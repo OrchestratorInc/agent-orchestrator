@@ -59,7 +59,6 @@ func TestTruncateExcerptContextKeepsRuneBoundary(t *testing.T) {
 }
 
 func TestExcerptDeliveryFallsBackToReferenceText(t *testing.T) {
-	// Turns queued before a controller existed store only the reference.
 	msg := excerptDeliveryMessage(ports.ChatUserMessage{
 		Text: "explain",
 		Content: []ports.ChatContent{{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{

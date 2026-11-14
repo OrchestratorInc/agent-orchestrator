@@ -17,8 +17,6 @@ var triageRedactions = []struct {
 	{regexp.MustCompile(`(?im)^.*\\+"` + triageSensitiveFieldPattern + `\\+"\s*:.*$`), `[redacted-secret]`},
 	{regexp.MustCompile(`(?i)((?:"` + triageSensitiveFieldPattern + `"|'` + triageSensitiveFieldPattern + `')\s*:\s*)(?:` + triageQuotedValue + `|[^\s,}\]]+)`), `${1}"[redacted-secret]"`},
 	{regexp.MustCompile(`(?i)(\bauthorization\s*:\s*)[^\r\n]+`), `${1}[redacted-secret]`},
-	// Values that open with backslashes and a quote are handled by redactEscapedAssignments.
-	// A shell-escaped space or tab ("alpha\ bravo") stays inside the value.
 	{regexp.MustCompile(`(?i)((?:\b|--)` + triageSensitiveFieldPattern + `\s*(?:[:=]\s*|\s+))(?:` + triageQuotedValue + `|(?:\\+[^\s"\\';&)},\]]|[^\s"\\';&)},\]])(?:\\[ \t]|[^\s"';&)},\]])*|\\+(\s|[;&)},\]]|$))`), `${1}[redacted-secret]${2}`},
 	{regexp.MustCompile(`(?i)(\b(?:pairing(?:[_ -]?code)?|code)\s*[:= -]?\s*)[0-9]{6,8}\b`), `${1}[redacted-secret]`},
 	{regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+`), `${1}[redacted-secret]`},
@@ -30,10 +28,6 @@ var triageRedactions = []struct {
 
 var triageEscapedAssignment = regexp.MustCompile(`(?i)(?:\b|--)` + triageSensitiveFieldPattern + `\\*["']?\s*(?:[:=]\s*|\s+)(\\+["'])`)
 
-// redactEscapedAssignments redacts quoted values nested inside an already
-// quoted string, such as an error logged by slog. The value closes at the
-// same escape depth it opened with, which a regexp cannot match. An
-// unclosed value is redacted to the end of the line.
 func redactEscapedAssignments(text string) string {
 	var out strings.Builder
 	for {

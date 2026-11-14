@@ -30,8 +30,6 @@ type DownloadSessionLike = Pick<Session, "on" | "removeListener" | "downloadURL"
 type DownloadWebContentsLike = Pick<WebContents, "downloadURL" | "isDestroyed">;
 type DownloadEventLike = { preventDefault: () => void };
 
-// A blocked download keeps only what is needed to request it again after the
-// user allows it. Nothing has been written to disk for it.
 type BlockedRequest = {
 	url: string;
 	session: DownloadSessionLike;
@@ -56,13 +54,10 @@ type BrowserDownloadManagerOptions = {
 };
 
 const MAX_DOWNLOAD_HISTORY = 200;
-// Blocked requests are capped on their own so a page or agent loop that keeps
-// requesting files can never push real downloads out of the history.
 const MAX_BLOCKED_DOWNLOADS = 20;
 const DOWNLOAD_DESTINATION_ERROR = "Could not prepare the Downloads folder.";
 const DOWNLOAD_DELETE_ERROR = "Could not delete the downloaded file.";
 const DOWNLOAD_UNAVAILABLE_ERROR = "This download is no longer available. Open the link again.";
-// How long an explicit approval waits for Chromium to request the file again.
 const DOWNLOAD_APPROVAL_TTL_MS = 60_000;
 
 function requestedURL(item: DownloadItemLike): string {
@@ -100,7 +95,6 @@ function collisionSafePath(directory: string, fileName: string, unavailable: Set
 	return candidate;
 }
 
-// Expects newest first, and keeps the newest of each kind.
 function withinLimits(downloads: StoredDownload[]): StoredDownload[] {
 	let blocked = 0;
 	let history = 0;
@@ -136,8 +130,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		(event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike | null) => void
 	>();
 	const blockedRequests = new Map<string, BlockedRequest>();
-	// An approval belongs to the browser context that will request the file
-	// again: the session, and the tab when the request is replayed through one.
 	const approvals = new Map<string, {
 		url: string;
 		session: DownloadSessionLike;
@@ -178,7 +170,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 				});
 		}
 	} catch {
-		// A missing or malformed optional history file starts with an empty list.
 	}
 
 	const state = (): BrowserDownloadsState => ({
@@ -188,7 +179,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 	const persist = (): void => {
 		mkdirSync(path.dirname(options.historyPath), { recursive: true });
 		const temporaryPath = `${options.historyPath}.tmp`;
-		// Blocked requests cannot be replayed after a restart, so they are not history.
 		const history = downloads.filter((download) => download.status !== "blocked");
 		writeFileSync(temporaryPath, JSON.stringify(history), { encoding: "utf8", mode: 0o600 });
 		renameSync(temporaryPath, options.historyPath);
@@ -198,7 +188,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			try {
 				persist();
 			} catch {
-				// A history write failure must not abort Chromium's file transfer.
 			}
 		}
 		const next = state();
@@ -206,8 +195,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			try {
 				options.notify(next);
 			} catch {
-				// A window can disappear while an Electron download event is being
-				// dispatched. Notification failure must not block other listeners.
 			}
 		}
 		return next;
@@ -234,8 +221,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		webContents?: DownloadWebContentsLike,
 	): string | undefined => {
 		const now = (options.now ?? Date.now)();
-		// Only the URL the request started from counts. A request that merely
-		// redirects through an approved URL must not use up that approval.
 		const url = requestedURL(item);
 		let approvedId: string | undefined;
 		for (const [id, approval] of approvals) {
@@ -244,8 +229,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 				!approvedId &&
 				approval.url === url &&
 				approval.session === session &&
-				// Strict: an approval replayed through the session has no tab, and
-				// must not be used by a live tab asking for the same URL.
 				approval.webContents === webContents
 			) approvedId = id;
 		}
@@ -253,8 +236,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		return approvedId;
 	};
 
-	// Pages, redirects, and agent-driven navigation can all start a download
-	// without the user asking for one. Nothing is saved until the user allows it.
 	const block = (
 		event: DownloadEventLike,
 		item: DownloadItemLike,
@@ -264,9 +245,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		event.preventDefault();
 		const url = requestedURL(item);
 		const now = (options.now ?? Date.now)();
-		// Only a repeat from the same tab is the same request. Another profile or
-		// tab asking for this URL gets its own row, so the file a row shows is
-		// always the one that row's Download fetches.
 		const existing = [...blockedRequests].find(([, request]) =>
 			request.url === url && request.session === session && request.webContents === webContents)?.[0];
 		if (existing) {
@@ -300,9 +278,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 	};
 
 	const begin = (item: DownloadItemLike, id: string): void => {
-		// The replayed request can report a different name than the one the user
-		// approved (a blob link loses its download attribute), so the approved
-		// row's name is the one that is saved.
 		const approved = downloads.find((download) => download.id === id);
 		const source = approved?.source;
 		const fileName = approved?.fileName ?? safeFilename(item.getFilename());
@@ -317,7 +292,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			try {
 				item.cancel();
 			} catch {
-				// The destination failure remains the useful error for the user.
 			}
 			error = DOWNLOAD_DESTINATION_ERROR;
 			publish();
@@ -365,7 +339,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 		attach(session: DownloadSessionLike | undefined): void {
 			if (!session || disposed || attachedSessions.has(session)) return;
 			const listener = (event: DownloadEventLike, item: DownloadItem, webContents?: DownloadWebContentsLike | null) => {
-				// Electron reports a session-level request with a null WebContents.
 				const tab = webContents ?? undefined;
 				const approvedId = takeApproval(item, session, tab);
 				if (approvedId) begin(item, approvedId);
@@ -391,11 +364,8 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			blockedRequests.clear();
 			approvals.clear();
 			try {
-				// Observers (wake policy) must learn that nothing is tracked any more;
-				// otherwise they keep treating the last progressing download as live.
 				options.notify({ downloads: [] });
 			} catch {
-				// The window may already be gone.
 			}
 		},
 		list: state,
@@ -408,7 +378,6 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 				case "allow": {
 					const request = blockedRequests.get(input.id);
 					if (download.status !== "blocked" || !request) throw new Error(DOWNLOAD_UNAVAILABLE_ERROR);
-					// The tab that asked may be gone; the session then requests the file.
 					const tab = request.webContents && !request.webContents.isDestroyed() ? request.webContents : undefined;
 					approvals.set(input.id, {
 						url: request.url,

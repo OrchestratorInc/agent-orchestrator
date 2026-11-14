@@ -11,9 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// importBranches adds one empty commit on top of parent to each named branch,
-// committed a second apart from start in the order given, in one git
-// fast-import.
 func importBranches(t *testing.T, repo, parent string, start int64, names ...string) {
 	t.Helper()
 	var stream strings.Builder
@@ -80,14 +77,10 @@ func TestListWorkspaceBranchesCapsAt200KeepingCheckedOut(t *testing.T) {
 	for i := 0; i < maxWorkspaceBranches+5; i++ {
 		names = append(names, fmt.Sprintf("b%03d", i))
 	}
-	// The checked-out branch is the oldest, so the newest-first listing
-	// leaves it out and it has to be looked up by name.
 	importBranches(t, repo, gitHead(t, repo), 1600000000, names...)
 	runGit(t, repo, "switch", "session")
 	svc := branchViewService(repo)
 	store := svc.store.(*fakeStore)
-	// b000 is local but left out too, so its PR, whose head is b000's tip,
-	// must not become a PR row.
 	b000 := strings.TrimSpace(runGit(t, repo, "rev-parse", "refs/heads/b000"))
 	store.prs["ao-1"] = []domain.PullRequest{readablePR(9, "b000", b000, time.Now())}
 
@@ -160,11 +153,9 @@ func TestListWorkspaceBranchesFoldsOnlyAPullRequestThatOwnsTheBranch(t *testing.
 	importBranches(t, repo, gitHead(t, repo), 1600000000, "session")
 	runGit(t, repo, "switch", "session")
 	pushed := gitHead(t, repo)
-	// The PR's head was pushed to the PR's repository; the branch has moved on locally since.
 	runGit(t, repo, "remote", "add", "origin", "https://github.com/acme/repo.git")
 	runGit(t, repo, "update-ref", "refs/remotes/origin/session", pushed)
 	runGit(t, repo, "commit", "--allow-empty", "-m", "unpushed")
-	// A fork has its own main, which a PR from that fork names as its source branch.
 	forkMain := strings.Repeat("9", 40)
 	runGit(t, repo, "remote", "add", "fork", "https://github.com/someone/repo.git")
 	svc := branchViewService(repo)
@@ -172,7 +163,6 @@ func TestListWorkspaceBranchesFoldsOnlyAPullRequestThatOwnsTheBranch(t *testing.
 	svc.store.(*fakeStore).prs["ao-1"] = []domain.PullRequest{
 		readablePR(1, "session", pushed, now),
 		readablePR(2, "main", forkMain, now.Add(-time.Minute)),
-		// A second PR from the same branch; the row already carries PR 1.
 		readablePR(3, "session", pushed, now.Add(-2*time.Minute)),
 	}
 
@@ -262,9 +252,6 @@ func TestListWorkspaceBranchesForWorkspaceProjectListsCheckedOutAndPRs(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Local branches are left out: only a single repository can review one.
-	// The checked-out row spans several repositories, so a branch name cannot
-	// say which one a PR belongs to: every PR keeps a row of its own.
 	if got, want := strings.Join(branchNames(branches.Branches), ","), "session,child-fix,session"; got != want || !branches.Supported {
 		t.Fatalf("rows = %s (supported=%v), want %s", got, branches.Supported, want)
 	}

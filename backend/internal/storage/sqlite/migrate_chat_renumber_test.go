@@ -8,9 +8,6 @@ import (
 func TestMigrateRecognizesPreRenumberedChatSchema(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 79)
 
-	// Reproduce a database opened by the feature branch when the exact same Chat
-	// migrations were numbered 0052-0065. Remove main's current 0052 schema so
-	// its burned version must be released and applied under its real meaning.
 	if _, err := db.Exec(`
 UPDATE app_settings SET default_session_mode = 'chat';
 DROP TRIGGER IF EXISTS usage_sources_cdc_update;
@@ -34,9 +31,6 @@ DELETE FROM goose_db_version WHERE version_id = 52 OR version_id BETWEEN 66 AND 
 		}
 	}
 
-	// Assert the repair itself preserves the preference before later migrations
-	// run. The product-default migration writes Chat too, so a final-state-only
-	// assertion would no longer detect a repair that reset this row first.
 	if err := repairRenumberedChatMigrationHistory(db); err != nil {
 		t.Fatalf("repair pre-renumbered Chat migration history: %v", err)
 	}
@@ -76,7 +70,6 @@ WHERE is_applied = 1 AND version_id BETWEEN 66 AND 79
 		t.Fatalf("mapped Chat migrations = %d, want 14", mapped)
 	}
 
-	// A second startup must be a no-op, not another attempt to replay either set.
 	if err := migrate(db); err != nil {
 		t.Fatalf("second migration pass: %v", err)
 	}

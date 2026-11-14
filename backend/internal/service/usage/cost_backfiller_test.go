@@ -17,8 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
-// Break caught: an unbounded or off-by-one worker page could monopolize the
-// SQLite writer and make restart progress depend on map/row iteration order.
 func TestCostBackfillerProcessesExact256RowPages(t *testing.T) {
 	tests := []struct {
 		count       int
@@ -74,8 +72,6 @@ func TestCostBackfillerProcessesExact256RowPages(t *testing.T) {
 	}
 }
 
-// Break caught: an unavailable model could be retried repeatedly against the
-// same catalog instead of recording that attempt and waiting for a new version.
 func TestCostBackfillerRetriesUnavailableEventOnlyForNewVersion(t *testing.T) {
 	firstSnapshot := backfillTestSnapshot(t, "0.000001")
 	secondSnapshot := backfillTestSnapshot(t, "0.000002")
@@ -124,9 +120,6 @@ func TestCostBackfillerRetriesUnavailableEventOnlyForNewVersion(t *testing.T) {
 	}
 }
 
-// Break caught: removing a job from the pending map before processing meant a
-// transient store error permanently dropped that provider/version until a
-// daemon restart or a newer catalog activation.
 func TestCostBackfillerRetriesTransientFailureForSameVersion(t *testing.T) {
 	snapshot := backfillTestSnapshot(t, "0.000001")
 	version := snapshot.ProviderVersion("openai")
@@ -185,8 +178,6 @@ func TestCostBackfillerRetriesTransientFailureForSameVersion(t *testing.T) {
 	}
 }
 
-// Break caught: a newer activation could wait behind every page of an older
-// provider job instead of superseding it at the next transaction boundary.
 func TestCostBackfillerSupersedesActiveJobBetweenBatches(t *testing.T) {
 	oldSnapshot := backfillTestSnapshot(t, "0.000001")
 	newSnapshot := backfillTestSnapshot(t, "0.000002")
@@ -374,8 +365,6 @@ func TestCostBackfillerRepricesAModelWhenItsOverrideChanges(t *testing.T) {
 	}
 }
 
-// Break caught: shutdown could wait forever for a provider page whose storage
-// read was still blocked, or apply work after the shared lifecycle canceled.
 func TestCostBackfillerCancellationInterruptsPendingPage(t *testing.T) {
 	snapshot := backfillTestSnapshot(t, "0.000001")
 	version := snapshot.ProviderVersion("openai")
@@ -403,8 +392,6 @@ func TestCostBackfillerCancellationInterruptsPendingPage(t *testing.T) {
 	}
 }
 
-// Break caught: in-memory duplicate suppression could make a daemon restart
-// forget durable total-null rows left after the previous worker stopped.
 func TestCostBackfillerRestartResumesSameVersionFromDurableFacts(t *testing.T) {
 	snapshot := backfillTestSnapshot(t, "0.000001")
 	version := snapshot.ProviderVersion("openai")

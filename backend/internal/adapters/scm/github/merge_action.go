@@ -16,9 +16,6 @@ var mergeHeadSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?
 
 var _ ports.SCMMerger = (*Provider)(nil)
 
-// MergePullRequest performs a GitHub squash, merge-commit, or rebase merge
-// guarded by the reviewed head SHA. GitHub's sha field is a compare-and-swap
-// precondition.
 func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeRequest) (ports.SCMMergeResult, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMMergeResult{}, fmt.Errorf("github scm: merge provider is not configured")

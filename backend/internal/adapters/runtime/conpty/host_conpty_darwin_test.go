@@ -14,8 +14,6 @@ import (
 	"github.com/creack/pty"
 )
 
-// TestMain lets the detached-spawn integration test re-exec this test binary
-// through the same hidden pty-host entrypoint used by the production AO binary.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "pty-host" {
 		os.Exit(RunHost(os.Args[2:], os.Stdout))
@@ -91,8 +89,6 @@ func TestDarwinDefaultSpawnHostEndToEnd(t *testing.T) {
 		cancel()
 		t.Fatal(err)
 	}
-	// The request context owns startup only. A host that reported READY must
-	// stay alive after that request ends so daemon restarts cannot kill agents.
 	cancel()
 	t.Cleanup(func() {
 		_ = clientKill(addr)
@@ -113,8 +109,6 @@ func TestDarwinDefaultSpawnHostEndToEnd(t *testing.T) {
 			t.Fatalf("get output: %v", outputErr)
 		}
 		text := strings.ReplaceAll(output, "\r", "")
-		// The host answers the script's DA1 query on its stdin, and nothing reads
-		// that reply before the input does, so it may arrive ahead of "hello".
 		received := strings.ReplaceAll(text, string(da1Reply), "")
 		if strings.Contains(text, "ready:works:prefix") && strings.Contains(received, "received:hello") {
 			break
@@ -166,8 +160,6 @@ func TestDarwinPTYCloseReapsTermIgnoringProcessGroup(t *testing.T) {
 	}
 }
 
-// An interactive shell ignores SIGTERM. Closing must not wait out the full
-// grace for it: AO closes a terminal the way a closing terminal window would.
 func TestDarwinPTYCloseDoesNotWaitOutAShellThatIgnoresSIGTERM(t *testing.T) {
 	conn, err := newConPTY(t.TempDir(), "/bin/sh", []string{"-c", `trap '' TERM; printf 'ready\n'; while :; do sleep 1; done`}, initialConPTYColumns, initialConPTYRows)
 	if err != nil {

@@ -39,7 +39,6 @@ func TestMigration0163AllowsFXAndReversesBothHistoricalSchemas(t *testing.T) {
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
-			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'fx'`)
 			downTo(t, db, 162)
 			var after string

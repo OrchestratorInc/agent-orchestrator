@@ -11,11 +11,6 @@ import {
 } from "../types/workspace";
 import { sessionUiKey } from "./hosts";
 
-/**
- * Items listed in `order` keep that order; items it has never seen are placed
- * before (`"start"`) or after (`"end"`) the ones it has. The sidebar uses this
- * for drag-reordered projects and sessions.
- */
 export function applyOrder<T>(
 	items: readonly T[],
 	idOf: (item: T) => string,
@@ -33,7 +28,6 @@ export function applyOrder<T>(
 	return unplaced === "start" ? [...rest, ...placed] : [...placed, ...rest];
 }
 
-/** Stable partition: pinned ids first, each group keeping its incoming order. */
 export function pinnedFirst<T>(items: readonly T[], idOf: (item: T) => string, pinnedIds: readonly string[]): T[] {
 	if (pinnedIds.length === 0) return [...items];
 	const pinned = new Set(pinnedIds);
@@ -50,15 +44,11 @@ export type SidebarNavSession = {
 export type SidebarOrderInput = {
 	workspaces: readonly WorkspaceSummary[];
 	remoteWorkspaces?: readonly WorkspaceSummary[];
-	/** Saved drag order of the project list. */
 	projectOrder?: readonly string[];
-	/** Projects pinned to the top of the list. */
 	pinnedProjectIds?: readonly string[];
-	/** Drag order of each project's sessions, keyed by `sessionUiKey(projectId, hostId)`. */
 	sessionOrders?: Readonly<Record<string, readonly string[]>>;
 };
 
-/** Sessions the sidebar lists for one project: workers only, terminated ones dropped. */
 function listedSessions(
 	workspace: WorkspaceSummary,
 	sessionOrders: SidebarOrderInput["sessionOrders"],
@@ -67,13 +57,6 @@ function listedSessions(
 	return applyOrder(visible, (session) => session.id, sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], "start");
 }
 
-/**
- * Every session reachable from the sidebar, in the order the sidebar shows
- * them: pinned sessions, then Sessions (the projectless agents), then projects
- * (pinned first) in the user's order, then remote hosts. A session that appears
- * twice (pinned and under its project) counts once, at its first position. Keyboard navigation and the
- * ⌘1–9 jump both walk this list so they always agree with what is on screen.
- */
 export function buildSidebarSessionOrder({
 	workspaces,
 	remoteWorkspaces = [],
@@ -102,9 +85,6 @@ export function buildSidebarSessionOrder({
 	for (const { workspace, session } of pinned) add(session, workspace);
 
 	const scratchpads = ownScratchpadWorkspaces(workspaces);
-	// The Sessions section, above Projects, lists its local sessions and the
-	// person's Cloud standalone agents as one list, in its own order; each agent
-	// still routes by its project.
 	const scratchpadOf = new Map(scratchpads.flatMap((workspace) => workspace.sessions.map((session) => [session.id, workspace] as const)));
 	const scratchpad: WorkspaceSummary = {
 		...(scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND) ??
@@ -138,12 +118,6 @@ function indexOfCurrent<T extends { sessionId: string; hostId?: string }>(list: 
 	return list.findIndex((entry) => entry.sessionId === current.sessionId && (entry.hostId ?? "") === (current.hostId ?? ""));
 }
 
-/**
- * The entry `direction` steps from the current session, wrapping at the ends,
- * optionally skipping entries that fail `accept`. With no current session
- * (home, a project board) forward starts at the first entry and backward at
- * the last. The current session itself is never returned.
- */
 export function stepSessionNav<T extends { sessionId: string; hostId?: string }>(
 	list: readonly T[],
 	current: NavCursor,

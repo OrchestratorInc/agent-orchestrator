@@ -1,13 +1,3 @@
-// Package muse implements the Muse Code CLI agent adapter.
-//
-// Muse Code is Meta's terminal coding agent, installed from
-// https://dev.meta.ai/install.sh as the executable "muse". With no subcommand
-// it opens the interactive TUI, and an optional positional prompt starts the
-// first turn without leaving that TUI.
-//
-// AO's standing instructions and activity hooks are passed through Muse's
-// process-local environment, so launching a session never modifies project
-// files.
 package muse
 
 import (
@@ -28,21 +18,14 @@ import (
 
 const adapterID = "muse"
 
-// Muse's own launcher forwards this process-local override to the runtime.
-// Unlike AGENTS.md, it applies only to this process and cannot dirty the
-// project. Muse's base-instructions override is rejected by the Meta provider,
-// so AO's standing instructions must ride the developer-prompt channel.
 const museDeveloperPromptEnvVar = "TBH_EVAL_APPEND_DEVELOPER_PROMPT"
 
-// Plugin is the Muse Code CLI agent adapter. It is safe for concurrent use;
-// the binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Muse adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -51,7 +34,6 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.ContinuousTerminalActivityDetector = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -64,17 +46,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports Muse's optional model override.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `muse --model`.")
 }
 
-// GetLaunchCommand builds the argv for a persistent interactive Muse session:
-//
-//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] [prompt]
-//
-// The prompt is the CLI's documented optional positional argument. `muse exec`
-// is deliberately not used because it is headless and exits after one turn.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	binary, err := p.museBinary(ctx)
 	if err != nil {
@@ -110,14 +85,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand builds the argv to resume an existing Muse session:
-//
-//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] resume <agentSessionId> [<prompt>]
-//
-// ok is false when Muse has not emitted its native session id through AO hooks.
-// The optional resume-time prompt is appended last, matching GetLaunchCommand,
-// so a review task submitted alongside a resume starts atomically with the
-// process instead of racing a post-launch terminal injection.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -165,7 +132,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces Muse hook-derived metadata.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -192,7 +158,7 @@ var museBinarySpec = binaryutil.BinarySpec{
 		"/opt/homebrew/bin/muse",
 	},
 	UnixHomePaths: [][]string{
-		{".local", "bin", "muse"}, // official Meta installer default
+		{".local", "bin", "muse"},
 	},
 	WinPaths: []binaryutil.WinPath{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "muse.cmd"}},
@@ -200,9 +166,6 @@ var museBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveMuseBinary finds the official Meta Muse Code launcher. The `muse`
-// command name is shared by unrelated tools, so a version-signature check keeps
-// those shims from being reported as an installed AO harness.
 func ResolveMuseBinary(ctx context.Context) (string, error) {
 	return resolveMuseBinary(ctx, museBinarySpec)
 }
@@ -276,8 +239,6 @@ func (p *Plugin) museBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

@@ -1,10 +1,3 @@
-// Package registry resolves the Chat driver for a harness.
-//
-// Registration is the whole capability gate: a harness with no driver here cannot
-// run in chat mode, and asking for one fails with ErrChatUnsupported rather than
-// quietly producing a TUI session. Adding a harness to chat means adding it here,
-// which keeps "which agents support chat" answerable by reading one file instead
-// of inferring it from behavior.
 package registry
 
 import (
@@ -52,18 +45,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Registry maps a harness to its Chat driver.
 type Registry struct {
 	drivers map[domain.AgentHarness]ports.ChatDriver
-	// plugins are the drivers' own agent plugins, each caching the executable
-	// it resolved.
 	plugins map[domain.AgentHarness]ports.AgentBinaryResolutionInvalidator
 }
 
 var _ ports.ChatDriverRegistry = (*Registry)(nil)
 
-// New builds a registry from an explicit driver list. Tests use it to register a
-// fake without touching the shipped set.
 func New(drivers ...ports.ChatDriver) *Registry {
 	byHarness := make(map[domain.AgentHarness]ports.ChatDriver, len(drivers))
 	for _, driver := range drivers {
@@ -75,19 +63,6 @@ func New(drivers ...ports.ChatDriver) *Registry {
 	return &Registry{drivers: byHarness}
 }
 
-// Build returns the drivers the daemon ships.
-//
-// Codex uses its native app-server protocol. Claude Code uses AO's reusable ACP
-// transport plus claude-agent-acp, pointed at the user's own Claude executable.
-// Cursor, OpenCode, Droid, Grok, Kimi, Kimchi, Pi, OMP, Qwen, Command Code,
-// DeepSeek Harness, Hermes, and GitHub Copilot expose ACP themselves, so AO launches the exact executable
-// resolved by each existing agent plugin. No path scrapes terminal output or
-// packages a second provider CLI.
-// Unreal Agent is compiled into AO and runs behind the same detached host seam.
-//
-// Every other harness stays TUI-only until the same is true of it. The driver
-// reuses the harness's existing agent plugin for binary resolution and auth, so
-// registration adds no second answer to "is this agent installed and logged in".
 func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	r := New()
 	r.plugins = make(map[domain.AgentHarness]ports.AgentBinaryResolutionInvalidator)
@@ -138,15 +113,12 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	return r
 }
 
-// InvalidateBinaryResolution makes harness's driver resolve its executable
-// again, after an install changed which one sessions should run.
 func (r *Registry) InvalidateBinaryResolution(harness domain.AgentHarness) {
 	if plugin, ok := r.plugins[harness]; ok {
 		plugin.InvalidateBinaryResolution()
 	}
 }
 
-// Driver returns the driver for a harness.
 func (r *Registry) Driver(harness domain.AgentHarness) (ports.ChatDriver, error) {
 	driver, ok := r.drivers[harness]
 	if !ok {
@@ -155,16 +127,11 @@ func (r *Registry) Driver(harness domain.AgentHarness) (ports.ChatDriver, error)
 	return driver, nil
 }
 
-// SupportsChat reports whether a harness has a driver at all, without probing the
-// local install. Use it to decide whether Chat is even offerable; use Driver plus
-// Probe to decide whether it will work right now.
 func (r *Registry) SupportsChat(harness domain.AgentHarness) bool {
 	_, ok := r.drivers[harness]
 	return ok
 }
 
-// Harnesses lists the harnesses with a registered driver, for diagnostics and for
-// telling a user which agents can run in chat mode.
 func (r *Registry) Harnesses() []domain.AgentHarness {
 	out := make([]domain.AgentHarness, 0, len(r.drivers))
 	for harness := range r.drivers {

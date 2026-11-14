@@ -39,10 +39,6 @@ func boolOption(id, name string, current bool) acpsdk.SessionConfigOption {
 	}
 }
 
-// The session/update notification documents itself as a complete replacement
-// "including removing an option", so an empty catalog from that channel is a
-// real statement about the session and must apply verbatim. Swallowing it would
-// leave a picker offering options the agent has withdrawn.
 func TestReplaceConfigOptionsAppliesEmptyCatalogVerbatim(t *testing.T) {
 	c := &conversation{capabilities: make(ports.ChatCapabilities)}
 	c.replaceConfigOptions([]acpsdk.SessionConfigOption{selectOption("model", "Model", "sonnet")})
@@ -57,9 +53,6 @@ func TestReplaceConfigOptionsAppliesEmptyCatalogVerbatim(t *testing.T) {
 	}
 }
 
-// A non-empty replacement is authoritative too: switching models can add,
-// change, or remove the other controls, so the new catalog replaces the old one
-// wholesale rather than merging into it.
 func TestReplaceConfigOptionsReplacesWholesale(t *testing.T) {
 	c := &conversation{capabilities: make(ports.ChatCapabilities)}
 	c.replaceConfigOptions([]acpsdk.SessionConfigOption{
@@ -80,10 +73,6 @@ func TestReplaceConfigOptionsReplacesWholesale(t *testing.T) {
 	}
 }
 
-// The bug this guards: an agent accepts session/set_config_option but answers
-// without the rebuilt catalog. Wiping made the picker vanish; returning the
-// pre-change catalog would show the old value for a change the agent already
-// applied. Neither is acceptable — record the accepted value and keep the rest.
 func TestApplyAcceptedConfigOptionRecordsSelectWithoutLosingCatalog(t *testing.T) {
 	c := &conversation{capabilities: make(ports.ChatCapabilities)}
 	c.replaceConfigOptions([]acpsdk.SessionConfigOption{
@@ -119,8 +108,6 @@ func TestApplyAcceptedConfigOptionRecordsBoolean(t *testing.T) {
 	}
 }
 
-// An id with no matching entry must leave the catalog untouched rather than
-// inventing a row for an option the session never advertised.
 func TestApplyAcceptedConfigOptionIgnoresUnknownID(t *testing.T) {
 	c := &conversation{capabilities: make(ports.ChatCapabilities)}
 	c.replaceConfigOptions([]acpsdk.SessionConfigOption{selectOption("model", "Model", "sonnet")})
@@ -137,8 +124,6 @@ func TestApplyAcceptedConfigOptionIgnoresUnknownID(t *testing.T) {
 
 func boolPtr(v bool) *bool { return &v }
 
-// pi-acp sends its thinking levels as a config option and again as legacy
-// session modes; the modes are not offered a second time as a "mode" option.
 func TestNormalizeSessionOptionsSkipsModesThatRepeatAnOption(t *testing.T) {
 	thinking := selectOption("thought_level", "Thinking", "low", "minimal", "low", "high")
 	modes := &acpsdk.SessionModeState{CurrentModeId: "low", AvailableModes: []acpsdk.SessionMode{
@@ -149,7 +134,6 @@ func TestNormalizeSessionOptionsSkipsModesThatRepeatAnOption(t *testing.T) {
 			t.Fatalf("mode option %+v repeats the thinking levels", option)
 		}
 	}
-	// Modes of their own are still offered.
 	modes.AvailableModes = []acpsdk.SessionMode{{Id: "ask", Name: "Ask"}, {Id: "code", Name: "Code"}}
 	if got := normalizeSessionOptions([]acpsdk.SessionConfigOption{thinking}, nil, modes); len(got) != 2 {
 		t.Fatalf("options = %+v, want the thinking option and the mode", got)

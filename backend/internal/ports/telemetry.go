@@ -8,23 +8,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// TelemetryLevel is the severity of a telemetry event.
 type TelemetryLevel string
 
 const (
-	// TelemetryLevelDebug marks verbose diagnostic events.
 	TelemetryLevelDebug TelemetryLevel = "debug"
-	// TelemetryLevelInfo marks normal operational events.
-	TelemetryLevelInfo TelemetryLevel = "info"
-	// TelemetryLevelWarn marks degraded but non-fatal events.
-	TelemetryLevelWarn TelemetryLevel = "warn"
-	// TelemetryLevelError marks failed operations.
+	TelemetryLevelInfo  TelemetryLevel = "info"
+	TelemetryLevelWarn  TelemetryLevel = "warn"
 	TelemetryLevelError TelemetryLevel = "error"
 )
 
-// TelemetryEvent is a structured operational/product event emitted by the
-// daemon. Payload must be allowlisted at the call site; sinks may serialize it
-// but must not mutate it.
 type TelemetryEvent struct {
 	Name       string
 	Source     string
@@ -36,32 +28,20 @@ type TelemetryEvent struct {
 	Payload    map[string]any
 }
 
-// EventSink consumes structured telemetry events. Implementations should be
-// best-effort: a slow or failing sink must not break the user action that
-// emitted the event.
 type EventSink interface {
 	Emit(ctx context.Context, ev TelemetryEvent)
 	Close(ctx context.Context) error
 }
 
-// TelemetryIdentity is who the remote telemetry stream is attributed to. The
-// user fields are only ever filled from an explicit AO Cloud sign-in or the
-// operator's authenticated GitHub account, never from git config, and are
-// empty once the user has opted out.
 type TelemetryIdentity struct {
-	InstallID   string
-	AnonymousID string
-	CloudUserID string
-	// CloudUserKnown is true after the desktop has resolved its Cloud session.
-	// An empty CloudUserID is only a known sign-out when this is true.
+	InstallID      string
+	AnonymousID    string
+	CloudUserID    string
 	CloudUserKnown bool
 	GitHubLogin    string
-	// OptedOut is true when export must stop: the user opted out, or the identity
-	// could not be persisted. Consumers (the paired phone) reset and stop capture.
-	OptedOut bool
+	OptedOut       bool
 }
 
-// DistinctID selects the signed-in Cloud user or the anonymous install.
 func (i TelemetryIdentity) DistinctID() string {
 	if i.CloudUserID != "" {
 		return i.CloudUserID
@@ -72,37 +52,21 @@ func (i TelemetryIdentity) DistinctID() string {
 	return i.InstallID
 }
 
-// ErrInvalidCloudUserID is returned for an id that is not a plausible user id.
 var ErrInvalidCloudUserID = errors.New("invalid cloud user id")
 
-// TelemetryIdentityStore holds the live telemetry identity for the daemon.
 type TelemetryIdentityStore interface {
 	Snapshot() TelemetryIdentity
 	OptedOut() bool
 	ExportSuppressed() bool
-	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out). It
-	// returns ErrInvalidCloudUserID when the id is not a plausible AO Cloud user id,
-	// and another error when the identity state could not be made durable, in
-	// which case remote export stays suppressed until a later call succeeds.
 	SetCloudUserID(ctx context.Context, id string) error
-	// MarkInstalledEvent reserves the one install event before queueing it.
 	MarkInstalledEvent(ctx context.Context) (bool, error)
 	SetGitHubLogin(login string)
 }
 
-// InstallMilestones claims install-lifetime "firsts" durably (marker files in
-// the data dir), so a "first" telemetry flag fires once per install instead of
-// whenever a table happens to be empty. known is false when the marker could
-// not be read or written.
 type InstallMilestones interface {
 	Claim(name string) (first bool, known bool)
 }
 
-// FirstForInstall resolves first_for_install for a milestone. The marker alone
-// would misreport an install upgraded from a build without markers, whose
-// first post-upgrade session is not its first ever, so the caller's "no prior
-// rows" check must agree too. ok is false when the answer is unknown and the
-// property should be omitted.
 func FirstForInstall(m InstallMilestones, name string, noPriorRows bool) (first, ok bool) {
 	if m == nil {
 		return false, false

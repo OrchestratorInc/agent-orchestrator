@@ -37,9 +37,6 @@ type batchInputItem struct {
 	ContentCount      int                  `json:"contentCount,omitempty"`
 }
 
-// queuedBatchInput keeps message boundaries and source identity in the provider
-// input while the persisted transcript retains one message per sender. AO sets
-// no batch size or text limit; a provider refusal is surfaced in full.
 func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.QueuedTurn, steer *ports.ChatUserMessage) (ports.ChatUserMessage, error) {
 	items := make([]batchInputItem, 0, len(batch)+1)
 	combined := ports.ChatUserMessage{}
@@ -116,11 +113,6 @@ func queuedBatchIDs(batch []domain.QueuedTurn) []string {
 	return ids
 }
 
-// drainRun is how many queued messages, from the front, the next turn takes.
-// A message the user typed gets a turn of its own, so the agent answers each
-// one in order. Agent and Orchestrator messages waiting next to each other still
-// go as one input (#6500), stopping before the next message the user typed.
-// Steering is separate and still takes the whole queue.
 func drainRun(queue []domain.QueuedTurn) int {
 	if len(queue) == 0 {
 		return 0

@@ -7,17 +7,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The batch query reads these slow-changing, view-only fields for a tracked PR
-// when it has none stored or its updatedAt moved, so each is capped: the PR
-// view shows a bounded sample, not the provider's full history.
 const (
 	scmDetailsLabelLimit    = 20
 	scmDetailsReviewerLimit = 20
 	scmDetailsCommitLimit   = 50
 )
 
-// pullRequestDetailsFromGraphQL normalizes the description, labels, requested
-// reviewers, commits and conversation comments of one batch-query PR node.
 func pullRequestDetailsFromGraphQL(pr map[string]any) *domain.PullRequestDetails {
 	description, truncated := truncateDescription(str(pr["body"]))
 	details := &domain.PullRequestDetails{
@@ -94,8 +89,6 @@ func pullRequestDetailsFromGraphQL(pr map[string]any) *domain.PullRequestDetails
 	return details
 }
 
-// commitAuthor prefers the GitHub login and falls back to the git author name,
-// which is all a commit made by an unlinked email has.
 func commitAuthor(v any) string {
 	author, _ := v.(map[string]any)
 	if user, _ := author["user"].(map[string]any); user != nil {
@@ -106,14 +99,10 @@ func commitAuthor(v any) string {
 	return str(author["name"])
 }
 
-// truncateDescription cuts a PR body to the stored cap without splitting a
-// UTF-8 character.
 func truncateDescription(body string) (string, bool) {
 	return truncateUTF8(body, domain.MaxPullRequestDescriptionBytes)
 }
 
-// truncateUTF8 cuts body to at most limit bytes without splitting a UTF-8
-// character.
 func truncateUTF8(body string, limit int) (string, bool) {
 	if len(body) <= limit {
 		return body, false

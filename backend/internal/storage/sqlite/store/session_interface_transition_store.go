@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// CreateSessionInterfaceTransition claims the one active transition slot for a
-// session. created=false returns the winner of a concurrent request rather than
-// leaking a SQLite constraint as an internal error.
 func (s *Store) CreateSessionInterfaceTransition(
 	ctx context.Context,
 	rec domain.SessionInterfaceTransition,
@@ -55,9 +52,6 @@ func (s *Store) CreateSessionInterfaceTransition(
 	return transitionRowToDomain(existing), false, nil
 }
 
-// CreateSessionInterfaceTransitionAfter claims a provider-history recovery
-// only while expectedPredecessorID is still the exact latest saga. The read and
-// insert share the writer transaction and lock, closing the consent TOCTOU gap.
 func (s *Store) CreateSessionInterfaceTransitionAfter(
 	ctx context.Context,
 	rec domain.SessionInterfaceTransition,
@@ -110,7 +104,6 @@ func (s *Store) CreateSessionInterfaceTransitionAfter(
 	return transition, created, predecessorMatched, err
 }
 
-// GetSessionInterfaceTransition reads one interface transition by id.
 func (s *Store) GetSessionInterfaceTransition(
 	ctx context.Context,
 	id string,
@@ -125,7 +118,6 @@ func (s *Store) GetSessionInterfaceTransition(
 	return transitionRowToDomain(row), true, nil
 }
 
-// GetActiveSessionInterfaceTransition reads the active transition for a session.
 func (s *Store) GetActiveSessionInterfaceTransition(
 	ctx context.Context,
 	id domain.SessionID,
@@ -140,7 +132,6 @@ func (s *Store) GetActiveSessionInterfaceTransition(
 	return transitionRowToDomain(row), true, nil
 }
 
-// GetLatestSessionInterfaceTransition reads the newest transition for a session.
 func (s *Store) GetLatestSessionInterfaceTransition(
 	ctx context.Context,
 	id domain.SessionID,
@@ -155,7 +146,6 @@ func (s *Store) GetLatestSessionInterfaceTransition(
 	return transitionRowToDomain(row), true, nil
 }
 
-// ListActiveSessionInterfaceTransitions lists transitions that have not reached a terminal phase.
 func (s *Store) ListActiveSessionInterfaceTransitions(ctx context.Context) ([]domain.SessionInterfaceTransition, error) {
 	rows, err := s.qr.ListActiveSessionInterfaceTransitions(ctx)
 	if err != nil {
@@ -168,9 +158,6 @@ func (s *Store) ListActiveSessionInterfaceTransitions(ctx context.Context) ([]do
 	return out, nil
 }
 
-// ListDeliverableSessionInterfaceTransitions returns terminal handoffs whose
-// outbox still owns at least one message. Terminal rows are deliberately kept:
-// they are the durable retry anchor after rollback, cancellation, or restart.
 func (s *Store) ListDeliverableSessionInterfaceTransitions(ctx context.Context) ([]domain.SessionInterfaceTransition, error) {
 	rows, err := s.qr.ListDeliverableSessionInterfaceTransitions(ctx)
 	if err != nil {
@@ -183,8 +170,6 @@ func (s *Store) ListDeliverableSessionInterfaceTransitions(ctx context.Context) 
 	return out, nil
 }
 
-// AdvanceSessionInterfaceTransition compare-and-swaps one phase. A false result
-// means another request (usually cancellation) won the race.
 func (s *Store) AdvanceSessionInterfaceTransition(
 	ctx context.Context,
 	id string,
@@ -214,9 +199,6 @@ func (s *Store) AdvanceSessionInterfaceTransition(
 	return rows > 0, nil
 }
 
-// CompleteSessionInterfaceTransition commits a degraded handoff and its notice
-// together, so every completed handoff has an outbox entry after a restart.
-// A stale phase changes neither the transition nor the outbox.
 func (s *Store) CompleteSessionInterfaceTransition(
 	ctx context.Context,
 	id string,
@@ -261,9 +243,6 @@ func (s *Store) CompleteSessionInterfaceTransition(
 	return moved && err == nil, err
 }
 
-// AcknowledgeSessionInterfaceTransitionNotice records that a user has seen a
-// failed or recovered transition notice. The transition remains intact as an
-// audit record, and COALESCE makes retries return the original timestamp.
 func (s *Store) AcknowledgeSessionInterfaceTransitionNotice(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -290,10 +269,6 @@ func (s *Store) AcknowledgeSessionInterfaceTransitionNotice(
 	return transitionRowToDomain(row), true, nil
 }
 
-// CommitSessionControllerEpoch is the atomic persistence primitive used only by
-// Lifecycle Manager. Keeping the CAS here prevents stale controller handoffs;
-// keeping the decision in Lifecycle Manager preserves its ownership of session
-// activity and controller facts.
 func (s *Store) CommitSessionControllerEpoch(
 	ctx context.Context,
 	id domain.SessionID,
@@ -304,10 +279,6 @@ func (s *Store) CommitSessionControllerEpoch(
 	return s.commitSessionControllerEpoch(ctx, id, source, target, nativeID, false, false, now)
 }
 
-// CommitSessionControllerEpochArchivedChat commits a degraded identity-reset
-// handoff into a fresh terminal. The source Chat may carry real messages: its
-// conversation stays archived exactly as it is instead of having to prove its
-// root untouched (upstream issue #7724). The CAS proof is unchanged.
 func (s *Store) CommitSessionControllerEpochArchivedChat(
 	ctx context.Context,
 	id domain.SessionID,
@@ -318,10 +289,6 @@ func (s *Store) CommitSessionControllerEpochArchivedChat(
 	return s.commitSessionControllerEpoch(ctx, id, source, target, nativeID, false, true, now)
 }
 
-// RestoreSessionControllerEpoch atomically restores the source interface after
-// a failed or interrupted handoff. Unlike an accepted Chat-to-TUI handoff, a
-// rollback must retain the checkpoint that caused target replay to fail so an
-// ordinary retry cannot silently bypass it.
 func (s *Store) RestoreSessionControllerEpoch(
 	ctx context.Context,
 	id domain.SessionID,
@@ -377,12 +344,6 @@ func (s *Store) commitSessionControllerEpoch(
 		return false, nil
 	}
 	if source == domain.SessionModeChat && target == domain.SessionModeTUI && nativeID == "" {
-		// A fresh TUI will choose its own native identity. Release the unused
-		// Chat reservation and event namespace in the same transaction, so a
-		// later return can bind that identity without inventing inherited
-		// history. The degraded archived-chat commit runs this release first
-		// too: only a Chat whose conversation actually holds messages keeps
-		// its binding archived (upstream issue #7724).
 		released, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
 			SessionID:       &id,
 			ProviderScopeID: uuid.NewString(),
@@ -391,21 +352,11 @@ func (s *Store) commitSessionControllerEpoch(
 			return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, err)
 		}
 		if released == 0 {
-			// A Chat whose controller never started (its start failed, or it
-			// was never opened) has no conversation row: the freshness proof
-			// accepts that, and there is no reservation to release.
 			if _, lookupErr := q.SelectConversationBySession(ctx, &id); errors.Is(lookupErr, sql.ErrNoRows) {
 				released = 1
 			} else if lookupErr != nil {
 				return false, fmt.Errorf("release untouched Chat provider for %s: %w", id, lookupErr)
 			} else if archivedChat {
-				// The proof refused, so the Chat conversation holds real
-				// content (activity or turns). A degraded identity-reset
-				// fresh TUI archives that messaged Chat exactly as it is,
-				// provider binding included: its messages stay in Chat
-				// instead of having to prove the root untouched (upstream
-				// issue #7724). Without the degraded admission the commit
-				// still fails below.
 				released = 1
 			}
 		}
@@ -419,10 +370,6 @@ func (s *Store) commitSessionControllerEpoch(
 	return true, nil
 }
 
-// ReplaceUnpersistedChatProvider moves a Chat whose provider never persisted
-// its reserved conversation onto the fresh conversation the provider started
-// instead. The session and its untouched root branch move together; recorded
-// history or a different current owner fails the swap and changes nothing.
 func (s *Store) ReplaceUnpersistedChatProvider(
 	ctx context.Context,
 	id domain.SessionID,
@@ -457,7 +404,6 @@ func (s *Store) ReplaceUnpersistedChatProvider(
 	})
 }
 
-// EnqueueSessionInterfaceTransitionMessage queues a user message while an interface transition is active.
 func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	ctx context.Context,
 	transitionID, clientMessageID, message string,
@@ -484,7 +430,6 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	})
 }
 
-// ListPendingSessionInterfaceTransitionMessages lists queued transition messages awaiting delivery.
 func (s *Store) ListPendingSessionInterfaceTransitionMessages(
 	ctx context.Context,
 	transitionID string,
@@ -505,7 +450,6 @@ func (s *Store) ListPendingSessionInterfaceTransitionMessages(
 	return out, nil
 }
 
-// MarkSessionInterfaceTransitionMessageDelivered records successful delivery of a queued transition message.
 func (s *Store) MarkSessionInterfaceTransitionMessageDelivered(
 	ctx context.Context,
 	id int64,
@@ -523,8 +467,6 @@ func (s *Store) MarkSessionInterfaceTransitionMessageDelivered(
 	return nil
 }
 
-// transitionRowToDomain maps the projected columns of any transition query onto
-// the domain record. Every sqlc Row for this table carries the same fields.
 func transitionRowToDomain(row any) domain.SessionInterfaceTransition {
 	switch r := row.(type) {
 	case gen.InsertSessionInterfaceTransitionRow:

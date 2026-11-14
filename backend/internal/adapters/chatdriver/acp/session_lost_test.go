@@ -25,11 +25,8 @@ func TestIsACPSessionMissing(t *testing.T) {
 		err  error
 		want bool
 	}{
-		// claude-agent-acp throws Error("Session not found"); the SDK sends it as
-		// -32603 with data.details, exactly as the user-visible error reads.
 		{"adapter", &acpsdk.RequestError{Code: -32603, Message: "Internal error",
 			Data: map[string]any{"details": "Session not found"}}, true},
-		// AO's persistent host wraps prompt error data to add its event id.
 		{"host wrapped", &acpsdk.RequestError{Code: -32603, Message: "Internal error",
 			Data: map[string]any{"providerData": map[string]any{"details": "Session not found"}, "ao.persistentEventId": "e1"}}, true},
 		{"wrapped in fmt", fmt.Errorf("set ACP session option %q: %w", "model", &acpsdk.RequestError{
@@ -47,8 +44,6 @@ func TestIsACPSessionMissing(t *testing.T) {
 	}
 }
 
-// lostSessionHost is a persistent provider host whose agent answers every
-// request with claude-agent-acp's "Session not found".
 type lostSessionHost struct {
 	conv         *conversation
 	host         net.Conn
@@ -91,11 +86,6 @@ func newLostSessionHost(t *testing.T) *lostSessionHost {
 	return h
 }
 
-// assertStoppedForResume checks the provider was terminated and the stream
-// ended as an ordinary stop. The controller treats the stream closing as the
-// stop signal and reports the session exited; an explicit stop event may or may
-// not precede it after a deliberate close. An inconclusive stop would preserve
-// the dead provider instead, and readiness would drain queued work into it.
 func (h *lostSessionHost) assertStoppedForResume(t *testing.T) []ports.ChatEvent {
 	t.Helper()
 	var seen []ports.ChatEvent
@@ -138,8 +128,6 @@ func TestSendTurnStopsProviderThatLostSession(t *testing.T) {
 		t.Fatalf("first request = %q", method)
 	}
 	h.assertStoppedForResume(t)
-	// The stopped provider took its journal with it; the controller's ACK must
-	// not fail and turn the stop into a preserved provider.
 	if err := h.conv.AcknowledgeProviderEvent(context.Background(), "e1"); err != nil {
 		t.Fatalf("ack after lost session: %v", err)
 	}
@@ -173,7 +161,6 @@ func TestPromptFailsTurnAndStopsProviderThatLostSession(t *testing.T) {
 func TestInterruptedPromptIntoLostSessionStillStopsProvider(t *testing.T) {
 	h := newLostSessionHost(t)
 	h.conv.activeTurn = "durable-turn"
-	// session/cancel was accepted before the prompt answered "Session not found".
 	done := make(chan struct{})
 	close(done)
 	h.conv.interrupt = &interruptAttempt{turnID: "durable-turn", done: done}
@@ -198,8 +185,6 @@ func sessionNotFoundError() error {
 		Data: map[string]any{"details": "Session not found"}}
 }
 
-// A Close that detached first (daemon shutdown) consumed closeOnce. The lost
-// session must still terminate the host, or the next daemon reattaches to it.
 func TestLostSessionEscalatesAnEarlierDetach(t *testing.T) {
 	h := newLostSessionHost(t)
 	if err := h.conv.Close(); err != nil {
@@ -234,8 +219,6 @@ func TestSteerIntoLostSessionIsARefusalAndStopsProvider(t *testing.T) {
 	if !errors.Is(err, ports.ErrChatProviderSessionLost) {
 		t.Fatalf("Steer error = %v, want ErrChatProviderSessionLost", err)
 	}
-	// A refusal settles the steer's delivery handle as rejected instead of
-	// leaving it uncertain, so recovery cannot report it as accepted.
 	var refusal interface{ ChatRefusal() bool }
 	if !errors.As(err, &refusal) || !refusal.ChatRefusal() {
 		t.Fatalf("Steer error is not a definitive refusal: %v", err)

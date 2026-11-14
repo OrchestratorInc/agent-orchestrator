@@ -55,15 +55,11 @@ func TestAccountKeychainDoesNotFallBackToComputerLogin(t *testing.T) {
 	}
 }
 
-// securityExit is a `security` failure with its exit status.
 type securityExit int
 
 func (e securityExit) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 func (e securityExit) ExitCode() int { return int(e) }
 
-// fakeKeychain answers like `security`: items are listed least recently written
-// first, a lookup without -a returns the first one for the service, and a miss
-// exits 44.
 func fakeKeychain(items ...[3]string) commandRunner {
 	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		service := args[slices.Index(args, "-s")+1]
@@ -112,8 +108,6 @@ func TestKeychainStillReadsItemFiledUnderAnotherAccount(t *testing.T) {
 	}
 }
 
-// A signed-out account item is Claude Code's answer; another account's token
-// must not stand in for it.
 func TestKeychainDoesNotReplaceAccountItemWithAnotherAccounts(t *testing.T) {
 	_, found := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
 		Env: envFrom(map[string]string{"USER": "someone"}), GOOS: "darwin", AllowKeychain: true,
@@ -139,8 +133,6 @@ func TestKeychainAccountFollowsClaudeCodeRule(t *testing.T) {
 	}
 }
 
-// Only a missing item may widen the lookup. Asking again after a read that
-// failed could prompt a second time or return the stale item.
 func TestKeychainDoesNotWidenLookupAfterAccountReadFails(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -169,7 +161,6 @@ func TestKeychainDoesNotWidenLookupAfterAccountReadFails(t *testing.T) {
 	}
 }
 
-// The real runner reports a miss through *exec.ExitError, not the test double.
 func TestKeychainItemMissingRecognizesARealExitStatus(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs a POSIX shell")

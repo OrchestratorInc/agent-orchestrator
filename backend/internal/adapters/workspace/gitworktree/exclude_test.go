@@ -11,14 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestAddExcludeTakesEffectInLinkedWorktree exercises AddExclude against a REAL
-// linked worktree (the only kind this adapter creates). git reads info/exclude
-// from $GIT_COMMON_DIR, not $GIT_DIR, and in a linked worktree those differ, so a
-// resolution via `--git-dir` writes the exclude where git never looks and the
-// pattern is a silent no-op. This test asserts the exclude actually takes effect:
-// after AddExclude, a file matching the pattern must NOT surface as an untracked
-// change. It fails against a `--git-dir` resolution and passes with
-// `--git-common-dir`.
 func TestAddExcludeTakesEffectInLinkedWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -30,7 +22,6 @@ func TestAddExcludeTakesEffectInLinkedWorktree(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Create a real linked worktree under the managed root.
 	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/exclude"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -41,7 +32,6 @@ func TestAddExcludeTakesEffectInLinkedWorktree(t *testing.T) {
 		t.Fatalf("AddExclude: %v", err)
 	}
 
-	// Drop a file that matches the excluded pattern into the worktree.
 	attachDir := filepath.Join(info.Path, ".ao", "attachments")
 	if err := os.MkdirAll(attachDir, 0o750); err != nil {
 		t.Fatalf("mkdir attachments: %v", err)
@@ -50,7 +40,6 @@ func TestAddExcludeTakesEffectInLinkedWorktree(t *testing.T) {
 		t.Fatalf("write attachment: %v", err)
 	}
 
-	// If the exclude took effect, git sees no untracked changes in the worktree.
 	out, err := exec.Command(git, "-C", info.Path, "status", "--porcelain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git status: %v\n%s", err, out)
@@ -59,7 +48,6 @@ func TestAddExcludeTakesEffectInLinkedWorktree(t *testing.T) {
 		t.Fatalf("exclude did not take effect; git status --porcelain not empty:\n%s", out)
 	}
 
-	// Idempotent: a second call must not duplicate the entry in the exclude file.
 	if err := ws.AddExclude(ctx, info, pattern); err != nil {
 		t.Fatalf("AddExclude (repeat): %v", err)
 	}

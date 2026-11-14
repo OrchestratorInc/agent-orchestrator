@@ -20,8 +20,6 @@ func requestedRun(id string, harness domain.ReviewerHarness, status domain.Revie
 	}
 }
 
-// A worker asking for its own review must hear that the head is already being
-// reviewed rather than silently get the existing pass back.
 func TestTriggerRejectReviewedHeadReportsRunningReview(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
@@ -44,8 +42,6 @@ func TestTriggerRejectReviewedHeadReportsRunningReview(t *testing.T) {
 	}
 }
 
-// "Any review on that head" counts every reviewer, even when a later pass by
-// another reviewer failed and so is the newest run on the head.
 func TestTriggerRejectReviewedHeadReportsAnyCompletedReview(t *testing.T) {
 	store := &fakeStore{
 		runs: []domain.ReviewRun{
@@ -88,8 +84,6 @@ func TestTriggerRejectReviewedHeadStartsAnUnreviewedHeadAsAgent(t *testing.T) {
 	}
 }
 
-// --rerun really reviews the same commit again with the same reviewer. The
-// SQLite unique index used to make this collide with the approved pass.
 func TestTriggerRerunReviewsAnApprovedHeadAgainWithTheSameReviewer(t *testing.T) {
 	ctx := context.Background()
 	store := newSQLiteReviewStore(t)
@@ -128,8 +122,6 @@ func TestTriggerRerunReviewsAnApprovedHeadAgainWithTheSameReviewer(t *testing.T)
 	}
 }
 
-// A worker may ask several reviewers at once. Adding one must not cancel or
-// tear down another that is still working on the same head.
 func TestTriggerRerunAddsAParallelReviewerWithoutStoppingTheRunningOne(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
@@ -173,8 +165,6 @@ func TestTriggerRerunAddsAParallelReviewerWithoutStoppingTheRunningOne(t *testin
 	}
 }
 
-// An idle pane of another reviewer is still released, as before, so parallel
-// support does not leak reviewer processes.
 func TestTriggerReleasesAnIdleOtherReviewer(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
@@ -256,8 +246,6 @@ func TestCancelStopsEveryRunningReviewer(t *testing.T) {
 	}
 }
 
-// A dead pane must only fail its own reviewer's runs, never another reviewer's
-// pass that is still running on the same worker.
 func TestTriggerStaleReviewerCancelIsScopedToThatReviewer(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
@@ -302,9 +290,6 @@ func TestReviewerDefaultsToTheProjectDefaultWorkerConfig(t *testing.T) {
 	}
 }
 
-// Restoring a worker restores its selected reviewer. Another reviewer running
-// alongside it keeps running when its pane survived, and is cancelled with an
-// accurate reason when it did not, instead of being reported as "switched".
 func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -350,9 +335,6 @@ func TestRestoreReviewerKeepsALiveParallelReviewerAndCancelsADeadOne(t *testing.
 	}
 }
 
-// When an agent asks a reviewer other than the selected one, the selected
-// reviewer fields keep meaning the session's selected reviewer; the working
-// reviewer is reported through ActiveReviewers.
 func TestListKeepsTheSelectedReviewerAndListsTheWorkingOneAsActive(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
@@ -379,8 +361,6 @@ func TestListKeepsTheSelectedReviewerAndListsTheWorkingOneAsActive(t *testing.T)
 	}
 }
 
-// A Chat reviewer running alongside the selected one has no pane by design and
-// is recovered by RecoverChatReviewers; worker restore must not cancel it.
 func TestRestoreReviewerLeavesARunningChatReviewerToChatRecovery(t *testing.T) {
 	store := &fakeStore{
 		reviews: map[domain.ReviewerHarness]domain.Review{
@@ -421,8 +401,6 @@ func TestTriggerPRURLReviewsOnlyTheNamedPR(t *testing.T) {
 	}
 }
 
-// With no PR tracked, the error names the worker's branch and the exact retry
-// command for this worker, so any caller can attach a PR AO has not picked up.
 func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
 	worker := liveWorker()
 	worker.Metadata.Branch = "ao/mer-1/fix"
@@ -432,16 +410,12 @@ func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
 		t.Fatalf("err = %v, want the branch and the exact --pr retry for a PR AO has not picked up", err)
 	}
 
-	// Without a lookup (an automatic pass, or no branch listing) the error
-	// does not claim the branch has no open PR.
 	_, err = eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
 	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "found no open PR") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
 		t.Fatalf("err = %v, want the exact --pr retry without a claim about the branch", err)
 	}
 }
 
-// A session whose only tracked PR is closed gets the same explanation and
-// retry command, not just "no open PR head".
 func TestTriggerWithOnlyAClosedTrackedPRPointsAtThePRFlag(t *testing.T) {
 	worker := liveWorker()
 	worker.Metadata.Branch = "ao/mer-1/fix"
@@ -453,8 +427,6 @@ func TestTriggerWithOnlyAClosedTrackedPRPointsAtThePRFlag(t *testing.T) {
 	}
 }
 
-// trigger, triggerWithSource and triggerWithSourceAndMode keep the older
-// engine tests readable now that TriggerWithOptions is the only entry point.
 func trigger(ctx context.Context, e *Engine, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (TriggerResult, error) {
 	return e.TriggerWithOptions(ctx, workerID, TriggerOptions{Harness: harness, Config: config})
 }

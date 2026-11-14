@@ -17,8 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// recordedReq captures one inbound HTTP request so tests can assert against
-// the exact GitHub API surface the adapter touched.
 type recordedReq struct {
 	Method      string
 	Path        string
@@ -26,9 +24,6 @@ type recordedReq struct {
 	IfNoneMatch string
 }
 
-// fakeGH is a programmable httptest.Server that matches requests by
-// "METHOD path" and records every call. Unmatched requests fail the test —
-// that is the point of TDD here, so an accidental extra call is loud.
 type fakeGH struct {
 	t        *testing.T
 	server   *httptest.Server
@@ -75,9 +70,6 @@ func (f *fakeGH) calls() []recordedReq {
 	return out
 }
 
-// newTrackerForTest constructs an adapter pointed at the fake server with a
-// static dev token. Production code uses EnvTokenSource; tests skip that to
-// keep the surface tiny.
 func newTrackerForTest(t *testing.T, f *fakeGH) *Tracker {
 	t.Helper()
 	tr, err := New(Options{
@@ -168,7 +160,7 @@ func TestGet_HappyPath(t *testing.T) {
 		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "octocat/hello-world#42"},
 		Title:     "Found a bug",
 		Body:      "It does not work",
-		State:     domain.IssueInProgress, // the "in-progress" label wins over plain "open"
+		State:     domain.IssueInProgress,
 		URL:       "https://github.com/octocat/hello-world/issues/42",
 		Labels:    []string{"bug", "in-progress"},
 		Assignees: []string{"alice", "bob"},
@@ -264,10 +256,6 @@ func TestGet_RateLimited(t *testing.T) {
 	}
 }
 
-// TestGet_SecondaryRateLimit covers the GitHub "abuse detection"
-// response — it lacks X-RateLimit-Remaining but sets Retry-After, and the
-// body mentions the limit. The classifier must still surface this as
-// ErrRateLimited rather than mis-categorizing it as auth failure.
 func TestGet_SecondaryRateLimit(t *testing.T) {
 	f := newFakeGH(t)
 	f.on("GET", "/repos/o/r/issues/1", func(w http.ResponseWriter, r *http.Request) {
@@ -306,9 +294,6 @@ func TestGet_RejectsEmptyProvider(t *testing.T) {
 	}
 }
 
-// TestGet_CanonicalizesProviderOnOutput pins the contract that returned
-// Issues always carry domain.TrackerProviderGitHub, so callers can re-route
-// without inspecting which adapter they originally talked to.
 func TestGet_CanonicalizesProviderOnOutput(t *testing.T) {
 	f := newFakeGH(t)
 	f.on("GET", "/repos/o/r/issues/1", func(w http.ResponseWriter, r *http.Request) {
@@ -327,9 +312,6 @@ func TestGet_CanonicalizesProviderOnOutput(t *testing.T) {
 	}
 }
 
-// TestGet_AuthFailed locks in that a 401 (and 403 without rate-limit
-// signals) maps to the typed ErrAuthFailed, so callers — especially
-// Preflight — can distinguish bad-token from other failures.
 func TestGet_AuthFailed(t *testing.T) {
 	f := newFakeGH(t)
 	f.on("GET", "/repos/o/r/issues/1", func(w http.ResponseWriter, r *http.Request) {
@@ -341,10 +323,6 @@ func TestGet_AuthFailed(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAuthFailed", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Preflight
-// ---------------------------------------------------------------------------
 
 func TestPreflight_HappyPath(t *testing.T) {
 	f := newFakeGH(t)
@@ -372,9 +350,6 @@ func TestPreflight_InvalidToken(t *testing.T) {
 	}
 }
 
-// TestPreflight_CachesSuccess pins that a successful check is cached so the
-// daemon doesn't burn a GET /user on every component start that wants to
-// confirm tracker auth.
 func TestPreflight_CachesSuccess(t *testing.T) {
 	f := newFakeGH(t)
 	f.on("GET", "/user", func(w http.ResponseWriter, r *http.Request) {
@@ -391,9 +366,6 @@ func TestPreflight_CachesSuccess(t *testing.T) {
 	}
 }
 
-// TestPreflight_RetriesAfterFailure pins the recovery property: failures
-// must NOT be cached, otherwise a transient network glitch at startup would
-// permanently brick the tracker for the lifetime of the daemon.
 func TestPreflight_RetriesAfterFailure(t *testing.T) {
 	f := newFakeGH(t)
 	var calls int
@@ -416,10 +388,6 @@ func TestPreflight_RetriesAfterFailure(t *testing.T) {
 		t.Fatalf("HTTP calls = %d, want 2 (first fail not cached)", got)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// List
-// ---------------------------------------------------------------------------
 
 func TestList_HappyPathAndDefaults(t *testing.T) {
 	f := newFakeGH(t)
@@ -455,8 +423,6 @@ func TestList_HappyPathAndDefaults(t *testing.T) {
 func TestList_FiltersOutPullRequests(t *testing.T) {
 	f := newFakeGH(t)
 	f.on("GET", "/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
-		// GitHub's issues endpoint returns PRs too. We must filter them out
-		// so the LCM never tries to spawn an agent against a PR number.
 		_, _ = w.Write([]byte(`[
 			{"number":10,"title":"real issue","state":"open","html_url":"https://github.com/o/r/issues/10"},
 			{"number":11,"title":"a PR","state":"open","html_url":"https://github.com/o/r/pull/11","pull_request":{"url":"https://api.github.com/repos/o/r/pulls/11"}},
@@ -808,19 +774,18 @@ func TestList_RejectsWrongProvider(t *testing.T) {
 
 func TestList_RejectsBadRepo(t *testing.T) {
 	cases := []string{
-		"",             // empty
-		"noseparator",  // missing /
-		"/repo",        // empty owner
-		"owner/",       // empty repo
-		"a/b/c",        // extra slash
-		" owner/repo",  // leading whitespace in owner
-		"owner/repo ",  // trailing whitespace in repo
-		"own er/repo",  // embedded space in owner
-		"owner/re#po",  // embedded # in repo
-		"\towner/repo", // tab in owner
-		"owner/repo\n", // newline in repo
+		"",
+		"noseparator",
+		"/repo",
+		"owner/",
+		"a/b/c",
+		" owner/repo",
+		"owner/repo ",
+		"own er/repo",
+		"owner/re#po",
+		"\towner/repo",
+		"owner/repo\n",
 	}
-	// Sanity: a benign leading-dot repo (".github" convention) must pass.
 	if _, _, err := parseGitHubRepo("octocat/.github"); err != nil {
 		t.Fatalf("leading-dot repo rejected unexpectedly: %v", err)
 	}

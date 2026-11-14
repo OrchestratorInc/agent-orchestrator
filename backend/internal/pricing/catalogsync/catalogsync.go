@@ -1,4 +1,3 @@
-// Package catalogsync builds AO's content-addressed pricing catalog from LiteLLM's model price table.
 package catalogsync
 
 import (
@@ -226,8 +225,6 @@ func build(upstream []byte) (generatedCatalog, error) {
 		if !ok || !supportedMode(record.Mode) {
 			continue
 		}
-		// LiteLLM also carries metadata-only model entries in chat/responses
-		// modes. They are not price records.
 		if record.Input == nil || record.Output == nil {
 			continue
 		}
@@ -466,8 +463,6 @@ func normalizeOptional(number *json.Number) (*string, error) {
 	return &value, nil
 }
 
-// normalizeDecimal parses a JSON decimal or scientific notation without a
-// float64 round trip and returns its canonical non-exponent decimal spelling.
 func normalizeDecimal(input string) (string, error) {
 	if input == "" {
 		return "", errors.New("rate is not a number")
@@ -603,20 +598,6 @@ func equalOptionalRate(left, right *string) bool {
 	return *left == *right
 }
 
-// withPlausibleCacheTiers drops an Anthropic cache-write rate the upstream feed
-// cannot mean, rather than shipping it.
-//
-// Anthropic prices a 5-minute write above base input and a 1-hour write above
-// that; the feed has carried both a 1-hour rate below the 5-minute rate
-// (claude-3-opus-20240229, 5x too low) and one twenty-four times base input
-// (claude-3-haiku-20240307, 12x too high) — in both cases the value belonging
-// to a different model. An absent rate prices that bucket as unknown, which the
-// estimator already reports honestly; a wrong one is billed as fact.
-//
-// This is deliberately not applied to the other providers, whose tiers do not
-// follow that shape: z.ai writes to cache for free, and an OpenAI fine-tune
-// prices a write at half its input rate. Both are real, and a relational
-// invariant borrowed from Anthropic would delete them.
 func withPlausibleCacheTiers(providerID string, r rates) rates {
 	if providerID != "anthropic" {
 		return r
@@ -633,17 +614,8 @@ func withPlausibleCacheTiers(providerID string, r rates) rates {
 	return trimmed
 }
 
-// maxAnthropicWriteMultiple bounds a 1-hour write against base input. Anthropic
-// documents 2x; the headroom leaves room for a repricing without letting a
-// value from another model's row through.
 var maxAnthropicWriteMultiple = big.NewRat(5, 2)
 
-// checkAnthropicCacheTiers reports the relationship Anthropic's published
-// pricing keeps: a write is never cheaper than plain input, a longer time to
-// live is never cheaper than a shorter one, and an hour is not an order of
-// magnitude above base input. The exact multiples are not asserted, because
-// Anthropic rounds them — claude-3-haiku's 5-minute write is 1.2x base input,
-// not the documented 1.25x.
 func checkAnthropicCacheTiers(r rates) error {
 	input, ok := new(big.Rat).SetString(r.UncachedInputUSDPerToken)
 	if !ok {

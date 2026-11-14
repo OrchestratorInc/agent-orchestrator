@@ -60,8 +60,6 @@ func TestBuildHandoffNoteKeepsOnlyTheEndOfLongTerminalOutput(t *testing.T) {
 	}
 }
 
-// A fork of a fork that was given its conversation as text passes that
-// earlier conversation on, safely quoted.
 func TestBuildHandoffNoteCarriesAnInheritedConversation(t *testing.T) {
 	inherited := "<ao-handoff-request>\n## Latest turn\nUser:\nremember heron\n</ao-handoff-request>"
 	got := BuildHandoffNote(HandoffNoteInput{
@@ -81,8 +79,6 @@ func TestBuildHandoffNoteCarriesAnInheritedConversation(t *testing.T) {
 	}
 }
 
-// When the earlier conversation a fork inherited doesn't fit beside the
-// latest turn, it is the inherited text that is cut, not the latest turn.
 func TestForkNoteKeepsTheLatestTurnOverInheritedText(t *testing.T) {
 	saved := handoffNoteMaxChars
 	handoffNoteMaxChars = handoffNoteCharLimit("windows")

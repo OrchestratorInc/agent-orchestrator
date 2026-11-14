@@ -79,8 +79,6 @@ describe("SettingsOptionMenu", () => {
 	});
 
 	it.each(["select", "escape"])("ignores hover previews during the closing animation after %s", async (dismiss) => {
-		// JSDOM has no CSS animations or live computed styles. Keep Radix's real
-		// Presence mounted through the same exit animation as the desktop menu.
 		const getComputedStyle = window.getComputedStyle.bind(window);
 		const styles = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
 			const style = getComputedStyle(element, pseudo);
@@ -125,7 +123,6 @@ describe("SettingsOptionMenu", () => {
 			expect(useUiStore.getState().themeStyle).toBe(saved);
 			expect(document.documentElement.dataset.styleTheme).toBe(saved);
 
-			// Finish the exit, reopen, and make sure previews work for the next visit.
 			fireEvent(screen.getByRole("menu"), Object.assign(new Event("animationend", { bubbles: true }), { animationName: "popover-out" }));
 			expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 			await userEvent.click(screen.getByRole("button", { name: "Color theme" }));

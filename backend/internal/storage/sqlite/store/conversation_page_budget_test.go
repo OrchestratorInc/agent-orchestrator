@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Exercise the generated reads directly: bounding the final snapshot alone does
-// not prevent the store from materializing a whole chunk of large payloads.
 func TestConversationPageSQLByteBudget(t *testing.T) {
 	for _, tc := range []struct{ table, column string }{
 		{"conversation_messages", "text"},
@@ -45,7 +43,6 @@ func TestConversationPageSQLByteBudget(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			// 24 characters, but 72 UTF-8 bytes. Each row fits 100 bytes; two do not.
 			payload := strings.Repeat("界", 24)
 			for i := 1; i <= 4; i++ {
 				var query string
@@ -59,7 +56,7 @@ func TestConversationPageSQLByteBudget(t *testing.T) {
 				}
 			}
 			q := gen.New(db)
-			for _, budget := range []int64{100, 1} { // An oversized first row must still advance the cursor.
+			for _, budget := range []int64{100, 1} {
 				for before := int64(5); before > 1; before-- {
 					var sequences []int64
 					if tc.table == "conversation_messages" {

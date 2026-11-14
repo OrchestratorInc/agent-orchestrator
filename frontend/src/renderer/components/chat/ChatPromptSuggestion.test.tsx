@@ -30,7 +30,6 @@ describe("next-message suggestion", () => {
 		const ghost = screen.getByTestId("prompt-suggestion").parentElement!;
 		expect(ghost).toHaveClass("px-[7px]");
 		expect(field).toHaveClass("px-[7px]", "overflow-visible");
-		// The wrapper scrolls the suggestion, so it reserves the scrollbar gutter for both.
 		expect(field.parentElement).toHaveClass("overflow-y-auto", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
 	});
 

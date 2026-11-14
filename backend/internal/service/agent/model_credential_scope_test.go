@@ -26,8 +26,6 @@ func TestCredentialTypeFromScope(t *testing.T) {
 }
 
 func TestModelCatalogScopeKeepsOnlyCredentialScopes(t *testing.T) {
-	// A credential scope has no backing project, so it survives verbatim; every
-	// other scope, including a project ID, is the single device catalog.
 	for _, tc := range []struct{ scope, want string }{
 		{scope: "@cred:anthropic_api_key", want: "@cred:anthropic_api_key"},
 		{scope: "agent-orchestrator", want: ""},
@@ -41,8 +39,6 @@ func TestModelCatalogScopeKeepsOnlyCredentialScopes(t *testing.T) {
 }
 
 func TestModelDiscoveryRequestSetsCredentialType(t *testing.T) {
-	// A credential scope carries the credential type onto the request for the
-	// adapter to honor.
 	s := &Service{}
 	request, err := s.modelDiscoveryRequest(context.Background(), "opencode", "@cred:openai_api_key", "/bin/opencode")
 	if err != nil {

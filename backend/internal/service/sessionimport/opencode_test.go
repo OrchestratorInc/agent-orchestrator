@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// newOpenCodeStore builds a synthetic opencode.db that mirrors the columns the
-// importer reads. Content is wholly invented; no real user history is used.
 func newOpenCodeStore(t *testing.T) (root string, db *sql.DB) {
 	t.Helper()
 	root = t.TempDir()
@@ -49,10 +47,6 @@ func addSession(t *testing.T, db *sql.DB, id, parent, dir, title string, updated
 	}
 }
 
-// addMessage writes a message and its ordered parts. A part is "text:<body>"
-// for a visible text block, "synthetic:<body>"/"ignored:<body>" for an
-// OpenCode-injected text part, or a bare part type ("tool", "reasoning",
-// "step-start") to exercise the text-only filter.
 func addMessage(t *testing.T, db *sql.DB, sessionID, msgID, role string, created int64, parts ...string) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)`,
@@ -101,8 +95,6 @@ func TestOpenCodeDiscoverSkipsChildAndArchived(t *testing.T) {
 	}
 }
 
-// OpenCode resumes from a private copy bound to AO's workspace (see the
-// opencode adapter's PrepareImportedSession), so readable chats are offered.
 func TestScanOffersOpenCodeWithReadableHistory(t *testing.T) {
 	root, db := newOpenCodeStore(t)
 	project := t.TempDir()
@@ -123,10 +115,6 @@ func TestScanOffersOpenCodeWithReadableHistory(t *testing.T) {
 func TestOpenCodeTranscriptKeepsOnlyUserAssistantText(t *testing.T) {
 	root, db := newOpenCodeStore(t)
 	addSession(t, db, "ses_abc123", "", "/work/repo", "Fix the parser", 9000, nil)
-	// A user turn whose typed prompt sits beside an OpenCode-injected @file echo
-	// (synthetic) and an ignored part, then an assistant turn whose
-	// reasoning/tool/step parts are provider internals. Only the typed prompt and
-	// the assistant's text must survive.
 	addMessage(t, db, "ses_abc123", "msg_a", "user", 1000, "synthetic:<file>parser.go contents the user never typed</file>", "text:Fix the parser", "ignored:stale attachment")
 	addMessage(t, db, "ses_abc123", "msg_b", "assistant", 2000, "step-start", "reasoning", "tool", "text:Done, fixed it.", "step-finish")
 
@@ -157,7 +145,6 @@ func TestOpenCodePlaceholderTitleFallsBackToPrompt(t *testing.T) {
 
 func TestOpenCodeTranscriptRejectsNonConversations(t *testing.T) {
 	root, db := newOpenCodeStore(t)
-	// Assistant-only (no user prompt) and a child session are not conversations.
 	addSession(t, db, "ses_noprompt", "", "/work/repo", "", 9000, nil)
 	addMessage(t, db, "ses_noprompt", "msg_a", "assistant", 1000, "text:Hello there.")
 	addSession(t, db, "ses_sub", "ses_noprompt", "/work/repo", "Sub", 9000, nil)
@@ -177,8 +164,6 @@ func TestOpenCodeMissingDatabaseYieldsNoCandidates(t *testing.T) {
 	}
 }
 
-// A long OpenCode session is bounded while its parts are read: the oldest
-// text goes first and the opening prompt stays.
 func TestOpenCodeHeldTextIsBoundedWhileReading(t *testing.T) {
 	held := maxHeldText
 	maxHeldText = 60

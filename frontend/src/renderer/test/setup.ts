@@ -5,26 +5,16 @@ import { appI18n } from "../i18n";
 import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 
-// The app loads non-English catalogs on demand. Component tests read other
-// locales synchronously (getFixedT, t after changeLanguage), so give the shared
-// instance every catalog up front. instance.test.ts covers the lazy path.
 for (const [locale, catalog] of Object.entries(appCatalogs)) {
 	appI18n.addResourceBundle(locale, "translation", catalog, true, true);
 }
 import { appShortcutBus } from "./app-shortcut-bus";
 import { resetAgentLoginLifecycle } from "../lib/agent-login-lifecycle";
 
-// Login lifecycle state is module-wide; a retained disposal must not leak into
-// the next test.
 beforeEach(() => resetAgentLoginLifecycle());
 
-// Vitest 4 can load the convenience entry against a different matcher
-// instance. Register the matchers on the active test runtime as well.
 expect.extend(jestDomMatchers);
 
-// Guard: src/main/** tests run in the Node.js environment (no DOM). vitest still
-// routes setupFiles here, so only install the DOM stubs when a DOM exists.
-// ponytail: single guard; node env has no DOM to stub.
 if (typeof window !== "undefined") {
 	const emptyRect = () => ({
 		bottom: 0,
@@ -38,9 +28,6 @@ if (typeof window !== "undefined") {
 		toJSON: () => ({}),
 	});
 
-	// JSDOM does not implement the selection geometry rich text editors use to
-	// keep the caret visible. Lexical only reads these values; zero geometry is
-	// sufficient for component tests.
 	if (!Range.prototype.getBoundingClientRect) {
 		Range.prototype.getBoundingClientRect = emptyRect;
 	}
@@ -72,9 +59,6 @@ if (typeof window !== "undefined") {
 		value: ResizeObserverStub,
 	});
 
-	// jsdom has no Web Animations API. Components that animate from a
-	// requestAnimationFrame callback (the file tree's expand slide) would
-	// otherwise throw after their test has already passed.
 	if (typeof HTMLElement.prototype.animate !== "function") {
 		Object.defineProperty(HTMLElement.prototype, "animate", {
 			configurable: true,
@@ -83,10 +67,6 @@ if (typeof window !== "undefined") {
 		});
 	}
 
-	// jsdom does not implement Element.scrollTo. Chat find repaints from a
-	// timer, so a test that finishes first would otherwise see an unhandled
-	// "scrollTo is not a function" after it has passed.
-	// On Element, where tests that need a spy install it, so theirs replaces this one.
 	if (typeof Element.prototype.scrollTo !== "function") {
 		Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, writable: true, value: () => {} });
 	}
@@ -126,8 +106,6 @@ if (typeof window !== "undefined") {
 		});
 	};
 	installLocalStorage();
-	// A test can spy on the getter and return a Storage that has no clear().
-	// The next file's beforeEach calls clear(). Put the stub back first.
 	beforeEach(() => {
 		if (typeof window.localStorage?.clear !== "function") installLocalStorage();
 	});
@@ -387,7 +365,7 @@ if (typeof window !== "undefined") {
 				list: async () => ({ downloads: [] }),
 				action: async () => ({ downloads: [] }),
 				clear: async () => ({ downloads: [] }),
-				onChanged: () => () => { /* no-op test subscription */ },
+				onChanged: () => () => { },
 			},
 			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
 			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
@@ -548,4 +526,4 @@ if (typeof window !== "undefined") {
 			agentBrowserUrl: async () => "",
 		},
 	};
-} // end if (typeof window !== "undefined")
+}

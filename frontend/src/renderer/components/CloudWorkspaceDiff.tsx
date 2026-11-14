@@ -21,7 +21,6 @@ export function CloudWorkspaceDiff({ annotation, session, isMaximized = false, o
 }
 
 export function CloudFileContentPane({ active, annotation, commitSha, initialEditing, initialLine, initialMode, initialRequestKey, onDirtyChange, path, scope, session, split = false }: {
-	/** False while the view is kept mounted behind another tab. */
 	active?: boolean;
 	annotation: FileAnnotationModel;
 	commitSha?: string;
@@ -37,8 +36,6 @@ export function CloudFileContentPane({ active, annotation, commitSha, initialEdi
 }) {
 	const { baseUrl, client } = useCloudCp();
 	const handleDirtyChange = useCallback((dirty: boolean) => onDirtyChange?.(path, dirty), [onDirtyChange, path]);
-	// A sibling repository's file is opened as ../<repository>/<path>; its
-	// calls and comments go to that repository.
 	const target = splitWorkspaceRepositoryPath(path);
 	const scopedClient = withWorkspaceRepository(client, target.repository);
 	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(annotation, target.repository), [annotation, target.repository]);

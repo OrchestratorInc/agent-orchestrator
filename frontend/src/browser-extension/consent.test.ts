@@ -48,7 +48,7 @@ describe("ConsentManager", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(fake.created[0]).toContain("consent.html?session=s1");
 		const ack = fake.send({ type: "ao-consent-decision", sessionId: "s1", allow: true, trusted: true });
-		fake.closeWindow(); // The page closes itself right after clicking.
+		fake.closeWindow();
 		await expect(pending).resolves.toMatchObject({ trusted: true });
 		await expect(ack).resolves.toEqual({ ok: true });
 		await expect(consent.ensure("s1")).resolves.toMatchObject({ trusted: true });
@@ -89,12 +89,10 @@ describe("ConsentManager", () => {
 		await expect(consent.ensure("s2")).resolves.toMatchObject({ trusted: true });
 		expect(created).toHaveLength(1);
 
-		// A session ending keeps the choice.
 		await consent.revoke("s1");
 		await expect(consent.ensure("s3")).resolves.toMatchObject({ trusted: true });
 		expect(created).toHaveLength(1);
 
-		// A person revoking one session ends it, and the next session asks again.
 		await consent.revoke("s3", true);
 		const asked = consent.ensure("s4");
 		await waitForPrompt(created, 2);

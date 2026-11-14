@@ -7,12 +7,10 @@ import type { HarnessDetails } from "./describe-harness";
 import { detectedCredential } from "./harness-diagnostics";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessStateText, HarnessTimestamp, hasValidTimestamp, type HarnessTone } from "./harness-ui";
 
-/** Read-only facts AO observed about one harness. */
 export function HarnessHealthTab({ details, checking, authCheckFailed, updateError, copied, onCheckAgain, onCopyReport }: {
 	details: HarnessDetails;
 	checking: boolean;
 	authCheckFailed: boolean;
-	/** The update failure a notice shortcut opened this tab for; also in the copied report. */
 	updateError?: string;
 	copied: boolean;
 	onCheckAgain: () => void;
@@ -28,7 +26,6 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 	const authLabel = renewsOnRun ? t("settings.harness.health.authRenewsOnRun")
 		: details.authStatus === "configured" && !details.unverifiedProvider ? t("settings.harness.health.connectionNotChecked")
 		: details.authSummary;
-	// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 	const credential = detectedCredential(details, t);
 	const executable = advisory?.binaryPath || details.job?.expectedDestination;
 	const hasDetails = Boolean((isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
@@ -52,7 +49,6 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup>
 		{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
-			{/* One version row: the installed release with how it compares to the latest. */}
 			{isInstalled && details.currentVersion ? <HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
 				<MiddleTruncatedText className="whitespace-nowrap font-mono text-xs text-settings-label" text={details.versionText} />
 				{details.updateAvailable ? <MiddleTruncatedText className="whitespace-nowrap text-xs font-medium text-settings-accent" text={versionLabel(advisory!.latestVersion!)} format={(version) => t("settings.harness.versionAvailable", { version })} />

@@ -7,9 +7,6 @@ import { workspaceDisplayName } from "./share/linkAccess";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TooltipProvider } from "./ui/tooltip";
 
-// A team workspace provisioned for one person can be named after their
-// email, so "People in asha.k77@example.com" read as if an address were a
-// group, and never said the workspace's people have full access.
 const EMAIL = "asha.k77@example.com";
 
 const mocks = vi.hoisted(() => ({
@@ -67,7 +64,6 @@ async function sentence(): Promise<string> {
 }
 
 describe("the workspace in People with access", () => {
-	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
 	afterEach(async () => {
 		cleanup();
 		await new Promise((resolve) => setTimeout(resolve, 0));
@@ -112,7 +108,6 @@ describe("the workspace in People with access", () => {
 		await waitFor(() => expect(within(workspaceRow()!).getByText("3 members")).toBeInTheDocument());
 		expect(within(workspaceRow()!).getByText("Everyone in your workspace")).toBeInTheDocument();
 		expect(workspaceRow()!.textContent).not.toContain("@");
-		// The owner row is the only place the address shows, as a person's.
 		expect(within(list).getAllByText(EMAIL)).toHaveLength(1);
 		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session.");
 	});

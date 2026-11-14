@@ -9,8 +9,8 @@ func TestPrivateIPv4Candidates(t *testing.T) {
 	ifaces := []net.Interface{
 		{Index: 1, Name: "lo0", Flags: net.FlagUp | net.FlagLoopback},
 		{Index: 2, Name: "en0", Flags: net.FlagUp},
-		{Index: 3, Name: "utun3", Flags: net.FlagUp}, // VPN — skip
-		{Index: 4, Name: "en5", Flags: 0},            // down — skip
+		{Index: 3, Name: "utun3", Flags: net.FlagUp},
+		{Index: 4, Name: "en5", Flags: 0},
 	}
 	addrs := map[string][]net.Addr{
 		"lo0":   {cidr("127.0.0.1/8")},
@@ -28,11 +28,11 @@ func TestPrivateIPv4Candidates(t *testing.T) {
 
 func TestTailscaleIPv4Candidates(t *testing.T) {
 	ifaces := []net.Interface{
-		{Index: 1, Name: "lo0", Flags: net.FlagUp | net.FlagLoopback}, // loopback — skip
-		{Index: 2, Name: "en0", Flags: net.FlagUp},                    // carrier NAT — skip
-		{Index: 3, Name: "utun1", Flags: net.FlagUp},                  // other VPN — skip
-		{Index: 4, Name: "utun0", Flags: net.FlagUp},                  // Tailscale — keep
-		{Index: 5, Name: "utun9", Flags: 0},                           // down — skip
+		{Index: 1, Name: "lo0", Flags: net.FlagUp | net.FlagLoopback},
+		{Index: 2, Name: "en0", Flags: net.FlagUp},
+		{Index: 3, Name: "utun1", Flags: net.FlagUp},
+		{Index: 4, Name: "utun0", Flags: net.FlagUp},
+		{Index: 5, Name: "utun9", Flags: 0},
 	}
 	addrs := map[string][]net.Addr{
 		"lo0":   {cidr("127.0.0.1/8")},
@@ -60,8 +60,6 @@ func TestTailscaleIPv4CandidatesEmptyWhenTailscaleDown(t *testing.T) {
 	}
 }
 
-// The LAN picker must keep ignoring Tailscale, or enabling Tailscale would
-// silently change which address the LAN tab of the pairing modal advertises.
 func TestPrivateIPv4CandidatesStillIgnoresTailscale(t *testing.T) {
 	ifaces := []net.Interface{
 		{Index: 1, Name: "en0", Flags: net.FlagUp},

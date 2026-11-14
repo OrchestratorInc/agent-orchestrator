@@ -62,7 +62,6 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 	}
 	page, _ := io.ReadAll(file)
 	_ = file.Close()
-	// The render route adds the bootstrap when it serves the page.
 	if string(page) != "<!doctype html><p>chart</p>" {
 		t.Errorf("stored page = %.200q, want the agent's raw page", page)
 	}
@@ -88,7 +87,6 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 	}
 }
 
-// An API client may omit the height; the frame opens at the CLI's 400, not the 80 floor.
 func TestPublishRenderWithoutAHeightOpensAt400(t *testing.T) {
 	h, _ := steerHarness(t)
 	if _, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{HTML: "<p>chart</p>", Title: "Chart"}); err != nil {
@@ -104,7 +102,6 @@ func TestPublishRenderWithoutAHeightOpensAt400(t *testing.T) {
 
 func TestPublishRenderWithoutARunningTurnLeavesNoFile(t *testing.T) {
 	h := newHarnessForHarness(t, domain.HarnessCodex)
-	// The page has no turn to show in, so publishing does not wait on a measure.
 	h.svc.SetRenderMeasure(func(context.Context, domain.SessionID, map[string]any) (any, error) {
 		t.Error("measured a page that has no turn to show in")
 		return nil, nil
@@ -139,7 +136,6 @@ func TestPublishRenderRejectsBadPagesBeforeStoring(t *testing.T) {
 	}
 }
 
-// The CLI inlines local images, so a page runs far past the HTML file an agent writes.
 func TestRenderAcceptsAPageOf25MiB(t *testing.T) {
 	h, _ := steerHarness(t)
 	ctx := context.Background()
@@ -188,7 +184,6 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 		gotArgs["network"] != chatsvc.RenderNetworkPublic || result.Network != chatsvc.RenderNetworkPublic {
 		t.Fatalf("args = %v, network = %q", gotArgs, result.Network)
 	}
-	// The desktop app loads it through the render route, which adds the bootstrap.
 	if string(pageDuringCheck) != "<p>chart</p>" {
 		t.Fatalf("page during the check = %.200q, want the agent's raw page", pageDuringCheck)
 	}
@@ -201,8 +196,6 @@ func TestCheckRenderLoadsTheStoredPageAndDeletesIt(t *testing.T) {
 	}
 }
 
-// The html tools are not a way around the agent's sandbox: an agent with no
-// network gets checks and measures with no network either.
 func TestRenderCheckAndMeasureUseNoMoreNetworkThanTheAgentHas(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.noNetwork = true
@@ -223,7 +216,6 @@ func TestRenderCheckAndMeasureUseNoMoreNetworkThanTheAgentHas(t *testing.T) {
 	if measureArgs["network"] != chatsvc.RenderNetworkNone {
 		t.Fatalf("measure args = %v, want network none", measureArgs)
 	}
-	// Readers get the page with no network too, for as long as it is shown.
 	if !strings.Contains(checkArgs["url"].(string), "/renders/offline-check-") || !strings.Contains(measureArgs["url"].(string), "/renders/offline-") {
 		t.Fatalf("check url = %v, measure url = %v, want offline render ids", checkArgs["url"], measureArgs["url"])
 	}
@@ -232,8 +224,6 @@ func TestRenderCheckAndMeasureUseNoMoreNetworkThanTheAgentHas(t *testing.T) {
 	}
 }
 
-// The page runs under the sandbox of the turn in flight; a mode the user picks
-// for the next turn does not apply to this one.
 func TestRenderNetworkFollowsTheTurnInFlightNotTheNextOne(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.networkMode = domain.PermissionModeBypassPermissions
@@ -267,8 +257,6 @@ func TestCheckRenderWithoutTheDesktopAppSaysSo(t *testing.T) {
 	}
 }
 
-// publishMeasured publishes a page with measure installed on h and returns
-// the result and the recorded render row.
 func publishMeasured(t *testing.T, h *harness, measure chatsvc.RenderMeasure) (chatsvc.RenderResult, domain.ConversationActivity) {
 	t.Helper()
 	h.svc.SetRenderMeasure(measure)
@@ -283,8 +271,6 @@ func publishMeasured(t *testing.T, h *harness, measure chatsvc.RenderMeasure) (c
 	return result, renderRows(snapshot)[0]
 }
 
-// The agent does not wait for the desktop app to measure its page: publish
-// returns with the row recorded, and the heights settle onto that row later.
 func TestPublishRenderReturnsBeforeTheMeasureAndSettlesTheHeightsLater(t *testing.T) {
 	h, _ := steerHarness(t)
 	release := make(chan struct{})
@@ -327,7 +313,6 @@ func TestPublishRenderRecordsTheMeasuredHeightsSortedByWidth(t *testing.T) {
 			pageDuringMeasure, _ = io.ReadAll(file)
 			_ = file.Close()
 		}
-		// Decoded JSON from the desktop app, out of order.
 		return map[string]any{"heights": []any{
 			[]any{1144.0, 88.0}, []any{320.0, 313.0}, []any{860.0, 120.0}, []any{375.0, 270.0}, []any{430.0, 233.0},
 			[]any{520.0, 193.0}, []any{640.0, 157.0}, []any{728.0, 138.0}, []any{1000.0, 100.0},
@@ -409,7 +394,6 @@ func TestPublishRenderStopsWaitingForAMeasureAtTheTimeout(t *testing.T) {
 func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	h := newHarnessForHarness(t, domain.HarnessCodex)
 	ctx := context.Background()
-	// A failed output-type update is only logged; the file is saved.
 	h.reconcileErr = errors.New("store unavailable")
 	if err := h.renders.PutRender(ctx, testSession, "r1", []byte("<!doctype html><p>chart</p>")); err != nil {
 		t.Fatal(err)
@@ -428,7 +412,6 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The bootstrap is included, so the file renders on its own.
 	if want := renderpage.Document([]byte("<!doctype html><p>chart</p>")); string(saved) != string(want) {
 		t.Fatalf("saved = %.200q, want the served document", saved)
 	}
@@ -439,13 +422,11 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 		t.Fatalf("reconciled = %v, want the session once", h.reconciled)
 	}
 
-	// The same page again is the same file, and nothing is written.
 	again, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r1", "Turns: by day")
 	if err != nil || again != got || len(h.reconciled) != 1 {
 		t.Fatalf("second save = %+v, %v; reconciled %v", again, err, h.reconciled)
 	}
 
-	// A different page under the same title gets the next free name.
 	if err := h.renders.PutRender(ctx, testSession, "r2", []byte("<p>other</p>")); err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +434,6 @@ func TestSaveRenderAsArtifactWritesTheServedPage(t *testing.T) {
 	if err != nil || other.Path != "Turns by day (2).html" {
 		t.Fatalf("different page = %+v, %v", other, err)
 	}
-	// Every candidate name is checked for the same bytes, not only the first.
 	if again, err := h.svc.SaveRenderAsArtifact(ctx, testSession, "r2", "Turns: by day"); err != nil || again != other || len(h.reconciled) != 2 {
 		t.Fatalf("re-saving the second page = %+v, %v; reconciled %v", again, err, h.reconciled)
 	}
@@ -469,8 +449,6 @@ func TestSaveRenderAsArtifactKeepsNamesWritable(t *testing.T) {
 	if err := h.renders.PutRender(ctx, testSession, "r1", []byte("<p>x</p>")); err != nil {
 		t.Fatal(err)
 	}
-	// 120 CJK runes are 360 bytes, past the 255-byte NAME_MAX; the stem is cut
-	// to 200 bytes on a rune boundary.
 	long := strings.Repeat("図", 120)
 	for title, want := range map[string]string{
 		long:      strings.Repeat("図", 66) + ".html",
@@ -508,7 +486,6 @@ func TestPublishRenderWithArtifactKeepsThePage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PublishRender: %v", err)
 	}
-	// An absolute path, so the agent can pass it to ao report --artifact.
 	want := filepath.Join(sessionartifacts.Dir(h.rendersDir, testSession), "Chart.html")
 	if result.ArtifactPath != want || result.ArtifactError != "" {
 		t.Fatalf("result = %+v, want artifact %s", result, want)
@@ -521,7 +498,6 @@ func TestPublishRenderWithArtifactKeepsThePage(t *testing.T) {
 func TestPublishRenderStaysPublishedWhenTheArtifactSaveFails(t *testing.T) {
 	h, _ := steerHarness(t)
 	ctx := context.Background()
-	// The stored artifact dir wins over the default one, and here it is a file.
 	blocked := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
 		t.Fatal(err)

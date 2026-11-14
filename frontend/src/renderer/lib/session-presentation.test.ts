@@ -229,13 +229,10 @@ describe("session presentation", () => {
 		for (const displayStatus of ["Blocked", "Needs input", "CI failing", "Merge conflicts", "Changes requested"]) {
 			expect(needsYou({ status: "working", displayStatus }).className).toBe("bg-status-needs-you");
 		}
-		// A calm display phrase keeps the lane tone.
 		expect(needsYou({ status: "working", displayStatus: "Awaiting review" }).className).toBe("bg-status-in-review");
 	});
 
 	it("prefers SCM state over runtime status for the dot tone", () => {
-		// A running agent drives status to `working`, which would erase every PR
-		// tone in the sidebar. SCM state wins so the row keeps its lane tone.
 		const merged = sessionWith({
 			status: "working",
 			scmStatus: "merged",
@@ -252,7 +249,6 @@ describe("session presentation", () => {
 		expect(flagged({ status: "working", activity: { state: "waiting_input", lastActivityAt: "" } })).toBe(true);
 		expect(flagged({ status: "working", activity: { state: "blocked", lastActivityAt: "" } })).toBe(true);
 		expect(flagged({ status: "working", kanbanColumn: "needs_review", scmStatus: "pr_open", displayStatus: "Blocked" })).toBe(true);
-		// Needs attention, but not waiting on input: keeps the orange-red dot.
 		expect(flagged({ status: "ci_failed", displayStatus: "CI failing" })).toBeUndefined();
 		expect(flagged({ status: "working" })).toBeUndefined();
 	});
@@ -268,7 +264,6 @@ describe("session presentation", () => {
 				sessionWith({ status: "working", kanbanColumn: "ready", displayStatus: "Closed without merge", activity: active }),
 			),
 		).toEqual({ className: "bg-status-exited", breathe: false });
-		// A mergeable PR is not done: its agent may still be working on it.
 		expect(
 			getSessionStatusDotView(sessionWith({ status: "working", kanbanColumn: "ready", displayStatus: "Mergeable", activity: active })),
 		).toEqual({ className: "bg-status-ready", breathe: true });
@@ -279,7 +274,6 @@ describe("session presentation", () => {
 
 		expect(dot({ status: "working", kanbanColumn: "ready", displayStatus: "Merged" })).toBe("bg-status-merged");
 		expect(dot({ status: "working", kanbanColumn: "ready", displayStatus: "Mergeable" })).toBe("bg-status-ready");
-		// A merged PR beside a live failing one does not speak for the session.
 		expect(dot({ status: "ci_failed", scmStatus: "ci_failed", kanbanColumn: "validating", displayStatus: "CI failing" })).toBe(
 			"bg-status-needs-you",
 		);
@@ -300,8 +294,6 @@ describe("session presentation", () => {
 	});
 
 	it("colours the dot from the PR the card's phrase describes, not the worst PR", () => {
-		// Two PRs: the card reads "Mergeable" from one while the other fails CI,
-		// so scmStatus aggregates to ci_failed. The dot must agree with the card.
 		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", kanbanColumn: "ready", displayStatus: "Mergeable" });
 
 		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });

@@ -3,32 +3,13 @@ import { type RefObject, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 
-// Two-finger horizontal trackpad swipes over the center pane go back/forward in
-// navigation history, like a browser. A puck follows the fingers in from the pane
-// edge and fills once the swipe has gone far enough; lifting the fingers then
-// navigates, and pulling back below that point cancels.
-//
-// DOM wheel events carry no gesture phase. The main process relays Chromium's
-// trackpad scroll begin/end, so a held swipe never navigates and momentum after
-// the lift is ignored. Without that signal a gesture ends after IDLE_MS without
-// wheel events.
 const IDLE_MS = 120;
-// Momentum can also arrive as a new scroll right after the previous one ends.
-// Touching the trackpad during momentum looks the same in timing, so a scroll
-// that starts this soon after an end is only treated as momentum if it also
-// decays from its first event, where a real swipe speeds up first.
 const MOMENTUM_GAP_MS = 120;
-// Chromium holds the scroll end until momentum finishes, which can take a
-// second after a fast swipe. Momentum shows up as steadily shrinking deltas,
-// so an armed swipe that was this fast and then decays this many events in a
-// row has been released.
 const FLICK_SPEED_PX = 10;
 const MOMENTUM_DECAY_EVENTS = 4;
 const AXIS_DECIDE_PX = 8;
-// Accumulated swipe distance that arms navigation.
 export const SWIPE_ARM_PX = 110;
 const MAX_PX = 220;
-// Puck travel: from just past the pane edge to resting inside it.
 const PUCK_HIDDEN_PX = -44;
 const PUCK_REST_PX = 18;
 const PUCK_OVERPULL_PX = 10;
@@ -47,22 +28,14 @@ type Gesture = {
 	sumX: number;
 	sumY: number;
 	offset: number;
-	// Consecutive events with shrinking deltas along the swipe, and the speed
-	// the run started from.
 	decay: number;
 	decayFrom: number;
 	lastSpeed: number;
 	tracked: number;
-	// Started right after a scroll ended and has only decayed since.
 	maybeMomentum: boolean;
-	// Horizontally scrollable ancestors with their starting scrollLeft. If one
-	// actually scrolls, the swipe belongs to it, as with browser overscroll.
 	scrollers: Array<[HTMLElement, number]>;
 };
 
-// Walks the composed path, not event.target: at the pane listener the target of
-// an event from inside an open shadow root (the @pierre/diffs code view) is the
-// shadow host, which hides the scroller inside it.
 function horizontalScrollers(path: EventTarget[], boundary: HTMLElement): Array<[HTMLElement, number]> {
 	const scrollers: Array<[HTMLElement, number]> = [];
 	for (const node of path) {
@@ -105,10 +78,6 @@ export function SwipeNavigation({
 
 		const puck = (direction: Direction) => (direction === "back" ? backRef.current : forwardRef.current);
 
-		// Writes the puck position straight to the DOM; wheel events arrive far
-		// faster than React should re-render. A gesture's first paint snaps the
-		// pucks back to their idle look, so a previous gesture's armed fill never
-		// fades out on the next one.
 		const paint = (offset: number) => {
 			cancelAnimationFrame(frame);
 			frame = requestAnimationFrame(() => {
@@ -136,7 +105,6 @@ export function SwipeNavigation({
 			});
 		};
 
-		// Fades the pucks out where they are.
 		const release = () => {
 			cancelAnimationFrame(frame);
 			for (const direction of ["back", "forward"] as const) {
@@ -171,9 +139,7 @@ export function SwipeNavigation({
 		};
 
 		const onWheel = (event: WheelEvent) => {
-			// Pinch-zoom arrives as ctrl+wheel; line/page deltas come from mouse wheels.
 			if (event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
-			// With native phases, wheel events after the lift are momentum (or a mouse).
 			if (nativePhases && !fingersDown) return;
 			if (!nativePhases) {
 				window.clearTimeout(idleTimer);
@@ -213,8 +179,6 @@ export function SwipeNavigation({
 				deltaX = gesture.sumX;
 			}
 
-			// Fingers moving right scroll toward the left edge (negative deltaX):
-			// that reveals the back puck from the left, as in Safari and Chrome.
 			let offset = Math.max(-MAX_PX, Math.min(MAX_PX, gesture.offset - deltaX));
 			if (offset > 0 && !canNavigate("back")) offset = 0;
 			if (offset < 0 && !canNavigate("forward")) offset = 0;
@@ -232,13 +196,11 @@ export function SwipeNavigation({
 			gesture.lastSpeed = speed;
 			gesture.tracked += 1;
 			if (gesture.decay >= MOMENTUM_DECAY_EVENTS && gesture.maybeMomentum) {
-				// Momentum from the previous swipe, not a new one.
 				gesture.mode = "done";
 				release();
 				return;
 			}
 			if (gesture.decay >= MOMENTUM_DECAY_EVENTS && gesture.decayFrom >= FLICK_SPEED_PX && Math.abs(offset) >= SWIPE_ARM_PX) {
-				// Released into momentum: navigate now and ignore the rest of the scroll.
 				gesture.mode = "done";
 				window.clearTimeout(idleTimer);
 				release();
@@ -268,10 +230,6 @@ export function SwipeNavigation({
 
 	if (!enabled) return null;
 
-	// The pucks rest just past the pane's edges. Clip them in a box that cannot
-	// scroll: a container with overflow hidden can still be scrolled by code
-	// (scrollIntoView, focus), and 44px of overhang would then slide the whole
-	// pane sideways under the sidebar.
 	return (
 		<div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-clip" data-swipe-pucks="">
 			<SwipePuck direction="back" puckRef={backRef} />

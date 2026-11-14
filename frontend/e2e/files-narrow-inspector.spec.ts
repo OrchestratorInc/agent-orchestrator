@@ -19,9 +19,6 @@ const patch = [
 	"",
 ].join("\n");
 
-// The preview session has no workspace behind it, so serve one changed file
-// with every header action (edit included) to fill the review row. The fake
-// bridge gives the renderer a ready daemon on :8080 for these routes to answer.
 async function stubWorkspaceFiles(page: Page, sessionId = "demo-working") {
 	await installFakeBridge(page);
 	const file = { path: filePath, status: "modified", additions: 3, deletions: 0, size: 512, binary: false, editable: true, fileFingerprint: "fp-1" };
@@ -53,8 +50,6 @@ function overlaps(a: { x: number; y: number; width: number; height: number }, b:
 	return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
-// Tab buttons can overflow their tab list's track, so measure each tab rather
-// than the list's own box.
 async function filterOverlapsATab(page: Page) {
 	const filter = await page.locator("#inspector").getByRole("textbox", { name: "Filter files" }).boundingBox();
 	if (!filter) return true;
@@ -101,7 +96,6 @@ test("@P0 files filter and review rows stay clear of each other in a narrow insp
 	await inspector.getByRole("tab", { name: /Files?$/ }).click();
 	await expect(page.getByRole("button", { name: `Collapse ${filePath}` })).toBeVisible();
 
-	// Wide: the filter shares the tab row, and every row action is inline.
 	expect((await inspector.boundingBox())!.width).toBeGreaterThan(440);
 	await expect.poll(() => filterOverlapsATab(page)).toBe(false);
 	expect(await filterIsBelowTabs(page)).toBe(false);
@@ -109,10 +103,6 @@ test("@P0 files filter and review rows stay clear of each other in a narrow insp
 	await expect(inspector.getByRole("button", { name: "More actions" })).toBeHidden();
 	await expectFileNameUntruncated(page);
 
-	// Narrow (zoom or a small window), both between the floor and the 440px
-	// breakpoint and at the rail's 300px floor: like the browser's URL field,
-	// the filter takes its own row, and the row's secondary actions fold into
-	// one menu so the file name keeps its room.
 	await page.setViewportSize({ width: 1200, height: 720 });
 	await expect.poll(async () => (await inspector.boundingBox())!.width).toBeLessThan(400);
 	expect((await inspector.boundingBox())!.width).toBeGreaterThan(300);

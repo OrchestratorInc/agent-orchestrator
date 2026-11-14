@@ -8,30 +8,17 @@ import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
 import { HarnessStatusDot } from "./harness-ui";
 
-/** AO Cloud's side of one harness, as its row on the Harness page shows it. */
 export interface HarnessCloudState {
-	/** Undefined while loading, or when the control plane could not say. */
 	details?: CloudHarnessDetails;
 	loading: boolean;
-	/** An update or a return to the AO-tested release is being saved. */
 	pending: boolean;
-	/** Why the last update or return failed to save. */
 	error?: string;
 }
 
-/** Whether AO Cloud's side of a harness reads as a problem the caller can act on. */
 export function cloudNeedsAttention(cloud?: HarnessCloudState): boolean {
 	return Boolean(cloud?.details?.editable && (cloud.details.failed || cloud.error));
 }
 
-/**
- * AO Cloud as a second, compact line inside a harness's installation row: the
- * release new Cloud sessions run, quiet unless the caller can update it or an
- * update failed. The AO-tested release, the Chat adapter, a failure's output
- * and the way back to the AO-tested release open beneath it on demand. Its own
- * Update button shows only when the row's main action is not an update
- * (the harness is not installed here); otherwise that one button covers both.
- */
 export function HarnessCloudLine({ state, standaloneUpdate, onUpdate, onReset }: {
 	state: HarnessCloudState;
 	standaloneUpdate: boolean;
@@ -45,7 +32,6 @@ export function HarnessCloudLine({ state, standaloneUpdate, onUpdate, onReset }:
 	const job = details?.entry.job;
 	const failed = !pending && Boolean(details?.editable && (details.failed || error));
 	return <div data-harness-cloud-line="" className="flex min-w-0 basis-full flex-col gap-2">
-		{/* One line, the same height loading or loaded, so nothing below it moves when the versions arrive. */}
 		<div className="flex min-h-5 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
 			<button
 				type="button"

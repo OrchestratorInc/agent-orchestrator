@@ -8,30 +8,18 @@ import { shareAccessIcon } from "../../ArtifactShareMark";
 import { Button } from "../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 
-/**
- * Who a link opens for, as a short name: "Only you" is how Only people
- * invited reads while nobody is invited, not a third choice.
- */
 export function accessName(t: TFunction, access: CloudShareAccess, invited: number): string {
 	if (access === "anyone") return t("artifacts.share.access.anyone");
 	return invited > 0 ? t("artifacts.share.access.invited") : t("artifacts.share.access.onlyYou");
 }
 
-/** The sentence under the access name. */
 export function accessSentence(t: TFunction, access: CloudShareAccess, invited: number): string {
 	if (access === "anyone") return t("artifacts.share.access.anyoneSentence");
 	return invited > 0 ? t("artifacts.share.access.invitedSentence") : t("artifacts.share.access.onlyYouSentence");
 }
 
-/**
- * General access: Only people invited or Anyone with the link, as one choice
- * with the sentence it means under it. Where links cannot be private
- * (choosable false) it only says the link is public. The change applies to
- * the link at once; its URL stays the same.
- */
 export function ArtifactGeneralAccess({ access, invited, onChange, choosable = true, disabled = false }: {
 	access: CloudShareAccess;
-	/** How many people the link is shared with. */
 	invited: number;
 	onChange: (access: CloudShareAccess) => void;
 	choosable?: boolean;

@@ -1,36 +1,18 @@
-// Bridged fetch for the cloud control-plane client. The CP has no CORS and
-// the WorkOS bearer token lives only in the Electron main process, so the
-// renderer cannot fetch the CP directly: this adapter turns a fetch call into
-// an aoBridge.cloudCp.request IPC round trip (main attaches the real token —
-// any Authorization header set here is replaced) and rebuilds a Response from
-// the proxied status/headers/body. Non-stream calls only: SSE must go through
-// subscribeSessionEventsBridged in ./stream-bridge instead.
-//
-// Plug it into the typed client:
-//   createCloudCpClient({ baseUrl, getToken, fetchImpl: createBridgedFetch() })
-
 import type { CloudCpProxyRequestInit, CloudCpProxyResponse } from "../../../main/cloud-cp-proxy";
 import { aoBridge } from "../bridge";
 
-/** The slice of the preload cloudCp bridge this adapter needs. */
 export interface CloudCpRequestBridge {
 	request(init: CloudCpProxyRequestInit): Promise<CloudCpProxyResponse>;
 }
 
 const API_PREFIX = "/api/cloud/v1";
 
-/** Statuses the Response constructor forbids a body for. */
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 function abortError(reason: unknown): unknown {
 	return reason ?? new DOMException("The operation was aborted.", "AbortError");
 }
 
-/**
- * The main-process fetch cannot be cancelled through the request channel, so
- * aborting only abandons the proxied call renderer-side — matching fetch's
- * observable contract (reject with the abort reason) without cancellation.
- */
 export async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 	return await new Promise<T>((resolve, reject) => {
 		const onAbort = (): void => {

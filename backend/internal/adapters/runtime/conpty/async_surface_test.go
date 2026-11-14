@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// recordingSurface records what reaches it; release gates each Write so tests
-// can model an emulator slower than the PTY.
 type recordingSurface struct {
 	mu      sync.Mutex
 	ops     []string
@@ -47,8 +45,6 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// The PTY read loop hands output to the surface and moves on; a slow emulator
-// must not hold it, or the program writing the output is paused.
 func TestAsyncSurfaceWriteDoesNotWaitForTheEmulator(t *testing.T) {
 	blocked := &recordingSurface{release: make(chan struct{})}
 	s := newAsyncSurface(80, 24, func(int, int) surfaceSink { return blocked }, func() []byte { return nil }, false)
@@ -69,7 +65,6 @@ func TestAsyncSurfaceWriteDoesNotWaitForTheEmulator(t *testing.T) {
 	close(blocked.release)
 }
 
-// Reads stay exact: they see every queued update, in order, resizes included.
 func TestAsyncSurfaceTailWaitsForQueuedOutputInOrder(t *testing.T) {
 	slow := &recordingSurface{release: make(chan struct{})}
 	s := newAsyncSurface(80, 24, func(int, int) surfaceSink { return slow }, func() []byte { return nil }, false)
@@ -97,8 +92,6 @@ func TestAsyncSurfaceTailWaitsForQueuedOutputInOrder(t *testing.T) {
 	}
 }
 
-// A backlog the emulator cannot catch up with is dropped; the next read rebuilds
-// the surface from the ring's retained output at the current grid.
 func TestAsyncSurfaceRebuildsFromTheRingWhenTheBacklogOverflows(t *testing.T) {
 	first := &recordingSurface{release: make(chan struct{})}
 	var rebuilt *recordingSurface
@@ -116,7 +109,7 @@ func TestAsyncSurfaceRebuildsFromTheRingWhenTheBacklogOverflows(t *testing.T) {
 	s := newAsyncSurface(80, 24, newSurface, func() []byte { return []byte("retained") }, false)
 	defer s.stop()
 
-	s.Write([]byte("held")) // the worker takes this and blocks in the emulator
+	s.Write([]byte("held"))
 	for !s.workerHolds() {
 		time.Sleep(time.Millisecond)
 	}
@@ -141,8 +134,6 @@ func (s *asyncSurface) workerHolds() bool {
 	return s.applying
 }
 
-// A terminal nothing probes for styled output must not run the emulator: a lazy
-// surface builds itself from the ring only when first read, then stays current.
 func TestLazyAsyncSurfaceBuildsOnFirstRead(t *testing.T) {
 	built := 0
 	var surface *recordingSurface
@@ -169,7 +160,6 @@ func TestLazyAsyncSurfaceBuildsOnFirstRead(t *testing.T) {
 	}
 }
 
-// The real emulator still renders the same screen through the async path.
 func TestAsyncSurfaceRendersRealOutput(t *testing.T) {
 	s := newAsyncSurface(40, 5, func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, func() []byte { return nil }, false)
 	defer s.stop()

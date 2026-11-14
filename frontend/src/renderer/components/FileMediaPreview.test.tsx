@@ -79,7 +79,6 @@ describe("FileMediaPreview", () => {
 		view.rerender(<FileMediaPreview {...props} source={source("t3")} />);
 		expect(onAccessRefused).toHaveBeenCalledTimes(1);
 
-		// The fresh link failed too: the error shows, and Retry may take one more link.
 		view.rerender(<FileMediaPreview {...props} source={source("t2")} />);
 		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 		fireEvent.error(screen.getByLabelText("broken.mp4"));

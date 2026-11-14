@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Keep ancestor rows where they were originally recorded. Only a provider-proven
-// fork with identical, complete turns may omit those copies from a new scope.
 func (s *Service) withoutInheritedHistory(ctx context.Context, provider ports.ChatConversation, active domain.ConversationBranch, retained ConversationRows, events []ports.ChatEvent) ([]ports.ChatEvent, error) {
 	reader, ok := provider.(ports.ChatInheritedHistory)
 	if !ok {
@@ -34,7 +32,6 @@ func (s *Service) withoutInheritedHistory(ctx context.Context, provider ports.Ch
 			return nil, err
 		}
 	}
-	// Nested forks replay the oldest inherited prefix first.
 	for i := len(ancestors) - 1; i >= 0; i-- {
 		ancestor := ancestors[i]
 		mapped, err := reader.InheritedHistory(ctx, ancestor, events)
@@ -48,8 +45,6 @@ func (s *Service) withoutInheritedHistory(ctx context.Context, provider ports.Ch
 		if err != nil {
 			return nil, err
 		}
-		// Presentation hides inactive providers' handles to disable edit controls.
-		// Recover the durable IDs here, without exposing them to the current UI.
 		rows.Turns = append([]domain.ConversationTurn(nil), rows.Turns...)
 		for j := range rows.Turns {
 			if rows.Turns[j].ProviderTurnID != "" {
@@ -67,8 +62,6 @@ func (s *Service) withoutInheritedHistory(ctx context.Context, provider ports.Ch
 }
 
 func omitCopiedPrefix(events, mapped []ports.ChatEvent, rows ConversationRows) []ports.ChatEvent {
-	// Approval/input records belong to AO's interaction history, not the native
-	// transcript. Keep those rows, but do not require Codex to replay them.
 	activities := make([]domain.ConversationActivity, 0, len(rows.Activities))
 	for _, activity := range rows.Activities {
 		if activity.Kind != domain.ActivityKindApproval && activity.Kind != domain.ActivityKindUserInput {
@@ -84,8 +77,6 @@ func omitCopiedPrefix(events, mapped []ports.ChatEvent, rows ConversationRows) [
 	messages, replayActivities := map[string]int{}, map[string]int{}
 	ambiguous := false
 	for i, event := range mapped {
-		// Codex may omit item IDs in persisted history. Its native turn identity
-		// still proves the candidate; complete content must match below as well.
 		if matched := index.byProviderTurnID[event.ProviderTurnID]; matched != nil {
 			if candidate != nil && matched != candidate {
 				ambiguous = true

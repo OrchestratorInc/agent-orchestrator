@@ -12,8 +12,6 @@ import (
 func TestListenUnixUsesShortAliasForLongDataPath(t *testing.T) {
 	runtimeDir := filepath.Join(t.TempDir(), strings.Repeat("long-data-directory-", 6))
 	runFilePath := filepath.Join(runtimeDir, "running.json")
-	// t.TempDir inherits TMPDIR, which can itself exceed sockaddr_un's limit in
-	// a normal AO worktree. Use the same deliberately short spelling as Listen.
 	aliasRoot, err := os.MkdirTemp("/tmp", "ao-br-test-")
 	if err != nil {
 		t.Fatalf("create short alias root: %v", err)

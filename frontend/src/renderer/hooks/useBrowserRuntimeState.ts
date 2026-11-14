@@ -1,8 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { BrowserRuntimeState } from "../../main/browser-view-host";
 
-// null until the main process answers, so a panel never flashes "disconnected"
-// before the first read.
 let current: BrowserRuntimeState | null = null;
 const listeners = new Set<() => void>();
 let stopIpc: (() => void) | undefined;
@@ -19,8 +17,6 @@ function receive(state: BrowserRuntimeState) {
 	listeners.forEach((listener) => listener());
 }
 
-// One IPC subscription for every mounted panel, opened by the first and closed by
-// the last. It subscribes before reading, so a late snapshot never replaces a push.
 function subscribe(listener: () => void): () => void {
 	listeners.add(listener);
 	if (!stopIpc) {
@@ -51,11 +47,6 @@ function subscribe(listener: () => void): () => void {
 
 const getSnapshot = () => current;
 
-/**
- * The desktop browser runtime link, read only by the surfaces that show it. It
- * lives outside useBrowserView so link changes re-render the Browser panel, not
- * the whole SessionView that owns the view model (#6466).
- */
 export function useBrowserRuntimeState(): BrowserRuntimeState | null {
 	return useSyncExternalStore(subscribe, getSnapshot);
 }

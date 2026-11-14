@@ -103,14 +103,10 @@ import { Switch } from "./ui/switch";
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
 const PALETTE_REVIEW_DEFER_MS = 120;
 const PALETTE_FILE_SEARCH_DEBOUNCE_MS = 150;
-/** Rows the file view lists; beside commands each search group shows a few. */
 const PALETTE_FILE_VIEW_ROWS = 50;
 const isMac = isMacPlatform();
 const PALETTE_FILE_SEARCH_MIN_CHARS = 2;
-// Session-text search starts at two characters: one character matches nearly
-// every past session and would make the palette flash a useless list.
 const PALETTE_SESSION_SEARCH_MIN_CHARS = 2;
-// How many recent sessions the palette lists before a query is typed.
 const PALETTE_RECENTS_LIMIT = 5;
 const EMPTY_REVIEW_STATES: Readonly<Record<string, PRReviewState[]>> = {};
 type PaletteView =
@@ -118,10 +114,8 @@ type PaletteView =
 	| { mode: "session-actions"; sessionId: string }
 	| { mode: "file-session-picker"; projectId: string }
 	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" }
-	// Nested lists go back to the view they were opened from.
 	| (PaletteMenuView & { parent: PaletteView });
 
-/** The submenu entry with this id, searched through nested submenus. */
 function findSubmenuOwner(entries: readonly MenuEntry[], entryId: string): Extract<MenuEntry, { kind: "submenu" }> | undefined {
 	for (const entry of entries) {
 		if (entry.kind !== "submenu") continue;
@@ -132,24 +126,17 @@ function findSubmenuOwner(entries: readonly MenuEntry[], entryId: string): Extra
 	return undefined;
 }
 
-/**
- * Whether two search keys differ only in their query text, so an answer for
- * the previous key belongs to the same host, org and session.
- */
 function sameSearchTarget(previous: readonly unknown[] | undefined, current: readonly unknown[], query: string): boolean {
 	if (!previous || previous.length !== current.length) return false;
 	const queryAt = current.lastIndexOf(query);
 	return queryAt >= 0 && previous.every((part, index) => index === queryAt || part === current[index]);
 }
 
-/** Keys cmdk moves the selection with: arrows, Home/End and its Ctrl+N/J/P/K. */
 function isRowNavigationKey(event: { key: string; ctrlKey: boolean }): boolean {
 	return ["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)
 		|| (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key));
 }
 
-// Memoized: it takes no props, so the shell's re-renders (several per route
-// change) skip the closed palette.
 export const CommandPalette = memo(function CommandPalette() {
 	const { i18n, t } = useTranslation();
 	const enabled = useCommandPaletteEnabled();
@@ -168,9 +155,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const developerMode = useUiStore((s) => s.developerMode);
 	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
 	const splitPanes = useSplitPanesEnabled();
-	// The palette stays mounted to preserve its close animation and global
-	// shortcut. While closed, commands are invisible, so retain the cached
-	// snapshot without subscribing this hidden surface to streamed updates.
 	const workspaces = useWorkspaceQuery({ subscribed: isOpen }).data ?? [];
 
 	const [view, setView] = useState<PaletteView>({ mode: "root" });
@@ -184,29 +168,18 @@ export const CommandPalette = memo(function CommandPalette() {
 	const [createProjectFlowMounted, setCreateProjectFlowMounted] = useState(false);
 	const [createProjectFlowOpenSignal, setCreateProjectFlowOpenSignal] = useState(0);
 	const [createProjectFlowPendingOpen, setCreateProjectFlowPendingOpen] = useState(false);
-	// The action that holds the palette, so a finished older one can't release a
-	// newer one that is still running.
 	const pendingRef = useRef<symbol | null>(null);
-	// cmdk selects the first row by itself whenever the query changes; only a
-	// navigation key or pointer move counts as the user choosing one.
 	const userPickRef = useRef(false);
-	// cmdk only re-applies a controlled value when the string changes.
-	// Flipping a trailing space (cmdk trims it) puts the best match back
-	// after cmdk selects its own first row.
 	const [valueResync, setValueResync] = useState(false);
 	const runGenerationRef = useRef(0);
 	const viewRef = useRef(view);
 	viewRef.current = view;
 	const closeResetTimerRef = useRef<number | null>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
-	// Where focus was when the palette opened, so closing hands it back.
 	const returnFocusRef = useRef<Element | null>(null);
 	useEffect(() => useUiStore.subscribe((state, previous) => {
 		if (state.isCommandPaletteOpen && !previous.isCommandPaletteOpen) returnFocusRef.current = document.activeElement;
 	}), []);
-	// Every list view types into the search field: on open, after Back and
-	// after leaving New task. The dialog's focus trap would otherwise pick
-	// its first button.
 	useEffect(() => {
 		if (!isOpen) return;
 		const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
@@ -224,7 +197,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [params.hostId, params.sessionId, workspaces]);
 	const currentSession = currentSessionContext?.session;
 	const currentProjectId = currentSession?.workspaceId ?? params.projectId;
-	// The Actions heading is the project they act on, drawn as the sidebar draws it.
 	const currentProject = currentProjectId
 		? workspaces.find((workspace) => workspace.id === currentProjectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
 		: undefined;
@@ -238,7 +210,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			<span className="truncate">{currentProject.name}</span>
 		</span>
 	) : undefined;
-	// The session's own sidebar mark: spinner, alert, PR state or read dot.
 	const sessionHeading = currentSession ? (
 		<span className="inline-flex min-w-0 items-center gap-2.5">
 			<span className="flex size-icon-base shrink-0 items-center justify-center" aria-hidden="true">
@@ -281,22 +252,14 @@ export const CommandPalette = memo(function CommandPalette() {
 		errorMessage: t("command.searchFilesError"),
 		cloud,
 	});
-	// Each search keeps its last answer on screen until the next one lands, so
-	// typing never blanks the rows the user is reading. File answers are kept
-	// only for the same target (host, org and session): another target's paths
-	// would open in this one.
 	const fileSearchQuery = useQuery<CommandPaletteFileSearchResponse>({
 		...fileSearchOptions,
 		enabled: fileSearchEnabled,
 		placeholderData: (previous, previousQuery) =>
 			sameSearchTarget(previousQuery?.queryKey, fileSearchOptions.queryKey, normalizedFileQuery) ? previous : undefined,
 	});
-	// File contents (this session's daemon) and chats (this machine) are searched
-	// beside file names; Cloud sessions have no daemon to search their contents.
 	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
-	// A Cloud session's contents are searched by its worker, once Cloud is signed in.
 	const contentTarget = activeFileTarget && (!activeFileTarget.cloudOrgId || cloudReady) ? activeFileTarget : undefined;
-	// Text inside files is searched only from Go to file, not the main list.
 	const contentSearchEnabled = searchQueryReady && view.mode === "file-search" && Boolean(contentTarget);
 	const contentSearchOptions = commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError"), cloud);
 	const contentSearchQuery = useQuery({
@@ -311,7 +274,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		enabled: chatSearchEnabled,
 		placeholderData: keepPreviousData,
 	});
-	// Cloud chats are searched in the control plane, one organization at a time.
 	const cloudChatOrgIds = useMemo(
 		() => [...new Set(workspaces.flatMap((workspace) => workspace.kind === "cloud" && workspace.cloudOrgId ? [workspace.cloudOrgId] : []))],
 		[workspaces],
@@ -322,11 +284,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		placeholderData: keepPreviousData,
 	});
 
-	// Session-text search shares the debounced query with file search: one timer
-	// per keystroke, two endpoints. Its rows show only in the root view, so it is
-	// off while another view (session actions, a file picker) owns the input.
-	// Recents before a query, matches after: opening the palette to get back to
-	// a recent session should not require remembering a word from it.
 	const sessionSearchEnabled = isOpen
 		&& view.mode === "root"
 		&& (normalizedSessionQuery.length === 0
@@ -342,9 +299,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			),
 		[reviewActionsReady, workspaces],
 	);
-	// Opening the palette must first acknowledge the shortcut and focus its input.
-	// Review actions are secondary and may require one query per PR-bearing session,
-	// so defer their setup until the palette has had a chance to paint.
 	useEffect(() => {
 		if (!isOpen) {
 			setReviewActionsReady(false);
@@ -353,8 +307,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		const timer = window.setTimeout(() => setReviewActionsReady(true), PALETTE_REVIEW_DEFER_MS);
 		return () => window.clearTimeout(timer);
 	}, [isOpen]);
-	// Review states are fetched only while the palette is open; the shared query
-	// key means sessions already viewed in the inspector reuse the cached data.
 	const reviewQuerySummary = useQueries({
 		subscribed: reviewActionsReady,
 		queries: sessionsWithOpenPRs.map((session) =>
@@ -372,11 +324,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		},
 	});
 
-	// Each session's review action stays hidden until we know whether it's
-	// safe to trigger, then is frozen for the rest of this open — merging in
-	// newly-resolved sessions but never overwriting one already captured, so
-	// a later poll (e.g. a running review completing) can't retitle or
-	// re-sort a row the user may already have selected.
 	useEffect(() => {
 		if (!isOpen) {
 			setReviewStatesSnapshot({});
@@ -409,11 +356,9 @@ export const CommandPalette = memo(function CommandPalette() {
 	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
 	const sideChats = useUiStore((s) => s.sideChats);
 	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
-	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
 	const stayAwake = useStayAwake(isOpen && isMac);
 	const stayToggleRef = useRef(stayAwake.toggle);
 	stayToggleRef.current = stayAwake.toggle;
-	// The chat ↔ terminal switch the session's own view offers.
 	const switchMenus = useSessionSwitchStore((state) => state.menus);
 	const switchItemFor = useCallback((sessionId: string | undefined): CommandItemModel[] => {
 		const menu = sessionId ? switchMenus[sessionId] : undefined;
@@ -464,14 +409,11 @@ export const CommandPalette = memo(function CommandPalette() {
 			}, t),
 			...buildShortcutCommands(t, {
 				splitPanes,
-				// A routed session is on screen even when it lives on a remote host
-				// this list does not hold; only a local one has a worktree here.
 				...(params.sessionId
 					? { session: currentSession && !currentSession.cloud && !currentSession.hostId && !params.hostId ? "local" as const : "elsewhere" as const }
 					: {}),
 			}),
 			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac, prefs }),
-			// The bell's panel and the footer's Connect mobile, which have no route.
 			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
 			...(isMac && stayAwake.supported
 				? [{ id: "global-stay-awake", group: "global" as const, title: t("awake.title"), icon: <Coffee aria-hidden="true" />, keywords: ["awake", "sleep", "caffeinate", "lid closed", "keep awake"], searchOnly: true, toggled: stayAwake.on, keepOpen: true, action: { kind: "run" as const, run: () => stayToggleRef.current() } }]
@@ -484,8 +426,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
 		[view, workspaces],
 	);
-	// The session whose right-click menu the palette is showing: in its actions,
-	// one of that menu's submenus, or renaming it.
 	const menuSession = view.mode === "root"
 		? currentSession
 		: view.mode === "session-actions"
@@ -499,7 +439,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const copyToClipboard = useCopyToClipboard();
 	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
 	const sessionMenuEntries = useSessionMenuEntries(menuSession, {
-		// Archive asks first, as from the sidebar; the confirm outlives the palette.
 		onArchive: menuSession && !menuSession.cloud?.shared ? () => {
 			setArchiveTarget(menuSession);
 			closePalette();
@@ -512,7 +451,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const sessionActionItems = useMemo(() => {
 		if (!scoped) return [];
 		const own = buildSessionActions(scoped.workspace, scoped.session, t);
-		// The palette's own rows already cover these.
 		const skip = new Set(["menu:session-copy-branch", ...(own.some((item) => item.action?.kind === "resume-session") ? ["menu:session-resume"] : [])]);
 		return [...own, ...switchItemFor(scoped.session.id), ...paletteMenuRows(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
 	}, [scoped, sessionMenuEntries, switchItemFor, t]);
@@ -525,7 +463,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			hasOrchestrator: Boolean(findProjectOrchestrator(workspaces, workspace.id)),
 			setPinned: (pinned) => useSidebarOrderStore.getState().setProjectPinned(workspace.id, pinned),
 			copyPath: () => copyToClipboard(workspace.path),
-			// Remote projects remove through their host, which the sidebar handles.
 			...(removeProject && !workspace.hostId ? { remove: () => setRemoveTarget(workspace) } : {}),
 		}, t);
 	}, [workspaces, pinnedProjectIds, restartingProjectIds, copyToClipboard, removeProject, t]);
@@ -562,11 +499,8 @@ export const CommandPalette = memo(function CommandPalette() {
 				return [];
 		}
 	}, [view, rootItems, menuSession, sessionMenuEntries, prefs, query, projectActionsFor, queryClient, t]);
-	// On the blank list: the open session's own menu under its name, and the
-	// project's remaining sidebar-menu actions beside the ones above.
 	const rootContextItems = useMemo((): CommandItemModel[] => {
 		if (view.mode !== "root") return [];
-		// The blank list keeps a session's few main actions; the rest wait for a search.
 		const sessionRows = currentSession
 			? [...switchItemFor(currentSession.id), ...paletteMenuRows(sessionMenuEntries, currentSession.id).filter((item) => item.id !== "menu:session-copy-branch")]
 				.map((item) => ({ ...item, group: "session" as const, ...(BLANK_SESSION_ACTIONS.has(item.id) ? {} : { searchOnly: true }) }))
@@ -574,10 +508,8 @@ export const CommandPalette = memo(function CommandPalette() {
 		const projectRows = currentProject
 			? projectActionsFor(currentProject)
 				.filter((item) => ["project-action:board", "project-action:copy-path", "project-action:pin", "project-action:remove"].includes(item.id))
-				// Removing waits for a search, so it never sits in the default list.
 				.map((item) => (item.id === "project-action:remove" ? { ...item, searchOnly: true } : item))
 			: [];
-		// On a session page the project's actions wait for a search too.
 		return [...sessionRows, ...(currentSession ? projectRows.map((item) => ({ ...item, searchOnly: true })) : projectRows)];
 	}, [view.mode, currentSession, currentProject, sessionMenuEntries, switchItemFor, projectActionsFor]);
 	const filePickerWorkspace = view.mode === "file-session-picker"
@@ -610,7 +542,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			workspace.kind === "cloud" && workspace.sessions.some((session) => session.id === sessionId && session.cloud)),
 		[workspaces],
 	);
-	// A chat this machine or Cloud holds; Cloud's hits are kept only for sessions listed here.
 	const findChatWorkspace = useCallback(
 		(sessionId: string | undefined) => findLocalChatWorkspace(sessionId) ?? findCloudChatWorkspace(sessionId),
 		[findCloudChatWorkspace, findLocalChatWorkspace],
@@ -626,15 +557,12 @@ export const CommandPalette = memo(function CommandPalette() {
 				const workspace = findChatWorkspace(hit.sessionId);
 				return {
 					title: workspace?.sessions.find((session) => session.id === hit.sessionId)?.title,
-					// The project is named only when it is not the one on screen.
 					place: workspace && workspace.id !== currentProjectId ? workspace.name : undefined,
 				};
 			});
 		},
 		[currentProjectId, chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
 	);
-	// Session-text rows are only shown once the query has settled, so a row the
-	// person is about to press cannot be replaced by a later response.
 	const sessionSearchSettled = normalizedSessionQuery === query.trim();
 	const sessionSearchItems = useMemo(
 		() => (sessionSearchSettled ? buildSessionSearchCommands(sessionSearchHits, query.trim(), t) : []),
@@ -652,24 +580,16 @@ export const CommandPalette = memo(function CommandPalette() {
 			return displayGroups([...fileItems, ...contentItems], query, t, PALETTE_FILE_VIEW_ROWS);
 		}
 		if (view.mode !== "root") {
-			// Renaming shows its one row whatever is typed; other lists filter.
 			return [{ id: "menu", label: "", items: view.mode === "rename-session" ? menuViewItems : filterCommands(menuViewItems, query) }];
 		}
-		// On a session page the project's actions and Copy branch wait for a search.
 		const shownRootItems = currentSession
 			? rootItems.map((item) => (item.group === "current" || item.id === "current-copy-branch" ? { ...item, searchOnly: true } : item))
 			: rootItems;
-		// A message the session-text group already lists is not repeated as a chat row.
 		const settledChatItems = withoutChatHitsCoveredBySessionSearch(chatItems, sessionSearchItems);
 		const commandGroups = displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...settledChatItems], query, t);
-		// Recents are a jumping-off point, so they sit last, capped, and skip
-		// sessions Needs attention already lists. Once a query is typed, transcript
-		// matches follow the commands and sessions, ahead of files and chats.
 		const recents = normalizedSessionQuery === "";
-		// The open session heads the list with its own actions, so it is listed too.
 		const listed = new Set([
 			...(currentSession ? [currentSession.id] : []),
-			// Needs attention and session rows are "attention:<id>" and "session:<id>".
 			...commandGroups.flatMap((group) => (group.id === "attention" || group.id === "sessions"
 				? group.items.map((item) => item.id.slice(item.id.indexOf(":") + 1))
 				: [])),
@@ -685,8 +605,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [view.mode, rootItems, rootContextItems, currentSession, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, sessionSearchItems, normalizedSessionQuery, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
-	// Rows a search found for an earlier query stay visible while the next one
-	// answers, but are never picked for Enter on their own.
 	const searchStale = normalizedFileQuery !== query.trim()
 		|| fileSearchQuery.isPlaceholderData
 		|| contentSearchQuery.isPlaceholderData
@@ -699,8 +617,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			: ((view.mode === "root" && query.trim() ? bestMatch(visibleItems.filter(autoSelectable), query) : undefined)
 				?? visibleItems.find(autoSelectable) ?? (searchStale ? undefined : visibleItems[0]))?.id) ?? "";
 
-	// Arrowing through Color theme previews each theme; leaving the list without
-	// picking one puts the saved theme back.
 	const previewTheme = view.mode === "choices" && view.menu === "color-theme" ? choiceValue(value) : undefined;
 	useEffect(() => {
 		if (!previewTheme) return;
@@ -717,25 +633,16 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, []);
 
 	const closePalette = useCallback(() => {
-		// Keep the current query visible while Radix plays the closing animation.
-		// Clearing it here causes the palette to flash an empty search before it
-		// is removed, especially when an action also changes the theme.
 		runGenerationRef.current += 1;
-		// An action still running belongs to the closed palette; the next open
-		// must not have its rows blocked by it.
 		pendingRef.current = null;
 		setPendingId(null);
 		setOpen(false);
 		setView({ mode: "root" });
 		if (closeResetTimerRef.current !== null) window.clearTimeout(closeResetTimerRef.current);
-		// Reduced-motion mode disables the closing animation, so keep a fallback
-		// reset for environments where no animationend event will arrive.
 		closeResetTimerRef.current = window.setTimeout(() => {
 			closeResetTimerRef.current = null;
 			if (!useUiStore.getState().isCommandPaletteOpen) resetTransient();
 		}, 150);
-		// Hand focus back to where it was (a terminal, the composer), unless the
-		// command already moved it somewhere on purpose.
 		const returnTo = returnFocusRef.current;
 		returnFocusRef.current = null;
 		window.setTimeout(() => {
@@ -743,11 +650,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			if (returnTo instanceof HTMLElement && returnTo.isConnected && (!active || active === document.body)) returnTo.focus();
 		}, 160);
 	}, [resetTransient, setOpen]);
-	// The import flow has its own cloud/query/dialog subtree. Mounting it beside a
-	// permanently retained palette made every palette render pay for an unrelated
-	// feature. Mount it only after the user chooses New project, then pulse its
-	// existing programmatic-open signal on the following commit (the flow seeds its
-	// signal ref on mount, so doing both in one render would intentionally no-op).
 	useEffect(() => {
 		if (!createProjectFlowMounted || !createProjectFlowPendingOpen) return;
 		setCreateProjectFlowPendingOpen(false);
@@ -844,7 +746,6 @@ export const CommandPalette = memo(function CommandPalette() {
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
-					// Modal — do not route to /settings (that legacy path redirects home).
 					useUiStore.getState().openGlobalSettings();
 					break;
 				case "/sessions/$sessionId":
@@ -868,7 +769,6 @@ export const CommandPalette = memo(function CommandPalette() {
 
 	const sessionRoute = useCallback(
 		(projectId: string, sessionId: string): Extract<NavigateTarget, { to: "/sessions/$sessionId" | "/projects/$projectId/sessions/$sessionId" }> => {
-			// A search hit for a standalone session carries no project id at all.
 			return !projectId || projectId === STANDALONE_WORKSPACE_ID
 				? { to: "/sessions/$sessionId", params: { sessionId } }
 				: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId } };
@@ -904,9 +804,6 @@ export const CommandPalette = memo(function CommandPalette() {
 				return;
 			}
 			const workspace = workspaces.find((candidate) => candidate.id === projectId);
-			// Cloud projects carry no local orchestrator-agent config; spawn the
-			// orchestrator as a cloud session in its own sandbox instead of falling
-			// through to the project-settings page.
 			if (workspace?.kind === "cloud") {
 				const sessionId = await spawnCloudOrchestrator(queryClient, projectId);
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -924,7 +821,6 @@ export const CommandPalette = memo(function CommandPalette() {
 			const sessionId = await spawnOrchestrator(projectId, "command_palette");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			navigateToTarget(sessionRoute(projectId, sessionId));
-			// A palette reopened while the spawn ran stays open.
 			if (isCurrentRun()) closePalette();
 		},
 		[workspaces, navigateToTarget, queryClient, closePalette, blockedByRestart, sessionRoute],
@@ -951,13 +847,10 @@ export const CommandPalette = memo(function CommandPalette() {
 			const generation = runGenerationRef.current;
 			const isCurrentRun = () => runGenerationRef.current === generation;
 			try {
-				// Actions that open another modal hand the backdrop over to it. A New
-				// task blocked by a restart keeps the palette open, so it has none.
 				const blockedTask = action.kind === "open-new-task" && (
 					useUiStore.getState().restartingProjectIds.has(action.projectId)
 					|| useUiStore.getState().provisioningProjectIds.has(sessionUiKey(action.projectId, params.hostId))
 				);
-				// New task opens a modal only for a cloud project; others get a page.
 				const taskOpensModal = action.kind === "open-new-task"
 					&& workspaces.some((workspace) => workspace.id === action.projectId && workspace.kind === CLOUD_PROJECT_KIND);
 				if (opensModal(action, taskOpensModal) && !blockedTask) beginModalHandoff();
@@ -1012,7 +905,6 @@ export const CommandPalette = memo(function CommandPalette() {
 					break;
 				case "open-view":
 					pushView({ ...action.view, parent: viewRef.current });
-					// Like opening the submenu in the context menu (Open in looks for new terminals).
 					if (action.view.mode === "menu-submenu") findSubmenuOwner(sessionMenuEntries, action.view.entryId)?.onOpenChange?.(true);
 					break;
 				case "run":
@@ -1066,8 +958,6 @@ export const CommandPalette = memo(function CommandPalette() {
 					break;
 				case "run-shortcut": {
 					closePalette();
-					// After the palette has closed, so the action sees the screen
-					// it was asked about, not the palette.
 					const shortcut = action.shortcut;
 					window.setTimeout(() => runAppShortcut({ id: shortcut }), 0);
 					break;
@@ -1084,9 +974,6 @@ export const CommandPalette = memo(function CommandPalette() {
 						break;
 					}
 					case "open-search-result": {
-						// Hand the match to the session before navigating: the Chat
-						// timeline is mounted by the shell, so it picks the target up
-						// when it renders rather than from route state.
 						revealSessionSearchMatch(action);
 						navigateToTarget(sessionRoute(action.projectId, action.sessionId));
 						closePalette();
@@ -1098,8 +985,6 @@ export const CommandPalette = memo(function CommandPalette() {
 						break;
 					case "open-new-task":
 						if (blockedByRestart(action.projectId)) break;
-						// New task opens the new chat page (a cloud project, the New task
-						// modal), like ⌘N, after the palette closes.
 						closePalette();
 						useUiStore.getState().requestNewTask(action.projectId, params.hostId);
 						break;
@@ -1110,9 +995,6 @@ export const CommandPalette = memo(function CommandPalette() {
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
 					case "open-archive": {
-						// Over the current page, with no navigation. The palette's own
-						// focus goes with it, so the modal returns to where the palette
-						// was opened from (a composer, a terminal) when it closes.
 						const returnFocus = returnFocusRef.current;
 						useUiStore.getState().openArchive({
 							...(action.projectId ? { projectId: action.projectId } : {}),
@@ -1145,9 +1027,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		[runAction],
 	);
 
-	// ⌘K / ⌘⇧P and ⌘P arrive from the main process (it also yields plain Ctrl+K and
-	// Ctrl+P to a focused terminal on Windows/Linux), so they work from xterm and
-	// the Browser view alike.
 	useAppShortcut(
 		"command-palette",
 		() => {
@@ -1160,8 +1039,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		},
 		enabled,
 	);
-	// Quick open: the palette's file search for the session on screen. Pressed
-	// again while it is showing, it closes, like ⌘K.
 	useAppShortcut(
 		"quick-open-file",
 		() => {
@@ -1177,7 +1054,6 @@ export const CommandPalette = memo(function CommandPalette() {
 		enabled,
 	);
 
-	// Digits belong to the palette's own list while it is open.
 	useEffect(() => {
 		if (!enabled || !isOpen) return;
 		const swallowIndexedChords = (event: KeyboardEvent) => {
@@ -1236,8 +1112,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const chatSearchError = chatSearchEnabled && !searchCatchingUp && chatSearchQuery.error
 		? (chatSearchQuery.error instanceof Error ? chatSearchQuery.error.message : t("command.searchChatsError"))
 		: null;
-	// One notice for everything that went wrong, so a daemon that is down reads
-	// as one problem rather than three red boxes.
 	const sessionSearchError = sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.error
 		? (sessionSearchQuery.error instanceof Error ? sessionSearchQuery.error.message : t("command.searchSessionsError"))
 		: null;
@@ -1251,8 +1125,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const scope = view.mode === "root"
 		? [scopeSessionTitle ? t("command.scopeFiles", { session: scopeSessionTitle }) : null, t("command.scopeChats")].filter(Boolean).join(" · ")
 		: "";
-	// Nested views keep the bar as it is: Back takes the search glyph's place,
-	// so the field never moves.
 	const backButton = view.mode === "root" ? undefined : (
 		<Button
 			type="button"
@@ -1269,9 +1141,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	return (
 		<>
 				<CommandDialog
-					// CommandDialog supplies an overlay plus trapped focus without the
-					// body-wide scroll/pointer lock that made palette opening scale with
-					// every retained shell node.
 					modal={false}
 					open={isOpen}
 					title={t("command.palette")}
@@ -1288,9 +1157,6 @@ export const CommandPalette = memo(function CommandPalette() {
 				commandProps={{
 					shouldFilter: false,
 					value: valueResync ? `${value} ` : value,
-					// cmdk picks the first row in the list after each query; the palette
-					// picks the best match instead, so only a row the person moved to
-					// (arrow keys, pointer) replaces it.
 					onValueChange: (next: string) => {
 						if (userPickRef.current) setSelectedValue(next);
 						else if (next !== value) setValueResync((on) => !on);
@@ -1314,7 +1180,6 @@ export const CommandPalette = memo(function CommandPalette() {
 							onValueChange={(next) => {
 								setQuery(next);
 								setError(null);
-								// A new query picks its own first row.
 								userPickRef.current = false;
 								setSelectedValue("");
 							}}
@@ -1333,14 +1198,9 @@ export const CommandPalette = memo(function CommandPalette() {
 							}
 							onKeyDown={(event) => {
 								if (event.nativeEvent.isComposing) return;
-								// ⌘↵ (or → at the end of the query) opens the selected row's
-								// alternative, such as a session's actions.
 								const wantsSecondary = (event.key === "Enter" && (event.metaKey || event.ctrlKey))
 									|| (event.key === "ArrowRight" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey
 										&& event.currentTarget.selectionStart === query.length);
-								// A row an earlier search found, which cmdk selected on its own,
-								// is not opened until the user moves onto it. cmdk keeps its own
-								// copy of the selection, so ask the list which row it has.
 								const cmdkSelectedId = event.currentTarget.closest("[cmdk-root]")
 									?.querySelector("[cmdk-item][aria-selected='true']")?.getAttribute("data-value");
 								const cmdkSelected = visibleItems.find((item) => item.id === cmdkSelectedId);
@@ -1355,7 +1215,6 @@ export const CommandPalette = memo(function CommandPalette() {
 									onSelectItem(selectedItem, true);
 									return;
 								}
-								// → on a row that opens a list (the ones with ›) opens it, as Enter does.
 								if (wantsSecondary && event.key === "ArrowRight" && selectedItem && !selectedItem.disabled && rowOpensList(selectedItem)) {
 									event.preventDefault();
 									event.stopPropagation();
@@ -1366,7 +1225,6 @@ export const CommandPalette = memo(function CommandPalette() {
 									event.preventDefault();
 									requestDismiss("pop");
 								}
-								// ← at the start of the field goes back out of a nested list, as → went in.
 								if (event.key === "ArrowLeft" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey
 									&& viewRef.current.mode !== "root"
 									&& event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
@@ -1420,8 +1278,6 @@ export const CommandPalette = memo(function CommandPalette() {
 							{sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.isFetching && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
 							)}
-							{/* An empty session-text result over an incomplete index is not the
-							    same answer as one over a complete index. */}
 							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchQuery.isFetching && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">
 									{sessionSearchIndexStatus.data?.state === "backfilling"
@@ -1492,7 +1348,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	);
 });
 
-/** Whether a palette action closes the palette into another modal. */
 function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensModal: boolean): boolean {
 	switch (action.kind) {
 		case "open-new-task":
@@ -1521,14 +1376,8 @@ function FooterHint({ keys, label }: { keys: readonly string[]; label: string })
 	);
 }
 
-/** Groups whose subtitle is a folder path: cut from its start, where it repeats. */
 const PATH_SUBTITLE_GROUPS = new Set<CommandItemModel["group"]>(["files", "content"]);
 
-/**
- * One palette row: a fixed leading column (a session's status dot or the
- * command's icon), the title with what the query matched drawn brighter, its
- * context in a quieter tone, and at the end the row's keys or state.
- */
 function PaletteRow({
 	item,
 	query,
@@ -1547,7 +1396,6 @@ function PaletteRow({
 	const { t } = useTranslation();
 	const Icon = iconForCommand(item);
 	const pathSubtitle = PATH_SUBTITLE_GROUPS.has(item.group);
-	// A row that leads to a list of choices rather than doing something.
 	const opensPicker = rowOpensList(item);
 	return (
 		<CommandItem
@@ -1579,8 +1427,6 @@ function PaletteRow({
 					</span>
 					{item.subtitle ? (
 						pathSubtitle ? (
-							// Right-to-left layout puts the ellipsis at the start of a long
-							// path; <bdi> keeps the path itself reading left to right.
 							<span dir="rtl" className="min-w-0 truncate text-left text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
 								<bdi>{item.subtitle}</bdi>
 							</span>
@@ -1596,7 +1442,6 @@ function PaletteRow({
 			) : item.disabled && item.disabledReason ? (
 				<span className="max-w-[45%] shrink-0 truncate text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
 			) : item.toggled !== undefined ? (
-				// Shows the state only; the row itself is what flips it.
 				<span className="flex shrink-0 items-center">
 					<span className="sr-only">{item.toggled ? t("command.on") : t("command.off")}</span>
 					<Switch checked={item.toggled} tabIndex={-1} aria-hidden="true" className="pointer-events-none" />
@@ -1617,15 +1462,12 @@ function PaletteRow({
 	);
 }
 
-/** The open session's actions the blank list shows; the others wait for a search. */
 const BLANK_SESSION_ACTIONS = new Set(["session-switch-interface", "menu:open-in", "menu:session-rename", "menu:session-resume", "menu:session-open-pr", "menu:session-archive"]);
 
-/** A session's menu rows; Rename opens the palette's own rename field, so it keeps the palette open. */
 function paletteMenuRows(entries: readonly MenuEntry[], sessionId: string): CommandItemModel[] {
 	return menuEntryCommands(entries, sessionId).map((item) => (item.id === "menu:session-rename" ? { ...item, keepOpen: true } : item));
 }
 
-/** A row whose action opens a nested list rather than doing something; drawn with ›. */
 function rowOpensList(item: CommandItemModel): boolean {
 	return (item.action?.kind === "open-file-search" && !item.action.target) || item.action?.kind === "open-view";
 }
@@ -1650,14 +1492,8 @@ function Highlighted({ text, spans }: { text: string; spans: readonly { start: n
 	);
 }
 
-/** Characters of context kept before the first match when the line is cut. */
 const SNIPPET_LEAD = 16;
 
-/**
- * One matched line with the matched spans in the foreground. A line whose
- * first match sits deep in it starts just before that match, so the reason
- * for the hit is not lost to truncation.
- */
 function HighlightedSnippet({ snippet }: { snippet: NonNullable<CommandItemModel["snippet"]> }) {
 	const parts: { text: string; hit: boolean }[] = [];
 	const firstMatch = snippet.highlights[0]?.start ?? 0;

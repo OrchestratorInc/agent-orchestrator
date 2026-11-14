@@ -7,7 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Store is the durable project persistence surface required by Service.
 type Store interface {
 	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
 	CountProjectsIncludingArchived(ctx context.Context) (int, error)

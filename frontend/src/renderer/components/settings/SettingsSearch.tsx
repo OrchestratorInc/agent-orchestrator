@@ -2,12 +2,6 @@ import { Search } from "@/components/app-icons";
 import type { ReactNode } from "react";
 import { Input } from "../ui/input";
 
-/**
- * The one settings search bar: full column width, scrolling with the page.
- * Pass it as a SettingsSection's `toolbar` so it sits under the heading and
- * above the card. `trailing` holds a ghost action beside the field
- * ("Clear all") or a view switch.
- */
 export function SettingsSearch({
 	value,
 	onChange,

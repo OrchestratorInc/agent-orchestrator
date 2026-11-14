@@ -200,7 +200,6 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	if resolver.request.ThreadID != "thread-1" || resolver.request.PR.Number != 7 {
 		t.Fatalf("request = %#v", resolver.request)
 	}
-	// The whole thread is marked, replies included, so the summary shows it resolved at once.
 	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
 		t.Fatalf("resolved thread ids = %#v", got)
 	}
@@ -295,9 +294,6 @@ func TestRequestRereviewRejectsUnknownReviewer(t *testing.T) {
 	}
 }
 
-// AO never sends the worker a separate verdict message: the reviewer's posted
-// review reaches the worker through the SCM observer like any other review. A
-// submitted result is recorded and stays complete.
 func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 	st := &fakeStore{
 		ok:  true,
@@ -498,8 +494,6 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 		ok: true,
 		batchRuns: []domain.ReviewRun{
 			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
-			// A newer-commit trigger superseded run-2 while the reviewer was still
-			// working on the original batch.
 			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunFailed},
 		},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2-new"}},
@@ -564,7 +558,6 @@ func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 	}
 }
 
-// recordingSink captures what the review service reports.
 type recordingSink struct{ events []ports.TelemetryEvent }
 
 func (r *recordingSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
@@ -582,8 +575,6 @@ func (r *recordingSink) named(name string) []ports.TelemetryEvent {
 	return out
 }
 
-// Code review shipped with no telemetry at all, so there was no way to tell
-// whether reviewers approve or request changes. This pins the outcome event.
 func TestSubmitReportsReviewOutcome(t *testing.T) {
 	created := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
 	store := &fakeStore{
@@ -626,16 +617,11 @@ func TestSubmitReportsReviewOutcome(t *testing.T) {
 	if got[0].SessionID == nil || *got[0].SessionID != "worker-1" {
 		t.Fatalf("SessionID = %#v, want worker-1", got[0].SessionID)
 	}
-	// The emit path detaches from the request context on purpose; the request id
-	// must still be carried so review rows join to the HTTP request.
 	if got[0].RequestID != "req-1" {
 		t.Fatalf("RequestID = %q, want req-1", got[0].RequestID)
 	}
 }
 
-// The review body is reviewer prose about someone's source code, and the PR URL
-// and SHA identify the repository. None may ever reach the payload, regardless of
-// what the daemon's remote allowlist would strip later.
 func TestSubmitNeverReportsReviewProseOrRepoIdentifiers(t *testing.T) {
 	store := &fakeStore{
 		ok: true,
@@ -675,8 +661,6 @@ func TestSubmitNeverReportsReviewProseOrRepoIdentifiers(t *testing.T) {
 	}
 }
 
-// Re-submitting an already-complete run is idempotent in the store, so it must be
-// idempotent in telemetry too, or a retrying reviewer would double-count verdicts.
 func TestResubmitDoesNotDoubleReport(t *testing.T) {
 	store := &fakeStore{
 		ok: true,
@@ -699,8 +683,6 @@ func TestResubmitDoesNotDoubleReport(t *testing.T) {
 	}
 }
 
-// Every existing caller constructs the service without a sink, so an unwired
-// service must stay silent rather than panic.
 func TestServiceWithoutTelemetrySinkStaysSilent(t *testing.T) {
 	store := &fakeStore{
 		ok:  true,
@@ -712,10 +694,6 @@ func TestServiceWithoutTelemetrySinkStaysSilent(t *testing.T) {
 	}
 }
 
-// reviewErrorKind must distinguish the engine's sentinels. They are wrapped with
-// %w and only become *apierr.Error at the HTTP boundary, so the generic
-// classifier would report every trigger failure as "internal" and the
-// trigger_failed event's error_kind could never say why.
 func TestReviewErrorKindClassifiesEngineSentinels(t *testing.T) {
 	cases := []struct {
 		name string
@@ -734,9 +712,6 @@ func TestReviewErrorKindClassifiesEngineSentinels(t *testing.T) {
 	}
 }
 
-// An automatic pass was previously invisible: only the manual Trigger emitted,
-// so auto-review could not be told apart from manual review anywhere
-// downstream even though the two answer different product questions.
 func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 	cases := []struct {
 		name string
@@ -831,8 +806,6 @@ func TestTriggerRejectsInvalidReviewerConfigBeforeEngine(t *testing.T) {
 	}
 }
 
-// The submitted event has to carry enough to tell a shallow automatic approval
-// apart from a substantial manual changes-requested pass.
 func TestSubmitReportsPassShapeNotItsContents(t *testing.T) {
 	policyOff := false
 	store := &fakeStore{
@@ -904,8 +877,6 @@ func TestReusedManualPassDoesNotReportNewReview(t *testing.T) {
 	}
 }
 
-// An automatic sweep with an existing review or a skipped session is not a
-// newly triggered review.
 func TestReusedOrSkippedAutoPassDoesNotCountAsTriggered(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -972,7 +943,6 @@ func TestTriggerRequestedEnablesAutoInjectOnlyAfterAPassStarts(t *testing.T) {
 		t.Fatalf("triggered events = %+v, want one agent trigger", got)
 	}
 
-	// Already on: nothing to change and nothing to report.
 	out, err = svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Source: domain.ReviewTriggerAgent, EnableAutoInject: true})
 	if err != nil {
 		t.Fatalf("second TriggerRequested: %v", err)
@@ -1020,12 +990,9 @@ func TestTriggerRequestedRejectsDaemonOnlySourceAndContradictoryPolicy(t *testin
 }
 
 type fakePRRefresher struct {
-	calls []string
-	err   map[string]error
-	// order records refreshes relative to the engine trigger.
-	order *[]string
-	// branchPRs, otherAuthorPRs, and findErr answer FindBranchPRs; finds
-	// counts the lookups.
+	calls          []string
+	err            map[string]error
+	order          *[]string
 	branchPRs      []string
 	otherAuthorPRs []string
 	findErr        error
@@ -1045,8 +1012,6 @@ func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL
 	return f.err[prURL]
 }
 
-// A requested review fetches the worker's open PRs fresh first, so it reviews
-// the commit really on the PR, and only then plans the pass.
 func TestTriggerRequestedRefreshesOpenPRsBeforePlanning(t *testing.T) {
 	var order []string
 	st := &fakeStore{prs: []domain.PullRequest{
@@ -1076,8 +1041,6 @@ func TestTriggerRequestedRefreshesOpenPRsBeforePlanning(t *testing.T) {
 	}
 }
 
-// Naming a PR AO does not track yet attaches it and reviews only it. If it
-// cannot be fetched there is nothing to review, so that is an error.
 func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
 	st := &fakeStore{}
 	refresher := &fakePRRefresher{}
@@ -1135,9 +1098,6 @@ func TestSubmitRequestsReviewRefreshForProviderPostedReview(t *testing.T) {
 	}
 }
 
-// A review requested right after opening a PR, before the SCM observer has
-// discovered it, attaches the one open PR from the worker's branch and
-// reviews it instead of failing.
 func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 	var order []string
 	url := "https://github.com/o/r/pull/9"
@@ -1154,8 +1114,6 @@ func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 		t.Fatalf("order = %v, want the branch PR attached before planning", order)
 	}
 
-	// A failed lookup says so, with the exact retry, instead of claiming the
-	// branch has no PR.
 	order = nil
 	refresher.branchPRs, refresher.findErr = nil, errors.New("provider down")
 	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
@@ -1167,9 +1125,6 @@ func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 	}
 }
 
-// A branch PR that cannot be attached right after the lookup found it (closed
-// in between) is reported as found but not attached, keeping the claim's
-// error class, and no review starts.
 func TestTriggerRequestedReportsABranchPRThatCouldNotBeAttached(t *testing.T) {
 	url := "https://github.com/o/r/pull/9"
 	claimErr := fmt.Errorf("%w: pull request %s was not found on the provider", ErrNotFound, url)
@@ -1190,8 +1145,6 @@ func TestTriggerRequestedReportsABranchPRThatCouldNotBeAttached(t *testing.T) {
 	}
 }
 
-// The engine may say the worker's branch has no open PR only when a lookup
-// ran and found none, not when it was skipped.
 func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testing.T) {
 	var got []bool
 	trigger := func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
@@ -1215,14 +1168,10 @@ func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testin
 	}
 }
 
-// namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
 type namedPRRefresher struct{}
 
 func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
 
-// A session whose tracked PR was closed or merged may have opened a new PR on
-// the same branch. With no open tracked PR, the branch lookup still runs and
-// attaches it.
 func TestTriggerRequestedAttachesTheBranchPRWhenOnlyAClosedPRIsTracked(t *testing.T) {
 	var order []string
 	url := "https://github.com/o/r/pull/9"
@@ -1262,9 +1211,6 @@ func TestTriggerRequestedNamesEachBranchPRWhenSeveralAreOpen(t *testing.T) {
 	}
 }
 
-// A PR another developer opened on a branch of the same name is not attached
-// on its own, the rule the SCM observer follows; the error says a PR from
-// another author was found and gives the --pr override.
 func TestTriggerRequestedDoesNotAttachAnotherAuthorsBranchPR(t *testing.T) {
 	url := "https://github.com/o/r/pull/9"
 	refresher := &fakePRRefresher{otherAuthorPRs: []string{url}}
@@ -1287,8 +1233,6 @@ func TestTriggerRequestedDoesNotAttachAnotherAuthorsBranchPR(t *testing.T) {
 	}
 }
 
-// The worker's own PR is still attached when another author also has one on
-// a branch of the same name.
 func TestTriggerRequestedAttachesTheOwnBranchPRBesideAnotherAuthors(t *testing.T) {
 	var order []string
 	own := "https://github.com/o/r/pull/9"
@@ -1306,8 +1250,6 @@ func TestTriggerRequestedAttachesTheOwnBranchPRBesideAnotherAuthors(t *testing.T
 	}
 }
 
-// Naming a PR with --pr stays the override: it is attached as named, without
-// a branch lookup or an authorship check.
 func TestTriggerRequestedNamedPRSkipsTheBranchLookup(t *testing.T) {
 	var order []string
 	url := "https://github.com/o/r/pull/9"

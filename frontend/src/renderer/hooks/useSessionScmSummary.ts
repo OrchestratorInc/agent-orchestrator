@@ -11,8 +11,6 @@ import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 import { useSettings } from "./useSettings";
 
-// openedBy only comes from AO Cloud, which names the person behind a PR its
-// GitHub App opened for them.
 export type SessionPRSummary = components["schemas"]["SessionPRSummary"] & { openedBy?: PROpener };
 export type SessionPRReference = components["schemas"]["SessionPRReference"];
 
@@ -73,7 +71,6 @@ export function useSessionScmSummary(
 			: sessionScmSummaryQueryKey(sessionId, hostId),
 		[baseUrl, cloud, cloudOrgId, hostId, sessionId],
 	);
-	// The session's shared event stream says when its pull requests change.
 	useCloudSessionEventListener({
 		baseUrl,
 		orgId: cloudOrgId,

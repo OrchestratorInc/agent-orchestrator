@@ -22,11 +22,8 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const DEFAULT_LOCALE: SupportedLocale = "en";
 
-/** Records an explicit choice from the language switcher. */
 export const LOCALE_COOKIE = "ao_locale";
 
-// Each name is in its own language, so a reader who cannot read the current
-// page can still find their language. Never translate these.
 export const LOCALE_LABELS: Record<SupportedLocale, string> = {
   en: "English",
   ja: "日本語",
@@ -51,10 +48,6 @@ export function isSupportedLocale(value: string): value is SupportedLocale {
   return (SUPPORTED_LOCALES as readonly string[]).includes(value);
 }
 
-/**
- * Finds a cookie value that is one of `allowed`. Self-contained, with no
- * imports, so the root layout can inline it into the head script.
- */
 export function findCookieValue(cookie: string, name: string, allowed: readonly string[]): string | null {
   const parts = cookie.split(";");
   for (let i = 0; i < parts.length; i++) {
@@ -66,7 +59,6 @@ export function findCookieValue(cookie: string, name: string, allowed: readonly 
   return null;
 }
 
-/** The locale saved by the language switcher, or English when none is saved. */
 export function readLocaleCookie(cookie: string): SupportedLocale {
   const value = findCookieValue(cookie, LOCALE_COOKIE, SUPPORTED_LOCALES);
   return value && isSupportedLocale(value) ? value : DEFAULT_LOCALE;

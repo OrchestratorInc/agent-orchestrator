@@ -16,8 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// TestReportRoundTrip pins the intentionally hand-mirrored CLI DTO to the real
-// HTTP, service, and durable SQLite boundaries.
 func TestReportRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	cfg := setConfigEnv(t)

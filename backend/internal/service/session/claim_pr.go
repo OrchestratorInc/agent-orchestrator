@@ -16,29 +16,19 @@ import (
 )
 
 var (
-	// ErrInvalidPRRef is returned when a claim request does not name a PR/MR URL or positive PR number.
-	ErrInvalidPRRef = errors.New("session: invalid pr ref")
-	// ErrPRNotFound is returned when the SCM provider has no matching pull request.
-	ErrPRNotFound = errors.New("session: pr not found")
-	// ErrPRNotOpen is returned when a PR is merged or closed and therefore cannot be claimed.
-	// Draft PRs are open work and remain claimable.
-	ErrPRNotOpen = errors.New("session: pr not open")
-	// ErrSCMUnavailable is returned when live SCM facts cannot be fetched.
-	ErrSCMUnavailable = errors.New("session: scm unavailable")
-	// ErrProjectMismatch is returned when the PR repository does not match the session project repository.
-	ErrProjectMismatch = errors.New("session: pr project mismatch")
-	// ErrSessionNotClaimable is returned when a session is not allowed to claim a PR.
+	ErrInvalidPRRef        = errors.New("session: invalid pr ref")
+	ErrPRNotFound          = errors.New("session: pr not found")
+	ErrPRNotOpen           = errors.New("session: pr not open")
+	ErrSCMUnavailable      = errors.New("session: scm unavailable")
+	ErrProjectMismatch     = errors.New("session: pr project mismatch")
 	ErrSessionNotClaimable = errors.New("session: not claimable")
-	// ErrSessionNoWorkspace is returned when a session has no workspace path to associate with PR work.
-	ErrSessionNoWorkspace = errors.New("session: no workspace")
+	ErrSessionNoWorkspace  = errors.New("session: no workspace")
 )
 
-// ClaimPROptions controls PR claim conflict behavior.
 type ClaimPROptions struct {
 	AllowTakeover bool
 }
 
-// ClaimPRResult is the session PR read model returned after a claim.
 type ClaimPRResult struct {
 	PRs                []domain.PRFacts
 	BranchChanged      bool
@@ -46,7 +36,6 @@ type ClaimPRResult struct {
 	DonorWasTerminated bool
 }
 
-// ListPRs returns all PRs currently owned by a session, ordered for display.
 func (s *Service) ListPRs(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error) {
 	_, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
@@ -58,7 +47,6 @@ func (s *Service) ListPRs(ctx context.Context, id domain.SessionID) ([]domain.PR
 	return s.listPRFacts(ctx, id)
 }
 
-// ClaimPR attaches a live pull request (GitHub PR or GitLab MR) to a worker session and persists the current SCM facts atomically.
 func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts ClaimPROptions) (ClaimPRResult, error) {
 	rec, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
@@ -116,9 +104,6 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	if obs.PR.URL == "" {
 		obs.PR.URL = prURL
 	}
-	// Draft PRs are still open work: workers must be able to claim them without
-	// first marking the PR ready for review. Only terminal states are rejected;
-	// the draft fact itself is preserved on the persisted PR row below.
 	if obs.PR.Merged || obs.PR.Closed {
 		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number, Title: obs.PR.Title}, domain.ActivityStatusFailed, ErrPRNotOpen)
 		return ClaimPRResult{}, ErrPRNotOpen
@@ -136,17 +121,10 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, err
 	}
 	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
-	// The PR has changed hands: tell the previous owner now, so a later read
-	// failing doesn't leave it acting on a PR it no longer owns.
 	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id
 	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
 		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
 	}
-	// Reconcile immediately rather than waiting for the artifact-output
-	// poller's next tick: a session that already produced artifacts must move
-	// to pr OutputType (and out of the artifact Kanban placement) with the
-	// same latency claiming a PR always had. A reconcile failure must not
-	// fail an otherwise-successful claim.
 	if s.outputTypeReconciler != nil {
 		if err := s.outputTypeReconciler.ReconcileSessionOutputType(ctx, id); err != nil && s.logger != nil {
 			s.logger.Warn("claim: reconcile output type failed", "session", id, "err", err)
@@ -157,9 +135,6 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, err
 	}
 	prs = claimedFirst(prs, prURL)
-	// TODO: implement workspace branch checkout. Until then, leave BranchChanged
-	// false and have CLI output report that the workspace was unchanged, without
-	// assuming the session was already on the PR branch.
 	res := ClaimPRResult{PRs: prs, BranchChanged: false, DonorWasTerminated: outcome.OwnerTerminated}
 	if tookOver {
 		res.TakenOverFrom = []domain.SessionID{outcome.PreviousOwner}
@@ -183,9 +158,6 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 		return fmt.Errorf("list workspace repositories for project %s: %w", project.ID, err)
 	}
 	for _, repo := range repos {
-		// A workspace root and local-only children may have no SCM identity.
-		// Only registered, parseable origins authorize a child repository;
-		// arbitrary checkout remotes never grant claim permission.
 		if requireSameRepo(prURL, repo.RepoOriginURL) == nil {
 			return nil
 		}
@@ -193,12 +165,6 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 	return ErrProjectMismatch
 }
 
-// sameRenamedGitHubRepo reports whether GitHub resolves the github.com origin
-// and the PR's repository to the same repository id, as it does after the
-// origin's owner or name was renamed or transferred. The PR is on the very
-// repository the origin's git remote already reaches through GitHub's
-// redirect, so this grants no trust beyond the origin itself. Any lookup
-// failure, other host, or different id keeps the mismatch.
 func (s *Service) sameRenamedGitHubRepo(ctx context.Context, prURL, origin string) bool {
 	if s.githubRepos == nil {
 		return false
@@ -249,9 +215,6 @@ func (s *Service) enrichClaimReviews(ctx context.Context, ref ports.SCMPRRef, ob
 		if errors.Is(err, ports.ErrSCMNotFound) {
 			return ports.ReviewWritePreserve, ErrPRNotFound
 		}
-		// Review thread fetch failed but the PR itself was observed — proceed
-		// with ReviewWritePreserve so the claim still succeeds.  Review
-		// threads will be retried on the next observer poll.
 		if s.logger != nil {
 			s.logger.Warn("claim: review thread fetch failed, proceeding without threads",
 				"pr", ref.URL,
@@ -280,9 +243,6 @@ func scmRepoForClaim(prURL string) (ports.SCMRepo, error) {
 	return ports.SCMRepo{Provider: providerKey(host), Host: host, Owner: owner, Name: name, Repo: owner + "/" + name}, nil
 }
 
-// providerKey maps a hostname to the normalized provider key used by the
-// multi-provider dispatcher. GitHub hosts return "github"; everything else is
-// treated as GitLab to match the multi-provider's registration order.
 func providerKey(host string) string {
 	return domain.RepositoryProvider(host)
 }
@@ -292,10 +252,6 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 	if observedAt.IsZero() {
 		observedAt = now
 	}
-	// Review completeness follows the claim's own review fetch: a preserved
-	// (failed) review fetch passes a zero ReviewObservedAt so the upsert keeps
-	// the stored pair instead of publishing claim-time certainty it does not
-	// have. enrichClaimReviews fills obs.Review.Partial only on success.
 	reviewObservedAt := time.Time{}
 	reviewPartial := false
 	if reviewMode != ports.ReviewWritePreserve {
@@ -462,8 +418,6 @@ func normalizePRRef(ref, repoOrigin string) (string, int, error) {
 	return prURLFromParts(host, owner, repo, n), n, nil
 }
 
-// prURLFromParts constructs the canonical PR/MR URL for a provider.
-// GitHub uses /pull/N; GitLab uses /-/merge_requests/N.
 func prURLFromParts(host, owner, repo string, number int) string {
 	if providerKey(host) == "github" {
 		return fmt.Sprintf("https://%s/%s/%s/pull/%d", host, owner, repo, number)
@@ -483,10 +437,6 @@ func requireSameRepo(prURL, repoOrigin string) error {
 	if err != nil {
 		return ErrInvalidPRRef
 	}
-	// Compare provider (derived from host) + host + full namespace. Same
-	// owner/repo name on GitHub and GitLab must not validate, and a
-	// gitlab.com origin must not accept a self-managed GitLab MR (review
-	// finding #6).
 	if !strings.EqualFold(prHost, originHost) {
 		return ErrProjectMismatch
 	}
@@ -507,7 +457,6 @@ func parsePRURL(raw string) (host, owner, name string, number int, err error) {
 	host = u.Host
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 
-	// GitHub: /owner/repo/pull/N → 4 parts, parts[2] == "pull"
 	if providerKey(host) == "github" && len(parts) == 4 && parts[2] == "pull" {
 		n, parseErr := strconv.Atoi(parts[3])
 		if parseErr != nil || n <= 0 {
@@ -519,14 +468,11 @@ func parsePRURL(raw string) (host, owner, name string, number int, err error) {
 		return host, parts[0], strings.TrimSuffix(parts[1], ".git"), n, nil
 	}
 
-	// GitLab: /owner/repo/-/merge_requests/N → parts[2] == "-", parts[3] == "merge_requests"
-	// Supports nested groups: /group/subgroup/repo/-/merge_requests/N
 	if providerKey(host) == "gitlab" && len(parts) >= 5 && parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
 		n, parseErr := strconv.Atoi(parts[len(parts)-1])
 		if parseErr != nil || n <= 0 {
 			return "", "", "", 0, ErrInvalidPRRef
 		}
-		// owner = everything before "-"; name = the last segment before "-"
 		repoParts := parts[:len(parts)-3]
 		if len(repoParts) < 2 {
 			return "", "", "", 0, ErrInvalidPRRef
@@ -559,8 +505,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// commentCreatedAt prefers the provider's comment timestamp and falls back to
-// the observation time for providers that do not report one.
 func commentCreatedAt(provider, observed time.Time) time.Time {
 	if !provider.IsZero() {
 		return provider
@@ -568,31 +512,15 @@ func commentCreatedAt(provider, observed time.Time) time.Time {
 	return observed
 }
 
-// branchPRLister lists a repository's open PRs from one branch, filtered by
-// the provider. The production SCM provider implements it; it stays optional
-// so claim-only fakes keep working.
 type branchPRLister interface {
 	ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
 }
 
-// BranchPRs are the open PRs from a session's branch, split by who opened
-// them.
 type BranchPRs struct {
-	// Own are the PRs opened by the account AO is signed in with.
-	Own []string
-	// OtherAuthor are the PRs another account opened on the same branch. AO
-	// never attaches them on its own, the same rule the SCM observer follows.
+	Own         []string
 	OtherAuthor []string
 }
 
-// FindBranchPRs returns the web URLs of open PRs whose source branch is the
-// session's branch, so a caller can attach a PR the SCM observer has not
-// discovered yet. It looks in the project's canonical/origin repository and,
-// for a workspace project, in every registered child repository, the same
-// repositories ClaimPR accepts. PRs from forks are skipped, and PRs another
-// account opened are returned apart from the signed-in account's own. It
-// returns nothing when the session has no branch or the provider cannot list;
-// a repository whose provider does not support branch listing is skipped.
 func (s *Service) FindBranchPRs(ctx context.Context, id domain.SessionID) (BranchPRs, error) {
 	rec, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
@@ -654,9 +582,6 @@ func (s *Service) FindBranchPRs(ctx context.Context, id domain.SessionID) (Branc
 	return found, nil
 }
 
-// branchPRIdentity resolves the signed-in account for repo's provider and host
-// once per lookup. Without a person's account AO cannot tell whether prURL is
-// the session's own PR, so the lookup fails rather than guess.
 func (s *Service) branchPRIdentity(ctx context.Context, cache map[string]ports.SCMIdentity, repo ports.SCMRepo, prURL string) (ports.SCMIdentity, error) {
 	key := strings.ToLower(repo.Provider + "|" + repo.Host)
 	if identity, ok := cache[key]; ok {
@@ -677,9 +602,6 @@ func (s *Service) branchPRIdentity(ctx context.Context, cache map[string]ports.S
 	return identity, nil
 }
 
-// branchPRRepos lists the repositories a session's PR can live in: the
-// canonical/origin repository and, for a workspace project, each registered
-// child repository with a parseable origin.
 func (s *Service) branchPRRepos(ctx context.Context, project domain.ProjectRecord) ([]ports.SCMRepo, error) {
 	var repos []ports.SCMRepo
 	seen := map[string]bool{}

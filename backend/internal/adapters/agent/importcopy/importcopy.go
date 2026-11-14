@@ -1,7 +1,3 @@
-// Package importcopy copies an imported provider session to the place the
-// provider will look for it from AO's workspace. It serves adapters whose
-// provider finds a session by the directory it runs in (see
-// ports.AgentImportedSessionRelocator).
 package importcopy
 
 import (
@@ -17,24 +13,10 @@ import (
 	"path/filepath"
 )
 
-// RewriteLine returns the line to write in place of one JSON Lines record.
-// The line has no trailing newline. Blank lines are copied without a call.
 type RewriteLine func(line []byte) ([]byte, error)
 
-// Check runs after the last record and before the copy is put in place. An
-// adapter uses it to require what its provider needs, such as exactly one
-// session record having been rewritten. An error leaves nothing at dst.
 type Check func() error
 
-// CopyOnce copies the JSON Lines file src to dst, passing each record through
-// rewrite, unless dst already exists. check may be nil. dst's directory is
-// created (0700) when missing.
-//
-// The source is only read. dst appears whole or not at all: the copy is
-// written to a private temporary file in dst's directory and then linked into
-// place, which also refuses to replace a dst created concurrently. An existing
-// dst is kept as it is, because after the first resume it holds the provider's
-// later turns.
 func CopyOnce(src, dst string, rewrite RewriteLine, check Check) error {
 	if _, err := os.Lstat(dst); err == nil {
 		return nil
@@ -83,10 +65,6 @@ func CopyOnce(src, dst string, rewrite RewriteLine, check Check) error {
 	return nil
 }
 
-// WriteOnce writes body to name inside root, which never follows a link out
-// of it. As with CopyOnce, name appears whole or not at all: body is written
-// to a private temporary file beside it and then linked into place, so an
-// existing name is never replaced; that case reports os.ErrExist.
 func WriteOnce(ctx context.Context, root *os.Root, name string, body []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -148,7 +126,6 @@ func copyLines(in io.Reader, out io.Writer, rewrite RewriteLine) error {
 	return writer.Flush()
 }
 
-// StringField returns a top-level string field of one JSON record.
 func StringField(line []byte, field string) (string, bool) {
 	var record map[string]json.RawMessage
 	if json.Unmarshal(line, &record) != nil {
@@ -161,9 +138,6 @@ func StringField(line []byte, field string) (string, bool) {
 	return value, true
 }
 
-// SetStringField returns the JSON record with a top-level string field set to
-// value. Every other field keeps its exact value. A record without the field
-// gains it, so callers decide which records to change.
 func SetStringField(line []byte, field, value string) ([]byte, error) {
 	var record map[string]json.RawMessage
 	if err := json.Unmarshal(line, &record); err != nil {
@@ -180,7 +154,6 @@ func SetStringField(line []byte, field, value string) ([]byte, error) {
 	return marshal(record)
 }
 
-// marshal encodes without HTML escaping, so untouched text keeps its bytes.
 func marshal(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)

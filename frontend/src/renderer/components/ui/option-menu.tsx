@@ -14,12 +14,6 @@ const ROW =
 const LABEL =
 	"px-2 py-1.5 text-micro tracking-wide text-passive";
 
-/**
- * The quiet filled trigger both this menu and the Settings pickers wear —
- * everything except the `group/*` token, which each owner names for itself so
- * its own chevron can key off it. Shared because the two are meant to be the
- * same control: a visual tweak here should never need making twice.
- */
 export const MENU_TRIGGER_CHROME =
 	"settings-option-trigger button-raised max-w-full min-w-0 border [--button-color:var(--secondary)] text-secondary-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -29,16 +23,6 @@ export const MENU_GHOST_TRIGGER_CHROME = cn(
 );
 const CloseSubmenu = createContext<(() => void) | undefined>(undefined);
 
-// ---------------------------------------------------------------------------
-// Root — re-export for convenience
-// ---------------------------------------------------------------------------
-
-/**
- * Not modal by default. A modal menu locks scrolling (a stylesheet added and removed)
- * and turns off pointer events on <body>; either restyles every element on the page
- * when the menu opens and again when it closes. Unless `modal` is passed, an outside
- * click still only closes the menu, as a modal one's would.
- */
 export function OptionMenu({ modal, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
 	return (
 		<ShieldOutsideClick.Provider value={modal === undefined}>
@@ -46,10 +30,6 @@ export function OptionMenu({ modal, ...props }: React.ComponentProps<typeof Drop
 		</ShieldOutsideClick.Provider>
 	);
 }
-
-// ---------------------------------------------------------------------------
-// Trigger
-// ---------------------------------------------------------------------------
 
 export const OptionMenuTrigger = forwardRef<
 	HTMLButtonElement,
@@ -70,10 +50,6 @@ export const OptionMenuTrigger = forwardRef<
 	);
 });
 
-// ---------------------------------------------------------------------------
-// Content (the panel)
-// ---------------------------------------------------------------------------
-
 export function OptionMenuContent({
 	className,
 	sideOffset = 6,
@@ -82,10 +58,6 @@ export function OptionMenuContent({
 	onPointerDownOutside,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
-	/**
-	 * Keep the rows still while open. A menu that opens upward is pinned by its bottom
-	 * edge, so a row that disappears would pull every row above it down under the pointer.
-	 */
 	steady?: boolean;
 }) {
 	const steadyRef = useSteadyHeight(steady);
@@ -116,13 +88,6 @@ export function OptionMenuContent({
 	);
 }
 
-/**
- * Shrinks the panel from the bottom while the pointer is on it. The height it loses
- * becomes a bottom margin, which the positioned wrapper still counts, so the top edge
- * and every row stay put; the space sits outside the panel, between it and the
- * trigger. Once the pointer leaves for anywhere but a submenu, the panel settles
- * back onto its trigger.
- */
 function useSteadyHeight(enabled: boolean | undefined) {
 	const cleanup = useRef<(() => void) | null>(null);
 	return useCallback((node: HTMLDivElement | null) => {
@@ -149,10 +114,6 @@ function useSteadyHeight(enabled: boolean | undefined) {
 	}, [enabled]);
 }
 
-// ---------------------------------------------------------------------------
-// Label
-// ---------------------------------------------------------------------------
-
 export function OptionMenuLabel({
 	className,
 	...props
@@ -165,10 +126,6 @@ export function OptionMenuLabel({
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Item
-// ---------------------------------------------------------------------------
-
 export function OptionMenuItem({
 	className,
 	active,
@@ -179,7 +136,6 @@ export function OptionMenuItem({
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
 	active?: boolean;
-	/** Visual active descendant used while a menu-owned search field retains focus. */
 	searchActive?: boolean;
 	radio?: boolean;
 }) {
@@ -211,14 +167,6 @@ export function OptionMenuItem({
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Submenu — trigger row + subcontent panel
-// ---------------------------------------------------------------------------
-
-/**
- * Lets a submenu that a selection closed open again, once its trigger is
- * asked for it: a click, a key, or a pointer that actually moves over it.
- */
 const AllowSubmenuReopen = createContext<(() => void) | undefined>(undefined);
 
 export function OptionMenuSub({
@@ -229,11 +177,6 @@ export function OptionMenuSub({
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub> & { closeOnSelect?: boolean }) {
 	const [localOpen, setLocalOpen] = useState(defaultOpen);
-	// Radix opens a submenu 100ms after the pointer moves onto its trigger and
-	// does not cancel that timer when a click opens it at once. A choice made
-	// inside that window (a quick click and pick, or a search and Enter) closes
-	// the submenu, and the old timer then reopened it. After a selection closes
-	// it, only the trigger being asked again (see AllowSubmenuReopen) opens it.
 	const closedBySelection = useRef(false);
 	const changeOpen = (next: boolean) => {
 		if (next && closedBySelection.current) return;
@@ -273,9 +216,6 @@ export function OptionMenuSubTrigger({
 	return (
 		<DropdownMenuPrimitive.SubTrigger
 			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
-			// Stop the click reaching the composer's click-to-focus handler without
-			// calling preventDefault, which Radix's composeEventHandlers reads as a
-			// signal to skip its own open/close handling.
 			onClick={(e) => {
 				e.stopPropagation();
 				allowReopen?.();
@@ -286,8 +226,6 @@ export function OptionMenuSubTrigger({
 				onKeyDown?.(e);
 			}}
 			onPointerMove={(e) => {
-				// A real move, not the zero-movement one a browser sends when the
-				// page changes under a resting pointer.
 				if (e.movementX || e.movementY) allowReopen?.();
 				onPointerMove?.(e);
 			}}

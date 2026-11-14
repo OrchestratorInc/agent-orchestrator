@@ -3,9 +3,6 @@ import { installFakeAgent } from "./support/fake-bridge";
 
 test.use({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
 
-// The nav cluster sits on the native traffic lights' centerline, which is the
-// framed panel's header centerline: 6px inset + 1px border + 36px / 2 = 25.
-// Native fullscreen has no frame, so the flush 36px row centers at 18.
 const trafficLightCenter = (fullScreen: boolean) => (fullScreen ? 18 : 25);
 
 async function geometry(page: Page) {
@@ -66,9 +63,6 @@ for (const mode of ["chat", "tui"] as const) {
 			const collapsed = await geometry(page);
 			expect(collapsed.nav.y).toBe(expanded.nav.y);
 			expect(collapsed.nav.height).toBe(expanded.nav.height);
-			// Chromium can report a fractional CSS-pixel centerline after the sidebar
-			// transition. Keep the smoke assertion strict without rejecting subpixel
-			// rasterization differences across CI runners.
 			expect(Math.abs(collapsed.nav.center - trafficLightCenter(fullScreen))).toBeLessThanOrEqual(2);
 			const firstTab = await page.getByRole("tab").first().boundingBox();
 			expect(firstTab!.x).toBeGreaterThanOrEqual(collapsed.nav.x + collapsed.nav.width);
@@ -95,15 +89,12 @@ for (const mode of ["chat", "tui"] as const) {
 			await nav.getByRole("button", { name: "Expand sidebar", exact: true }).click();
 		}
 		await expect.poll(() => page.evaluate(() => document.querySelector<HTMLElement>('[data-testid="session-terminal-region"]')!.style.getPropertyValue("--ao-sidebar-collapse-progress"))).toBe("0");
-		// The floating macOS top bar draws the panel's rounded frame on ::after.
 		const radius = await page.locator(".center-panel-surface").evaluate((el) => parseFloat(getComputedStyle(el, "::after").borderTopLeftRadius));
 		expect(radius).toBeGreaterThan(0);
 		const positions = await page.evaluate(async () => {
 			const tab = document.querySelector<HTMLElement>('[role="tab"]')!;
 			const frames = [tab.getBoundingClientRect().x];
 			const gap = document.querySelector('[data-slot="sidebar-gap"]')!;
-			// Layout observers run before paint. Sample after the chrome observer,
-			// rather than forcing layout mid-frame between Motion and its observer.
 			const observer = new ResizeObserver(() => frames.push(tab.getBoundingClientRect().x));
 			observer.observe(gap);
 			document.querySelector<HTMLButtonElement>('[data-slot="titlebar-nav"] button')!.click();
@@ -112,7 +103,6 @@ for (const mode of ["chat", "tui"] as const) {
 			frames.push(tab.getBoundingClientRect().x);
 			return frames;
 		});
-		// The per-frame variables must stay off <html>, which would restyle the whole document.
 		expect(await page.evaluate(() => document.documentElement.style.getPropertyValue("--ao-sidebar-layout-width"))).toBe("");
 		expect(positions.at(-1)!).toBeLessThan(positions[0] - 20);
 		for (let i = 1; i < positions.length; i++) expect(positions[i]).toBeLessThanOrEqual(positions[i - 1] + 1);

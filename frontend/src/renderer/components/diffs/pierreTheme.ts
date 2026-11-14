@@ -1,7 +1,3 @@
-// Pierre derives its canvas from the selected Shiki theme and injects that
-// value inside its shadow root. Keep the theme's syntax colors, but use AO's
-// own workspace canvas for the visible file and diff surfaces.
-/** WASM highlighter: much faster than Shiki on large files and diffs. */
 export const PIERRE_HIGHLIGHTER = "highlights";
 
 export const AO_PIERRE_SURFACE_CSS = `
@@ -51,10 +47,6 @@ export const AO_PIERRE_SURFACE_CSS = `
 }
 `;
 
-// Local Files diffs (the review list, the Files preview and centre file tabs):
-// an inset line-number column, and the empty side of a split hunk keeps its
-// line-number gutter on the canvas instead of painting a grey block. Cloud diffs
-// use only the shared surface CSS above.
 export const AO_PIERRE_FILES_REVIEW_CSS = `
 /* Inset the line-number column so numbers sit in from the panel edge instead
    of lining up under the file header's chevron: a wider right-aligned column

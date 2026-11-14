@@ -5,34 +5,17 @@ import { aoBridge } from "../lib/bridge";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
-/**
- * A cloud session's HTML artifact, framed from the control plane. The frame
- * is sandboxed without allow-same-origin or popups, so the page runs in an
- * opaque origin and cannot open a window; the control plane's own
- * Content-Security-Policy sandboxes it too and blocks its network requests.
- * A file whose stored object is gone shows as unavailable; a refused link
- * calls onAccessRefused so the caller can take a fresh one. When the page
- * opens another file of its session, onNavigate gets that file's path, and a
- * link refused on the way (the frame shows "Link expired") calls
- * onAccessRefused. A zoom scales the frame as browser zoom does: the page
- * gets a viewport of the pane's size over zoom, shown scaled by zoom, so it
- * reflows and pans with its own scrolling.
- */
 export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGranted, onNavigate, onThumbnailState, thumbnail, zoom = 1 }: {
 	title: string;
 	url: string;
 	onAccessRefused?: () => void;
 	onAccessGranted?: () => void;
 	onNavigate?: (path: string) => void;
-	/** A thumbnail's state: loading until the file's status is known and its page has loaded, failed while it shows the fallback, ready once the page is drawn. */
 	onThumbnailState?: (state: "loading" | "failed" | "ready") => void;
-	/** Scale only the page; gallery fallbacks keep the card's normal size. */
 	thumbnail?: { width: number; height?: number; fallback: ReactNode };
-	/** The artifact viewer's zoom, 1 at fit. */
 	zoom?: number;
 }) {
 	const { t } = useTranslation();
-	// The URL whose page has finished loading, so a new URL starts over.
 	const [loadedUrl, setLoadedUrl] = useState<string>();
 	useEffect(() => {
 		const prefix = artifactFilesPrefix(url);
@@ -81,7 +64,6 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	);
 }
 
-/** The origin and access prefix of a cloud artifact file URL. */
 function artifactFilesPrefix(url: string): string | undefined {
 	try {
 		const parsed = new URL(url);
@@ -92,7 +74,6 @@ function artifactFilesPrefix(url: string): string | undefined {
 	}
 }
 
-/** The artifact path of url under prefix, or undefined for a URL elsewhere. */
 export function artifactPathUnder(prefix: string, url: string): string | undefined {
 	try {
 		const parsed = new URL(url);

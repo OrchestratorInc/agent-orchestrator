@@ -30,8 +30,6 @@ export function terminalCommand(
 		return { command: "/usr/bin/osascript", args: ["-e", script] };
 	}
 	if (platform === "win32") {
-		// The launcher runs with null stdio, so a direct cmd.exe would get no
-		// console. start opens a new console window with real input and output.
 		return { command: env.ComSpec || env.COMSPEC || "cmd.exe", args: ["/d", "/s", "/v:off", "/c", `"start "" ${argv.map(windowsCommandArg).join(" ")}"`] };
 	}
 	for (const launcher of LINUX_TERMINAL_LAUNCHERS) {

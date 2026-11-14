@@ -1,26 +1,8 @@
-/**
- * PostHog funnel events for AO Cloud (B2C): sign-in, the org's offering, cloud
- * project and session creation with time-to-ready, the Upgrade page, Stripe
- * checkout, plan refusals and limits.
- *
- * Every event goes through captureRendererEvent, so the existing opt-out
- * (no telemetry bootstrap means no client), the operator denylist, the
- * per-name rate limit and the per-event property allowlist in telemetry.ts all
- * apply. No PII leaves here: ids are hashed by the allowlist, and no prompt,
- * repository name, email or error message is ever passed.
- *
- * Instrumentation wraps the renderer's control-plane client
- * (instrumentCloudClient) so call sites stay untouched; the client still
- * returns and throws exactly what it did before.
- */
-
 import type { CloudCpClient } from "./cloud-cp/client";
 import type { CloudCpCreateSessionRequest, CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
 import { captureRendererEvent, setCloudTelemetryContext } from "./telemetry";
 
-/** Pending session creations, keyed by session id, for time-to-ready. */
 const pendingSessions = new Map<string, { requestedAt: number; provider: string; kind: string }>();
-/** A pending session is forgotten after this long without becoming ready. */
 const PENDING_SESSION_TTL_MS = 60 * 60_000;
 const PENDING_CHECKOUT_KEY = "ao.telemetry.cloudCheckoutPending";
 
@@ -37,14 +19,8 @@ function errorStatus(error: unknown): number | undefined {
 	return typeof status === "number" ? status : undefined;
 }
 
-/** The signed-in user as last seen by any hook instance; undefined before the first read. */
 let knownCloudUser: string | null | undefined;
 
-/**
- * Tracks the cloud session and reports a genuine sign-in: a session for a
- * user who was not signed in before. The initial read on mount and background
- * token refreshes (which re-send the same user) are not sign-ins.
- */
 export function noteCloudSession(
 	account: { authProvider: string; user: { id: string } } | null,
 	initial: boolean,
@@ -63,11 +39,6 @@ interface OfferingShape {
 	kind?: unknown;
 }
 
-/**
- * Records the org's offering from /me (contract: `offering` with kind and
- * billingMode; older control planes omit it) and tags every later event and
- * exception with the hashed org id, kind and billing mode.
- */
 export function reportCloudOffering(me: CloudCpMeResponse): void {
 	const orgId = me.organizations[0]?.id;
 	const offering = ((me as unknown as { offering?: OfferingShape }).offering ?? {}) as OfferingShape;
@@ -95,7 +66,6 @@ export function reportUpgradeViewed(source: string): void {
 	void captureRendererEvent("ao.renderer.cloud_upgrade_viewed", { source });
 }
 
-/** Limit codes are usage or slot ceilings; anything else (PLAN_REQUIRED) is a plan refusal. */
 const LIMIT_CODES = new Set([
 	"ORCHESTRATOR_SLOTS_FULL",
 	"WORKER_SLOTS_FULL",
@@ -104,7 +74,6 @@ const LIMIT_CODES = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
-/** The control plane refused a request for plan reasons; `shown` is whether Upgrade opened. */
 export function reportPlanRefusal(code: string, shown: boolean): void {
 	const event = LIMIT_CODES.has(code) ? "ao.renderer.cloud_limit_reached" : "ao.renderer.cloud_plan_refusal_shown";
 	void captureRendererEvent(event, { code, shown });
@@ -122,11 +91,9 @@ function markCheckoutPending(plan: string, now: number): void {
 	try {
 		storage()?.setItem(PENDING_CHECKOUT_KEY, JSON.stringify({ plan, at: now }));
 	} catch {
-		// Best effort: without storage the completion is simply not reported.
 	}
 }
 
-/** Reports checkout completion the first time a pending checkout's org shows an entitled subscription. */
 export function observeBillingSummary(summary: { entitled?: boolean; subscriptionStatus?: string; plan?: string }): void {
 	let pending: { plan?: string; at?: number } | null = null;
 	try {
@@ -141,7 +108,6 @@ export function observeBillingSummary(summary: { entitled?: boolean; subscriptio
 	try {
 		storage()?.removeItem(PENDING_CHECKOUT_KEY);
 	} catch {
-		// Ignore: a repeat report is bounded by the rate limiter.
 	}
 	const elapsed = typeof pending.at === "number" ? Math.max(0, Date.now() - pending.at) : undefined;
 	void captureRendererEvent("ao.renderer.cloud_checkout_completed", {
@@ -156,12 +122,6 @@ function prunePending(now: number): void {
 	}
 }
 
-/**
- * Watches session snapshots from the control plane for the sessions this app
- * created: the first time one has a connected worker it reports ready with the
- * time since the create request; a startup error the control plane gave up on
- * reports failed.
- */
 export function observeCloudSessions(sessions: readonly CloudCpSession[], now = Date.now()): void {
 	if (pendingSessions.size === 0) return;
 	prunePending(now);
@@ -189,7 +149,6 @@ export function observeCloudSessions(sessions: readonly CloudCpSession[], now = 
 	}
 }
 
-/** Test seam. */
 export function resetCloudTelemetryForTest(): void {
 	pendingSessions.clear();
 	knownCloudUser = undefined;
@@ -203,12 +162,6 @@ function projectProvider(config: Record<string, unknown> | undefined): string {
 	return defaultProvider || "default";
 }
 
-/**
- * Reports a user's request for a cloud session, once per create
- * (createCloudSession): a create that a control plane predating
- * interfaceMode and defaultInterfaceMode rejects is sent again without them, and that retry is
- * not a second request.
- */
 export function reportCloudSessionCreateRequested(body: Pick<CloudCpCreateSessionRequest, "provider" | "kind" | "projectId">): void {
 	void captureRendererEvent("ao.renderer.cloud_session_create_requested", {
 		provider: body.provider || defaultProvider || "default",
@@ -217,10 +170,6 @@ export function reportCloudSessionCreateRequested(body: Pick<CloudCpCreateSessio
 	});
 }
 
-/**
- * Wraps the funnel calls of a control-plane client with telemetry. Results and
- * errors pass through unchanged; telemetry never throws into the caller.
- */
 export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 	const instrumented: CloudCpClient = { ...client };
 	instrumented.me = async (options) => {
@@ -228,7 +177,6 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 		try {
 			reportCloudOffering(me);
 		} catch {
-			// Telemetry must never break the caller.
 		}
 		return me;
 	};
@@ -248,8 +196,6 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 		});
 		return response;
 	};
-	// The request itself is reported once per user create, by
-	// reportCloudSessionCreateRequested: a create can take two calls.
 	instrumented.createSession = async (orgId, body, options) => {
 		const requestedAt = Date.now();
 		const provider = body.provider || defaultProvider || "default";
@@ -263,9 +209,6 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			observeCloudSessions([response.session]);
 			return response;
 		} catch (error) {
-			// A control plane that predates interfaceMode and defaultInterfaceMode
-			// rejects the body with 400 invalid_request, and createCloudSession
-			// sends the create again without them: not a failed session.
 			if ((body.interfaceMode !== undefined || body.defaultInterfaceMode !== undefined) && errorStatus(error) === 400 &&
 				errorCode(error) === "invalid_request") {
 				throw error;
@@ -281,8 +224,6 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			throw error;
 		}
 	};
-	// A standalone agent's create is its session's: reported as one, timed
-	// from here to the session's first connection like any other.
 	instrumented.createStandaloneAgent = async (orgId, body, options) => {
 		const requestedAt = Date.now();
 		const provider = body.provider || defaultProvider || "default";

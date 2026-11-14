@@ -2,16 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 import { installFakeTerminalMux } from "./support/fake-terminal-mux";
 
-// The focus fixes are renderer-only and Electron ships the same Chromium on
-// every desktop platform, but two things branch on the platform: the command
-// palette gives a focused terminal the plain Ctrl+K readline binding off macOS,
-// and the terminal host styles itself per platform. Cover the branches here by
-// faking the platform the way terminal-viewport-retention.spec.ts does, so the
-// macOS-only development machine is not the only place these are exercised.
-
-// isMacPlatform() checks navigator.userAgent as well as navigator.platform, so
-// a fake that sets only the platform still takes the macOS branch on a macOS
-// development machine. All three have to be overridden together.
 const PLATFORMS = [
 	{
 		name: "macOS",
@@ -94,9 +84,6 @@ for (const platform of PLATFORMS) {
 		await fakePlatform(page, platform);
 		await installFakeAgent(page, { projectId: "fake-proj", projectName: "fake-proj" });
 		await page.goto("/#/projects/fake-proj");
-		// The sidebar mounts under the startup screen, so the trigger can be attached
-		// while the startup screen still covers it. A forced click then lands on the
-		// startup screen and the menu never opens.
 		await expect(page.getByTestId("daemon-startup-loader")).toHaveCount(0);
 		await page
 			.getByRole("button", { name: /Project actions for fake-proj/ })
@@ -110,10 +97,6 @@ for (const platform of PLATFORMS) {
 	});
 }
 
-// Documents a deliberate consequence of focusing the terminal on open. Off
-// macOS the palette hands plain Ctrl+K to a focused terminal so readline's
-// kill-to-end-of-line keeps working, which now applies as soon as a session
-// opens rather than only after the user clicks into the terminal.
 test("renderer: a focused terminal keeps plain Ctrl+K off macOS @T0", async ({ page }) => {
 	await terminalHarness(page, PLATFORMS[1]);
 	await expect.poll(() => caretIsInTheVisibleTerminal(page)).toBe(true);
@@ -121,7 +104,6 @@ test("renderer: a focused terminal keeps plain Ctrl+K off macOS @T0", async ({ p
 	await page.keyboard.press("Control+k");
 	await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(0);
 
-	// The palette is still reachable once focus is out of the terminal.
 	await page.getByRole("button", { name: `Open ${sessionB.title}`, exact: true }).focus();
 	await page.keyboard.press("Control+k");
 	await expect(page.getByRole("dialog", { name: "Command palette" })).toHaveCount(1);

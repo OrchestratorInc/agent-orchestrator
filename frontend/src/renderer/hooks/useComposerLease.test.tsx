@@ -65,8 +65,6 @@ describe("useComposerLease", () => {
 		act(() => result.current.noteDraft("hi"));
 		await act(async () => { vi.advanceTimersByTime(COMPOSER_RENEW_MS); });
 		expect(client.renewComposer).toHaveBeenLastCalledWith("org-1", "session-1", 7, true);
-		// No keystroke since: the next renewal reports it, so the server can
-		// release an idle holder.
 		await act(async () => { vi.advanceTimersByTime(COMPOSER_RENEW_MS); });
 		expect(client.renewComposer).toHaveBeenLastCalledWith("org-1", "session-1", 7, false);
 	});
@@ -193,7 +191,6 @@ describe("useComposerLease", () => {
 			act(() => result.current.noteDraft(text, text.length));
 			await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS / 3); });
 		}
-		// 20 keystrokes over about six publish windows, with no pause.
 		expect(client.publishComposerDraft.mock.calls.length).toBeGreaterThanOrEqual(4);
 		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS + 10); });
 		await waitFor(() => expect(client.publishComposerDraft).toHaveBeenLastCalledWith("org-1", "session-1", 7, text, text.length));

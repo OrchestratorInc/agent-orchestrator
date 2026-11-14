@@ -7,10 +7,6 @@ import (
 	"os"
 )
 
-// PeerVerifier returns a check for connections to the Chrome runtime socket:
-// the peer must run as the daemon's user and be the same ao executable the
-// host wrapper runs. The socket itself is already owner-only; this pins the
-// peer to AO's own binary on top of the endpoint token.
 func PeerVerifier(executable string) func(net.Conn) error {
 	return func(conn net.Conn) error {
 		pid, uid, err := peerIdentity(conn)

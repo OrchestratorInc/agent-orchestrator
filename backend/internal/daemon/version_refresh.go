@@ -12,20 +12,12 @@ import (
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
-// versionRefreshSweepTick paces moves to a newly installed harness release.
-// Sessions must already have been quiet for VersionRefreshIdle, so a tick
-// only bounds how long after that they wait.
 const versionRefreshSweepTick = time.Minute
 
 type versionRefreshSettings interface {
 	VersionRefreshEnabled(ctx context.Context) bool
 }
 
-// runVersionRefreshSweep moves idle Chat sessions, and with
-// AO_TUI_VERSION_REFRESH idle terminal sessions, still on a replaced harness
-// release to the installed one, and removes Homebrew kegs kept for sessions
-// that have all moved. It runs whether or not idle hibernation is on, and a
-// moved chat is always started again right away on the new release.
 func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings versionRefreshSettings, sessions sessionLifecycle, installs *systeminstall.Service, log *slog.Logger) {
 	ticker := time.NewTicker(versionRefreshSweepTick)
 	defer ticker.Stop()
@@ -58,8 +50,6 @@ func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings ver
 	}
 }
 
-// staleSessionsGauge reports stale-session counts every staleSessionsEvery,
-// and only for harnesses that have some now or had some at the last report.
 type staleSessionsGauge struct {
 	log      *slog.Logger
 	last     map[domain.AgentHarness]int64
@@ -88,7 +78,6 @@ func (g *staleSessionsGauge) observe(ctx context.Context, sessions sessionLifecy
 	g.last = counts
 }
 
-// versionRefreshPolicy combines the kill switches with the user's setting.
 func versionRefreshPolicy(ctx context.Context, cfg config.Config, settings versionRefreshSettings) sessionmanager.VersionRefreshPolicy {
 	enabled := cfg.VersionRefresh && settings.VersionRefreshEnabled(ctx)
 	return sessionmanager.VersionRefreshPolicy{
@@ -98,8 +87,6 @@ func versionRefreshPolicy(ctx context.Context, cfg config.Config, settings versi
 	}
 }
 
-// managedHarnessRoot is where AO keeps versioned harness installs: under the
-// AO data dir, like every other piece of AO state.
 func managedHarnessRoot(cfg config.Config) string {
 	if !cfg.ManagedHarnessInstalls || cfg.DataDir == "" {
 		return ""

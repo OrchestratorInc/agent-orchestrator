@@ -38,12 +38,9 @@ describe("coder template parameters", () => {
 
 	it("saves the whole draft map, since the endpoint replaces it", () => {
 		const saved = { region: "us", docker: "false" };
-		// One changed key still sends every override, so docker survives.
 		expect(parameterOverridesUpdate(parameters, saved, { region: "ap", docker: "false" })).toEqual({ region: "ap", docker: "false" });
-		// docker back to its default: absent from the map, so it is removed.
 		expect(parameterOverridesUpdate(parameters, saved, { region: "us" })).toEqual({ region: "us" });
 		expect(parameterOverridesUpdate(parameters, saved, saved)).toBeUndefined();
-		// A saved key already at its default changes nothing; dropping an unknown one does.
 		expect(parameterOverridesUpdate(parameters, { region: "eu" }, {})).toBeUndefined();
 		expect(parameterOverridesUpdate(parameters, { gone: "1" }, {})).toEqual({});
 	});

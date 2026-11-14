@@ -18,19 +18,13 @@ import { HarnessCloudLine, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessInstallProgress, useInstallJustFinished } from "./HarnessInstallProgress";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessStatusDot, HarnessTimestamp } from "./harness-ui";
 
-/** Install, update and login each own one row. While a job or login runs,
-	* the row that started it shows progress instead. */
 export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, signedIn, loginPanel, savedKeys, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
-	/** AO Cloud's side of this harness, when AO Cloud runs it: a second line of the installation row. */
 	cloud?: HarnessCloudState;
-	/** A login or logout terminal is open for any harness. */
 	authWorkflowActive: boolean;
-	/** A verified sign-in just closed the login panel. */
 	signedIn?: boolean;
 	loginPanel?: ReactNode;
-	/** Keys AO saved for this harness while it is not installed, so they can still be removed. */
 	savedKeys?: ReactNode;
 	copied: boolean;
 	diagnosticsExpanded: boolean;
@@ -39,11 +33,8 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	onInstall: (methodId: string) => void;
 	onSelectMethod: (methodId: string) => void;
 	onCopyCommand: (command: string) => void;
-	/** Updates every place that has an update: this host and, for an admin, AO Cloud. */
 	onUpdate: () => void;
-	/** Updates AO Cloud alone (the harness is not installed here). */
 	onCloudUpdate?: () => void;
-	/** Has AO Cloud run the AO-tested release again. */
 	onCloudReset?: () => void;
 	onLogin: () => void;
 	onLogout: () => void;
@@ -51,33 +42,23 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	onCloseAuth: () => void;
 	onRetryAuth: () => void;
 	onTerminalState: (state: TerminalSessionState) => void;
-	/** Lists sessions an update waits for. */
 	onViewSessions?: (inUse: HarnessInUse) => void;
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
-	// The login panel held focus and its status line. Once it closes on a
-	// verified sign-in, say so here and hand focus to the account's login
-	// action, unless the user has already moved focus somewhere else.
 	const rootRef = useRef<HTMLDivElement>(null);
 	const showSignedIn = Boolean(signedIn && !loginPanel);
 	useEffect(() => {
 		if (!showSignedIn || (document.activeElement && document.activeElement !== document.body)) return;
 		rootRef.current?.querySelector<HTMLElement>("[data-terminal-focus-handoff]:not(:disabled)")?.focus();
 	}, [showSignedIn]);
-	// Sessions that must end first turn Update into a way to find them.
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
-	// Subscription accounts are for local Claude Code and Codex.
 	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
-	// The running job's steps stay in the Installation card until it finishes on Done.
 	const justFinished = useInstallJustFinished(job);
 	const stage = justFinished ? "done" : installStage(job);
-	// Progress reads as a solid state, not a greyed-out action.
 	const progress = (label: string) => <span role="status"><Button type="button" size="default" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{label}</Button></span>;
 	const progressAction = progress(details.progressLabel);
-	// One Update covers every place with an update: this host, and AO Cloud
-	// for someone who may change it. Which places it covers shows on hover.
 	const localUpdate = details.showUpdate && !details.needsLogin && details.canUpdate;
 	const cloudUpdate = Boolean(cloud?.details?.actionable) && !cloud?.pending;
 	const updateButton = <Button type="button" data-harness-primary-action="" size="default" variant={updateBlocked && !cloudUpdate ? "secondary" : undefined} className="min-w-20" onClick={onUpdate}>
@@ -94,8 +75,6 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 		: authBusy ? null
 		: !isInstalled ? (
 			!details.installationPending && installMethod ? <span className="flex items-center gap-2">
-				{/* One click installs the recommended method; after a failure the
-				    user can retry through another available method. */}
 				{failed && availableMethods.length > 1 ? <SettingsOptionMenu
 					aria-label={t("settings.harness.installMethod")}
 					value={installMethod.id}
@@ -129,8 +108,6 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? details.canRelogin ? "settings.harness.openSetup" : "settings.harness.setup" : details.canRelogin ? "settings.harness.loginAgain" : "settings.harness.login")}
 		</Button> : null;
 	return <div ref={rootRef} className="flex flex-col gap-6">
-		{/* Always mounted, so the change is announced. A bare live region, not
-		    role="status": the tab's own progress statuses stay the only ones. */}
 		<p aria-live="polite" data-signed-in-announcer="" className="sr-only">{showSignedIn ? t("settings.harness.loginUi.connected") : ""}</p>
 		<HarnessDetailGroup title={t("settings.harness.installation")}>
 			<HarnessDetailRow
@@ -152,10 +129,8 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 		{job && isWaitingForIdleJob(job) ? <div className="-mt-3"><IdleUpdateStatus agentId={details.agentId} job={job} hostId={hostId} onViewSessions={(waiting) => onViewSessions?.(waiting)} /></div> : null}
 		{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
-		{/* A harness with no installable method explains how it is maintained instead. */}
 		{isInstalled && details.manualOnly && plan?.reason && !(details.showUpdate && !details.canUpdate) ? <p className="-mt-3 text-xs text-settings-muted">{plan.reason}</p> : null}
 
-		{/* With accounts listed, the CLI's own login is a row there, not a card of its own. */}
 		{(isInstalled || rowAuthWorkflow) && !accountProvider ? <HarnessDetailGroup title={t("settings.harness.account")}>
 			{!loginPanel && <HarnessDetailRow
 				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress")

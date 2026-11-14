@@ -67,7 +67,6 @@ describe("cloud funnel event allowlist", () => {
 
 	it("tags every event and exception with the hashed cloud org, kind and billing mode", async () => {
 		setCloudTelemetryContext({ orgId: "22222222-2222-2222-2222-222222222222", orgKind: "b2c", billingMode: "self_serve" });
-		// The org id is hashed asynchronously; under a loaded suite one tick is not enough.
 		await vi.waitFor(() => expect(withTelemetryContext({}).cloud_org_id_hash).toMatch(/^[0-9a-f]{64}$/));
 		const context = withTelemetryContext({});
 		expect(context).toMatchObject({ cloud_org_kind: "b2c", cloud_billing_mode: "self_serve" });

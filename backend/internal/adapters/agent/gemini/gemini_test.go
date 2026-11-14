@@ -48,8 +48,6 @@ func TestAuthStatusUsesCachedAPIKey(t *testing.T) {
 	}
 }
 
-// AO exports a saved GEMINI_API_KEY to itself, but Gemini sessions do not get
-// one another harness's panel saved; the check must not count it either.
 func TestAuthStatusIgnoresAKeyGeminiSessionsDoNotGet(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "ao-saved-key")
 	t.Setenv("GOOGLE_API_KEY", "")

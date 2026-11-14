@@ -160,7 +160,6 @@ describe("cloud review cleanup", () => {
 	});
 });
 
-// A fresh module sees exactly what a booting renderer sees: only storage.
 async function bootStore() {
 	return (await import("./ui-store")).useUiStore;
 }

@@ -46,8 +46,6 @@ func TestGetIdentityReturnsTheHostID(t *testing.T) {
 	}
 }
 
-// The probe is reachable without a credential, so it must not become a place
-// where anything else about the machine leaks.
 func TestGetIdentityExposesNothingBeyondIDAndVersion(t *testing.T) {
 	srv := identityServer(t, "h_abc")
 

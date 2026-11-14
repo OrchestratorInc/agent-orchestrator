@@ -25,7 +25,6 @@ test("@P0 thousands of changed files stay bounded and responsive", async ({ page
 	});
 	await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
 	const inspector = await openInspector(page);
-	// Keep a heartbeat running during mount, patch parsing, and navigation.
 	await page.evaluate(() => {
 		const gaps: number[] = [];
 		let previous = performance.now();
@@ -43,7 +42,6 @@ test("@P0 thousands of changed files stay bounded and responsive", async ({ page
 	await expect(inspector.getByText("Files 1–96 of 5123")).toBeVisible();
 	await expect.poll(() => requested.flat().length).toBe(96);
 	const openedMs = Date.now() - started;
-	// The pane must not resume loading the rest of the repository after settling.
 	await page.waitForTimeout(500);
 	expect(requested.flat()).toEqual(files.slice(0, 96).map((file) => file.path));
 	await inspector.getByRole("button", { name: "Next files", exact: true }).click();
@@ -54,8 +52,6 @@ test("@P0 thousands of changed files stay bounded and responsive", async ({ page
 	await expect.poll(() => requested.flat().length).toBe(193);
 	const gaps = await page.evaluate(() => (window as unknown as { finishReviewHeartbeat: () => number[] }).finishReviewHeartbeat());
 	expect(gaps.length).toBeGreaterThan(5);
-	// A generous event-loop budget catches multi-second renderer stalls while
-	// allowing CI scheduling noise; file/request bounds above are deterministic.
 	expect(Math.max(...gaps)).toBeLessThan(2000);
 	expect(errors).toEqual([]);
 	await testInfo.attach("large-review-responsiveness", { body: JSON.stringify({ files: files.length, openedMs, frames: gaps.length, maxFrameGapMs: Math.max(...gaps), requestedFiles: requested.flat().length }), contentType: "application/json" });

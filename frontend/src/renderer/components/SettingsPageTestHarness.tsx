@@ -14,7 +14,6 @@ function Nav() {
 	return (
 		<>
 			<SettingsSidebarNav layer={layer} />
-			{/* Mirrors the sidebar footer's Back row. */}
 			<Pressable disabled={layer.cueBusy} onClick={layer.close}>{t("settings.back")}</Pressable>
 		</>
 	);
@@ -26,7 +25,6 @@ function CenterPane() {
 	return <div ref={ref}><SettingsPane />{layer && <SwipeNavigation containerRef={ref} navigation={layer.navigation} />}</div>;
 }
 
-/** Test-only stand-in for the shell: settings sidebar section beside the settings pane. */
 export function SettingsDialog() {
 	return (
 		<SettingsProvider>

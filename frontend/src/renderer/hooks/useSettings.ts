@@ -1,43 +1,24 @@
-/**
- * Daemon-owned user preferences.
- *
- * Read from and written to the daemon rather than held in the renderer, because
- * `ao spawn`, mobile, and headless spawns resolve the same value. A preference
- * kept in one client would look correct in Settings and disagree with the others.
- */
-
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import type { SessionMode } from "../types/workspace";
 
-/** `disabledModels` lists the models pickers leave out; empty or unset means every catalog model. */
 export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disabledModels">;
 
 export const settingsQueryKey = ["settings"] as const;
 
 export interface Settings {
 	harnessDefaults?: Record<string, HarnessDefault>;
-	/** Applies to sessions created from now on; never to an existing one. */
 	defaultSessionMode: SessionMode;
-	/** Agents that can run in chat mode today. Empty means chat is unavailable. */
 	chatHarnesses: string[];
-	/** Deployment client identity (AO_CLIENT); empty when unset. */
 	client: string;
-	/** Whether the local offering is available on this daemon. */
 	localEnabled: boolean;
-	/** Whether the cloud offering is available: on for everyone with a configured control plane. */
 	cloudEnabled: boolean;
-	/** Cloud control plane base URL; empty when cloud is not configured. */
 	cloudControlPlaneUrl: string;
-	/** Whether the daemon's AO_TRACKER_INTAKE gate is on. Off hides intake controls. */
 	trackerIntakeEnabled: boolean;
-	/** Idle open sessions move to a harness release installed while they ran. */
 	versionRefresh?: boolean;
-	/** New chat sessions get tools to drive desktop apps through Cua Driver. */
 	computerUse?: boolean;
-	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
 	accountHandoff?: boolean;
 }
@@ -48,19 +29,9 @@ export function useSettings(hostId?: string, enabled = true) {
 	const query = useQuery({
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
 		enabled,
-		// Settings gate the cloud sign-in UI, so this query must recover from a
-		// transient startup failure. The daemon can still be booting on first
-		// fetch ("AO daemon is starting"); without a refetch the whole cloud
-		// offering stays hidden until a manual reload. Poll like the workspace
-		// query so it self-heals once the daemon is ready.
 		refetchInterval: 15_000,
 		retry: 5,
 		queryFn: async ({ signal }): Promise<Settings> => {
-			// The read is one SQLite row, but the renderer shares six connections
-			// to the daemon with its event streams and slow probes, so a read can
-			// sit queued behind them. Bound it: a read that never completes would
-			// otherwise hold the query in loading, with no retry or refetch, until
-			// the app restarts.
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/settings", {
 				signal: AbortSignal.any([signal, AbortSignal.timeout(settingsReadTimeoutMs)]),
 			});
@@ -70,17 +41,12 @@ export function useSettings(hostId?: string, enabled = true) {
 				harnessDefaults: data?.harnessDefaults ?? {},
 				chatHarnesses: data?.chatHarnesses ?? [],
 				client: data?.client ?? "",
-				// Offering gates fail closed for cloud and open for local, so a daemon
-				// that predates them behaves like a plain local install.
 				localEnabled: data?.localEnabled ?? true,
 				cloudEnabled: data?.cloudEnabled ?? false,
 				cloudControlPlaneUrl: data?.cloudControlPlaneUrl ?? "",
 				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
-				// A daemon that predates the setting never moves sessions.
 				versionRefresh: data?.versionRefresh ?? false,
-				// A daemon that predates the setting never adds the instruction.
 				computerUse: data?.computerUse ?? false,
-				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
 				accountHandoff: data?.accountHandoff ?? false,
 			};
@@ -104,8 +70,6 @@ export function useUpdateSessionInterface() {
 			if (error) throw error;
 			return data;
 		},
-		// Refetch rather than writing the value in locally: the daemon is the source
-		// of truth, and the control must not claim a change it did not persist.
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
 	});
 
@@ -116,7 +80,6 @@ export function useUpdateSessionInterface() {
 	};
 }
 
-/** Saves which models one harness offers without replacing other harnesses' entries. */
 export function useUpdateHarnessDefault(hostId?: string) {
 	const queryClient = useQueryClient();
 	const key = hostId ? ["settings", hostId] : settingsQueryKey;
@@ -146,8 +109,6 @@ export function useUpdateVersionRefresh() {
 			if (error) throw error;
 			return data;
 		},
-		// Refetch rather than writing the value in locally: the daemon is the source
-		// of truth, and the control must not claim a change it did not persist.
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
 	});
 
@@ -208,7 +169,6 @@ export function useUpdateComputerUse() {
 			if (error) throw error;
 			return data;
 		},
-		// The daemon is the source of truth: refetch instead of assuming the write.
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
 	});
 

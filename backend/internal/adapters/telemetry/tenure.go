@@ -9,25 +9,10 @@ import (
 	"time"
 )
 
-// How long has this install been around, and how many days has it actually been
-// used? PostHog's retention insight answers "of the installs first seen in week
-// N, how many came back", which is a cohort question. It cannot answer "of the
-// installs active today, how long have they been with us", because that is a
-// property of the install rather than of a cohort.
-//
-// Stamping tenure on every event makes the second question a one-property
-// breakdown: a single chart showing how much of today's activity comes from
-// people on their first day versus their sixth month.
-
 const tenureStateFile = "telemetry_tenure.json"
 
-// TenureBucket is a closed vocabulary, so it can be charted directly without a
-// numeric axis and without exposing an exact install date.
 type TenureBucket string
 
-// The buckets, coarsening as tenure grows: a first-day install and a
-// second-day install are different stories, whereas month seven and month eight
-// are not.
 const (
 	TenureFirstDay   TenureBucket = "d0"
 	TenureFirstWeek  TenureBucket = "d1_6"
@@ -55,17 +40,11 @@ func tenureBucketFor(ageDays int) TenureBucket {
 }
 
 type tenureState struct {
-	FirstSeen string `json:"first_seen"`
-	// LastActive plus ActiveDays is what keeps this bounded. Storing every active
-	// date would grow without limit on a long-lived install; a counter plus the
-	// last date is enough to increment once per calendar day.
+	FirstSeen  string `json:"first_seen"`
 	LastActive string `json:"last_active"`
 	ActiveDays int    `json:"active_days"`
 }
 
-// tenureTracker records how long an install has existed and how many distinct
-// days it has been seen. Safe for concurrent use: the sink emits from any
-// goroutine.
 type tenureTracker struct {
 	path string
 	now  func() time.Time
@@ -109,13 +88,9 @@ func (t *tenureTracker) saveLocked() {
 	if err != nil {
 		return
 	}
-	// Best effort by design: losing tenure is preferable to failing an event.
 	_ = os.WriteFile(t.path, append(body, '\n'), 0o600)
 }
 
-// observe records that the install was seen now, and returns its tenure. The
-// first call on a fresh install reports age 0 and one active day, so a brand new
-// install is never indistinguishable from one with no record.
 func (t *tenureTracker) observe() (ageDays, activeDays int, bucket TenureBucket) {
 	now := t.now().UTC()
 	today := now.Format("2006-01-02")
@@ -139,13 +114,10 @@ func (t *tenureTracker) observe() (ageDays, activeDays int, bucket TenureBucket)
 
 	first, err := time.Parse("2006-01-02", t.state.FirstSeen)
 	if err != nil {
-		// A corrupt date must not poison the numbers with something nonsensical.
 		return 0, t.state.ActiveDays, TenureFirstDay
 	}
 	age := int(now.Truncate(24*time.Hour).Sub(first.UTC()).Hours() / 24)
 	if age < 0 {
-		// Clock moved backwards, or the file came from another machine. Clamp
-		// rather than report a negative age.
 		age = 0
 	}
 	return age, t.state.ActiveDays, tenureBucketFor(age)

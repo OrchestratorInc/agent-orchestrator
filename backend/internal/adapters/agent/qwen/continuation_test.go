@@ -88,8 +88,6 @@ func TestNativeSessionConfigDir(t *testing.T) {
 	}
 }
 
-// Qwen 0.26.4 sanitizeCwd: lowercase on win32, then /[^a-zA-Z0-9]/g.
-// JavaScript's regexp replaces each UTF-16 code unit (two for an emoji).
 func TestSanitizeQwenCwd(t *testing.T) {
 	for _, tc := range []struct {
 		cwd     string
@@ -162,7 +160,6 @@ func TestRelocateImportedSessionRawSymlinkCWD(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.CWD != rawDir {
 			t.Fatalf("cwd = %q, error = %v; want raw %q", rec.CWD, err, rawDir)
 		}
-		// The fixture's json.Marshal escapes HTML; compare native JSON values.
 		var native struct {
 			Number json.Number `json:"number"`
 			Text   string      `json:"text"`
@@ -181,7 +178,6 @@ func TestRelocateImportedSessionRawSymlinkCWD(t *testing.T) {
 	if after, err := os.ReadFile(source); err != nil || string(after) != string(before) {
 		t.Fatal("original transcript changed")
 	}
-	// Later opens must keep AO's appended turns, even if the source disappears.
 	withTurn := append(body, []byte("{\"type\":\"user\",\"text\":\"AO-ONLY-TURN\"}\n")...)
 	if err := os.WriteFile(target, withTurn, 0o600); err != nil {
 		t.Fatal(err)

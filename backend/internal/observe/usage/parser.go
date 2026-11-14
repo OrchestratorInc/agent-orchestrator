@@ -140,23 +140,17 @@ type stableTailStateV1 struct {
 }
 
 type claudeParserStateV1 struct {
-	ModelID    string                  `json:"model_id,omitempty"`
-	Provider   string                  `json:"billing_provider,omitempty"`
-	Unfinished *claudeTranscriptRecord `json:"unfinished,omitempty"`
-	// LegacyProvider is the retired "provider" key. A build before #2928 filled
-	// it with the harness name — "claude-code", "openai" — not a billing route,
-	// so decoding must accept it (DisallowUnknownFields) and must never read
-	// it. Reusing the key for the billing route would stamp the harness name
-	// onto every event newly ingested from such a source, marked observed and
-	// therefore beyond every repair path.
-	LegacyProvider string `json:"provider,omitempty"`
+	ModelID        string                  `json:"model_id,omitempty"`
+	Provider       string                  `json:"billing_provider,omitempty"`
+	Unfinished     *claudeTranscriptRecord `json:"unfinished,omitempty"`
+	LegacyProvider string                  `json:"provider,omitempty"`
 }
 
 type codexParserStateV1 struct {
 	Baseline       codexTokenVector `json:"baseline"`
 	ModelID        string           `json:"model_id,omitempty"`
 	Provider       string           `json:"billing_provider,omitempty"`
-	LegacyProvider string           `json:"provider,omitempty"` // see claudeParserStateV1
+	LegacyProvider string           `json:"provider,omitempty"`
 
 	ServiceTier string `json:"service_tier,omitempty"`
 
@@ -297,14 +291,11 @@ type claudeTranscriptRecord struct {
 	Timestamp   string `json:"timestamp"`
 	IsSidechain bool   `json:"isSidechain"`
 	Message     struct {
-		ID         string  `json:"id"`
-		Model      string  `json:"model"`
-		Provider   string  `json:"provider"`
-		StopReason *string `json:"stop_reason"`
-		// Decoded twice on purpose: the typed view drives the neutral counters,
-		// and the raw bytes are the bounded provider object stored verbatim so
-		// fields Anthropic adds later survive without a schema change here.
-		Usage json.RawMessage `json:"usage"`
+		ID         string          `json:"id"`
+		Model      string          `json:"model"`
+		Provider   string          `json:"provider"`
+		StopReason *string         `json:"stop_reason"`
+		Usage      json.RawMessage `json:"usage"`
 	} `json:"message"`
 }
 
@@ -334,9 +325,6 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 			recordMalformed(result)
 			continue
 		}
-		// The transcript feeds the same write-once column as the hook, so it
-		// earns the same whitelist. An unrecognised string is dropped rather
-		// than stored: unattributed is repairable, a wrong attribution is not.
 		nativeProvider := pricing.TrustedClaudeBillingProvider(
 			firstNonEmpty(native.Message.Provider, native.Provider))
 		if nativeProvider != "" {
@@ -432,9 +420,6 @@ func emitClaudeEvent(
 	result.addEvent(eventsByKey, event)
 }
 
-// canonicalBillingProvider normalizes one observed routing fact into a catalog
-// provider identifier. Unknown or conflicting routing stays empty so the event
-// is stored unattributed rather than priced against the wrong provider.
 func canonicalBillingProvider(observed string) string {
 	provider := pricing.CanonicalProviderID(observed)
 	if provider == "unknown" {
@@ -660,8 +645,6 @@ func removeString(values []string, target string) []string {
 }
 
 func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, state *codexParserStateV1, result *parseResult) {
-	// payload.info is the bounded object; payload.rate_limits is its sibling and
-	// is deliberately never read, so account-level quota state cannot be stored.
 	var payload struct {
 		Type           string          `json:"type"`
 		Info           json.RawMessage `json:"info"`
@@ -757,10 +740,6 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 		result.Cursor.LastErrorCode = domain.UsageErrorNonMonotonicCumulativeUsage
 		return
 	}
-	// A record that carried no per-event vector still gives up its cache-write
-	// count, because the neutral counters beside it are the same subtraction of
-	// the same two native readings. Persisting it is what keeps a write-rated
-	// model priceable; see providerUsageWithCacheWrite.
 	var derivedCacheWrite *int64
 	if info.Last == nil {
 		write := selected.CacheWriteInputTokens
@@ -870,28 +849,13 @@ func normalizeAnthropicUsage(directInput, cacheCreationInput, cachedInput, outpu
 	}, true
 }
 
-// maxProviderUsageBytes bounds one stored provider usage object. Transcripts are
-// untrusted input, and an object this large is no longer the small counter
-// record the providers document, so it is dropped rather than persisted.
 const maxProviderUsageBytes = 8 << 10
 
-// jsonValueReported reports whether raw carries a value at all, as opposed to
-// being absent or an explicit JSON null.
-//
-// That distinction used to come free from a nil pointer. A json.RawMessage
-// holding `null` has nonzero length and decodes into a typed struct as all-zero
-// values, so a record reporting no usage would otherwise become a synthetic
-// zero event — or, for Codex, a cumulative baseline of zero that recharges
-// every earlier token. Callers still decode the value afterwards, so a present
-// but non-object member remains malformed rather than being silently dropped.
 func jsonValueReported(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
-// isJSONObject reports whether raw is a present JSON object. Unmarshalling into
-// a map is the check: JSON null yields a nil map without an error, and any
-// other JSON type fails outright.
 func isJSONObject(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
@@ -925,9 +889,6 @@ const (
 	derivedCacheWrite1HKey = "ao_derived_cache_write_1h_input_tokens"
 )
 
-// boundedProviderUsage compacts one provider usage object for durable storage.
-// It returns empty for anything that is not a JSON object or exceeds the bound,
-// which stores SQL NULL: an absent object is honest, a truncated one is not.
 func boundedProviderUsage(raw json.RawMessage) string {
 	if len(raw) > maxProviderUsageBytes || !isJSONObject(raw) {
 		return ""

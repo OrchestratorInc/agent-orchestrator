@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A tool call is remembered by one argument, picked in toolArgumentKeys order.
 func TestToolArgumentPicksTheRememberedField(t *testing.T) {
 	cases := []struct {
 		input string
@@ -33,8 +32,6 @@ func TestToolArgumentPicksTheRememberedField(t *testing.T) {
 	}
 }
 
-// The argument is cut to 2,000 characters and the output to 3,072, counted in
-// characters so a multi-byte character is never split.
 func TestToolTextKeepsItsCaps(t *testing.T) {
 	long := strings.Repeat("é", 5000)
 	call := toolCallText("Bash", long)
@@ -53,7 +50,6 @@ func TestToolTextKeepsItsCaps(t *testing.T) {
 	}
 }
 
-// A result is read by its text parts, not every string in its JSON.
 func TestToolResultTextReadsTextParts(t *testing.T) {
 	cases := []struct {
 		raw  string
@@ -72,8 +68,6 @@ func TestToolResultTextReadsTextParts(t *testing.T) {
 	}
 }
 
-// Sources are prepared in parallel but written one at a time in their order,
-// and an apply that asks to stop stops the rest.
 func TestForEachNativePlanAppliesInOrder(t *testing.T) {
 	svc := New(Options{})
 	targets := make([]domain.SessionSearchTarget, 40)

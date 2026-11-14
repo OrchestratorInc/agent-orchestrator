@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A batched queued turn is left out of the snapshot's turns, so the snapshot has
-// to carry where it was delivered: with a drain's other members, or by a steer.
 func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -23,7 +21,6 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 		}
 	}
 
-	// Queue drain: a report and a human message start one provider turn together.
 	appendQueued("report-1", domain.MessageOriginAutomation, time.Second)
 	appendQueued("human-1", domain.MessageOriginHuman, 2*time.Second)
 	batch, err := s.ClaimQueuedBatch(ctx, conversation, true, 0, histClock.Add(time.Minute))
@@ -37,14 +34,11 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A row with no detail at all, as a provider's reasoning step can be, must not
-	// break reading the steers.
 	reasoning := domain.ConversationActivity{ID: "reasoning-1", Kind: domain.ActivityKindReasoning, Status: domain.ActivityStatusCompleted}
 	if err := s.UpsertActivity(ctx, conversation, "p-lead", reasoning, histClock.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
-	// Steer: a queued report rides a steer into the running turn.
 	appendQueued("report-2", domain.MessageOriginAutomation, 3*time.Second)
 	steered, err := s.ClaimQueuedBatch(ctx, conversation, false, 0, histClock.Add(2*time.Minute))
 	if err != nil || len(steered) != 1 {
@@ -83,8 +77,6 @@ func TestSnapshotCarriesBatchedDeliveries(t *testing.T) {
 	}
 }
 
-// Rolling back does not undo a spawn or a kill, so an AO action filed under a
-// rolled-back turn stays in the snapshot while that turn's own work leaves it.
 func TestAOActionOutlivesItsRolledBackTurn(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -120,8 +112,6 @@ func TestAOActionOutlivesItsRolledBackTurn(t *testing.T) {
 	}
 }
 
-// A page carries only the deliveries of batches its own messages belong to, so a
-// long orchestrator history does not ride along on every live poll.
 func TestPagedSnapshotCarriesOnlyItsOwnBatches(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -159,7 +149,6 @@ func TestPagedSnapshotCarriesOnlyItsOwnBatches(t *testing.T) {
 	if err != nil || len(full.BatchedDeliveries) != batches {
 		t.Fatalf("full deliveries = %d, %v", len(full.BatchedDeliveries), err)
 	}
-	// Four messages a page: two batches each, newest first.
 	seen := map[string]bool{}
 	before := int64(0)
 	for page := 0; page < batches/2; page++ {

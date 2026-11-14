@@ -1,6 +1,3 @@
-// Package hookutil holds small filesystem helpers shared by the agent hook
-// installers (claude-code, codex, opencode). It centralizes the atomic-write
-// primitive so every adapter writes hook config the same crash-safe way.
 package hookutil
 
 import (
@@ -16,26 +13,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
-// GitignoreSentinel marks a workspace .gitignore as AO-managed so
-// EnsureWorkspaceGitignore can rewrite its own file idempotently while never
-// touching a user- or repo-provided .gitignore at the same path.
 const GitignoreSentinel = "# managed by agent-orchestrator: AO hook files stay out of git status"
 
-// bugTriageMarkerFile sits inside the skill folder because the skills folder's
-// .gitignore belongs to the using-ao install, which rewrites it. The marker is
-// written before the skill, and the folder is never cleared, so an install that
-// fails partway still carries the marker and the next one repairs it.
 const (
 	bugTriageMarkerFile = ".ao-managed"
 	bugTriageSentinel   = "agent-orchestrator: managed bug-triage skill"
 )
 
-// InstallBugTriageSkill writes AO's bug-triage skill into a harness's skills
-// folder. Unlike using-ao, the name is generic: a project may have its own
-// bug-triage, so a folder AO does not own stays and the session still starts.
-// An empty folder (an install that stopped before its marker) is nobody's,
-// even if that install left one of AtomicWriteFile's temp files, which the
-// install then removes.
 func InstallBugTriageSkill(skillsDir string) error {
 	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
 	if _, err := os.Lstat(skillDir); err == nil {
@@ -48,8 +32,6 @@ func InstallBugTriageSkill(skillsDir string) error {
 			if err != nil {
 				return fmt.Errorf("read bug-triage skill: %w", err)
 			}
-			// A temp file left by a write killed before the marker landed does
-			// not make the folder the project's.
 			for _, entry := range entries {
 				if !strings.HasPrefix(entry.Name(), ".ao-tmp-") {
 					return nil
@@ -62,8 +44,6 @@ func InstallBugTriageSkill(skillsDir string) error {
 	if err := os.MkdirAll(skillDir, 0o750); err != nil {
 		return fmt.Errorf("create bug-triage skill: %w", err)
 	}
-	// Temp files from an interrupted write would stay untracked in git status.
-	// ReadDir, not Glob: the workspace path may hold pattern characters.
 	entries, err := os.ReadDir(skillDir)
 	if err != nil {
 		return fmt.Errorf("read bug-triage skill: %w", err)
@@ -88,7 +68,6 @@ func InstallBugTriageSkill(skillsDir string) error {
 	return nil
 }
 
-// UninstallBugTriageSkill removes the skill only when AO's marker owns it.
 func UninstallBugTriageSkill(skillsDir string) error {
 	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
 	managed, err := bugTriageManaged(skillDir)
@@ -112,22 +91,8 @@ func bugTriageManaged(skillDir string) (bool, error) {
 	return strings.Contains(string(data), bugTriageSentinel), nil
 }
 
-// CopilotAgentProfileSentinel marks a Copilot custom-agent profile as
-// AO-managed so writers and scratch-workspace readers share one ownership
-// marker.
 const CopilotAgentProfileSentinel = "<!-- managed by agent-orchestrator: copilot agent profile -->"
 
-// EnsureWorkspaceGitignore writes a self-ignoring .gitignore into dir covering
-// the named AO-installed files. Hook files land in fresh session worktrees as
-// untracked files, and `git worktree remove` (without --force) refuses on ANY
-// untracked file — without this ignore, AO's own hook files would make every
-// session workspace permanently undeletable. The patterns are anchored to dir
-// and name only AO's files, so anything else an agent drops in the same
-// directory still counts as dirt and keeps blocking teardown.
-//
-// A .gitignore at the same path that lacks the sentinel is left untouched and
-// the install proceeds: the worktree then simply stays dirty and teardown
-// preserves it, which is the safe degradation.
 func EnsureWorkspaceGitignore(dir string, names ...string) error {
 	path := filepath.Join(dir, ".gitignore")
 	existing, err := os.ReadFile(path) //nolint:gosec // path built from caller-owned workspace dir
@@ -154,8 +119,6 @@ func EnsureWorkspaceGitignore(dir string, names ...string) error {
 	return nil
 }
 
-// statRegularFile returns the FileInfo for path if it names an existing regular
-// file (not a directory). Otherwise it returns nil, false.
 func statRegularFile(path string) (os.FileInfo, bool) {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -164,18 +127,11 @@ func statRegularFile(path string) (os.FileInfo, bool) {
 	return info, true
 }
 
-// FileExists reports whether path names an existing regular file (not a
-// directory). It does not check the exec bit — callers that need to verify
-// executability should use IsExecutableFile instead.
 func FileExists(path string) bool {
 	_, ok := statRegularFile(path)
 	return ok
 }
 
-// IsExecutableFile reports whether path names an existing regular file (not a
-// directory) whose owner exec bit is set on Unix. On Windows it behaves
-// identically to FileExists because os.Stat does not expose a reliable execute
-// permission; Windows candidates carry explicit .cmd/.exe extensions instead.
 func IsExecutableFile(path string) bool {
 	info, ok := statRegularFile(path)
 	if !ok {
@@ -187,16 +143,13 @@ func IsExecutableFile(path string) bool {
 	return true
 }
 
-// AtomicWriteFile writes data to path via a temp file in the same directory
-// followed by a rename, so a crash or signal mid-write can't leave a truncated
-// or empty file that the agent then fails to parse (silently disabling hooks).
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".ao-tmp-*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return err
@@ -215,8 +168,6 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// FinalAssistantTextJS is shared by the JavaScript extensions AO installs for
-// agents whose run-end event carries the conversation.
 const FinalAssistantTextJS = `// The run's final assistant text. The event shape is the agent's, so anything
 // unexpected only means "no text".
 function finalAssistantText(event) {
@@ -232,10 +183,6 @@ function finalAssistantText(event) {
 }
 `
 
-// ReadJSONLTail returns the complete records in the last window bytes of a
-// JSON Lines transcript: a record cut by the window's start, and one the
-// harness has not finished writing, are dropped. A path that is not a regular
-// file yields no records.
 func ReadJSONLTail(path string, window int64) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // a transcript path reported by the harness's own hook
 	if err != nil {

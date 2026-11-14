@@ -27,7 +27,6 @@ it("registers the listener before requesting the snapshot", () => {
 		return new Promise<UpdateStatus>(() => undefined);
 	});
 	render(<Probe />);
-	// The other order loses any push that lands in the gap.
 	expect(order).toEqual(["listen", "snapshot"]);
 });
 
@@ -41,11 +40,9 @@ it("does not let a late snapshot overwrite a newer push", async () => {
 	getStatus.mockReturnValue(new Promise<UpdateStatus>((resolve) => { resolveSnapshot = resolve; }));
 
 	render(<Probe />);
-	// A completed check arrives first...
 	act(() => emit({ state: "not-available", checkedAt: 2000 }));
 	expect(screen.getByTestId("state")).toHaveTextContent("not-available:2000");
 
-	// ...then the older mount-time snapshot finally resolves.
 	await act(async () => {
 		resolveSnapshot({ state: "idle", checkedAt: 1000 });
 	});

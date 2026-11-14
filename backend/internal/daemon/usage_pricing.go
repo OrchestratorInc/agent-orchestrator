@@ -82,9 +82,6 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 }
 
 func (r *usagePricingRuntime) onCatalogActivation(ctx context.Context, activations []pricing.ProviderActivation) {
-	// A later catalog can make a previously unknown model attributable. Those
-	// rows are still provider-null, so the cost backfiller cannot select them;
-	// replay attribution before relying on cost-only work.
 	r.repairer.Repair()
 	if err := r.backfiller.Enqueue(ctx, r.manager.Snapshot(), activations); err != nil && ctx.Err() == nil {
 		r.logger.Warn("enqueue usage pricing backfill", "err", err)
@@ -98,9 +95,6 @@ func (r *usagePricingRuntime) Manager() *pricing.Manager {
 	return r.manager
 }
 
-// RepairLegacyAttribution asks for another historical repair pass because a
-// binding just learned its billing route. Without it a Claude session collected
-// before its first hook would stay unpriced until the next daemon start.
 func (r *usagePricingRuntime) RepairLegacyAttribution() {
 	if r == nil {
 		return
@@ -124,8 +118,6 @@ func (r *usagePricingRuntime) Start(ctx context.Context) error {
 		cancel()
 		return err
 	}
-	// Start synchronously publishes a valid LKG before callers may construct or
-	// start the transcript ingestion pipeline.
 	if err := r.refresher.Start(runtimeCtx); err != nil {
 		cancel()
 		r.backfiller.Wait()
@@ -141,7 +133,6 @@ func (r *usagePricingRuntime) Wait() {
 	if r.cancel != nil {
 		r.cancel()
 	}
-	// Stop activation production before joining consumers and storage teardown.
 	r.refresher.Wait()
 	r.repairer.Wait()
 	r.backfiller.Wait()

@@ -37,8 +37,6 @@ type projectRemoveOptions struct {
 	yes  bool
 }
 
-// addProjectRequest mirrors the daemon's project AddInput body for
-// POST /api/v1/projects. projectId and name are optional (pointers omit them).
 type addProjectRequest struct {
 	Path        string         `json:"path"`
 	ProjectID   *string        `json:"projectId,omitempty"`
@@ -74,7 +72,6 @@ type workspaceRepoDetails struct {
 	Repo         string `json:"repo"`
 }
 
-// agentConfig mirrors the daemon's typed domain.AgentConfig for the CLI client.
 type agentConfig struct {
 	Model       string `json:"model,omitempty"`
 	Effort      string `json:"effort,omitempty"`
@@ -82,13 +79,11 @@ type agentConfig struct {
 	Permissions string `json:"permissions,omitempty"`
 }
 
-// roleOverride mirrors domain.RoleOverride.
 type roleOverride struct {
 	Agent       string      `json:"agent,omitempty"`
 	AgentConfig agentConfig `json:"agentConfig,omitempty"`
 }
 
-// trackerIntakeConfig mirrors domain.TrackerIntakeConfig.
 type trackerIntakeConfig struct {
 	Enabled  bool   `json:"enabled,omitempty"`
 	Provider string `json:"provider,omitempty"`
@@ -96,7 +91,6 @@ type trackerIntakeConfig struct {
 	Assignee string `json:"assignee,omitempty"`
 }
 
-// reviewerConfig mirrors domain.ReviewerConfig.
 type reviewerConfig struct {
 	Harness     string       `json:"harness"`
 	AgentConfig *agentConfig `json:"agentConfig,omitempty"`
@@ -106,10 +100,6 @@ type containerReapConfig struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
-// projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
-// client. The CLI sets common fields via flags and the whole object via
-// --config-json. Every domain key must be modeled here, or set-config drops it
-// (TestProjectConfigMirrorsDomainJSONKeys guards this).
 type projectConfig struct {
 	ContainerReap         *containerReapConfig `json:"containerReap,omitempty"`
 	CanonicalRepoURL      string               `json:"canonicalRepoURL,omitempty"`
@@ -128,14 +118,10 @@ type projectConfig struct {
 	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
 	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
 	AutoReview            bool                 `json:"autoReview,omitempty"`
-	// WorkersRequestReview must round-trip through set-config so a CLI edit
-	// of another field never silently turns it off.
-	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
-	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	WorkersRequestReview  bool                 `json:"workersRequestReview,omitempty"`
+	Reviewers             []reviewerConfig     `json:"reviewers,omitempty"`
 }
 
-// setConfigRequest mirrors the daemon's SetConfigInput body for
-// PUT /api/v1/projects/{id}/config.
 type setConfigRequest struct {
 	Config projectConfig `json:"config"`
 }
@@ -366,7 +352,6 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-// projectConfigFlags are the set-config flags that edit one config field.
 var projectConfigFlags = []string{
 	"canonical-repo-url", "default-branch", "session-prefix", "model", "permission",
 	"worker-agent", "orchestrator-agent", "agent-rules", "agent-rules-file",
@@ -374,11 +359,6 @@ var projectConfigFlags = []string{
 	"pre-remove", "tracker-intake", "tracker-repo", "tracker-assignee", "reviewer",
 }
 
-// buildProjectConfig turns the set-config flags into the typed config sent to
-// the daemon. --clear empties the config; --config-json supplies the whole
-// object; otherwise each changed field flag overwrites its field in the current
-// config, so fields the CLI has no flag for (effort, ...) survive.
-// The daemon validates the values.
 func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) bool, current func() (projectConfig, error)) (projectConfig, error) {
 	if opts.clear {
 		return projectConfig{}, nil
@@ -441,9 +421,6 @@ func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) 
 	return cfg, nil
 }
 
-// currentProjectConfig reads the project's saved config so set-config flags can
-// edit it in place. A degraded project reports no config, and merging into
-// nothing would wipe it, so it is refused.
 func (c *commandContext) currentProjectConfig(ctx context.Context, id string) (projectConfig, error) {
 	var res projectGetResult
 	if err := c.getJSON(ctx, "projects/"+url.PathEscape(id), &res); err != nil {
@@ -458,8 +435,6 @@ func (c *commandContext) currentProjectConfig(ctx context.Context, id string) (p
 	return *res.Project.Config, nil
 }
 
-// reviewersForFlags turns repeated --reviewer harness values into the config
-// shape. The daemon validates the harness vocabulary.
 func reviewersForFlags(harnesses []string) []reviewerConfig {
 	if len(harnesses) == 0 {
 		return nil
@@ -478,7 +453,6 @@ func reviewersForFlags(harnesses []string) []reviewerConfig {
 	return reviewers
 }
 
-// parseEnvPairs turns repeated KEY=VALUE flags into a map.
 func parseEnvPairs(pairs []string) (map[string]string, error) {
 	if len(pairs) == 0 {
 		return nil, nil
@@ -619,8 +593,6 @@ func writeProjectDetails(cmd *cobra.Command, res projectGetResult) error {
 	return nil
 }
 
-// formatProjectConfig renders the per-project config as compact JSON for the
-// `project get` text view. A nil config returns "" so the row is skipped.
 func formatProjectConfig(config *projectConfig) string {
 	if config == nil {
 		return ""

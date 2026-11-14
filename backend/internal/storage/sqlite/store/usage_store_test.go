@@ -105,8 +105,6 @@ func TestUsageBindingAndSourceIdempotency(t *testing.T) {
 	}
 }
 
-// TestActiveKimiBindingRemainsDiscoverable catches removing live Kimi
-// bindings from the bounded reconciliation queue after the main source exists.
 func TestActiveKimiBindingRemainsDiscoverable(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -323,7 +321,6 @@ func TestFinalizeUsageBindingsForSessionLaunchIsGenerationAndRevisionFenced(t *t
 	if err != nil || !ok || got.State != domain.UsageBindingActive {
 		t.Fatalf("binding after stale-revision finalization=%+v ok=%v err=%v", got, ok, err)
 	}
-	// A no-op timestamp write still invalidates an observer's session snapshot.
 	mustNoError(t, s.UpdateSession(ctx, sess))
 	finalized, err = s.FinalizeUsageBindingsForSessionLaunch(ctx, sess.ID, "launch-current", expectedRevision, now)
 	if err != nil || len(finalized) != 0 {
@@ -479,7 +476,6 @@ func TestUsageMutationsEmitSessionUpdatedCDC(t *testing.T) {
 		canonicalUsageTokens(10, 0, 10, 2),
 	)})
 	mustNoError(t, err)
-	// New totals invalidate usage once after the transaction commits.
 	assertUsageSessionUpdatedEvents(t, s, base, sess, 1)
 
 	base, err = s.LatestSeq(ctx)
@@ -652,9 +648,6 @@ WHERE mue.source_event_key = 'event-cost'`).Scan(
 	}
 }
 
-// Break caught: provider backfill could miss source-exact case/alias variants,
-// revisit the active version, include immutable zero totals, or process an
-// unbounded/non-deterministic page.
 func TestListUsageCostCandidatesReturnsStableCanonicalBatch(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
@@ -850,9 +843,6 @@ func tokenOrNil(value *int64) int64 {
 	return *value
 }
 
-// Break caught: per-row enrichment transactions would emit duplicate CDC
-// invalidations for one binding, while a partial transaction could expose only
-// some estimates from one bounded batch.
 func TestApplyUsageCostUpdatesCommitsBatchAndTouchesEachBindingOnce(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
@@ -943,8 +933,6 @@ FROM model_usage_events ORDER BY id`)
 	}
 }
 
-// Break caught: a stale backfill page could overwrite a concurrent catalog
-// attempt, changed raw source facts, or an immutable known-zero total.
 func TestApplyUsageCostUpdatesRefusesStaleFactsVersionAndKnownZero(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
@@ -1007,8 +995,6 @@ func TestApplyUsageCostUpdatesRefusesStaleFactsVersionAndKnownZero(t *testing.T)
 	}
 }
 
-// Break caught: legacy attribution must be selected source-by-source and the
-// repair transaction may not advance or rewrite the durable parser cursor.
 func TestApplyLegacyUsageRepairsUsesExactSourceFactsAndPreservesCursor(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
@@ -1087,8 +1073,6 @@ FROM model_usage_events WHERE source_event_key = 'legacy-repair'`).Scan(
 	}
 }
 
-// Break caught: a replay result from a stale/replaced source generation must
-// not repair a row after any generic fact or the event's prior version changed.
 func TestApplyLegacyUsageRepairsRefusesStaleSourceAndRawFacts(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)
@@ -1175,8 +1159,6 @@ func TestApplyUsageChunkReplayComparesNewSourceFactsButNotCosts(t *testing.T) {
 		t.Fatalf("split replay err = %v, want source conflict", err)
 	}
 
-	// A stored NULL predates the capture, so a replay carrying the object is an
-	// enrichment rather than a conflict.
 	kindConflict := event
 	kindConflict.MeasurementKind = domain.UsageMeasurementUnknown
 	if err := s.ApplyUsageChunk(ctx, source.ID, 20, now.Add(time.Second), domain.SourceCursorState{ByteOffset: 30, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second)}, []domain.ModelUsageEvent{kindConflict}); !errors.Is(err, domain.ErrUsageSourceEventConflict) {
@@ -1333,9 +1315,6 @@ func TestApplyUsageChunkProviderUsageConflictsRollback(t *testing.T) {
 	}
 }
 
-// An event stored before the bounded object was captured has provider_usage_json
-// NULL. Replaying its durable prefix must fill that in rather than either
-// rejecting the event or inserting a duplicate.
 func TestApplyUsageChunkProviderUsageEnrichmentAdvancesCursorWithoutDuplicate(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1627,10 +1606,6 @@ func TestUsageAggregatesMergeProvidersPerModelAndPreserveCostCoverageFacts(t *te
 		t.Fatalf("apply cost events: %v", err)
 	}
 
-	// One model is one row even when two providers served it. Each event was
-	// already costed against its own provider's rates, so the merged coverage
-	// facts stay exact; splitting the row only ever exposed AO's own attribution
-	// state as a duplicate model.
 	models, err := s.ListUsageModelAggregates(ctx, sess.ID)
 	mustNoError(t, err)
 	if len(models) != 1 || models[0].ModelID != "shared-model" {
@@ -1650,8 +1625,6 @@ func TestUsageAggregatesMergeProvidersPerModelAndPreserveCostCoverageFacts(t *te
 	if len(compact) != 1 || usageTokenValue(compact[0].ProcessedTokens) != 18 {
 		t.Fatalf("compact rows = %+v", compact)
 	}
-	// The dashboard row already summed across providers, so it is unchanged by
-	// the model row merging into one.
 	compactCost := compact[0].Cost
 	if compactCost.EventCount != 2 || compactCost.PricedEventCount != 1 || compactCost.PricedTotalNanos != 100 ||
 		compactCost.ObservedCostEventCount != 1 || compactCost.InferredCostEventCount != 1 ||
@@ -1882,9 +1855,6 @@ func seedUsageSession(t *testing.T, s *sqlite.Store, harness domain.AgentHarness
 	return got
 }
 
-// TestKimiUsageEventRoundTrip catches schema or validation changes that accept
-// Kimi sessions in the app but reject their certified usage source or canonical
-// Anthropic-shaped token event at the storage boundary.
 func TestKimiUsageEventRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
@@ -2171,8 +2141,6 @@ func usageEvent(key string, tokens domain.UsageTokenMetrics) domain.ModelUsageEv
 	}
 }
 
-// codexProviderUsage is payload.info reduced to the per-event vector the store
-// round-trips and pricing later reads.
 func codexProviderUsage(cacheWrite, reasoning int64) string {
 	return fmt.Sprintf(
 		`{"last_token_usage":{"cache_write_input_tokens":%d,"reasoning_output_tokens":%d}}`,
@@ -2254,12 +2222,6 @@ func mustNoError(t testing.TB, err error, context ...string) {
 	}
 }
 
-// Break caught: a physically replaced transcript re-emits the same logical event
-// under the same stable key, so replay deduplicates against the row the retired
-// generation left behind and the row keeps pointing at that generation. The
-// legacy repairer skips a source retired as artifact_replaced and the
-// replacement owns no row for the event, so an attribution that never landed
-// could never land — the cost stayed NULL for the life of the row.
 func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2267,8 +2229,6 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 	now := time.Unix(1700000000, 0).UTC()
 	retired := seedUsageSource(t, s, sess, now)
 
-	// Unattributed on the original generation, exactly what the repairer exists
-	// to finish.
 	event := anthropicUsageEvent("replaced-event", 5, 10, 5, 4)
 	mustNoError(t, s.ApplyUsageChunk(ctx, retired.ID, 0, retired.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
@@ -2286,7 +2246,6 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 	}, now.Add(time.Second))
 	mustNoError(t, err, "replace source")
 
-	// The replacement replays a byte-identical logical event.
 	mustNoError(t, s.ApplyUsageChunk(ctx, replacement.ID, 0, replacement.UpdatedAt, domain.SourceCursorState{
 		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now.Add(2 * time.Second),
 	}, []domain.ModelUsageEvent{event}), "replay onto the replacement")
@@ -2309,7 +2268,6 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 		}
 	}
 
-	// Idempotent: replaying again neither duplicates the row nor moves it back.
 	mustNoError(t, s.ApplyUsageChunk(ctx, replacement.ID, 10, now.Add(2*time.Second), domain.SourceCursorState{
 		ByteOffset: 20, State: domain.UsageSourceActive, UpdatedAt: now.Add(3 * time.Second),
 	}, []domain.ModelUsageEvent{event}), "replay twice")
@@ -2322,9 +2280,6 @@ func TestApplyUsageChunkRehomesAnOpenDuplicateToTheReplacementSource(t *testing.
 	}
 }
 
-// An inferred attribution is open everywhere else, so it has to move too:
-// stranded on a retired generation it keeps a guessed provider and the cost
-// derived from it, where no observation can reach either.
 func TestApplyUsageChunkRehomesAnInferredDuplicateToTheReplacementSource(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2367,9 +2322,6 @@ func TestApplyUsageChunkRehomesAnInferredDuplicateToTheReplacementSource(t *test
 	}
 }
 
-// Break caught: replay used to compare the inferred provider with the newly
-// observed provider before rehoming the stable event, rejecting the evidence
-// that should replace the inference and its provider-specific cost.
 func TestApplyUsageChunkPromotesRehomedInferenceToObservedProvider(t *testing.T) {
 	dataDir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dataDir)

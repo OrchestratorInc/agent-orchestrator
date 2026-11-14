@@ -60,7 +60,6 @@ func TestSessionLimitsRefreshesOnlyPinnedAccount(t *testing.T) {
 		if err != nil || accountID != "b" || limits.FetchedAt.Unix() != want {
 			t.Fatalf("limits = %q, %+v, %v", accountID, limits, err)
 		}
-		// A changed default must not redirect an existing binding or its reads.
 		store.defaults[domain.AgentAccountProviderClaude] = "device-claude"
 	}
 	if !reflect.DeepEqual(provider.homes, []string{"/account-b", "/account-b"}) {

@@ -1,17 +1,3 @@
-/**
- * The share links for cloud sessions and projects that this device created,
- * so Copy link in the share dialog works after the dialog closes and opens
- * again. The control plane keeps only a hash of each link's code, so the URL
- * exists only where it was made: here, encrypted with the OS keychain
- * (safeStorage) and keyed by the control plane and the link's id. On another
- * device the dialog offers "Copy new link" instead.
- *
- * Without protected storage (no keychain, or Linux's basic_text backend) the
- * URLs live only in memory for this run, never as plain text on disk. They
- * belong to the account that made them: the file names it, and another
- * account's URLs are never shown, even after a restart that missed the
- * sign-out. Signing out, or in as someone else, clears them (main.ts).
- */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
@@ -22,7 +8,6 @@ export interface SessionShareUrlCrypto {
 	decrypt(value: Buffer): string;
 }
 
-/** The signed-in account's id, whose URLs these are; undefined while signed out. */
 export type SessionShareUrlOwner = () => Promise<string | undefined> | string | undefined;
 
 const MAX_URL_LENGTH = 512;
@@ -33,7 +18,6 @@ function key(baseUrl: string, linkId: string): string {
 	return JSON.stringify([baseUrl.replace(/\/+$/, ""), linkId.toLowerCase()]);
 }
 
-/** Only an http(s) URL of sensible length is kept; anything else is not a share link. */
 function shareUrl(value: unknown): string | undefined {
 	if (typeof value !== "string" || value.length > MAX_URL_LENGTH) return undefined;
 	try {
@@ -45,22 +29,11 @@ function shareUrl(value: unknown): string | undefined {
 }
 
 export class SessionShareUrls {
-	/** This run's URLs for `user`, with the file's merged in once it has been read. */
 	private urls = new Map<string, string>();
-	/** The account this run's URLs belong to. */
 	private user: string | undefined;
-	/** Links forgotten before the file was read, so reading it doesn't bring them back. */
 	private forgotten = new Set<string>();
-	/**
-	 * Whether the file has been read (or found missing, another account's, or
-	 * unreadable for good), so writing it keeps what it held. Until then
-	 * nothing is written: a keychain unavailable for a moment must not cost the
-	 * URLs already saved.
-	 */
 	private loaded = false;
-	/** Bumped by clear() and by another account, so a read that started before can't bring the old URLs back. */
 	private generation = 0;
-	/** Cleared, and nothing remembered since: clearing again (every signed-out notice) has nothing to do. */
 	private empty = false;
 	private writing: Promise<void> = Promise.resolve();
 
@@ -74,7 +47,6 @@ export class SessionShareUrls {
 		this.forgotten.delete(id);
 		urls.delete(id);
 		urls.set(id, url);
-		// Oldest first: past the cap the oldest links are forgotten.
 		for (const old of urls.keys()) {
 			if (urls.size <= MAX_LINKS) break;
 			urls.delete(old);
@@ -104,28 +76,21 @@ export class SessionShareUrls {
 		if (changed) await this.save();
 	}
 
-	/**
-	 * Forgets every URL, on disk too: the account that made them signed out
-	 * or another signed in. Waits for any write in flight, so none lands after.
-	 */
 	async clear(): Promise<void> {
 		if (this.empty) return;
 		this.empty = true;
 		this.urls = new Map();
 		this.forgotten.clear();
 		this.generation += 1;
-		// Nothing left to keep from the file: writing again starts it afresh.
 		this.loaded = true;
 		this.writing = this.writing.then(() => fs.rm(this.file, { force: true })).catch(() => undefined);
 		await this.writing;
 	}
 
-	/** The signed-in account's URLs, read from the file once; undefined while signed out. */
 	private async load(): Promise<Map<string, string> | undefined> {
 		const user = await this.owner();
 		if (!user) return undefined;
 		if (user !== this.user) {
-			// Another account's URLs, from this run or the file, are never its.
 			this.user = user;
 			this.urls = new Map();
 			this.forgotten.clear();
@@ -138,7 +103,6 @@ export class SessionShareUrls {
 		try {
 			raw = await fs.readFile(this.file);
 		} catch (error) {
-			// None yet: there is nothing to keep. Unreadable for now: try again next time.
 			if (generation === this.generation && (error as NodeJS.ErrnoException).code === "ENOENT") this.loaded = true;
 			return this.urls;
 		}
@@ -147,19 +111,13 @@ export class SessionShareUrls {
 		try {
 			parsed = JSON.parse(this.crypto.decrypt(raw));
 		} catch {
-			// Another keychain's (another install or app signature) or damaged:
-			// it can't be read now or later, so it counts as empty and the next
-			// write replaces it, rather than every recall trying it again.
 			parsed = undefined;
 		}
 		const saved = parsed as { user?: unknown; links?: unknown } | undefined;
-		// Only the signed-in account's own; a file of another's (or from before
-		// files named their account) holds nothing for it and goes on the next write.
 		const links = saved?.user === user && Array.isArray(saved.links) ? saved.links : [];
 		if (saved && saved.user !== user) {
 			this.writing = this.writing.then(() => fs.rm(this.file, { force: true })).catch(() => undefined);
 		}
-		// This run's URLs are newer than the file's, and a link forgotten in the meantime stays forgotten.
 		const merged = new Map<string, string>();
 		for (const item of links) {
 			if (Array.isArray(item) && typeof item[0] === "string" && shareUrl(item[1]) && !this.forgotten.has(item[0])) merged.set(item[0], item[1] as string);
@@ -174,9 +132,6 @@ export class SessionShareUrls {
 		return this.urls;
 	}
 
-	// Writes are serialized and atomic: a crash leaves the old file or the new.
-	// Without protected storage, or before the file could be read, nothing is
-	// written and nothing removed: the URLs stay in memory for this run.
 	private save(): Promise<void> {
 		if (!this.loaded || !this.user || !this.crypto.available()) return this.writing;
 		const snapshot = JSON.stringify({ user: this.user, links: [...this.urls.entries()] });
@@ -190,7 +145,6 @@ export class SessionShareUrls {
 	}
 }
 
-/** Refuses a call from anything but a window's main frame, where the bridge lives. */
 function requireMainFrame(event: unknown): void {
 	const { senderFrame } = event as Partial<IpcMainInvokeEvent>;
 	if (senderFrame === null || (senderFrame && senderFrame.parent !== null)) {

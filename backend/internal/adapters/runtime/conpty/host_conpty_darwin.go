@@ -15,10 +15,6 @@ import (
 	"github.com/creack/pty"
 )
 
-// darwinPTYConn is a native macOS pseudoterminal owned by the detached host.
-// The child starts in its own session/process group (creack/pty's StartWithSize
-// does this), so teardown can reap the whole launched process tree rather than
-// leaving dev servers or other descendants behind.
 type darwinPTYConn struct {
 	pty *os.File
 	cmd *exec.Cmd
@@ -33,8 +29,6 @@ type darwinPTYConn struct {
 const darwinPTYCloseGrace = 500 * time.Millisecond
 
 func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
-	// shellCmd and shellArgs are the runtime launch argv assembled by AO's
-	// trusted agent adapter, not input interpreted by a shell.
 	//nolint:forbidigo // Interactive ConPTY children require direct process control.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
 	cmd.Dir = cwd
@@ -85,11 +79,6 @@ func (c *darwinPTYConn) Close() error {
 			select {
 			case <-c.doneC:
 			default:
-				// The PTY child is a session leader. Signal its process group so
-				// descendants cannot outlive a terminal AO explicitly destroys.
-				// SIGHUP first, as a closing terminal would: an interactive shell
-				// ignores SIGTERM, so without it every close waited out the full
-				// grace before SIGKILL.
 				pgid := c.cmd.Process.Pid
 				_ = syscall.Kill(-pgid, syscall.SIGHUP)
 				_ = syscall.Kill(-pgid, syscall.SIGTERM)

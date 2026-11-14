@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// search.db is derived data: a damaged one must be rebuilt, never keep the
-// daemon from starting, and never touch ao.db.
 func TestOpenRebuildsADamagedSearchIndex(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -46,9 +44,6 @@ func TestOpenRebuildsADamagedSearchIndex(t *testing.T) {
 	}
 }
 
-// Search is optional. A search.db that cannot be opened at all (here a
-// directory stands where the file belongs, which is not "damage" a rebuild
-// fixes) must turn search off and leave the rest of the store working.
 func TestOpenWorksWhenTheSearchIndexCannotOpen(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -72,9 +67,6 @@ func TestOpenWorksWhenTheSearchIndexCannotOpen(t *testing.T) {
 	}
 }
 
-// The app's readers never attach search.db, so an index that breaks while the
-// daemon runs fails search alone. Each read below runs concurrently, so the
-// pool has to open new connections after search.db is gone.
 func TestAppReadsSurviveASearchIndexThatBreaksAfterOpen(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -118,8 +110,6 @@ func TestAppReadsSurviveASearchIndexThatBreaksAfterOpen(t *testing.T) {
 	}
 }
 
-// AO_SESSION_SEARCH=off is the support lever for a machine where the index
-// misbehaves: search.db is never opened (or created), and the store works.
 func TestSearchSwitchedOffNeverOpensTheIndex(t *testing.T) {
 	t.Setenv(sessionSearchSwitch, "off")
 	dir := t.TempDir()
@@ -143,8 +133,6 @@ func TestSearchSwitchedOffNeverOpensTheIndex(t *testing.T) {
 	}
 }
 
-// The reset behind `ao search --reindex` empties the index in place and leaves
-// it usable: same file, empty tables, the same owner.
 func TestResetEmptiesTheIndexInPlace(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -178,8 +166,6 @@ func TestResetEmptiesTheIndexInPlace(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Reopening keeps the rebuilt index: the reset kept the owner, so the owner
-	// check does not clear it again.
 	st, err = Open(dir)
 	if err != nil {
 		t.Fatal(err)

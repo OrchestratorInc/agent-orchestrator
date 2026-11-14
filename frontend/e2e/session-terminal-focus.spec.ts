@@ -2,10 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 import { installFakeTerminalMux } from "./support/fake-terminal-mux";
 
-// A worker terminal used to be auto-focused only during a handoff, so opening a
-// TUI session or switching between two of them left focus on the sidebar button
-// that was clicked. Keystrokes went nowhere until the user clicked the terminal.
-
 const sessionA = { id: "tui-focus-a", title: "Tui A", activity: "active" as const };
 const sessionB = { id: "tui-focus-b", title: "Tui B", activity: "active" as const };
 const handleA = `${sessionA.id}/terminal_0`;
@@ -59,8 +55,6 @@ test("renderer: switching TUI sessions moves the caret to the session on screen 
 	await expect.poll(() => caretIsInTheVisibleTerminal(page)).toBe(true);
 	await page.keyboard.type("aaa");
 
-	// Each session received only its own keystrokes, so the caret followed the
-	// terminal that was actually on screen.
 	const inputs = await page.evaluate(() => window.__aoFakeTerminalMux?.stats().inputs ?? {});
 	expect(inputs[handleB]?.join("")).toBe("bbb");
 	expect(inputs[handleA]?.join("")).toBe("aaa");

@@ -37,8 +37,6 @@ const prToneClasses = {
 	error: { dot: "bg-destructive", text: "text-destructive" },
 } as const;
 
-// Time phrase comes from formatTimeCompact (appI18n catalogs), not Intl locale
-// resolution, so the card never leaks the OS language into the app UI.
 function relativeTime(timestamp: string | undefined, format: (key: "shell.updatedAt", values?: Record<string, unknown>) => string): string {
 	if (!timestamp) return "";
 	return format("shell.updatedAt", { time: formatTimeCompact(timestamp) });
@@ -201,7 +199,6 @@ export function SessionLinkPreviewCard({
 	href: string;
 	sourceHostId?: string;
 	sourceKind?: "cloud";
-	/** Opens the session through the same path as clicking the link itself. */
 	onOpen?: () => void;
 }) {
 	const target = parseSessionLink(href);
@@ -211,8 +208,6 @@ export function SessionLinkPreviewCard({
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
 	if (session) {
 		const terminated = session.isTerminated === true || session.status === "terminated";
-		// A terminated card already holds its own Resume button, so only a live one opens on click.
-		// Pointer only: the card is portaled and closes when the link blurs, so the link is the keyboard path.
 		const openable = onOpen && !terminated;
 		return (
 			<HoverCardContent
@@ -234,13 +229,11 @@ const ARTIFACT_EXCERPT_CHARS = 480;
 const MARKDOWN_PREVIEW_CHARS = 1500;
 const TABLE_PREVIEW_ROWS = 6;
 const TABLE_PREVIEW_COLUMNS = 4;
-// The page renders at PAGE_PREVIEW_WIDTH and is scaled to the card's 296px content width.
 const PAGE_PREVIEW_WIDTH = 1000;
 const PAGE_PREVIEW_HEIGHT = 625;
 const PAGE_PREVIEW_SCALE = 296 / PAGE_PREVIEW_WIDTH;
 const MARKDOWN_FRONTMATTER = /^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 
-/** The leading readable text of an artifact, for a hover preview. */
 export function artifactExcerpt(kind: SessionArtifact["kind"], content: string): string {
 	let text = content;
 	if (kind === "html") {
@@ -256,7 +249,6 @@ export function artifactExcerpt(kind: SessionArtifact["kind"], content: string):
 	return text.length > ARTIFACT_EXCERPT_CHARS ? `${text.slice(0, ARTIFACT_EXCERPT_CHARS).trimEnd()}…` : text;
 }
 
-/** A Markdown artifact's body without frontmatter, cut at a line break near the preview limit. */
 export function markdownPreviewSource(content: string): string {
 	const body = content.replace(MARKDOWN_FRONTMATTER, "").trim();
 	if (body.length <= MARKDOWN_PREVIEW_CHARS) return body;
@@ -284,7 +276,6 @@ const MARKDOWN_PREVIEW_COMPONENTS: Components = {
 	hr: () => <hr className="my-1.5 border-border" />,
 };
 
-/** A Markdown artifact's body, formatted compactly and with links and images inert. */
 function ArtifactMarkdownPreview({ source, clamp }: { source: string; clamp: "short" | "tall" }) {
 	return (
 		<div className={cn("overflow-hidden text-xs leading-4 text-popover-foreground [mask-image:linear-gradient(to_bottom,black_70%,transparent)]", clamp === "short" ? "max-h-20" : "max-h-40")}>
@@ -295,7 +286,6 @@ function ArtifactMarkdownPreview({ source, clamp }: { source: string; clamp: "sh
 	);
 }
 
-/** A scaled, non-interactive render of an HTML artifact on its own inline origin. */
 function ArtifactPagePreview({ url, title }: { url: string; title: string }) {
 	return (
 		<div
@@ -315,7 +305,6 @@ function ArtifactPagePreview({ url, title }: { url: string; title: string }) {
 	);
 }
 
-/** An image artifact, fit inside the card. Its update time keys the URL so a rewrite refetches. */
 function ArtifactImagePreview({ rawUrl, name, updatedAt }: { rawUrl: string; name: string; updatedAt: string }) {
 	const { t } = useTranslation();
 	const src = useMemo(() => {
@@ -358,11 +347,7 @@ function ArtifactTablePreview({ rows }: { rows: string[][] }) {
 
 function ArtifactContentPreview({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
-	// The frame allows same-origin, which is only safe on the dedicated inline artifact
-	// origin. A remote host's page URL carries a proxy capability token the page could
-	// read, so a remote or Cloud session shows the text excerpt instead.
 	const page = artifact.kind === "html" && !remote && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
-	// The raw route serves an SVG as image/svg+xml, and an <img> runs none of its scripts.
 	const image = artifact.rawUrl && (isRasterImagePath(artifact.path) || isSvgPath(artifact.path)) ? artifact.rawUrl : undefined;
 	const file = useQuery({ ...sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl), enabled: Boolean(artifact.rawUrl) && !page && !image, staleTime: 30_000 });
 	if (page) return <ArtifactPagePreview url={page} title={artifact.name} />;
@@ -416,11 +401,8 @@ function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArti
 	);
 }
 
-/** The artifact hover preview for an artifact already in hand (e.g. a board card row). */
 export function ArtifactPreviewCard({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
 	return (
-		// React bubbles portal clicks through the component tree, so stop them
-		// before they reach a clickable parent such as the board card.
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3" onClick={(event) => event.stopPropagation()}>
 			<ArtifactCardBody artifact={artifact} session={session} remote={Boolean(session.cloud || (session.hostId && session.hostId !== LOCAL_HOST))} />
 		</HoverCardContent>

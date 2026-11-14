@@ -11,7 +11,6 @@ import type { WorkspaceSummary } from "../../../types/workspace";
 import { useUiStore } from "../../../stores/ui-store";
 import { ConfirmDialog } from "../../ConfirmDialog";
 
-/** Explains why an update must wait and lists the sessions it waits for, each one link away. */
 export function HarnessSessionsDialog({ agentId, inUse, hostId, onOpenChange }: {
 	agentId: AgentId | null;
 	inUse?: HarnessInUse;
@@ -66,11 +65,6 @@ const WAIT_REASON_KEYS = {
 	resume: "settings.harness.waitReason.resume",
 } as const satisfies Record<NonNullable<InstallJob["waitingOn"]>[number]["reason"], string>;
 
-/**
- * An update queued until the harness's sessions are idle. It reads as routine
- * at first; once it has waited a while it names the session it waits for, so
- * the user can finish or pause that work, or cancel the update.
- */
 export function IdleUpdateStatus({ agentId, job, hostId, now = Date.now(), onViewSessions }: {
 	agentId: AgentId;
 	job: InstallJob;

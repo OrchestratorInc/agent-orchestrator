@@ -13,7 +13,7 @@ func TestWorkspaceDiffStatsMatchesSeparateGitReads(t *testing.T) {
 	root := newWorkspaceRepo(t)
 	odd := "odd\tname\nfile.txt"
 	if runtime.GOOS == "windows" {
-		odd = "odd name.txt" // Win32 filenames cannot contain control characters.
+		odd = "odd name.txt"
 	}
 	writeWorkspaceFile(t, root, odd, "old\n")
 	writeWorkspaceFile(t, root, "binary.dat", "old\x00data")

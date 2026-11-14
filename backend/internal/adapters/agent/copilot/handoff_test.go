@@ -51,7 +51,7 @@ func TestNativeConversationExists(t *testing.T) {
 	if exists(id) {
 		t.Error("missing session reported as existing")
 	}
-	write("") // directory without events.jsonl: session/load answers not found
+	write("")
 	if exists(id) {
 		t.Error("session without events reported as existing")
 	}

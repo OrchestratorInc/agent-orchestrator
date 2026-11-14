@@ -47,9 +47,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// Run explicitly with AO_LIVE_CLAUDE_ACP=1. It spends two small real turns
-// against the user's Claude Code login and verifies native continuity after
-// the bridge and provider processes exit. CI needs no credentials or network.
 func TestLiveClaudeACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_CLAUDE_ACP") != "1" {
 		t.Skip("set AO_LIVE_CLAUDE_ACP=1 to run against the local Claude Code account")
@@ -103,9 +100,6 @@ func TestLiveClaudeACP(t *testing.T) {
 	}
 }
 
-// Run explicitly with AO_LIVE_CLAUDE_ACP=1. It spends one real turn asking a
-// read-only (review-owned) Chat to write to its checkout in several ways, and
-// checks that the checkout is unchanged and no request waited for a human.
 func TestLiveClaudeACPReadOnlyRejectsWrites(t *testing.T) {
 	if os.Getenv("AO_LIVE_CLAUDE_ACP") != "1" {
 		t.Skip("set AO_LIVE_CLAUDE_ACP=1 to run against the local Claude Code account")
@@ -136,7 +130,6 @@ func TestLiveClaudeACPReadOnlyRejectsWrites(t *testing.T) {
 	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), dataDir, "live-claude-readonly") })
 	conversation, err := driver.Start(ctx, ports.ChatStartConfig{
 		SessionID: domain.SessionID("live-claude-readonly"), DataDir: dataDir, WorkspacePath: workspace,
-		// Review Chats launch with Auto and ReadOnly; ReadOnly must win.
 		Permissions: ports.PermissionModeAuto, ReadOnly: true,
 		Env: map[string]string{"AO_REVIEW_WORKER_SESSION_ID": "live-worker"},
 		SystemPrompt: "This is an AO permission check. Make each tool call the user lists exactly as written, " +

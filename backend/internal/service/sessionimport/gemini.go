@@ -49,8 +49,6 @@ type geminiRecord struct {
 	} `json:"$patch"`
 }
 
-// Gemini PartListUnion has plain text parts with no type discriminator. It also
-// contains function calls/results, thoughts and inline data, which stay hidden.
 func geminiText(raw json.RawMessage) string {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
@@ -109,8 +107,6 @@ func geminiCWD(ctx context.Context, root *os.Root, path, hash string, projects [
 			}
 		}
 	}
-	// Older releases stored only sha256(cwd). Match explicit AO project paths;
-	// never search the filesystem or write a registry/marker into provider state.
 	for _, cwd := range projects {
 		sum := sha256.Sum256([]byte(cwd))
 		expected := hex.EncodeToString(sum[:])
@@ -150,7 +146,6 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 		} else {
 			order = append(order, msg.ID)
 		}
-		// Bound retained text, even when a recording contains huge tool payloads.
 		text := geminiText(msg.Content)
 		if strings.Contains(text, omittedText) {
 			t.shortened = true
@@ -193,9 +188,6 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 			apply(*rec.Set)
 		}
 		if rec.Rewind != nil {
-			// A rewind to a message evicted by the bound above drops everything
-			// after the opening message, which stays. An id never seen changes
-			// nothing.
 			keep := len(order)
 			if evicted[*rec.Rewind] {
 				keep = min(1, len(order))

@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// The manifest is Cline's per-session process record. It survives exit, so a
-// saved pid alone is not ownership: require live provider process evidence and
-// reject pids started after the recorded session start.
 func clineImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil || ctx.Err() != nil || !filepath.IsLocal(source.NativeID) || filepath.Base(source.NativeID) != source.NativeID {

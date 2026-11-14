@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// deliveryStore adds the waiting-input counter and the recorder's read surface
-// to the lifecycle fake.
 type deliveryStore struct {
 	*fakeStore
 	waits   map[domain.SessionID]int64
@@ -76,7 +74,6 @@ func TestWaitingInputEntriesAreCountedForSessionEnded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// waiting -> blocked stays inside the needs-input family: two pauses, not three.
 	if got := st.waits["mer-1"]; got != 2 {
 		t.Fatalf("waiting_input_count = %d, want 2 (events %#v)", got, sink.events)
 	}
@@ -123,8 +120,6 @@ func TestTrackerCloseReportsCompletedSession(t *testing.T) {
 	}
 }
 
-// terminateThenFail is a completion terminator whose kill commits termination
-// and then fails in cleanup.
 type terminateThenFail struct {
 	st        *deliveryStore
 	terminate bool
@@ -160,7 +155,6 @@ func TestMergeTeardownReportsEndWhenCleanupFailsAfterTermination(t *testing.T) {
 		if len(ended) != 1 || ended[0].Payload["outcome"] != "pr_opened" {
 			t.Fatalf("ended = %#v, want one pr_opened outcome", ended)
 		}
-		// The poller retries a failed teardown; the end is reported only once.
 		_ = m.terminateCompletedSession(ctx, "mer-1")
 		if got := len(endedEvents(sink)); got != 1 {
 			t.Fatalf("ended events after retry = %d, want 1", got)

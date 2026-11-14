@@ -17,18 +17,14 @@ function resolveTriageBinary(stateEnv: NodeJS.ProcessEnv): string {
 				accessSync(configured, constants.X_OK);
 				return configured;
 			}
-		} catch { /* Fall back to the bundled or dev binary. */ }
+		} catch { }
 	}
-	// Ignore shell expressions and PATH commands, which may resolve to a stale ao.
 	const launch = resolveDaemonLaunch({ ...stateEnv, AO_DAEMON_COMMAND: undefined }, app.isPackaged,
 		process.resourcesPath, app.getAppPath(), os.homedir(), process.platform);
 	if (!launch) throw new Error("The bundled binary is unavailable.");
 	return launch.command;
 }
 
-// Linux terminals close when their command exits, which would take the issue
-// URL or failure ao triage prints last with them. Windows has -NoExit and macOS
-// Terminal keeps the window.
 const KEEP_WINDOW_OPEN = `"$@"; status=$?; printf '\\nPress Enter to close this window.'; read -r reply; exit "$status"`;
 
 export async function launchTriageInTerminal(
@@ -38,18 +34,12 @@ export async function launchTriageInTerminal(
 	try {
 		const command = resolveTriageBinary(stateEnv);
 		const args = ["triage"];
-		// Terminal command text is visible and may enter shell history. Only state
-		// paths belong here; the terminal's shell supplies credentials and PATH.
-		// Pass them even at their defaults so the shell's own exports cannot
-		// point triage at another instance.
 		const env: Record<string, string> = {};
 		if (stateEnv.AO_DATA_DIR) env.AO_DATA_DIR = stateEnv.AO_DATA_DIR;
 		if (stateEnv.AO_RUN_FILE) env.AO_RUN_FILE = stateEnv.AO_RUN_FILE;
 		const overrides = Object.entries(env);
 		let argv: string[];
 		if (process.platform === "win32") {
-			// Encode paths before passing through cmd.exe, which expands %variables%
-			// even inside quotes. PowerShell receives only a base64 argument.
 			const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 			manualCommand = [...overrides.map(([key, value]) => `$env:${key}=${quote(value)}`), `& ${[command, ...args].map(quote).join(" ")}`].join("; ");
 			argv = [path.win32.join(stateEnv.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoExit", "-NoProfile", "-EncodedCommand", Buffer.from(manualCommand, "utf16le").toString("base64")];

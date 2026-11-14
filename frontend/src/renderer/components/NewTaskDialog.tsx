@@ -41,14 +41,10 @@ type NewTaskDialogProps = {
 
 export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCreated, onOpenChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
-	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces({ subscribed: open }).data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	// This dialog serves cloud projects only for now; every other project starts
-	// from the new chat page.
-	// Cloud standalone agents are the Scratchpad's, not projects to start a task in.
 	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND && !isScratchpadWorkspace(workspace)), [workspaces]);
 	const localProjects = useMemo(() => hostId ? [] : projects.filter((project) => project.kind !== CLOUD_PROJECT_KIND), [hostId, projects]);
 	const localProjectDetails = useQueries({
@@ -108,7 +104,6 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in data-[state=closed]:animate-overlay-out" />
 				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-(--color-border-overlay) overlay-glass p-0 text-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
-					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu
 							triggerVariant="ghost"

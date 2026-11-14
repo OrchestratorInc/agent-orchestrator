@@ -1,5 +1,3 @@
-// Renderer Sentry intake is deliberately transport-free. Trusted preload adds
-// the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
 import { aoBridge } from "./bridge";
@@ -7,7 +5,7 @@ import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-polic
 
 function forwardCapture(input: RendererTelemetryCaptureInput): void {
 	try { void Promise.resolve(aoBridge.telemetry?.capture(input)).catch(() => undefined); }
-	catch { /* a failing reporter must not become an unhandled rejection */ }
+	catch { }
 }
 
 export type ObservabilityContext = { release?: string; channel?: string; platform?: string; distinctId?: string };
@@ -25,9 +23,6 @@ function tagsFor(meta: CaptureMeta, triage: Triage): Record<string, string> {
 
 type RendererFrame = { function: string; filename?: string; lineno?: number; colno?: number; debug_id?: string };
 
-// The release build's Sentry bundler plugin registers each chunk's debug ID
-// under a stack captured inside that chunk. Map the chunk's asset path to it so
-// Sentry can apply the uploaded source map.
 function debugIdsByAsset(): Map<string, string> {
 	const ids = (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
 	const byAsset = new Map<string, string>();
@@ -38,10 +33,6 @@ function debugIdsByAsset(): Map<string, string> {
 	return byAsset;
 }
 
-// Named ("at fn (location)") and anonymous ("at location") frames are both
-// kept when the location is an app asset. Function text crosses only when it is
-// an allowlisted name; anything else becomes "renderer_frame", and Electron
-// main titles the event by bundle file and line instead.
 function safeRendererFrames(error: unknown): RendererFrame[] {
 	if (!(error instanceof Error) || !error.stack) return [];
 	const frames: RendererFrame[] = [];

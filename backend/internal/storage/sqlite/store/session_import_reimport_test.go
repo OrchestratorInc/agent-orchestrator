@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Terminating an imported session releases its conversation: the same chat
-// imports again into a new session instead of returning the dead one.
 func TestImportedConversationImportsAgainAfterTermination(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "again")

@@ -5,8 +5,6 @@ import { cloudChatEventsKey, cloudChatHistoryKey } from "../lib/cloud-chat-histo
 import { useUiStore } from "../stores/ui-store";
 import { useCloudAccountSwitchReset } from "./useCloudAccountSwitchReset";
 
-// A spawn the previous account's plan refused, as the board's orchestrator
-// action leaves it in the mutation cache.
 async function refusedSpawn(queryClient: QueryClient, projectId: string) {
 	const mutation = queryClient.getMutationCache().build(queryClient, {
 		mutationKey: ["project-orchestrator-open", projectId],
@@ -56,7 +54,6 @@ describe("useCloudAccountSwitchReset", () => {
 		queryClient.setQueryData(cloudChatHistoryKey("org-1", "session-1"), { hasOlder: true, nextBefore: 1, recentPending: false, loadingOlder: false, generation: 1 });
 		queryClient.setQueryData(["cloud-script-steps", "org-1", "session-1"], []);
 		const { rerender } = render({ userId: "user-a" });
-		// A token refresh of the same account keeps them.
 		rerender({ userId: "user-a", ready: true, onLocalPage: false });
 		expect(queryClient.getQueryData(cloudChatEventsKey("org-1", "session-1"))).toBeDefined();
 		rerender({ userId: "user-b", ready: true, onLocalPage: false });

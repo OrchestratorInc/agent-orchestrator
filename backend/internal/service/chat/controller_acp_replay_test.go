@@ -24,7 +24,6 @@ import (
 
 const acpReplayFrames = 20543
 
-// The test binary doubles as the detached host, as in the ACP driver's tests.
 func TestMain(m *testing.M) {
 	if len(os.Args) >= 8 && os.Args[1] == "chat-host" {
 		if os.Args[5] != string(persistenthost.ProtocolACP) || os.Args[7] != "--" {
@@ -86,8 +85,6 @@ func TestACPReplayProviderHelper(t *testing.T) {
 }
 
 func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
-	// Instrumented SQLite projection of 20k events takes nearly five minutes on
-	// CI. Leave bounded time for the full archive checks and final restart too.
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
 	defer cancel()
 	st := openStore(t)
@@ -190,7 +187,6 @@ func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 		second.ProviderConversationID() != first.ProviderConversationID() {
 		t.Fatal("reconnect replaced the native provider")
 	}
-	// The real SQLite projector consumes immediately; replay naturally outruns it.
 	replayStarted := time.Now()
 	lastProgress := replayStarted
 	awaitACPReplay(ctx, t, "replay completion committed", func() bool {
@@ -198,7 +194,6 @@ func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 		if bytes.Contains(logs, []byte("notification queue overflow")) {
 			t.Fatal("ACP replay overflowed while the real SQLite projector was consuming")
 		}
-		// Poll one indexed row; reserve full snapshots for sparse diagnostics and final assertions.
 		replayTurn, readErr := st.TurnByID(ctx, turn.ID)
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -224,8 +219,6 @@ func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 		}
 		return complete
 	})
-	// Replay can consume the wait budget. The committed snapshot and archive are
-	// separate reads and must not fail because that wait just expired.
 	readCtx, readCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer readCancel()
 	rows, err := st.LoadConversationSnapshot(readCtx, second.ConversationID())

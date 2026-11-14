@@ -14,16 +14,6 @@ import { recordDirectWorkerInteraction } from "../lib/session-management-telemet
 export type RestoreSessionResult =
 	{ status: "success" } | { status: "not_resumable"; message: string } | { status: "error"; message: string };
 
-/**
- * A deleted cloud session stays in the cloud sessions listing (flagged
- * terminated) so it can be restored, so a session id present there marks the
- * restore as control-plane rather than local. The listing's query key carries
- * the org the sessions belong to (`[...cloudSessionsQueryKey, baseUrl, orgId]`),
- * so read the org from the matching entry rather than re-subscribing to it. The
- * session's CURRENT worker epoch is captured alongside so restore can baseline
- * the "box is up" signal against it: the fresh box is genuinely up only once a
- * NEW epoch appears past this one (see the terminal-reset store).
- */
 function findCloudSession(
 	queryClient: QueryClient,
 	sessionId: string,
@@ -51,8 +41,6 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 				?.flatMap((workspace) => workspace.sessions)
 				.find((session) => session.id === sessionId)?.kind;
 			recordDirectWorkerInteraction(sessionId, "lifecycle", role ?? cloudSession?.kind, hostId);
-			// Cloud sessions re-provision through the control plane, not the local
-			// daemon: restore keeps the conversation and work intact server-side.
 			if (cloudSession !== undefined) {
 				const { orgId: cloudOrgId, workerEpoch: baselineEpoch } = cloudSession;
 				const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
@@ -62,17 +50,8 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 				}
 				try {
 					await createRendererCloudCpClient(baseUrl).restoreSession(cloudOrgId, sessionId);
-					// The session flips to reviving on the next fetch; refresh the cloud
-					// listing (and the merged board) so the UI reflects it immediately.
 					await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-					// Restore re-provisions a fresh sandbox under the same session id but
-					// a NEW worker epoch, so the old terminal is dead. Bump the reset nonce
-					// so the pane rebuilds from scratch (new mux factory, cursor at 0) and
-					// re-mints against the new epoch instead of clinging to the exited one.
-					// Pass the pre-restore epoch as the baseline: the pane shows "Connecting"
-					// until the worker epoch advances past it (the fresh worker's terminal
-					// exists), so the user never types into the old box's dead terminal.
 					useTerminalResetStore.getState().bump(sessionId, baselineEpoch);
 					return { status: "success" };
 				} catch (err) {

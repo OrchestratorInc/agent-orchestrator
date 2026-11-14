@@ -24,7 +24,6 @@ export function browserRuntimeKeyPath(dataDir: string): string {
 	return path.join(dataDir, KEY_FILE);
 }
 
-/** The owner-only key survives app restarts; the derived token reaches the daemon only through private stdin. */
 export function resolveBrowserRuntimeToken(dataDir: string, io: BrowserRuntimeKeyFs = nodeKeyFs): string {
 	return createHmac("sha256", readOrCreateKey(dataDir, io)).update(DERIVATION_LABEL).digest("base64url");
 }
@@ -35,8 +34,6 @@ function readOrCreateKey(dataDir: string, io: BrowserRuntimeKeyFs): Buffer {
 	const existing = readKey(keyPath, io);
 	if (existing) return existing;
 
-	// Append candidates instead of displacing a key or reclaiming another owner's
-	// lock. Once a valid line is complete, later appends cannot replace that winner.
 	for (let attempt = 0; attempt < PUBLISH_ATTEMPTS; attempt += 1) {
 		const candidate = randomBytes(KEY_BYTES).toString("base64url");
 		try {
@@ -54,8 +51,6 @@ function readOrCreateKey(dataDir: string, io: BrowserRuntimeKeyFs): Buffer {
 		}
 		const winner = readKey(keyPath, io);
 		if (winner) return winner;
-		// Short writes from concurrent appenders can split a candidate. Retry, but
-		// never return a candidate unless a complete record on disk backs it.
 	}
 	throw new Error(`could not establish a browser runtime key at ${keyPath}`);
 }
@@ -67,8 +62,6 @@ function readKey(keyPath: string, io: BrowserRuntimeKeyFs): Buffer | null {
 	} catch {
 		return null;
 	}
-	// Keep existing one-line keys readable. New candidates start with LF; only
-	// their terminated records are eligible, even if an incomplete tail parses.
 	const records = raw.includes("\n") ? raw.split("\n").slice(0, -1) : [raw];
 	for (const record of records) {
 		const trimmed = record.trim();

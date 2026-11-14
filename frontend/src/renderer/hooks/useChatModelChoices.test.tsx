@@ -19,8 +19,6 @@ vi.mock("./useAgentModelsQuery", () => ({
 	}),
 }));
 
-// Settings-driven narrowing is covered by useOfferedModels' own tests; here only
-// which ids a chat's lists are matched by against the switched-off ones.
 const settings = vi.hoisted(() => ({ disabled: undefined as string[] | undefined }));
 vi.mock("./useOfferedModels", async () => {
 	const { filterDisabledModels } = await import("../lib/agent-model-choices");
@@ -100,7 +98,6 @@ describe("useChatModelChoices", () => {
 		expect(Object.values(reasons(cloud.result.current.configOptions)).every((reason) => !reason)).toBe(true);
 	});
 
-	// The worker's CLI runs Haiku 4.5 for "haiku" where this computer's runs a newer one.
 	const cloudList: ChatModel[] = [
 		{ id: "sonnet", displayName: "Sonnet 4.6", description: "Sonnet 4.6 · Best for everyday tasks", default: true },
 		{ id: "claude-opus-5-5", displayName: "Claude Opus 5.5", default: false },
@@ -120,13 +117,11 @@ describe("useChatModelChoices", () => {
 	});
 
 	it("filters a cloud chat's Claude choices by their own ids, as New Task does", async () => {
-		// This computer's Sonnet 5.5 is switched off; Cloud's "sonnet" alias is another model.
 		settings.disabled = ["claude-sonnet-5-5"];
 		const kept = renderHook(() => useChatModelChoices("claude-code", cloudList, cloudOptions, "haiku", undefined, true, false), { wrapper });
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(choiceIDs(kept.result.current.configOptions)).toEqual(["sonnet", "claude-opus-5-5", "haiku"]);
 		expect(kept.result.current.models.map((model) => model.id)).toContain("sonnet");
-		// An id both lists share is the same model, and is left out of both.
 		settings.disabled = ["claude-opus-5-5"];
 		const hidden = renderHook(() => useChatModelChoices("claude-code", cloudList, cloudOptions, "haiku", undefined, true, false), { wrapper });
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -141,7 +136,6 @@ describe("useChatModelChoices", () => {
 			choices: [{ value: "opus", name: "Opus" }, { value: "sonnet", name: "Sonnet" }],
 		}];
 		const { result } = renderHook(() => useChatModelChoices("claude-code", [], options, "opus"), { wrapper });
-		// The local alias "sonnet" is this computer's Sonnet 5.5, so switching that off hides it.
 		await waitFor(() => expect(choiceIDs(result.current.configOptions)).toEqual(["opus"]));
 		expect(result.current.models.map((model) => model.id)).toEqual(["claude-opus-5-5"]);
 	});

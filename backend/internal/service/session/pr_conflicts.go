@@ -12,13 +12,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// maxConflictFiles caps the files named for one PR; the view lists a few and
-// the banner says where to look, so a huge conflict does not flood the summary.
 const maxConflictFiles = 50
 
-// conflictCache remembers conflict files by the two commits they were computed
-// from. Both are immutable SHAs, so an entry never goes stale; a new push or a
-// moved base is a new key.
 type conflictCache struct {
 	mu    sync.Mutex
 	files map[string][]string
@@ -37,18 +32,12 @@ func (c *conflictCache) put(key string, files []string) {
 	if c.files == nil {
 		c.files = map[string][]string{}
 	}
-	// A bounded memory is enough: the keys of PRs that moved on are never asked for again.
 	if len(c.files) >= 256 {
 		c.files = map[string][]string{}
 	}
 	c.files[key] = files
 }
 
-// prConflictFiles names the files a PR's head conflicts with its base in, by
-// merging the two in memory in the session's own repository. It reads local
-// objects only: no provider call, and neither HEAD, the index nor the worktree
-// is touched. It reports nothing when either side is not available locally,
-// since an unknown answer must not read as "no conflicts".
 func (s *Service) prConflictFiles(ctx context.Context, root string, pr domain.PullRequest) []string {
 	if root == "" || pr.HeadSHA == "" || !gitCommitExists(ctx, root, pr.HeadSHA) {
 		return nil
@@ -75,10 +64,6 @@ func (s *Service) prConflictFiles(ctx context.Context, root string, pr domain.Pu
 	return files
 }
 
-// gitMergeConflictFiles runs `git merge-tree --write-tree` for two commits. It
-// exits 0 for a clean merge and 1 when files conflict, listing them after the
-// result tree; anything else (an old git without --write-tree, a bad object) is
-// "unknown", not "no conflicts".
 func gitMergeConflictFiles(ctx context.Context, root, base, head string) ([]string, bool) {
 	cmd := workspaceGitCommand(ctx, root, "merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", base, head)
 	var stdout bytes.Buffer
@@ -89,7 +74,6 @@ func gitMergeConflictFiles(ctx context.Context, root, base, head string) ([]stri
 	case err == nil:
 		return []string{}, true
 	case errors.As(err, &exitErr) && exitErr.ExitCode() == 1:
-		// <tree>\0<path>\0<path>\0 ...
 		parts := strings.Split(stdout.String(), "\x00")
 		seen := map[string]bool{}
 		files := []string{}

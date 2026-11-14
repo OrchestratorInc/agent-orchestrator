@@ -11,14 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// aiderConfigHome is stubbed in tests; production resolves the user's home.
 var aiderConfigHome = os.UserHomeDir
 
-// saveAiderAPIKey writes Aider's documented ~/.aider.conf.yml key entries.
-// OpenAI and Anthropic use their dedicated top-level options; every other
-// provider uses the documented `api-key` list of `provider=key` entries, which
-// Aider translates to the provider's environment variable. Existing settings,
-// comments, and unrelated entries are preserved through a YAML node round-trip.
 func saveAiderAPIKey(ctx context.Context, method, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -100,9 +94,6 @@ func aiderProvider(method string) (string, bool) {
 	return "", false
 }
 
-// mappingRoot returns the document's mapping node. Missing or empty documents
-// get a fresh mapping so a first key save starts a valid file; any other root
-// shape is rejected rather than rewritten.
 func mappingRoot(doc *yaml.Node) (*yaml.Node, error) {
 	if doc.Kind == 0 || len(doc.Content) == 0 {
 		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
@@ -116,14 +107,8 @@ func mappingRoot(doc *yaml.Node) (*yaml.Node, error) {
 	return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Aider's configuration file is invalid; repair it before saving a key here.", nil)
 }
 
-// errYAMLAnchored refuses to change a value other settings share through a
-// YAML anchor: replacing it would leave their aliases dangling, and changing
-// it in place would change them too.
 var errYAMLAnchored = apierr.Invalid("AGENT_AUTH_STORE_SHARED", "This setting is shared with others through a YAML anchor; change it in the file itself.", nil)
 
-// upsertYAMLMappingString sets key to the string value. An existing string is
-// updated in place, keeping its comments and quoting; an alias becomes a
-// plain string, leaving the value it pointed at where it is defined.
 func upsertYAMLMappingString(root *yaml.Node, key, value string) error {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value != key {
@@ -146,8 +131,6 @@ func upsertYAMLMappingString(root *yaml.Node, key, value string) error {
 	return nil
 }
 
-// upsertYAMLProviderKey maintains Aider's documented `api-key` list of
-// `provider=key` entries, replacing only the chosen provider's entry.
 func upsertYAMLProviderKey(root *yaml.Node, provider, key string) error {
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if root.Content[i].Value != "api-key" {
@@ -173,8 +156,6 @@ func upsertYAMLProviderKey(root *yaml.Node, provider, key string) error {
 			list.Content = append(list.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: entry})
 			return nil
 		case yaml.ScalarNode:
-			// A single provider string is valid YAML for the list option;
-			// widen it to a list that keeps the existing entry.
 			list.Kind = yaml.SequenceNode
 			list.Tag = "!!seq"
 			existing := list.Value
@@ -199,8 +180,6 @@ func upsertYAMLProviderKey(root *yaml.Node, provider, key string) error {
 	return nil
 }
 
-// providerOfYAMLKeyEntry splits Aider's documented `provider=key` form on the
-// first equals sign so keys containing '=' stay intact.
 func providerOfYAMLKeyEntry(entry string) string {
 	for i := 0; i < len(entry); i++ {
 		if entry[i] == '=' {

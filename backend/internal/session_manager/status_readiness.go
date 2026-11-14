@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A slow or unavailable provider must not leave the board loading forever.
-// This is a verification deadline, not an artificial delay before publication.
 const statusVerificationLimit = 30 * time.Second
 
 type statusRecovery struct {
@@ -16,15 +14,12 @@ type statusRecovery struct {
 	failed  *domain.SessionRecord
 }
 
-// StatusRecoveryRevision fences API snapshots read concurrently with recovery.
 func (m *Manager) StatusRecoveryRevision() uint64 {
 	m.statusRecoveryMu.RLock()
 	defer m.statusRecoveryMu.RUnlock()
 	return m.statusRecoveryRevision
 }
 
-// SessionStatusReadiness describes this daemon's recovery observation. It is
-// deliberately not durable: a new daemon must verify the sessions again.
 func (m *Manager) SessionStatusReadiness(rec domain.SessionRecord) string {
 	if rec.NeedsImportResume() {
 		return "ready"
@@ -33,9 +28,6 @@ func (m *Manager) SessionStatusReadiness(rec domain.SessionRecord) string {
 	defer m.statusRecoveryMu.RUnlock()
 	result, found := m.statusRecoveries[rec.ID]
 	if found {
-		// A deadline cancels the recovery context, but the dependency must return
-		// before another attempt can safely own this session. Keep the UI checking
-		// until the operation gate has actually been released.
 		if result.pending {
 			return "checking"
 		}
@@ -63,16 +55,11 @@ func (m *Manager) beginStatusRecovery(id domain.SessionID) {
 	m.statusRecoveryRevision++
 }
 
-// markFreshSessionStatusReady keeps a session created by this daemon outside
-// the startup snapshot's failure state. A concurrent startup recovery remains
-// authoritative once it has already claimed the same session.
 func (m *Manager) markFreshSessionStatusReady(id domain.SessionID) {
 	m.statusRecoveryMu.Lock()
 	defer m.statusRecoveryMu.Unlock()
 	select {
 	case <-m.startupBackgroundReconcileDone:
-		// After a successful startup, an untracked session already reads as ready;
-		// avoid turning ordinary spawns into recovery-revision changes.
 		if !m.statusRecoveryFailed {
 			return
 		}

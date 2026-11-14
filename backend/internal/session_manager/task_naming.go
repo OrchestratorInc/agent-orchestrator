@@ -23,14 +23,10 @@ type generatedTaskName struct {
 	Slug  string `json:"slug"`
 }
 
-// taskNamingApplies reports whether a start gets a generated branch name.
 func taskNamingApplies(cfg ports.SpawnConfig) bool {
 	return cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != ""
 }
 
-// startTaskNaming overlaps the one cosmetic model call with the whole start.
-// It runs under the daemon context because the rename that consumes it happens
-// after launch. The waiter also observes the deadline if a provider is slow to cancel.
 func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecord, projectConfig domain.ProjectConfig) (func() generatedTaskName, context.CancelFunc) {
 	if !taskNamingApplies(cfg) {
 		return nil, func() {}
@@ -39,7 +35,6 @@ func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecor
 	if fallback.Slug == "" {
 		fallback.Slug = taskSlug(string(rec.ID))
 	}
-	// Clients keep the temporary branch private until the rename settles.
 	m.setBranchNaming(rec.ID, true)
 	settled := func() { m.setBranchNaming(rec.ID, false) }
 	runner, ok := m.chat.(chatBackgroundTaskRunner)
@@ -56,8 +51,6 @@ func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecor
 		if !cfg.AgentConfigResolved {
 			config = applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), config)
 		}
-		// Chat has already resolved model/effort; TUI callers carry their resolved
-		// config below. This temporary call never owns the worker's conversation.
 		rec.Metadata.Model, rec.Metadata.Effort = config.Model, config.Effort
 		m.runInBackground(func() {
 			defer func() { <-slots }()
@@ -74,7 +67,6 @@ func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecor
 			done <- name
 		})
 	default:
-		// ponytail: overflow uses the local slug; queue only if skipped AI names become a problem.
 		done <- fallback
 	}
 	return func() generatedTaskName {
@@ -139,10 +131,6 @@ func taskSlug(value string) string {
 	return b.String()
 }
 
-// nameTaskBranchLater renames a launched task's temporary branch once its
-// generated name arrives. The checkout never moves, so neither setup nor the
-// agent waits for naming. A skipped or failed rename keeps the temporary branch.
-// The launched spawn hands back its project gate, which the rename takes.
 func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, taskName func() generatedTaskName, cancel context.CancelFunc) {
 	if release, ok := ctx.Value(spawnWorkspaceGateKey{}).(func()); ok {
 		release()
@@ -156,7 +144,6 @@ func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRec
 		started := time.Now()
 		name := taskName()
 		if name.Title != "" {
-			// The title needs no gate, so another start's long setup cannot delay it.
 			ctx, done := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
 			if _, err := m.store.RenameSessionIfDisplayName(ctx, rec.ID, rec.DisplayName, name.Title, m.clock()); err != nil {
 				m.logger.Warn("apply generated task title", "sessionID", rec.ID, "error", err)
@@ -175,19 +162,13 @@ func (m *Manager) nameTaskBranchLater(ctx context.Context, rec domain.SessionRec
 	})
 }
 
-// taskBranchRenameTimeout starts once the project gate is held. A variable so
-// tests can shorten it.
 var taskBranchRenameTimeout = 30 * time.Second
 
 const taskNamingWriteTimeout = 10 * time.Second
 
-// renameTaskBranch returns the branch Git holds afterwards, and records it.
 func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.SessionRecord, ws ports.WorkspaceInfo, project *ports.WorkspaceProjectInfo, slug string) (string, error) {
-	// Serialize with cleanup and restore so a removed checkout is never renamed.
 	gate := m.workspaceGate(rec.ProjectID)
 	if !gate.TryLock() {
-		// Another start or cleanup holds the project, maybe for minutes: show the
-		// temporary branch meanwhile. The rename still lands after.
 		m.setBranchNaming(rec.ID, false)
 		gate.Lock()
 	}
@@ -195,7 +176,6 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 	if err := m.backgroundContext.Err(); err != nil {
 		return ws.Branch, err
 	}
-	// Shutdown must not kill Git halfway through renaming a live agent's branch.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskBranchRenameTimeout)
 	defer cancel()
 	current, found, err := m.store.GetSession(ctx, rec.ID)
@@ -215,7 +195,6 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 		if recordErr == nil {
 			return held.Root.Branch, nil
 		}
-		// Keep Git and the row agreeing: put the temporary names back exactly.
 		var undoErr error
 		if held, undoErr = namer.RevertTaskBranch(ctx, held, info); undoErr == nil {
 			return ws.Branch, recordErr
@@ -223,8 +202,6 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 		err = errors.Join(recordErr, undoErr)
 	}
 	if !sameTaskBranches(held, info) {
-		// A failed undo left Git, maybe per repository, off the temporary
-		// names: the row must name what Git holds.
 		retryCtx, done := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
 		defer done()
 		err = errors.Join(err, m.recordTaskBranch(retryCtx, rec.ID, ws.Branch, held))
@@ -248,7 +225,6 @@ func sameTaskBranches(a, b ports.WorkspaceProjectInfo) bool {
 	return a.Root.Branch == b.Root.Branch && slices.EqualFunc(a.Worktrees, b.Worktrees, func(x, y ports.WorkspaceRepoInfo) bool { return x.Branch == y.Branch })
 }
 
-// setBranchNaming publishes whether a task's generated branch name is on the way.
 func (m *Manager) setBranchNaming(id domain.SessionID, naming bool) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(m.backgroundContext), taskNamingWriteTimeout)
 	defer cancel()

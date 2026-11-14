@@ -12,20 +12,14 @@ import (
 
 const kimchiSession = "019fe4d5-24c5-77ac-a0e3-d3c18b37dcef"
 
-// kimchiPath is a Kimchi session file as Kimchi writes it:
-// sessions/--<cwd-dashed>--/<ISO>_<uuid>.jsonl.
 func kimchiPath(root, folder, id string) string {
 	return filepath.Join(root, "sessions", folder, "2026-08-09T04-43-21-669Z_"+id+".jsonl")
 }
 
-// kimchiMsg is one Kimchi `message` record linked into the tree by id/parentId.
 func kimchiMsg(id, parent, role, text string) string {
 	return `{"type":"message","id":"` + id + `","parentId":"` + parent + `","timestamp":"2026-08-09T04:43:30.000Z","message":{"role":"` + role + `","content":[{"type":"text","text":"` + text + `"}]}}`
 }
 
-// Shapes below are synthetic but mirror real Kimchi session JSONL: a single
-// id/parentId chain of session, model_change, thinking_level_change, message,
-// session_info and custom records.
 func TestKimchiTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","timestamp":"2026-08-09T04:43:21.669Z","cwd":"/work/repo"}
@@ -70,8 +64,6 @@ func TestKimchiTranscriptTitleFallsBackToFirstPrompt(t *testing.T) {
 	}
 }
 
-// A rewind sends a new prompt under an earlier parent; the abandoned turns stay
-// in the file but must not appear beside their replacement.
 func TestKimchiTranscriptFollowsActiveBranchAfterRewind(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","timestamp":"2026-08-09T04:43:21.669Z","cwd":"/work/repo"}
@@ -135,8 +127,6 @@ func TestKimchiDiscoverGroupsEachFileByNativeID(t *testing.T) {
 	}
 }
 
-// AO's own resume copy shares the original's id but runs in an AO worktree;
-// Scan must offer only the original.
 func TestKimchiScanSkipsAOResumeCopies(t *testing.T) {
 	root, dataDir, repo := t.TempDir(), t.TempDir(), canonical(t.TempDir())
 	worktree := filepath.Join(dataDir, "worktrees", "proj", "sess")
@@ -157,8 +147,6 @@ func TestKimchiScanSkipsAOResumeCopies(t *testing.T) {
 	}
 }
 
-// folderDashes encodes an absolute path the way Kimchi names a session folder:
-// the path without its leading slash, every '/' replaced by '-'.
 func folderDashes(abs string) string {
 	out := make([]rune, 0, len(abs))
 	for i, r := range abs {

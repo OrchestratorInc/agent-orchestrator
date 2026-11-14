@@ -1,4 +1,3 @@
-// Package sqlitetest provides isolated, fully migrated SQLite stores for tests.
 package sqlitetest
 
 import (
@@ -18,10 +17,6 @@ var databaseTemplate struct {
 	err  error
 }
 
-// Open returns a store cloned from a database migrated once for the current
-// test binary. dataDir may contain unrelated fixture files, but it must not
-// already contain ao.db. Tests that exercise migration behavior should continue
-// to call sqlite.Open directly with an empty directory.
 func Open(dataDir string) (*sqlite.Store, error) {
 	template, err := templateDatabase()
 	if err != nil {
@@ -35,9 +30,6 @@ func Open(dataDir string) (*sqlite.Store, error) {
 		return nil, fmt.Errorf("clone migrated template: %w", err)
 	}
 
-	// Fast path: skip all Goose migration/repair/reconciliation — the cloned
-	// database was fully migrated by buildTemplateDatabase and its schema
-	// version is verified by OpenPreMigrated before opening the pools.
 	store, err := sqlite.OpenPreMigrated(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("open cloned store: %w", err)
@@ -45,13 +37,11 @@ func Open(dataDir string) (*sqlite.Store, error) {
 	return store, nil
 }
 
-// MustOpen returns an isolated store and registers its cleanup with t.
 func MustOpen(t testing.TB) *sqlite.Store {
 	t.Helper()
 	return MustOpenAt(t, t.TempDir())
 }
 
-// MustOpenAt is MustOpen for callers that also use dataDir for other fixtures.
 func MustOpenAt(t testing.TB, dataDir string) *sqlite.Store {
 	t.Helper()
 

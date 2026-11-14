@@ -110,7 +110,6 @@ describe("update-settings", () => {
 		const settings = await readUpdateSettings(dir);
 		expect(settings.feature).toBeNull();
 		expect(settings.macDifferentialUpdates).toBe(false);
-		// channel is preserved as-is
 		expect(settings.channel).toBe("nightly");
 	});
 
@@ -124,7 +123,6 @@ describe("update-settings", () => {
 			feature: { pr: 2270 },
 			macDifferentialUpdates: false,
 		});
-		// Sanity: channel must remain the home channel value, not a feature string.
 		expect(settings.channel).toBe("nightly");
 	});
 

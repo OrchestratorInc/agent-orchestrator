@@ -10,15 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The one SQL reader of conversation_provider_events.payload_json is
-// SelectVerifiedAuthenticationTurn, which json_extracts providerTurnId, turnState,
-// error and providerConversationId from turn.completed rows. Archive rows used to
-// carry all 26 envelope keys, "" or null when an event left them empty; they now
-// omit those keys. A row of either shape must clear (or keep) a re-authentication
-// demand identically.
-
-// fullArchiveEnvelope is every key the archive record had before empty ones were
-// dropped, each in its empty form.
 const fullArchiveEnvelope = `{"account":null,"activityKind":"","activityStatus":"","clientMessageId":"",` +
 	`"controllerState":"","decisions":null,"delta":"","detail":null,"diff":null,"kind":"",` +
 	`"mcpServers":null,"plan":null,"providerConversationId":"","providerEventId":"",` +
@@ -26,8 +17,6 @@ const fullArchiveEnvelope = `{"account":null,"activityKind":"","activityStatus":
 	`"requestId":"","reroute":null,"summary":"","text":"","threadState":null,"title":"",` +
 	`"turnState":"","usage":null}`
 
-// archivePayload encodes a turn.completed record in the given shape. fields holds
-// the keys the event actually set.
 func archivePayload(t *testing.T, full bool, fields map[string]any) string {
 	t.Helper()
 	record := map[string]any{}
@@ -71,8 +60,6 @@ func TestArchiveRowsOfEitherShapeReconcileAuthenticationAlike(t *testing.T) {
 				"providerTurnId": "provider-turn", "turnState": "completed", "error": "boom",
 			},
 		},
-		// error is only archived when the event has an error, so even an empty message
-		// is a present key, and a present key is not NULL.
 		{
 			name: "completed with an error that has an empty message",
 			fields: map[string]any{

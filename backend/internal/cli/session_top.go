@@ -19,7 +19,6 @@ type sessionTopOptions struct {
 	json    bool
 }
 
-// sessionMemoryDTO mirrors controllers.SessionMemoryResponse.
 type sessionMemoryDTO struct {
 	SessionID    string    `json:"sessionId"`
 	RSSBytes     uint64    `json:"rssBytes"`
@@ -33,11 +32,6 @@ type sessionMemoryListResponse struct {
 
 type sessionTopEntry struct {
 	sessionDTO
-	// RSSBytes and ProcessCount are nil when the session's process tree could
-	// not be measured (the text table shows "-" for the same reason): a
-	// missing reading must never serialize as a genuine zero-byte, zero-process
-	// measurement, which automation consuming --json cannot tell apart from
-	// "we don't know".
 	RSSBytes     *uint64 `json:"rssBytes"`
 	ProcessCount *int    `json:"processCount"`
 }
@@ -134,8 +128,6 @@ func writeSessionTop(cmd *cobra.Command, entries []sessionTopEntry, total uint64
 			rss = formatBytes(*e.RSSBytes)
 			procs = fmt.Sprint(*e.ProcessCount)
 		}
-		// Activity carries the raw enum; "working" is only the derived
-		// status, so comparing against it gave active sessions an idle time.
 		idle := "-"
 		if e.Activity.State != string(domain.ActivityActive) {
 			idle = sessionAge(now, e.Activity.LastActivityAt)
@@ -150,7 +142,6 @@ func writeSessionTop(cmd *cobra.Command, entries []sessionTopEntry, total uint64
 	return table.Flush()
 }
 
-// formatBytes renders a byte count the way btop does: one decimal, binary units.
 func formatBytes(b uint64) string {
 	const unit = 1024
 	if b < unit {

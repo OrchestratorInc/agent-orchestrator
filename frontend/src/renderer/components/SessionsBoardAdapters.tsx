@@ -118,21 +118,15 @@ export function BoardSessionCardAdapter({
 	onTerminate,
 	session,
 }: {
-	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
-	/** Colour for the chip; neutral unless this card is part of the fix. */
 	memoryTone?: ChipTone;
 	onOpen: () => void;
-	/** Opens the session with this artifact (by path) shown in the inspector. */
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
-	/** Opens the share dialog for this session; set only where this person can share it. */
 	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
-	/** The people in this session when it is shared. */
 	participants?: readonly SessionPerson[];
-	/** The signed-in cloud user, to tell their own work from someone else's. */
 	me?: string;
 }) {
 	return (
@@ -151,7 +145,6 @@ export function BoardSessionCardAdapter({
 	);
 }
 
-/** The board card for a session, rendered static for a sidebar hover preview. */
 export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSession }) {
 	return <DesktopSessionCard interactive={false} session={session} still />;
 }
@@ -169,20 +162,15 @@ export function ArchivedSessionCardAdapter({
 	selected,
 	session,
 }: {
-	/** The archive grid's dense card: branch, PRs and time on one line. */
 	compact?: boolean;
-	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
-	/** Asks the host to confirm the delete, for a card inside a list that owns its keys. */
 	onDelete?: () => void;
-	/** Opens the session on click, making this a live board card (hover, menu). */
 	onOpen?: () => void;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
-	/** The list's selection, which then replaces the card's own hover fill. */
 	selected?: boolean;
 	session: WorkspaceSession;
 }) {
@@ -191,9 +179,6 @@ export function ArchivedSessionCardAdapter({
 	return (
 		<DesktopSessionCard
 			compact={compact}
-			// A grid of many archived cards shows the PRs each session recorded
-			// (and any summary already cached) instead of fetching and polling
-			// one SCM summary per card.
 			live={!compact}
 			selected={selected}
 			hidePullRequestProgress={hidePullRequestProgress}
@@ -206,7 +191,6 @@ export function ArchivedSessionCardAdapter({
 						label={t("shell.restoreNamed", { title: session.title })}
 						onClick={restoreAction}
 					/>
-					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
 					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
 			}
@@ -256,7 +240,6 @@ function DesktopSessionCard({
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
-	/** Fetch and follow the session's PRs and archive state (on by default). */
 	live?: boolean;
 	memory?: SessionMemoryReading;
 	memoryTone?: ChipTone;
@@ -280,7 +263,6 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId, live);
-	// Archiving is the owner workspace's; a guest's archive would always be refused.
 	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
@@ -314,7 +296,6 @@ function DesktopSessionCard({
 								onClick={(event) => {
 									event.stopPropagation();
 									clearTerminateSessionState(queryClient, session.id, session.hostId);
-									// Always open the confirm; the modal owns its own dismissal.
 									setConfirmOpen(true);
 								}}
 								disabled={termination.isPending}
@@ -338,7 +319,6 @@ function DesktopSessionCard({
 		/>
 	) : undefined;
 
-	// Share sits beside Archive and shows the same way: on hover or focus.
 	const share = interactive && onShare ? onShare : undefined;
 	const shareButton = share ? (
 		<Tooltip>
@@ -394,7 +374,6 @@ function DesktopSessionCard({
 			resource={resourcePresentation}
 			overlay={people || shareButton ? (
 				<span className="inline-flex items-center gap-1">
-					{/* The circles open the same share dialog, as they do in the session header. */}
 					{people ? <SessionPeopleStack people={people} me={me} onActivate={share} /> : null}
 					{shareButton}
 					{terminationOverlay}
@@ -449,7 +428,6 @@ function DesktopSessionCard({
 	);
 }
 
-/** A card has no title to edit in place, so the board renames through a small dialog. */
 function SessionRenameDialog({
 	onOpenChange,
 	open,
@@ -465,8 +443,6 @@ function SessionRenameDialog({
 	const [draft, setDraft] = useState(session.title);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Start each opening from the current title, but keep what is typed if the
-	// title changes while the dialog is open.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
@@ -477,7 +453,6 @@ function SessionRenameDialog({
 	}
 	useEffect(() => {
 		if (!open) return;
-		// The confirm dialog focuses its button on open; the name field should win.
 		const frame = requestAnimationFrame(() => inputRef.current?.select());
 		return () => cancelAnimationFrame(frame);
 	}, [open]);
@@ -534,7 +509,6 @@ const BOARD_ARTIFACT_LIMIT = 2;
 const BOARD_ARTIFACT_EXPANDED_LIMIT = 10;
 const BOARD_ARTIFACT_HOVER_DELAY = 300;
 
-/** The session's most recently updated artifacts, newest first. */
 export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
 	return [...artifacts]
 		.sort(
@@ -671,11 +645,6 @@ function BoardArtifactLinks({
 	);
 }
 
-/**
- * While someone else in a shared session is writing to the agent, the card's
- * one status line says so, in the working color. A provisioning or failed
- * start keeps its own line.
- */
 export function withSharedWorkStatus(
 	session: BoardSessionPresentation,
 	participants: readonly SessionPerson[] | undefined,
@@ -702,7 +671,6 @@ function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessi
 	return {
 		...session,
 		displayStatus: undefined,
-		// No red tint either: the card reads like every other ended session.
 		plainSurface: true,
 		statusPresentation: {
 			className: "hidden",
@@ -740,8 +708,6 @@ function pullRequestProgressLabel(
 		.join(" · ");
 }
 
-/** "1.4 GB · 82%" while working, just "240 MB" while idle: an idle agent is
- * always at 0% and printing it is noise. */
 function toResourcePresentation(
 	memory: SessionMemoryReading | undefined,
 	working: boolean,
@@ -761,18 +727,12 @@ function toResourcePresentation(
 	};
 }
 
-/**
- * Permanently deletes an archived session. A worktree still on disk is cleaned
- * up first the way session cleanup does it, never forced: uncommitted work
- * refuses the delete, and the dialog says why.
- */
 function ArchiveDeleteButton({
 	isDisabled,
 	onRequest,
 	session,
 }: {
 	isDisabled: boolean;
-	/** When set, the host shows the confirm instead of this button. */
 	onRequest?: () => void;
 	session: WorkspaceSession;
 }) {
@@ -807,7 +767,6 @@ function ArchiveDeleteButton({
 	);
 }
 
-/** The confirm behind every "delete permanently" on an archived session. */
 export function DeleteArchivedSessionDialog({
 	onDeleted,
 	onOpenChange,
@@ -823,7 +782,6 @@ export function DeleteArchivedSessionDialog({
 	const queryClient = useQueryClient();
 	const [deleting, setDeleting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Each opening starts without the last attempt's error.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);

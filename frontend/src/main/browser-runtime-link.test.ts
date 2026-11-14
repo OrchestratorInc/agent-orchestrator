@@ -24,7 +24,6 @@ afterEach(async () => {
 	);
 });
 
-// Answer the hello the way the daemon's broker accepts a valid token.
 function ackHello(socket: net.Socket) {
 	socket.once("data", () => socket.write(`${JSON.stringify({ type: "hello-ok" })}\n`));
 }
@@ -36,8 +35,6 @@ async function listen(server: net.Server) {
 	return { host: address.address, port: address.port };
 }
 
-// Waits on socket I/O without advancing fake timers, so a test controls every
-// backoff step itself. setImmediate and performance.now() are never faked here.
 async function until(check: () => boolean, label: string) {
 	const deadline = performance.now() + 5_000;
 	while (!check()) {
@@ -118,7 +115,6 @@ describe("browser runtime link", () => {
 		await vi.advanceTimersByTimeAsync(200);
 		await until(() => handle.state.connected && connections === 2, "the redial");
 
-		// The panel never sees a disconnect: the link was always connected or about to be.
 		expect(states).toEqual([CONNECTING, CONNECTED, CONNECTING, CONNECTED]);
 	});
 
@@ -429,7 +425,6 @@ describe("browser runtime link", () => {
 		const address = await listen(
 			net.createServer((socket) => {
 				connections += 1;
-				// The broker's answer to a stale token: an explicit refusal, then close.
 				socket.once("data", () => {
 					socket.end(
 						`${JSON.stringify({
@@ -453,10 +448,7 @@ describe("browser runtime link", () => {
 		await vi.advanceTimersByTimeAsync(60_000);
 		await new Promise((resolve) => setImmediate(resolve));
 
-		// Before the fix every refused attempt reported connected and redialed every 200 ms.
 		expect(connections).toBe(1);
-		// The daemon's reason reaches the Browser panel, which names a cause only for
-		// a code that identifies one.
 		expect(states).toEqual([CONNECTING, { ...REJECTED, rejectionCode: "BROWSER_RUNTIME_TOKEN_REJECTED" }]);
 		expect(logs.filter((line) => line.includes("connected"))).toEqual([]);
 		expect(logs.filter((line) => line.includes("refused"))).toEqual([
@@ -467,7 +459,6 @@ describe("browser runtime link", () => {
 	it("backs off without claiming a refusal when the link closes before the daemon answers", async () => {
 		useBackoffTimers();
 		let connections = 0;
-		// A transport failure mid-handshake, or an older daemon closing on a hello it refused.
 		const address = await listen(
 			net.createServer((socket) => {
 				connections += 1;
@@ -482,10 +473,8 @@ describe("browser runtime link", () => {
 			onStateChange: (state) => states.push(state),
 		});
 		handles.push(handle);
-		// A close has been handled once its redial is scheduled.
 		await until(() => connections === 1 && vi.getTimerCount() === 1, "the first close");
 
-		// Each close doubles the wait to the 2 s cap; nothing resets it.
 		for (const [delay, attempt] of [[200, 2], [400, 3], [800, 4], [1_600, 5], [2_000, 6], [2_000, 7]] as const) {
 			await vi.advanceTimersByTimeAsync(delay - 1);
 			expect(connections).toBe(attempt - 1);
@@ -519,15 +508,12 @@ describe("browser runtime link", () => {
 		handles.push(handle);
 		await until(() => handle.state.rejected, "hello-rejected");
 
-		// browserRuntimeRecoveryDecision retires a daemon only for this reason; a
-		// protocol mismatch keeps the broker's code and waits for an upgrade.
 		expect(reasons).toEqual(["invalid-token"]);
 	});
 
 	it("reports a link the daemon dropped before accepting it, but not an ordinary disconnect", async () => {
 		useBackoffTimers();
 		const silentReasons: string[] = [];
-		// How a daemon predating hello-rejected refuses a stale token: it closes.
 		const silent = await listen(
 			net.createServer((socket) => {
 				socket.once("data", () => socket.destroy());
@@ -558,7 +544,6 @@ describe("browser runtime link", () => {
 		serverSocket!.destroy();
 		await until(() => acceptedHandle.state.connecting, "the redial after the drop");
 
-		// A daemon restart after a working link must not be retired as a refusal.
 		expect(acceptedReasons).toEqual([]);
 	});
 

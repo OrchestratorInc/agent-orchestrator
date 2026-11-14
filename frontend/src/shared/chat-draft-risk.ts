@@ -7,7 +7,6 @@ export const CHAT_DRAFT_BOUNDARY_KINDS = [
 
 export type ChatDraftBoundaryKind = (typeof CHAT_DRAFT_BOUNDARY_KINDS)[number];
 
-/** Resolved renderer translations, also used by Electron's native confirmation. */
 export type ChatDraftDialogCopy = {
 	title: string;
 	message: string;
@@ -31,7 +30,6 @@ export function isChatDraftBoundaryKind(value: unknown): value is ChatDraftBound
 	return typeof value === "string" && CHAT_DRAFT_BOUNDARY_KINDS.includes(value as ChatDraftBoundaryKind);
 }
 
-/** Parse an untrusted IPC payload into one canonical risk set. */
 export function parseChatDraftBoundaryKinds(
 	value: unknown,
 ): readonly ChatDraftBoundaryKind[] | undefined {

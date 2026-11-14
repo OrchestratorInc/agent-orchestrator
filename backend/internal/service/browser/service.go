@@ -1,5 +1,3 @@
-// Package browser owns authorization and dispatch for session-scoped browser
-// commands. HTTP controllers remain transport-only adapters.
 package browser
 
 import (
@@ -32,9 +30,6 @@ type runtime interface {
 	Execute(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) (browserruntime.Result, error)
 }
 
-// Service validates worker ownership and lifecycle state before dispatching to
-// the session's browser runtime: the Electron panel by default, or the user's
-// Chrome through the AO extension when the session chose it.
 type Service struct {
 	sessions  sessionReader
 	runtime   runtime
@@ -45,13 +40,10 @@ type Service struct {
 	log     *slog.Logger
 }
 
-// New creates a browser service.
 func New(sessions sessionReader, runtime runtime, authority *Authority) *Service {
 	return &Service{sessions: sessions, runtime: runtime, authority: authority}
 }
 
-// UseChrome enables the Chrome extension runtime. Sessions opt in with the
-// "target" action; their choice persists in targets.
 func (s *Service) UseChrome(chrome runtime, targets *TargetStore, log *slog.Logger) {
 	if log == nil {
 		log = slog.Default()
@@ -61,7 +53,6 @@ func (s *Service) UseChrome(chrome runtime, targets *TargetStore, log *slog.Logg
 	s.log = log
 }
 
-// Status returns transport state after validating the session owner.
 func (s *Service) Status(ctx context.Context, sessionID domain.SessionID, capability string) (browserruntime.Status, error) {
 	if err := s.authorize(ctx, sessionID, capability); err != nil {
 		return browserruntime.Status{}, err
@@ -86,7 +77,6 @@ func (s *Service) runtimeFor(target string) runtime {
 	return s.runtime
 }
 
-// Execute validates ownership and dispatches one supported action.
 func (s *Service) Execute(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -111,15 +101,12 @@ func (s *Service) Execute(
 	}
 	target := s.targetFor(sessionID)
 	if target == TargetChrome {
-		// Chrome mode acts with the user's real identity; keep an audit line
-		// per command (never arguments, which can hold typed text).
 		s.log.Info("browser chrome command", "session", sessionID, "action", action)
 	}
 	result, err := s.runtimeFor(target).Execute(ctx, sessionID, action, args)
 	return result, action, err
 }
 
-// target reads or changes which browser the session's commands go to.
 func (s *Service) target(sessionID domain.SessionID, args map[string]interface{}) (browserruntime.Result, error) {
 	if requested, ok := args["target"]; ok {
 		target, _ := requested.(string)
@@ -151,15 +138,12 @@ type sessionDestroyer interface {
 	DestroySession(ctx context.Context, sessionID domain.SessionID) error
 }
 
-// Lifecycle tears down a session's browser state in every runtime and forgets
-// its target. It implements the session manager's browser lifecycle hook.
 type Lifecycle struct {
 	Panel   sessionDestroyer
 	Chrome  sessionDestroyer
 	Targets *TargetStore
 }
 
-// DestroySession releases the session in both runtimes.
 func (l Lifecycle) DestroySession(ctx context.Context, sessionID domain.SessionID) error {
 	var errs []error
 	if l.Panel != nil {

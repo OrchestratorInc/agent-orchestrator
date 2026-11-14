@@ -50,8 +50,6 @@ func automationTestRouter(service AutomationService) http.Handler {
 	return r
 }
 
-// Request decoding must preserve the schedule choice and route through the
-// automation service rather than launching a session from the controller.
 func TestAutomationsCreateReturnsDefinition(t *testing.T) {
 	service := &fakeAutomationService{}
 	body := `{"projectId":"demo","displayName":"Morning","prompt":"Review","kind":"worker","templateId":"daily_pr_review_v1","useCase":"pr_review","model":"gpt-5","effort":"high","cron":"0 9 * * *","timezone":"Asia/Calcutta"}`

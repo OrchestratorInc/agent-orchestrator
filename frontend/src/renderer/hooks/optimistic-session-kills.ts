@@ -1,10 +1,7 @@
 import { toKanbanColumn, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 
-/** Host-qualified sessions with an in-flight optimistic kill. */
 const optimisticKillIds = new Set<string>();
-// Bumped on every change, so memoized lists that apply the kills (the sidebar's
-// remote hosts) rebuild when a kill starts or ends, not only when data arrives.
 let optimisticKillVersion = 0;
 const optimisticKillListeners = new Set<() => void>();
 
@@ -13,7 +10,6 @@ function notifyOptimisticKillChange() {
 	for (const listener of optimisticKillListeners) listener();
 }
 
-/** useSyncExternalStore source for the set of in-flight optimistic kills. */
 export function subscribeOptimisticSessionKills(listener: () => void): () => void {
 	optimisticKillListeners.add(listener);
 	return () => optimisticKillListeners.delete(listener);
@@ -61,7 +57,6 @@ export function applyTerminatedSession(
 	}));
 }
 
-/** Re-apply pending kills so a mid-flight workspace refetch cannot resurrect rows. */
 export function applyOptimisticSessionKills(
 	workspaces: WorkspaceSummary[] | undefined,
 ): WorkspaceSummary[] | undefined {

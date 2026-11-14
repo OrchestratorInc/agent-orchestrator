@@ -68,8 +68,6 @@ func TestSearchSendsQueryAndFilters(t *testing.T) {
 	if !strings.Contains(out, "Fix the login test") || !strings.Contains(out, "flaky login test") {
 		t.Fatalf("output = %q", out)
 	}
-	// The id is what `ao session resume-agent` and an in-app link take; a name
-	// alone left a person reading the table nothing to act on.
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if !strings.HasPrefix(lines[0], "ID ") || len(lines) < 2 || !strings.HasPrefix(lines[1], "proj-1 ") {
 		t.Fatalf("table = %q, want the session id as the first column", out)
@@ -110,14 +108,11 @@ func TestSearchJSONIsMachineReadable(t *testing.T) {
 	if response.Coverage.State != "ready" || response.Sort != "relevance" || response.Group != "session" {
 		t.Fatalf("response = %+v", response)
 	}
-	// A field the daemon left out stays out, so a script checking for one (a
-	// resume command, a message to open) is not handed an empty string.
 	for _, absent := range []string{`"messageId"`, `"title"`, `"sessionName"`, `"sessionMatches"`} {
 		if strings.Contains(out, absent) {
 			t.Fatalf("output %s has %s, which the daemon left out", out, absent)
 		}
 	}
-	// Scripts get the matched spans the daemon sent, not just the snippet.
 	if spans := response.Results[0].Highlights; len(spans) != 1 || spans[0].Start != 4 || spans[0].End != 10 {
 		t.Fatalf("highlights = %+v, want the daemon's span", spans)
 	}
@@ -306,8 +301,6 @@ func TestSearchReportsCoverageWhenIndexIsIncomplete(t *testing.T) {
 	}
 }
 
-// An index whose backfill failed is not "still backfilling": the note must say
-// it could not be built, so an empty result is not read as "never happened".
 func TestCoverageNoteExplainsAnIndexThatCouldNotBeBuilt(t *testing.T) {
 	note := coverageNote(sessionSearchCoverageDTO{State: "unavailable"})
 	if !strings.Contains(note, "could not be built") || strings.Contains(note, "backfilling") {
@@ -318,7 +311,6 @@ func TestCoverageNoteExplainsAnIndexThatCouldNotBeBuilt(t *testing.T) {
 	}
 }
 
-// parseQuery splits a raw query string into a single-value map for assertions.
 func parseQuery(raw string) (map[string]string, error) {
 	parsed, err := url.ParseQuery(raw)
 	if err != nil {
@@ -333,8 +325,6 @@ func parseQuery(raw string) (map[string]string, error) {
 	return values, nil
 }
 
-// Each session is listed once and says how many of its messages matched;
-// --per-message asks the daemon for every matching message instead.
 func TestSearchGroupsBySessionUnlessPerMessage(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var queries []string
@@ -374,7 +364,6 @@ func TestSearchGroupsBySessionUnlessPerMessage(t *testing.T) {
 	}
 }
 
-// --sort recent alone is the recency browse the API serves without words.
 func TestSearchSortRecentBrowsesWithoutWords(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var query url.Values
@@ -402,8 +391,6 @@ func TestSearchSortRecentBrowsesWithoutWords(t *testing.T) {
 	}
 }
 
-// --reindex asks the daemon to rebuild the index and says results are
-// incomplete until it finishes; --json passes the daemon's coverage through.
 func TestSearchReindexRequestsARebuild(t *testing.T) {
 	cfg := setConfigEnv(t)
 	requests := 0

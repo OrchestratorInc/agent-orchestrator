@@ -14,8 +14,6 @@ import (
 
 const testAccountID = "72d4db6e-da2c-414c-a6a9-fdbd09a006b6"
 
-// snapshots is test-only inspection. Production callers use the catalog's
-// scoped read methods instead of materializing every account snapshot.
 func (c *codexAccountCatalog) snapshots() []domain.CodexAccountSnapshot {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

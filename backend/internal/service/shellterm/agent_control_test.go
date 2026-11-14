@@ -59,27 +59,22 @@ func TestSessionTerminalControlInterruptsAndReads(t *testing.T) {
 	if sent := <-rt.sentCh; sent.input != "\x03" {
 		t.Fatalf("interrupt sent %q", sent.input)
 	}
-	// The rendered screen wins over raw output, and comes back as plain text.
 	rt.setOutput("raw \x1b[31mbytes\x1b[m")
 	rt.styledOutput = "$ ls   \n\x1b[34mREADME.md\x1b[m\n\n   \n"
 	output, err := svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
 	if err != nil || output != "$ ls\nREADME.md" {
 		t.Fatalf("output = %q, %v", output, err)
 	}
-	// A rendered screen that is empty is the answer: the terminal shows nothing,
-	// whatever raw output it once produced.
 	rt.styledOutput = "   \n\n"
 	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
 	if err != nil || output != "" {
 		t.Fatalf("empty screen read %q, %v; want empty", output, err)
 	}
-	// The newline after the last row is not a row: one line asks for the last row.
 	rt.styledOutput = "$ ls\nREADME.md\n"
 	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 1)
 	if err != nil || output != "README.md" {
 		t.Fatalf("last line = %q, %v; want README.md", output, err)
 	}
-	// Without a rendered screen, raw output is cleaned of control sequences.
 	rt.styledErr = errors.New("no surface")
 	output, err = svc.SessionTerminalOutput(ctx, "s-1", "sh-own", 0)
 	if err != nil || output != "raw bytes" {
@@ -97,7 +92,7 @@ func TestSessionTerminalControlRefusesAnExitedShell(t *testing.T) {
 
 func TestCloseSessionTerminalClosesOnlyTheSessionsOwnShell(t *testing.T) {
 	svc, rt := agentControlFixture()
-	rt.childExited = true // an exited shell can still be closed
+	rt.childExited = true
 	ctx := context.Background()
 	if err := svc.CloseSessionTerminal(ctx, "s-1", "sh-other"); apiErrCode(err) != "PANE_TERMINAL_NOT_FOUND" {
 		t.Fatalf("closing another session's shell: err = %v", err)

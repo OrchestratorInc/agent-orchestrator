@@ -11,19 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionsearch"
 )
 
-// BenchmarkCorpus is a fixed fixture corpus with fixed queries and expected top
-// results. It is a correctness benchmark, not a throughput one: it asserts that
-// ranking actually expresses the product rule (title > user > path > agent >
-// tool/command output, then bm25, then recency) and that every operator filters
-// as promised.
-//
-// The corpus is deliberately small and hand-written so a failure names the rule
-// that broke rather than reporting an aggregate score.
-
 type corpusSession struct {
-	// name is the fixture's own label. AO mints session ids as
-	// "{projectId}-{num}", so cases refer to a fixture by name and the seeder
-	// resolves it to the real id.
 	name        string
 	projectID   string
 	title       string
@@ -36,8 +24,6 @@ type corpusSession struct {
 	terminate   bool
 }
 
-// corpusSessions is the benchmark fixture. Each session exists to make exactly
-// one ranking or filtering claim testable.
 var corpusSessions = []corpusSession{
 	{
 		name:        "auth-1",
@@ -97,8 +83,6 @@ var corpusSessions = []corpusSession{
 	},
 }
 
-// seedCorpus writes the benchmark corpus into a fresh store and indexes it. It
-// returns the fixture plus a map from each fixture name to its real session id.
 func seedCorpus(t *testing.T) (*fixture, map[string]string) {
 	t.Helper()
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
@@ -107,8 +91,6 @@ func seedCorpus(t *testing.T) (*fixture, map[string]string) {
 		session := seedChatSession(t, f.store, entry.projectID, entry.name, "conv-"+entry.name)
 		ids[entry.name] = string(session.ID)
 
-		// The harness and the display name come from the session row; a Chat
-		// session is created as claude-code with no name.
 		record, found, err := f.store.GetSession(context.Background(), session.ID)
 		if err != nil || !found {
 			t.Fatalf("GetSession %s: found=%v err=%v", entry.name, found, err)
@@ -118,7 +100,6 @@ func seedCorpus(t *testing.T) (*fixture, map[string]string) {
 		if err := f.store.UpdateSession(context.Background(), record); err != nil {
 			t.Fatalf("UpdateSession %s: %v", entry.name, err)
 		}
-		// UpdateSession no longer writes the title; renames have their own narrow writer.
 		if _, err := f.store.RenameSession(context.Background(), record.ID, entry.title, time.Now()); err != nil {
 			t.Fatalf("RenameSession %s: %v", entry.name, err)
 		}
@@ -139,8 +120,6 @@ func seedCorpus(t *testing.T) (*fixture, map[string]string) {
 	if _, err := f.svc.IndexAll(context.Background()); err != nil {
 		t.Fatalf("IndexAll: %v", err)
 	}
-	// Terminate after indexing: the status filter reads the durable session fact,
-	// so the order does not matter, but doing it last keeps the fixture legible.
 	for _, entry := range corpusSessions {
 		if !entry.terminate {
 			continue
@@ -157,22 +136,15 @@ func seedCorpus(t *testing.T) (*fixture, map[string]string) {
 	return &f, ids
 }
 
-// TestRankingBenchmark is the fixed-query ranking benchmark. Every case names
-// the rule it proves, so a regression reports the rule rather than a number.
 func TestRankingBenchmark(t *testing.T) {
 	f, ids := seedCorpus(t)
 
 	cases := []struct {
-		name  string
-		query string
-		// wantTop is the fixture name that must rank first.
-		wantTop string
-		// wantTopKind is the document kind that must rank first within it.
-		wantTopKind domain.SessionSearchKind
-		// wantAbsent lists fixtures that must not appear at all.
-		wantAbsent []string
-		// wantKindPresent requires some result for wantTop to carry this kind,
-		// which is how a lower-tier document proves it was indexed at all.
+		name            string
+		query           string
+		wantTop         string
+		wantTopKind     domain.SessionSearchKind
+		wantAbsent      []string
 		wantKindPresent *domain.SessionSearchKind
 		rule            string
 	}{
@@ -182,15 +154,11 @@ func TestRankingBenchmark(t *testing.T) {
 			rule: "a session whose name matches outranks one that only mentions the words",
 		},
 		{
-			// "forever" appears only in auth-2's agent reply, so no title can
-			// outrank it and the user/assistant ordering is what is measured.
 			name: "user message beats agent reply", query: "forever",
 			wantTop: "auth-2", wantTopKind: domain.SessionSearchKindAssistant,
 			rule: "an agent reply is findable, and a title match is not invented for it",
 		},
 		{
-			// "give up" appears only in auth-2's user message, so this isolates
-			// the user-before-assistant ordering from any title match.
 			name: "human words outrank the reply that repeats them", query: "give up",
 			wantTop: "auth-2", wantTopKind: domain.SessionSearchKindUser,
 			rule: "the human's own words outrank the agent's reply about them",
@@ -216,9 +184,6 @@ func TestRankingBenchmark(t *testing.T) {
 			rule: "a quoted phrase matches only the contiguous words",
 		},
 		{
-			// auth-2 is the only fixture whose text contains "upload", so it is
-			// the only session the exclusion may remove. auth-1 has "backoff"
-			// but no "upload" and must stay.
 			name: "exclusion removes a session", query: "backoff !upload",
 			wantTop: "legacy-1", wantTopKind: domain.SessionSearchKindUser,
 			wantAbsent: []string{"auth-2"},
@@ -257,9 +222,6 @@ func TestRankingBenchmark(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			// The rules are about which document ranks first, so they read the
-			// per-message list; the grouped list (one row per session, shown at
-			// its best message) must put the same session first.
 			response, err := f.svc.Search(context.Background(), domain.ParseSessionSearchQuery(testCase.query),
 				domain.SessionSearchParams{Group: domain.SessionSearchGroupMessage})
 			if err != nil {
@@ -306,12 +268,6 @@ func TestRankingBenchmark(t *testing.T) {
 	}
 }
 
-// TestRankingBenchmarkKindWeights pins the kind weighting: with the same text in
-// every kind, a session name outranks the person's words, which outrank the
-// agent's reply, which outranks tool and command output. The weights multiply
-// bm25 (domain.SessionSearchKindWeights), so this order holds when the
-// match is equally good, not regardless of how good it is; see
-// TestRankingBenchmarkWeightsAreNotTiers for the other half.
 func TestRankingBenchmarkKindWeights(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-1", "conv-1")
@@ -369,10 +325,6 @@ func TestRankingBenchmarkKindWeights(t *testing.T) {
 	}
 }
 
-// TestRankingBenchmarkWeightsAreNotTiers is why the kind is a weight and not a
-// tier: an agent reply that is about the query must beat a long user message
-// that mentions it once in passing. Under the old hard tier every user message
-// outranked every reply; on LoCoMo that cost 22 points of turn-level recall@10.
 func TestRankingBenchmarkWeightsAreNotTiers(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	passing := seedChatSession(t, f.store, "proj", "sess-passing", "conv-passing")
@@ -395,9 +347,6 @@ func TestRankingBenchmarkWeightsAreNotTiers(t *testing.T) {
 	}
 }
 
-// TestRankingBenchmarkRecencyTieBreak proves the order is deterministic when two
-// documents rank identically, which is what makes a result list stable while a
-// person types.
 func TestRankingBenchmarkRecencyTieBreak(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	older := seedChatSession(t, f.store, "proj", "sess-old", "conv-old")
@@ -418,7 +367,6 @@ func TestRankingBenchmarkRecencyTieBreak(t *testing.T) {
 	}
 }
 
-// describe renders results compactly so a benchmark failure names what ranked.
 func describe(results []domain.SessionSearchResult) string {
 	parts := make([]string, 0, len(results))
 	for _, result := range results {

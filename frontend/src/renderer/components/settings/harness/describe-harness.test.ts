@@ -6,7 +6,7 @@ import { describeHarness } from "./describe-harness";
 
 describe("configured harness authentication summary", () => {
 	it.each([
-		["mimo-code", undefined, undefined], // MiMo Auto needs no credentials.
+		["mimo-code", undefined, undefined],
 		["claude-code", undefined, undefined],
 		["codewhale", undefined, undefined],
 		["memcode", undefined, undefined],

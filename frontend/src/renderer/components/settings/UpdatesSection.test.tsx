@@ -80,10 +80,6 @@ beforeEach(() => {
 });
 
 it("renders the installed nightly build time as the device-local instant", async () => {
-	// The stamp 202609070300 encodes 03:00 UTC. The expected string is derived
-	// from that absolute instant, so the assertion holds in every timezone —
-	// and it can only hold at all when the stamp is parsed as UTC, never as
-	// local wall time (issue #5059).
 	renderUpdates();
 
 	const builtAt = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
@@ -141,8 +137,6 @@ it("keeps restart available when native staging has stalled", async () => {
 	expect(screen.getByText("Downloaded. Restart to finish updating.")).toBeVisible();
 });
 
-// A dump the main process has not learned to rewrite yet must still stay out
-// of Settings: no response body, headers or app.asar paths (#5755).
 const UPDATER_DUMP =
 	'Cannot parse releases feed: HttpError: 504 Gateway Time-out\nHeaders: {"set-cookie": "_gh_sess=abc123"}\n    at createHttpError (C:\\AO\\resources\\app.asar\\httpExecutor.js:53:12)';
 

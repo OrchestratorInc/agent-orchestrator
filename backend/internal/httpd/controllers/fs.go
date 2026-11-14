@@ -11,21 +11,14 @@ import (
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
 )
 
-// DirectoryBrowserService lists directories on the daemon host.
 type DirectoryBrowserService interface {
 	List(ctx context.Context, path string) (fsbrowsersvc.Listing, error)
 }
 
-// FSController owns the read-only /fs routes used by remote clients to browse
-// for a project path. Listing is directories-only and dotfile-free by design:
-// the connection credential already authorizes spawning agents (shell access),
-// so this reveals nothing new — but there is no reason to serve more than the
-// picker needs.
 type FSController struct {
 	Svc DirectoryBrowserService
 }
 
-// Register mounts fs REST routes on the supplied router.
 func (c *FSController) Register(r chi.Router) {
 	r.Get("/fs/dirs", c.listDirs)
 }

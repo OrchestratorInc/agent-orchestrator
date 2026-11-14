@@ -138,8 +138,6 @@ func TestGetLaunchCommandMapsApprovalModes(t *testing.T) {
 }
 
 func TestGetPromptDeliveryStrategyIsAfterStart(t *testing.T) {
-	// A prompt on the command line runs in command mode and exits; the
-	// interactive session takes it once its footer shows.
 	plugin := &Plugin{}
 
 	got, err := plugin.GetPromptDeliveryStrategy(context.Background(), ports.LaunchConfig{})
@@ -352,16 +350,11 @@ func TestContextCancellationIsRespected(t *testing.T) {
 	if err := plugin.GetAgentHooks(ctx, ports.WorkspaceHookConfig{}); err == nil {
 		t.Fatal("GetAgentHooks: want context error")
 	}
-	// resolvedBinary is set, so this exercises the cached-binary path, which
-	// must still honor cancellation.
 	if _, err := plugin.GetLaunchCommand(ctx, ports.LaunchConfig{}); err == nil {
 		t.Fatal("GetLaunchCommand: want context error")
 	}
 }
 
-// TestGetAgentHooksPreservesUnknownEntryFields locks the round-trip behavior:
-// keys AO does not model on a user hook entry (here "async") must survive a
-// GetAgentHooks rewrite instead of being silently dropped.
 func TestGetAgentHooksPreservesUnknownEntryFields(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "autohand"}
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -451,7 +444,6 @@ func TestGetAgentHooksInstallsAndPreservesConfig(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("AUTOHAND_CONFIG", configPath)
 
-	// Seed a config with unrelated keys plus a user hook; both must survive.
 	existing := `{
   "provider": "openai",
   "auth": {"token": "keep-me"},
@@ -474,7 +466,6 @@ func TestGetAgentHooksInstallsAndPreservesConfig(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +475,6 @@ func TestGetAgentHooksInstallsAndPreservesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Unrelated top-level config keys are preserved.
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
 		t.Fatal(err)

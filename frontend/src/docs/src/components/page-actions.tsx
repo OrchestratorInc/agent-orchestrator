@@ -12,10 +12,6 @@ const BUTTON = buttonVariants({ color: "secondary", size: "sm", className: "gap-
 const MENU_ITEM =
   "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fd-foreground hover:bg-fd-accent hover:text-fd-accent-foreground [&_svg]:size-3.5";
 
-/**
- * Copies the article as Markdown, opens it in a chat assistant, or shows its
- * source. `markdownPath` is the article's Markdown copy, e.g. `/quickstart.md`.
- */
 export function PageActions({ markdownPath, sourceUrl }: { markdownPath: string; sourceUrl: string }) {
   const { i18n } = useLingui();
   const [copied, setCopied] = useState(false);
@@ -30,8 +26,6 @@ export function PageActions({ markdownPath, sourceUrl }: { markdownPath: string;
   }, [copied]);
 
   async function copyMarkdown() {
-    // The dev server serves the copies where the route builds them; the
-    // export moves them to the site root.
     const url = process.env.NODE_ENV === "development" ? `/markdown${markdownPath}` : markdownPath;
     markdown.current ??= fetch(url).then((response) => {
       if (!response.ok) throw new Error(`${url}: ${response.status}`);
@@ -41,8 +35,6 @@ export function PageActions({ markdownPath, sourceUrl }: { markdownPath: string;
     text.catch(() => {
       markdown.current = null;
     });
-    // Handing the clipboard a pending item keeps the click's permission
-    // while the Markdown loads, which Safari requires.
     if (typeof ClipboardItem !== "undefined") {
       const blob = text.then((value) => new Blob([value], { type: "text/plain" }));
       await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);

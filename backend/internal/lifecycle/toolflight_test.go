@@ -9,13 +9,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// sig builds an event-tagged activity signal the way the ingress does.
 func sig(state domain.ActivityState, event, toolName, toolUseID string) ports.ActivitySignal {
 	return ports.ActivitySignal{Valid: true, State: state, Event: event, ToolName: toolName, ToolUseID: toolUseID}
 }
 
-// seedSignaled seeds a session that already produced signals (FirstSignalAt
-// stamped), so receipt stamping does not interfere with precedence assertions.
 func seedSignaled(st *fakeStore, id domain.SessionID, state domain.ActivityState) {
 	st.sessions[id] = domain.SessionRecord{
 		ID: id, ProjectID: "mer",
@@ -24,7 +21,6 @@ func seedSignaled(st *fakeStore, id domain.SessionID, state domain.ActivityState
 	}
 }
 
-// mustApply applies a signal and fails the test on error.
 func mustApply(t *testing.T, m *Manager, id domain.SessionID, s ports.ActivitySignal) {
 	t.Helper()
 	if err := m.ApplyActivitySignal(ctx, id, s); err != nil {
@@ -36,8 +32,6 @@ func stateOf(st *fakeStore, id domain.SessionID) domain.ActivityState {
 	return st.sessions[id].Activity.State
 }
 
-// blockOnDialog drives a session into blocked through the real signal path:
-// the blocking tool's pre-tool-use, then permission-request naming that tool.
 func blockOnDialog(t *testing.T, m *Manager, st *fakeStore, id domain.SessionID, toolName, toolUseID string) {
 	t.Helper()
 	mustApply(t, m, id, sig(domain.ActivityActive, "pre-tool-use", toolName, toolUseID))
@@ -47,12 +41,6 @@ func blockOnDialog(t *testing.T, m *Manager, st *fakeStore, id domain.SessionID,
 	}
 }
 
-// blockOnNotificationCorrelation drives a session into blocked through the
-// notification correlation path: the blocking tool's pre-tool-use, then a
-// notification(permission_prompt) whose tool_use_id matches the inflight entry.
-// The notification's tool_name is lowercased to mirror adapters (e.g. Kimchi)
-// whose notification payloads carry the internal tool name while hooks carry
-// the external capitalized name.
 func blockOnNotificationCorrelation(t *testing.T, m *Manager, st *fakeStore, id domain.SessionID, toolName, toolUseID string) {
 	t.Helper()
 	mustApply(t, m, id, sig(domain.ActivityActive, "pre-tool-use", toolName, toolUseID))
@@ -66,8 +54,6 @@ func blockOnNotificationCorrelation(t *testing.T, m *Manager, st *fakeStore, id 
 }
 
 func TestToolPrecedence_ApprovedToolPostClearsBlocked(t *testing.T) {
-	// Approving the dialog fires no hook; the approved tool's own post is the
-	// earliest observable resolution signal and must clear blocked -> active.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
@@ -79,7 +65,6 @@ func TestToolPrecedence_ApprovedToolPostClearsBlocked(t *testing.T) {
 }
 
 func TestToolPrecedence_ApprovedToolFailurePostAlsoClears(t *testing.T) {
-	// An approved tool that runs and FAILS still resolved the dialog.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
@@ -166,8 +151,6 @@ func TestToolPrecedence_CursorSameKeyDialogsDecrementOneAtATime(t *testing.T) {
 }
 
 func TestToolPrecedence_LegacyKimchiFailurePostAlsoClears(t *testing.T) {
-	// Old Kimchi hook files used this non-canonical subcommand. Keep accepting
-	// it so existing worktrees do not remain blocked after a failed tool call.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
@@ -179,14 +162,10 @@ func TestToolPrecedence_LegacyKimchiFailurePostAlsoClears(t *testing.T) {
 }
 
 func TestToolPrecedence_SubagentTrafficDoesNotClearBlocked(t *testing.T) {
-	// The failure that reverted the naive mapping in PR #5's review: parallel
-	// subagent tool signals (same session id) land while the dialog is still
-	// on screen. They must be tracked but never change the state.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
 
-	// A different tool starts and finishes while the dialog is pending.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Read", "toolu_sub"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
 		t.Fatalf("state after subagent pre = %q, want blocked", got)
@@ -195,7 +174,6 @@ func TestToolPrecedence_SubagentTrafficDoesNotClearBlocked(t *testing.T) {
 	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
 		t.Fatalf("state after subagent post = %q, want blocked", got)
 	}
-	// The approved tool's post still clears afterwards.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "toolu_1"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
 		t.Fatalf("state after approved post = %q, want active", got)
@@ -203,8 +181,6 @@ func TestToolPrecedence_SubagentTrafficDoesNotClearBlocked(t *testing.T) {
 }
 
 func TestToolPrecedence_TurnBoundariesClearBlocked(t *testing.T) {
-	// A prompt cannot be submitted and a turn cannot end while a dialog holds
-	// the composer, so these events reliably mean the dialog is gone.
 	cases := []struct {
 		name string
 		s    ports.ActivitySignal
@@ -212,11 +188,7 @@ func TestToolPrecedence_TurnBoundariesClearBlocked(t *testing.T) {
 	}{
 		{"user-prompt-submit", sig(domain.ActivityActive, "user-prompt-submit", "", ""), domain.ActivityActive},
 		{"stop", sig(domain.ActivityIdle, "stop", "", ""), domain.ActivityIdle},
-		// A turn that ended on an API error (Claude StopFailure, or a Codex
-		// failure read from its rollout) ends the turn the same way.
 		{"stop-failure", sig(domain.ActivityIdle, "stop-failure", "", ""), domain.ActivityIdle},
-		// Esc at the dialog ends the turn: an interrupt read from the
-		// transcript (Claude, Codex) or Codex's Interrupt hook.
 		{"interrupt", sig(domain.ActivityIdle, "interrupt", "", ""), domain.ActivityIdle},
 		{"session-end", sig(domain.ActivityExited, "session-end", "", ""), domain.ActivityExited},
 		{"chat-controller-stopped", sig(domain.ActivityExited, "chat.controller.stopped", "", ""), domain.ActivityExited},
@@ -235,10 +207,6 @@ func TestToolPrecedence_TurnBoundariesClearBlocked(t *testing.T) {
 }
 
 func TestToolPrecedence_NotificationSubtypesDoNotClearBlocked(t *testing.T) {
-	// agent_completed (idle) and idle_prompt (waiting_input) arrive with
-	// event "notification" and are no evidence the dialog closed — a
-	// background `claude agents` run finishing must not unmask a live dialog
-	// (the cycle-2 minor finding on PR #5).
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
@@ -254,9 +222,6 @@ func TestToolPrecedence_NotificationSubtypesDoNotClearBlocked(t *testing.T) {
 }
 
 func TestToolPrecedence_IdentitylessBlockedDuplicatePreservesCandidate(t *testing.T) {
-	// Claude can report the same permission dialog twice: first with its tool
-	// identity, then as a bare Notification. The duplicate must not erase the
-	// candidate needed to correlate the approved tool's post.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
@@ -269,12 +234,8 @@ func TestToolPrecedence_IdentitylessBlockedDuplicatePreservesCandidate(t *testin
 }
 
 func TestToolPrecedence_NoCandidatesFailsSafe(t *testing.T) {
-	// A blocking signal that carries no tool identity (codex, a bare
-	// Notification, or a daemon restarted mid-dialog) yields no candidates:
-	// nothing tool-shaped may clear the block; the turn boundary still does.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
-	// Blocked lands with NO prior pre and NO tool name (restart-equivalent).
 	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-request", "", ""))
 
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "toolu_1"))
@@ -308,10 +269,6 @@ func TestToolPrecedence_DefinitivePermissionResolutionClearsBlocked(t *testing.T
 }
 
 func TestToolPrecedence_LegacySignalsKeepLastWriterWins(t *testing.T) {
-	// The compatibility pin: a signal WITHOUT an event (old CLIs, the 12
-	// adapters that don't tag their signals) keeps today's last-writer-wins
-	// semantics even out of blocked — the precedence rule must not change
-	// behavior for anyone who doesn't opt in.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
@@ -323,8 +280,6 @@ func TestToolPrecedence_LegacySignalsKeepLastWriterWins(t *testing.T) {
 }
 
 func TestToolPrecedence_ToolEventsDoNotDemoteWaitingInput(t *testing.T) {
-	// waiting_input marks "the user's turn". Background subagent tool traffic
-	// must not clear it; an explicit user signal does.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityWaitingInput)
 
@@ -343,17 +298,12 @@ func TestToolPrecedence_ToolEventsDoNotDemoteWaitingInput(t *testing.T) {
 }
 
 func TestToolPrecedence_AmbiguousSameNameBlockFailsClosed(t *testing.T) {
-	// Two same-name tools in flight when the dialog appears: the permission
-	// payload has no tool_use_id to say WHICH one is at the dialog, so neither
-	// sibling's post may clear the block — that would let a paste answer a
-	// still-open dialog. Fail closed: the block lifts only at a turn boundary.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_1"))
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_2"))
 	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-request", "Bash", ""))
 
-	// Either sibling's post must NOT clear the live dialog.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "toolu_2"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
 		t.Fatalf("state after ambiguous sibling post = %q, want blocked (fail closed)", got)
@@ -362,7 +312,6 @@ func TestToolPrecedence_AmbiguousSameNameBlockFailsClosed(t *testing.T) {
 	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
 		t.Fatalf("state after second ambiguous post = %q, want blocked (fail closed)", got)
 	}
-	// A turn boundary still lifts it.
 	mustApply(t, m, "mer-1", sig(domain.ActivityIdle, "stop", "", ""))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityIdle {
 		t.Fatalf("state after stop = %q, want idle", got)
@@ -370,13 +319,8 @@ func TestToolPrecedence_AmbiguousSameNameBlockFailsClosed(t *testing.T) {
 }
 
 func TestToolPrecedence_SequentialDialogsResetAmbiguity(t *testing.T) {
-	// Two dialogs in one turn without a turn boundary between them (the block
-	// re-asserts via a fresh permission-request). A prior ambiguous block must
-	// not leak into a later unique one: the re-snapshot recomputes from
-	// scratch, so the unique dialog's tool can still clear it.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
-	// Dialog 1: two same-name Bash tools -> ambiguous, cannot clear on a post.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_1"))
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_2"))
 	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-request", "Bash", ""))
@@ -385,9 +329,6 @@ func TestToolPrecedence_SequentialDialogsResetAmbiguity(t *testing.T) {
 	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
 		t.Fatalf("dialog 1 ambiguous: state = %q, want blocked", got)
 	}
-	// Both dialog-1 tools have posted, so their ids are drained from inflight.
-	// Dialog 2: a single new Bash -> unique, must be clearable despite the
-	// stale ambiguousBlock from dialog 1.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_3"))
 	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "permission-request", "Bash", ""))
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "toolu_3"))
@@ -397,8 +338,6 @@ func TestToolPrecedence_SequentialDialogsResetAmbiguity(t *testing.T) {
 }
 
 func TestToolPrecedence_UniqueSameNameToolClears(t *testing.T) {
-	// The unambiguous case still works: exactly one in-flight Bash when the
-	// dialog appears, so its post is a valid approval signal.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "pre-tool-use", "Bash", "toolu_1"))
@@ -411,12 +350,7 @@ func TestToolPrecedence_UniqueSameNameToolClears(t *testing.T) {
 }
 
 func TestToolPrecedence_ReaperTerminationReleasesFlight(t *testing.T) {
-	// A crash/SIGKILL is reaped via ApplyRuntimeObservation, which fires no
-	// session-end hook — so it is the last chance to release the session's
-	// tool-flight state. A leaked entry would otherwise persist for the
-	// daemon's life (later observations return early on cur.IsTerminated).
 	m, st, _ := newManager()
-	// A live session with an in-flight tool tracked in the flights map.
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer",
 		Activity:      domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now().Add(-2 * time.Minute)},
@@ -438,14 +372,12 @@ func TestToolPrecedence_ReaperTerminationReleasesFlight(t *testing.T) {
 }
 
 func TestToolPrecedence_SuppressedSignalEmitsNoNotification(t *testing.T) {
-	// A suppressed clear must not fan out: the session never left blocked, so
-	// no needs-input exit/entry telemetry or notification may fire.
 	st := newFakeStore()
 	sink := &fakeNotificationSink{}
 	m := New(st, nil, WithNotificationSink(sink))
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnDialog(t, m, st, "mer-1", "Bash", "toolu_1")
-	entered := len(sink.intents) // the blocked entry notification
+	entered := len(sink.intents)
 
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Read", "toolu_sub"))
 	if len(sink.intents) != entered {
@@ -454,58 +386,37 @@ func TestToolPrecedence_SuppressedSignalEmitsNoNotification(t *testing.T) {
 }
 
 func TestToolPrecedence_ToolUseIDMatchBridgesCasingMismatch(t *testing.T) {
-	// Kimchi's PreToolUse/PostToolUse payloads capitalize tool_name ("Bash")
-	// via externalToolName, but the permission_prompt notification carries the
-	// raw internal name ("bash"). The name-based candidate lookup fails, but
-	// the notification also carries tool_use_id — matching it directly against
-	// the inflight map bridges the casing gap and lets the block clear on the
-	// correlated post-tool-use.
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnNotificationCorrelation(t, m, st, "mer-1", "Bash", "toolu_1")
 
-	// User accepts. post-tool-use: tool_name="Bash", tool_use_id="toolu_1".
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Bash", "toolu_1"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
 		t.Fatalf("after post-tool-use: state = %q, want active", got)
 	}
 }
 
-// TestToolPrecedence_NotificationCorrelationFailurePostClearsBlocked is the
-// moved Kimchi lifecycle integration test. Kimchi enters blocked via a
-// notification(permission_prompt) whose tool_use_id matches an inflight
-// pre-tool-use entry, bridging a tool_name casing mismatch. The approved
-// tool may run and fail — a post-tool-use-failure signal must still clear
-// the correlated blocked state, because the permission dialog was resolved
-// regardless of the tool's exit status.
 func TestToolPrecedence_NotificationCorrelationFailurePostClearsBlocked(t *testing.T) {
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnNotificationCorrelation(t, m, st, "mer-1", "Bash", "toolu_1")
 
-	// post-tool-use-failure: the approved tool ran and failed — blocked must clear.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use-failure", "Bash", "toolu_1"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
 		t.Fatalf("after post-tool-use-failure: state = %q, want active (blocked cleared)", got)
 	}
 }
 
-// TestToolPrecedence_NotificationCorrelationSiblingDoesNotClear verifies that a
-// different tool's post does not clear a blocked state entered via the
-// notification correlation path — only the approved tool's post (or failure
-// post) clears it.
 func TestToolPrecedence_NotificationCorrelationSiblingDoesNotClear(t *testing.T) {
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
 	blockOnNotificationCorrelation(t, m, st, "mer-1", "Bash", "toolu_1")
 
-	// A sibling tool's post must NOT clear blocked.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use", "Read", "toolu_sibling"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
 		t.Fatalf("after sibling post: state = %q, want blocked (sibling must not clear)", got)
 	}
 
-	// The approved tool's failure post still clears afterwards.
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "post-tool-use-failure", "Bash", "toolu_1"))
 	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
 		t.Fatalf("after approved failure post: state = %q, want active", got)

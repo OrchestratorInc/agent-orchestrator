@@ -1,10 +1,4 @@
 #!/usr/bin/env node
-// Regenerates src/main/tray-catalog.generated.ts from the renderer locale JSON.
-//
-// The tray (Electron main) needs ~9 strings. Importing the renderer catalogs
-// put all 8 locale files (1.3 MB, 58% of main.js) on the main process's startup
-// path. tray-catalog.test.ts fails when this file drifts from the JSON; run
-// `node scripts/sync-tray-catalog.mjs` from frontend/ to fix it.
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +27,6 @@ for (const locale of LOCALES) {
 		if (typeof messages[key] !== "string") throw new Error(`${locale}.json is missing "${key}"`);
 		catalogs[locale][key] = messages[key];
 	}
-	// Locales with more plural categories than English (ru: few, many) carry the extra forms too.
 	for (const key of KEYS.filter((k) => k.endsWith("_other"))) {
 		const base = key.slice(0, -"_other".length);
 		for (const form of ["zero", "two", "few", "many"]) {

@@ -1,10 +1,5 @@
 import type { ThemePalette } from "../../lib/theme-palettes";
 
-/**
- * A theme's palette drawn on its own canvas: accent, then status hues. Colors
- * come from the palette, not tokens, because each swatch previews a theme that
- * usually isn't the active one. `compact` keeps three hues for the trigger.
- */
 export function ThemePaletteSwatch({ palette, compact = false }: { palette: ThemePalette; compact?: boolean }) {
 	const hues = compact
 		? [palette.accent, palette.green, palette.red]

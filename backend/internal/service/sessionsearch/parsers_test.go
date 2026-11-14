@@ -13,11 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// These tests call the transcript parsers directly. The integration tests cover
-// the same formats end to end, but a parser is where a provider's shape is
-// interpreted, and a format change should fail here with a precise message
-// rather than as "the search found nothing".
-
 func TestParseClaudeTranscriptLine(t *testing.T) {
 	t.Run("user and assistant prose", func(t *testing.T) {
 		units := parseClaudeTranscriptLine([]byte(`{"type":"user","message":{"role":"user",` +
@@ -87,8 +82,6 @@ func TestParseClaudeTranscriptLine(t *testing.T) {
 }
 
 func TestParseCodexTranscriptLine(t *testing.T) {
-	// The item stream (newer Codex) and the response_item stream (every Codex)
-	// describe the same turn; a rollout is read from exactly one of them.
 	userItem := `{"timestamp":"2026-08-09T12:00:00Z","type":"event_msg",` +
 		`"payload":{"type":"item_completed","item":{"type":"UserMessage",` +
 		`"content":[{"type":"text","text":"why does the reaper leak goroutines"}]}}}`
@@ -117,7 +110,6 @@ func TestParseCodexTranscriptLine(t *testing.T) {
 		if strings.Contains(command[0].text, "/bin/zsh") {
 			t.Fatalf("shell wrapper indexed: %q", command[0].text)
 		}
-		// Older rollouts record the command as a string and the output as output.
 		legacy := parseCodexTranscriptLine([]byte(`{"timestamp":"x","type":"event_msg","payload":{"type":"item_completed",`+
 			`"item":{"type":"CommandExecution","command":"go vet ./...","output":"vet: zzLegacy"}}}`), true)
 		if len(legacy) != 1 || !strings.Contains(legacy[0].text, "go vet") || !strings.Contains(legacy[0].text, "zzLegacy") {
@@ -167,7 +159,6 @@ func TestParseCodexTranscriptLine(t *testing.T) {
 			!strings.Contains(web[0].text, "Pragma statements") {
 			t.Fatalf("web units = %+v", web)
 		}
-		// Most Extension items only time an internal step.
 		if units := parseCodexTranscriptLine([]byte(`{"timestamp":"x","type":"event_msg","payload":{"type":"item_completed",`+
 			`"item":{"type":"Extension","kind":"thinking","durationMs":1200}}}`), true); len(units) != 0 {
 			t.Fatalf("empty extension produced %+v", units)
@@ -284,21 +275,18 @@ func TestOpenCodeMessageUnits(t *testing.T) {
 		for _, unit := range units {
 			kinds = append(kinds, string(unit.kind))
 		}
-		// The reasoning part is not indexed.
 		if strings.Join(kinds, ",") != "assistant,command,path,path,tool,command" {
 			t.Fatalf("kinds = %v", kinds)
 		}
 		if !strings.HasPrefix(units[1].text, "shell: go test ./reaper") || !strings.Contains(units[1].text, "TestShutdown deadlock") {
 			t.Fatalf("shell unit = %q", units[1].text)
 		}
-		// An edit or a write keeps its path, not the text it wrote.
 		if units[2].paths[0] != "reaper/reaper.go" || units[2].text != "edit: reaper/reaper.go" {
 			t.Fatalf("edit unit = %+v", units[2])
 		}
 		if units[3].paths[0] != "docs/SHUTDOWN.md" || units[3].text != "write: docs/SHUTDOWN.md" {
 			t.Fatalf("write unit = %+v", units[3])
 		}
-		// A fetch has none of the remembered arguments; its output is kept.
 		if units[4].text != "webfetch\n\nmutex faq" {
 			t.Fatalf("webfetch unit = %q", units[4].text)
 		}
@@ -330,8 +318,6 @@ func TestOpenCodeLegacyMessage(t *testing.T) {
 	}
 }
 
-// A tool call's arguments are JSON of arbitrary shape; every string leaf has to
-// be searchable, because that is where a person's remembered value lives.
 func TestRawJSONTextFlattensEveryStringLeaf(t *testing.T) {
 	got := rawJSONText([]byte(`{"command":"go build ./...","nested":{"paths":["src/auth","src/upload"]},"count":3,"ok":true}`))
 	for _, want := range []string{"go build ./...", "src/auth", "src/upload"} {
@@ -339,7 +325,6 @@ func TestRawJSONTextFlattensEveryStringLeaf(t *testing.T) {
 			t.Fatalf("flattened text %q is missing %q", got, want)
 		}
 	}
-	// Numbers and booleans are not prose and must not be indexed as words.
 	for _, unwanted := range []string{"3", "true"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("flattened text %q includes %q", got, unwanted)
@@ -362,8 +347,6 @@ func TestReadNativeTranscriptBoundsEachUnit(t *testing.T) {
 	if err != nil || len(lines) != 2 {
 		t.Fatalf("lines = %d, err = %v", len(lines), err)
 	}
-	// A command row is the command and the first 3,072 characters of its
-	// output (coverage.go); prose keeps as many chunks as a message may become.
 	if got := utf8.RuneCountInString(lines[0].text); got > len("make")+2+toolOutputChars {
 		t.Fatalf("command unit holds %d characters, want the command and %d of output", got, toolOutputChars)
 	}
@@ -381,10 +364,6 @@ func TestReadNativeTranscriptBoundsEachUnit(t *testing.T) {
 	}
 }
 
-// Found in review: the format probe and the read open the live file
-// separately, so a first item record appended between them was skipped by the
-// legacy parser while the cursor moved past it. The read stops at the size the
-// probe saw; the next pass reads the record and its probe finds it.
 func TestNativeReadStopsAtTheSizeTheProbeSaw(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	legacy := `{"timestamp":"2026-08-09T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"legacy turn"}]}}` + "\n"
@@ -395,7 +374,6 @@ func TestNativeReadStopsAtTheSizeTheProbeSaw(t *testing.T) {
 	if codexHasItemStreamFrom(path, 0, probed) {
 		t.Fatal("the legacy rollout has no item record yet")
 	}
-	// The first item record arrives after the probe, before the read.
 	item := `{"timestamp":"2026-08-09T12:05:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","npm test"],"aggregated_output":"zzRaceNeedle","status":"completed"}}}` + "\n"
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -418,21 +396,15 @@ func TestNativeReadStopsAtTheSizeTheProbeSaw(t *testing.T) {
 	}
 }
 
-// Found in review: the probes could see a record finished after the file was
-// measured while the read, bounded to that size, did not read it: the source
-// was saved as the item stream without its first item, and the next pass
-// indexed that item next to its legacy copy. The probes stop at the same size.
 func TestFormatProbeSeesOnlyWhatWasThereWhenMeasured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	legacy := `{"timestamp":"2026-08-09T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"legacy turn"}]}}` + "\n"
 	item := `{"timestamp":"2026-08-09T12:05:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text","text":"legacy turn"}]}}}` + "\n"
 	half := len(item) / 2
-	// Measured while the first item record is half written.
 	if err := os.WriteFile(path, []byte(legacy+item[:half]), 0o600); err != nil {
 		t.Fatalf("write rollout: %v", err)
 	}
 	measured := int64(len(legacy) + half)
-	// Codex finishes the record before the probe runs.
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open rollout: %v", err)
@@ -448,7 +420,6 @@ func TestFormatProbeSeesOnlyWhatWasThereWhenMeasured(t *testing.T) {
 	if codexHasItemStreamFrom(path, 0, measured) {
 		t.Fatal("the unread-part check saw a record finished after the file was measured")
 	}
-	// The next pass, which measures the whole file, sees it.
 	if !codexHasItemStreamFrom(path, 0, int64(len(legacy)+len(item))) {
 		t.Fatal("the next pass must see the finished item record")
 	}

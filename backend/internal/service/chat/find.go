@@ -18,10 +18,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// ErrFindCursor fences pagination against a different query or transcript.
 var ErrFindCursor = errors.New("search changed; restart from the first page")
 
-// ErrFindUnavailable reports a transport without complete retained history.
 var ErrFindUnavailable = errors.New("complete conversation search is unavailable")
 
 const maxFindCacheBytes = 32 << 20
@@ -36,7 +34,6 @@ type cachedFind struct {
 	at              time.Time
 }
 
-// FindOccurrence identifies a literal match in one displayed message block.
 type FindOccurrence struct {
 	MessageID string `json:"messageId"`
 	Revision  int64  `json:"revision"`
@@ -46,7 +43,6 @@ type FindOccurrence struct {
 	End       int    `json:"end"`
 }
 
-// FindResult is a bounded occurrence page with an exact transcript-wide count.
 type FindResult struct {
 	ConversationID     string           `json:"conversationId"`
 	TranscriptRevision string           `json:"transcriptRevision"`
@@ -59,7 +55,6 @@ type FindResult struct {
 	InitialIndex       int              `json:"initialIndex"`
 }
 
-// FindAnchor starts a new search at the reader's visible text position.
 type FindAnchor struct {
 	MessageID      string
 	Block, Offset  int
@@ -72,8 +67,6 @@ type findReader interface {
 	ConversationFindWindow(context.Context, string, int64) (domain.ConversationFindWindow, error)
 }
 
-// FindConversation is a read-only search of the visible durable branch. Its
-// revision binds every result page to the same query and transcript contents.
 func (s *Service) FindConversation(ctx context.Context, id, query, cursor string, anchors ...FindAnchor) (FindResult, error) {
 	if err := ctx.Err(); err != nil {
 		return FindResult{}, err
@@ -104,14 +97,10 @@ func (s *Service) FindConversation(ctx context.Context, id, query, cursor string
 			break
 		}
 	}
-	// Cursor pages refer to one immutable read snapshot. Streaming can change
-	// between requests without stranding navigation; durable edits and branch
-	// changes revoke the snapshot. Keep at most 32 MiB in memory, never on disk.
 	revision, err := findRevision(conversation, messages, query)
 	if err != nil {
 		return FindResult{}, err
 	}
-	// Without a streaming message the two hashes cover the same input.
 	durableRevision := revision
 	if slices.ContainsFunc(messages, func(message domain.ConversationMessage) bool { return findableMessage(message) && message.Streaming }) {
 		durableRevision, err = findRevisionFiltered(conversation, messages, query, true)
@@ -148,7 +137,6 @@ func (s *Service) FindConversation(ctx context.Context, id, query, cursor string
 	if err != nil {
 		return FindResult{}, err
 	}
-	// Only retain facts needed by matching, not delivery payloads/attachments.
 	size, count := 0, 0
 	for _, message := range messages {
 		if findableMessage(message) {
@@ -204,7 +192,6 @@ func findRevision(conversation domain.ConversationRecord, messages []domain.Conv
 func findRevisionFiltered(conversation domain.ConversationRecord, messages []domain.ConversationMessage, query string, settledOnly bool) (string, error) {
 	needle := strings.TrimSpace(foldFindText(query).text)
 	hash := sha256.New()
-	// JSON supplies unambiguous boundaries; text is hashed, never logged.
 	encoder := json.NewEncoder(hash)
 	if err := encoder.Encode([]string{conversation.ID, conversation.ActiveBranchID, string(conversation.SessionID), conversation.ReviewID, needle}); err != nil {
 		return "", err
@@ -333,8 +320,6 @@ func findMessagesAt(ctx context.Context, conversation domain.ConversationRecord,
 					}
 				}
 				from = end
-				// A folded expansion (ß→ss) is one displayed glyph. Do not
-				// count the same glyph twice for a one-letter query.
 				for from < len(folded.text) && folded.startAt(from) < folded.endAt(end-1) {
 					from++
 				}
@@ -368,7 +353,6 @@ func findableMessage(message domain.ConversationMessage) bool {
 	return !message.Continuation && message.Origin != domain.MessageOriginAutomation && message.Origin != domain.MessageOriginDaemon && (message.Role == domain.MessageRoleUser || message.Role == domain.MessageRoleAssistant)
 }
 
-// FindConversationWindow reveals a result without loading intervening history.
 func (s *Service) FindConversationWindow(ctx context.Context, id string, sequence int64) (Snapshot, error) {
 	reader, ok := s.store.(findReader)
 	if !ok {
@@ -380,8 +364,6 @@ func (s *Service) FindConversationWindow(ctx context.Context, id string, sequenc
 		if sideErr != nil {
 			return Snapshot{}, sideErr
 		}
-		// Messages near the target and their turns are sufficient to reveal it;
-		// the normal side history remains the authority for live interactions.
 		from, to := -1, 0
 		for i, message := range side.Messages {
 			if message.Sequence == sequence {

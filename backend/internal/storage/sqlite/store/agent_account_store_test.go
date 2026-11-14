@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// TestAgentAccountUsageFollowsBindingHistory pins the per-account statistics:
-// each usage event counts for the account the session was on when it happened,
-// so a session moved from one account to another splits its usage between them.
 func TestAgentAccountUsageFollowsBindingHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -48,8 +45,6 @@ func TestAgentAccountUsageFollowsBindingHistory(t *testing.T) {
 		t.Fatalf("current binding = %q bound=%v, want acct-b", current, bound)
 	}
 
-	// Removing the account keeps the session's history attributable and drops
-	// any default that named it.
 	mustNoError(t, s.SetAgentAccountDefault(ctx, domain.AgentAccountProviderClaude, "acct-b"))
 	mustNoError(t, s.DeleteAgentAccount(ctx, "acct-b"))
 	if _, ok, err := s.GetAgentAccountDefault(ctx, domain.AgentAccountProviderClaude); err != nil || ok {
@@ -57,8 +52,6 @@ func TestAgentAccountUsageFollowsBindingHistory(t *testing.T) {
 	}
 }
 
-// A controller handoff must change the mode or the account: an account move is
-// a same-mode transition that names both accounts.
 func TestInterfaceTransitionsAllowSameModeOnlyForAnAccountMove(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

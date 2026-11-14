@@ -44,8 +44,6 @@ describe("splitClaudeModels", () => {
 		expect(other).toEqual([]);
 	});
 
-	// Fallback aliases now carry the version discovery resolved, so a context
-	// variant of the newest Opus must stay a current choice, not an older one.
 	it("keeps a versioned context variant alongside its family's newest model", () => {
 		const aliases = [model("Sonnet 5.5", "sonnet"), model("Fable 5.1", "fable"), model("Opus 5.5", "opus"), model("Haiku 5.5", "haiku"), model("Opus 5.5 (1M context)", "opus[1m]")];
 		const { current, other } = splitClaudeModels(aliases);
@@ -60,7 +58,6 @@ describe("mergeSameNamedModels", () => {
 		const merged = mergeSameNamedModels(models, "claude-opus-5-5");
 		expect(merged.map((item) => item.id)).toEqual(["fable", "sonnet-5-5", "claude-opus-5-5"]);
 		expect(merged.find((item) => item.id === "claude-opus-5-5")).toMatchObject({ aliases: ["opus"] });
-		// With nothing chosen, the first listing stays.
 		expect(mergeSameNamedModels(models).map((item) => item.id)).toEqual(["fable", "opus", "sonnet-5-5"]);
 	});
 
@@ -103,7 +100,6 @@ describe("foldClaudeAliasDefault", () => {
 	it("keeps the alias as the default when this CLI cannot run the family's newest model", () => {
 		const alias = model("Opus", "opus", { isDefault: true });
 		const gated = { ...model("Opus 5.5"), unavailableReason: "Requires Claude Code 2.1.280 or newer." };
-		// Folding into Opus 4.6 would pin a cloud worker that can run 5.5 to the older model.
 		const models = [model("Opus 4.6"), gated, alias];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
 	});
@@ -259,7 +255,6 @@ describe("offeredCatalogModels", () => {
 			runnableModels: ["opencode/big-pickle"],
 		};
 		expect(offeredCatalogModels(opencode, undefined).map((m) => m.id)).toEqual(["opencode/big-pickle"]);
-		// A model already picked stays, so the picker still names it.
 		expect(offeredCatalogModels(opencode, undefined, ["opencode/claude-opus"]).map((m) => m.id))
 			.toEqual(["opencode/big-pickle", "opencode/claude-opus"]);
 	});

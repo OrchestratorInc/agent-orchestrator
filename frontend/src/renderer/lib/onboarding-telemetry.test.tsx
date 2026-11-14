@@ -16,7 +16,6 @@ describe("onboarding step telemetry", () => {
 		reportOnboardingStep("welcome", "viewed");
 		reportOnboardingStep("welcome", "viewed");
 		expect(capture.mock.calls).toEqual([["ao.onboarding.step_viewed", { step: "welcome" }]]);
-		// A fresh module load (next launch) reads the persisted record.
 		expect(JSON.parse(window.localStorage.getItem("ao.telemetry.onboardingSteps") ?? "[]")).toEqual(["welcome:viewed"]);
 	});
 
@@ -25,7 +24,6 @@ describe("onboarding step telemetry", () => {
 		expect(capture).not.toHaveBeenCalled();
 		reportOnboardingStep("github_auth", "viewed");
 		reportOnboardingStep("github_auth", "abandoned");
-		// A later launch observes the sign-in (login resolved, or setup no longer needed).
 		completeOnboardingStepIfViewed("github_auth");
 		completeOnboardingStepIfViewed("github_auth");
 		expect(capture.mock.calls).toEqual([

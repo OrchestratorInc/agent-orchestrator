@@ -1,11 +1,6 @@
-// Run by TestBrowserBoundaryElectron against the real Go router and in-memory
-// terminals. This exercises Chromium's actual Origin and fetch metadata, not
-// a renderer mock. It does not launch the complete AO desktop application.
 const { app, BrowserWindow, net, protocol } = require("electron");
 const path = require("node:path");
 const assert = require("node:assert/strict");
-// Load production TypeScript in Electron's main process for this transport test.
-// This uses the installed compiler and leaves application code unmodified.
 const ts = require("typescript");
 require.extensions[".ts"] = (module, filename) => module._compile(ts.transpileModule(
  require("node:fs").readFileSync(filename, "utf8"),
@@ -13,8 +8,6 @@ require.extensions[".ts"] = (module, filename) => module._compile(ts.transpileMo
 ).outputText, filename);
 const { startRemoteProxy } = require("../src/main/remote-proxy.ts");
 const { mediaCrossOrigin } = require("../src/renderer/lib/file-media.ts");
-// Chromium flags remain in process.argv, so the script/URL positions differ
-// between the local invocation and Linux CI. Never resolve a flag as an app URL.
 const base = process.env.AO_BOUNDARY_URL;
 assert.equal(new URL(base).protocol, "http:");
 assert.equal(new URL(base).hostname, "127.0.0.1");
@@ -24,8 +17,6 @@ protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: t
 const result = (code) => { console.log(`AO_BOUNDARY_RESULT:${code}`); app.exit(code); };
 app.whenReady().then(async () => {
  protocol.handle("app", () => new Response("<title>boundary fixture</title>"));
- // The main process reaches the daemon with Node fetch, which sends no browser
- // fetch metadata. Electron net.fetch sends Sec-Fetch-Site without Origin.
  const mainNative = await fetch(base + "/api/v1/shell-terminals").then(r => r.status);
  assert.equal(mainNative, 200, "main-process Node fetch reaches the daemon");
  const mainNet = await net.fetch(base + "/api/v1/shell-terminals").then(r => r.status);

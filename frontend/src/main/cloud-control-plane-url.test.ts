@@ -12,7 +12,6 @@ describe("createControlPlaneUrlResolver", () => {
 		await expect(resolve()).resolves.toBe("https://staging-api.aoagents.dev");
 		expect(fetchImpl).toHaveBeenCalledTimes(1);
 		expect(fetchImpl.mock.calls[0][0]).toBe("http://127.0.0.1:3001/api/v1/settings");
-		// The same port with a new daemon asks again.
 		daemon = { baseUrl: "http://127.0.0.1:3001", key: "3001:11" };
 		fetchImpl.mockResolvedValueOnce(settings("https://api.aoagents.dev"));
 		await expect(resolve()).resolves.toBe("https://api.aoagents.dev");

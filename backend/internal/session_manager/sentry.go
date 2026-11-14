@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// captureBackgroundFault reports a session-manager failure that happens off
-// the request path to Sentry. Expected user state stays out: a signed-out
-// agent, the user's own setup script failing, and canceled work.
 func captureBackgroundFault(ctx context.Context, err error, operation, reason string) {
 	if isExpectedSessionFailure(err) {
 		return

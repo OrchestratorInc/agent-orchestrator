@@ -202,19 +202,15 @@ func TestPiReportsATurnWithoutAModelCall(t *testing.T) {
 	if err := check("s1", turn(15), true); err != nil {
 		t.Fatalf("answered turn = %v, want no failure", err)
 	}
-	// A later turn with no reply leaves the session's total as it was.
 	if err := check("s1", turn(15), false); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
 		t.Fatalf("a turn with no reply and no new tokens = %v, want a reported failure", err)
 	}
-	// Tokens used: the model was reached, though it said nothing.
 	if err := check("s1", turn(40), false); err != nil {
 		t.Fatalf("a turn that used tokens = %v, want no failure", err)
 	}
-	// After a daemon restart no total is known; a turn with no reply still fails.
 	if err := check("s2", turn(500), false); err == nil {
 		t.Fatal("an unanswered first turn after a restart was taken as answered")
 	}
-	// A provider that reports no usage: an answered turn is fine.
 	if err := check("s3", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, true); err != nil {
 		t.Fatalf("answered turn without usage = %v, want no failure", err)
 	}
@@ -229,7 +225,6 @@ func TestPromptResponseFailureShowsTheModelErrorPiRecorded(t *testing.T) {
 	if err := os.MkdirAll(folder, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// As Pi records a reply the provider refused.
 	record := `{"type":"session","id":"01a151e7"}` + "\n" +
 		`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}` + "\n" +
 		`{"type":"message","message":{"role":"assistant","content":[],"model":"gpt-5.5","stopReason":"error",` +
@@ -271,14 +266,12 @@ func TestLaunchPreloadsTheCurrentModelsIntoPiACP(t *testing.T) {
 	}
 	dir := filepath.Join(dataDir, "prompts", "session-1", "pi-acp-models")
 	script := filepath.Join(dir, "models-preload.mjs")
-	// The user's own Bun options are kept; the preload is added to them.
 	if got := launch.Env["BUN_OPTIONS"]; got != "--smol --preload="+script {
 		t.Fatalf("BUN_OPTIONS = %q", got)
 	}
 	if got := launch.Env["AO_PI_MODELS_JSON"]; got != filepath.Join(dir, "models.json") {
 		t.Fatalf("AO_PI_MODELS_JSON = %q", got)
 	}
-	// The preload acts only in pi-acp itself and gives Pi's commands the user's options back.
 	if launch.Env["AO_PI_ACP_ENTRY"] != entry || launch.Env["AO_PI_BUN_OPTIONS"] != "--smol" {
 		t.Fatalf("AO_PI_ACP_ENTRY = %q, AO_PI_BUN_OPTIONS = %q", launch.Env["AO_PI_ACP_ENTRY"], launch.Env["AO_PI_BUN_OPTIONS"])
 	}
@@ -286,7 +279,6 @@ func TestLaunchPreloadsTheCurrentModelsIntoPiACP(t *testing.T) {
 		t.Fatalf("preload script = %d bytes, %v; want the embedded one", len(written), err)
 	}
 
-	// A data directory Bun cannot name in BUN_OPTIONS leaves pi-acp as it is.
 	spaced := filepath.Join(t.TempDir(), "with space")
 	launch, err = cfg.Launch(context.Background(), acpdriver.LaunchConfig{SessionID: "session-2", DataDir: spaced})
 	if err != nil {

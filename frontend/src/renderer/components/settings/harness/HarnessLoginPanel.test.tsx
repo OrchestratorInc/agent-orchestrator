@@ -50,7 +50,6 @@ describe("HarnessLoginPanel", () => {
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
-		// The device choice shown beside the key is always sent explicitly.
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "test-secret", undefined, undefined, false);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledWith("env_OPENAI_API_KEY"));
 		// A saved key is not a verified sign-in: the panel stays to confirm it
@@ -88,7 +87,6 @@ describe("HarnessLoginPanel", () => {
 	it.each(["qwen", "continue", "openhands"] as const)("requires a model for %s provider keys", async (agentId) => {
 		const user = userEvent.setup();
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId, method: "env_OPENAI_API_KEY", status: "succeeded" });
-		// Where the daemon can't share keys outside AO, no device setting is sent.
 		render(<HarnessLoginPanel agentId={agentId} methods={[{ id: agentId === "openhands" ? "env_LLM_API_KEY" : "env_OPENAI_API_KEY", label: "Provider API key", secret: true }]} providerKeys={[{ ...unsavedKey(agentId === "openhands" ? "LLM_API_KEY" : "OPENAI_API_KEY"), deviceAvailable: false }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.queryByRole("checkbox", { name: "Share with other apps" })).toBeNull();
 		await user.type(screen.getByLabelText("API key"), "test-secret");
@@ -112,7 +110,6 @@ describe("HarnessLoginPanel", () => {
 	it("warns that a Claude Code API key can replace the subscription", () => {
 		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, deviceAvailable: true, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
-		// The billing note is a warning with its icon, not muted help text.
 		expect(screen.getByText(/instead of your Claude subscription/).closest("p")?.querySelector("svg.text-warning")).not.toBeNull();
 		expect(screen.getByRole("checkbox", { name: "Share with other apps" })).not.toBeChecked();
 	});
@@ -120,7 +117,6 @@ describe("HarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		vi.mocked(fetchCatalogProviders).mockResolvedValue([{ id: "zeta", name: "Zeta AI", env: "ZETA_API_KEY", models: 2 }]);
 		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }, { id: "native", label: "Other native sign-in", secret: false }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		// Once the catalog loads, the row says how many providers it offers.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription(/^1 provider/));
 		expect(fetchCatalogProviders).toHaveBeenCalledWith("opencode", undefined);
 		await user.type(screen.getByLabelText("API key"), "zeta-secret");
@@ -133,7 +129,6 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(checkProviderKey).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
 		const saved = (name: string, label: string) => ({ name, label, configured: true, hint: "abcd", device: false, deviceAvailable: true, checkable: true, agents: ["qwen"] });
 		render(<HarnessLoginPanel agentId="qwen" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }, { id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[saved("OPENAI_API_KEY", "OpenAI API key"), saved("ANTHROPIC_API_KEY", "Anthropic API key")]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		// OpenAI's form is open first; ask it for models, then switch away.
 		await user.click(screen.getByRole("button", { name: "Load models" }));
 		expect(checkProviderKey).toHaveBeenCalledWith("OPENAI_API_KEY", "", undefined);
 		await user.click(screen.getByRole("button", { name: "Anthropic API key" }));
@@ -146,7 +141,6 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(fetchCatalogProviders).mockReturnValue(new Promise(() => undefined));
 		const { unmount } = render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "native", label: "Other native sign-in", secret: false }, { id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		const order = () => Array.from(document.querySelectorAll("[data-login-method]")).map((button) => button.getAttribute("aria-label"));
-		// The panel shows its own translated label for the native method.
 		expect(order()).toEqual(["Provider API key", "Native sign-in"]);
 		unmount();
 		render(<HarnessLoginPanel agentId="codex" methods={methods} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
@@ -207,7 +201,6 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getAllByRole("menuitem")).toHaveLength(1);
 		await user.click(screen.getByRole("menuitem", { name: "Z.AI Coding Plan" }));
 		expect(screen.getByRole("button", { name: "Provider" })).toHaveTextContent("Z.AI Coding Plan");
-		// The chosen provider's key variable is the key field's placeholder.
 		expect(screen.getByLabelText("API key")).toHaveAttribute("placeholder", "ZAI_API_KEY");
 		await user.click(screen.getByRole("button", { name: "Provider" }));
 		await user.click(screen.getByRole("menuitem", { name: "Groq" }));
@@ -222,7 +215,6 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue(native);
 		vi.mocked(actOnAgentUILogin).mockResolvedValue({ ...native, nativePrompt: "waiting", selectedOption: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		// Native sign-in is the only method, so it starts without a click.
 		expect(await screen.findByText("Selected: OpenAI")).toBeVisible();
 		expect(startAgentUILogin).toHaveBeenCalledTimes(1);
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "native", "", undefined);
@@ -242,7 +234,6 @@ describe("HarnessLoginPanel", () => {
 			expect(await screen.findByText("Waiting for the native sign-in flow…")).toBeVisible();
 			await act(async () => { await vi.advanceTimersByTimeAsync(13_000); });
 			expect(screen.getByText("AO can't read this sign-in screen. Continue in the terminal login.")).toBeVisible();
-			// The terminal becomes the one main action; AO does not leave on its own.
 			expect(screen.getAllByRole("button", { name: "Open terminal login" })).toHaveLength(1);
 			expect(onTerminal).not.toHaveBeenCalled();
 		} finally {
@@ -264,8 +255,6 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 	});
 
-	// Gemini, Hermes and MiMo Code can only report their own credentials as
-	// present: the sign-in finishes as configured, never as verified.
 	it("finishes a native sign-in the harness can only report as configured", async () => {
 		const user = userEvent.setup();
 		const native: AgentLoginSnapshot = { ...snapshot, agentId: "hermes", method: "native", nativePrompt: "waiting", loginUrl: undefined, deviceCode: undefined };
@@ -364,8 +353,6 @@ describe("HarnessLoginPanel", () => {
 		expect(startAgentUILogin).toHaveBeenCalledWith("aider", "aider_openrouter_key", "sk-or", undefined);
 		expect(await screen.findByText("Configured", {}, { timeout: 3_000 })).toBeVisible();
 	});
-	// Keys are set here, so this is where the user hears that turning sharing
-	// off left AO's copy in the user environment.
 	it("warns when a saved key is still in the user environment", async () => {
 		const user = userEvent.setup();
 		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "gemini", method: "gemini_api_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined, withdrawFailed: true };
@@ -698,8 +685,6 @@ describe("HarnessLoginPanel", () => {
 		expect(onVerify).toHaveBeenCalledTimes(1);
 	});
 
-	// Keys are set here, so they are removed here too: AO stops passing the key
-	// to sessions and takes its copy out of the user environment.
 	describe("removing a saved key", () => {
 		const savedOpenAIKey = { name: "OPENAI_API_KEY", label: "OpenAI API key", configured: true, hint: "abcd", device: true, deviceAvailable: true, checkable: false, agents: ["goose"] };
 		const renderSaved = (onProviderKeysChanged = vi.fn()) => {
@@ -728,8 +713,6 @@ describe("HarnessLoginPanel", () => {
 			expect(await screen.findByText("Removed, but apps outside AO can still see this key until you log out.")).toBeVisible();
 		});
 
-		// Gemini's own key method also saves GEMINI_API_KEY in AO's store, so it
-		// is removed from here as well, without offering sharing it does not take.
 		it("removes the GEMINI_API_KEY that Gemini's key method saved in AO", async () => {
 			const user = userEvent.setup();
 			const savedGeminiKey = { name: "GEMINI_API_KEY", label: "Gemini API key", configured: true, hint: "wxyz", device: false, deviceAvailable: true, checkable: true, agents: ["gemini", "opencode"] };

@@ -1,4 +1,3 @@
-// Package cursorstore reads and relocates Cursor Agent's native SQLite chats.
 package cursorstore
 
 import (
@@ -16,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite" // Register the native SQLite reader.
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -25,14 +24,12 @@ const (
 	maxText  = 16 << 20
 )
 
-// Message is visible conversation text, excluding tool and internal state.
 type Message struct {
 	Role string
 	Text string
 	At   time.Time
 }
 
-// Archive describes one complete native conversation.
 type Archive struct {
 	ID       string
 	CWD      string
@@ -48,7 +45,6 @@ type metadata struct {
 	Created int64  `json:"createdAt"`
 }
 
-// SessionPath matches Cursor's md5(resolve(process.cwd())) directory layout.
 func SessionPath(root, cwd, id string) (string, error) {
 	if _, err := uuid.Parse(id); err != nil || filepath.Base(id) != id {
 		return "", errors.New("invalid cursor session id")
@@ -69,21 +65,13 @@ func SessionPath(root, cwd, id string) (string, error) {
 	return filepath.Join(root, "chats", hex.EncodeToString(sum[:]), id, "store.db"), nil
 }
 
-// Layout selects where Cursor looks up a chat it resumes. The terminal CLI keys
-// chats by the md5 of its launch directory; `cursor-agent acp` keeps them in
-// acp-sessions/<id> and loads them by id, running tools in the requested cwd.
-// Both read the same SQLite store format.
 type Layout int
 
-// The two places Cursor resumes a chat from.
 const (
-	// LayoutTerminal is the terminal CLI's chats/<md5 of cwd>/<id> layout.
 	LayoutTerminal Layout = iota
-	// LayoutACP is `cursor-agent acp`'s acp-sessions/<id> layout.
 	LayoutACP
 )
 
-// ACPSessionPath matches `cursor-agent acp`'s acp-sessions/<id>/store.db layout.
 func ACPSessionPath(root, id string) (string, error) {
 	if _, err := uuid.Parse(id); err != nil || filepath.Base(id) != id {
 		return "", errors.New("invalid cursor session id")
@@ -95,12 +83,6 @@ func ACPSessionPath(root, id string) (string, error) {
 	return filepath.Join(root, "acp-sessions", id, "store.db"), nil
 }
 
-// SessionID is the id the copy of native chat id resumes under. The terminal
-// layout keys copies by launch directory, so they keep the native id. ACP keys
-// them by id alone, so each launch directory and source version gets its own
-// stable id: a second import of the same chat, from this or another AO data
-// directory, must not collide with the first copy, which holds that import's
-// later turns.
 func (l Layout) SessionID(id, cwd, expected string) string {
 	if l != LayoutACP {
 		return id
@@ -177,7 +159,6 @@ func snapshot(ctx context.Context, root, path string) (*sql.DB, *sql.Tx, string,
 	return db, tx, path, nil
 }
 
-// Read follows only the active root's native turn graph.
 func Read(ctx context.Context, root, path string) (Archive, error) {
 	db, tx, actual, err := snapshot(ctx, root, path)
 	if err != nil {
@@ -210,8 +191,6 @@ func readMetadata(ctx context.Context, tx *sql.Tx, path string) (metadata, error
 	return meta, nil
 }
 
-// Verify checks native backing state without requiring a supported display
-// projection. Later native turns can use text/blob formats the importer omits.
 func Verify(ctx context.Context, root, path, id string) error {
 	db, tx, actual, err := snapshot(ctx, root, path)
 	if err != nil {
@@ -320,7 +299,6 @@ func read(ctx context.Context, tx *sql.Tx, path string) (Archive, error) {
 	return out, nil
 }
 
-// Find locates a complete conversation in any native cwd bucket.
 func Find(ctx context.Context, root, id string) (string, bool, error) {
 	if _, err := uuid.Parse(id); err != nil {
 		return "", false, err
@@ -350,10 +328,6 @@ func Find(ctx context.Context, root, id string) (string, bool, error) {
 	return found, found != "", nil
 }
 
-// CopySelectedIn publishes a private native snapshot once, where layout's
-// resume looks for it, leaving the source unchanged. It verifies the discovery
-// evidence before snapshotting and before publishing the completed copy; empty
-// evidence supports old imports.
 func CopySelectedIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string) (string, error) {
 	return copyIn(ctx, layout, root, source, launchCWD, expected, nil)
 }
@@ -464,8 +438,6 @@ func copyIn(ctx context.Context, layout Layout, root, source, launchCWD, expecte
 	if err := provider.MkdirAll(filepath.Dir(filepath.Dir(relTarget)), 0o700); err != nil {
 		return "", err
 	}
-	// The complete directory appears in one no-replace operation. A failure or
-	// interruption before publication leaves no reservation blocking a retry.
 	if publish != nil {
 		if err := publish(stage, filepath.Dir(target)); err != nil {
 			return "", err
@@ -480,7 +452,6 @@ func copyIn(ctx context.Context, layout Layout, root, source, launchCWD, expecte
 	return target, nil
 }
 
-// copyRows copies the store, recording id as the chat's own agentId.
 func copyRows(ctx context.Context, source *sql.Tx, path, id string) error {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -545,8 +516,6 @@ func copyTableRows(ctx context.Context, source, target *sql.Tx, metadata bool, i
 	return rows.Err()
 }
 
-// withAgentID rewrites the hex-encoded chat record's agentId and keeps every
-// other field Cursor stored.
 func withAgentID(encoded, id string) (string, error) {
 	body, err := hex.DecodeString(encoded)
 	if err != nil {

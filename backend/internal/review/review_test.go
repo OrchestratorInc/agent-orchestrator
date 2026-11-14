@@ -15,8 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// --- fakes ---
-
 type fakeStore struct {
 	review                *domain.Review
 	reviews               map[domain.ReviewerHarness]domain.Review
@@ -28,13 +26,9 @@ type fakeStore struct {
 		harness   domain.ReviewerHarness
 		config    domain.AgentConfig
 	}
-	upsertErr     error
-	upsertErrCall int
-	upsertCalls   int
-	// insertErr, when set, makes the next InsertReviewRun model a concurrent
-	// writer that already recorded a run for this commit: it records that
-	// winner (so a follow-up GetReviewRunBySessionAndSHA finds it) and returns
-	// insertErr instead of recording the caller's run.
+	upsertErr              error
+	upsertErrCall          int
+	upsertCalls            int
 	insertErr              error
 	insertErrWinnerAtFront bool
 	recoverableReviews     []domain.Review
@@ -204,8 +198,6 @@ func (f *fakeStore) InsertReviewRun(_ context.Context, r domain.ReviewRun) error
 		}
 		return f.insertErr
 	}
-	// Mirrors idx_review_run_session_pr_sha_harness. Harness is part of the key so
-	// a second reviewer on the same commit is a distinct pass, not a duplicate.
 	for _, existing := range f.runs {
 		if existing.SessionID == r.SessionID &&
 			existing.PRURL == r.PRURL &&
@@ -573,8 +565,6 @@ func seedReviewWorker(t *testing.T, st *sqlite.Store, worker domain.SessionRecor
 	}
 }
 
-// --- tests ---
-
 func TestRecoverChatReviewersRequiresStoreRecoveryQuery(t *testing.T) {
 	want := errors.New("recovery query unavailable")
 	store := &fakeStore{recoverableReviewsErr: want}
@@ -886,8 +876,6 @@ func TestTriggerPreservesHookOwnedActivityStateAfterLaunch(t *testing.T) {
 		agentSessionID: "native-review-1",
 		launchID:       "launch-1",
 		onSpawn: func(LaunchSpec) {
-			// Simulate a fast reviewer whose stop hook wins the race while Spawn
-			// is still unwinding.
 			store.mutateReview(domain.ReviewerClaudeCode, func(review *domain.Review) {
 				review.ReviewerActivityState = domain.ActivityIdle
 			})
@@ -1086,8 +1074,6 @@ func TestRestoreReviewerPreservesHookOwnedActivityStateAfterRestore(t *testing.T
 		handle:         "review-mer-1",
 		agentSessionID: "native-review-2",
 		onRestore: func(LaunchSpec) {
-			// Simulate the relaunched reviewer reporting newer activity before the
-			// restore finalization writes handle/native-id metadata.
 			store.mutateReview(domain.ReviewerCodex, func(review *domain.Review) {
 				review.ReviewerActivityState = domain.ActivityActive
 			})
@@ -1688,8 +1674,6 @@ func TestTriggerSnapshotsDisabledInjectionPolicy(t *testing.T) {
 }
 
 func TestTriggerFallsBackToExistingRunOnUniqueConflict(t *testing.T) {
-	// The idempotency check passes (no run yet), but the insert loses to a
-	// concurrent writer the unique index already accepted.
 	store := &fakeStore{insertErr: domain.ErrDuplicateReviewRun}
 	launcher := &fakeLauncher{handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
@@ -1763,10 +1747,6 @@ func TestTriggerIsIdempotentForSameCommit(t *testing.T) {
 	}
 }
 
-// Choosing a different reviewer is a request for a second opinion on this exact
-// commit. Before this, an approved commit was skipped before the harness was
-// even consulted, so the picker looked broken precisely when a user would reach
-// for it: pick another agent, nothing happens.
 func TestTriggerRunsAnotherHarnessOnAnAlreadyApprovedCommit(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
@@ -1833,8 +1813,6 @@ func TestTriggerHarnessOverrideDoesNotRestartRunningReviewJustBecauseResolvedCon
 	}
 }
 
-// The project default must not re-review an approved commit on every trigger.
-// Only an explicit pick counts as asking for a second opinion.
 func TestTriggerWithoutOverrideStillSkipsAnApprovedCommit(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
@@ -1910,8 +1888,6 @@ func TestTriggerWithPersistedReviewerConfigAndSameHarnessOverrideStillReusesSame
 	}
 }
 
-// Re-picking the harness that already reviewed this commit is not a second
-// opinion, so it must still reuse rather than run the same agent twice.
 func TestTriggerWithSameHarnessOverrideStillReuses(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
@@ -2435,17 +2411,11 @@ func TestTriggerRespawnsLivePaneWithoutReviewerAgentSession(t *testing.T) {
 	}
 }
 
-// A live reviewer pane launched under a previous harness must be respawned under
-// the newly-resolved harness, not reused via Notify: the pane's sandbox/
-// permissions/env are fixed at Spawn, so reusing a codex pane to serve a
-// claude-code review (or vice versa) would run under the wrong profile.
 func TestTriggerRespawnsWhenReviewerHarnessChanged(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
 		runs:   []domain.ReviewRun{{ID: "run-0", SessionID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha0", Status: domain.ReviewRunComplete}},
 	}
-	// Live pane exists (alive), but the worker/project now resolves to claude-code
-	// while the pane was launched under codex.
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
@@ -2464,11 +2434,6 @@ func TestTriggerRespawnsWhenReviewerHarnessChanged(t *testing.T) {
 	}
 }
 
-// A harness switch observed on a trigger that creates no run (the current
-// commit is already reviewed) must NOT advance the recorded harness. The live
-// pane keeps running under the previous harness, so recording the new harness
-// on this no-created path would make the next trigger read it back as
-// prevHarness, match the resolved harness, and reuse (Notify) the stale pane.
 func TestTriggerSwitchKillsOldReviewerWhenNothingCreated(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
@@ -2477,7 +2442,6 @@ func TestTriggerSwitchKillsOldReviewerWhenNothingCreated(t *testing.T) {
 			Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
 		}},
 	}
-	// Live codex pane; the worker/project now resolves to claude-code.
 	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
 
@@ -2496,10 +2460,6 @@ func TestTriggerSwitchKillsOldReviewerWhenNothingCreated(t *testing.T) {
 	}
 }
 
-// End-to-end of the blocker: a harness switch seen on a no-run trigger must not
-// defeat respawn on the next commit. Before the fix, the eager upsert recorded
-// the new harness on the no-created trigger, so the following commit saw
-// prevHarness == harness and reused (Notify) the stale old-harness pane.
 func TestTriggerRespawnsOnNextCommitAfterHarnessSwitchWithNoRun(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
@@ -2508,8 +2468,6 @@ func TestTriggerRespawnsOnNextCommitAfterHarnessSwitchWithNoRun(t *testing.T) {
 			Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
 		}},
 	}
-	// Trigger 1: current commit sha1 is already reviewed → no run created, while
-	// the worker now resolves to claude-code but the live pane is still codex.
 	l1 := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng1 := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, l1)
 	if _, err := trigger(context.Background(), eng1, "mer-1", "", domain.AgentConfig{}); err != nil {
@@ -2519,8 +2477,6 @@ func TestTriggerRespawnsOnNextCommitAfterHarnessSwitchWithNoRun(t *testing.T) {
 		t.Fatalf("trigger 1 (nothing new) should not launch: %+v", l1)
 	}
 
-	// Trigger 2: a new commit arrives → a run is created. The reviewer must
-	// respawn under claude-code, not Notify the stale codex pane.
 	l2 := &fakeLauncher{alive: true, handle: "review-mer-1"}
 	eng2 := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha2"), fakeProjects{}, l2)
 	res, err := trigger(context.Background(), eng2, "mer-1", "", domain.AgentConfig{})
@@ -3275,7 +3231,6 @@ func TestArchiveReviewerHidesSurfaceAndPreservesHistoryUntilNewReview(t *testing
 					t.Fatalf("archived controller claimed: %v %v", claimed, err)
 				}
 			}
-			// Simulate recovery with a fresh engine; archived reviewers must stay closed.
 			nextLauncher := &fakeLauncher{interfaceMode: mode, handle: "new-reviewer"}
 			if mode == domain.ReviewerInterfaceChat {
 				nextLauncher.onSpawn = func(LaunchSpec) {

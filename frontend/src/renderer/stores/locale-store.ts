@@ -12,8 +12,6 @@ type LocaleState = {
 };
 
 async function applyLocale(locale: AppLocale): Promise<void> {
-	// Non-English catalogs are lazy chunks; load before switching so the first
-	// render in the new language is complete.
 	await loadLocaleCatalog(locale);
 	const changingLanguage = appI18n.changeLanguage(locale);
 	if (typeof document !== "undefined") {
@@ -23,7 +21,6 @@ async function applyLocale(locale: AppLocale): Promise<void> {
 	await changingLanguage;
 }
 
-// Apply default lang early so the document attribute is correct before hydrate.
 void applyLocale(DEFAULT_LOCALE);
 
 let localeRevision = 0;
@@ -44,7 +41,6 @@ export const useLocaleStore = create<LocaleState>((set, get) => ({
 				const settings = await aoBridge.uiSettings.get();
 				locale = coerceLocale(settings.locale);
 			} catch {
-				// A missing bridge or unreadable setting must not prevent the UI from starting.
 			}
 			if (revisionAtStart !== localeRevision) return;
 			await applyLocale(locale);

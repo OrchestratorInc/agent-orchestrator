@@ -1,12 +1,3 @@
-// The window's side of agent-driven split panes. An agent runs `ao pane`; the
-// daemon relays the request over the terminal mux (ch "panes") to every window
-// that subscribed, and the window showing that session applies it and answers
-// with the new layout. Each session view on screen also reports its layout as
-// it changes, so `ao pane ls` can answer without asking the window.
-//
-// One socket per window, opened while a session view is registered (local
-// sessions in Developer Mode only; see SessionView). Nothing is persisted.
-
 import type { components } from "../../api/schema";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { layoutBoxes, leafKeys, type TabGroup } from "./pane-split";
@@ -15,7 +6,6 @@ import { muxUrlFromApiBase } from "./terminal-mux";
 export type PaneLayout = components["schemas"]["ControllersPaneLayout"];
 export type PaneCommandRequest = components["schemas"]["ControllersPaneCommandRequest"];
 
-/** Thrown by a handler to refuse a request with a code the agent sees. */
 export class PaneCommandError extends Error {
 	constructor(
 		readonly code: string,
@@ -25,7 +15,6 @@ export class PaneCommandError extends Error {
 	}
 }
 
-/** Applies one request to a session on screen and returns its new layout. */
 export type PaneCommandHandler = (request: PaneCommandRequest) => Promise<PaneLayout>;
 
 type CommandFrame = { id: string; sessionId: string; action: string; args?: PaneCommandRequest };
@@ -52,7 +41,6 @@ function connect() {
 		if (socket !== ws) return;
 		open = true;
 		send({ type: "subscribe" });
-		// The daemon forgets a window's layouts when its socket closes.
 		for (const [sessionId, layout] of layouts) send({ type: "layout", sessionId, layout });
 	};
 	ws.onmessage = (event: MessageEvent) => {
@@ -111,10 +99,6 @@ async function answer(command: CommandFrame) {
 	}
 }
 
-/**
- * Registers the session view on screen for a session: it answers that
- * session's requests until the returned function is called.
- */
 export function registerPaneSession(sessionId: string, handler: PaneCommandHandler): () => void {
 	handlers.set(sessionId, handler);
 	if (handlers.size === 1 && !unsubscribeBaseUrl) {
@@ -136,21 +120,18 @@ export function registerPaneSession(sessionId: string, handler: PaneCommandHandl
 	};
 }
 
-/** Reports what a registered session shows now. */
 export function reportPaneLayout(sessionId: string, layout: PaneLayout): void {
 	if (!handlers.has(sessionId)) return;
 	layouts.set(sessionId, layout);
 	send({ type: "layout", sessionId, layout });
 }
 
-/** The last layout reported for a session. */
 export function latestPaneLayout(sessionId: string): PaneLayout | undefined {
 	return layouts.get(sessionId);
 }
 
 export type PaneTabDescription = PaneLayout["tabs"][number];
 
-/** What a session shows, in the shape agents read from `ao pane`. */
 export function describePaneLayout(input: {
 	enabled: boolean;
 	selected: string;

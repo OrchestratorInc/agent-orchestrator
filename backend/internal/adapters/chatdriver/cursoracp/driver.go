@@ -1,5 +1,3 @@
-// Package cursoracp binds the user's own Cursor Agent installation to AO's
-// reusable ACP Chat transport.
 package cursoracp
 
 import (
@@ -20,10 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches `cursor-agent acp` from the exact binary resolved by the
-// existing Cursor adapter. Models and slash commands come from the live ACP
-// session advertisements. Cursor owns tools, project rules, and auth; AO adds a
-// session-scoped standing rule and resolves permissions through ACP.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:          domain.HarnessCursor,
@@ -38,9 +32,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		},
 		ValidateTurnSettings: validateTurnSettings,
 		VersionProbe:         versionProbe,
-		// Cursor has no session/close and ignores stdin closing; it exits on
-		// SIGTERM in about 50ms.
-		QuickStop: true,
+		QuickStop:            true,
 	}, log)
 }
 
@@ -89,10 +81,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	args = append(args, "acp")
 	var env map[string]string
 	if strings.TrimSpace(cfg.DataDir) != "" {
-		// Earlier builds left each session's standing rules, its full system
-		// prompt, in plugin folders that nothing reads any more.
 		_ = os.RemoveAll(filepath.Join(cfg.DataDir, "cursor", "acp-plugins"))
-		// The preload only speeds Cursor up; any problem launches it without one.
 		if preload, err := writeNetPreload(cfg.DataDir); err == nil && preloadPathUsable(preload) {
 			existing, ok := cfg.Env["NODE_OPTIONS"]
 			if !ok {
@@ -104,9 +93,6 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	return args, env, nil
 }
 
-// sessionPreamble leads the first prompt with AO's standing instructions (and a
-// switch's handoff note): Cursor's chat reads neither a --plugin-dir rule nor an
-// embedded resource (Cursor Agent 2026.10.01), only prompt text.
 func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	if standing := strings.TrimSpace(cfg.SystemPrompt); standing != "" {
 		return []acpsdk.ContentBlock{acpdriver.StandingInstructionsBlock(standing)}
@@ -150,10 +136,6 @@ func permissionOption(
 	return "", false
 }
 
-// sessionOptions splits a model id that folds in effort, thinking and speed (the
-// command line's "claude-opus-4-8-thinking-high-fast", an older session's
-// "claude-opus-4-8[thinking=true,effort=high]") into Cursor's separate settings.
-// A plain id sets only the model, keeping the settings Cursor saved for it.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model == "" {
 		return nil
@@ -165,14 +147,11 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	options := []acpdriver.SessionOption{{ID: "model", Value: model}}
 	for _, id := range []string{"thinking", "fast"} {
 		if value, ok := params[id]; ok && (id != "thinking" || value != "") {
-			// Only an explicitly selected Fast setting must fail closed. CLI-style
-			// aliases synthesize fast=false when omitted; Thinking remains best-effort.
 			options = append(options, acpdriver.SessionOption{
 				ID: id, Value: value, Optional: id == "thinking" || (id == "fast" && !explicitFast),
 			})
 		}
 	}
-	// Each model names its effort setting its own way; only the one it offers applies.
 	if effort := params["effort"]; effort != "" {
 		options = append(options,
 			acpdriver.SessionOption{ID: "effort", Value: effort, Optional: true},
@@ -217,7 +196,6 @@ func cursorModelParams(id string) (string, map[string]string, bool) {
 		}
 		return id, params, explicitFast
 	}
-	// A command-line id that leaves a setting out means it is off.
 	for _, flag := range []string{"thinking", "fast"} {
 		if params[flag] == "" {
 			params[flag] = "false"
@@ -226,11 +204,8 @@ func cursorModelParams(id string) (string, map[string]string, bool) {
 	return cursorChatModelName(strings.Join(tokens[:end], "-")), params, explicitFast
 }
 
-// cursorOlderClaude matches the command line's older Claude name, version first
-// ("claude-4.6-opus"), which Cursor's chat names family first ("claude-opus-4-6").
 var cursorOlderClaude = regexp.MustCompile(`^claude-(\d+(?:\.\d+)?)-(opus|sonnet|haiku)$`)
 
-// cursorChatModelName turns a command-line model name into the one Cursor's chat lists.
 func cursorChatModelName(name string) string {
 	if match := cursorOlderClaude.FindStringSubmatch(name); match != nil {
 		return "claude-" + match[2] + "-" + strings.ReplaceAll(match[1], ".", "-")

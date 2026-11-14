@@ -22,8 +22,6 @@ func startGroup(t *testing.T, script string) *exec.Cmd {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	// Reap the leader as it exits, as the chat hosts do, so a zombie does not
-	// keep the group alive.
 	go func() { _ = cmd.Wait() }()
 	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
 	return cmd
@@ -34,14 +32,8 @@ func alive(pid int) bool {
 	return err == nil
 }
 
-// TestTerminateGroupLetsTheLeaderStopWhatItStarted pins why chat agents are
-// asked to exit before they are killed: Claude Code runs each command in a
-// process group of its own and stops it on SIGTERM. The group signal never
-// reaches that command, so only the agent's own cleanup can stop it, and a
-// bare SIGKILL would leave it running.
 func TestTerminateGroupLetsTheLeaderStopWhatItStarted(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "tool.pid")
-	// set -m gives the background "tool" a process group of its own.
 	cmd := startGroup(t, `set -m; sleep 60 & echo $! > `+pidFile+`; tool=$!; set +m
 trap 'kill $tool; exit 0' TERM
 while :; do sleep 0.05; done`)
@@ -70,8 +62,6 @@ while :; do sleep 0.05; done`)
 	t.Fatal("the leader's own command outlived the stop")
 }
 
-// TestTerminateGroupKillsWhatIgnoresSIGTERM pins the fallback: a group that
-// does not exit within the grace is killed.
 func TestTerminateGroupKillsWhatIgnoresSIGTERM(t *testing.T) {
 	cmd := startGroup(t, `trap '' TERM; sleep 60`)
 	time.Sleep(100 * time.Millisecond)

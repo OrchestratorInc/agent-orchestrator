@@ -11,7 +11,6 @@ import { openPRTab, usePRTabs } from "../lib/pr-tabs";
 import { linksOnlyImages } from "./PRDescriptionImage";
 import { PRImageGallery } from "./PRImageGallery";
 
-// The Reviews tab's review summary typography, so the two read as one family.
 const bodyClass = cn(
 	"min-w-0 select-text break-words text-xs leading-relaxed text-muted-foreground",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
@@ -26,9 +25,6 @@ const bodyClass = cn(
 	"[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
 );
 
-// Kept outside the component: a new renderer each render would remount every
-// image placeholder and close an open lightbox on the next re-render. The
-// card's preview leaves images out: the line under it counts them.
 const previewComponents: Components = {
 	a: ({ node, href, children }) => linksOnlyImages(node) ? null : (
 		<AppLink href={href} rel="noopener noreferrer" target="_blank">
@@ -40,16 +36,8 @@ const previewComponents: Components = {
 
 const footerLinkClass = "ml-auto inline-flex items-center gap-1 font-medium transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-/**
- * The PR body inside the PR card: three lines of its text, a line counting
- * its images (they open in a gallery), and Read full
- * description, which opens the whole body in the PR's tab (a local PR; a
- * Cloud one has no tab). It reads the body the daemon already stored, so none
- * of this calls the provider.
- */
 export function PRDescriptionPreview({ cloud, detailsFailed, pr, sessionKey }: {
 	cloud: boolean;
-	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
 	detailsFailed?: boolean;
 	pr: SessionPRSummary;
 	sessionKey: string;
@@ -75,19 +63,14 @@ export function PRDescriptionPreview({ cloud, detailsFailed, pr, sessionKey }: {
 
 	let empty: string | undefined;
 	if (!pr.detailsObservedAt) {
-		// Only the local GitHub observer fetches details; elsewhere they never arrive.
 		empty = detailsFailed ? t("pr.description.unavailable") : pr.provider === "github" && !cloud ? t("pr.description.pending") : t("pr.description.unsupported");
 	} else if (!description) {
 		empty = t("pr.description.none");
 	}
-	// The full view is worth opening when the card shows only part of the body;
-	// only a local PR has a tab to open it in.
 	const hasMedia = !empty && images.length > 0;
 	const hasMore = !cloud && Boolean(pr.url) && !empty && (overflows || images.length > 0 || tables > 0 || pr.descriptionTruncated === true);
 
 	return (
-		// The PR card is already a filled surface, so the description keeps its own
-		// edge and background to stand apart from it; the type inside matches a review summary.
 		<article className="mt-2 flex min-w-0 flex-col gap-1 rounded-md border border-border/60 bg-background px-2.5 py-2.5" data-testid="pr-description">
 			<h4 className="inline-flex min-w-0 items-center gap-1 text-micro font-medium text-muted-foreground">
 				<AlignLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
@@ -96,10 +79,7 @@ export function PRDescriptionPreview({ cloud, detailsFailed, pr, sessionKey }: {
 			{empty ? (
 				<p className="text-xs leading-relaxed text-passive">{empty}</p>
 			) : (
-				// Paragraphs that only held images render empty and take no room.
 				<div className={cn(bodyClass, "line-clamp-3 max-h-[3lh] overflow-hidden [&_p:empty]:hidden", overflows && "[mask-image:linear-gradient(to_bottom,black_55%,transparent)]")} id={bodyId} ref={bodyRef}>
-					{/* The PR body is provider content: react-markdown never renders raw HTML.
-					    line-clamp only folds text; the height cap folds tables, lists and code too. */}
 					<ReactMarkdown components={previewComponents} remarkPlugins={[remarkGfm]}>{description}</ReactMarkdown>
 				</div>
 			)}

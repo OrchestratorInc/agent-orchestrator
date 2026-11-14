@@ -15,22 +15,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
-// SessionSearchService is the controller-facing session search contract.
 type SessionSearchService interface {
 	Search(ctx context.Context, parsed domain.SessionSearchParsedQuery, params domain.SessionSearchParams) (domain.SessionSearchResponse, error)
 	Coverage(ctx context.Context) (domain.SessionSearchCoverage, error)
 	RequestReindex() error
 }
 
-// SessionSearchController serves the ranked search over past AO sessions.
-//
-// The index behind it is local and derived: this route reads it, never the
-// provider transcripts themselves, and never writes session data.
 type SessionSearchController struct {
 	Svc SessionSearchService
 }
 
-// Register mounts the session search routes.
 func (c *SessionSearchController) Register(r chi.Router) {
 	r.Get("/search/sessions", c.search)
 	r.Get("/search/index-status", c.indexStatus)
@@ -55,8 +49,6 @@ func (c *SessionSearchController) search(w http.ResponseWriter, r *http.Request)
 	envelope.WriteJSON(w, http.StatusOK, sessionSearchResponse(result))
 }
 
-// indexStatus reports what the index covers, for `ao search --index-status` and
-// for the palette's "still indexing" note.
 func (c *SessionSearchController) indexStatus(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/search/index-status")
@@ -70,9 +62,6 @@ func (c *SessionSearchController) indexStatus(w http.ResponseWriter, r *http.Req
 	envelope.WriteJSON(w, http.StatusOK, SessionSearchIndexStatusResponse{Coverage: sessionSearchCoverage(coverage)})
 }
 
-// reindex empties the index and rebuilds it from scratch, for
-// `ao search --reindex`. It answers at once; the rebuild runs in the
-// background, and index-status reports "backfilling" until it ends.
 func (c *SessionSearchController) reindex(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/search/reindex")
@@ -90,13 +79,6 @@ func (c *SessionSearchController) reindex(w http.ResponseWriter, r *http.Request
 	envelope.WriteJSON(w, http.StatusAccepted, SessionSearchIndexStatusResponse{Coverage: sessionSearchCoverage(coverage)})
 }
 
-// SessionSearchQuery is the wire shape of GET /api/v1/search/sessions.
-//
-// Every parameter is optional: without q the request browses by its filters or
-// sort=recent. Filters are additive: an omitted filter does not narrow the
-// search, and an empty result is a normal answer rather than an error.
-// Operators typed into q (harness:, project:, before:, !term, …) are parsed by
-// the same function the palette and CLI use.
 type SessionSearchQuery struct {
 	Query     string `query:"q,omitempty" description:"Words to search for. Leave it out to browse by filters or sort=recent. Words may carry operators such as harness:, project:, status:, before:, after:, path:, !exclude, \"exact phrase\", 'exact, ^prefix."`
 	ProjectID string `query:"projectId,omitempty" description:"Restrict results to one project. Equivalent to project: in q."`
@@ -111,7 +93,6 @@ type SessionSearchQuery struct {
 	Offset    int    `query:"offset,omitempty" minimum:"0" description:"Page offset."`
 }
 
-// SessionSearchResponse is the body of GET /api/v1/search/sessions (200).
 type SessionSearchResponse struct {
 	Query    string                `json:"query"`
 	Results  []SessionSearchResult `json:"results"`
@@ -123,45 +104,35 @@ type SessionSearchResponse struct {
 	Coverage SessionSearchCoverage `json:"coverage"`
 }
 
-// SessionSearchIndexStatusResponse is the body of GET /api/v1/search/index-status.
 type SessionSearchIndexStatusResponse struct {
 	Coverage SessionSearchCoverage `json:"coverage"`
 }
 
-// SessionSearchResult is one ranked hit. Snippet is plain text; Highlights are
-// UTF-16 offsets into it, so the renderer never parses markup out of the index.
 type SessionSearchResult struct {
-	SessionID     string                   `json:"sessionId"`
-	ProjectID     string                   `json:"projectId"`
-	Harness       string                   `json:"harness"`
-	Kind          string                   `json:"kind" enum:"title,user,assistant,tool,command,path"`
-	MessageID     string                   `json:"messageId,omitempty"`
-	Seq           int64                    `json:"seq"`
-	Title         string                   `json:"title,omitempty"`
-	Snippet       string                   `json:"snippet"`
-	Highlights    []SessionSearchHighlight `json:"highlights,omitempty"`
-	Rank          float64                  `json:"rank"`
-	CreatedAt     time.Time                `json:"createdAt"`
-	SessionName   string                   `json:"sessionName,omitempty"`
-	ProjectName   string                   `json:"projectName,omitempty"`
-	SessionState  string                   `json:"sessionState,omitempty"`
-	ResumeCommand string                   `json:"resumeCommand,omitempty"`
-	// SessionMatches counts the session's matching messages when results are
-	// grouped by session, so a row can say "+N more in this session".
-	SessionMatches int `json:"sessionMatches,omitempty"`
-	// ReviewID is set when the match is in one of the session's reviewer chats;
-	// opening the result opens that reviewer chat at the message.
-	ReviewID string `json:"reviewId,omitempty"`
+	SessionID      string                   `json:"sessionId"`
+	ProjectID      string                   `json:"projectId"`
+	Harness        string                   `json:"harness"`
+	Kind           string                   `json:"kind" enum:"title,user,assistant,tool,command,path"`
+	MessageID      string                   `json:"messageId,omitempty"`
+	Seq            int64                    `json:"seq"`
+	Title          string                   `json:"title,omitempty"`
+	Snippet        string                   `json:"snippet"`
+	Highlights     []SessionSearchHighlight `json:"highlights,omitempty"`
+	Rank           float64                  `json:"rank"`
+	CreatedAt      time.Time                `json:"createdAt"`
+	SessionName    string                   `json:"sessionName,omitempty"`
+	ProjectName    string                   `json:"projectName,omitempty"`
+	SessionState   string                   `json:"sessionState,omitempty"`
+	ResumeCommand  string                   `json:"resumeCommand,omitempty"`
+	SessionMatches int                      `json:"sessionMatches,omitempty"`
+	ReviewID       string                   `json:"reviewId,omitempty"`
 }
 
-// SessionSearchHighlight is one matched span inside a result's snippet.
 type SessionSearchHighlight struct {
 	Start int `json:"start"`
 	End   int `json:"end"`
 }
 
-// SessionSearchCoverage says what the index can see, so a caller can tell an
-// empty answer from an incomplete index.
 type SessionSearchCoverage struct {
 	State              string    `json:"state" enum:"ready,backfilling,unavailable"`
 	IndexedSources     int64     `json:"indexedSources"`
@@ -173,9 +144,6 @@ type SessionSearchCoverage struct {
 	BackfilledAt       time.Time `json:"backfilledAt,omitzero"`
 }
 
-// parseSessionSearchQuery splits the request into the parsed query (operators
-// from q) and the explicit filters. Explicit filters win only when the operator
-// was not typed, which is what lets a palette user override a saved filter.
 func parseSessionSearchQuery(r *http.Request) (domain.SessionSearchParsedQuery, domain.SessionSearchParams, error) {
 	values := r.URL.Query()
 	raw := strings.TrimSpace(values.Get("q"))
@@ -188,8 +156,6 @@ func parseSessionSearchQuery(r *http.Request) (domain.SessionSearchParsedQuery, 
 		Limit:     domain.NormalizeSessionSearchLimit(atoiOrZero(values.Get("limit"))),
 		Offset:    max(atoiOrZero(values.Get("offset")), 0),
 	}
-	// A query needs words or a filter. The one exception is an explicit recency
-	// browse, which is what a palette shows before anything is typed.
 	explicitRecents := strings.EqualFold(strings.TrimSpace(values.Get("sort")), string(domain.SessionSearchSortRecent))
 	dated := strings.TrimSpace(values.Get("from")) != "" || strings.TrimSpace(values.Get("to")) != ""
 	if raw == "" && params.ProjectID == "" && params.Harness == "" &&
@@ -239,8 +205,6 @@ func parseSessionSearchQuery(r *http.Request) (domain.SessionSearchParsedQuery, 
 	return parsed, params, nil
 }
 
-// parseSearchBoundary accepts a date (midnight UTC) or a full RFC 3339
-// timestamp, which is what a date picker and a script respectively send.
 func parseSearchBoundary(raw string) (*time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

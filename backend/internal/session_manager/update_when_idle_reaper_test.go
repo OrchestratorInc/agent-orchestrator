@@ -12,17 +12,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// idleRestartRuntime restarts a terminal in place and reports no command
-// running in it.
 type idleRestartRuntime struct{ *fakeRestartRuntime }
 
 func (idleRestartRuntime) RunningWorkloadCommands(context.Context, ports.RuntimeHandle, ports.SupervisedProcessRef) (int, error) {
 	return 0, nil
 }
 
-// An update stops an idle terminal and installs while it is down. The reaper
-// ticks meanwhile and finds the dead runtime of a session idle for longer than
-// the recent-activity window: it must leave the session the update resumes.
 func TestTerminalStoppedForUpdateSurvivesTheReaperAndResumes(t *testing.T) {
 	ctx := context.Background()
 	st, err := sqlite.Open(t.TempDir())
@@ -76,7 +71,6 @@ func TestTerminalStoppedForUpdateSurvivesTheReaperAndResumes(t *testing.T) {
 		t.Fatal("the terminal still runs after the stop")
 	}
 
-	// The installer runs now, and the reaper ticks.
 	if err := reaper.New(lcm, st, runtime, reaper.Config{}).Tick(ctx); err != nil {
 		t.Fatalf("reaper tick: %v", err)
 	}
@@ -93,8 +87,6 @@ func TestTerminalStoppedForUpdateSurvivesTheReaperAndResumes(t *testing.T) {
 		t.Fatalf("resume after update: %v", err)
 	}
 	rec, _, err = st.GetSession(ctx, "mer-1")
-	// The stop destroyed the runtime, so resume creates a new one rather than
-	// restarting the old handle.
 	if err != nil || rec.IsTerminated || rec.Metadata.RuntimeLaunchID != "launch-new" || base.created != 1 || runtime.restarted != 0 {
 		t.Fatalf("resumed session = terminated:%v launch:%q created:%d restarts:%d (%v); want the terminal recreated on a new launch",
 			rec.IsTerminated, rec.Metadata.RuntimeLaunchID, base.created, runtime.restarted, err)

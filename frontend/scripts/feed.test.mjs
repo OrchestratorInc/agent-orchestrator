@@ -16,14 +16,14 @@ import { selectInstallers, feedFilename, buildYml, hashFile, generateFeeds, MAC_
 import { writeBlockmap } from "./blockmap.mjs";
 const V = "0.10.4";
 const NAMES = [
-	"Agent.Orchestrator.Setup.0.10.4.exe", // win versioned
-	"Agent.Orchestrator-0.10.4.AppImage", // linux versioned
-	"Agent.Orchestrator-darwin-arm64-0.10.4.zip", // mac arm64 versioned
-	"Agent.Orchestrator-darwin-x64-0.10.4.zip", // mac x64 versioned
-	"agent-orchestrator-darwin-arm64.zip", // ao-start alias (no version) -> excluded
-	"agent-orchestrator-win32-x64.exe", // alias (no version) -> excluded
-	"agent-orchestrator_0.10.4_amd64.deb", // deb -> excluded by extension
-	"agent-orchestrator-0.10.4.x86_64.rpm", // rpm -> excluded by extension
+	"Agent.Orchestrator.Setup.0.10.4.exe",
+	"Agent.Orchestrator-0.10.4.AppImage",
+	"Agent.Orchestrator-darwin-arm64-0.10.4.zip",
+	"Agent.Orchestrator-darwin-x64-0.10.4.zip",
+	"agent-orchestrator-darwin-arm64.zip",
+	"agent-orchestrator-win32-x64.exe",
+	"agent-orchestrator_0.10.4_amd64.deb",
+	"agent-orchestrator-0.10.4.x86_64.rpm",
 ];
 
 describe("selectInstallers", () => {
@@ -46,10 +46,6 @@ describe("feedFilename", () => {
 		expect(feedFilename("nightly", "linux")).toBe("nightly-linux.yml");
 	});
 
-	// Channel-isolation invariant: a pr<N> channel MUST produce its own namespaced
-	// feed filenames and MUST NOT produce filenames that start with "latest" or
-	// "nightly". This guards against the #2270 poisoning class where a pr-channel
-	// feed accidentally overwrites the shared latest-mac.yml / nightly-mac.yml.
 	describe("pr<N> channel isolation (guards against #2270 latest-mac.yml poisoning)", () => {
 		it("pr2270 + mac => pr2270-mac.yml", () => {
 			expect(feedFilename("pr2270", "mac")).toBe("pr2270-mac.yml");
@@ -132,7 +128,6 @@ describe("buildYml", () => {
 			true,
 		);
 		expect(yml).toContain("important: true\n");
-		// must still have all existing fields
 		expect(yml).toContain("version: 0.10.4");
 		expect(yml).toContain("releaseDate:");
 	});
@@ -189,7 +184,6 @@ describe("generateFeeds macOS sidecar suppression", () => {
 
 		const yml = readFileSync(join(dir, "nightly-mac.yml"), "utf8");
 		expect(yml).not.toContain("blockMapSize");
-		// Darwin 22 is macOS 13, the Electron 44 floor; electron-updater compares os.release().
 		expect(yml).toContain(`minimumSystemVersion: ${MAC_MINIMUM_DARWIN_VERSION}\n`);
 		expect(MAC_MINIMUM_DARWIN_VERSION).toBe("22.0.0");
 		for (const macZip of macZips) {
@@ -226,7 +220,6 @@ describe("generateFeeds macOS sidecar suppression", () => {
 		expect(writeBlockmap).toHaveBeenCalledTimes(2);
 		expect(writeBlockmap).toHaveBeenCalledWith(join(dir, winExe));
 		expect(writeBlockmap).toHaveBeenCalledWith(join(dir, linuxAppImage));
-		// os.release() is not a macOS version on Windows or Linux, so only the mac feed carries a floor.
 		expect(readFileSync(join(dir, "nightly.yml"), "utf8")).not.toContain("minimumSystemVersion");
 		expect(readFileSync(join(dir, "nightly-linux.yml"), "utf8")).not.toContain("minimumSystemVersion");
 

@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// SQLite's capped appends discard text after a NUL in that delta. Combining
-// deltas must not also discard later chunks or change when the cap is reached.
 func TestNULDeltasPreserveUnbatchedActivityStreams(t *testing.T) {
 	for _, stream := range []struct {
 		name     string

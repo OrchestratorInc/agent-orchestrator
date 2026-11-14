@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// requiredHelpTokens are the CLI flags this adapter emits.
 var requiredHelpTokens = []string{"--task", "--resume", "--always-approve", "--llm-approve"}
 
 func TestLiveOpenHandsReleaseContract(t *testing.T) {

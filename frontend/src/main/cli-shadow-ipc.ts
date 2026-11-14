@@ -18,8 +18,6 @@ export function registerCliShadowIpc(input: {
 		isPackaged: input.isPackaged(),
 		appImage: input.appImage,
 	});
-	// Each handler checks enabled first: a dev or isolated build must not start
-	// the login-shell probe, and Settings has nothing to show there.
 	ipcMain.handle("cliShadow:inspect", async (_event, identity: unknown): Promise<CliShadowStatus> => {
 		if (!input.enabled()) return { kind: "unknown" };
 		return inspectCliShadow(io, { ...await request(), probeIdentity: typeof identity === "string" ? identity : undefined });
@@ -28,7 +26,6 @@ export function registerCliShadowIpc(input: {
 		if (!input.enabled() || typeof path !== "string" || typeof target !== "string" || typeof identity !== "string") return { ok: false, code: "changed", message: "Nothing to replace." };
 		return replaceCliShadow(io, await request(), { path, target, identity });
 	});
-	// Takes no path from the renderer: it only ever reveals the current other ao.
 	ipcMain.handle("cliShadow:reveal", async () => {
 		if (!input.enabled()) return;
 		const status = await inspectCliShadow(io, await request());

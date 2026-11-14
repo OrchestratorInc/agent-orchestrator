@@ -10,25 +10,12 @@ import type { WorkspaceSession } from "../../types/workspace";
 
 type TaggedSession = Pick<WorkspaceSession, "id" | "cloud" | "isTerminated">;
 
-/**
- * On a session someone shared with this person: what they can do in it and,
- * when it came through a team, which one. "Watch · via Platform". Nothing on
- * the person's own sessions, nor on one that has ended (it has no live state
- * to read the role from, like the other live subscribers).
- */
 export function SessionAccessTag({ session }: { session: TaggedSession }) {
 	const teams = useTeamsEnabled();
 	if (!teams || session.cloud?.shared !== true || session.isTerminated === true) return null;
 	return <SharedSessionAccessTag session={session} />;
 }
 
-/**
- * The role is the session's live one, so it is always what the control plane
- * enforces. The team comes from the shared list, which refreshes less often:
- * when the role changes (a direct share raised it above the team's, say), the
- * list is read again at once, and until it answers the tag names no team
- * rather than one that may no longer be the reason.
- */
 function SharedSessionAccessTag({ session }: { session: TaggedSession }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -37,7 +24,6 @@ function SharedSessionAccessTag({ session }: { session: TaggedSession }) {
 	const liveRole = live?.viewers.find((viewer) => viewer.userId === live.you)?.role;
 	const previousRole = useRef(liveRole);
 	const [roleChangedAt, setRoleChangedAt] = useState(0);
-	// When the list was last read; re-renders on each read, even an unchanged one.
 	const listedAt = useSyncExternalStore(
 		useCallback((onChange: () => void) => queryClient.getQueryCache().subscribe(onChange), [queryClient]),
 		() => queryClient.getQueryState([...sharedCloudWorkspacesQueryKey, baseUrl])?.dataUpdatedAt ?? 0,

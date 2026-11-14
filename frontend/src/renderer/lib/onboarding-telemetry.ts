@@ -2,9 +2,6 @@ import { useCallback, useEffect, useRef } from "react";
 import type { OnboardingStep } from "./onboarding-steps";
 import { captureRendererEvent } from "./telemetry";
 
-// Desktop onboarding funnel: each step reports viewed, completed and abandoned at
-// most once per install, so the counts read as a funnel rather than a page-view
-// firehose. Closed vocabulary on both axes; nothing user-authored is sent.
 export type OnboardingPhase = "viewed" | "completed" | "abandoned";
 
 const STORAGE_KEY = "ao.telemetry.onboardingSteps";
@@ -19,10 +16,8 @@ function readReported(): Set<string> {
 	}
 }
 
-/** Reserves a (step, phase) slot; false when already reported or contradicted by an earlier phase. */
 export function reserveOnboardingPhase(step: OnboardingStep, phase: OnboardingPhase): boolean {
 	const reported = readReported();
-	// A step that finished is never abandoned afterwards.
 	if (phase === "abandoned" && reported.has(`${step}:completed`)) return false;
 	const key = `${step}:${phase}`;
 	if (reported.has(key)) return false;
@@ -31,7 +26,6 @@ export function reserveOnboardingPhase(step: OnboardingStep, phase: OnboardingPh
 	try {
 		window.localStorage.setItem(STORAGE_KEY, JSON.stringify([...reported]));
 	} catch {
-		// Memory set above still dedupes within this launch.
 	}
 	return true;
 }
@@ -41,23 +35,11 @@ export function reportOnboardingStep(step: OnboardingStep, phase: OnboardingPhas
 	void captureRendererEvent(`ao.onboarding.step_${phase}`, { step });
 }
 
-/**
- * Records completion of a step this install has already seen. Completion can be
- * observed long after the step's UI is gone (GitHub sign-in finished in a
- * terminal, outside the app, or on a later launch), so it is keyed to the
- * install's recorded view rather than to the component that showed it.
- */
 export function completeOnboardingStepIfViewed(step: OnboardingStep): void {
 	if (!readReported().has(`${step}:viewed`)) return;
 	reportOnboardingStep(step, "completed");
 }
 
-/**
- * Reports a step as viewed while `active`, abandoned if the window closes while
- * it is still active, and completed when it goes from active to inactive. The
- * returned function reports completion explicitly for steps whose component
- * unmounts as part of finishing.
- */
 export function useOnboardingStep(step: OnboardingStep, active: boolean): () => void {
 	const wasActive = useRef(false);
 	useEffect(() => {

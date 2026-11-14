@@ -6,23 +6,12 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { QrCanvas } from "./QrCanvas";
 
-// Public App Store listing for the Agent Orchestrator iOS app. No storefront
-// segment ("/us/") on purpose: Apple redirects a bare /app/ link to the
-// visitor's own storefront, while a pinned one sends everyone outside that
-// country to a "not available" page.
 export const IOS_APP_STORE_URL = "https://apps.apple.com/app/ao-mobile/id6792552173";
 
-/** Public Google Play listing for the Agent Orchestrator Android app. */
 export const ANDROID_PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=aoagents.dev&pcampaignid=web_share";
 
-/** Deliberately smaller than the pairing QR so it never competes with it. */
 const STORE_QR_SIZE = 140;
 
-// ConnectMobileGetApp is step zero of pairing: the pairing QR below it is
-// meaningless until the app is installed. It sits outside the modal's
-// enable-collapse because installing the app has nothing to do with whether
-// the LAN bridge is running. The QR (of the store listing itself) hides
-// behind a disclosure so the widened modal keeps its height.
 export function ConnectMobileGetApp() {
 	const { t } = useTranslation();
 	const [showQR, setShowQR] = useState(false);
@@ -31,7 +20,6 @@ export function ConnectMobileGetApp() {
 		<div className="flex flex-col">
 			<span className="px-3 py-3 text-subtitle leading-(--leading-settings-mobile-title) text-settings-label">{t("mobile.getApp")}</span>
 
-			{/* iOS — items-center so the action cluster sits on the row's optical centre. */}
 			<div className="flex items-center justify-between gap-3 px-3 py-3">
 				<div className="flex min-w-0 flex-col">
 					<span className="text-sm leading-5 text-settings-label">{t("mobile.ios")}</span>
@@ -85,7 +73,6 @@ export function ConnectMobileGetApp() {
 				</div>
 			</div>
 
-			{/* Android — available directly from Google Play. */}
 			<div className="flex items-center justify-between gap-3 px-3 py-3">
 				<div className="flex min-w-0 flex-col">
 					<span className="text-sm leading-5 text-settings-label">{t("mobile.android")}</span>

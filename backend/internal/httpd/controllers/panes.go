@@ -17,16 +17,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/panes"
 )
 
-// PaneService relays split-pane requests to the desktop window
-// (internal/service/panes).
 type PaneService interface {
 	Layout(sessionID string) (json.RawMessage, bool)
 	Connected() bool
 	Execute(ctx context.Context, sessionID, action string, args json.RawMessage) (panes.Result, error)
 }
 
-// PaneTerminalService types into and reads a session's own shell terminals
-// (internal/service/shellterm).
 type PaneTerminalService interface {
 	TypeIntoSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID, text string, enter bool) error
 	InterruptSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error
@@ -34,7 +30,6 @@ type PaneTerminalService interface {
 	CloseSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error
 }
 
-// PaneInputRequest types into one of the session's terminal tabs.
 type PaneInputRequest struct {
 	Tab       string  `json:"tab" description:"Key of one of this session's terminal tabs, from ao pane."`
 	Text      *string `json:"text,omitempty" description:"Text to type. Sent as a command (followed by Enter) unless enter is false."`
@@ -43,20 +38,17 @@ type PaneInputRequest struct {
 	Close     bool    `json:"close,omitempty" description:"Close the terminal tab (its shell may already have exited)."`
 }
 
-// PaneOutputQuery selects a terminal tab and how much of its screen to read.
 type PaneOutputQuery struct {
 	Tab   string `query:"tab" description:"Key of one of this session's terminal tabs, from ao pane."`
 	Lines *int64 `query:"lines,omitempty" minimum:"1" maximum:"2000" description:"How many of the last lines to return. Defaults to 200."`
 }
 
-// PaneOutputResponse is what a terminal tab shows, as plain text.
 type PaneOutputResponse struct {
 	SessionID string `json:"sessionId"`
 	Tab       string `json:"tab"`
 	Output    string `json:"output"`
 }
 
-// PaneTab is one tab in a session's center pane.
 type PaneTab struct {
 	Key   string  `json:"key" description:"Stable tab key used by pane commands: session, a shell terminal's handle id, reviewer:<id>, reviewer-chat:<id> or file:<path>."`
 	Kind  string  `json:"kind" enum:"session,terminal,reviewer,file" description:"What the tab shows."`
@@ -64,7 +56,6 @@ type PaneTab struct {
 	Agent *string `json:"agent,omitempty" description:"Agent running in a terminal tab, when the window tracks it."`
 }
 
-// PaneBox is one pane of a split, as fractions of the center area.
 type PaneBox struct {
 	Key    string  `json:"key" description:"Key of the tab shown in this pane."`
 	X      float64 `json:"x" description:"Left edge, 0 to 1."`
@@ -73,14 +64,12 @@ type PaneBox struct {
 	Height float64 `json:"height" description:"Height, 0 to 1."`
 }
 
-// PaneGroup is a set of tabs shown together as a split.
 type PaneGroup struct {
 	ID    string    `json:"id" description:"Group id, for ungroup."`
 	Focus string    `json:"focus" description:"Key of the group's focused pane."`
 	Panes []PaneBox `json:"panes" description:"Every pane of the split with its position."`
 }
 
-// PaneLayout is what the desktop window shows for a session.
 type PaneLayout struct {
 	Enabled  bool        `json:"enabled" description:"Whether split panes are on in the window (a Developer Mode preview). Commands are refused while off."`
 	Selected string      `json:"selected" description:"Key of the tab on screen (the focused pane when a split is shown)."`
@@ -89,13 +78,11 @@ type PaneLayout struct {
 	Groups   []PaneGroup `json:"groups" description:"Every split group of the session."`
 }
 
-// PaneLayoutResponse is a session's current split layout.
 type PaneLayoutResponse struct {
 	SessionID string     `json:"sessionId"`
 	Layout    PaneLayout `json:"layout"`
 }
 
-// PaneCommandRequest asks the desktop window to change a session's splits.
 type PaneCommandRequest struct {
 	Action string  `json:"action" enum:"split,remove,ungroup,focus,close" description:"split shows tab beside another; remove takes a tab out of its group; ungroup dissolves a group; focus brings a tab on screen; close closes a terminal tab."`
 	Tab    *string `json:"tab,omitempty" description:"Tab key. For split, also terminal (open a new shell terminal) or file:<workspace-relative path> (open the file)."`
@@ -104,19 +91,10 @@ type PaneCommandRequest struct {
 	Group  *string `json:"group,omitempty" description:"For ungroup: group id. Defaults to the group on screen."`
 }
 
-// PaneSessionLookup finds the session a pane request names, for its
-// capability verifier.
 type PaneSessionLookup interface {
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 }
 
-// PanesController serves split-pane layouts and requests for agents, and
-// lets an agent drive its own session's terminal tabs.
-//
-// Like `ao browser`, every route requires the session's capability
-// (X-AO-Browser-Capability, injected into the owning agent only): a session
-// id alone is not proof, and without it any local process could type into
-// another session's terminals.
 type PanesController struct {
 	Svc          PaneService
 	Terminals    PaneTerminalService
@@ -124,8 +102,6 @@ type PanesController struct {
 	Capabilities SessionCapabilityValidator
 }
 
-// authorize checks that the caller holds the capability of the session it
-// names. It writes the error response and returns false when it does not.
 func (c *PanesController) authorize(w http.ResponseWriter, r *http.Request, sessionID domain.SessionID) bool {
 	if c.Sessions == nil || c.Capabilities == nil {
 		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
@@ -148,7 +124,6 @@ func (c *PanesController) authorize(w http.ResponseWriter, r *http.Request, sess
 	return true
 }
 
-// Register mounts the pane routes.
 func (c *PanesController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/panes", c.layout)
 	r.Post("/sessions/{sessionId}/panes", c.command)
@@ -336,7 +311,6 @@ func validatePaneCommand(in PaneCommandRequest) string {
 	return ""
 }
 
-// normalizePaneLayout keeps lists non-null on the wire.
 func normalizePaneLayout(layout PaneLayout) PaneLayout {
 	if layout.Tabs == nil {
 		layout.Tabs = []PaneTab{}

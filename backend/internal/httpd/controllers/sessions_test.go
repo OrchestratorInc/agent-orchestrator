@@ -45,14 +45,12 @@ import (
 )
 
 type fakeSessionService struct {
-	artifactsRegistered   []string
-	artifactsUnregistered []string
-	registerArtifactsErr  error
-	deleted               []domain.SessionID
-	deleteCleanup         []bool
-	deleteErr             error
-	// lastListFilter is the filter the controller parsed; listPage, when set,
-	// replaces the page built from sessions so a test can pin the wire shape.
+	artifactsRegistered        []string
+	artifactsUnregistered      []string
+	registerArtifactsErr       error
+	deleted                    []domain.SessionID
+	deleteCleanup              []bool
+	deleteErr                  error
 	lastListFilter             sessionsvc.ListFilter
 	listPage                   *sessionsvc.ListPage
 	workspaceSnapshotInput     sessionsvc.WorkspaceSelectionRevisionInput
@@ -333,8 +331,6 @@ func (f *fakeSessionService) SetPreview(_ context.Context, id domain.SessionID, 
 		return domain.Session{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	s.Metadata.PreviewURL = previewURL
-	// Mirror the store: every set bumps the revision, even when the URL is
-	// unchanged, so the controller's refresh contract can be exercised here.
 	s.Metadata.PreviewRevision++
 	f.sessions[id] = s
 	return s, nil
@@ -1108,9 +1104,6 @@ func TestSessionsAPI_StartInterfaceTransitionDefaultsOmittedHistoryPolicyToStric
 	}
 }
 
-// A phone polls only live workers and pages the archive when it is opened. The
-// paging query reaches the service intact, and the page's cursor and the
-// archive's size are on the wire only when there is something to report.
 func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.listPage = &sessionsvc.ListPage{
@@ -1442,11 +1435,6 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	// A real workspace file at the same literal path the legacy
-	// __ao_artifacts__/ marker scheme would have used. The advertised
-	// previewUrl must still resolve to the artifact's own content: it now
-	// carries scope in its host, not in a path prefix a workspace file could
-	// also contain, so this collision cannot affect it.
 	workspace := t.TempDir()
 	collidingPath := filepath.Join(workspace, "__ao_artifacts__", "site", "index.html")
 	if err := os.MkdirAll(filepath.Dir(collidingPath), 0o755); err != nil {
@@ -1513,7 +1501,6 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 	if resp.Session.ArtifactFiles[1].PreviewURL != "" {
 		t.Fatalf("markdown previewUrl = %q, want empty", resp.Session.ArtifactFiles[1].PreviewURL)
 	}
-	// The chat frames the page from its own inline origin, not the preview one.
 	if inline := resp.Session.ArtifactFiles[0].InlineURL; !strings.Contains(inline, "://ao-inline-artifact.") || !strings.HasSuffix(inline, "/site/index.html") {
 		t.Fatalf("html inlineUrl = %q, want an ao-inline-artifact origin", inline)
 	}
@@ -1542,9 +1529,6 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 		t.Fatalf("GET default workspace root = %d, body=%q", workspaceStatus, workspaceBody)
 	}
 
-	// The colliding workspace file, addressed on the ordinary (non-artifact)
-	// preview origin at its own literal path, is unaffected and still opens
-	// its own real content.
 	workspacePreviewURL, err := previewutil.FileURL(srv.URL, "ao-1", "__ao_artifacts__/site/index.html")
 	if err != nil {
 		t.Fatalf("build workspace preview URL: %v", err)
@@ -1558,20 +1542,12 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 	}
 }
 
-// TestSessionsAPI_ArtifactRawURLIsUnambiguousUnderWorkspaceCollision covers
-// the raw-content URL exported for non-HTML artifacts (markdown/generic files).
-// Unlike the legacy __ao_artifacts__/ path-prefix route,
-// rawUrl is built on the artifact preview origin — a distinct host from the
-// workspace preview origin — so a real workspace file at the same literal
-// path cannot shadow it.
 func TestSessionsAPI_ArtifactRawURLIsUnambiguousUnderWorkspaceCollision(t *testing.T) {
 	artifactDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(artifactDir, "report.md"), []byte("artifact report content"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 
-	// A real workspace file at the literal path the legacy marker scheme
-	// would have used for this same artifact.
 	workspace := t.TempDir()
 	collidingPath := filepath.Join(workspace, "__ao_artifacts__", "report.md")
 	if err := os.MkdirAll(filepath.Dir(collidingPath), 0o755); err != nil {
@@ -1631,8 +1607,6 @@ func TestSessionsAPI_ArtifactRawURLIsUnambiguousUnderWorkspaceCollision(t *testi
 		t.Fatalf("rawUrl body = %q, want artifact content, not the colliding workspace file's", directBody)
 	}
 
-	// The colliding workspace file, addressed on the ordinary (non-artifact)
-	// preview origin at its own literal path, is unaffected.
 	workspacePreviewURL, err := previewutil.FileURL(srv.URL, "ao-1", "__ao_artifacts__/report.md")
 	if err != nil {
 		t.Fatalf("build workspace preview URL: %v", err)
@@ -1646,12 +1620,6 @@ func TestSessionsAPI_ArtifactRawURLIsUnambiguousUnderWorkspaceCollision(t *testi
 	}
 }
 
-// TestSessionsAPI_PreviewFileWorkspaceFileWinsOverArtifactNamespaceCollision
-// covers the legacy /preview/files/* route directly: __ao_artifacts__/ is a
-// reserved marker AO prepends itself, but it was a valid workspace-relative
-// path before artifact previews existed. A real workspace file at that exact
-// literal path must still be served, not silently swapped for the artifact
-// directory's unrelated content.
 func TestSessionsAPI_PreviewFileWorkspaceFileWinsOverArtifactNamespaceCollision(t *testing.T) {
 	workspace := t.TempDir()
 	collidingPath := filepath.Join(workspace, "__ao_artifacts__", "index.html")
@@ -1673,9 +1641,6 @@ func TestSessionsAPI_PreviewFileWorkspaceFileWinsOverArtifactNamespaceCollision(
 	s.Metadata.ArtifactDir = artifactDir
 	svc.sessions["ao-1"] = s
 
-	// A second session with no colliding workspace file at that literal path,
-	// to positively confirm the artifact directory still serves normally when
-	// there is nothing to collide with.
 	noCollisionArtifactDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(noCollisionArtifactDir, "index.html"), []byte("artifact content"), 0o644); err != nil {
 		t.Fatalf("write artifact file: %v", err)
@@ -1705,13 +1670,6 @@ func TestSessionsAPI_PreviewFileWorkspaceFileWinsOverArtifactNamespaceCollision(
 	}
 }
 
-// TestSessionsAPI_PreviewOriginWorkspaceFileWinsOverArtifactNamespaceCollision
-// covers the same __ao_artifacts__/ namespace collision as the legacy-route
-// test above, but on the isolated-origin PreviewOrigin route — the primary
-// Browser route the desktop app actually uses. A stored preview URL pointing
-// at that literal path must resolve to the real workspace file that existed
-// there before artifact previews did, not to the unrelated artifact
-// directory content.
 func TestSessionsAPI_PreviewOriginWorkspaceFileWinsOverArtifactNamespaceCollision(t *testing.T) {
 	workspace := t.TempDir()
 	collidingPath := filepath.Join(workspace, "__ao_artifacts__", "index.html")
@@ -1751,15 +1709,6 @@ func TestSessionsAPI_PreviewOriginWorkspaceFileWinsOverArtifactNamespaceCollisio
 	}
 }
 
-// TestSessionsAPI_PreviewOriginArtifactLinkRequestPathWorkspaceFileWins covers
-// the fast path in previewOriginEntry that decodes __ao_artifacts__/ directly
-// from the incoming request path (added for the Summary panel's artifact
-// links, which are built via previewutil.FileURL and navigated to directly —
-// independent of any stored session.Metadata.PreviewURL). The sibling test
-// above only exercises requestPath "/" against a stored PreviewURL and does
-// not reach this fast path at all, so it could not have caught this: a real
-// workspace file at the literal requested __ao_artifacts__/ path must still
-// win over the artifact directory here too.
 func TestSessionsAPI_PreviewOriginArtifactLinkRequestPathWorkspaceFileWins(t *testing.T) {
 	workspace := t.TempDir()
 	collidingPath := filepath.Join(workspace, "__ao_artifacts__", "index.html")
@@ -1779,8 +1728,6 @@ func TestSessionsAPI_PreviewOriginArtifactLinkRequestPathWorkspaceFileWins(t *te
 	s := svc.sessions["ao-1"]
 	s.Metadata.WorkspacePath = workspace
 	s.Metadata.ArtifactDir = artifactDir
-	// No PreviewURL stored: an artifact-panel link navigates directly to the
-	// origin with the scope encoded in the request path itself.
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -1836,14 +1783,6 @@ func TestSessionsAPI_SpawnRejectsOversizedBody(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
 
-	// A body past the ~135 MiB maxSpawnBodyBytes cap is rejected while decoding
-	// (MaxBytesReader), before the attachment size caps and without materializing
-	// the whole body. The oversized bytes live in an *attachment* payload (not the
-	// prompt, which has its own much smaller PROMPT_TOO_LONG cap), so this pins the
-	// body cap specifically: MaxBytesReader makes the read/decode fail with
-	// INVALID_JSON. If that line were removed the body would decode fully and be
-	// rejected later with an attachment-specific code (ATTACHMENT_TOO_LARGE),
-	// failing this test. 150 MiB of base64 comfortably exceeds the ~135 MiB cap.
 	oversized := `{"projectId":"ao","attachments":[{"mimeType":"image/png","data":"` +
 		strings.Repeat("A", 150<<20) + `"}]}`
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", oversized)
@@ -2021,14 +1960,10 @@ func TestSessionsAPI_SpawnPassesEffortToService(t *testing.T) {
 	if svc.lastSpawn.AgentConfig.Effort != "high" {
 		t.Fatalf("service AgentConfig.Effort = %q, want high", svc.lastSpawn.AgentConfig.Effort)
 	}
-	// A request-carried effort is an explicit override, so the service can
-	// distinguish it from an inherited default and reject harnesses that
-	// cannot honor it instead of silently dropping the caller's choice.
 	if !svc.lastSpawn.EffortOverride {
 		t.Fatal("service EffortOverride = false, want true for a request-carried effort")
 	}
 
-	// Omitted effort must not masquerade as an explicit override.
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions",
 		`{"kind":"worker","harness":"codex","prompt":"fix","displayName":"second","model":"sonnet"}`)
 	if status != http.StatusCreated {
@@ -2053,9 +1988,6 @@ func TestSessionsAPI_SpawnPassesParentSessionToService(t *testing.T) {
 	}
 }
 
-// `ao spawn` asks for the async start so the session reads as provisioning
-// with its prompt queued while it starts; a standalone worker has no project
-// to start in the background and stays synchronous.
 func TestSessionsAPI_SpawnAsyncOnlyForProjectSessions(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -2373,9 +2305,6 @@ func TestSessionsAPI_SetPreviewEmptyURLAutodetectsIndex(t *testing.T) {
 func TestSessionsAPI_SetPreviewEmptyURLDoesNotFallbackToMarkdown(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
-	// A Markdown-rich repo with no index.html: the old behavior fell back to
-	// mostRecentPreviewable and picked README.md. The fix restricts bare
-	// ao preview to real static entrypoints, so this should 404.
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# project"), 0o644); err != nil {
 		t.Fatalf("write readme: %v", err)
 	}
@@ -2393,8 +2322,6 @@ func TestSessionsAPI_SetPreviewEmptyURLDoesNotFallbackToMarkdown(t *testing.T) {
 func TestSessionsAPI_SetPreviewEmptyURLPrefersWorkspaceEntryOverExistingTarget(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
-	// An index.html exists, so bare `ao preview` returns to the workspace entry
-	// instead of sticking to the last explicit target.
 	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<html></html>`), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
@@ -2499,7 +2426,6 @@ func TestSessionsAPI_SetPreviewLocalRelativePathResolvesToPreviewOrigin(t *testi
 	if strings.Contains(resp.Session.PreviewURL, workspace) {
 		t.Fatalf("preview leaked workspace path: %s", resp.Session.PreviewURL)
 	}
-	// The resolved preview origin actually serves the local file.
 	fileBody, fileStatus, _ := doPreviewOriginRequest(t, srv, resp.Session.PreviewURL, "/")
 	if fileStatus != http.StatusOK {
 		t.Fatalf("serve local file = %d, want 200; body=%s", fileStatus, fileBody)
@@ -2610,9 +2536,7 @@ func TestSessionsAPI_PreviewOriginResolvesRootRelativeAssetsFromEntryDirectory(t
 		filepath.Join(workspace, "dist", "assets", "app.css"):  `@font-face { src: url("/fonts/app.woff2") }`,
 		filepath.Join(workspace, "dist", "assets", "app.js"):   `document.body.dataset.loaded = "yes"`,
 		filepath.Join(workspace, "dist", "fonts", "app.woff2"): "preview-font",
-		// A conflicting workspace-root asset proves /assets is mounted relative
-		// to the selected deployment directory, not the workspace root.
-		filepath.Join(workspace, "assets", "app.css"): "wrong-root",
+		filepath.Join(workspace, "assets", "app.css"):          "wrong-root",
 	}
 	for file, contents := range files {
 		if err := os.WriteFile(file, []byte(contents), 0o644); err != nil {
@@ -2651,8 +2575,6 @@ func TestSessionsAPI_PreviewOriginResolvesRootRelativeAssetsFromEntryDirectory(t
 		}
 	}
 
-	// Retain the old API route as a compatibility surface for stored URLs and
-	// external callers while new previews use the isolated origin.
 	legacyBody, legacyStatus, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/dist/assets/app.css", "")
 	if legacyStatus != http.StatusOK || !strings.Contains(string(legacyBody), "/fonts/app.woff2") {
 		t.Fatalf("legacy preview route = %d, body=%q; want existing file response", legacyStatus, legacyBody)
@@ -2830,7 +2752,6 @@ func TestSessionsAPI_ArtifactMediaETagTracksRapidReplacements(t *testing.T) {
 				t.Fatalf("unchanged response: status=%d body=%q headers=%v", unchanged.StatusCode, body, unchanged.Header)
 			}
 			for _, replacement := range []string{"other clip", "a longer replacement clip"} {
-				// First change only subsecond mtime, then only size, within one HTTP second.
 				write(replacement, modified.Add(time.Millisecond))
 				fresh, body := get(map[string]string{"If-None-Match": etag, "If-Modified-Since": lastModified})
 				freshETag := fresh.Header.Get("ETag")
@@ -2898,8 +2819,6 @@ func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {
 	}
 }
 
-// Match encodeURIComponent's wire encoding, which differs from Go's path
-// escaping for these names and makes chi route using URL.RawPath.
 func TestSessionsAPI_PreviewAPIEncodedFilenames(t *testing.T) {
 	workspace, artifacts := t.TempDir(), t.TempDir()
 	svc := newFakeSessionService()
@@ -3038,8 +2957,6 @@ func TestSessionsAPI_PreviewOriginsIsolateConcurrentSessionsAndSurviveRouterRest
 		}
 	}
 
-	// A new router has no in-memory preview registry. The persisted URL and
-	// session workspace are sufficient to reconstruct the same virtual root.
 	restarted := newSessionTestServer(t, svc)
 	body, status, _ := doPreviewOriginRequest(t, restarted, previewURLs["ao-1"], "/theme.css")
 	if status != http.StatusOK || string(body) != "session-one" {
@@ -3364,10 +3281,10 @@ func TestSessionsAPI_ManagedPreviewReceivesProjectEnv(t *testing.T) {
 
 func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 	module := strings.Repeat("export const value = 'remote preview module';\n", 100)
-	oversized := strings.Repeat("a", 4<<20+1) // one byte over the 4 MiB cap
+	oversized := strings.Repeat("a", 4<<20+1)
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/streamed.js": // no announced length: chunked, possibly a stream
+		case "/streamed.js":
 			w.Header().Set("Content-Type", "text/javascript")
 			_, _ = io.WriteString(w, module)
 			return
@@ -3396,7 +3313,6 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 		case "/image.png":
 			w.Header().Set("Content-Type", "image/png")
 		}
-		// Announced, as a Vite module's is.
 		w.Header().Set("Content-Length", strconv.Itoa(len(module)))
 		_, _ = io.WriteString(w, module)
 	}))
@@ -3429,13 +3345,11 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 		return response, body
 	}
 
-	for range 2 { // the second reuses the pooled compressor
+	for range 2 {
 		response, body := get("/mod.js", "gzip, deflate, br, zstd", "")
 		if response.Header.Get("Content-Encoding") != "gzip" || response.Header.Get("ETag") != `W/"v1"` {
 			t.Fatalf("module headers = %v, want gzip with a weak ETag", response.Header)
 		}
-		// Its headers carry the gzip's own length: the module was compressed
-		// whole before the client read a byte, so no compressor waits on it.
 		if response.ContentLength != int64(len(body)) {
 			t.Fatalf("gzip module announced %d bytes and sent %d", response.ContentLength, len(body))
 		}
@@ -3454,7 +3368,7 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 		{"/mod.js", "gzip;q=0.0, br", "", ""},
 		{"/mod.js", "br, GZIP; Q=0.000", "", ""},
 		{"/mod.js", "br, gzip;q=0.5", "", "gzip"},
-		{"/mod.js", "gzip", "bytes=0-2047", ""}, // range offsets count uncompressed bytes
+		{"/mod.js", "gzip", "bytes=0-2047", ""},
 		{"/ranged.js", "gzip", "bytes=0-2047", ""},
 		{"/streamed.js", "gzip", "", ""},
 		{"/tiny.js", "gzip", "", ""},
@@ -3472,9 +3386,6 @@ func TestSessionsAPI_ManagedPreviewCompressesUncompressedText(t *testing.T) {
 	}
 }
 
-// A streamed body (SSR, RSC payloads, token streams) announces no length. Each
-// write reaches a client that accepts gzip as the dev server makes it, not
-// once gzip has 64 KiB or the end.
 func TestSessionsAPI_ManagedPreviewStreamsWithoutHoldingBack(t *testing.T) {
 	release := make(chan struct{})
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3522,18 +3433,16 @@ func TestSessionsAPI_ManagedPreviewStreamsWithoutHoldingBack(t *testing.T) {
 	}
 }
 
-// A dev server that dies mid-module must fail the request. A response that
-// ends cleanly would hand the browser a shorter module, which it caches.
 func TestSessionsAPI_ManagedPreviewAbortsACutModule(t *testing.T) {
 	random := make([]byte, 256<<10)
 	_, _ = rand.Read(random)
-	module := hex.EncodeToString(random) // 512 KiB announced, half of it sent
+	module := hex.EncodeToString(random)
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")
 		w.Header().Set("Content-Length", strconv.Itoa(len(module)))
 		_, _ = io.WriteString(w, module[:len(module)/2])
 		w.(http.Flusher).Flush()
-		panic(http.ErrAbortHandler) // the dev server dies
+		panic(http.ErrAbortHandler)
 	}))
 	t.Cleanup(app.Close)
 	parsed, _ := url.Parse(app.URL)
@@ -3563,9 +3472,6 @@ func TestSessionsAPI_ManagedPreviewAbortsACutModule(t *testing.T) {
 	}
 }
 
-// ReverseProxy flushes every write of a body it has no length for, and gzip
-// writes a few hundred bytes at a time: a compressed module must still go out
-// in large writes, not as a thousand small frames.
 func TestSessionsAPI_ManagedPreviewWritesCompressedModulesInLargePieces(t *testing.T) {
 	var source strings.Builder
 	for i := 0; source.Len() < 1<<20; i++ {
@@ -3606,7 +3512,6 @@ func TestSessionsAPI_ManagedPreviewWritesCompressedModulesInLargePieces(t *testi
 	}
 }
 
-// countingRecorder counts the writes and flushes a handler makes.
 type countingRecorder struct {
 	*httptest.ResponseRecorder
 	writes, flushes int
@@ -3693,7 +3598,6 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	if response.StatusCode != http.StatusOK || first.path != "/app/?q=1" || first.host != parsed.Host || first.authorization != "" || first.origin != "" || first.cookie != "app_session=ok" || first.relay != "" {
 		t.Fatalf("app proxy: status=%d observed=%+v", response.StatusCode, first)
 	}
-	// Turbopack names chunks after scoped packages; "%40swc" must reach the app as sent, not as "%2540swc".
 	if _, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/_next/static/chunks/0i4a_%40swc_helpers.js", ""); status != http.StatusOK || readSeen().path != "/_next/static/chunks/0i4a_%40swc_helpers.js" {
 		t.Fatalf("escaped app path: status=%d observed=%+v", status, readSeen())
 	}
@@ -4025,8 +3929,6 @@ func TestSessionsAPI_GetWorkspaceManifestOmitsUnchangedInventory(t *testing.T) {
 	if len(got.Sections.Uncommitted) != 1 || got.Sections.Uncommitted[0].Path != "README.md" {
 		t.Fatalf("manifest uncommitted section = %+v, want README.md", got.Sections.Uncommitted)
 	}
-	// Empty sections still serialize as arrays, so a missing uncommitted key
-	// can only mean an older daemon.
 	if !strings.Contains(string(body), `"staged":[]`) {
 		t.Fatalf("manifest body = %s, want empty sections as arrays", body)
 	}
@@ -4244,10 +4146,6 @@ func TestSessionsAPI_GetWorkspaceFile(t *testing.T) {
 	}
 }
 
-// TestSessionsAPI_GetWorkspaceFileSection verifies the section query param
-// reaches the service unchanged, so a staged-section request and an
-// unstaged-section request for the same path resolve to different diffs
-// instead of colliding on one combined base..worktree diff.
 func TestSessionsAPI_GetWorkspaceFileSection(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
@@ -4396,7 +4294,6 @@ func TestSessionsAPI_RevisionParsesCommaSeparatedCommitShas(t *testing.T) {
 		t.Fatalf("selection revision input = %+v, want %+v", got, want)
 	}
 
-	// A PR view alone, without commits, still reads the selection.
 	if _, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file/revision?path=README.md&scope=committed&prNumber=42", ""); status != http.StatusOK || svc.workspaceSelectionRevision.View.PRNumber != 42 {
 		t.Fatalf("GET PR view revision = %d, input %+v", status, svc.workspaceSelectionRevision)
 	}
@@ -4446,7 +4343,6 @@ func TestSessionsAPI_GetWorkspaceCommitSelection(t *testing.T) {
 		t.Fatalf("response = %+v", got)
 	}
 
-	// Commits that cannot be combined are data, not an error.
 	svc.workspaceSelection = sessionsvc.WorkspaceCommitSelection{
 		View:     sessionsvc.WorkspaceViewInfo{TipSHA: "tip"},
 		Conflict: &sessionsvc.WorkspaceCommitSelectionConflict{CommitSHA: "bbb", Paths: []string{"a.txt"}, Reason: sessionsvc.WorkspaceCommitConflict},
@@ -4572,8 +4468,6 @@ func TestSessionsAPI_GetWorkspaceFileBlobRequiresPath(t *testing.T) {
 func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	workspace := t.TempDir()
 	svc := newFakeSessionService()
-	// Permit the startup reconciliation, then block refresh work to verify
-	// that the invalidation edge is sent before scanning the changed workspace.
 	scans := 0
 	svc.workspaceListHook = func(ctx context.Context) error {
 		scans++
@@ -4661,10 +4555,6 @@ func TestSessionsAPI_SpawnBranchNotFetchedReturnsTypedError(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "BRANCH_NOT_FETCHED")
 }
 
-// TestSessionsAPI_SpawnRejectsOverlongDisplayName asserts the spawn endpoint
-// caps displayName at 100 characters even though the field itself is optional
-// (the desktop new-task dialog omits it). `ao spawn` enforces the same limit
-// CLI-side before the request is sent.
 func TestSessionsAPI_SpawnRejectsOverlongDisplayName(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
 
@@ -4980,9 +4870,6 @@ func TestSessionsAPI_DelegateTaskRejectsOversizedBody(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
 
-	// A body past the ~135 MiB spawn attachment cap is rejected while decoding
-	// (MaxBytesReader), before attachment size validation and without
-	// materializing the whole body. 150 MiB of base64 comfortably exceeds the cap.
 	oversized := `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/png","data":"` +
 		strings.Repeat("A", 150<<20) + `"}]}`
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate", oversized)
@@ -5040,9 +4927,6 @@ func TestSessionsAPI_SendRejectsOversizedBody(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
 
-	// A body past the ~69 MiB send attachment cap is rejected while decoding
-	// (MaxBytesReader), before attachment size validation and without
-	// materializing the whole body. 80 MiB of base64 comfortably exceeds the cap.
 	oversized := `{"message":"Make the button blue.","attachment":{"mimeType":"image/png","data":"` +
 		strings.Repeat("A", 80<<20) + `"}}`
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", oversized)
@@ -5084,8 +4968,6 @@ func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 	}
 }
 
-// The schema's enum for a cleanup skip code must list exactly the codes the
-// session manager can report.
 func TestCleanupSkippedSessionCodeEnumMatchesDomain(t *testing.T) {
 	field, _ := reflect.TypeFor[controllers.CleanupSkippedSession]().FieldByName("Code")
 	want := make([]string, 0, len(domain.CleanupSkipCodes))
@@ -5246,10 +5128,6 @@ func TestSessionPRSummaryOmitsUnavailableLifecycleTimes(t *testing.T) {
 	}
 }
 
-// A mergeable or not-yet-observed PR has no blocking reasons. The contract
-// types reasons as a string array and the desktop reads it with .includes, so
-// "no reasons" must serialize as [] and never as null, which crashed the
-// session inspector for every open mergeable PR.
 func TestSessionPRSummaryReasonsAreNeverNull(t *testing.T) {
 	for _, state := range []domain.Mergeability{domain.MergeMergeable, domain.MergeUnknown} {
 		payload, err := json.Marshal(controllers.NewSessionPRSummary(sessionsvc.PRSummary{
@@ -5342,7 +5220,6 @@ func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T)
 	if !response.Session.LastUserMessageAt.Equal(human) || !response.Session.LastInteractionAt.Equal(direction) {
 		t.Fatalf("timestamps=%+v", response)
 	}
-	// A later human prompt participates without rewriting the orchestration fact.
 	rec.Metadata.LatestUserPromptAt = direction.Add(time.Hour)
 	svc.sessions["ao-1"] = rec
 	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")

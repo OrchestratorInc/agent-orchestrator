@@ -35,11 +35,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// Run explicitly with AO_LIVE_CURSOR_ACP=1. It uses the user's existing Cursor
-// executable, account, and AO-managed Cursor profile; CI never depends on them.
-// The test exercises the native tool/approval path, cancellation, load-based
-// resume, dynamic options/commands, AO's managed standing rule, Cursor's
-// ordinary AGENTS.md rules, and a blocking Cursor extension request.
 func TestLiveCursorACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_CURSOR_ACP") != "1" {
 		t.Skip("set AO_LIVE_CURSOR_ACP=1 to run against the local Cursor account")
@@ -124,10 +119,6 @@ func TestLiveCursorACP(t *testing.T) {
 	}
 }
 
-// Every AO permission mode must at least open and complete a native Cursor ACP
-// turn. The contract tests assert exact flags/client policy; this live matrix
-// catches provider-side flag drift. Run explicitly because it consumes account
-// turns and may surface real permission prompts.
 func TestLiveCursorACPPermissionModes(t *testing.T) {
 	if os.Getenv("AO_LIVE_CURSOR_ACP") != "1" {
 		t.Skip("set AO_LIVE_CURSOR_ACP=1 to run against the local Cursor account")

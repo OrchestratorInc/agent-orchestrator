@@ -2,8 +2,6 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { PRMarkdown } from "./PRMarkdown";
 
-// The shape of a CodeRabbit summary comment: template comments, a badge link
-// around a <picture>, and a <details> walkthrough.
 const codeRabbitBody = [
 	"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->",
 	"<!-- review_stack_entry_start -->",
@@ -27,9 +25,7 @@ describe("PRMarkdown", () => {
 		expect(text).not.toMatch(/<!--|<details|<summary|<picture|<a href|<\/a>|<img/);
 		expect(screen.getByText("No actionable comments were generated in the recent review.")).toBeInTheDocument();
 		expect(screen.getByText("Walkthrough")).toBeInTheDocument();
-		// The badge keeps its picture, as an image the viewer opens.
 		expect(screen.getByRole("button", { name: "Open image: Explain Change" })).toBeInTheDocument();
-		// Code keeps its angle brackets.
 		expect(screen.getByText("<a>")).toBeInTheDocument();
 	});
 

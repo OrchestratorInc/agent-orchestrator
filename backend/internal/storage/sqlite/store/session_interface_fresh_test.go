@@ -73,10 +73,6 @@ func TestFreshInterfaceEpochReleasesOnlyUntouchedRootProvider(t *testing.T) {
 	}
 }
 
-// A degraded identity-reset fresh TUI keeps a Chat that already carries real
-// messages archived exactly as it is, provider binding included, instead of
-// failing the untouched-Chat release proof (upstream issue #7724). The strict
-// commit keeps requiring the untouched proof.
 func TestArchivedChatInterfaceEpochKeepsMessagedChatArchived(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -99,12 +95,10 @@ func TestArchivedChatInterfaceEpochKeepsMessagedChatArchived(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The strict commit still refuses to discard a Chat with history.
 	if changed, err := st.CommitSessionControllerEpoch(ctx, sess.ID, domain.SessionModeChat, domain.SessionModeTUI, "", now); changed || err == nil {
 		t.Fatalf("strict commit with a messaged Chat changed=%v err=%v", changed, err)
 	}
 
-	// The degraded archived-chat commit succeeds and archives the Chat as-is.
 	changed, err := st.CommitSessionControllerEpochArchivedChat(ctx, sess.ID, domain.SessionModeChat, domain.SessionModeTUI, "", now)
 	if err != nil || !changed {
 		t.Fatalf("archived-chat epoch changed=%v err=%v", changed, err)
@@ -130,10 +124,6 @@ func TestArchivedChatInterfaceEpochKeepsMessagedChatArchived(t *testing.T) {
 	}
 }
 
-// A degraded identity-reset fresh TUI whose Chat conversation never accepted a
-// message still releases the unused Chat provider reservation and event
-// namespace, exactly as the strict fresh commit does: only a messaged Chat
-// keeps its binding archived (upstream PR #7740 review, P2).
 func TestArchivedChatInterfaceEpochReleasesUntouchedChatProvider(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -180,8 +170,6 @@ func TestArchivedChatInterfaceEpochReleasesUntouchedChatProvider(t *testing.T) {
 	}
 }
 
-// Orchestrator conversations are project-owned: session_id is empty and the
-// active orchestrator is recorded only as current_session_id.
 func TestFreshInterfaceEpochReleasesUntouchedProjectConversation(t *testing.T) {
 	for _, name := range []string{"fresh", "provider turn"} {
 		t.Run(name, func(t *testing.T) {
@@ -241,8 +229,6 @@ func TestFreshInterfaceEpochReleasesUntouchedProjectConversation(t *testing.T) {
 	}
 }
 
-// A Chat id that the provider reserved but never persisted moves, with its
-// untouched root, to the fresh provider conversation started in its place.
 func TestReplaceUnpersistedChatProviderMovesSessionAndRoot(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -314,7 +300,6 @@ func TestReplaceUnpersistedChatProviderMovesSessionAndRoot(t *testing.T) {
 			if current.Metadata.ProviderConversationID != "fresh-chat-id" || after.ProviderConversationID != "fresh-chat-id" {
 				t.Fatalf("fresh provider not bound: session=%q branch=%+v", current.Metadata.ProviderConversationID, after)
 			}
-			// The scope is part of a surviving provider host's identity.
 			if after.ID != before.ID || after.ProviderScopeID != before.ProviderScopeID {
 				t.Fatalf("replace changed the root: before=%+v after=%+v", before, after)
 			}
@@ -325,12 +310,6 @@ func TestReplaceUnpersistedChatProviderMovesSessionAndRoot(t *testing.T) {
 	}
 }
 
-// A project conversation handed to a replacement orchestrator keeps its root.
-// The root's session_id records the orchestrator that created it; the
-// conversation's current session is the live owner. An untouched reservation
-// left by the previous owner is released at the rebind, so the replacement
-// binds its own provider to the same root and both the Chat->Terminal release
-// and the fresh-resume swap prove ownership through current_session_id.
 func TestProjectRebindLetsReplacementOrchestratorReleaseAndReplace(t *testing.T) {
 	for _, name := range []string{"release", "replace", "with history", "same owner"} {
 		t.Run(name, func(t *testing.T) {
@@ -365,8 +344,6 @@ func TestProjectRebindLetsReplacementOrchestratorReleaseAndReplace(t *testing.T)
 				}
 			}
 			if name == "same owner" {
-				// A restart of the current owner must not drop its own reservation:
-				// a surviving provider host may still hold it.
 				if _, err := st.CreateConversation(ctx, "ignored", domain.ConversationScopeProject, s1.ProjectID, s1.ID, now); err != nil {
 					t.Fatal(err)
 				}
@@ -401,8 +378,6 @@ func TestProjectRebindLetsReplacementOrchestratorReleaseAndReplace(t *testing.T)
 				t.Fatalf("rebind kept the previous owner's reservation: %+v", rebound)
 			}
 
-			// The replacement's first Chat start publishes its provider id; the
-			// root binding trigger moves it onto the same, still-empty root.
 			s2.Metadata.ProviderConversationID = "s2-reserved"
 			if err := st.UpdateSession(ctx, s2); err != nil {
 				t.Fatal(err)

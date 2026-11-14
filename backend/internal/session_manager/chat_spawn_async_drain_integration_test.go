@@ -75,7 +75,7 @@ func TestIncompleteClientRequestAfterStartupCrashDoesNotReplayOpeningPrompt(t *t
 		Logger:   slog.New(slog.DiscardHandler),
 	})
 	first.browserCapabilities = browsersvc.NewAuthority()
-	first.runBackground = func(func()) {} // daemon dies before its scheduled startup runs
+	first.runBackground = func(func()) {}
 	cfg := asyncChatSpawnConfig("opening brief")
 	cfg.ClientRequestID, cfg.ClientRequestHash = "draft-1", "v1:opening brief"
 	if _, _, _, err := first.Spawn(ctx, cfg); !errors.Is(err, ErrSpawnCommit) {
@@ -132,9 +132,6 @@ func TestIncompleteClientRequestAfterStartupCrashDoesNotReplayOpeningPrompt(t *t
 	}
 }
 
-// The real Chat service used to swallow its queued dispatch error and tell
-// Session Manager the initial drain succeeded, leaving a failed brief in a
-// session marked ready with no Retry banner.
 func TestAsyncChatSpawnRealDrainFailureStaysRetryable(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -201,9 +198,6 @@ func TestAsyncChatSpawnRealDrainFailureStaysRetryable(t *testing.T) {
 	if _, err := m.ResumeAgentWithMode(ctx, rec.ID); err != nil {
 		t.Fatalf("resume failed session before explicit turn retry: %v", err)
 	}
-	// SendTurn failed before returning a provider id, so automatic retry would
-	// risk duplicate work if the provider actually accepted it. The visible
-	// original remains available for an explicit user resend after recovery.
 	if _, err := service.Send(ctx, rec.ID, ports.ChatUserMessage{
 		Text: snapshot.Messages[0].Text, Origin: domain.MessageOriginHuman,
 	}); err != nil {

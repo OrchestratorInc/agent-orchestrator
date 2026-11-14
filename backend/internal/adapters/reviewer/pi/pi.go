@@ -1,4 +1,3 @@
-// Package pi implements the interactive Pi code-review adapter.
 package pi
 
 import (
@@ -36,13 +35,11 @@ var requiredFlags = []string{
 //go:embed assets/ao-pi-reviewer.ts
 var extensionSource []byte
 
-// Reviewer launches Pi's live TUI with only AO's structured review tools.
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 	runHelp       func(context.Context, string) ([]byte, error)
 }
 
-// New returns the production Pi reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{
 		resolveBinary: agentpi.ResolvePiBinary,
@@ -52,14 +49,11 @@ func New() *Reviewer {
 	}
 }
 
-// Harness identifies Pi in the reviewer registry.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerPi }
 
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
-// ReviewPreflight refuses Pi versions missing the resource-isolation flags on
-// which the reviewer security boundary depends.
 func (r *Reviewer) ReviewPreflight(ctx context.Context, _ string) error {
 	binary, err := r.resolveBinary(ctx)
 	if err != nil {
@@ -78,16 +72,11 @@ func (r *Reviewer) ReviewPreflight(ctx context.Context, _ string) error {
 	return nil
 }
 
-// ReviewCommand always starts Pi interactively. Resource discovery and every
-// built-in tool are disabled; the explicit AO-owned extension is the complete
-// tool surface. No print or non-interactive mode flag is ever emitted.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	binary, err := r.resolveBinary(ctx)
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
-	// Preflight calls ReviewCommand before request-scoped prompt files exist and
-	// only needs the executable. Production launches always have the prompt root.
 	if strings.TrimSpace(inv.TaskPromptRoot) == "" {
 		return ports.ReviewCommandSpec{Argv: []string{binary}}, nil
 	}
@@ -140,14 +129,11 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	return ports.ReviewCommandSpec{Argv: argv, Env: envVars}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Pi reviewer pane by relaunching with
-// the reviewer extension, manifest, and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// ReviewMessage returns the short task-file reference for the long-lived TUI.
 func (*Reviewer) ReviewMessage(ctx context.Context, inv ports.ReviewInvocation) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -185,7 +171,6 @@ func activateManifest(inv ports.ReviewInvocation) (reviewgateway.Environment, st
 	return env, pointerPath, nil
 }
 
-// ReviewCancel selects Pi's official interactive Escape cancellation key.
 func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInput, Interrupts: 1, Input: "\x1b"}, nil
 }

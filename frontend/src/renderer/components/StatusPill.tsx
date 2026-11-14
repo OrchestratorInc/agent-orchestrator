@@ -8,7 +8,6 @@ type StatusPillProps = {
 	leading?: "none" | "normal";
 };
 
-/** Tinted status pill with inset hairline — shared by topbar and inspector. */
 export function StatusPill({ label, tone, breathe, className, leading = "normal" }: StatusPillProps) {
 	return (
 		<span

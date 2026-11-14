@@ -185,7 +185,6 @@ async function installHarness(page: Page): Promise<void> {
 	await installFakeTerminalMux(page, {
 		[handleA]: longReplay,
 		[handleB]: shortReplay,
-		// C deliberately has no replay bytes.
 		[handleC]: "",
 		[handleD]: "D short replay",
 		[handleE]: "E short replay",
@@ -306,8 +305,6 @@ test.describe("retained terminal viewport", () => {
 		expect(sixStats.sockets).toBe(1);
 		expect(sixStats.writers).toBe(6);
 
-		// A real width and font-size change reflows xterm's buffer. Preparation
-		// must finish that reflow at the latest output before revealing the pane.
 		await openSession(page, sessionB.title);
 		const beforeParkedGridChange = await muxStats(page);
 		const aResizesBeforeReturn = beforeParkedGridChange.resizes[handleA]?.length ?? 0;
@@ -346,9 +343,6 @@ test.describe("retained terminal viewport", () => {
 		expect((await muxStats(page)).opens[handleA]).toBe(1);
 		await page.setViewportSize({ width: 1280, height: 800 });
 
-		// Frame-sensitive bottom-follow case: hidden output leaves xterm's
-		// offscreen DOM scrollTop stale even though its canonical buffer is at
-		// bottom. The reveal observer must never see that stale frame.
 		await activeTerminal(page).locator(".xterm-screen").hover();
 		await page.mouse.wheel(0, 100_000);
 		await expect.poll(() => activeBufferAtBottom(page)).toBe(true);
@@ -418,9 +412,6 @@ test.describe("retained terminal viewport", () => {
 		}, handleA);
 		const aResizesBeforeReturn = (await muxStats(page)).resizes[handleA]?.length ?? 0;
 
-		// Exercise the same rapid return seen in 04.30.04, including output in
-		// the return commit. The retained terminal returns to its already-published
-		// grid, so activation must not manufacture another PTY/SIGWINCH repaint.
 		await openSession(page, sessionA.title);
 		await expect
 			.poll(async () => (await muxStats(page)).resizes[handleA]?.length ?? 0)
@@ -487,8 +478,6 @@ test.describe("retained terminal viewport", () => {
 				return terminal.getSelection();
 			});
 
-		// A hidden terminal stays connected for output but cannot accept
-		// keyboard/paste input; only the active B pane receives it.
 		await openSession(page, sessionB.title);
 		await expect(page.getByTestId("terminal-replay-cover")).toHaveCount(0);
 		const inputsBefore = (await muxStats(page)).inputs[handleA]?.length ?? 0;
@@ -551,11 +540,9 @@ test.describe("retained terminal viewport", () => {
 		expect(afterReconnectSelection).toBe(retainedSelection);
 		expect((await muxStats(page)).opens[handleA]).toBe(2);
 		const reconnectStats = await muxStats(page);
-		expect(reconnectStats.writers).toBe(3); // Exactly one writer for each retained A/B/C attachment.
+		expect(reconnectStats.writers).toBe(3);
 		expect(reconnectStats.sockets).toBe(1);
 
-		// Authoritative session removal is a hard lifecycle boundary, not an LRU
-		// event: every retained renderer and mux must be disposed.
 		await page.evaluate((ids) => {
 			for (const id of ids) window.__aoFakeAgent!.removeWorker(id);
 		}, [sessionA.id, sessionB.id, sessionC.id]);

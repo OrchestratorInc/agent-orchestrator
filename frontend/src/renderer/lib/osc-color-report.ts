@@ -1,8 +1,3 @@
-// xterm emits OSC 4/10/11/12 color reports on its onData stream. AO forwards
-// only strict, complete reports back to the PTY. Cursor Agent's theme probe
-// specifically issues OSC 10/11/12 queries on stdout and listens on stdin; AO
-// must return the live palette or the prompt bar defaults to dark.
-
 export type OscTerminalColors = {
 	foreground: string;
 	background: string;
@@ -26,7 +21,6 @@ export function isOscColorReport(data: string): boolean {
 	return OSC_COLOR_REPORT.test(data);
 }
 
-/** Convert #rrggbb or browser-resolved rgb() into xterm's rgb:RRRR/GGGG/BBBB form. */
 export function hexToOscRgb(hex: string): string {
 	const normalized = hex.replace(/^#/, "").trim();
 	if (normalized.length === 3) {
@@ -70,7 +64,6 @@ export function buildOscColorReports(colors: OscTerminalColors): string {
 	);
 }
 
-/** Answer OSC 10/11/12 probes emitted on the PTY output stream. */
 export function cursorOscProbeRepliesForOutput(chunk: string, colors: OscTerminalColors): string | null {
 	if (!OSC_COLOR_PROBE.test(chunk)) return null;
 	const replies: string[] = [];
@@ -80,7 +73,6 @@ export function cursorOscProbeRepliesForOutput(chunk: string, colors: OscTermina
 	return replies.length > 0 ? replies.join("") : null;
 }
 
-/** Buffer split xterm onData chunks and forward only complete strict OSC 4/10/11/12 replies. */
 export function createOscColorReportForwarder(emit: (report: string) => void): {
 	push: (data: string) => void;
 	dispose: () => void;
@@ -91,9 +83,6 @@ export function createOscColorReportForwarder(emit: (report: string) => void): {
 		push(data: string) {
 			buffer += data;
 			if (buffer.length > MAX_OSC_BUFFER_LENGTH) {
-				// An unterminated OSC must not retain arbitrary PTY output forever.
-				// Keep only the newest bounded suffix; the normal start-sequence check
-				// below will discard it unless it is still a valid partial report.
 				buffer = buffer.slice(-MAX_OSC_BUFFER_LENGTH);
 			}
 			for (;;) {
@@ -133,7 +122,6 @@ export function createOscColorReportForwarder(emit: (report: string) => void): {
 	};
 }
 
-/** Buffer split xterm onData chunks and forward only strict ANSI cursor-position replies. */
 export function createCursorPositionReportForwarder(emit: (report: string) => void): {
 	hasPartialRequest: () => boolean;
 	observeOutput: (data: string) => void;

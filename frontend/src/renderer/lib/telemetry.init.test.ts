@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// initTelemetry memoizes its result in a module-scoped promise, so each test
-// resets the module registry and re-mocks the heavy boundaries (posthog, the
-// Electron bridge) before importing. This exercises the real init control flow.
-
 const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
@@ -94,16 +90,12 @@ describe("initTelemetry recovery", () => {
 		}));
 
 		const { initTelemetry } = await import("./telemetry");
-		// First attempt throws -> caught -> false, and the memoized promise is dropped.
 		expect(await initTelemetry()).toBe(false);
-		// A later call retries and succeeds, rather than the whole session staying dark.
 		expect(await initTelemetry()).toBe(true);
 		expect(calls).toBe(2);
 	});
 
 	it("keeps a deliberately withheld result memoized (no retry, no re-bootstrap)", async () => {
-		// Null bootstrap = telemetry withheld (no key / not opted in). That is a
-		// deliberate false, not an error, so it must stay cached and NOT retry.
 		const getBootstrap = vi.fn(async () => null);
 		mockPosthog();
 		vi.doMock("./bridge", () => ({
@@ -116,7 +108,6 @@ describe("initTelemetry recovery", () => {
 		const { initTelemetry } = await import("./telemetry");
 		expect(await initTelemetry()).toBe(false);
 		expect(await initTelemetry()).toBe(false);
-		// Memoized: the withheld result is not re-attempted.
 		expect(getBootstrap).toHaveBeenCalledTimes(1);
 	});
 
@@ -284,7 +275,6 @@ describe("PostHog identity and opt-out", () => {
 			expect(sent[0][1]).toEqual(expect.objectContaining({ days_since_install: 0 }));
 			await vi.advanceTimersByTimeAsync(600_000);
 			expect(claim).toHaveBeenCalledTimes(2);
-			// Next-day return is computed in PostHog retention, not sent.
 			expect(posthogStub.capture.mock.calls.some(([name]) => /next_day/.test(String(name)))).toBe(false);
 		} finally {
 			vi.useRealTimers();
@@ -349,14 +339,12 @@ describe("PostHog identity and opt-out", () => {
 		await initTelemetry();
 		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "user_01H", isIdentifiedID: true } }));
 		expect(posthogStub.register).toHaveBeenLastCalledWith(expect.objectContaining({ ao_cloud_user_id: "user_01H" }));
-		// Launch events go out identified, with install_id still attached.
 		const launchEvents = posthogStub.capture.mock.calls.map(([, properties]) => properties);
 		expect(launchEvents.length).toBeGreaterThan(0);
 		for (const properties of launchEvents) {
 			expect(properties).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
 			expect(properties).not.toHaveProperty("$process_person_profile", false);
 		}
-		// The runtime still sets the person properties once, without a reset.
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		expect(posthogStub.reset).not.toHaveBeenCalled();
 		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
@@ -448,7 +436,6 @@ describe("PostHog identity and opt-out", () => {
 			email: "dev@example.com",
 			ao_cloud_user_id: "user_01H",
 		});
-		// Email must not be stamped on events: not registered, not on a capture.
 		for (const [props] of posthogStub.register.mock.calls as unknown as [Record<string, unknown>][]) {
 			expect(JSON.stringify(props)).not.toContain("dev@example.com");
 			expect(props).not.toHaveProperty("email");
@@ -506,7 +493,7 @@ describe("PostHog identity and opt-out", () => {
 		const { identifyCloudUser, clearCloudUser } = await import("./telemetry");
 		const pending = identifyCloudUser({ id: "user_A", email: "a@example.com" });
 		await Promise.resolve();
-		clearCloudUser(); // init has not finished, so there is nothing to reset yet
+		clearCloudUser();
 		release();
 		await pending;
 		expect(posthogStub.identify).not.toHaveBeenCalled();
@@ -538,7 +525,6 @@ describe("PostHog identity and opt-out", () => {
 		await identifyCloudUser({ id: "user_A", email: "a@example.com" });
 		clearCloudUser();
 		await identifyCloudUser({ id: "user_B", email: "b@example.com" });
-		// Direct switch with no sign-out in between also resets first.
 		await identifyCloudUser({ id: "user_C", email: "c@example.com" });
 		expect(order).toEqual(["identify:user_A", "reset", "identify:user_B", "reset", "identify:user_C"]);
 		posthogStub.identify.mockReset();
@@ -556,7 +542,6 @@ describe("PostHog identity and opt-out", () => {
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		expect(posthogStub.identify).not.toHaveBeenCalled();
 
-		// Opting back in resumes capture and identifies the signed-in user.
 		await applyAnalyticsOptOut(false);
 		expect(posthogStub.opt_in_capturing).toHaveBeenLastCalledWith({ captureEventName: false });
 		expect(posthogStub.identify).toHaveBeenCalledWith("user_01H", expect.objectContaining({ email: "dev@example.com" }));
@@ -590,7 +575,7 @@ describe("PostHog identity and opt-out", () => {
 		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
 		const init = initTelemetry();
 		await Promise.resolve();
-		await applyAnalyticsOptOut(true); // client is not ready yet: only the flag can be set
+		await applyAnalyticsOptOut(true);
 		releaseSettings();
 
 		expect(await init).toBe(false);
@@ -625,8 +610,6 @@ describe("PostHog identity and opt-out", () => {
 	});
 });
 
-// Signing in through the orchestrator.inc return page can hand over the
-// website visitor's PostHog id; the renderer links it to the account once.
 describe("linking a website visit at sign-in", () => {
 	const VISITOR = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
 	const EVENT = "ao.renderer.cloud_web_visitor_link_requested";
@@ -662,7 +645,6 @@ describe("linking a website visit at sign-in", () => {
 		await vi.waitFor(() => expect(linkEvents()).toHaveLength(1));
 
 		expect(posthogStub.identify).toHaveBeenCalledWith(userA.id, expect.objectContaining({ email: userA.email }));
-		// alias(alias, original): merge the website id into the identified user.
 		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
 		expect(posthogStub.alias).toHaveBeenCalledWith(VISITOR, userA.id);
 		const eventOrder = posthogStub.capture.mock.invocationCallOrder[posthogStub.capture.mock.calls.findIndex(([name]) => name === EVENT)];
@@ -753,12 +735,10 @@ describe("linking a website visit at sign-in", () => {
 
 	it("never moves a visit to another account, or keeps it past a sign-out", async () => {
 		const { noteCloudSignInWebVisitor, identifyCloudUser, clearCloudUser } = await load();
-		// A's visit, then the session switches to B before A was identified.
 		noteCloudSignInWebVisitor(userA.id, VISITOR);
 		noteCloudSignInWebVisitor(userB.id);
 		await identifyCloudUser(userB);
 		await identifyCloudUser(userA);
-		// B's visit, then a sign-out notification.
 		noteCloudSignInWebVisitor(userB.id, VISITOR);
 		noteCloudSignInWebVisitor(null);
 		clearCloudUser();

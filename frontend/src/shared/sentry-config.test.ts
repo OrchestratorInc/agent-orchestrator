@@ -29,7 +29,6 @@ describe("daemon Sentry handoff", () => {
 describe("published Sentry builds", () => {
 	it("accepts only release-stamped stable and nightly versions", () => {
 		for (const version of ["0.14.10", "0.14.11-nightly.202611100625"]) expect(isPublishedSentryBuild(version, false)).toBe(true);
-		// Every one of these reached Sentry from a self-built or development copy.
 		for (const version of ["development", "", "0.13.0-ragcorp.7", "0.14.10+ptbr.1", "0.14.9-nightly.202610311751.local", "0.14.10-custom.1", "0.13.4-noetaxis.4612024", "0.14.11-edge.1"]) {
 			expect(isPublishedSentryBuild(version, false)).toBe(false);
 		}

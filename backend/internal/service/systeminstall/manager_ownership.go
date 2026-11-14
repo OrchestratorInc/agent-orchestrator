@@ -16,8 +16,6 @@ import (
 
 const maxShimBytes = 64 << 10
 
-// managerOwnsBinary proves that the named package manager owns the exact
-// executable selected by the harness adapter.
 func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, string, string, string, bool) (bool, error) {
 	return func(ctx context.Context, binaryPath, method, pkg string, cask bool) (bool, error) {
 		if commands == nil || binaryPath == "" || pkg == "" || packageLayout(binaryPath) == layoutVersionManager {
@@ -31,8 +29,6 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 					return true, nil
 				}
 			}
-			// The daemon's npm is one Node among many: nvm, fnm, Node tarballs
-			// and vendor installers keep their own global prefix.
 			if _, ok := npmPrefixOwningBinary(binaryPath, pkg); ok {
 				return true, nil
 			}
@@ -110,7 +106,6 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 				for _, raw := range main.AppPaths {
 					var appPath string
 					if json.Unmarshal(raw, &appPath) != nil {
-						// pipx serializes pathlib.Path using this tagged object.
 						var tagged struct {
 							Type string `json:"__type__"`
 							Path string `json:"__Path__"`
@@ -154,15 +149,11 @@ func managerPath(ctx context.Context, commands ports.CommandRunner, argv []strin
 	return filepath.Clean(root), nil
 }
 
-// Probe timeouts. Manager metadata commands may reach the network; ownership
-// and runtime probes only read local state.
 const (
 	localProbeTimeout   = 5 * time.Second
 	managerProbeTimeout = 10 * time.Second
 )
 
-// runProbe runs a bounded read-only command and returns its output. Stderr is
-// kept only when keepStderr is set: manager warnings would corrupt JSON output.
 func runProbe(ctx context.Context, commands ports.CommandRunner, timeout time.Duration, keepStderr bool, argv []string) (string, error) {
 	if commands == nil {
 		return "", fmt.Errorf("command runner unavailable")
@@ -210,8 +201,6 @@ func nodeShimTargetsPackage(binaryPath, packageRoot string) (bool, error) {
 	return found, nil
 }
 
-// nodeShimTargets returns the node_modules files a Windows (.cmd/.ps1) or
-// POSIX npm shim passes to node, in order; none when path is not such a shim.
 func nodeShimTargets(binaryPath string) ([]string, error) {
 	switch strings.ToLower(filepath.Ext(binaryPath)) {
 	case "", ".cmd", ".ps1":
@@ -233,7 +222,6 @@ func nodeShimTargets(binaryPath string) ([]string, error) {
 	var targets []string
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"))
-		// Accept launcher arguments, never mentions in comments or assignments.
 		if !nodeShimLaunchLine(line) {
 			continue
 		}
@@ -254,8 +242,6 @@ func nodeShimTargets(binaryPath string) ([]string, error) {
 }
 
 func nodeShimLaunchLine(line string) bool {
-	// npm's cmd shim chains its launch after other commands:
-	// endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" ...
 	for _, command := range strings.FieldsFunc(line, func(r rune) bool { return r == '&' || r == '|' }) {
 		if nodeShimLaunchCommand(command) {
 			return true
@@ -282,7 +268,6 @@ func nodeShimLaunchCommand(line string) bool {
 		command = match[1]
 	}
 	command = strings.ToLower(strings.ReplaceAll(command, `\`, "/"))
-	// npm's cmd shim resolves node into %_prog%; its PS shim uses node$exe.
 	base := command[strings.LastIndex(command, "/")+1:]
 	return command == "%_prog%" || base == "node" || base == "node.exe" || base == "node$exe" || strings.Contains(command, "/node_modules/")
 }
@@ -400,18 +385,10 @@ func advisoryPackageSources(plans []Plan, preferred, layout string) []Plan {
 	return sources
 }
 
-// npmPrefixOwningBinary finds the npm global prefix that installed pkg and
-// owns binaryPath, from the binary's own location rather than the daemon's
-// npm. A harness installed with another Node (nvm, fnm, a Node tarball, or an
-// installer's private prefix such as ~/.local) lives under
-// <prefix>/lib/node_modules/<pkg> on Unix and <prefix>\node_modules\<pkg> on
-// Windows, where the prefix also holds the command shim.
 func npmPrefixOwningBinary(binaryPath, pkg string) (string, bool) {
 	if binaryPath == "" || pkg == "" {
 		return "", false
 	}
-	// Bun, pnpm and Yarn also keep global packages under node_modules; npm
-	// must not claim, and then rewrite, a copy another manager installed.
 	switch packageLayout(binaryPath) {
 	case layoutBun, layoutPNPM, layoutYarn, layoutVersionManager:
 		return "", false
@@ -431,7 +408,6 @@ func npmPrefixOwningBinary(binaryPath, pkg string) (string, bool) {
 			return prefix, true
 		}
 	}
-	// Windows npm shims (<prefix>\pi.cmd) are files in the prefix itself.
 	prefix := filepath.Dir(binaryPath)
 	packageRoot := filepath.Join(prefix, "node_modules", filepath.FromSlash(pkg))
 	if owned, err := nodeShimTargetsPackage(binaryPath, packageRoot); err == nil && owned && npmPackageNamed(packageRoot, pkg) {
@@ -451,10 +427,6 @@ func npmPackageNamed(packageRoot, pkg string) bool {
 	return json.Unmarshal(body, &manifest) == nil && manifest.Name == pkg
 }
 
-// npmCommandForPrefix runs the npm that belongs to prefix with that prefix's
-// Node when the prefix is a Node installation (nvm, fnm, a tarball), so an
-// update uses the same Node the harness was installed with. Other prefixes,
-// such as ~/.local or %APPDATA%\npm, use npm from PATH.
 func npmCommandForPrefix(goos, prefix string) []string {
 	node, cli := filepath.Join(prefix, "bin", "node"), filepath.Join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js")
 	if goos == "windows" {

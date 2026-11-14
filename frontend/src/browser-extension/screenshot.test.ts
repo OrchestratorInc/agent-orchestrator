@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { base64ToBytes, bytesToBase64, pngSize } from "./screenshot";
 
-// 1x1 transparent PNG.
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 describe("screenshot helpers", () => {

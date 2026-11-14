@@ -58,7 +58,6 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	useEffect(() => {
 		if (status === "authenticated") void load();
 		else setSaved([]);
-		// The bridge is fixed for the lifetime of this Settings page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [status]);
 
@@ -78,7 +77,6 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		setBusy(true);
 		setFormError("");
 		try {
-			// Old saved records have no identity, so re-pair them through add.
 			const health = editing?.hostId
 				? await aoBridge.remotes.update(editing.url, {
 					label: nextLabel,
@@ -180,8 +178,6 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			) : null}
 		</SettingsSection>
 
-		{/* The form wraps the whole section so its rows stay direct children of
-		    the grouped card and pick up the card's dividers. */}
 		<form className="flex w-full flex-col" onSubmit={(event) => void save(event)} ref={formRef}>
 			<SettingsSection title={editing ? t("remote.editHost", { label: editing.label }) : t("remote.addHost")} grouped>
 				<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("remote.setupHint")}</p>

@@ -13,8 +13,6 @@ declare global {
 }
 
 test.describe("live renderer performance workloads", () => {
-	// AO_PERF_PRODUCTION=1 AO_PERF_BENCH=1 AO_E2E_PORT=5497 \
-	//   npm run test:e2e -- chat-performance --grep chatRenderCost --repeat-each=5 --workers=1
 	test.skip(
 		process.env.AO_PERF_BENCH !== "1",
 		"Opt-in benchmark; timings are evidence, not hardware-dependent CI assertions",

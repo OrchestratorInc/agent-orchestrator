@@ -12,11 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// conversation_provider_events_branch_insert gives an archive row the conversation's
-// active branch with an UPDATE after the INSERT, but only when the row arrives with an
-// empty branch_id. The archive INSERT sets branch_id itself, so the row is written
-// once. These tests watch for that UPDATE with an observer trigger.
-
 const observeBranchRewrites = `
 CREATE TABLE branch_rewrites (event_id INTEGER NOT NULL);
 CREATE TRIGGER observe_branch_rewrites AFTER UPDATE OF branch_id ON conversation_provider_events
@@ -24,8 +19,6 @@ BEGIN
     INSERT INTO branch_rewrites (event_id) VALUES (NEW.id);
 END;`
 
-// archiveBranchFixture is a Chat session with a conversation on its root branch, and
-// a second connection to the same database on which branch_id rewrites are observed.
 func archiveBranchFixture(t *testing.T) (*sqlite.Store, *sql.DB, domain.SessionRecord, domain.ConversationRecord) {
 	t.Helper()
 	ctx := context.Background()
@@ -87,10 +80,6 @@ func branchRewrites(t *testing.T, raw *sql.DB) int {
 	return n
 }
 
-// assertTriggerAgrees inserts a row the way a writer that omits branch_id does, so the
-// trigger assigns it, and checks that the observer saw that rewrite and that the
-// branch it assigned is the one the archive INSERT chose. It runs last: the control
-// row's rewrite is the only one the observer should have recorded.
 func assertTriggerAgrees(t *testing.T, raw *sql.DB, session domain.SessionID, conversation, archivedEventID string) {
 	t.Helper()
 	if got := branchRewrites(t, raw); got != 0 {
@@ -147,8 +136,6 @@ func TestArchiveInsertFollowsTheActiveBranchWithoutARewrite(t *testing.T) {
 	assertTriggerAgrees(t, raw, session.ID, conversation.ID, "on-child")
 }
 
-// An event archived from inside another event's projection takes the nested path,
-// which reuses the outer transaction. A batched write archives its events that way.
 func TestNestedArchiveInsertsSetTheBranchWithoutARewrite(t *testing.T) {
 	ctx := context.Background()
 	s, raw, session, conversation := archiveBranchFixture(t)
@@ -175,9 +162,6 @@ func TestNestedArchiveInsertsSetTheBranchWithoutARewrite(t *testing.T) {
 	assertTriggerAgrees(t, raw, session.ID, conversation.ID, "inner-2")
 }
 
-// Replaying native history happens inside the transaction that moves the
-// conversation head, so its events must land on the branch that transaction just
-// activated, not the one active when it began.
 func TestArchiveInsertSeesTheBranchActivatedEarlierInTheSameTransaction(t *testing.T) {
 	ctx := context.Background()
 	s, raw, session, conversation := archiveBranchFixture(t)
@@ -208,9 +192,6 @@ func TestArchiveInsertSeesTheBranchActivatedEarlierInTheSameTransaction(t *testi
 	assertTriggerAgrees(t, raw, session.ID, conversation.ID, "replayed")
 }
 
-// An archive row for a conversation that does not exist fails on its foreign key.
-// Setting branch_id in the INSERT must not turn that error into a silently ignored
-// row: INSERT OR IGNORE swallows a NOT NULL violation.
 func TestArchiveInsertForAMissingConversationStillFails(t *testing.T) {
 	ctx := context.Background()
 	s, raw, session, _ := archiveBranchFixture(t)

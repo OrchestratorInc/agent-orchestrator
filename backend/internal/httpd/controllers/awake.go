@@ -14,7 +14,6 @@ import (
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 )
 
-// AwakeService defines loopback-only desktop wake operations.
 type AwakeService interface {
 	Status() domain.AwakeState
 	ObserveStatus(context.Context) domain.AwakeState
@@ -32,25 +31,20 @@ type AwakeService interface {
 	RevokeLowPower(context.Context) error
 }
 
-// AwakeController serves desktop wake routes.
 type AwakeController struct{ Svc AwakeService }
 
-// AwakeIDParam identifies a wake request in a route.
 type AwakeIDParam struct {
 	AwakeID string `path:"awakeId"`
 }
 
-// ExtendAwakeRequest adds time to a finite request.
 type ExtendAwakeRequest struct {
 	DurationSeconds int `json:"durationSeconds"`
 }
 
-// AwakeRulesRequest replaces activation rules.
 type AwakeRulesRequest struct {
 	Rules []domain.AwakeRule `json:"rules"`
 }
 
-// AwakeDownloadsRequest reports active AO download identities.
 type AwakeDownloadsRequest struct {
 	ActiveIDs []string `json:"activeIds"`
 }
@@ -92,14 +86,12 @@ func (c *AwakeController) reply(w http.ResponseWriter, r *http.Request, err erro
 	envelope.WriteJSON(w, http.StatusOK, c.Svc.Status())
 }
 
-// Status returns current wake state.
 func (c *AwakeController) Status(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, nil)
 	}
 }
 
-// Start starts a wake request.
 func (c *AwakeController) Start(w http.ResponseWriter, r *http.Request) {
 	if !c.available(w, r) {
 		return
@@ -110,14 +102,12 @@ func (c *AwakeController) Start(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// End ends one owned request.
 func (c *AwakeController) End(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.End(r.Context(), chi.URLParam(r, "awakeId")))
 	}
 }
 
-// Extend extends a finite request.
 func (c *AwakeController) Extend(w http.ResponseWriter, r *http.Request) {
 	if !c.available(w, r) {
 		return
@@ -128,21 +118,18 @@ func (c *AwakeController) Extend(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Stop releases this adapter's wake ownership.
 func (c *AwakeController) Stop(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.StopAll(r.Context()))
 	}
 }
 
-// Resume checks fresh host readings before clearing a safety stop.
 func (c *AwakeController) Resume(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.Resume(r.Context()))
 	}
 }
 
-// Settings updates desktop wake settings.
 func (c *AwakeController) Settings(w http.ResponseWriter, r *http.Request) {
 	if !c.available(w, r) {
 		return
@@ -153,7 +140,6 @@ func (c *AwakeController) Settings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Rules replaces activation rules.
 func (c *AwakeController) Rules(w http.ResponseWriter, r *http.Request) {
 	if !c.available(w, r) {
 		return
@@ -164,7 +150,6 @@ func (c *AwakeController) Rules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Downloads updates typed download heartbeats.
 func (c *AwakeController) Downloads(w http.ResponseWriter, r *http.Request) {
 	if !c.available(w, r) {
 		return
@@ -175,35 +160,30 @@ func (c *AwakeController) Downloads(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Recover ends requests and restores journaled effects.
 func (c *AwakeController) Recover(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.Recover(r.Context()))
 	}
 }
 
-// ClearHistory removes ended sessions while preserving replay protection.
 func (c *AwakeController) ClearHistory(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.ClearHistory(r.Context()))
 	}
 }
 
-// Observe reads fresh host conditions.
 func (c *AwakeController) Observe(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		envelope.WriteJSON(w, http.StatusOK, c.Svc.ObserveStatus(r.Context()))
 	}
 }
 
-// AuthorizeLowPower opens a user-initiated macOS authorization prompt.
 func (c *AwakeController) AuthorizeLowPower(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.AuthorizeLowPower(r.Context()))
 	}
 }
 
-// RevokeLowPower disables automation and requests explicit permission removal.
 func (c *AwakeController) RevokeLowPower(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.RevokeLowPower(r.Context()))

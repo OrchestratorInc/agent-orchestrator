@@ -117,8 +117,6 @@ func (p *installationInvalidations) InvalidateAgentInstallation(harness string) 
 	p.harnesses = append(p.harnesses, harness)
 }
 
-// Launches, Chat drivers and model discovery each hold their own plugins: an
-// install that clears only the agent service's cache leaves them on the old binary.
 func TestInvalidateHarnessBinaryClearsEveryCache(t *testing.T) {
 	launch := &cachedBinaryAgent{}
 	models := &cachedBinaryAgent{}
@@ -144,9 +142,6 @@ func TestInvalidateHarnessBinaryClearsEveryCache(t *testing.T) {
 	}
 }
 
-// TestWiring_WriteFlowsToBroadcaster exercises the real boot path end to end:
-// a lifecycle write -> sqlite -> DB trigger -> change_log -> CDC poller ->
-// broadcaster, through the same cdc.Source implementation the daemon uses.
 func TestWiring_WriteFlowsToBroadcaster(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlitetest.Open(t.TempDir())
@@ -177,8 +172,6 @@ func TestWiring_WriteFlowsToBroadcaster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A real transition through the engine, which writes the row and fires the
-	// activity_state/is_terminated CDC trigger.
 	if err := lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Timestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -200,12 +193,9 @@ func TestWiring_WriteFlowsToBroadcaster(t *testing.T) {
 	}
 }
 
-// TestWiring_AgentResolverResolvesRealAdapters asserts buildAgentResolver wires a
-// real registry-backed per-session resolver: each harness resolves to the
-// matching registered adapter, while empty and unknown harnesses miss.
 func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	resolver, err := buildAgentResolver("", log) // empty default → claude-code
+	resolver, err := buildAgentResolver("", log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,12 +254,6 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 	}
 }
 
-// TestWiring_ActiveTurnSteeringComesFromAdapters asserts the active-turn
-// steering policy lifecycle consumes is resolved from the agent adapters
-// (ports.ActiveTurnSteerer) rather than from any harness knowledge baked into
-// the shared domain package. A harness whose adapter does not declare the
-// capability — and an unresolvable one — must answer false, so an unknown
-// harness is never written to mid-turn.
 func TestWiring_ActiveTurnSteeringComesFromAdapters(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	agents, err := buildAgentResolver(config.DefaultAgent, log)
@@ -315,13 +299,6 @@ func TestWiring_StartupSignalGateComesFromAdapters(t *testing.T) {
 	}
 }
 
-// TestWiring_UrgentNudgeGateComesFromAdapters asserts the urgent merge-conflict
-// nudge is fail-closed at a waiting_input prompt: it is only safe on a harness
-// that reports a permission dialog AS blocked (ports.BlockedActivitySignaler),
-// so a waiting_input prompt there is a genuine idle composer rather than a
-// masked permission decision. Codex, Droid, and the shared-hook harnesses all
-// fold permission prompts into waiting_input and must stay suppressed; only
-// blocked-signalling adapters (claude-code, kimchi) open the boundary.
 func TestWiring_UrgentNudgeGateComesFromAdapters(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	agents, err := buildAgentResolver(config.DefaultAgent, log)
@@ -335,10 +312,6 @@ func TestWiring_UrgentNudgeGateComesFromAdapters(t *testing.T) {
 			t.Errorf("harness %q reports permission dialogs as blocked; urgent nudge must be allowed at waiting_input", harness)
 		}
 	}
-	// Codex maps permission-request to waiting_input; Droid folds both permission
-	// decisions and idle notifications into waiting_input; Goose/Devin ride the
-	// shared name-only StandardDeriveActivityState with no blocked signal. All
-	// must keep urgent delivery suppressed at a waiting_input prompt.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessCodex, domain.HarnessDroid, domain.HarnessGoose, domain.HarnessDevin,
 		"definitely-not-an-agent", "",
@@ -352,10 +325,6 @@ func TestWiring_UrgentNudgeGateComesFromAdapters(t *testing.T) {
 	}
 }
 
-// TestWiring_StartSessionBuildsSessionService asserts the daemon's startSession
-// constructs a real controller-facing session service end to end (resolver +
-// gitworktree workspace + session manager over the shared store/LCM), which is
-// what gets mounted at httpd APIDeps.Sessions.
 func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
@@ -459,14 +428,6 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	}
 }
 
-// TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken is a regression test for
-// issue #2685: when no tracker credentials are configured, the session service
-// must tolerate a true-nil ports.Tracker so Spawn's issue-context guard fires
-// instead of dereferencing a typed-nil *github.Tracker. The pre-fix wiring
-// assigned the typed-nil return of newGitHubTracker directly, and
-// `ao spawn --issue` panicked on the first lookup. The multi-tracker is now
-// built once in Run and passed in (see newMultiTracker); this test exercises
-// the service-side nil-guard directly.
 func TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken(t *testing.T) {
 	t.Setenv("AO_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -496,19 +457,9 @@ func TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken(t *testing.T) {
 		t.Fatalf("startSession: %v", err)
 	}
 
-	// Spawn reaches withIssueContext (and the tracker guard) before the manager
-	// tries to materialize a workspace. The manager may return an error from the
-	// no-op runtime, but it must not panic — that is the regression.
 	_, _, _, _ = svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, IssueID: "107"})
 }
 
-// TestStartTrackerIntake_RunsEvenWithoutEnabledProjects is a regression test:
-// startTrackerIntake used to scan projects once at call time and skip starting
-// the observer loop entirely when none had intake enabled yet. Poll() itself
-// already re-reads project config on every tick, so a project enabling
-// intake after daemon boot was silently never picked up until a restart. With
-// the AO_TRACKER_INTAKE gate on, the loop must still always start; Poll is what
-// decides whether there's work to do.
 func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
@@ -638,8 +589,6 @@ func (c *captureRuntimeSender) SendMessage(_ context.Context, handle ports.Runti
 	return nil
 }
 
-// TestWiring_SessionMessengerSendsToRuntimePane asserts the daemon wires ao
-// send to the live runtime pane and resolves the handle from the shared store.
 func TestWiring_SessionMessengerSendsToRuntimePane(t *testing.T) {
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
@@ -757,14 +706,8 @@ func (c *captureMessenger) Send(_ context.Context, id domain.SessionID, msg stri
 	return nil
 }
 
-// TestWiring_StartLifecycleThreadsMessengerIntoLCM asserts startLifecycle
-// constructs the LCM with a real messenger by driving an SCM observation
-// through the wired stack and checking the messenger receives the CI-failure
-// nudge — a nil messenger here would silently drop the send inside sendOnce.
 func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	// Cancel must run BEFORE Stop so the reaper goroutine's ctx.Done() fires;
-	// Stop is a no-op otherwise. Cleanup is LIFO, so register Stop first.
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -819,13 +762,6 @@ func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 	}
 }
 
-// TestWiring_MergeConflictNudgeReArmsAfterConflictClears is the end-to-end
-// counterpart to the lifecycle unit tests for #4528, over the real sqlite store
-// the daemon runs on: it drives the SCM observer's entrypoint
-// (ApplySCMObservation) through the full mergeable → conflicting → mergeable →
-// conflicting cycle and asserts the second conflict notifies again. The
-// dedup signature is persisted in pr.last_nudge_signature, so a fake store
-// cannot prove the round trip actually survives the real column.
 func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	store, err := sqlitetest.Open(t.TempDir())
@@ -894,11 +830,6 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 		t.Fatalf("second nudge is not the merge-conflict nudge for this session: %+v", messenger.msgs[1])
 	}
 
-	// A daemon restart rebuilds the lifecycle manager with empty in-memory dedup
-	// maps, so only pr.last_nudge_signature carries the state forward. A bare
-	// lifecycle.New over the same store is that rebuild without the background
-	// observers a second startLifecycle would leave running. The still-unresolved
-	// conflict must stay quiet across that boundary.
 	restarted := &captureMessenger{}
 	restartedLCM := lifecycle.New(store, restarted)
 	if err := restartedLCM.ApplySCMObservation(ctx, rec.ID, ports.SCMObservation{
@@ -913,9 +844,6 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 	}
 }
 
-// TestProjectRepoResolver_ResolvesRegisteredProject asserts the DB-backed repo
-// resolver turns a registered project into its on-disk repo path (so spawns
-// materialise a worktree), and fails loudly for an unregistered project.
 func TestProjectRepoResolver_ResolvesRegisteredProject(t *testing.T) {
 	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
@@ -940,15 +868,11 @@ func TestProjectRepoResolver_ResolvesRegisteredProject(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for an unregistered project")
 	}
-	// Guard the sentinel wrapping so the HTTP 400 mapping can't silently regress.
 	if !errors.Is(err, sessionmanager.ErrProjectNotResolvable) {
 		t.Fatalf("unregistered-project error should wrap ErrProjectNotResolvable, got %v", err)
 	}
 }
 
-// fakeSessionLifecycle records calls to Reconcile and RestoreAll so tests can
-// assert the daemon wiring invokes the correct methods without needing a real
-// runtime or worktree.
 type fakeSessionLifecycle struct {
 	reconcileCalled           bool
 	reconcileSafetyCalled     bool
@@ -1051,19 +975,12 @@ func (f *fakeSessionLifecycle) PersistChatModel(_ context.Context, _ domain.Sess
 	return nil
 }
 
-// TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
-// sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile
-// check) and that Reconcile and RestoreAll dispatch correctly through the
-// interface, matching what daemon.go wires at boot.
 func TestWiring_SessionLifecycleInterfaceInvokedByDaemon(t *testing.T) {
-	// Verify *sessionmanager.Manager satisfies the interface at compile time.
 	var _ sessionLifecycle = (*sessionmanager.Manager)(nil)
 
 	fake := &fakeSessionLifecycle{}
 	ctx := context.Background()
 
-	// Dispatch through the interface variable to exercise the real dispatch
-	// path, not just direct struct method calls.
 	var sl sessionLifecycle = fake
 
 	if err := sl.Reconcile(ctx); err != nil {
@@ -1137,12 +1054,6 @@ func (r *selectableRuntime) SendMessage(context.Context, ports.RuntimeHandle, st
 	return nil
 }
 
-// TestWiring_NewMultiTracker_NeverTypedNilWhenNoGitHubToken verifies the
-// typed-nil guard from issue #2685 at the multi-tracker wiring level. With no
-// GitHub token the GitHub slot is lazily constructed, so newMultiTracker must
-// return a truly non-nil, usable ports.Tracker — never a typed-nil (non-nil
-// interface wrapping a nil pointer), which would bypass the session service's
-// `tracker == nil` guard and panic on first call.
 func TestWiring_NewMultiTracker_NeverTypedNilWhenNoGitHubToken(t *testing.T) {
 	t.Setenv("AO_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
@@ -1152,15 +1063,9 @@ func TestWiring_NewMultiTracker_NeverTypedNilWhenNoGitHubToken(t *testing.T) {
 	if tracker == nil {
 		t.Fatal("newMultiTracker = nil, want non-nil: the GitHub slot is lazily constructed and always present")
 	}
-	// With no credentials the lazy GitHub adapter fails to resolve, so an
-	// error from Preflight is fine — it just must not panic.
 	_ = tracker.Preflight(context.Background())
 }
 
-// TestWiring_NewMultiTracker_ReturnsNonNilWhenGitHubHasToken verifies the
-// degrade-gracefully pattern: when only the GitHub tracker can construct
-// (GitLab token missing), the multi-tracker still returns a non-nil
-// ports.Tracker that serves GitHub issue lookups.
 func TestWiring_NewMultiTracker_ReturnsNonNilWhenGitHubHasToken(t *testing.T) {
 	t.Setenv("AO_GITHUB_TOKEN", "gh-test-token")
 	t.Setenv("AO_GITLAB_TOKEN", "")

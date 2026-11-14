@@ -15,11 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// authenticationWithAccount decides readiness by the saved account new
-// sessions start on, when they start on one, and otherwise by Codex's
-// structured account check.
 func (s *Service) authenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-	// Accounts sign in to OpenAI; the adapter checks a custom provider's key instead.
 	if agentID == string(domain.HarnessCodex) && codexagent.UsesCustomModelProvider() {
 		return domain.AgentAuthenticationObservation{}, false
 	}
@@ -29,8 +25,6 @@ func (s *Service) authenticationWithAccount(ctx context.Context, agentID string,
 	return s.codexAuthenticationWithAccount(ctx, agentID, purpose)
 }
 
-// codexAuthenticationWithAccount adds the identity of the account a
-// structured Codex verdict checked, when it found that account signed in.
 func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
 	observation, record, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
 	if handled && record.Snapshot.ID != "" && (observation.State == domain.AgentAuthenticationAuthorized || observation.State == domain.AgentAuthenticationConfigured) {
@@ -40,14 +34,10 @@ func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID st
 	return observation, handled
 }
 
-// SetSavedDefaultSignIn late-binds the per-folder account catalog. When new
-// Claude Code or Codex sessions start on a saved account, that account's
-// sign-in, not the computer's own login, is whether the harness is ready.
 func (s *Service) SetSavedDefaultSignIn(signedIn func(ctx context.Context, harness domain.AgentHarness) (domain.AgentAccountIdentityCheck, bool)) {
 	s.savedDefaultSignIn = signedIn
 }
 
-// SetSavedDefaultLaunchEnv supplies the account context new tasks will use.
 func (s *Service) SetSavedDefaultLaunchEnv(launchEnv func(context.Context, domain.AgentHarness) (map[string]string, error)) {
 	s.savedDefaultLaunchEnv = launchEnv
 }
@@ -69,8 +59,6 @@ func (s *Service) savedDefaultAuthentication(ctx context.Context, agentID string
 	} else {
 		observation = successfulAuthentication(now, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "The default account is signed out, and no other account is signed in. Sign one in again in Settings.")
 	}
-	// Marks the verdict as the saved account's: a sign-in or sign-out of the
-	// CLI's own login does not change it, so clients check that login itself.
 	observation.Diagnostics = []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("agent_account", "saved_default_account")}
 	return observation, true
 }
@@ -92,14 +80,11 @@ func codexAccountIdentity(record codexAccountRecord) *domain.AgentAccountIdentit
 	return identity.Sanitized()
 }
 
-// Service integration.
 func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
 	observation, _, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
 	return observation, handled
 }
 
-// structuredCodexAuthenticationRecord also returns the account record the
-// verdict is about; it is zero when no account was checked.
 func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, codexAccountRecord, bool) {
 	none := codexAccountRecord{}
 	if agentID != string(domain.HarnessCodex) || s.codexAccounts == nil || s.codexAccounts.factory == nil {
@@ -107,9 +92,6 @@ func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agent
 	}
 	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
 		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("codex_account", "account_store_unavailable"))
-		// Account management is optional for ordinary Codex use. When AO's
-		// local account store cannot answer safely, fall back to the native
-		// readiness path instead of treating that as proof Codex is signed out.
 		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	if purpose == domain.AgentReadinessPurposeLaunch {
@@ -150,9 +132,6 @@ func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agent
 		if capabilities.CapacityRead.State != domain.CodexCapabilitySupported {
 			return domain.AgentAuthenticationObservation{}, none, false
 		}
-		// Launch readiness uses a protected provider call. account/read is only
-		// local metadata discovery and cannot prove that the server accepts the
-		// stored tokens.
 		s.codexAccounts.capacity.invalidate(record.Snapshot.ID, false)
 		_, capacityErr := s.codexAccounts.capacity.ensureOne(ctx, record, capabilities, true)
 		if capacityErr != nil {
@@ -167,8 +146,6 @@ func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agent
 			return latest.Snapshot.Authentication, latest, true
 		}
 		if !verified {
-			// Offline, timeout, and provider failures are not evidence that the
-			// account is signed out. Let native launch readiness remain advisory.
 			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		return latest.Snapshot.Authentication, latest, true
@@ -176,7 +153,6 @@ func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agent
 	return result, record, true
 }
 
-// CachedCodexAccounts returns the current in-memory view without native work.
 func (s *Service) CachedCodexAccounts(ctx context.Context) (CodexAccounts, error) {
 	if err := ctx.Err(); err != nil {
 		return CodexAccounts{}, err
@@ -196,14 +172,12 @@ func (s *Service) CachedCodexAccounts(ctx context.Context) (CodexAccounts, error
 	return result, nil
 }
 
-// CodexAccountEnsureOptions selects the account observations refreshed by EnsureCodexAccounts.
 type CodexAccountEnsureOptions struct {
 	IncludeUsage              bool
 	ForceAuthentication       bool
 	ForceDeviceReconciliation bool
 }
 
-// EnsureCodexAccounts rediscovers requested accounts and refreshes eligible observations.
 func (s *Service) EnsureCodexAccounts(ctx context.Context, ids []string, options CodexAccountEnsureOptions) (CodexAccounts, error) {
 	if s.codexAccounts == nil {
 		return CodexAccounts{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -219,9 +193,6 @@ func (s *Service) EnsureCodexAccounts(ctx context.Context, ids []string, options
 	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
 		return CodexAccounts{}, err
 	}
-	// Full Settings refreshes establish the current device account before any
-	// global-home checks. A targeted row refresh stays in that saved account's
-	// isolated home, so it must not publish a transient device reconciliation.
 	if len(ids) == 0 || options.ForceDeviceReconciliation {
 		_ = s.codexAccounts.reconcileGlobalWithPolicy(ctx, options.ForceDeviceReconciliation)
 	}
@@ -238,9 +209,6 @@ func (s *Service) EnsureCodexAccounts(ctx context.Context, ids []string, options
 	return result, err
 }
 
-// ConsumeCodexAccountResetCredit redeems one provider-reported usage-limit
-// reset and returns the refreshed cached account view. The provider chooses the
-// credit; opaque credit identifiers never cross the daemon boundary.
 func (s *Service) ConsumeCodexAccountResetCredit(ctx context.Context, accountID, idempotencyKey string) (CodexAccounts, error) {
 	if s.codexAccounts == nil {
 		return CodexAccounts{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -257,7 +225,6 @@ func (s *Service) ConsumeCodexAccountResetCredit(ctx context.Context, accountID,
 	return s.CachedCodexAccounts(ctx)
 }
 
-// SubscribeCodexAccounts returns cached state followed by latest-wins updates.
 func (s *Service) SubscribeCodexAccounts(ctx context.Context) (<-chan CodexAccounts, error) {
 	if s.codexAccounts == nil {
 		return nil, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -292,14 +259,12 @@ func (s *Service) SubscribeCodexAccounts(ctx context.Context) (<-chan CodexAccou
 	return out, nil
 }
 
-// PublishCodexAccounts notifies subscribers after externally owned switch changes.
 func (s *Service) PublishCodexAccounts() {
 	if s.codexAccounts != nil {
 		s.codexAccounts.publish()
 	}
 }
 
-// SetCodexAccountLoginTerminalOpener wires the trusted shell-terminal boundary.
 func (s *Service) SetCodexAccountLoginTerminalOpener(opener codexAccountLoginTerminalService) {
 	if s.codexAccounts != nil {
 		s.codexAccounts.terminal = opener
@@ -330,7 +295,6 @@ func (s *Service) prepareCodexAccountLogin(ctx context.Context) error {
 	}
 }
 
-// OpenCodexAccountLoginTerminal starts one private native-login operation.
 func (s *Service) OpenCodexAccountLoginTerminal(ctx context.Context) (CodexAccountLoginTerminalStart, error) {
 	if err := s.prepareCodexAccountLogin(ctx); err != nil {
 		return CodexAccountLoginTerminalStart{}, err
@@ -338,9 +302,6 @@ func (s *Service) OpenCodexAccountLoginTerminal(ctx context.Context) (CodexAccou
 	return s.codexAccounts.openLoginTerminal(ctx, "")
 }
 
-// OpenCodexAccountReauthenticationTerminal starts native sign-in for one
-// retained account slot. A locally validated credential replaces that slot
-// instead of creating a duplicate account.
 func (s *Service) OpenCodexAccountReauthenticationTerminal(ctx context.Context, accountID string) (CodexAccountLoginTerminalStart, error) {
 	if err := s.prepareCodexAccountLogin(ctx); err != nil {
 		return CodexAccountLoginTerminalStart{}, err
@@ -352,9 +313,6 @@ func (s *Service) OpenCodexAccountReauthenticationTerminal(ctx context.Context, 
 	return s.codexAccounts.openLoginTerminal(ctx, accountID)
 }
 
-// LogoutCodexAccount removes one AO-saved credential while retaining the
-// account card. Active-account logout also clears the device-global file-backed
-// credential after exact structured identity confirmation.
 func (s *Service) LogoutCodexAccount(ctx context.Context, accountID string) (CodexAccounts, error) {
 	if s.codexAccounts == nil || s.codexAccounts.factory == nil {
 		return CodexAccounts{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -369,9 +327,6 @@ func (s *Service) LogoutCodexAccount(ctx context.Context, accountID string) (Cod
 		return CodexAccounts{}, err
 	}
 	accountID = strings.TrimSpace(accountID)
-	// Only the verified or last-known device owner needs global reconciliation.
-	// An inactive account logs out through its isolated AO home even when the
-	// device-global credential cannot currently be inspected.
 	if s.codexAccounts.accountMayOwnDeviceCredential(accountID) {
 		if err := s.EnsureCodexDeviceAccountReconciled(ctx); err != nil {
 			return CodexAccounts{}, err
@@ -384,7 +339,6 @@ func (s *Service) LogoutCodexAccount(ctx context.Context, accountID string) (Cod
 	return s.CachedCodexAccounts(ctx)
 }
 
-// DeleteCodexAccount permanently removes one inactive signed-out account slot.
 func (s *Service) DeleteCodexAccount(ctx context.Context, accountID string) (CodexAccounts, error) {
 	if s.codexAccounts == nil {
 		return CodexAccounts{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -410,8 +364,6 @@ func (s *Service) DeleteCodexAccount(ctx context.Context, accountID string) (Cod
 	return s.CachedCodexAccounts(ctx)
 }
 
-// VerifyCodexAccountLogin completes a pending login once its local credential
-// has been safely validated and committed.
 func (s *Service) VerifyCodexAccountLogin(ctx context.Context, operationID string) (domain.CodexAccountLoginOperation, error) {
 	if s.codexAccounts == nil {
 		return domain.CodexAccountLoginOperation{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -421,8 +373,6 @@ func (s *Service) VerifyCodexAccountLogin(ctx context.Context, operationID strin
 		if result.Account.Active && s.readiness != nil {
 			s.readiness.Invalidate(string(domain.HarnessCodex), readinessInvalidateAuthentication)
 		}
-		// Credential commit is complete. Provider-backed authentication, capacity,
-		// and usage warming happens independently and cannot roll the login back.
 		accountID := result.Account.ID
 		go func() {
 			_, _ = s.EnsureCodexAccounts(s.codexAccounts.ctx, []string{accountID}, CodexAccountEnsureOptions{
@@ -433,7 +383,6 @@ func (s *Service) VerifyCodexAccountLogin(ctx context.Context, operationID strin
 	return result, err
 }
 
-// CancelCodexAccountLogin destroys a pending login and its credential staging.
 func (s *Service) CancelCodexAccountLogin(ctx context.Context, operationID string) (domain.CodexAccountLoginOperation, error) {
 	if s.codexAccounts == nil {
 		return domain.CodexAccountLoginOperation{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -451,7 +400,6 @@ func (s *Service) requireCodexAccountInstallation(ctx context.Context) error {
 	return nil
 }
 
-// InvalidateCodexAccountAuthentication invalidates the globally active account.
 func (s *Service) InvalidateCodexAccountAuthentication() {
 	if s.codexAccounts == nil {
 		return
@@ -464,7 +412,6 @@ func (s *Service) InvalidateCodexAccountAuthentication() {
 	go func() { _ = s.codexAccounts.reconcileGlobal(s.codexAccounts.ctx) }()
 }
 
-// ObserveActiveCodexAccountCapacity attributes a provider event to the active account.
 func (s *Service) ObserveActiveCodexAccountCapacity(observation ports.CodexCapacityObservation) {
 	if s.codexAccounts == nil {
 		return
@@ -475,8 +422,6 @@ func (s *Service) ObserveActiveCodexAccountCapacity(observation ports.CodexCapac
 	}
 }
 
-// WarmCodexAccounts starts asynchronous local-store initialization, local
-// device reconciliation, and then saved-account observation warming.
 func (s *Service) WarmCodexAccounts() {
 	if s.codexAccounts == nil {
 		return
@@ -485,10 +430,6 @@ func (s *Service) WarmCodexAccounts() {
 		if err := s.codexAccounts.waitAccountStore(s.codexAccounts.ctx); err != nil {
 			return
 		}
-		// Reconciliation is local-only and establishes the safe home for the device
-		// account before any Codex process is opened for authentication or capacity.
-		// A local reconciliation failure still leaves inactive saved accounts
-		// eligible for their isolated checks below.
 		_ = s.codexAccounts.reconcileGlobal(s.codexAccounts.ctx)
 		capabilities := s.codexAccounts.detectCapabilities(s.codexAccounts.ctx)
 		records, err := s.codexAccounts.catalog.recordsFor(nil)
@@ -506,8 +447,6 @@ func (s *Service) WarmCodexAccounts() {
 	}()
 }
 
-// WaitCodexAccountStoreReady waits only for AO-owned local account state. It
-// never starts Codex or inspects the device-global credential.
 func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	if s.codexAccounts == nil {
 		return apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -525,16 +464,6 @@ func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	})
 }
 
-// reconcileCodexDeviceCredentialForRecheck matches the device Codex credential
-// before an explicit authentication recheck, e.g. after a login in the Harness
-// settings terminal, which runs `codex login` outside AO's account login flow.
-// Codex readiness answers from the last device reconciliation, and nothing else
-// re-runs it after such a login, so without this the recheck kept reporting the
-// pre-login state (no device credential, or a previous credential's "sign in
-// again" evidence) until something else reconciled or the app restarted. A
-// changed credential is matched to its account; an unchanged one keeps its
-// evidence. Best-effort: account management is optional for ordinary Codex use,
-// so failures leave the recheck unchanged.
 func (s *Service) reconcileCodexDeviceCredentialForRecheck(ctx context.Context) {
 	if s.codexAccounts == nil {
 		return
@@ -545,8 +474,6 @@ func (s *Service) reconcileCodexDeviceCredentialForRecheck(ctx context.Context) 
 	_ = s.codexAccounts.reconcileGlobalWithPolicy(ctx, true)
 }
 
-// EnsureCodexDeviceAccountReconciled conclusively identifies the canonical
-// device account before an operation is allowed to mutate it.
 func (s *Service) EnsureCodexDeviceAccountReconciled(ctx context.Context) error {
 	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
 		return err
@@ -571,8 +498,6 @@ func (s *Service) EnsureCodexDeviceAccountReconciled(ctx context.Context) error 
 	})
 }
 
-// BeginCodexAccountMutation gives the local switch worker exclusive ownership
-// of the credential mutation path for the complete transaction.
 func (s *Service) BeginCodexAccountMutation(ctx context.Context) error {
 	if s.codexAccounts == nil {
 		return apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable")
@@ -581,7 +506,6 @@ func (s *Service) BeginCodexAccountMutation(ctx context.Context) error {
 	return err
 }
 
-// EndCodexAccountMutation releases the switch-owned credential mutation path.
 func (s *Service) EndCodexAccountMutation() {
 	if s.codexAccounts == nil {
 		return
@@ -592,7 +516,6 @@ func (s *Service) EndCodexAccountMutation() {
 	}
 }
 
-// CodexAccountLoginInProgress reports whether a native login is still open.
 func (s *Service) CodexAccountLoginInProgress() bool {
 	if s.codexAccounts == nil {
 		return false
@@ -602,9 +525,6 @@ func (s *Service) CodexAccountLoginInProgress() bool {
 	return s.codexAccounts.login != nil && !terminalLoginStatus(s.codexAccounts.login.snapshot.Status)
 }
 
-// PrepareCodexAccountForSwitch snapshots the stable source and target
-// credentials before the durable journal is created. Provider state is not
-// consulted; the staged files are the complete local recovery evidence.
 func (s *Service) PrepareCodexAccountForSwitch(ctx context.Context, switchID, accountID string) (domain.CodexAccountSwitchSource, error) {
 	notPrepared := func(err error) (domain.CodexAccountSwitchSource, error) {
 		return domain.CodexAccountSwitchSource{}, errors.Join(ports.ErrCodexAccountSwitchNotCommitted, err)
@@ -676,9 +596,6 @@ func (s *Service) PrepareCodexAccountForSwitch(ctx context.Context, switchID, ac
 	return source, nil
 }
 
-// InspectCodexAccountSwitch classifies the stable device credential against
-// the staged target and source. An error means local inspection was
-// inconclusive and the durable switch fence must be retained.
 func (s *Service) InspectCodexAccountSwitch(ctx context.Context, switchID string, sourceKind domain.CodexAccountSwitchSourceKind, sourceAccountID, accountID string) (domain.CodexAccountSwitchInstallationState, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -741,8 +658,6 @@ func (s *Service) InspectCodexAccountSwitch(ctx context.Context, switchID string
 	return domain.CodexAccountSwitchExternalCredential, nil
 }
 
-// ActivatePreparedCodexAccountSwitch performs the single compare-and-swap
-// from the staged source to the staged target.
 func (s *Service) ActivatePreparedCodexAccountSwitch(ctx context.Context, sourceKind domain.CodexAccountSwitchSourceKind, switchID, targetID string) error {
 	notCommitted := func(err error) error {
 		return errors.Join(ports.ErrCodexAccountSwitchNotCommitted, err)
@@ -787,8 +702,6 @@ func (s *Service) ActivatePreparedCodexAccountSwitch(ctx context.Context, source
 	return err
 }
 
-// CleanupCodexAccountSwitch removes private switch staging after the durable
-// switch has reached a locally confirmed terminal phase.
 func (s *Service) CleanupCodexAccountSwitch(_ context.Context, switchID string) error {
 	if s.codexAccounts == nil || !isCanonicalUUIDv4(strings.TrimSpace(switchID)) {
 		return nil
@@ -796,8 +709,6 @@ func (s *Service) CleanupCodexAccountSwitch(_ context.Context, switchID string) 
 	return os.RemoveAll(filepath.Join(s.codexAccounts.switchStagingRoot, switchID))
 }
 
-// CleanupInactiveCodexAccountSwitches removes credential staging that has no
-// live durable journal. The active switch directory, when supplied, is kept.
 func (s *Service) CleanupInactiveCodexAccountSwitches(ctx context.Context, activeSwitchID string) error {
 	if s.codexAccounts == nil {
 		return nil
@@ -827,13 +738,10 @@ func (s *Service) CleanupInactiveCodexAccountSwitches(ctx context.Context, activ
 
 var _ ports.CodexAccountCredentialManager = (*Service)(nil)
 
-// CodexAccountSwitchInProgress reports whether the credential coordinator owns
-// the device-global mutation gate.
 func (s *Service) CodexAccountSwitchInProgress() bool {
 	return s.codexSwitches != nil && s.codexSwitches.CodexAccountSwitchInProgress()
 }
 
-// StartCodexAccountSwitch starts a durable device credential switch.
 func (s *Service) StartCodexAccountSwitch(ctx context.Context, cfg ports.CodexAccountSwitchConfig) (domain.CodexAccountSwitch, error) {
 	if s.codexSwitches == nil {
 		return domain.CodexAccountSwitch{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account switching is unavailable")
@@ -841,8 +749,6 @@ func (s *Service) StartCodexAccountSwitch(ctx context.Context, cfg ports.CodexAc
 	return s.codexSwitches.StartCodexAccountSwitch(ctx, cfg)
 }
 
-// GetCodexAccountSwitch returns the durable result for one switch. The UI uses
-// this journal state instead of inferring success from a reconciliation snapshot.
 func (s *Service) GetCodexAccountSwitch(ctx context.Context, id string) (domain.CodexAccountSwitch, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -861,8 +767,6 @@ func (s *Service) GetCodexAccountSwitch(ctx context.Context, id string) (domain.
 	return sw, nil
 }
 
-// ReconcileCodexAccountSwitches starts best-effort local settlement for any
-// durable switch journal. Recovery failure never blocks unrelated daemon work.
 func (s *Service) ReconcileCodexAccountSwitches(ctx context.Context) error {
 	if s.codexSwitches == nil {
 		return nil
@@ -870,7 +774,6 @@ func (s *Service) ReconcileCodexAccountSwitches(ctx context.Context) error {
 	return s.codexSwitches.ReconcileCodexAccountSwitches(ctx)
 }
 
-// WaitCodexAccountSwitchWorkers drains credential workers during shutdown.
 func (s *Service) WaitCodexAccountSwitchWorkers(ctx context.Context) error {
 	if s.codexSwitches == nil {
 		return nil

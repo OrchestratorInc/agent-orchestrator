@@ -16,9 +16,6 @@ import { SettingsSearch } from "../SettingsSearch";
 
 const folderFilter = "folder:";
 
-/** One agent's chats on this computer, from the daemon's validated preview. A
- * chat from a Git folder that is not a project yet adds that folder as a
- * project on import. */
 export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const { t } = useTranslation();
 	const [project, setProject] = useState("all");
@@ -26,9 +23,7 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const [selected, setSelected] = useState(new Set<string>());
 	const [results, setResults] = useState<ImportResult[]>([]);
 	const [importing, setImporting] = useState(false);
-	// The scan an import runs after adding folders must not reset its results.
 	const importingRef = useRef(false);
-	// Choices made on the last list (a selection or an import) survive the next scan.
 	const keepChoicesRef = useRef(false);
 	const [error, setError] = useState<string>();
 	const queryClient = useQueryClient();
@@ -85,7 +80,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const eligible = visible.filter((c) => !c.sessionId && !importedIds.has(c.id));
 	const selectedVisible = eligible.filter((c) => selected.has(c.id));
 	const newFolders = [...new Set(selectedVisible.flatMap((c) => (c.folder ? [c.folder] : [])))];
-	// Leaving Settings for an imported chat opens it; the sidebar reveals the open session.
 	const openSession = (c: Candidate, sessionId: string) => {
 		closeSettings();
 		navigateToSession(c.projectId, sessionId);
@@ -138,7 +132,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			.map(([n, key]) => t(key, { count: n }))
 			.join(" ");
 	return (
-		// Only the list scrolls; the filter stays on top and the actions stay on the bottom.
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
 			<div className="flex shrink-0 flex-col gap-3">
 				<p className="text-xs text-muted-foreground">
@@ -188,7 +181,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			</div>
 			{preview.isPending ? null : (
 				<div className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border">
-					{/* Outside the scroller: rows never pass under it, so no fill is needed. */}
 					<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
 						<Checkbox
 							aria-label={t("sessionImport.selectAllAria")}
@@ -265,8 +257,6 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 							onClick={() => {
 								setError(undefined);
 								keepChoicesRef.current = false;
-								// A rescan with an unchanged list keeps preview.data's identity, so the
-								// effect would not run: reset here.
 								setResults([]);
 								void preview.refetch().then(({ data }) => {
 									if (data && !keepChoicesRef.current) {

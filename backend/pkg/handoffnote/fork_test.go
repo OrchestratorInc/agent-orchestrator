@@ -59,8 +59,6 @@ func TestBuildKeepsOnlyTheEndOfLongTerminalOutput(t *testing.T) {
 	}
 }
 
-// A fork of a fork that was given its conversation as text passes that
-// earlier conversation on, safely quoted.
 func TestBuildCarriesAnInheritedConversation(t *testing.T) {
 	got := Build(Input{
 		Fork:      &Fork{SourceSessionID: "app-8"},
@@ -79,9 +77,6 @@ func TestBuildCarriesAnInheritedConversation(t *testing.T) {
 	}
 }
 
-// When the inherited conversation doesn't fit beside the latest turn, it is
-// the inherited text that is cut, before any turn, and it is left out
-// entirely once too little of it would be left.
 func TestBuildShortensInheritedTextBeforeTheTurns(t *testing.T) {
 	const maxChars = 16_000
 	latest := Turn{UserRequest: "LATEST-ASK", AgentResponse: "LATEST-START " + strings.Repeat("x", 9_000) + " LATEST-END"}

@@ -122,14 +122,12 @@ func TestPollerRediscoverEntryAfterDeleteAndRecreate(t *testing.T) {
 	svc := &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", workspace, "index.html")}}
 	poller := NewPoller(svc, svc, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
 
-	// First poll normalizes the explicitly selected workspace entry.
 	if err := poller.Poll(context.Background()); err != nil {
 		t.Fatalf("first Poll: %v", err)
 	}
 	wantURL := mustFileURL(t, "http://127.0.0.1:3001", "ao-1", "index.html")
 	assertSets(t, svc.sets, previewSet{id: "ao-1", url: wantURL})
 
-	// Delete the entry — poller must clear the preview and mark the session cleared.
 	if err := os.Remove(entry); err != nil {
 		t.Fatalf("remove index.html: %v", err)
 	}
@@ -143,7 +141,6 @@ func TestPollerRediscoverEntryAfterDeleteAndRecreate(t *testing.T) {
 		t.Fatalf("second set.url = %q, want empty (clear)", svc.sets[1].url)
 	}
 
-	// Recreate the entry — poller must re-discover.
 	if err := poller.Poll(context.Background()); err != nil {
 		t.Fatalf("third Poll (still deleted): %v", err)
 	}
@@ -249,10 +246,6 @@ func TestPollerRewritesStoredOriginToActualDaemonPortWithoutChangingEntry(t *tes
 }
 
 func TestPollerDoesNotAutoPreviewMarkdownOnlyNewSession(t *testing.T) {
-	// A brand-new session (never explicitly previewed) whose workspace contains
-	// only Markdown documents — no index.html — must NOT be auto-previewed.
-	// Surfacing an arbitrary repo README as the initial browser target is noise.
-	// See issue #2859.
 	workspace := t.TempDir()
 	writeFile(t, filepath.Join(workspace, "README.md"), "# project")
 	writeFile(t, filepath.Join(workspace, "docs", "setup.md"), "# setup")
@@ -268,9 +261,6 @@ func TestPollerDoesNotAutoPreviewMarkdownOnlyNewSession(t *testing.T) {
 }
 
 func TestPollerKeepsMarkdownPreviewFreshOnceExplicitlySet(t *testing.T) {
-	// Once a session has been explicitly previewed against a workspace Markdown
-	// file (workspaceOwned), the poller must still keep that preview fresh — the
-	// document-fallback restriction only applies to never-previewed sessions.
 	workspace := t.TempDir()
 	writeFile(t, filepath.Join(workspace, "docs", "report.md"), "# report")
 	relative := "docs/report.md"

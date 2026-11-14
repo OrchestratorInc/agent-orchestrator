@@ -97,17 +97,11 @@ func TestActivityProjectionRetryUsesOriginalStopSignal(t *testing.T) {
 	if err := json.Unmarshal([]byte(after.NativeCheckpointEvidence), &evidence); err != nil {
 		t.Fatal(err)
 	}
-	// Claude answers are retained as native observations, not paired with the
-	// current display prompt. A CAS retry must still preserve the original Stop.
 	if s.conflict || len(evidence.Events) != 2 || evidence.Events[1].Text != "human answer" || evidence.Invalid {
 		t.Fatalf("retry lost original Stop payload: conflict=%v checkpoint=%+v", s.conflict, after)
 	}
 }
 
-// TestActivityProjectionRetryRecordsStepOnce guards against recordStepLocked
-// running before the CAS retry loop: a signal that wins only on its second
-// pass through the fences must still leave exactly one step behind, not one
-// per pass.
 func TestActivityProjectionRetryRecordsStepOnce(t *testing.T) {
 	s := &promptConflictStore{fakeStore: newFakeStore(), conflict: true}
 	s.sessions["mer-1"] = domain.SessionRecord{
@@ -129,9 +123,6 @@ func TestActivityProjectionRetryRecordsStepOnce(t *testing.T) {
 	}
 }
 
-// TestActivityProjectionRejectedSignalRecordsNoStep guards the other half of
-// the same fix: a signal the launch-id fence rejects must never reach the
-// step log, even though recordStepLocked used to run before that fence.
 func TestActivityProjectionRejectedSignalRecordsNoStep(t *testing.T) {
 	s := &promptConflictStore{fakeStore: newFakeStore()}
 	s.sessions["mer-1"] = domain.SessionRecord{

@@ -11,29 +11,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// These DTOs mirror the daemon's session search API without importing
-// controller types, matching how the other commands keep the wire boundary.
 type sessionSearchResultDTO struct {
-	SessionID string `json:"sessionId"`
-	ProjectID string `json:"projectId"`
-	Harness   string `json:"harness"`
-	Kind      string `json:"kind"`
-	MessageID string `json:"messageId,omitempty"`
-	Seq       int64  `json:"seq"`
-	Title     string `json:"title,omitempty"`
-	Snippet   string `json:"snippet"`
-	// Highlights are the matched spans in Snippet, as UTF-16 offsets.
-	Highlights    []sessionSearchHighlightDTO `json:"highlights,omitempty"`
-	Rank          float64                     `json:"rank"`
-	CreatedAt     string                      `json:"createdAt"`
-	SessionName   string                      `json:"sessionName,omitempty"`
-	ProjectName   string                      `json:"projectName,omitempty"`
-	SessionState  string                      `json:"sessionState,omitempty"`
-	ResumeCommand string                      `json:"resumeCommand,omitempty"`
-	// SessionMatches counts the session's matched messages in a grouped list.
-	SessionMatches int `json:"sessionMatches,omitempty"`
-	// ReviewID is set when the match is in one of the session's reviewer chats.
-	ReviewID string `json:"reviewId,omitempty"`
+	SessionID      string                      `json:"sessionId"`
+	ProjectID      string                      `json:"projectId"`
+	Harness        string                      `json:"harness"`
+	Kind           string                      `json:"kind"`
+	MessageID      string                      `json:"messageId,omitempty"`
+	Seq            int64                       `json:"seq"`
+	Title          string                      `json:"title,omitempty"`
+	Snippet        string                      `json:"snippet"`
+	Highlights     []sessionSearchHighlightDTO `json:"highlights,omitempty"`
+	Rank           float64                     `json:"rank"`
+	CreatedAt      string                      `json:"createdAt"`
+	SessionName    string                      `json:"sessionName,omitempty"`
+	ProjectName    string                      `json:"projectName,omitempty"`
+	SessionState   string                      `json:"sessionState,omitempty"`
+	ResumeCommand  string                      `json:"resumeCommand,omitempty"`
+	SessionMatches int                         `json:"sessionMatches,omitempty"`
+	ReviewID       string                      `json:"reviewId,omitempty"`
 }
 
 type sessionSearchHighlightDTO struct {
@@ -67,12 +62,6 @@ type sessionSearchIndexStatusDTO struct {
 	Coverage sessionSearchCoverageDTO `json:"coverage"`
 }
 
-// newSearchCommand searches past AO sessions: titles, user messages, agent
-// replies, tool calls, command output, and the file paths a session touched.
-//
-// It is the agent-facing half of the desktop search surface: a worker can look
-// up what it (or another session) already worked out instead of re-deriving it.
-// The query language is the same one the Cmd+K palette accepts.
 func newSearchCommand(ctx *commandContext) *cobra.Command {
 	var project, harness, status, path, since, until, sortBy string
 	var limit, offset int
@@ -117,7 +106,6 @@ func newSearchCommand(ctx *commandContext) *cobra.Command {
 				return writeIndexStatus(cmd, response)
 			}
 			query := strings.TrimSpace(strings.Join(args, " "))
-			// Filters, or --sort recent, browse without words, as the API does.
 			filtersUsed := project != "" || harness != "" || status != "" || path != "" || since != "" || until != "" ||
 				strings.EqualFold(strings.TrimSpace(sortBy), "recent")
 			if query == "" && !filtersUsed {
@@ -208,8 +196,6 @@ func newSearchCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-// normalizeSearchDate accepts a date or an RFC 3339 timestamp, so both
-// `--since 2026-08-01` and `--since 2026-08-01T09:00:00Z` work.
 func normalizeSearchDate(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if _, err := time.Parse(time.DateOnly, raw); err == nil {
@@ -221,14 +207,9 @@ func normalizeSearchDate(raw string) (string, error) {
 	return "", errors.New("want YYYY-MM-DD or an RFC 3339 time")
 }
 
-// writeSessionSearchTable renders one result per line. A match inside a long
-// message would be unreadable in a table, so the snippet is normalized to one
-// line and the session id is kept as the handle a caller can open.
 func writeSessionSearchTable(cmd *cobra.Command, response sessionSearchResponseDTO) error {
 	out := cmd.OutOrStdout()
 	if len(response.Results) == 0 {
-		// An empty page is still an answer: say so, and say what the index could
-		// not see, so "no results" is not read as "this never happened".
 		if _, err := fmt.Fprintln(out, "No sessions matched."); err != nil {
 			return err
 		}
@@ -249,8 +230,6 @@ func writeSessionSearchTable(cmd *cobra.Command, response sessionSearchResponseD
 		if parsed, err := time.Parse(time.RFC3339Nano, result.CreatedAt); err == nil {
 			when = parsed.Local().Format("2006-01-02 15:04")
 		}
-		// The row is the session's best-matching message; the count is how many
-		// of its messages matched, as the desktop row shows it.
 		match := oneLine(result.Snippet)
 		switch {
 		case result.SessionMatches == 1:
@@ -258,8 +237,6 @@ func writeSessionSearchTable(cmd *cobra.Command, response sessionSearchResponseD
 		case result.SessionMatches > 1:
 			match += fmt.Sprintf(" (%d matches)", result.SessionMatches)
 		}
-		// The id first: it is what `ao session resume-agent` and an in-app
-		// session link take, and a name is not unique.
 		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			result.SessionID, name, when, result.Harness, result.Kind, match)
 	}
@@ -272,8 +249,6 @@ func writeSessionSearchTable(cmd *cobra.Command, response sessionSearchResponseD
 	return nil
 }
 
-// writeIndexStatus reports what the index covers, which is what a caller checks
-// before trusting an empty search.
 func writeIndexStatus(cmd *cobra.Command, response sessionSearchIndexStatusDTO) error {
 	out := cmd.OutOrStdout()
 	coverage := response.Coverage
@@ -294,8 +269,6 @@ func writeIndexStatus(cmd *cobra.Command, response sessionSearchIndexStatusDTO) 
 	return nil
 }
 
-// coverageNote says what the index cannot see, so an empty result is not read as
-// "this never happened".
 func coverageNote(coverage sessionSearchCoverageDTO) string {
 	parts := make([]string, 0, 2)
 	switch coverage.State {

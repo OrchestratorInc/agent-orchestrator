@@ -21,7 +21,6 @@ vi.mock("../lib/bridge", () => ({
 		app: { openExternal: async () => undefined },
 	},
 }));
-// The picker is a menu of its own; stand in for its row.
 vi.mock("./TerminalAgentControls", () => ({
 	TerminalAgentPickerRow: ({ session }: { session: WorkspaceSession }) => <button data-menu-row type="button">{`agent ${session.provider}`}</button>,
 }));
@@ -59,7 +58,6 @@ const sessionSpec = { kind: "session", tabKey: "session", session, onRename: vi.
 const terminalAgent: SessionTabAgentMenu = { session, blocked: false, picksAgent: true, switchTarget: "chat", switchAction: { disabled: false, run: vi.fn() } };
 const chatAgent: SessionTabAgentMenu = { session, blocked: true, picksAgent: false, switchTarget: "tui", switchAction: { disabled: true, reason: "Busy", run: vi.fn() } };
 
-// Every tab type with a menu, and the session tab on both surfaces.
 const cases: Array<[string, TabMenuSpec, SessionTabAgentMenu?]> = [
 	["session tab over a terminal", sessionSpec, terminalAgent],
 	["session tab over a chat", sessionSpec, chatAgent],
@@ -70,12 +68,10 @@ const cases: Array<[string, TabMenuSpec, SessionTabAgentMenu?]> = [
 	["HTML file tab", file("site/index.html")],
 	["diff tab", file("src/app.ts", { kind: "snapshot", label: "abc123" })],
 	["artifact tab", file("report.md", { kind: "artifact" } as never)],
-	// A group member closes (SessionView's closePane), the session too.
 	["split group tab on a session", { kind: "group", onUngroup: vi.fn(), member: { ...sessionSpec, onRename: undefined, onClose: vi.fn() } }, terminalAgent],
 	["split group tab on a file", { kind: "group", onUngroup: vi.fn(), member: { ...file("src/app.ts"), closeShortcut: true } }],
 ];
 
-/** Each row of the open menu: its role, text and whether it is disabled. */
 function menuRows() {
 	const menu = screen.getByRole("menu");
 	return Array.from(menu.querySelectorAll("[role=menuitem], [role=separator], [data-menu-row]")).map((row) => {
@@ -85,7 +81,6 @@ function menuRows() {
 	});
 }
 
-/** The open menu's rows once its lookups (editor targets, workspace) have settled. */
 async function settledMenuRows() {
 	let rows = menuRows();
 	for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -115,7 +110,6 @@ async function renderBoth(spec: TabMenuSpec, agent: SessionTabAgentMenu | undefi
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
-	// A closing modal menu can leave pointer-events off the body for a frame.
 	const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 	fireEvent.contextMenu(screen.getByRole("button", { name: "tab" }));

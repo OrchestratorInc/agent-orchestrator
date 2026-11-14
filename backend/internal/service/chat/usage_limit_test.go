@@ -387,7 +387,7 @@ func TestUsageLimitAutoResumeDurableAcrossServiceRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	provider := newFakeConversation()
-	provider.turnSeq = 1 // Native resume preserves the provider's existing turn IDs.
+	provider.turnSeq = 1
 	restarted := chatsvc.New(chatsvc.Options{
 		Store: reopened, Reader: fullSnapshotReader(reopened), Sessions: reopened,
 		Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, NewID: uuid.NewString, Now: h.now,

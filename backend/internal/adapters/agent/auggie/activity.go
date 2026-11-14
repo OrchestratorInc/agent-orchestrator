@@ -6,9 +6,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// DeriveActivityState maps Auggie lifecycle callbacks onto normalized AO
-// activity. A Stop caused by an error or the iteration limit requires attention;
-// normal completion and interruption leave the session idle.
 func DeriveActivityState(event string, payload []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "session-start", "pre-tool-use", "post-tool-use":

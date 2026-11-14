@@ -99,8 +99,6 @@ func TestPermissionConfigOptionsMapsCommandCodeModes(t *testing.T) {
 }
 
 func TestPermissionConfigOptionsLabelsOpenCodeTiers(t *testing.T) {
-	// AO injects these as OpenCode agents; build and plan are OpenCode's own
-	// execution modes and must stay out of the approvals vocabulary.
 	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessOpenCodeV2} {
 		for _, tc := range []struct {
 			value string
@@ -142,7 +140,6 @@ func TestPermissionConfigOptionsLabelsOpenCodeTiers(t *testing.T) {
 	}
 }
 
-// Copilot's catalog exactly as copilot --acp 1.0.93 advertises it.
 func copilotCatalog() []ports.ChatConfigOption {
 	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
 	return []ports.ChatConfigOption{
@@ -343,9 +340,6 @@ func TestSanitizeCopilotLoadedModeFailsWhenSetterOmitsCatalog(t *testing.T) {
 			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "autopilot"}
 		}
 	}
-	// When the setter returns no catalog, SetConfigOption returns nil options.
-	// Even though the accepted value is preserved in the local cache, the safety
-	// reset must fail closed because the provider never reported the mode.
 	conv := &copilotTestConversation{options: catalog, omitSetterCatalog: true}
 	err := sanitizeCopilotLoadedMode(context.Background(), conv)
 	if err == nil {

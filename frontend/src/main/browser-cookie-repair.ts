@@ -1,18 +1,9 @@
-// Imported profiles can hold cookies that keep sites failing, and updating AO
-// must fix them without the user re-importing:
-//   - imports before #6075 widened host-only cookies to domain cookies. Once the
-//     site sets its real one, the browser sends two with different values, and
-//     Google answers with its cookie error page;
-//   - imports copied anti-bot cookies, which only work in the browser that
-//     earned them, so sites keep challenging.
 import Database from "better-sqlite3";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isAntiBotCookie } from "./browser-profile-import";
 
 const STATE_FILE = "browser-cookie-repair.json";
-// An import writes cookies far faster than sites set them: a real imported
-// profile holds 407 created within 21 ms.
 const IMPORT_BURST_GAP_MICROSECONDS = 100_000;
 const IMPORT_BURST_MIN_COOKIES = 20;
 
@@ -59,11 +50,6 @@ export function cookieKey(cookie: Pick<RepairCookie, "domain" | "name" | "path">
 	return `${cookie.domain ?? ""}\0${cookie.name}\0${cookie.path || "/"}`;
 }
 
-/**
- * Old imports left no record, but the cookie store shows them: nothing else
- * creates this many cookies this fast. Unreadable means nothing is reported, so
- * a duplicate is only ever removed on evidence.
- */
 export function importedCookieKeys(databaseFile: string, log?: (message: string) => void): Set<string> {
 	const keys = new Set<string>();
 	try {
@@ -101,11 +87,6 @@ function sameCookie(a: RepairCookie, b: RepairCookie): boolean {
 	return a.name === b.name && a.domain === b.domain && (a.path ?? "/") === (b.path ?? "/");
 }
 
-/**
- * Setting an expired cookie deletes exactly that name, domain and path. It never
- * touches the site's real cookie, so a failure or crash here cannot sign anyone
- * out. cookies.remove would also take every other cookie the URL can see.
- */
 function expire(session: RepairSession, cookie: RepairCookie): Promise<void> {
 	return session.cookies.set({
 		url: urlOf(cookie),
@@ -122,8 +103,6 @@ function expire(session: RepairSession, cookie: RepairCookie): Promise<void> {
 export async function repairCookies(session: RepairSession, importedKeys: ReadonlySet<string>): Promise<RepairResult> {
 	const cookies = await session.cookies.get({});
 	const antiBot = cookies.filter((item) => isAntiBotCookie(item.name));
-	// A site can set both forms itself. It is only import damage when the domain
-	// copy came from an import and the site's real cookie arrived later.
 	const widened = cookies.filter(
 		(item) =>
 			!isAntiBotCookie(item.name) &&
@@ -140,7 +119,6 @@ export async function repairCookies(session: RepairSession, importedKeys: Readon
 	);
 	for (const cookie of [...antiBot, ...widened]) await expire(session, cookie).catch(() => undefined);
 
-	// Only what is really gone counts, so a profile is never marked repaired early.
 	const after = await session.cookies.get({});
 	const gone = (cookie: RepairCookie) => !after.some((other) => sameCookie(other, cookie));
 	const repaired = { antiBot: antiBot.filter(gone).length, duplicates: widened.filter(gone).length };
@@ -180,14 +158,7 @@ async function writeState(file: string, pending: string[]): Promise<void> {
 	await rename(temporary, file);
 }
 
-/**
- * Repairs the profiles that existed when this version first ran, once each. Later
- * profiles earned their own cookies, so they are never touched. Failures are logged and not
- * retried: repeating this at every launch would wipe freshly earned anti-bot
- * cookies. Never throws, so a failed repair cannot stop AO starting.
- */
 export function repairBrowserProfileCookies(options: RepairOptions): Promise<void> {
-	// Reopening the window can start this during a run. They share one run.
 	const file = path.join(options.stateDir, STATE_FILE);
 	const running = runs.get(file);
 	if (running) return running;
@@ -208,7 +179,6 @@ async function runRepair(file: string, options: RepairOptions): Promise<void> {
 		for (const profileId of [...pending]) {
 			if (options.profileIds.includes(profileId)) {
 				try {
-					// Read before opening the session, which takes over the cookie store.
 					const importedKeys = importedCookieKeys(options.cookieDatabase(profileId), options.log);
 					const result = await repairCookies(options.fromProfile(profileId), importedKeys);
 					options.log?.(`AO: repaired browser profile cookies: ${result.antiBot} anti-bot, ${result.duplicates} duplicates, ${result.failed} failed`);
@@ -220,7 +190,6 @@ async function runRepair(file: string, options: RepairOptions): Promise<void> {
 			await writeState(file, pending);
 		}
 	} catch (error) {
-		// Without a record the next launch could repeat this, so stop here.
 		options.log?.(`AO: could not record browser profile cookie repair: ${String(error)}`);
 	}
 }

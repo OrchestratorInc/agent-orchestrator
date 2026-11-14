@@ -4,11 +4,6 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSentinelCapable, launchEnv, parseArgs, removeRunFile, seedUpdateSettings } from "./e2e-mac-update.mjs";
 
-// The harness itself needs a real macOS runner, a real signed N-1 install and a
-// real published N feed, so it cannot run here. What IS testable anywhere is the
-// flag contract: a typo in the CI job's arguments should fail loudly at parse
-// time rather than half-run an update test and report a confusing timeout.
-
 describe("e2e-mac-update parseArgs", () => {
 	const required = ["--app", "/Applications/Agent Orchestrator.app", "--expect-version", "0.10.4"];
 
@@ -17,7 +12,6 @@ describe("e2e-mac-update parseArgs", () => {
 		expect(opts.app).toBe("/Applications/Agent Orchestrator.app");
 		expect(opts.expectVersion).toBe("0.10.4");
 		expect(opts.appName).toBe("Agent Orchestrator");
-		// All app state lives under ~/.ao only (see AGENTS.md hard rules).
 		expect(opts.stateDir).toBe(join(homedir(), ".ao"));
 		expect(opts.runFile).toBe(join(homedir(), ".ao", "running.json"));
 		expect(opts.channel).toBe("latest");
@@ -60,17 +54,12 @@ describe("e2e-mac-update parseArgs", () => {
 		expect(opts.runFile).toBe("/tmp/ao-e2e/run.json");
 	});
 
-	// The app does `stateDir = path.dirname(runFilePath())` and reads
-	// update-settings.json from there (main.ts initAutoUpdates), so the settings
-	// directory follows --run-file, not --state-dir, when the two diverge.
 	it("derives the settings dir from the run file, which is what the app reads", () => {
 		expect(parseArgs(required).settingsDir).toBe(join(homedir(), ".ao"));
 		const moved = parseArgs([...required, "--state-dir", "/tmp/ao-e2e", "--run-file", "/tmp/elsewhere/run.json"]);
 		expect(moved.settingsDir).toBe("/tmp/elsewhere");
 	});
 
-	// Mirrors backend/internal/config resolveDataDir's default of <ao home>/data,
-	// so an overridden --state-dir keeps the daemon's SQLite out of the real ~/.ao.
 	it("derives the daemon data dir under the state dir", () => {
 		expect(parseArgs([...required, "--state-dir", "/tmp/ao-e2e"]).dataDir).toBe(join("/tmp/ao-e2e", "data"));
 	});
@@ -93,9 +82,6 @@ describe("e2e-mac-update parseArgs", () => {
 	});
 });
 
-// The bug these cover: --state-dir and --run-file were parsed and used by the
-// harness, but neither launch passed AO_DATA_DIR or AO_RUN_FILE to the app. The
-// harness seeded and polled paths the app never used, so it could only time out.
 describe("e2e-mac-update launch environment", () => {
 	const opts = parseArgs([
 		"--app",
@@ -111,7 +97,6 @@ describe("e2e-mac-update launch environment", () => {
 		expect(env.AO_E2E_UPDATE_SENTINEL).toBe("/tmp/sentinel.json");
 		expect(env.AO_RUN_FILE).toBe(opts.runFile);
 		expect(env.AO_DATA_DIR).toBe(opts.dataDir);
-		// Still an inherited environment, not a replacement one.
 		expect(env.PATH).toBe("/usr/bin");
 	});
 
@@ -128,8 +113,6 @@ describe("e2e-mac-update launch environment", () => {
 			]);
 			seedUpdateSettings(moved.settingsDir, "nightly");
 			const written = JSON.parse(readFileSync(join(dir, "nested", "update-settings.json"), "utf8"));
-			// Shape must match UpdateSettings in src/main/update-settings.ts, and
-			// enabled:true is what makes startAutoUpdates run without a dialog.
 			expect(written).toEqual({ enabled: true, channel: "nightly", nightlyAck: true, feature: null });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -137,9 +120,6 @@ describe("e2e-mac-update launch environment", () => {
 	});
 });
 
-// A baseline published before the AO_E2E_UPDATE_SENTINEL listener existed
-// ignores the env var, so the harness could only ever burn its full download
-// timeout and report a "never staged" failure that looks like a broken update.
 describe("e2e-mac-update assertSentinelCapable", () => {
 	let dir;
 	const bundle = (name, asarContents) => {
@@ -171,30 +151,14 @@ describe("e2e-mac-update assertSentinelCapable", () => {
 	});
 });
 
-// assertSentinelCapable is a substring scan of a BUILT app.asar, so it can only
-// fail after a release is cut — and it fails by refusing to run, which reads as
-// "old baseline" rather than "the app stopped emitting the signal". That is
-// exactly how the listener stayed missing from #3012 until #4254: five weeks in
-// which no build could satisfy the harness and the macOS update-hop job could
-// never run against any baseline.
-//
-// This asserts the coupling at its source instead, so deleting the listener
-// fails a unit test in the same commit rather than silently disabling a job.
 describe("update-hop coverage is wired to the app", () => {
 	it("keeps the sentinel listener the harness scans for in auto-updater.ts", () => {
-		// Resolved from the runner's cwd rather than import.meta.url: the test
-		// transform rewrites import.meta.url to a non-file scheme. Both
-		// candidates are listed so this works whether vitest is invoked from
-		// frontend/ (the npm script) or from the repo root.
 		const sourcePath = ["src/main/auto-updater.ts", "frontend/src/main/auto-updater.ts"]
 			.map((rel) => join(process.cwd(), rel))
 			.find((candidate) => existsSync(candidate));
 		expect(sourcePath, "could not locate auto-updater.ts from " + process.cwd()).toBeDefined();
 		const source = readFileSync(sourcePath, "utf8");
 		expect(source).toContain('E2E_UPDATE_SENTINEL_ENV = "AO_E2E_UPDATE_SENTINEL"');
-		// The native updater is the only signal that means "staged, will swap on
-		// quit"; electron-updater's own update-downloaded fires before Squirrel
-		// has fetched anything, so hanging the sentinel there stages nothing.
 		expect(source).toMatch(/nativeAutoUpdater\.on\("update-downloaded"/);
 	});
 });

@@ -8,16 +8,11 @@ import (
 	"time"
 )
 
-// Spawn chooses the initial interface from an explicit request or the daemon
-// default. Changing that default affects only later spawns; changing an existing
-// session requires the explicit, serialized interface-transition endpoint.
 func TestChatModeSpawnPrecedenceAndDefaultIsolation(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
 	project := seedProject(t, d, "modes")
 
-	// The daemon owns the default, so a client that says nothing still gets a
-	// consistent answer — including `ao spawn` and mobile, which have no UI state.
 	d.mustCall("PATCH", "/settings/session-interface", http.StatusOK,
 		map[string]any{"defaultSessionMode": "chat"}, nil)
 
@@ -28,8 +23,6 @@ func TestChatModeSpawnPrecedenceAndDefaultIsolation(t *testing.T) {
 		t.Fatalf("session spawned under a chat default has mode %q", fromDefault.Session.Mode)
 	}
 
-	// An explicit request outranks the default. This is the path `ao spawn --mode`
-	// uses, and it must not be silently normalized to the default.
 	explicitTUI := spawn(t, d, map[string]any{
 		"projectId": project, "kind": "worker", "harness": "codex", "mode": "tui",
 	})
@@ -37,8 +30,6 @@ func TestChatModeSpawnPrecedenceAndDefaultIsolation(t *testing.T) {
 		t.Fatalf("explicit --mode tui produced %q", explicitTUI.Session.Mode)
 	}
 
-	// Flipping the default must not reach backwards. Existing sessions change only
-	// through the explicit handoff coordinator, never as a settings side effect.
 	d.mustCall("PATCH", "/settings/session-interface", http.StatusOK,
 		map[string]any{"defaultSessionMode": "tui"}, nil)
 
@@ -57,8 +48,6 @@ func TestChatModeSpawnPrecedenceAndDefaultIsolation(t *testing.T) {
 		t.Fatalf("session spawned after the flip has mode %q, want tui", afterFlip.Session.Mode)
 	}
 
-	// A chat session has no terminal to attach to, and the TUI one does. This is
-	// the observable difference the whole feature exists to produce.
 	chatSnap := d.conversation(fromDefault.Session.ID)
 	if chatSnap.Mode != "chat" {
 		t.Errorf("conversation reports mode %q", chatSnap.Mode)
@@ -72,10 +61,6 @@ func TestChatModeSpawnPrecedenceAndDefaultIsolation(t *testing.T) {
 	}
 }
 
-// A chat request for an agent with no chat driver must fail before anything
-// durable exists. The failure mode this guards against is the expensive one: a
-// half-created session with a worktree and no way to talk to it, which the user
-// then has to find and clean up.
 func TestChatSpawnForUnsupportedAgentLeavesNothingBehind(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -86,9 +71,6 @@ func TestChatSpawnForUnsupportedAgentLeavesNothingBehind(t *testing.T) {
 	}
 	d.mustCall("GET", "/sessions", http.StatusOK, nil, &before)
 
-	// Asked of the daemon rather than hardcoded. Chat drivers get added — codex
-	// first, then claude-code — and a test naming one by hand quietly stops testing
-	// anything the day that agent gains a driver.
 	harness := harnessWithoutChatDriver(t, d)
 
 	status, body := d.callExpectingError("POST", "/sessions", map[string]any{
@@ -111,8 +93,6 @@ func TestChatSpawnForUnsupportedAgentLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// The spawn prompt is the user's task brief and must arrive as a real turn: this
-// is the moment a chat session becomes useful rather than merely created.
 func TestChatSpawnPromptProducesAnAnsweredTurn(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -136,8 +116,6 @@ func TestChatSpawnPromptProducesAnAnsweredTurn(t *testing.T) {
 	if first.Role != "user" {
 		t.Fatalf("first message role = %q, want the user's brief", first.Role)
 	}
-	// Origin records who AUTHORED a message, not who delivered it. The daemon
-	// carries the brief to the provider; that does not make it the daemon's.
 	if first.Origin != "human" {
 		t.Errorf("spawn prompt origin = %q, want human", first.Origin)
 	}

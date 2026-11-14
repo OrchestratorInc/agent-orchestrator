@@ -17,7 +17,6 @@ export function useRequestUpdateInstall(): () => void {
 		void (async () => {
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
-				// Force a current local snapshot, even when the cache appears fresh.
 				const projects = await Promise.race([
 					queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0, retry: false }),
 					new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("Worker refresh timed out")), 10_000); }),
@@ -29,7 +28,6 @@ export function useRequestUpdateInstall(): () => void {
 				}
 				await aoBridge.updates.install();
 			} catch {
-				// Unknown worker state still requires explicit confirmation.
 				openPrompt();
 			} finally {
 				clearTimeout(timer);

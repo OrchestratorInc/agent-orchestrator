@@ -173,7 +173,6 @@ describe("AgentModelPicker", () => {
 			open(undefined, false, "claude-code", { models: [{ id: "claude-opus-5-5", label: "Opus", aliases: ["opus"] }], modelId: "claude-opus-5-5" });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			await user.click(screen.getByRole("menuitem", { name: /Model/ }));
-			// One star for the favourite row at the top, one on the model row it folded into.
 			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(2);
 		} finally {
 			toggleModelFavorite(saved);
@@ -267,7 +266,6 @@ describe("AgentModelPicker", () => {
 			open();
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			const row = await screen.findByRole("menuitemradio", { name: /GPT Gone/ });
-			// Codex's list loads with only gpt-x.
 			await vi.waitFor(() => expect(row).toHaveAttribute("aria-disabled", "true"));
 		} finally {
 			toggleModelFavorite(gone);

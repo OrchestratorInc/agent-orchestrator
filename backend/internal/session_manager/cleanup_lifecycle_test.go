@@ -15,8 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ListTerminalCleanupCandidates mirrors the SQLite scan: terminated sessions
-// with no facts, stale facts, or a pending cleanup that is due.
 func (f *fakeStore) ListTerminalCleanupCandidates(_ context.Context, now time.Time) ([]domain.SessionID, error) {
 	f.cleanupMu.Lock()
 	defer f.cleanupMu.Unlock()
@@ -34,8 +32,6 @@ func (f *fakeStore) ListTerminalCleanupCandidates(_ context.Context, now time.Ti
 	return ids, nil
 }
 
-// batchCleanupFactsStore adds the SQLite store's one-query facts read, so
-// Cleanup's batched path is exercised as well as its per-session fallback.
 type batchCleanupFactsStore struct {
 	*fakeStore
 	batchReads int
@@ -101,8 +97,6 @@ func TestCleanup_RecordsReleaseAndSkipsItOnTheNextRun(t *testing.T) {
 	}
 }
 
-// With a store that batches facts, a run reads every session's facts once
-// instead of once per session.
 func TestCleanup_BatchesSettledFactsRead(t *testing.T) {
 	_, st, rt, ws := newManager()
 	batch := &batchCleanupFactsStore{fakeStore: st}
@@ -123,9 +117,6 @@ func TestCleanup_BatchesSettledFactsRead(t *testing.T) {
 	}
 }
 
-// A sweep records an untracked session's failure too, but report-only, so an
-// old preserved worktree does not start showing a cleanup error in the app. A
-// retry keeps it report-only.
 func TestCleanup_RecordsUntrackedFailureReportOnly(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = ports.ErrWorkspaceDirty
@@ -146,8 +137,6 @@ func TestCleanup_RecordsUntrackedFailureReportOnly(t *testing.T) {
 	}
 }
 
-// A restore bumps the cleanup generation, so a release recorded for the old
-// generation does not hide the restored session's new workspace.
 func TestCleanup_RevisitsSessionRestoredAfterRelease(t *testing.T) {
 	m, st, _, ws := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
@@ -195,8 +184,6 @@ func TestKill_RecordsReleasedWorkspace(t *testing.T) {
 	}
 }
 
-// An archive that keeps the worktree records why, for the app to show: a hard
-// refusal as such, a "not now" one as pending for the background pass.
 func TestKill_RecordsPreservedWorkspaceForTheApp(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
@@ -221,8 +208,6 @@ func TestKill_RecordsPreservedWorkspaceForTheApp(t *testing.T) {
 	}
 }
 
-// Each teardown refusal gets a stable code clients can branch on, and a reason
-// that names what to do without the raw error's filesystem paths.
 func TestCleanupRefusalForClassifiesTeardownErrors(t *testing.T) {
 	wrap := func(err error) error { return fmt.Errorf("gitworktree: refusing to remove %q: %w", "/ws/mer-1", err) }
 	for _, tc := range []struct {
@@ -269,8 +254,6 @@ func TestReconcileWorkspaceCleanup_FinishesAcceptedCleanup(t *testing.T) {
 	}
 }
 
-// The sweep never removes a worktree that is still on disk unless the user
-// already asked for it.
 func TestReconcileWorkspaceCleanup_LeavesUnacceptedWorktreeOnDisk(t *testing.T) {
 	m, st, _, ws := newManager()
 	path := t.TempDir()
@@ -290,8 +273,6 @@ func TestReconcileWorkspaceCleanup_LeavesUnacceptedWorktreeOnDisk(t *testing.T) 
 	}
 }
 
-// A worktree already gone from disk still goes through teardown, which prunes
-// git's stale registration before the release is recorded.
 func TestReconcileWorkspaceCleanup_PrunesAndRecordsWorkspaceAlreadyGone(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyReclaim = ports.WorkspaceReclaimAlreadyAbsent
@@ -317,8 +298,6 @@ func TestReconcileWorkspaceCleanup_PrunesAndRecordsWorkspaceAlreadyGone(t *testi
 	}
 }
 
-// A registration git still refuses to drop (a locked one) is recorded
-// report-only, not released, so `ao session cleanup` keeps reporting it.
 func TestReconcileWorkspaceCleanup_RecordsRefusedRegistrationReportOnly(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = ports.ErrWorkspaceLocked
@@ -397,8 +376,6 @@ func TestDeleteSession(t *testing.T) {
 	}
 }
 
-// With cleanup, a worktree still on disk is released first, the way cleanup
-// does it; a refusal keeps both the worktree and the session.
 func TestDeleteSession_CleansUpFirst(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -474,7 +451,6 @@ func TestDeleteSession_RefusesWhileAnotherOperationRuns(t *testing.T) {
 	}
 }
 
-// A path a live successor holds is left for a later pass, not failed.
 func TestReconcileWorkspaceCleanup_LeavesPathSharedWithLiveSuccessor(t *testing.T) {
 	m, st, _, _ := newManager()
 	shared := filepath.Join(t.TempDir(), "gone")

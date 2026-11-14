@@ -13,10 +13,6 @@ const png = (name = "shot.png") =>
 
 afterEach(() => vi.unstubAllGlobals());
 
-// Steering sends guidance INTO the running turn instead of queueing behind it. The
-// thing these tests protect is that the choice is legible: Enter changing meaning
-// silently would be worse than the queueing it replaces.
-
 describe("ChatComposer steering", () => {
 	const queuedMessage = (turnId: string, text: string) => ({
 		turnId,
@@ -176,7 +172,6 @@ describe("ChatComposer steering", () => {
 		await typeInLexicalEditor(screen.getByRole("combobox"), "a draft");
 
 		expect(steerButtons()).toHaveLength(1);
-		// Still the visible button, not the hover-only one that is transparent at rest.
 		expect(steerButtons()[0]).not.toHaveClass("opacity-0");
 		expect(nextRow.querySelector("[data-enter-steers]")).not.toBeNull();
 	});
@@ -241,8 +236,6 @@ describe("ChatComposer steering", () => {
 		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await waitFor(() => expect(field).toHaveAttribute("aria-disabled", "true"));
 
-		// Chromium can move focus to the document when the editor becomes non-editable.
-		// Model that explicitly because jsdom leaves focus in place.
 		const previousTabIndex = document.body.getAttribute("tabindex");
 		try {
 			document.body.tabIndex = -1;
@@ -581,10 +574,6 @@ describe("ChatWorkspace steering", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByText("second queued")).toBeVisible();
 	});
 
-	// A chat that cannot steer a queued message (a Cloud control plane without
-	// queued-steer) offers no Steer on its queue. The button once called nothing
-	// there, yet hid the message and drew it as steered until the next remount
-	// put it back in the queue.
 	it("offers no queued Steer where the chat cannot steer a queued message, and shows a recorded failure on its row", async () => {
 		const snapshot = {
 			...chatFixture,
@@ -617,9 +606,6 @@ describe("ChatWorkspace steering", () => {
 		expect(within(failed).getAllByRole("button", { name: "Steer this queued message into the running turn" }).length).toBeGreaterThan(0);
 	});
 
-	// A steer that fails (refused, timed out, the turn ended, the server or the
-	// network failed) never fails silently: the message is back in the queue, in
-	// its place, with the reason on its row, and its Steer tries again.
 	it("puts a queued message whose steer failed back in its place in the queue, with the reason and a retry", async () => {
 		const queued = (id: string, sequence: number, text: string) => ({
 			kind: "message" as const, id: `${id}-message`, turnId: id, sequence, revision: 0,
@@ -642,7 +628,6 @@ describe("ChatWorkspace steering", () => {
 
 		await userEvent.click(steerOf("queued-a"));
 		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-a");
-		// While the steer is in flight the message has left the queue.
 		await waitFor(() => expect(screen.queryByTestId("queued-message-queued-a")).not.toBeInTheDocument());
 
 		const reason = "Couldn't steer: the agent finished its turn first. It's back in the queue; select Steer to try again.";
@@ -720,9 +705,7 @@ describe("ChatWorkspace steering", () => {
 		const row = screen.getByTestId("queued-message-queued-annotation");
 		expect(within(row).getByText("Rename this file · 1 annotation")).toBeVisible();
 		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
-		// The dock owns the queued annotation, as it does a typed message.
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
-		// Ordinary automation turns stay out of the user's queue controls.
 		expect(screen.queryByTestId("queued-message-queued-automation")).not.toBeInTheDocument();
 
 		expect(within(row).getByRole("button", { name: "Delete queued message" })).toBeVisible();
@@ -953,7 +936,6 @@ describe("ChatWorkspace steering", () => {
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
 	});
 
-	// A queued turn has not reached the provider, so there is nothing to steer.
 	it("does not offer steering into a turn that is only queued", () => {
 		render(
 			<ChatWorkspace
@@ -981,7 +963,6 @@ describe("ChatWorkspace steering", () => {
 				snapshot={{
 					...chatFixture,
 					latestSequence: 14,
-					// The carried turn is not among the snapshot's turns, as the daemon sends it.
 					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) }],
 					items: [
 						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, createdAt: at(0) },

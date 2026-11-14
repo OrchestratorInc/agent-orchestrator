@@ -11,12 +11,6 @@ export type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
 export type ReviewRunFacts = components["schemas"]["ReviewRun"];
 export type ReviewerActivityState = ReviewsResponse["reviewerActivityState"];
 
-/**
- * Shared query options for a session's AO review states. The query key is the
- * single source of truth for review data — the SessionInspector Reviews tab
- * and the command palette both subscribe through this, so React Query shares
- * one cache entry per session and one fetch path (including the preview mock).
- */
 export const sessionReviewsQueryKey = (sessionId: string, hostId?: string) =>
 	hostId ? ["session-reviews", hostId, sessionId] as const : ["session-reviews", sessionId] as const;
 
@@ -41,7 +35,6 @@ export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: b
 	});
 }
 
-/** Review states for a session's active PRs. Open and draft PRs can be reviewed; merged/closed PRs cannot. */
 export function openReviewStatesFor(session: WorkspaceSession, reviewStates: PRReviewState[]): PRReviewState[] {
 	const openPRURLs = new Set(
 		sortedPRs(session)
@@ -71,8 +64,6 @@ export function reviewHasLiveActivity(
 		case "blocked":
 			return true;
 		default:
-			// Older daemons do not return reviewer activity state. Keep today's
-			// running-run semantics until a hook says otherwise.
 			return true;
 	}
 }
@@ -98,8 +89,6 @@ export function reviewSessionRunAction(reviewStates: PRReviewState[], isTriggeri
 	return appI18n.t("inspector.review.run");
 }
 
-// Preview-only pins so the reviews section can be seen mid-run and with a verdict
-// left behind by an earlier commit — neither follows from a PR's review decision.
 const MOCK_RUNNING_PR = 322;
 const MOCK_STALE_PR = 324;
 
@@ -146,8 +135,6 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			verdict: "",
 			...over,
 		});
-		// A couple of PRs are pinned to states the review decision alone cannot
-		// produce, so the preview shows every shape the panel can render.
 		if (pr.number === MOCK_RUNNING_PR) {
 			return {
 				latestRun: run({ status: "running", id: `demo-review-run-${pr.number}-live` }),
@@ -159,8 +146,6 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			};
 		}
 		if (pr.number === MOCK_STALE_PR) {
-			// Reviewed, then a new commit landed: the verdict is about code that
-			// has since changed, so the panel demotes it to "Previous".
 			return {
 				previousRun: run({
 					status: "delivered",
@@ -192,8 +177,6 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			title: mockReviewTitle(pr.number),
 		};
 	});
-	// Earlier passes, so the history control has something to open. Two reviewers
-	// on the same PR is the case the control exists for.
 	const runs: ReviewRunFacts[] = states.flatMap((state) => {
 		const base = {
 			autoInjectReview: session.autoInjectReview ?? true,

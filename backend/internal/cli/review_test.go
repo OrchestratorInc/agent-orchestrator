@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// reviewCapture records the method/path/body of the request the CLI made.
 type reviewCapture struct {
 	method string
 	path   string
@@ -40,9 +39,6 @@ func reviewServer(t *testing.T, status int, respBody string) (*httptest.Server, 
 
 func aliveDeps() Deps { return Deps{ProcessAlive: func(int) bool { return true }} }
 
-// setReviewEnv is setConfigEnv for review commands, which default to the
-// calling AO session: it clears inherited session ids so the suite stays
-// hermetic when it runs inside an AO worker or reviewer.
 func setReviewEnv(t *testing.T) testConfig {
 	t.Helper()
 	cfg := setConfigEnv(t)
@@ -104,7 +100,6 @@ func TestReviewSubmitAcceptsUnderscoreFlags(t *testing.T) {
 	srv, capture := reviewServer(t, http.StatusOK, `{"review":{"id":"run-1","verdict":"changes_requested"}}`)
 	writeRunFileFor(t, cfg, srv)
 
-	// Reviewer agents often spell --review-id as --review_id; both must work.
 	_, errOut, err := executeCLI(t, aliveDeps(),
 		"review", "submit", "mer-1", "--run", "run-1", "--verdict", "changes_requested", "--review_id", "98765")
 	if err != nil {
@@ -204,8 +199,6 @@ func TestReviewSubmitRetriesUncertainTransportFailureWithIdenticalPayload(t *tes
 				}
 				bodies = append(bodies, string(raw))
 				if len(bodies) == 1 {
-					// The daemon may have committed before the connection broke.
-					// This also covers a successful status followed by a body read failure.
 					if tc.bodyErr == nil {
 						return nil, io.ErrUnexpectedEOF
 					}
@@ -415,8 +408,6 @@ func TestReviewStopTooManyArgsIsUsageError(t *testing.T) {
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
 	}
-	// Assert the message so the test distinguishes the cobra atMostOneArg error
-	// from the fallback "worker session id is required" usage error (both exit 2).
 	if err == nil || !strings.Contains(err.Error(), "accepts at most 1 arg") {
 		t.Fatalf("err = %v, want an \"accepts at most 1 arg\" usage error", err)
 	}
@@ -428,8 +419,6 @@ func TestReviewRestartTooManyArgsIsUsageError(t *testing.T) {
 	if got := ExitCode(err); got != 2 {
 		t.Fatalf("exit code = %d, want 2 (usage); err=%v", got, err)
 	}
-	// Assert the message so the test distinguishes the cobra atMostOneArg error
-	// from the fallback "worker session id is required" usage error (both exit 2).
 	if err == nil || !strings.Contains(err.Error(), "accepts at most 1 arg") {
 		t.Fatalf("err = %v, want an \"accepts at most 1 arg\" usage error", err)
 	}
@@ -437,7 +426,6 @@ func TestReviewRestartTooManyArgsIsUsageError(t *testing.T) {
 
 func TestReviewRestartPostsTriggerCreated(t *testing.T) {
 	cfg := setReviewEnv(t)
-	// 201 with created:true means a new review pass was started.
 	srv, capture := reviewServer(t, http.StatusCreated, `{"created":true}`)
 	writeRunFileFor(t, cfg, srv)
 
@@ -455,7 +443,6 @@ func TestReviewRestartPostsTriggerCreated(t *testing.T) {
 
 func TestReviewRestartPostsTriggerReused(t *testing.T) {
 	cfg := setReviewEnv(t)
-	// 200 with created:false means an existing run for the same commit was reused.
 	srv, capture := reviewServer(t, http.StatusOK, `{"created":false}`)
 	writeRunFileFor(t, cfg, srv)
 

@@ -19,10 +19,6 @@ type fakeEndpointSource struct {
 
 func (f fakeEndpointSource) AdvertisedEndpoints() []mobilebridge.Endpoint { return f.endpoints }
 
-// The phone re-reads this after every successful connect. It is what makes a
-// rotated tunnel hostname or a changed LAN address heal without re-pairing, and
-// it cannot live under /api/v1/mobile because lanControlBlock 404s that whole
-// prefix on the LAN listener — the only listener a phone can reach.
 func TestGetEndpointsReturnsTheAdvertisedList(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
@@ -57,7 +53,6 @@ func TestGetEndpointsReturnsTheAdvertisedList(t *testing.T) {
 }
 
 func TestGetEndpointsIsReachableFromTheLANListener(t *testing.T) {
-	// The whole point of not putting it under /api/v1/mobile.
 	if httpd.IsLANControlBlockedPathForTest("/api/v1/endpoints") {
 		t.Fatal("/api/v1/endpoints is blocked on the LAN listener, so the phone can never refresh")
 	}

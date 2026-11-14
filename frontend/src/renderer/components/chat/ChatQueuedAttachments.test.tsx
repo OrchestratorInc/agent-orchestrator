@@ -272,7 +272,6 @@ describe("queued message attachments", () => {
 					await userEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
 				}
 				view.unmount();
-				// Mounting the retired key with no durable seed exposes any leaked registry descriptors.
 				const cache = renderHook(() => useFileAttachments({ initialKey }));
 				expect(cache.result.current.attachments).toHaveLength(action === "unmount" || action === "failed cleanup" ? 1 : 0);
 				cache.unmount();
@@ -448,8 +447,6 @@ describe("queued message attachments", () => {
 			items: second.snapshot.items.map((item) => item.kind === "message" ? { ...item, revision: serverRevision } : item),
 		});
 		second.edit.mockImplementation(async (...request) => {
-			// Receipt lookup precedes revision validation on the daemon; the real
-			// SQLite behavior is covered by TestQueuedEditRetryAfterCommittedResponseIsLost.
 			expect(request).toEqual(committedRequest);
 		});
 		expect(screen.getByRole("combobox")).toHaveAttribute("contenteditable", "false");

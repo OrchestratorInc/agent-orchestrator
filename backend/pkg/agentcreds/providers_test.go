@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// Every probe must hit a model-listing endpoint. A generic identity endpoint
-// would confirm the credential authenticates and say nothing about whether it
-// can reach Claude.
 func TestProbesTargetModelEndpoints(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -44,7 +41,6 @@ func TestProbesTargetModelEndpoints(t *testing.T) {
 			if !strings.HasSuffix(path, tc.wantPath) {
 				t.Fatalf("probed %q, want a path ending in %q", path, tc.wantPath)
 			}
-			// The runtime endpoint bills tokens; the control plane does not.
 			if strings.Contains(path, "bedrock-runtime") || strings.Contains(path, ":messages") {
 				t.Fatalf("probe hit a billable endpoint: %q", path)
 			}
@@ -94,8 +90,6 @@ func TestAnthropicModelDiscoveryRejectsRepeatedCursor(t *testing.T) {
 	}
 }
 
-// A gateway need not implement model listing, so an empty list there is not a
-// verdict either way, and a 404 is Unknown rather than a rejection.
 func TestGatewayToleratesAMissingModelEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -195,7 +189,6 @@ func TestGatewayRequestPreservesBasePathAndUsesOnlyAPIKeyHeader(t *testing.T) {
 	}
 }
 
-// The validating call also supplies the first-party catalog.
 func TestValidationReturnsThatProvidersModelIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"claude-opus-4-5-20251101"},{"id":"gpt-4o"}]}`))
@@ -213,8 +206,6 @@ func TestValidationReturnsThatProvidersModelIDs(t *testing.T) {
 	}
 }
 
-// A credential kind that cannot authenticate to a provider is a programming
-// error, and must surface as Unknown rather than as a bogus rejection.
 func TestMismatchedKindAndProviderIsUnknown(t *testing.T) {
 	result := New(nil).Validate(context.Background(), Credential{
 		Kind: Kind("unsupported"), Secret: "token", Provider: ProviderFirstParty,
@@ -224,8 +215,6 @@ func TestMismatchedKindAndProviderIsUnknown(t *testing.T) {
 	}
 }
 
-// Effort levels differ per model and change as models ship, so they must come
-// from the provider. This fixture is the real api.anthropic.com shape.
 func TestEffortLevelsComeFromTheProvider(t *testing.T) {
 	body := `{"data":[
 		{"id":"claude-opus-5","display_name":"Claude Opus 5","capabilities":{"effort":{
@@ -272,8 +261,6 @@ func TestEffortLevelsComeFromTheProvider(t *testing.T) {
 	}
 }
 
-// A model that supports no effort must report none, so the UI renders no
-// control at all rather than an empty or disabled dropdown.
 func TestUnsupportedEffortIsEmptyNotPartial(t *testing.T) {
 	if got := supportedEfforts(map[string]json.RawMessage{
 		"supported": json.RawMessage(`false`),
@@ -286,8 +273,6 @@ func TestUnsupportedEffortIsEmptyNotPartial(t *testing.T) {
 	}
 }
 
-// The API returns effort as an object, so order has to be imposed or the
-// dropdown reshuffles between requests.
 func TestEffortOrderIsStableAndAscending(t *testing.T) {
 	raw := map[string]json.RawMessage{
 		"supported": json.RawMessage(`true`),

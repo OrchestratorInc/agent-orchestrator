@@ -18,11 +18,6 @@ import { useCloudOrg } from "./useCloudOrg";
 
 export const orchestratorChildrenQueryKey = ["cloud-session-children"] as const;
 
-/**
- * One worker session as the orchestrator inspector renders it. Structurally
- * compatible with the session shape getSessionStatusDotView consumes, so the
- * sidebar's status-dot presentation applies unchanged.
- */
 export type OrchestratorChildView = {
 	id: string;
 	title: string;
@@ -61,18 +56,10 @@ export function toOrchestratorChildView(child: CloudCpSessionChild): Orchestrato
 	};
 }
 
-/** Live children first (server order: newest activity first), history last. */
 export function sortChildViews(children: OrchestratorChildView[]): OrchestratorChildView[] {
 	return [...children].sort((a, b) => Number(a.isTerminated) - Number(b.isTerminated));
 }
 
-/**
- * The sessions a cloud orchestrator spawned, for the inspector's Workers
- * section. Enabled only for cloud orchestrator sessions; polls on the same
- * cadence as the cloud session list so status and PR chips track the board.
- * In browser preview mode the demo orchestrator serves mock children so the
- * section is designable without a control plane.
- */
 export function useOrchestratorChildren(session: WorkspaceSession) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
@@ -89,8 +76,6 @@ export function useOrchestratorChildren(session: WorkspaceSession) {
 				return sortChildViews((mockOrchestratorChildren[session.id] ?? []).map(toOrchestratorChildView));
 			}
 			if (orgId === undefined) return [];
-			// First page only (control-plane max page size), matching the cloud
-			// session list's pagination stance.
 			const response = await client.listSessionChildren(orgId, session.id, { limit: 100 });
 			return sortChildViews(response.items.map(toOrchestratorChildView));
 		},

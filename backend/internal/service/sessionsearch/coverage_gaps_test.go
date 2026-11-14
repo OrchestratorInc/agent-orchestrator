@@ -10,15 +10,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionsearch"
 )
 
-// filler is plain words, so a test can place a needle at a known depth of a
-// long text without JSON escapes.
 func filler(bytes int) string {
 	const word = "progress steady "
 	return strings.Repeat(word, bytes/len(word)+1)[:bytes]
 }
 
-// A tool's output is indexed to its first 3,072 characters
-// (coverage.go): what ran and how it started; the rest of a long log is not.
 func TestLongCommandOutputKeepsItsFirst3072Characters(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
@@ -42,8 +38,6 @@ func TestLongCommandOutputKeepsItsFirst3072Characters(t *testing.T) {
 	}
 }
 
-// A long prompt was cut at 8 KiB; the rest could not be found. It is split
-// into chunks now, and a word in several chunks is still one match.
 func TestLongMessageIsSearchableToItsEndAndCountsOnce(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
@@ -65,8 +59,6 @@ func TestLongMessageIsSearchableToItsEndAndCountsOnce(t *testing.T) {
 	}
 }
 
-// The same rules in AO Chat: a long message is searchable to its end, and a
-// long command output to its first 3,072 characters.
 func TestChatLongMessageToItsEndAndLongOutputToItsStart(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-chat-long", "conv-chat-long")
@@ -93,10 +85,6 @@ func TestChatLongMessageToItsEndAndLongOutputToItsStart(t *testing.T) {
 	}
 }
 
-// Found in review: a long message's chunks shared no text, so a quoted phrase
-// with a chunk break between its words was in neither chunk and found nothing.
-// The fixture is the one from the review: the break falls after "alpha ".
-// Each chunk now starts with the end of the one before it.
 const phraseAcrossABreak = "alpha beta"
 
 func textWithAPhraseAcrossABreak() string {
@@ -117,12 +105,10 @@ func TestChatQuotedPhraseAcrossAChunkBreakIsFound(t *testing.T) {
 	if !strings.Contains(got[0].Snippet, phraseAcrossABreak) {
 		t.Fatalf("snippet %q does not show the phrase", got[0].Snippet)
 	}
-	// "alpha" is now in both chunks; it is still one message, one match.
 	word := search(t, f.svc, "alpha").Results
 	if len(word) != 1 || word[0].SessionMatches != 1 {
 		t.Fatalf("results = %s (matches %v), want one session with one match", describe(word), matchCounts(word))
 	}
-	// Words that are not next to each other are not a phrase.
 	if miss := search(t, f.svc, `"beta alpha"`).Results; len(miss) != 0 {
 		t.Fatalf("results = %s, want none for the words in the other order", describe(miss))
 	}

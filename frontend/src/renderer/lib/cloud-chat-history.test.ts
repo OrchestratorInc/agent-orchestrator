@@ -21,11 +21,9 @@ const event = (sequence: number, createdAt = "2026-11-08T10:00:00.000Z"): CloudC
 });
 const sequences = (events: readonly CloudCpClientEvent[] | undefined) => events?.map((item) => item.sequence);
 
-/** A page read back from a sequence, as a control plane that supports it answers. */
 const back = (events: CloudCpClientEvent[], hasOlder: boolean, nextBefore = events[0]?.sequence): CloudCpChatEventsResponse => ({
 	events, hasMore: false, nextAfter: events.at(-1)?.sequence ?? 0, hasOlder, nextBefore,
 });
-/** A forward page, as an older control plane answers any read. */
 const forward = (events: CloudCpClientEvent[], hasMore: boolean): CloudCpChatEventsResponse => ({
 	events, hasMore, nextAfter: events.at(-1)?.sequence ?? 0,
 });
@@ -107,7 +105,6 @@ describe("loadCloudChatHistory", () => {
 		queryClient.setQueryData<CloudChatHistory>(cloudChatHistoryKey(ORG, SESSION), { hasOlder: true, nextBefore: 40, recentPending: false, loadingOlder: true, generation: 3 });
 		const cp = client();
 		cp.listChatEvents.mockImplementationOnce(async () => {
-			// The stream replays from the old list's end while the read runs.
 			queryClient.setQueryData(cloudChatEventsKey(ORG, SESSION), [event(40), event(42), event(43), event(901)]);
 			return back([event(900)], true);
 		}).mockResolvedValueOnce(back([event(880), event(900)], true));

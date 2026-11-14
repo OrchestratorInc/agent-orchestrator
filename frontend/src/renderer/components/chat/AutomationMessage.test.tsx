@@ -1,10 +1,3 @@
-/**
- * AO's automation messages are read back from the text AO writes for them. The
- * templates this renderer writes are produced here by their real formatters, so
- * a change to one fails the reader it breaks; the daemon's are fixed samples of
- * lifecycle's formatters.
- */
-
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";

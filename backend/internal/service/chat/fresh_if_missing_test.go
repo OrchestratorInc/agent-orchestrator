@@ -12,10 +12,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// A driver may start fresh in place of a provider conversation that was never
-// persisted, but only when the caller proved the conversation never started and
-// the driver did not reattach to a live provider. The fresh conversation has no
-// native history, so none is imported.
 func TestResumeAcceptsFreshProviderOnlyWhenAllowed(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -44,8 +40,6 @@ func TestResumeAcceptsFreshProviderOnlyWhenAllowed(t *testing.T) {
 				t.Fatalf("CreateConversation: %v", err)
 			}
 
-			// A history reader that refuses every replay: importing native history
-			// from the fresh conversation would fail the start.
 			fresh := &rejectedHistoryConversation{fakeConversation: newFakeConversation()}
 			fresh.providerConversationID = "fresh-provider-thread"
 			var returned ports.ChatConversation = fresh

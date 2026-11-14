@@ -9,18 +9,11 @@ import (
 	ghtml "github.com/yuin/goldmark/renderer/html"
 )
 
-// markdownRenderer converts workspace Markdown to HTML for the browser panel.
-// GitHub-flavored extensions (tables, strikethrough, task lists, autolinks) are
-// enabled, and raw HTML is passed through: preview content is workspace-local
-// and agent-trusted, matching the preview target's existing trust model.
 var markdownRenderer = goldmark.New(
 	goldmark.WithExtensions(extension.GFM),
 	goldmark.WithRendererOptions(ghtml.WithUnsafe()),
 )
 
-// RenderMarkdown converts Markdown source into a self-contained HTML document
-// styled for the browser panel. title labels the document (typically the file
-// name).
 func RenderMarkdown(source []byte, title string) ([]byte, error) {
 	var body bytes.Buffer
 	if err := markdownRenderer.Convert(source, &body); err != nil {
@@ -40,9 +33,6 @@ func RenderMarkdown(source []byte, title string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// markdownStyles is a compact GitHub-like stylesheet that honors the OS color
-// scheme so the rendered Markdown fits the desktop browser panel in both light
-// and dark modes.
 const markdownStyles = `
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }

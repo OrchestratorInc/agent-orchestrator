@@ -50,7 +50,6 @@ func (g *graphReader) append(out *Archive, role string, parts [][]byte) error {
 	return nil
 }
 
-// decode retains protobuf field numbers and skips unknown fixed-width fields.
 func decode(body []byte) (map[uint64][][]byte, error) {
 	out := make(map[uint64][][]byte)
 	for len(body) != 0 {

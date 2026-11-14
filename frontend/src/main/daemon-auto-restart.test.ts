@@ -20,10 +20,6 @@ describe("daemonExitWasUngraceful", () => {
 		).toBe(false);
 	});
 
-	// Regression: `ao stop` with the desktop app attached outlives the 10s drain
-	// deadline (the app holds the /events SSE stream), so the daemon force-closes
-	// and exits non-zero AFTER removing the run-file. That is a deliberate stop,
-	// not a crash — the removed marker must not be respawned.
 	it("treats a clean exit that removed the run-file as a stop even when it exited non-zero", () => {
 		expect(
 			daemonExitWasUngraceful({ runFilePresent: false, runFilePid: null, childPid: 42, code: 1, signal: null }),

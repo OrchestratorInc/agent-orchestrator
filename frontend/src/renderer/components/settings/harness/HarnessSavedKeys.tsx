@@ -7,10 +7,6 @@ import { Button } from "../../ui/button";
 import { KeyWarning, REMOVE_CONFIRM_MS, savedKeySummary } from "../providerKeyUi";
 import { HarnessDetailGroup, HarnessDetailRow } from "./harness-ui";
 
-/** The keys AO saved that a harness reads, for a harness that is not
-	* installed. Its sign-in panel can't open without the harness, so this is
-	* where those keys, and AO's shared copy in the user environment, are
-	* removed. Keys are only entered through the sign-in panel. */
 export function HarnessSavedKeys({ agentId, hostId, providerKeys, onProviderKeysChanged }: {
 	agentId: AgentId;
 	hostId?: string;
@@ -19,8 +15,6 @@ export function HarnessSavedKeys({ agentId, hostId, providerKeys, onProviderKeys
 }) {
 	const { t } = useTranslation();
 	const [notice, setNotice] = useState<{ warn: boolean; text: string } | null>(null);
-	// Gemini's own key method saves GEMINI_API_KEY in AO too, though Gemini
-	// isn't listed among the key's readers.
 	const keys = providerKeys?.filter((key) => key.configured
 		&& (key.agents.includes(agentId) || (agentId === "gemini" && key.name === "GEMINI_API_KEY"))) ?? [];
 	if (!keys.length && !notice) return null;

@@ -5,7 +5,6 @@ import type { ChatConfigOption } from "../../types/conversation";
 import type { PickerSource } from "./AgentSwitchPicker";
 import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
-// The agent picker is tested on its own; here only what it is given matters.
 const agentPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
 vi.mock("./AgentSwitchPicker", async (original) => ({
 	...await original<typeof import("./AgentSwitchPicker")>(),
@@ -325,7 +324,6 @@ it("keeps the Claude model menu open when expanding Other models, without an age
 	];
 	const composerClick = vi.fn();
 	render(
-		// Stands in for the composer, which focuses its editor on clicks that bubble out of the menu.
 		<div onClick={composerClick}>
 			<TurnSettingsBar
 				harness="claude-code"
@@ -384,7 +382,6 @@ describe("ACP session config options", () => {
 					],
 				},
 			]} />);
-		// Plan pairs with the agent's Default, so it is the Plan Mode toggle, not a picker named "Mode".
 		expect(screen.queryByRole("button", { name: "Model mode for the next turn" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Mode" })).toHaveTextContent("YOLO");
 	});
@@ -563,7 +560,6 @@ describe("ACP session config options", () => {
 	);
 
 	it("shows Copilot's Agent and Plan as Plan Mode and keeps AO's approval control", async () => {
-		// The daemon removes Autopilot and allow_all from Copilot's catalog.
 		const uri = "https://agentclientprotocol.com/protocol/session-modes#";
 		const copilotModes: ChatConfigOption = {
 			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: `${uri}agent`,
@@ -650,7 +646,6 @@ describe("ACP session config options", () => {
 			within(tools).getByRole("button", { name: "Model and reasoning effort for the next turn" })
 				.querySelector(".icon-chevron-down"),
 		).toBeNull();
-		// The permission button reads as a select: value first, caret second.
 		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".icon-chevron-down")).not.toBeNull();
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
@@ -859,9 +854,6 @@ describe("ACP session config options", () => {
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" }, "approvalMode");
 	});
 
-	// Hermes' default session mode governs only its file-edit tool; ordinary
-	// shell commands still run without asking, so the hint copy must not read
-	// stronger than Hermes behaves.
 	it("describes what Hermes' Default actually gates in the approval menu", async () => {
 		const user = userEvent.setup();
 		render(
@@ -879,8 +871,6 @@ describe("ACP session config options", () => {
 		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
 	});
 
-	// A Cloud chat keeps its approval mode unless the change is marked as a pick
-	// from this menu, so the unified bar's rows must mark it like the plain rows do.
 	it("reports a pick from the unified bar's approval menu as an approval pick", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
@@ -1143,13 +1133,10 @@ describe("remember project permissions", () => {
 		rerender(<TurnSettingsBar {...props} error={message} rememberPermissionsError="Could not save project default" />);
 		const alert = screen.getByRole("alert");
 		expect(row).toContainElement(alert);
-		// The row stays the only child of the bar: nothing is stacked under it.
 		expect(bar.children).toHaveLength(1);
 		expect(alert).toHaveTextContent(message);
 		expect(alert).toHaveTextContent("Could not save project default");
-		// However narrow the row, the warning icon keeps its room.
 		expect(alert).toHaveClass("min-w-3.5");
-		// The line truncates to the free space; keyboard focus opens the whole message.
 		expect(alert).toHaveAttribute("tabindex", "0");
 		act(() => alert.focus());
 		expect(await screen.findByRole("tooltip")).toHaveTextContent(`${message} · Could not save project default`);
@@ -1224,8 +1211,6 @@ describe("native model selection", () => {
 });
 
 describe("Cursor Ask and Agent chat modes", () => {
-	// Values are deliberately not lowercase: AO must round-trip whatever the
-	// provider advertised, never a value re-derived from the label.
 	const CURSOR_MODE: ChatConfigOption = {
 		id: "mode",
 		name: "Chat mode",
@@ -1426,8 +1411,6 @@ describe("Cursor Ask and Agent chat modes", () => {
 	});
 });
 
-// Captured from a live `cursor-agent acp` session/new response: Cursor advertises
-// three postures in one mode option, alongside its own model catalog.
 describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 	const CURSOR_MODES: ChatConfigOption = {
 		id: "mode",
@@ -1643,8 +1626,6 @@ describe("Cursor's live Agent/Plan/Ask mode catalog", () => {
 });
 
 describe("OpenCode's live permission tiers", () => {
-	// What the daemon publishes for OpenCode: AO's tiers (relabelled from the
-	// injected agents) alongside OpenCode's own build and plan agents.
 	const OPENCODE_MODES: ChatConfigOption = {
 		id: "mode",
 		name: "Session Mode",
@@ -1700,7 +1681,6 @@ describe("OpenCode's live permission tiers", () => {
 		await user.click(screen.getByRole("menuitemradio", { name: "Bypass permissions" }));
 		expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "ao-bypass" });
 
-		// build is OpenCode's agent mode, so the toggle must not invent a second one.
 		await user.click(screen.getByRole("button", { name: "Model mode for the next turn" }));
 		expect(screen.getByRole("switch", { name: "Plan Mode" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "Agent Mode" })).not.toBeInTheDocument();
@@ -1802,7 +1782,6 @@ describe("agent picker effort names", () => {
 	it("names levels the provider leaves unnamed, as the local chat and New Task do", () => {
 		const { rows, shown } = efforts(["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, name: "" })));
 		expect(rows.map((effort) => effort.label)).toEqual(["Low", "Medium", "High", "Extra high", "Max"]);
-		// The level the next turn runs with is the one the composer shows.
 		expect(shown).toBe("Extra high");
 	});
 
@@ -2015,7 +1994,6 @@ describe("permissions for the agent picked for the next message", () => {
 				agentSwitch={{ projectId: "p", pending, pendingPermissionModes: ["default"], onPendingChange }}
 			/>,
 		);
-		// Claude Code's own option is gone; the control is Kimi's, and Kimi cannot bypass.
 		expect(screen.queryByRole("button", { name: /Permission mode/ })).not.toBeInTheDocument();
 		const note = "Kimi can't run in Bypass permissions. It will start in Use agent permissions.";
 		await user.click(screen.getByRole("button", { name: note }));

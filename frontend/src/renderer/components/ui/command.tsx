@@ -11,7 +11,6 @@ import { ShortcutCaps } from "./kbd";
 
 const commandClassName = "flex w-full flex-col overflow-hidden rounded-[var(--radius-command-palette)] text-foreground outline-none";
 
-/** The search field's look, shared by cmdk's input and a surface that runs its own list. */
 const commandInputClassName =
 	"flex h-control-sm min-w-0 flex-1 bg-transparent text-[length:var(--font-size-command-input)] leading-body text-foreground caret-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -41,10 +40,6 @@ function CommandDialog({
 	className?: string;
 	commandProps?: React.ComponentProps<typeof CommandPrimitive>;
 	contentProps?: React.ComponentProps<typeof Dialog.Content>;
-	/**
-	 * The palette's surface without cmdk, for a body that owns its own list and
-	 * keys (the archive grid). Only `commandProps.className` applies.
-	 */
 	plain?: boolean;
 }) {
 	const { className: bodyClassName, ...restCommandProps } = commandProps ?? {};
@@ -111,9 +106,7 @@ function CommandInput({
 	trailing,
 	...props
 }: React.ComponentProps<typeof CommandPrimitive.Input> & {
-	/** Replaces the search glyph, such as with a back button in a nested view. */
 	leading?: React.ReactNode;
-	/** Sits at the end of the field: a search spinner, the current scope. */
 	trailing?: React.ReactNode;
 }) {
 	return (
@@ -129,10 +122,6 @@ function CommandInput({
 	);
 }
 
-/**
- * The palette's top bar. The search field and any view that replaces it (such
- * as New task) share it, so the bar keeps its height and the text its place.
- */
 function CommandBar({ className, ...props }: React.ComponentProps<"div"> & { "cmdk-input-wrapper"?: string }) {
 	return <div className={cn("flex items-center gap-2.5 px-[var(--size-command-pad-x)] pt-3 pb-1.5", className)} {...props} />;
 }
@@ -180,10 +169,6 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
 	);
 }
 
-/**
- * Keys for a command. Rows show bare glyphs (⇧⌘O) so they read as a hint, not
- * a control; the footer shows each key as a small cap.
- */
 function CommandShortcut({ keys, variant = "glyphs", className }: { keys: readonly string[]; variant?: "glyphs" | "caps"; className?: string }) {
 	if (variant === "glyphs") {
 		return (

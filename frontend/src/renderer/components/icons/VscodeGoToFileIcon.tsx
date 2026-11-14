@@ -1,6 +1,5 @@
 import type { SVGProps } from "react";
 
-/** VS Code's Codicon `go-to-file`, used for opening a file in the main workspace. */
 export function VscodeGoToFileIcon(props: SVGProps<SVGSVGElement>) {
 	return (
 		<svg fill="currentColor" viewBox="0 0 16 16" {...props}>

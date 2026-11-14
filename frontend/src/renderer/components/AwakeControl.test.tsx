@@ -545,7 +545,6 @@ describe("shared Stay Awake controls", () => {
 		try {
 			fireEvent.click(coffee());
 			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-			// The POST has finished, but native ownership has not been acknowledged.
 			expect(state.sessions).toHaveLength(1);
 			for (let i = 0; i < 4; i++) {
 				expect(coffee()).not.toHaveAttribute("aria-busy");
@@ -670,7 +669,6 @@ describe("shared Stay Awake controls", () => {
 });
 
 describe("footer Stay Awake menu row", () => {
-	// Mirrors the sidebar footer: the trigger holds the state, the row only renders it.
 	function FooterMenu() {
 		const stay = useFooterStayAwake();
 		return (

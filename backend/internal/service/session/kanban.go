@@ -23,10 +23,6 @@ func deriveKanbanPresentation(
 	)
 }
 
-// toContractKanbanSessionFacts reads rec.OutputType, the persisted column
-// lifecycle.Manager.ReconcileSessionOutputType maintains, as the source of
-// truth for artifact-output placement rather than re-scanning the artifact
-// directory on every Kanban derivation.
 func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalCapable bool) contract.KanbanSessionFacts {
 	return contract.KanbanSessionFacts{
 		SessionFacts:      toContractSessionFacts(rec, signalCapable),

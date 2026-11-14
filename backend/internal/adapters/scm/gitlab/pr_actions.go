@@ -16,9 +16,6 @@ import (
 var _ ports.SCMPRStateChanger = (*Provider)(nil)
 var _ ports.SCMCommenter = (*Provider)(nil)
 
-// ChangePullRequestState closes or reopens a GitLab merge request through its
-// state_event. GitLab only expresses draft status through the title prefix,
-// so ready and draft are unsupported.
 func (p *Provider) ChangePullRequestState(ctx context.Context, request ports.SCMPRStateRequest) error {
 	if p == nil || p.client == nil {
 		return fmt.Errorf("gitlab scm: state provider is not configured")
@@ -58,8 +55,6 @@ func (p *Provider) ChangePullRequestState(ctx context.Context, request ports.SCM
 	return nil
 }
 
-// PostComment posts a top-level merge-request note, or a reply note in the
-// discussion named by request.ThreadID.
 func (p *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequest) (ports.SCMCommentResult, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMCommentResult{}, fmt.Errorf("gitlab scm: comment provider is not configured")
@@ -114,8 +109,6 @@ func (p *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequ
 	}, nil
 }
 
-// mapMutationStatus classifies a failed merge-request mutation: 404 is an
-// unknown MR and 400/405/409/422 are GitLab refusing it.
 func mapMutationStatus(status int, err error) error {
 	switch status {
 	case http.StatusNotFound:
@@ -129,8 +122,6 @@ func mapMutationStatus(status int, err error) error {
 
 var _ ports.SCMAttachmentStore = (*Provider)(nil)
 
-// AttachmentAccess allows attachments on any merge request: GitLab keeps them
-// as project uploads, not in the repository, so commenting is all it takes.
 func (p *Provider) AttachmentAccess(_ context.Context, ref ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
 	if ref.Number <= 0 || strings.TrimSpace(ref.Repo.Owner) == "" || strings.TrimSpace(ref.Repo.Name) == "" {
 		return ports.SCMAttachmentAccess{}, fmt.Errorf("gitlab scm: invalid merge request reference")
@@ -138,9 +129,6 @@ func (p *Provider) AttachmentAccess(_ context.Context, ref ports.SCMPRRef) (port
 	return ports.SCMAttachmentAccess{Allowed: true, Location: ref.Repo.Owner + "/" + ref.Repo.Name}, nil
 }
 
-// StoreAttachments stores each file with GitLab's project uploads API, which
-// serves it from the project; no branch or commit is involved. The URLs are
-// absolute on the PR's web host.
 func (p *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMStoredAttachments{}, fmt.Errorf("gitlab scm: attachment provider is not configured")
@@ -181,14 +169,10 @@ func (p *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachme
 	return ports.SCMStoredAttachments{URLs: urls}, nil
 }
 
-// DiscardAttachments has nothing to remove: an upload no note links to stays
-// private to the project's members and is never listed.
 func (p *Provider) DiscardAttachments(context.Context, ports.SCMPRRef, string) error {
 	return nil
 }
 
-// uploadURL makes an upload's URL absolute. full_path is already rooted at
-// the instance; url is relative to the project, so it gets the project path.
 func uploadURL(ref ports.SCMPRRef, relative, fullPath string) string {
 	if u, err := url.Parse(fullPath); err == nil && u.IsAbs() {
 		return fullPath

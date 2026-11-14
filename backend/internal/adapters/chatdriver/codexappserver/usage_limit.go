@@ -12,16 +12,11 @@ import (
 
 var errCodexUsageLimitExceeded = errors.New("codex usage limit exceeded")
 
-// Account notifications have no turn or thread identifier. Keep only complete
-// Codex observations received during this root turn, never a previous turn's
-// account cache. A second bucket makes the failed limit ambiguous for this turn.
 type usageLimitTracker struct {
-	threadID  string
-	turnID    string
-	resetAt   time.Time
-	ambiguous bool
-	// Codex can report a terminal error separately, then complete without an
-	// attached error. Preserve that quota refusal on the durable failed turn.
+	threadID        string
+	turnID          string
+	resetAt         time.Time
+	ambiguous       bool
 	failureTurnID   string
 	failure         error
 	failureResetsAt time.Time
@@ -62,8 +57,6 @@ func (u *usageLimitTracker) observe(n notification, rootThread string, now time.
 	}
 }
 
-// codexUsageLimitResetAt is shared by turn notifications and account reads.
-// Display-normalized capacity alone cannot distinguish rolling and spend caps.
 func codexUsageLimitResetAt(wire capacityWireBucket, now time.Time) time.Time {
 	if wire.LimitID == nil || *wire.LimitID != "codex" || !wire.primaryReported || !wire.secondaryReported ||
 		(wire.SpendControlReached != nil && *wire.SpendControlReached) ||

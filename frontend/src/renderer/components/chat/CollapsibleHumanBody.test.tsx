@@ -3,9 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { revealFoldedRange } from "../../lib/chat-annotation-navigation";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 
-// jsdom has no layout: give every element the same rendered height. With no
-// computed line height the fold falls back to 22px lines, so it folds at 220px
-// and only when the content is taller than 264px.
 function renderedHeight(px: number) {
 	vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(px);
 }
@@ -52,7 +49,6 @@ describe("CollapsibleHumanBody", () => {
 		renderedHeight(900);
 		const { unmount } = render(<CollapsibleHumanBody stateKey="handoff"><p>Handed off</p></CollapsibleHumanBody>);
 		unmount();
-		// The stored copy replacing a local echo mounts a new bubble with the same text.
 		renderedHeight(0);
 		render(<CollapsibleHumanBody stateKey="handoff"><p>Handed off</p></CollapsibleHumanBody>);
 		expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
@@ -76,7 +72,6 @@ describe("CollapsibleHumanBody", () => {
 			</CollapsibleHumanBody>,
 		);
 		const clip = screen.getByText("Opening line").parentElement!.parentElement!;
-		// Folded to 220px, from 100 to 320; the last 40px is the fade.
 		vi.spyOn(clip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 400, 220));
 		const textAt = (text: string, top: number) => {
 			const range = document.createRange();
@@ -85,16 +80,13 @@ describe("CollapsibleHumanBody", () => {
 			return range;
 		};
 
-		// Readable above the fold: navigation scrolls to it without opening anything.
 		expect(revealFoldedRange(textAt("Opening line", 110))).toBe(false);
 		expect(clip).toHaveAttribute("data-folded");
-		// In the fade or below it: the message opens, as Show more would open it.
 		let opened = false;
 		act(() => { opened = revealFoldedRange(textAt("Closing line", 270)); });
 		expect(opened).toBe(true);
 		expect(clip).not.toHaveAttribute("data-folded");
 		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
-		// Open, nothing is hidden: the next navigation measures straight away.
 		expect(revealFoldedRange(textAt("Closing line", 270))).toBe(false);
 	});
 });

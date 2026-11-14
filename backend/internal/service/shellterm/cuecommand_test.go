@@ -356,7 +356,6 @@ func TestCueCommandDoesNotSendWhenCanceledDuringReadiness(t *testing.T) {
 	root := t.TempDir()
 	rt := newFakeShellRuntime()
 	rt.childProbeCh = make(chan struct{}, 1)
-	// Let cancellation close both readiness contexts before the probe returns.
 	rt.childProbeWaitForCancellation = true
 	st := &fakeShellTerminalStore{}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})

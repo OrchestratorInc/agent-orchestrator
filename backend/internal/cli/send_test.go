@@ -15,15 +15,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
-// sendServer wires an httptest server expecting POST /api/v1/sessions/{id}/send
-// and captures the request body and path the CLI hit.
 type sendCapture struct {
 	body string
 	path string
 }
 
-// writeRunFileFor points the CLI's run-file at srv so postJSON dials the test
-// server. It mirrors the run-file convention the other CLI tests use.
 func writeRunFileFor(t *testing.T, cfg testConfig, srv *httptest.Server) {
 	t.Helper()
 	if err := runfile.Write(cfg.runFile, runfile.Info{
@@ -580,9 +576,6 @@ func TestSend_ServerInternalErrorExits1(t *testing.T) {
 	if got := ExitCode(err); got != 1 {
 		t.Fatalf("exit code = %d, want 1", got)
 	}
-	// Regression guard: a future change that swallows the API envelope and
-	// prints only "daemon returned HTTP 500" would silently hide what the
-	// daemon was trying to tell the operator.
 	if !strings.Contains(err.Error(), "SESSION_OPERATION_FAILED") && !strings.Contains(errOut, "SESSION_OPERATION_FAILED") {
 		t.Fatalf("error did not surface the server error envelope: %v\nstderr=%s", err, errOut)
 	}
@@ -601,7 +594,6 @@ func TestSend_DaemonNotRunningExits1(t *testing.T) {
 
 func TestSend_NetworkErrorExits1(t *testing.T) {
 	cfg := setConfigEnv(t)
-	// Start and immediately close a server so the run-file points at a closed port.
 	srv, _ := sendServer(t, http.StatusOK, "{}")
 	writeRunFileFor(t, cfg, srv)
 	srv.Close()

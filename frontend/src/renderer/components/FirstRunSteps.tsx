@@ -24,7 +24,6 @@ import { CloseButton } from "./ui/close-button";
 import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
 
-/** Header shared by the steps after the welcome screen: back, title and subtext, close. */
 function FirstRunHeader({ onBack, onClose, disabled, title, description }: { onBack: () => void; onClose: () => void; disabled?: boolean; title: string; description: string }) {
 	const { t } = useTranslation();
 	return (
@@ -41,10 +40,8 @@ function FirstRunHeader({ onBack, onClose, disabled, title, description }: { onB
 	);
 }
 
-/** First screen of the first-run prompt. */
 export function FirstRunWelcome({ disabled, onNext }: { disabled?: boolean; onNext: () => void }) {
 	const { t } = useTranslation();
-	// Warm the repository list and avatars while the welcome screen is up.
 	useEffect(() => {
 		void preloadGitHubRepos();
 	}, []);
@@ -59,26 +56,16 @@ export function FirstRunWelcome({ disabled, onNext }: { disabled?: boolean; onNe
 }
 
 export type GitHubState = {
-	/** False until both the CLI and sign-in checks have answered. */
 	known: boolean;
-	/** The CLI is installed and signed in, so the user's repositories can be listed. */
 	hasGitHub: boolean;
-	/**
-	 * The CLI is known to be missing or signed out, so a git-related action should
-	 * first offer to install it or sign in. A probe that failed or timed out is
-	 * not a reason to block anyone, so unknown never counts as needing setup.
-	 */
 	needsSetup: boolean;
 };
 
 export const NO_GITHUB_STATE: GitHubState = { known: true, hasGitHub: false, needsSetup: false };
 
-/** Reads the GitHub CLI state for first-run children; the checks run only while this is mounted. */
 export function WithGitHubState({ children }: { children: (state: GitHubState) => ReactNode }) {
 	const { query, requirements } = useSystemRequirementsGate();
 	const auth = useGitHubAuthRequirement();
-	// A probe that errors, never starts (preview builds) or hangs must not leave
-	// the source step on its placeholder: after a short wait, treat GitHub as unavailable.
 	const [gaveUp, setGaveUp] = useState(false);
 	useEffect(() => {
 		const timer = window.setTimeout(() => setGaveUp(true), 4000);
@@ -95,7 +82,6 @@ export function WithGitHubState({ children }: { children: (state: GitHubState) =
 	return <>{children({ known, hasGitHub, needsSetup })}</>;
 }
 
-/** Install the GitHub CLI if it is missing, then sign in. Calls `onReady` once both are done. */
 export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onSkip?: () => void }) {
 	const { t } = useTranslation();
 	const { query, requirements } = useSystemRequirementsGate();
@@ -125,8 +111,6 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 		if (cliMissing) void inspect("gh");
 	}, [cliMissing, inspect]);
 
-	// The onboarding funnel's GitHub step: viewed while setup is actually
-	// needed, abandoned if the window goes away first, completed once signed in.
 	const needsSetup = cliMissing || auth.data?.satisfied === false;
 	useEffect(() => {
 		if (!needsSetup) return;
@@ -136,7 +120,6 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 		return () => window.removeEventListener("pagehide", onHide);
 	}, [needsSetup]);
 
-	// Signed in, from the login terminal or from outside the app: nothing left to do.
 	const signedIn = auth.data?.satisfied === true;
 	useEffect(() => {
 		if (!signedIn) return;
@@ -144,7 +127,6 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 		if (terminal) closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
 		readyRef.current();
 	}, [signedIn, terminal, closeTerminal, terminalQuery.clear]);
-	// The login process ending usually means it finished; confirm with a fresh check.
 	useEffect(() => {
 		if (terminalState === "exited" || terminalState === "error") void authRefetch.current();
 	}, [terminalState]);
@@ -192,7 +174,6 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	);
 }
 
-/** First-run step: GitHub setup for a clone. The user can continue without it, since public repos clone over plain git. */
 export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => void; onBack: () => void; onClose: () => void }) {
 	const { t } = useTranslation();
 	const { requirements } = useSystemRequirementsGate();
@@ -212,13 +193,6 @@ export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => 
 	);
 }
 
-/**
- * Whether first run offers the import step: an agent whose chats can be imported
- * is installed, and the scan of this computer has not come back empty. The scan
- * starts here, so the folder list is usually ready when the step opens. A scan
- * still running is not waited for: the step shows it reading, and moves on by
- * itself if the scan then finds nothing (see `onNothingToImport`).
- */
 export function WithImportOffer({ children }: { children: (offer: boolean) => ReactNode }) {
 	const agents = useImportableAgents(true);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000, enabled: agents.length > 0 });
@@ -226,18 +200,10 @@ export function WithImportOffer({ children }: { children: (offer: boolean) => Re
 	return <>{children(agents.length > 0 && !nothingToImport)}</>;
 }
 
-/** A chat the folder import can bring in: not imported yet, and tied to a folder. */
 function importableFromFolder(chat: ImportCandidate): boolean {
 	return !chat.sessionId && Boolean(chat.projectId || chat.folder);
 }
 
-/**
- * Importing earlier chats is a one-time, optional step for a new user, so it sits
- * in first run, between the welcome screen and setting up a project. It opens as
- * a short summary of what was found; the folder list only expands when the user
- * asks for it, and Skip moves on. Each picked folder becomes a project, so a
- * finished import ends the first-run prompt.
- */
 export function FirstRunImport({
 	onBack,
 	onClose,
@@ -248,7 +214,6 @@ export function FirstRunImport({
 	onBack: () => void;
 	onClose: () => void;
 	onSkip: () => void;
-	/** The scan finished after the step opened and found nothing, or failed. */
 	onNothingToImport: () => void;
 	onImported: () => void;
 }) {
@@ -317,7 +282,6 @@ export function FirstRunImport({
 	);
 }
 
-/** The "what do you want to start with" step. Same borderless tiles as the Add Project modal. */
 export function FirstRunSources({
 	disabled,
 	gh,
@@ -393,9 +357,6 @@ export function FirstRunSources({
 	);
 }
 
-/** Springs the modal to each step's height. The content swaps instantly; only the size animates.
- * A step taller than the dialog's height limit (a short window, or high zoom with the
- * source tiles stacked) scrolls inside it instead of being cut off. */
 export function AnimatedStepBody({ children }: { children: ReactNode }) {
 	const reduceMotion = useReducedMotion();
 	const bodyRef = useRef<HTMLDivElement>(null);

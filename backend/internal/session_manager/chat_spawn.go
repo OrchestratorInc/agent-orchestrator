@@ -14,50 +14,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The chat-mode controller launch.
-//
-// It is deliberately a separate path rather than conditionals threaded through
-// the terminal launch: a chat session starts no agent process inside a runtime,
-// has no pane to write into, and has no prompt-delivery strategy. Sharing that
-// code would mean every step asking which kind of session it is in.
-//
-// What the two modes DO share is everything above this point — project
-// resolution, prompts, the seed row, the worktree, provisioning, attachments —
-// which is why the branch sits where it does and not higher.
-
-// ChatLauncher starts the structured controller for a chat session. Implemented
-// by the chat service; nil in a build without chat support.
 type ChatLauncher interface {
-	// SupportsChat reports whether a harness has a Chat driver at all, without
-	// probing the local install. Use it to decide whether Chat is even offerable.
 	SupportsChat(harness domain.AgentHarness) bool
-	// PreflightChat reports whether a harness can start in chat mode right now.
-	// Called before any durable state exists so an unsupported request costs
-	// nothing.
 	PreflightChat(ctx context.Context, harness domain.AgentHarness, permissions ports.PermissionMode) error
-	// StartChat launches the controller and returns the provider conversation
-	// handle to persist for resume. Implementations must call ControllerReady
-	// after the provider and generation exist but before consuming live events.
 	StartChat(ctx context.Context, cfg ChatStart) (ChatStarted, error)
-	// StartChatTurn delivers the initial prompt as a normal turn. There is no
-	// paste-and-Enter equivalent in chat mode: the provider either accepts the
-	// turn or reports why.
 	StartChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error)
-	// RelaySessionChatTurn preserves delivery identity, authorship, and acceptance
-	// time. A durable clientMessageID makes queued retries idempotent.
 	RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error)
-	// HasLiveChatController reports whether the daemon still owns a controller
-	// for the session. Resume uses this to distinguish a stale durable activity
-	// state left by an older daemon from a genuinely live controller.
 	HasLiveChatController(id domain.SessionID) bool
-	// StopChat releases a session's controller.
 	StopChat(ctx context.Context, id domain.SessionID) error
-	// QueueChatPrompt records the opening prompt as a queued turn instead of
-	// sending it. An asynchronous spawn has no controller yet; DrainChatQueue
-	// delivers this turn, and anything the user typed after it, in order.
 	QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error)
-	// DrainChatQueue dispatches what accumulated while the session had no
-	// controller.
 	DrainChatQueue(ctx context.Context, id domain.SessionID) error
 }
 
@@ -76,15 +41,10 @@ type chatBackgroundTaskRunner interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 }
 
-// ChatStart is what the launcher needs. It mirrors the terminal path's
-// LaunchConfig in spirit: everything resolved, nothing left to look up.
 type ChatStart = ports.ChatControllerStart
 
-// ChatStarted is the durable result of a launch.
 type ChatStarted = ports.ChatControllerStarted
 
-// RunBackgroundTask executes one short-lived model call with id's harness and
-// the currently active authenticated account. It creates no AO session or terminal.
 func (m *Manager) RunBackgroundTask(
 	ctx context.Context,
 	id domain.SessionID,
@@ -97,7 +57,6 @@ func (m *Manager) RunBackgroundTask(
 	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, runner.RunBackgroundTask)
 }
 
-// RunPromptSuggestionTask preserves the requested turn's native context when available.
 func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
 	runner, ok := m.chat.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
@@ -118,7 +77,6 @@ func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, sy
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
 	}
-	// Existing background titles and suggestions use the provider's default effort.
 	rec.Metadata.Effort = ""
 	return m.runRecordBackgroundTask(ctx, rec, systemPrompt, prompt, run)
 }
@@ -154,8 +112,6 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 			m.augmentAgentRuntimeEnv(agent, env)
 		}
 	}
-	// This provider call is not the worker session. Suppress session-scoped hooks
-	// so its prompt and response cannot be projected into the worker's history.
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
 	pinRuntimePermissionEnv(env, config.Permissions)
 
@@ -179,20 +135,14 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 }
 
 func backgroundTaskPermissions(harness domain.AgentHarness) ports.PermissionMode {
-	// Kimi and Grok ACP do not support accept-edits. Background tasks require
-	// disabled tools; each binding must enforce that restriction or reject it.
 	if harness == domain.HarnessKimi || harness == domain.HarnessGrok {
 		return ports.PermissionModeDefault
 	}
 	return ports.PermissionModeAcceptEdits
 }
 
-// ChatControllerCommit carries the post-commit conversation state back to Chat
-// Service without making it read again after durable ownership has changed.
 type ChatControllerCommit = ports.ChatControllerCommit
 
-// chatProviderOwnershipStore supplies the durable handoff and history
-// facts. Embedders without these reads retain strict ordinary-resume behavior.
 type chatProviderOwnershipStore interface {
 	GetLatestSessionInterfaceTransition(context.Context, domain.SessionID) (domain.SessionInterfaceTransition, bool, error)
 	ConversationForSession(context.Context, domain.SessionID) (domain.ConversationRecord, error)
@@ -203,8 +153,6 @@ func interfaceTransitionProviderBoundaryID(transitionID string) string {
 	return transitionID + ":provider"
 }
 
-// chatSpawn bundles the shared state the chat launch needs from Spawn, so the
-// signature does not grow to a dozen positional arguments.
 type chatSpawn struct {
 	cfg              ports.SpawnConfig
 	project          domain.ProjectRecord
@@ -215,18 +163,9 @@ type chatSpawn struct {
 	prompt           string
 	systemPrompt     string
 	systemPromptFile string
-	// promptQueued means the opening prompt is already a durable queued turn
-	// (asynchronous spawn). The controller drains it; sending it again here
-	// would deliver the user's brief twice.
-	promptQueued bool
+	promptQueued     bool
 }
 
-// launchChatController starts the provider controller for a chat session and
-// marks it spawned.
-//
-// Rollback mirrors the terminal path's: a failure before the controller exists
-// tears the workspace down, and a failure after it exists closes the controller
-// first so no app-server process is left behind holding the worktree.
 func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domain.SessionRecord, error) {
 	id := in.record.ID
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, in.cfg.Harness)
@@ -245,16 +184,9 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		diffBaseSHA, diffBaseRef = resolveSpawnDiffBase(
 			ctx, in.workspace.Path, in.workspace.BaseRef)
 	}
-	// Chat Service retains this unprivileged base environment. The bearer is
-	// minted inside its per-session launch gate and is never cached for reuse.
 	env := m.runtimeEnvForHarness(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env, in.record.Harness)
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
-		// Chat launches go through the same workspace preparation as terminal
-		// launches: without the adapter's hooks (e.g. Command Code's
-		// SessionStart hook, which injects the standing instructions from the
-		// prompt file) a fresh chat session would start with no AO role or
-		// coordination context.
 		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env); err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
 			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
@@ -263,8 +195,6 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 
 	providerConversationID, forkHandoffNote := "", ""
 	if fork := in.cfg.Fork; fork != nil && fork.Handoff != nil && fork.PrepareChat == nil {
-		// The agent can't copy its own conversation: the fork's fresh agent
-		// starts with AO's copy, as text.
 		forkHandoffNote, err = fork.Handoff(ctx, ports.ForkTarget{SessionID: id, DataDir: m.dataDir, WorkspacePath: in.workspace.Path, Env: env})
 		if err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
@@ -318,17 +248,14 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		},
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			metadata := domain.SessionMetadata{
-				Permissions:       in.record.Metadata.Permissions,
-				Branch:            in.workspace.Branch,
-				WorkspacePath:     in.workspace.Path,
-				WorkspaceRepoPath: in.workspace.RepoPath,
-				Prompt:            in.prompt,
-				DiffBaseSHA:       diffBaseSHA,
-				DiffBaseRef:       diffBaseRef,
-				ArtifactDir:       in.record.Metadata.ArtifactDir,
-				// No RuntimeHandleID or RuntimeLaunchID: a chat session has no
-				// agent pane. Leaving them empty keeps the reaper from probing for
-				// a terminal that was never created.
+				Permissions:               in.record.Metadata.Permissions,
+				Branch:                    in.workspace.Branch,
+				WorkspacePath:             in.workspace.Path,
+				WorkspaceRepoPath:         in.workspace.RepoPath,
+				Prompt:                    in.prompt,
+				DiffBaseSHA:               diffBaseSHA,
+				DiffBaseRef:               diffBaseRef,
+				ArtifactDir:               in.record.Metadata.ArtifactDir,
 				ProviderConversationID:    started.ProviderConversationID,
 				ControllerGeneration:      started.ControllerGeneration,
 				BrowserCapabilityVerifier: in.record.Metadata.BrowserCapabilityVerifier,
@@ -365,8 +292,6 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			}
 			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, agentlaunch.RedactError(err, in.project.Config.Env))
 		}
-		// No controller exists, so nothing provider-side needs closing. The
-		// runtime was never touched, hence runtimeDestroyed=false.
 		if providerConversationID != "" {
 			m.discardForkConversation(ctx, in.cfg.Harness, providerConversationID, in.workspace.Path, env)
 		}
@@ -375,14 +300,9 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	}
 
 	if fork := in.cfg.Fork; fork != nil && providerConversationID != "" {
-		// The history was imported from the agent's copy, so its artifact
-		// links still name the original.
 		m.pointForkLinksAtFork(ctx, in.cfg.ProjectID, fork.SourceSessionID, id)
 	}
 
-	// The initial prompt is a normal turn through the controller. There is no
-	// paste-and-Enter equivalent here, and no "deliver after start" variant: the
-	// provider either accepts the turn or reports why.
 	if in.prompt != "" && !in.promptQueued {
 		if _, err := m.chat.StartChatTurn(ctx, id, in.prompt); err != nil {
 			m.stopChatAfterSpawnFailure(ctx, id)
@@ -395,16 +315,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	return m.getRecord(ctx, id)
 }
 
-// aoMCPServers is the tool server every chat session gets: `ao mcp` from the
-// daemon's own binary, which gives the agent the html_preview and html_render
-// tools, and the computer-use tools while "Let agents use this computer" is
-// on, read like the system prompt when the chat starts or restores. Chat
-// Service keeps it for every later start and resume of the session (edit,
-// rollback, fork). Its env holds only what the CLI needs to reach this daemon
-// for this session, never a credential such as AO_BROWSER_CAPABILITY.
 func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
-		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
 	}
 	executable, err := m.executable()
@@ -413,8 +325,6 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 			"executable", executable, "error", err)
 		return nil
 	}
-	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
-	// without it config.Load needs $HOME to find the data dir.
 	serverEnv := make(map[string]string, 4)
 	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
 		if value := env[key]; value != "" {
@@ -435,9 +345,6 @@ func (m *Manager) stopChatAfterSpawnFailure(ctx context.Context, id domain.Sessi
 	m.stopChatBestEffort(cleanupCtx, id)
 }
 
-// stopChatBestEffort closes a controller during rollback. A failure here is
-// logged rather than returned: the spawn is already failing, and the caller's
-// error is the one worth surfacing.
 func (m *Manager) stopChatBestEffort(ctx context.Context, id domain.SessionID) {
 	if m.chat == nil {
 		return
@@ -447,16 +354,6 @@ func (m *Manager) stopChatBestEffort(ctx context.Context, id domain.SessionID) {
 	}
 }
 
-// sendChat routes an outbound message into a chat session's conversation.
-//
-// It reports handled=false for anything that is not a live chat session, so the
-// terminal path below it is reached unchanged — including for a session this
-// build cannot serve, where the runtime guard's refusal is still the right answer.
-//
-// The refusals here mirror the terminal path's: a terminated session cannot
-// receive a message, and one whose controller is gone cannot either. Busy is not
-// a refusal — the controller queues a mid-turn message, which is strictly better
-// than the terminal path's habit of dropping a nudge it cannot safely deliver.
 func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) (bool, error) {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -479,16 +376,10 @@ func (m *Manager) sendChat(ctx context.Context, id domain.SessionID, message, cl
 	return true, nil
 }
 
-// SessionModeDefaults supplies the daemon-owned default session interface.
 type SessionModeDefaults interface {
 	DefaultSessionMode(ctx context.Context) domain.SessionMode
 }
 
-// resolveSessionMode applies startSessionMode with the daemon-owned default,
-// read here, at spawn time, so changing the preference affects only sessions
-// created afterwards. An existing session changes only through an explicit,
-// capability-gated interface transition; it is never re-resolved from the
-// default.
 func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKind, requested domain.SessionMode) domain.SessionMode {
 	var defaultMode domain.SessionMode
 	if m.defaults != nil {
@@ -497,17 +388,6 @@ func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKin
 	return startSessionMode(kind, requested, defaultMode)
 }
 
-// startSessionMode is the precedence for a spawn's controller mode:
-//
-//  1. the mode the caller explicitly requested;
-//  2. Chat for an orchestrator;
-//  3. the daemon-owned default;
-//  4. the compatibility default, TUI.
-//
-// Whether the harness can run the result is checked afterwards. The cloud
-// control plane resolves a cloud session's interface with the same precedence
-// (internal/domain.StartInterface in the private control plane); both are tested against
-// contracts/session-start-interface.json so they cannot drift.
 func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.SessionMode) domain.SessionMode {
 	if requested.Valid() {
 		return requested
@@ -518,13 +398,6 @@ func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.Ses
 	return domain.NormalizeSessionMode(defaultMode)
 }
 
-// resumeChatController reattaches a chat session to its provider conversation
-// after a daemon restart.
-//
-// It resumes the stored conversation rather than starting a new one. A resume
-// that fails is reported, not silently replaced with a fresh conversation:
-// presenting unrelated history as continuous is worse than an error the user can
-// act on, and it would strand the work the old conversation was holding.
 func (m *Manager) resumeChatController(
 	ctx context.Context,
 	operation string,
@@ -547,8 +420,6 @@ func (m *Manager) resumeChatController(
 	}
 	defer releaseCodexAdmission()
 
-	// Recomputed rather than persisted, matching the terminal path: a restored
-	// session keeps its standing instructions across the relaunch.
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return RestoreResult{}, relaunchFailed("system prompt", fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err))
@@ -594,10 +465,6 @@ func (m *Manager) resumeChatController(
 			rec.Metadata.Model = effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Model
 			agentConfig.Model = rec.Metadata.Model
 		}
-		// An imported chat runs in a folder the provider was never set up in:
-		// install its workspace hooks and pre-launch config before the ACP
-		// controller starts. Relocation can move the native home, so the config
-		// env is applied again first.
 		m.applyImportedConfigEnv(ctx, rec, env)
 		if agent, ok := m.agents.Agent(rec.Harness); ok {
 			if err := m.prepareWorkspace(ctx, agent, rec.ID, launchPath, systemPrompt, "", agentConfig, env); err != nil {
@@ -634,8 +501,6 @@ func (m *Manager) resumeChatController(
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			if preparedImportEnv {
-				// The import preparer already saw this resolved environment. Only
-				// bind its verifier to the gate's exact owner; do not issue again.
 				prepared, prepareErr := m.persistBrowserCapabilityVerifier(launchCtx, rec, expected, rec.Metadata.BrowserCapabilityVerifier)
 				if prepareErr != nil {
 					return nil, prepareErr
@@ -657,16 +522,12 @@ func (m *Manager) resumeChatController(
 			rec = prepared
 			return launchEnv, nil
 		},
-		// The handle that makes this a resume rather than a new conversation.
 		ProviderConversationID:             rec.Metadata.ProviderConversationID,
 		FreshIfProviderConversationMissing: freshIfMissing,
 		ProviderHandoff:                    providerHandoff,
-		// Ordinary resumes allocate a fresh generation. Switch recovery reuses
-		// the saga's reserved generation until delivery is durably settled so a
-		// second restart can still prove exact target ownership.
-		ControllerGeneration: controllerGeneration,
-		HistoryMode:          historyMode,
-		HistoryPolicy:        historyPolicy,
+		ControllerGeneration:               controllerGeneration,
+		HistoryMode:                        historyMode,
+		HistoryPolicy:                      historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			if rec.NeedsImportResume() && started.ProviderConversationID != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
 				return ChatControllerCommit{}, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("the provider did not resume the original conversation"))
@@ -692,19 +553,14 @@ func (m *Manager) resumeChatController(
 				metadata.Branch = ws.Branch
 			}
 			if freshIfMissing && started.ProviderConversationID != rec.Metadata.ProviderConversationID {
-				// The provider started fresh in place of a conversation it never
-				// persisted. Move the session and its untouched root together.
 				if err := m.replaceUnpersistedChatProvider(ctx, rec, started.ProviderConversationID); err != nil {
 					completionErr = err
 					return ChatControllerCommit{}, err
 				}
-				// The swap is one-shot: any later call with this id must not retry it.
 				rec.Metadata.ProviderConversationID = started.ProviderConversationID
 				freshIfMissing = false
 			}
 			metadata.ProviderConversationID = started.ProviderConversationID
-			// A fresh generation per launch: events still arriving from the
-			// controller this one replaced carry the old one and are rejected.
 			metadata.ControllerGeneration = started.ControllerGeneration
 
 			committedConversation, commitErr := m.markChatControllerSpawned(
@@ -712,10 +568,7 @@ func (m *Manager) resumeChatController(
 				started.CommitProviderHistory, providerHandoff, started.LiveReconnect,
 			)
 			if commitErr == nil {
-				// Chat retains this callback for controller rebuilds. Consume the
-				// reservation after publication so those rebuilds resume normally.
 				providerHandoff = nil
-				// Rebuilds continue the adopted import; its replay boundary is fixed.
 				rec.Metadata.ImportSource = metadata.ImportSource
 			}
 			completionErr = commitErr
@@ -732,7 +585,6 @@ func (m *Manager) resumeChatController(
 			m.stopChatBestEffort(ctx, rec.ID)
 			return RestoreResult{}, relaunchFailed("record launch", fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr))
 		}
-		// Another app can hold an imported conversation after adoption too.
 		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
 			return RestoreResult{}, ErrSessionOpenElsewhere
 		}
@@ -742,12 +594,8 @@ func (m *Manager) resumeChatController(
 
 	restored, err := m.getRecord(ctx, rec.ID)
 	if err != nil {
-		// StartChat has published the new controller. A failed follow-up read
-		// cannot establish that it is safe to put the session back to sleep.
 		return RestoreResult{}, fmt.Errorf("%w: load resumed chat after native start: %w", ports.ErrChatRecoveryInconclusive, err)
 	}
-	// Native continuity: the provider still holds the conversation, so the agent
-	// resumes with its own history rather than a replayed prompt.
 	return RestoreResult{Session: restored, Mode: RestoreModeNative}, nil
 }
 
@@ -777,10 +625,6 @@ type unpersistedChatProviderStore interface {
 	ReplaceUnpersistedChatProvider(ctx context.Context, id domain.SessionID, expectedProviderConversationID, providerConversationID string) error
 }
 
-// providerNeverPersisted reports durable proof that the stored provider
-// conversation was reserved but never started: the adapter finds no persisted
-// history behind the id and AO recorded no conversation activity. Only then may
-// a provider that cannot find the id start fresh in its place.
 func (m *Manager) providerNeverPersisted(ctx context.Context, rec domain.SessionRecord) bool {
 	id := rec.Metadata.ProviderConversationID
 	if id == "" {

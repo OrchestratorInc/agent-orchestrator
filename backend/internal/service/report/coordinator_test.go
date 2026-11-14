@@ -105,9 +105,6 @@ func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 }
 
 func TestCoordinatorBusyOrchestratorDoesNotHoldUpOtherProjects(t *testing.T) {
-	// Project p's orchestrator composer holds the operator's unsent draft, so its
-	// earliest-due batch is refused. It must back off instead of staying first in
-	// line and starving project q's reports on every retry.
 	now := time.Date(2026, 9, 14, 13, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
 	store.sessions = []domain.SessionRecord{

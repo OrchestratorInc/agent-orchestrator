@@ -3,9 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// cloud-auth-local imports store helpers from cloud-auth, which constructs a
-// WorkOS client and reads Electron globals at module load — mock both so the
-// suite runs in Node with no Electron/WorkOS.
 const mocks = vi.hoisted(() => ({
 	isPackaged: false,
 	encryptionAvailable: true,
@@ -137,10 +134,8 @@ describe("local-auth register/login/logout", () => {
 			user: { id: "user_1", email: "dev@example.com", displayName: "Dev One" },
 			organizations: [{ id: "org_1", slug: "acme", role: "owner" }],
 		});
-		// The opaque token must never appear on the public account.
 		expect(account).not.toHaveProperty("accessToken");
 
-		// Store round-trip: session is readable and the token is the opaque one.
 		await expect(getCloudSession(dataDir)).resolves.toMatchObject({
 			authProvider: "local",
 			user: { email: "dev@example.com" },
@@ -163,7 +158,6 @@ describe("local-auth register/login/logout", () => {
 		expect(account.authProvider).toBe("local");
 		await expect(getCloudAccessToken(dataDir)).resolves.toBe("ao_local_login_token");
 
-		// A stored token is encrypted on disk (safeStorage passthrough here).
 		await expect(readFile(path.join(dataDir, "cloud-auth.bin"))).resolves.toBeInstanceOf(Buffer);
 	});
 
@@ -174,7 +168,6 @@ describe("local-auth register/login/logout", () => {
 		await expect(
 			loginLocal(dataDir, { cpUrl: CP_URL, email: "dev@example.com", password: "nope" }, { fetchImpl }),
 		).rejects.toThrow("Invalid email or password.");
-		// Nothing is stored on failure.
 		await expect(getCloudSession(dataDir)).resolves.toBeNull();
 	});
 

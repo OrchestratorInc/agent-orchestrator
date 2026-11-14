@@ -199,10 +199,6 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 	);
 }
 
-/**
- * The folder picker: every folder with chats that can be imported, the suggested
- * ones checked. `onImported` runs once an import finished without failures.
- */
 export function FolderImport({
 	header,
 	source,

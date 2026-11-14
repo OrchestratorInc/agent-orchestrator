@@ -121,7 +121,6 @@ func TestLANManagerStopClosesConnectionAfterCancelledGrace(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		// Deliberately ignore cancellation to exercise forced connection close.
 		<-release
 	}))
 	res := openLANShutdownStream(t, base+"/events")
@@ -176,7 +175,6 @@ func TestLANManagerStartWaitsForPreviousStop(t *testing.T) {
 		releaseHandler()
 		t.Fatalf("Start returned before the old listener finished stopping: %v", err)
 	case <-time.After(50 * time.Millisecond):
-		// The old handler is held open, so a completed restart is premature.
 	}
 	releaseHandler()
 	if err := <-stopDone; err != nil {
@@ -201,8 +199,6 @@ func TestLANManagerStopClosesHijackedWebSocket(t *testing.T) {
 		}
 		defer conn.CloseNow()
 		for {
-			// A hijacked connection is no longer owned by http.Server. Even a
-			// handler that does not use the request context must lose access.
 			kind, data, err := conn.Read(context.Background())
 			if err != nil {
 				return
@@ -453,8 +449,6 @@ func TestLANManagerStopBeforeServeRegistersListener(t *testing.T) {
 	streamCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewMobileLAN(http.NotFoundHandler(), "", 0, nil, nil)
-	// This is Start's published state before its Serve goroutine is scheduled.
-	// Delay Serve explicitly so this ownership boundary is deterministic.
 	m.ln = &lanListener{Listener: ln, conns: make(map[*lanConn]struct{})}
 	m.cancel = cancel
 	m.bound = ln.Addr().(*net.TCPAddr).Port
@@ -476,8 +470,6 @@ func TestLANManagerStopBeforeServeRegistersListener(t *testing.T) {
 	}
 }
 
-// Keeping already-closed hijacked sockets in the registry would grow memory
-// with every mobile reconnect until the listener is finally disabled.
 func TestLANManagerReleasesClosedWebSocket(t *testing.T) {
 	ended := make(chan struct{})
 	m, base := startShutdownTestLAN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -572,8 +564,6 @@ func TestLANConnPreservesTCPHalfClose(t *testing.T) {
 	}
 }
 
-// net/http uses the optional ReaderFrom method for efficient response copies.
-// A connection wrapper must keep that path available to the server.
 func TestLANConnPreservesReadFrom(t *testing.T) {
 	underlying := &readFromLANTestConn{}
 	conn := &lanConn{Conn: underlying}

@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// identityDir is an artifact directory whose rows are applied in memory the
-// way the store applies them, so a test can scan, change files and scan again.
 type identityDir struct {
 	t    *testing.T
 	dir  string
@@ -65,8 +63,6 @@ func (d *identityDir) remove(rel string) {
 	}
 }
 
-// scan observes the directory, applies the planned changes to the rows and
-// returns the changes and the listed files.
 func (d *identityDir) scan() (domain.SessionArtifactChanges, []domain.SessionArtifactFile) {
 	d.t.Helper()
 	observation, err := Observe(context.Background(), d.dir, RegisteredPaths(d.rows))
@@ -85,8 +81,6 @@ func (d *identityDir) scan() (domain.SessionArtifactChanges, []domain.SessionArt
 	for _, drop := range changes.Drop {
 		dropped[drop.ID] = true
 	}
-	// As in the store, a forgotten row goes unless it has history, which keeps
-	// it with no file.
 	for _, forget := range changes.Forget {
 		if d.rows[byID[forget.ID]].HasVersions {
 			d.rows[byID[forget.ID]].File = domain.FileIdentity{}
@@ -124,7 +118,6 @@ func (d *identityDir) register(path string) {
 	d.t.Fatalf("no row at %s", path)
 }
 
-// setHistory marks whether the row at path has kept versions.
 func (d *identityDir) setHistory(path string, has bool) {
 	for i := range d.rows {
 		if d.rows[i].Path == path {
@@ -196,8 +189,6 @@ func TestCopyAndNewFileAreNewArtifacts(t *testing.T) {
 	if len(changes.Move) != 0 || len(changes.Insert) != 1 || d.idAt("a.html") != id {
 		t.Fatalf("copy = %+v", changes)
 	}
-	// A file deleted and another written elsewhere is not a rename, even if
-	// the new file gets the old inode number.
 	d.remove("a.html")
 	d.write("other.html", "b")
 	changes, _ = d.scan()
@@ -211,15 +202,12 @@ func TestFileWrittenAgainInPlaceKeepsItsIdentity(t *testing.T) {
 	d.write("page.html", "one")
 	d.scan()
 	id := d.idAt("page.html")
-	// An editor that saves through a new file and a rename over the old one.
 	d.write("page.html.tmp", "two")
 	d.rename("page.html.tmp", "page.html")
 	d.scan()
 	if d.idAt("page.html") != id {
 		t.Fatal("a file replaced in place got a new identity")
 	}
-	// And an agent that deletes and writes it again: a registered file keeps
-	// its row while it is gone (an unregistered one does if it has history).
 	d.register("page.html")
 	d.remove("page.html")
 	d.scan()
@@ -243,10 +231,6 @@ func TestRenameOverAnotherFileKeepsTheDestination(t *testing.T) {
 	}
 }
 
-// A registered artifact whose file is gone keeps its path when another file
-// is moved onto it, as it would if its file were still there: it keeps its
-// identity, its history and its share link. The moved file's own row goes as
-// a gone file's does.
 func TestRenameOntoAGoneRegisteredFileKeepsTheDestination(t *testing.T) {
 	d := newIdentityDir(t)
 	d.write("a.html", "a")
@@ -282,8 +266,6 @@ func TestRenameOntoAGoneFileWithHistoryKeepsTheDestination(t *testing.T) {
 	}
 }
 
-// Only a row that nothing would miss, neither registered nor with history,
-// gives its path to the renamed artifact.
 func TestRenameOntoAGoneFileWithNothingToKeepTakesItsPath(t *testing.T) {
 	d := newIdentityDir(t)
 	d.write("report.html", "old")
@@ -293,7 +275,6 @@ func TestRenameOntoAGoneFileWithNothingToKeepTakesItsPath(t *testing.T) {
 	d.setHistory("report.html", true)
 	d.remove("report.html")
 	d.scan()
-	// Its history went since, so the row holds nothing worth keeping.
 	d.setHistory("report.html", false)
 	d.rename("draft.html", "report.html")
 	changes, _ := d.scan()
@@ -302,9 +283,6 @@ func TestRenameOntoAGoneFileWithNothingToKeepTakesItsPath(t *testing.T) {
 	}
 }
 
-// Replacing a deliverable through a temporary file keeps the deliverable
-// however the scans fall between the steps: scans run on every session read
-// and poll, so their timing must not decide which artifact survives.
 func TestReplacingThroughATempFileKeepsTheArtifactWhateverTheScanTiming(t *testing.T) {
 	for _, timing := range []struct {
 		name                    string
@@ -410,11 +388,6 @@ func TestRenamedAndEditedFileKeepsItsIdentity(t *testing.T) {
 	}
 }
 
-// A rename onto the path of a registered file that is gone keeps the path a
-// deliverable: the renamed artifact takes its registration.
-
-// A gone file that was never registered is forgotten, so transient files such
-// as an editor's do not leave rows behind; a registered one is kept.
 func TestGoneUnregisteredFileIsForgotten(t *testing.T) {
 	d := newIdentityDir(t)
 	d.write("page.html.tmp", "x")

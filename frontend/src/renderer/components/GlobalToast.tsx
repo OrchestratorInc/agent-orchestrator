@@ -44,7 +44,6 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const isError = toast.tone === "error";
 	const isSuccess = toast.tone === "success";
 	const dismissMs = toast.durationMs ?? (isError ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
-	// Hovering or focusing a toast pauses its timer so it can be read and acted on.
 	const [paused, setPaused] = useState(false);
 
 	useEffect(() => {

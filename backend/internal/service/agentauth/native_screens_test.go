@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// nativeScreens are first screens of real native sign-in and setup flows, as
-// AO's hidden terminal sees them on each platform. A screen AO cannot drive
-// must hand off to the terminal ("terminal_required"), never sit at
-// "waiting": the panel would otherwise show a spinner with nothing to do.
 var nativeScreens = []struct {
 	name     string
 	output   string
@@ -17,8 +13,6 @@ var nativeScreens = []struct {
 	options  []string
 }{
 	{
-		// Captured in the desktop app on Windows 11: cliclack falls back to
-		// ASCII glyphs there.
 		name:   "goose configure, Windows console",
 		output: "This will update your existing config files\n  if you prefer, you can edit them directly at C:\\Users\\me\\AppData\\Roaming\\Block\\goose\\config\n\nT  goose-configure\n|\n*  What would you like to configure?\n|  > Configure Providers (Change provider or update credentials)\n|    Custom Providers\n|    Add Extension\n|    Toggle Extensions\n|    Remove Extension\n|    goose settings\n—\n",
 		kind:   "terminal_required",
@@ -29,13 +23,11 @@ var nativeScreens = []struct {
 		kind:   "terminal_required",
 	},
 	{
-		// cliclack's Unicode glyphs on macOS and Linux.
 		name:   "goose configure, macOS and Linux",
 		output: "┌   goose-configure\n│\n◆  What would you like to configure?\n│  ● Configure Providers (Change provider or update credentials)\n│  ○ Custom Providers\n│  ○ Add Extension\n└\n",
 		kind:   "terminal_required",
 	},
 	{
-		// @clack/prompts select, as OpenCode-style provider pickers draw it.
 		name:     "clack provider picker with reviewed labels",
 		output:   "┌  Add credential\n│\n◆  Select provider\n│  ● OpenAI\n│  ○ Anthropic\n│  ○ OpenRouter\n└\n",
 		kind:     "menu",

@@ -128,10 +128,8 @@ describe("cloud funnel telemetry", () => {
 		await createCloudSession(client, "org-1", { ...body, interfaceMode: "chat" });
 		expect(createSession).toHaveBeenCalledTimes(2);
 		expect(events()).not.toContain("ao.renderer.cloud_session_failed");
-		// One user create is one request, however many calls it takes.
 		expect(events().filter((event) => event === "ao.renderer.cloud_session_create_requested")).toHaveLength(1);
 
-		// The same 400 without the field is a real failure.
 		const invalid = instrumentCloudClient(fakeClient({
 			createSession: vi.fn(async () => {
 				throw rejection;
@@ -178,7 +176,6 @@ describe("cloud funnel telemetry", () => {
 		reportCloudOffering({ ...me, offering: undefined } as unknown as CloudCpMeResponse);
 		expect(captured.at(-1)?.properties).toMatchObject({ org_kind: "unknown", billing_mode: "unknown", default_provider: "freestyle" });
 
-		// A project created without an explicit provider reports the org default.
 		await client.createGitHubProject("org-1", { githubRepositoryId: "42", displayName: "acme/secret-repo" });
 		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_project_created", properties: { provider: "freestyle", project_id: "project-9" } });
 		expect(JSON.stringify(captured.at(-1))).not.toContain("secret-repo");

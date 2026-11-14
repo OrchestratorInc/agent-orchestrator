@@ -16,17 +16,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
-// EventSource is the session-state feed the "sessions" channel forwards. The CDC
-// broadcaster satisfies it; the interface lives next to its consumer so terminal
-// does not depend on CDC internals beyond the Event shape.
 type EventSource interface {
 	Subscribe(fn func(cdc.Event)) (unsubscribe func())
 }
 
-// wsConn is the transport seam: a JSON-framed, single-reader/single-writer
-// WebSocket connection. internal/httpd adapts coder/websocket to this; tests
-// supply an in-memory fake. WriteJSON is only ever called from the per-conn
-// writer goroutine; Ping may be called concurrently (it is a control frame).
 type wsConn interface {
 	ReadJSON(ctx context.Context, v any) error
 	WriteJSON(ctx context.Context, v any) error
@@ -35,31 +28,17 @@ type wsConn interface {
 }
 
 const (
-	defaultHeartbeat = 15 * time.Second
-	// dataWatermark caps queued PTY output per connection. Above it the producing
-	// attachment's read loop blocks, so tmux throttles at the source instead of
-	// the connection being torn down under a flood.
-	dataWatermark = 1 << 20
-	// burstFlushInterval spaces writes while output streams. A frame queued
-	// after a quiet period (a keystroke's echo) is written at once; frames
-	// queued within this interval of the previous write wait for it, so a flood
-	// leaves as a few large messages instead of thousands of tiny ones, each of
-	// which costs the renderer an event, a JSON parse and a decode.
+	defaultHeartbeat   = 15 * time.Second
+	dataWatermark      = 1 << 20
 	burstFlushInterval = 4 * time.Millisecond
 )
 
-// Manager serves WebSocket clients, opening one attach Stream per opened pane
-// per connection. There is no shared per-pane state to outlive a connection:
-// the runtime owns the session (screen, scrollback, modes), and every fresh
-// attach gets its full handshake + repaint. A client reconnect simply attaches
-// again.
 type Manager struct {
 	src       Source
 	events    EventSource
 	log       *slog.Logger
 	heartbeat time.Duration
 
-	// ctx scopes every attachment's PTY lifetime; cancelled by Close.
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -67,8 +46,6 @@ type Manager struct {
 	attachments map[*attachment]struct{}
 	closed      bool
 
-	// sharedMu guards shared, the per-terminal-id view of every attached client.
-	// It arbitrates the single PTY's grid across clients (see reconcileLocked).
 	sharedMu sync.Mutex
 	shared   map[string]*sharedTerm
 
@@ -80,42 +57,24 @@ type Manager struct {
 	panesMu       sync.Mutex
 	panes         PaneSource
 
-	// inputMu guards inputBlocked and lastInputAt. It is held only briefly, never
-	// across a pane write.
 	inputMu      sync.Mutex
 	inputBlocked map[string]int
 	lastInputAt  map[string]time.Time
 
-	// fences holds one write fence per terminal id. Every pane write for that
-	// terminal holds it — a keystroke, and input buffered during attach as it is
-	// replayed — and so do BeginInputDrain and HoldInput, so they order against
-	// those writes without stalling any other terminal's input. Lock order: a
-	// fence, then inputMu.
 	fencesMu sync.Mutex
 	fences   map[string]*inputFence
 }
 
-// inputFence serializes one terminal's pane writes. sem is a one-slot
-// semaphore rather than a mutex so a waiter can give up when its context ends.
-// refs counts holders and waiters so the entry is dropped once nobody needs it.
 type inputFence struct {
 	sem  chan struct{}
 	refs int
 }
 
-// sharedTerm tracks every client currently viewing one terminal id (one PTY) so
-// the daemon can pick a single authoritative grid for it. A PTY has exactly one
-// size; when several clients view it at once the largest eligible client wins and
-// the rest render that grid scaled — this is what keeps a small phone from
-// stripping down the desktop, and keeps every client's grid matched to the PTY so
-// full-screen TUIs don't mis-render.
 type sharedTerm struct {
 	members            map[*connState]*termMember
-	authCols, authRows uint16 // last authoritative grid broadcast/applied
+	authCols, authRows uint16
 }
 
-// termMember is one client's contribution to a shared terminal: its own attach
-// Stream, the grid it last asked for, and whether it drives the size (primary).
 type termMember struct {
 	att     *attachment
 	cols    uint16
@@ -123,50 +82,36 @@ type termMember struct {
 	primary bool
 }
 
-// Option configures a Manager.
 type Option func(*Manager)
 
-// ShellAgentSource streams the agents running in shell terminals as JSON
-// snapshots. fn gets the current snapshot at once and every later one; it is
-// called with the source's lock held, so it must not block.
 type ShellAgentSource interface {
 	SubscribeShellAgents(fn func(snapshot json.RawMessage)) (unsubscribe func())
 }
 
-// PaneSource connects a desktop window to the split-pane relay (see
-// internal/service/panes). send delivers an encoded command to the window and
-// must not block.
 type PaneSource interface {
 	ConnectPanes(send func(command json.RawMessage)) PaneConn
 }
 
-// PaneConn is one window's link to the split-pane relay.
 type PaneConn interface {
 	Report(sessionID string, layout json.RawMessage)
 	Resolve(result json.RawMessage)
 	Close()
 }
 
-// SetPanes late-binds the split-pane relay.
 func (m *Manager) SetPanes(src PaneSource) {
 	m.panesMu.Lock()
 	m.panes = src
 	m.panesMu.Unlock()
 }
 
-// SetShellAgents late-binds the shell agent source; the manager is built
-// before it during daemon boot.
 func (m *Manager) SetShellAgents(src ShellAgentSource) {
 	m.shellAgentsMu.Lock()
 	m.shellAgents = src
 	m.shellAgentsMu.Unlock()
 }
 
-// WithHeartbeat overrides the ping interval.
 func WithHeartbeat(d time.Duration) Option { return func(m *Manager) { m.heartbeat = d } }
 
-// SetSessionInputLease late-binds the mutation-aware input authority. The
-// terminal manager is created before the session manager during daemon boot.
 func (m *Manager) SetSessionInputLease(lease sessionguard.InputLease) {
 	m.inputLeaseMu.Lock()
 	m.inputLease = lease
@@ -183,8 +128,6 @@ func (m *Manager) acquireSessionInput(id string) (func(), bool) {
 	return lease.AcquireSessionInput(domain.SessionID(id))
 }
 
-// NewManager builds a Manager. src opens attach Streams; events feeds the session
-// channel (may be nil to disable it). A nil logger falls back to slog.Default.
 func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -209,14 +152,11 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 	return m
 }
 
-// lockInputFence takes terminalID's write fence and returns its unlock.
 func (m *Manager) lockInputFence(terminalID string) (unlock func()) {
 	unlock, _ = m.lockInputFenceContext(context.Background(), terminalID)
 	return unlock
 }
 
-// lockInputFenceContext takes terminalID's write fence, or gives up with
-// ctx's error once ctx ends first.
 func (m *Manager) lockInputFenceContext(ctx context.Context, terminalID string) (unlock func(), err error) {
 	m.fencesMu.Lock()
 	f := m.fences[terminalID]
@@ -247,10 +187,6 @@ func (m *Manager) unrefInputFence(terminalID string, f *inputFence) {
 	m.fencesMu.Unlock()
 }
 
-// BeginInputDrain blocks new user input for one terminal while Session Manager
-// hands its controller to another interface. Once it returns, every write that
-// began before it has finished (it waits on the terminal's fence) and every later
-// write is refused until the matching release runs. The release is idempotent.
 func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, release func()) {
 	unlock := m.lockInputFence(terminalID)
 	m.inputMu.Lock()
@@ -273,28 +209,12 @@ func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, rel
 	}
 }
 
-// LastInputAt returns when the newest keystroke was accepted for one terminal,
-// without blocking input. A drain (BeginInputDrain) drops keystrokes while it is
-// held, so read-only callers must use this instead.
 func (m *Manager) LastInputAt(terminalID string) time.Time {
 	m.inputMu.Lock()
 	defer m.inputMu.Unlock()
 	return m.lastInputAt[terminalID]
 }
 
-// HoldInput takes one terminal's write fence and returns a release. Unlike
-// BeginInputDrain, it does NOT set inputBlocked, so a concurrent keystroke is not
-// dropped: its writeInput blocks on the fence until release and then writes, and
-// input buffered during an attach waits the same way. Other terminals are not
-// fenced. Session Manager holds it across the composer-draft confirmation and the
-// pane write so a human keystroke cannot land between the final empty-frame proof
-// and the paste (#5711). Hold it only briefly; this terminal's keystrokes queue
-// for its duration.
-//
-// lastInputAt is read under the fence, so no keystroke accepted after it can
-// reach the pane until release; one accepted just before may still be rendering,
-// which is why the caller settles on it before trusting the screen. The release
-// is idempotent.
 func (m *Manager) HoldInput(terminalID string) (lastInputAt time.Time, release func()) {
 	unlock := m.lockInputFence(terminalID)
 	m.inputMu.Lock()
@@ -304,19 +224,6 @@ func (m *Manager) HoldInput(terminalID string) (lastInputAt time.Time, release f
 	return lastInputAt, func() { once.Do(unlock) }
 }
 
-// ForgetTerminalInput drops one terminal's input timestamp. Callers use it only
-// after they destroyed the runtime behind the terminal: the timestamp must
-// outlive viewers (a draft typed before switching tabs still guards the idle
-// and draft proofs), so nothing here drops it on detach (#5691).
-//
-// It takes the write fence first so a keystroke write already in flight
-// finishes before the entry goes, and gives up with ctx's error, changing
-// nothing, if ctx ends while it waits. Under the fence it also stops every view
-// still open on that runtime from taking input: their buffered and queued
-// keystrokes are dropped, and so is anything typed later, so none of them can
-// record the timestamp again. A fresh view (a new runtime under the same id)
-// records as usual. A drain's inputBlocked count is left alone: its holder
-// releases it.
 func (m *Manager) ForgetTerminalInput(ctx context.Context, terminalID string) error {
 	unlock, err := m.lockInputFenceContext(ctx, terminalID)
 	if err != nil {
@@ -340,10 +247,6 @@ func (m *Manager) ForgetTerminalInput(ctx context.Context, terminalID string) er
 	return nil
 }
 
-// TerminalOnScreen reports whether a client is showing the terminal. A client
-// without a grid keeps it parked off screen: it attached without one, or gave
-// it up with a 0x0 resize when its pane or window was hidden. (Same signal as
-// Account Manager's session moves, #6274.)
 func (m *Manager) TerminalOnScreen(terminalID string) bool {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
@@ -355,7 +258,6 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 	return cols > 0 && rows > 0
 }
 
-// inputRefused reports whether a drain refuses input for terminalID right now.
 func (m *Manager) inputRefused(terminalID string) bool {
 	m.inputMu.Lock()
 	defer m.inputMu.Unlock()
@@ -373,15 +275,11 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 		return
 	}
 	if err := a.writeLeased(raw, release); errors.Is(err, errInputRefused) {
-		// Nothing reached the pane, so nothing was accepted. This also keeps a
-		// view forgotten by ForgetTerminalInput from recording its terminal again.
 		return
 	}
 	m.recordInputAt(terminalID, raw)
 }
 
-// recordInputAt starts the render settle window after input acceptance and
-// refreshes it after buffered replay. Callers hold the terminal's write fence.
 func (m *Manager) recordInputAt(terminalID string, raw []byte) {
 	if terminalReports.Match(raw) {
 		return
@@ -391,15 +289,8 @@ func (m *Manager) recordInputAt(terminalID string, raw []byte) {
 	m.inputMu.Unlock()
 }
 
-// terminalReports matches bytes the terminal view sends on its own, not typed by
-// anyone: focus in and out, and replies to the agent's queries about the
-// device and cursor, colours, modes ($y), keyboard flags (?…u), window size (…t)
-// and version (a DCS string). They are no reason to think the agent was given
-// work. A key under the kitty keyboard protocol ends in u too, but never has ?.
 var terminalReports = regexp.MustCompile(`^(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[cRn]|\x1b\[\??[0-9;]*\$y|\x1b\[\?[0-9]*u|\x1b\[[0-9;]+t|\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$`)
 
-// Close tears down every live attachment and stops re-attach loops. Safe to
-// call once on daemon shutdown.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	if m.closed {
@@ -420,8 +311,6 @@ func (m *Manager) Close() {
 	}
 }
 
-// track registers a live attachment so Close can tear it down; it refuses new
-// attachments once the manager is closed.
 func (m *Manager) track(a *attachment) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -438,8 +327,6 @@ func (m *Manager) forget(a *attachment) {
 	m.mu.Unlock()
 }
 
-// joinTerminal registers a client (its connection + attach Stream + requested
-// grid + role) as a viewer of terminal id, then reconciles the shared grid.
 func (m *Manager) joinTerminal(id string, c *connState, att *attachment, cols, rows uint16, primary bool) {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
@@ -451,9 +338,6 @@ func (m *Manager) joinTerminal(id string, c *connState, att *attachment, cols, r
 	previousCols, previousRows := s.authCols, s.authRows
 	s.members[c] = &termMember{att: att, cols: cols, rows: rows, primary: primary}
 	m.reconcileLocked(id, s, false)
-	// A follower joining a PTY that is already at its authoritative size wouldn't
-	// be touched by reconciliation. Apply the grid only to its new attachment and
-	// tell that client directly, without re-signalling every existing viewer.
 	if s.authCols > 0 && s.authRows > 0 &&
 		previousCols == s.authCols && previousRows == s.authRows {
 		_ = att.resize(s.authRows, s.authCols)
@@ -461,9 +345,6 @@ func (m *Manager) joinTerminal(id string, c *connState, att *attachment, cols, r
 	}
 }
 
-// updateTerminalSize records a client's newly requested grid and reconciles.
-// Identical normal updates are no-ops; force is reserved for an explicit
-// recovery re-signal when an attach client may have missed the prior SIGWINCH.
 func (m *Manager) updateTerminalSize(id string, c *connState, cols, rows uint16, force bool) {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
@@ -482,8 +363,6 @@ func (m *Manager) updateTerminalSize(id string, c *connState, cols, rows uint16,
 	m.reconcileLocked(id, s, force)
 }
 
-// leaveTerminal drops a client from a shared terminal and reconciles so the grid
-// follows the remaining clients (or the entry is dropped when the last leaves).
 func (m *Manager) leaveTerminal(id string, c *connState) {
 	m.sharedMu.Lock()
 	defer m.sharedMu.Unlock()
@@ -502,14 +381,10 @@ func (m *Manager) leaveTerminal(id string, c *connState) {
 	m.reconcileLocked(id, s, false)
 }
 
-// reconcileLocked picks the authoritative grid for a shared terminal and applies
-// it only when it changed (or explicit recovery forces a re-signal). This keeps
-// a non-authoritative viewer's local resize from repainting the shared TUI at an
-// unchanged grid. Caller holds m.sharedMu.
 func (m *Manager) reconcileLocked(id string, s *sharedTerm, force bool) {
 	cols, rows := largestGrid(s.members)
 	if cols == 0 || rows == 0 {
-		return // no client has reported a usable size yet
+		return
 	}
 	changed := cols != s.authCols || rows != s.authRows
 	if !changed && !force {
@@ -524,11 +399,6 @@ func (m *Manager) reconcileLocked(id string, s *sharedTerm, force bool) {
 	}
 }
 
-// largestGrid chooses the authoritative grid for a set of viewers: the largest
-// (by area) among the PRIMARY clients if any primary has reported a size, else
-// the largest among all. Choosing one client's cols AND rows as a pair (never an
-// independent per-axis max) guarantees the grid matches a real client exactly, so
-// that client renders pixel-correct and only smaller ones scale.
 func largestGrid(members map[*connState]*termMember) (cols, rows uint16) {
 	anyPrimary := false
 	for _, mem := range members {
@@ -552,9 +422,6 @@ func largestGrid(members map[*connState]*termMember) (cols, rows uint16) {
 	return cols, rows
 }
 
-// Serve runs the protocol loop for one client connection until it errors, the
-// client disconnects, or ctx/the manager is cancelled. It owns the single writer
-// goroutine and the heartbeat.
 func (m *Manager) Serve(ctx context.Context, conn wsConn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -585,7 +452,6 @@ func (m *Manager) Serve(ctx context.Context, conn wsConn) {
 	}
 }
 
-// connState is the per-connection mutable state.
 type connState struct {
 	mgr    *Manager
 	conn   wsConn
@@ -594,36 +460,23 @@ type connState struct {
 	out    *outQueue
 
 	mu          sync.Mutex
-	terms       map[string]*attachment // terminal id -> this conn's own attach PTY
+	terms       map[string]*attachment
 	unsubEvts   func()
 	unsubAgents func()
 	panes       PaneConn
 	closed      bool
 
-	// writers holds each terminal's newest writer. It is only touched by the
-	// read loop and, once it has returned, by cleanup, so it needs no lock.
 	writers map[string]*inputWriter
 }
 
-// inputQueueDepth bounds the keystroke messages one terminal can queue behind
-// its held fence before the connection's read loop waits for room.
 const inputQueueDepth = 256
 
-// inputWriter writes one terminal's input from one connection in arrival order,
-// off the connection's read loop. A keystroke waiting on a held fence
-// (HoldInput) then stalls only that terminal, not the connection's other
-// terminals, resizes, or pongs — the desktop app multiplexes every terminal
-// over one connection. Closing the terminal retires its writer; it exits once
-// its queue drains.
 type inputWriter struct {
-	queue chan queuedInput
-	done  chan struct{}
-	// retired means queue is closed. Read loop only.
+	queue   chan queuedInput
+	done    chan struct{}
 	retired bool
 }
 
-// queuedInput is a keystroke message to write, or (closeAfter) the attachment
-// to close once every keystroke queued before it is written.
 type queuedInput struct {
 	a          *attachment
 	raw        []byte
@@ -631,9 +484,6 @@ type queuedInput struct {
 	closeAfter bool
 }
 
-// run writes the queue in order. prev is the terminal's retired writer, if it
-// may still be draining; waiting for it keeps keys typed before a close and
-// reopen ahead of keys typed after.
 func (w *inputWriter) run(m *Manager, terminalID string, prev *inputWriter) {
 	defer close(w.done)
 	if prev != nil {
@@ -648,8 +498,6 @@ func (w *inputWriter) run(m *Manager, terminalID string, prev *inputWriter) {
 	}
 }
 
-// queueInput hands a keystroke message to the terminal's writer, starting one
-// when it has none or its last one was retired.
 func (c *connState) queueInput(terminalID string, in queuedInput) {
 	w := c.writers[terminalID]
 	if w == nil || w.retired {
@@ -661,8 +509,6 @@ func (c *connState) queueInput(terminalID string, in queuedInput) {
 	w.queue <- in
 }
 
-// closeAfterInput closes a once the keystrokes this connection queued for it
-// are written, so a client that types and then switches away keeps its keys.
 func (c *connState) closeAfterInput(terminalID string, a *attachment) {
 	if w := c.writers[terminalID]; w == nil || w.retired {
 		a.close()
@@ -671,8 +517,6 @@ func (c *connState) closeAfterInput(terminalID string, a *attachment) {
 	c.queueInput(terminalID, queuedInput{a: a, closeAfter: true})
 }
 
-// retireWriter closes terminalID's writer queue, so the writer exits once it
-// has written what was queued, and forgets writers that already finished.
 func (c *connState) retireWriter(terminalID string) {
 	if w := c.writers[terminalID]; w != nil && !w.retired {
 		close(w.queue)
@@ -721,8 +565,6 @@ func (c *connState) handleTerminal(msg clientMsg) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is disabled while an exclusive session operation is in progress"})
 			return
 		}
-		// A drain refuses input received while it is held, even if the write
-		// itself would only run after the drain ends.
 		a := c.lookup(msg.ID)
 		if a == nil || c.mgr.inputRefused(msg.ID) {
 			release()
@@ -730,19 +572,12 @@ func (c *connState) handleTerminal(msg clientMsg) {
 		}
 		c.queueInput(msg.ID, queuedInput{a: a, raw: raw, release: release})
 	case msgResize:
-		// The client reports the grid it fits to; the manager arbitrates the shared
-		// PTY's size across all viewers and resizes the attach Stream itself (see
-		// reconcileLocked), so we do not resize this attachment directly here.
 		c.mgr.updateTerminalSize(msg.ID, c, msg.Cols, msg.Rows, msg.Force)
 	case msgClose:
 		c.closeTerminal(msg.ID)
 	}
 }
 
-// openTerminal opens this connection's own attach Stream for the pane. rows/cols
-// are the client's grid from the open frame; the manager arbitrates the shared
-// PTY size from it (see joinTerminal) and applies it to the Stream. role marks
-// the client primary/secondary for that arbitration (empty = primary).
 func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 	if id == "" {
 		c.enqueue(serverMsg{Ch: chTerminal, Type: msgError, Error: "missing terminal id"})
@@ -751,12 +586,10 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 	c.mu.Lock()
 	if _, ok := c.terms[id]; ok {
 		c.mu.Unlock()
-		return // already open on this conn; avoid a duplicate attach
+		return
 	}
 	c.mu.Unlock()
 
-	// a is captured by onExit before assignment; safe because the attach loop —
-	// the only thing that fires onExit — starts after the registration below.
 	var a *attachment
 	a = newAttachment(id, ports.RuntimeHandle{ID: id}, c.mgr.src,
 		func() {
@@ -766,11 +599,6 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgData, raw: data})
 		},
 		func() {
-			// Clear the connection's entry for this id before sending exited so
-			// a client that reopens the moment it sees exited finds no stale
-			// entry and is served instead of dropped by the open guard. Guard on
-			// identity: that reopen may already have installed a fresh
-			// attachment under the same id, which must not be evicted.
 			c.mu.Lock()
 			if c.terms[id] == a {
 				delete(c.terms, id)
@@ -790,9 +618,6 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 	c.terms[id] = a
 	c.mu.Unlock()
 
-	// Register with the shared-terminal arbiter, which sizes the attach Stream to
-	// the authoritative grid (the open frame's rows/cols become this client's
-	// requested size). An empty role means primary — the size-driving client.
 	c.mgr.joinTerminal(id, c, a, cols, rows, role != roleSecondary)
 
 	go func() {
@@ -873,13 +698,8 @@ func (c *connState) handleShellAgents(msg clientMsg) {
 	c.mu.Unlock()
 }
 
-// handlePanes links the connection to the split-pane relay on "subscribe" and
-// passes on its layout reports and command results.
 func (c *connState) handlePanes(msg clientMsg) {
 	if msg.Type == msgSubscribe {
-		// Only the desktop app's own page drives panes. The terminal socket also
-		// accepts local programs that send no Origin, and those must not be able
-		// to receive pane requests or answer them.
 		if !paneClientAllowed(c.conn) {
 			return
 		}
@@ -922,16 +742,11 @@ func (c *connState) handlePanes(msg clientMsg) {
 	}
 }
 
-// paneClientAllowed reports whether the connection may use the panes channel:
-// the transport vouches for it by implementing AllowsPanes.
 func paneClientAllowed(conn wsConn) bool {
 	p, ok := conn.(interface{ AllowsPanes() bool })
 	return ok && p.AllowsPanes()
 }
 
-// outQueue is the per-connection write queue. A buffered channel cannot serve
-// both frame classes: control frames must never be dropped or block their
-// caller, while PTY output must push back on its own read loop.
 type outQueue struct {
 	mu     sync.Mutex
 	frames []serverMsg
@@ -944,15 +759,10 @@ func newOutQueue() *outQueue {
 	return &outQueue{wake: make(chan struct{}, 1), room: make(chan struct{}, 1)}
 }
 
-// maxMergedData bounds one merged data frame.
 const maxMergedData = 256 << 10
 
 func (q *outQueue) push(msg serverMsg) {
 	q.mu.Lock()
-	// PTY output arrives in many small reads. Output queued behind the writer
-	// for the same terminal joins the frame before it, so a burst is sent as a
-	// few messages instead of thousands of tiny ones (each costing an envelope,
-	// a base64 pass and a renderer write).
 	if n := len(q.frames); n > 0 && msg.raw != nil {
 		if last := &q.frames[n-1]; last.raw != nil && last.Ch == msg.Ch && last.ID == msg.ID &&
 			last.Type == msg.Type && len(last.raw)+len(msg.raw) <= maxMergedData {
@@ -1004,10 +814,6 @@ func (q *outQueue) drain() []serverMsg {
 	return frames
 }
 
-// enqueue pushes a frame to the writer. Data frames wait for room so the
-// attachment's PTY read loop stalls and tmux throttles the producer; control
-// frames never wait, because the CDC fan-out enqueues on one goroutine shared
-// by every connection.
 func (c *connState) enqueue(msg serverMsg) {
 	for msg.Type == msgData && c.out.full() {
 		select {
@@ -1033,8 +839,6 @@ func (c *connState) writeLoop(ctx context.Context, flushInterval time.Duration) 
 			return
 		case <-c.out.wake:
 		}
-		// A wake left over from frames an earlier drain already took has nothing
-		// to pace or send.
 		if c.out.empty() {
 			continue
 		}
@@ -1052,7 +856,6 @@ func (c *connState) writeLoop(ctx context.Context, flushInterval time.Duration) 
 		}
 		msgs := c.out.drain()
 		if len(msgs) == 0 {
-			// Not a write; counting it would hold back the next isolated frame.
 			continue
 		}
 		for _, msg := range msgs {
@@ -1109,17 +912,12 @@ func (c *connState) cleanup() {
 	c.panes = nil
 	c.mu.Unlock()
 
-	// Drop this connection from every shared terminal so the grid follows the
-	// clients that remain (a disconnecting large client must let the PTY shrink
-	// back to the smaller ones still attached).
 	for _, id := range ids {
 		c.mgr.leaveTerminal(id, c)
 	}
 	for i, a := range attachments {
 		c.closeAfterInput(ids[i], a)
 	}
-	// The read loop has returned, so nothing queues input any more. Each
-	// writer finishes what was queued (keystrokes, then closes) and exits.
 	for _, w := range c.writers {
 		if !w.retired {
 			close(w.queue)

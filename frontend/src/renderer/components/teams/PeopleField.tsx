@@ -9,7 +9,6 @@ import { useCloudSession } from "../../lib/cloud-session";
 import { PersonAvatar, TeamTile } from "./TeamVisuals";
 import { Button } from "../ui/button";
 
-/** Someone picked in a people field: a team, or a person by email. */
 export type Recipient =
 	| { kind: "team"; teamId: string; name: string; memberCount: number; memberNames?: string[] }
 	| { kind: "person"; email: string; name?: string };
@@ -24,17 +23,6 @@ type Option =
 	| { id: string; kind: "email"; email: string; disabled: boolean; self?: boolean }
 	| { id: string; kind: "newTeam"; disabled: false };
 
-/**
- * One field for people and teams: type to search the workspace's teams and
- * the people it knows, or a full email to add anyone. Picks become tokens in
- * the field. Arrow keys move through suggestions, Enter or comma picks,
- * Backspace on an empty field removes the last pick, Escape closes.
- *
- * Enter picks the first suggestion only once the suggestions are for what is
- * typed (a fast paste must not pick a match for the text before it), else it
- * adds the typed email. "New team…" is never the first suggestion; it is
- * reached with the arrow keys or the pointer.
- */
 export function PeopleField({
 	orgId,
 	value,
@@ -57,23 +45,17 @@ export function PeopleField({
 	value: Recipient[];
 	onChange: (next: Recipient[]) => void;
 	allowTeams?: boolean;
-	/** Keys (recipientKey) of people and teams that can't be picked, such as those who already have access. */
 	unavailable?: ReadonlySet<string>;
 	unavailableLabel?: string;
-	/** People in the workspace already have full access, so they can't be picked (sharing, not teams). */
 	workspaceHasAccess?: boolean;
 	placeholder: string;
-	/** Sits at the field's trailing edge, such as an access menu. */
 	trailing?: ReactNode;
-	/** Offered as "New team…", with whoever is picked so far and what is typed. */
 	onNewTeam?: (people: Recipient[], typed: string) => void;
-	/** Enter in an empty field with picks in it. */
 	onSubmit?: () => void;
 	autoFocus?: boolean;
 	ariaLabel: string;
 	invalid?: boolean;
 	className?: string;
-	/** The text input, for a caller that moves focus back to the field. */
 	inputRef?: RefObject<HTMLInputElement | null>;
 }) {
 	const { t } = useTranslation();
@@ -81,8 +63,6 @@ export function PeopleField({
 	const ownInputRef = useRef<HTMLInputElement>(null);
 	const inputRef = externalInputRef ?? ownInputRef;
 	const fieldRef = useRef<HTMLDivElement>(null);
-	// The list is portaled outside any modal dialog, whose scroll lock cancels
-	// wheel events there; scroll it directly, as SearchablePicker does.
 	const listRef = useCallback((list: HTMLDivElement | null) => {
 		if (!list) return;
 		const onWheel = (event: WheelEvent) => {
@@ -98,28 +78,19 @@ export function PeopleField({
 	const [query, setQuery] = useState("");
 	const blurCloseTimer = useRef<number | undefined>(undefined);
 	useEffect(() => () => window.clearTimeout(blurCloseTimer.current), []);
-	// The suggestion the person moved to with the arrow keys or the pointer;
-	// until they do, the highlight is the default one below.
 	const [moved, setMoved] = useState<string | null>(null);
 	useEffect(() => {
 		const handle = window.setTimeout(() => setQuery(text.trim()), 120);
 		return () => window.clearTimeout(handle);
 	}, [text]);
-	// Loads from the start, so the suggestions are there when the list opens
-	// instead of the list growing under the pointer.
 	const candidates = useShareCandidates(orgId, query, true);
-	// The person using the app: their own email is never someone to add.
 	const me = useCloudSession().session?.user.email?.toLowerCase() ?? "";
 	const picked = useMemo(() => new Set(value.map(recipientKey)), [value]);
 	const typed = text.trim();
-	// The suggestions answer what is typed, not text from before the last keystrokes.
 	const fresh = query === typed && candidates.data !== undefined && !candidates.isPlaceholderData;
 
 	const options = useMemo<Option[]>(() => {
 		const list: Option[] = [];
-		// Until the answer for what's typed arrives, the last answer is narrowed
-		// to what still matches (the control plane's rule: the name or email
-		// contains the text), so nobody who doesn't match shows for a moment.
 		const needle = typed.toLowerCase();
 		const stillMatches = (candidate: CloudCpShareCandidate) =>
 			fresh || !needle || `${candidate.name}\n${candidate.email ?? ""}`.toLowerCase().includes(needle);
@@ -147,12 +118,6 @@ export function PeopleField({
 		return list;
 	}, [allowTeams, candidates.data, fresh, me, onNewTeam, picked, text, typed, unavailable, workspaceHasAccess]);
 
-	// With something typed, the first suggestion that answers it is
-	// highlighted: a match once the results are current, else the typed email.
-	// A whole email typed means that address and no other: suggestions whose
-	// email only contains it (tiwari@ in vaibhaavtiwari@) are never the default,
-	// or Enter would share with someone else. With nothing typed nothing is
-	// highlighted, so Enter shares what is picked.
 	const exactId = looksLikeEmail(typed.toLowerCase()) ? `email:${typed.toLowerCase()}` : "";
 	const defaultOption = !typed
 		? undefined
@@ -163,7 +128,6 @@ export function PeopleField({
 	const highlighted = movedOption ?? defaultOption;
 	const highlight = highlighted ? options.indexOf(highlighted) : -1;
 
-	// Keep the highlighted suggestion in view as the arrow keys move it.
 	useEffect(() => {
 		if (!open || highlight < 0) return;
 		document.getElementById(`${listId}-${highlight}`)?.scrollIntoView({ block: "nearest" });
@@ -188,8 +152,6 @@ export function PeopleField({
 		onChange([...value, next]);
 		setText("");
 		setQuery("");
-		// Close so what was picked, and what it means, is in view; typing,
-		// a click or an arrow key opens the suggestions again.
 		setOpen(false);
 		inputRef.current?.focus();
 	};
@@ -197,8 +159,6 @@ export function PeopleField({
 	const commitTyped = (): boolean => {
 		const typed = text.trim().replace(/,$/, "").toLowerCase();
 		if (!looksLikeEmail(typed)) return false;
-		// Not you, nor anyone the list says can't be added (in the workspace,
-		// already has access): the list shows why.
 		if (typed === me || options.some((option) => option.id === `email:${typed}` && option.disabled)) {
 			setOpen(true);
 			return false;
@@ -206,7 +166,6 @@ export function PeopleField({
 		if (!picked.has(`email:${typed}`)) onChange([...value, { kind: "person", email: typed }]);
 		setText("");
 		setMoved(null);
-		// Closed, so the suggestions don't open over what comes after the field.
 		setOpen(false);
 		return true;
 	};
@@ -224,7 +183,6 @@ export function PeopleField({
 			return;
 		}
 		if (event.key === "Enter") {
-			// Enter that confirms an input method's composition isn't a pick.
 			if (event.nativeEvent.isComposing) return;
 			event.preventDefault();
 			if (showList && highlighted) {
@@ -248,8 +206,6 @@ export function PeopleField({
 		}
 	};
 
-	// Until the first suggestions arrive, the list stays shut rather than
-	// opening with "New team…" alone and growing.
 	const loadingFirst = candidates.data === undefined && candidates.fetchStatus === "fetching";
 	const showList = open && options.length > 0 && !loadingFirst;
 	const firstPerson = options.findIndex((option) => option.kind !== "team" && option.kind !== "newTeam");
@@ -308,9 +264,6 @@ export function PeopleField({
 								setMoved(null);
 								setOpen(true);
 							}}
-							// Focus alone doesn't open the suggestions: a dialog opening
-							// with focus here would cover what it shows. A click, typing
-							// or an arrow key does.
 							onClick={() => setOpen(true)}
 							onBlur={() => {
 								window.clearTimeout(blurCloseTimer.current);
@@ -332,7 +285,6 @@ export function PeopleField({
 						{trailing}
 					</div>
 				</PopoverPrimitive.Anchor>
-				{/* Above everything, so a short dialog doesn't clip the suggestions. */}
 				<PopoverPrimitive.Portal>
 					<PopoverPrimitive.Content
 						ref={listRef}

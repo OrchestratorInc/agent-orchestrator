@@ -21,7 +21,6 @@ func TestDeepSeekHarnessKeyKeepsCommentsAndOtherEntries(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A lock left by a process that has exited is taken over.
 	if err := os.WriteFile(path+".lock", []byte("2147483646\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +69,6 @@ func TestDeepSeekHarnessKeyStartsAStoreAndRefusesOldLayouts(t *testing.T) {
 	if err != nil || yaml.Unmarshal(data, &store) != nil || store.Version != 1 || store.Refs["DEEPSEEK_API_KEY"] != "sk-first" {
 		t.Fatalf("new store = %s, %v", data, err)
 	}
-	// Harness itself upgrades the pre-release flat layout; AO must not guess.
 	if err := os.WriteFile(path, []byte("DEEPSEEK_API_KEY: flat\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -122,8 +120,6 @@ func TestDeepSeekHarnessLockTakesOverOnlyAnExitedHolder(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can remove the lock regardless of permissions")
 	}
-	// An exited holder's lock that can't be removed waits out the deadline
-	// instead of spinning.
 	if err := os.WriteFile(path+".lock", record, 0o600); err != nil {
 		t.Fatal(err)
 	}

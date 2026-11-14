@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { LOCALE_COOKIE } from "./locales";
 import { savedLocaleScript } from "./saved-locale-script";
 
-/** Runs the head script on `url` with `locale` saved, and reports where it went. */
 function run(url: string, locale: string) {
   const { pathname, search, hash } = new URL(url);
   let redirect: string | undefined;

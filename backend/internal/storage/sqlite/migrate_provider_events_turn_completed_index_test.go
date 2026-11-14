@@ -6,14 +6,8 @@ import (
 	"testing"
 )
 
-// TestMigrationIndexesOnlyTurnCompletedProviderEvents covers the partial
-// index that keeps the completed-turn authentication lookup off the full
-// provider-event archive: it must pick up the rows that predate it, must not
-// cover any other method, and must drop cleanly on the way down.
 func TestMigrationIndexesOnlyTurnCompletedProviderEvents(t *testing.T) {
 	const index = "idx_conversation_provider_events_turn_completed"
-	// The archive rows are seeded without their conversation and session parents:
-	// the migration only reads the table, so the parent chain adds nothing.
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261021230230412)
 	for i, method := range []string{"reasoning.delta", "turn.completed", "agent_message.delta", "turn.completed", "turn.completed"} {
 		mustExec(t, db, `INSERT INTO conversation_provider_events
@@ -32,9 +26,6 @@ func TestMigrationIndexesOnlyTurnCompletedProviderEvents(t *testing.T) {
 	).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("turn.completed rows reachable through the index = %d, err = %v; want the 3 that predate it", count, err)
 	}
-	// A partial index cannot answer a query that does not imply its predicate, so
-	// SQLite refuses to force it: that refusal is how this proves the other
-	// methods were left out of the index.
 	err := db.QueryRow(
 		`SELECT COUNT(*) FROM conversation_provider_events INDEXED BY ` + index + ` WHERE method = 'reasoning.delta'`,
 	).Scan(&count)

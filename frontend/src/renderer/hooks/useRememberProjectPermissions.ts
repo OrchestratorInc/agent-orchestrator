@@ -15,11 +15,6 @@ type ProjectPermissionsConfig = {
 	};
 };
 
-/**
- * The project's remembered permission mode, and saving or forgetting it. Only an
- * explicit toggle writes it; selecting a session mode is separate. `null` forgets.
- * A Scratchpad session has no project to read.
- */
 export function useRememberProjectPermissions(projectId: string, sourceHarness?: string, hostId?: string, kind?: SessionKind) {
 	const queryClient = useQueryClient();
 	const hasProject = Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID;
@@ -60,9 +55,6 @@ export function useRememberProjectPermissions(projectId: string, sourceHarness?:
 	const config = project.data?.config;
 	const role = kind === "orchestrator" ? config?.orchestrator : config?.worker;
 	const stored = (role?.agentConfig?.permissions || config?.agentConfig?.permissions || undefined) as ApprovalMode | undefined;
-	// The last write shows until the refetched project catches up, then the project
-	// wins again, so a change made in project settings shows here too. The daemon
-	// stores Codex's default as Full access, so the saved mode reads the same for every agent.
 	const written = mutation.variables;
 	const savedMode = belongsToProject && mutation.isSuccess && written && project.dataUpdatedAt < mutation.submittedAt
 		? written.sourceHarness === "codex" && written.permissions === "default" ? "bypass-permissions" : written.permissions ?? undefined

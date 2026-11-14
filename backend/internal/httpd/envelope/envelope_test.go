@@ -120,9 +120,6 @@ func (invalidOwnedError) ObservabilityOwner() ownership.Owner {
 	return ownership.Owner("untrusted")
 }
 
-// codeErr mimics the modernc.org/sqlite error surface (a Code() int method)
-// without importing the driver, so the transient detector can be tested in
-// isolation.
 type codeErr struct {
 	code int
 	msg  string
@@ -150,7 +147,7 @@ func TestWriteError_TransientMapsTo503(t *testing.T) {
 	}{
 		{"sqlite busy", codeErr{code: sqliteBusy, msg: "database is locked"}},
 		{"sqlite locked", codeErr{code: sqliteLocked, msg: "database table is locked"}},
-		{"sqlite busy extended", codeErr{code: 261, msg: "SQLITE_BUSY_RECOVERY"}}, // 261 & 0xFF == 5
+		{"sqlite busy extended", codeErr{code: 261, msg: "SQLITE_BUSY_RECOVERY"}},
 		{"sqlite locked extended", codeErr{code: 262, msg: "SQLITE_LOCKED_SHAREDCACHE"}},
 		{"wrapped busy", fmt.Errorf("get session: %w", codeErr{code: sqliteBusy, msg: "database is locked"})},
 		{"deadline exceeded", context.DeadlineExceeded},
@@ -173,9 +170,7 @@ func TestWriteError_NonTransientStays500(t *testing.T) {
 		err  error
 	}{
 		{"plain error", errors.New("boom")},
-		// A non-busy sqlite code must NOT be treated as transient.
 		{"sqlite constraint", codeErr{code: 19, msg: "UNIQUE constraint failed"}},
-		// Client cancellation is deliberately excluded from transient.
 		{"context canceled", context.Canceled},
 		{"apierr internal", apierr.Internal("INTERNAL", "nope")},
 	}
@@ -192,8 +187,6 @@ func TestWriteError_NonTransientStays500(t *testing.T) {
 func TestWriteError_WorkspaceRepoUnavailableMapsTo404(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/s1/workspace/files", nil)
-	// The sentinel reaches WriteError wrapped by application layers, so match
-	// the wrapped shape too.
 	err := fmt.Errorf("git -C /repo status: %w", ports.ErrWorkspaceRepoUnavailable)
 
 	WriteError(rec, req, err)

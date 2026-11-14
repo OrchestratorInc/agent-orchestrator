@@ -11,7 +11,6 @@ const findWhitespace = /[\p{White_Space}\uFEFF]/u;
 export const isEmptyFindQuery = (query: string): boolean => /^[\p{White_Space}\uFEFF]*$/u.test(query);
 const inlineKinds = new Set(["text", "inlineCode", "html", "emphasis", "strong", "delete", "link", "linkReference", "break"]);
 
-/** The daemon uses Goldmark; shared fixtures lock the displayed-text boundary. */
 export function findBlocks(source: string, isMarkdown: boolean): string[] {
 	if (!isMarkdown) return [source];
 	const markdown = unified().use(remarkParse).use(remarkGfm);
@@ -88,22 +87,17 @@ export function occurrenceKey(hit: FindOccurrence): string {
 
 export function renderedFindBlocks(root: HTMLElement): Array<{ text: string; nodes: Text[] }> {
 	const blocks = new Map<Element, { text: string; nodes: Text[] }>();
-	// Inline file references are message text rendered as buttons, not toolbar controls.
 	const excluded = "button:not([data-chat-find-include]), svg, img, iframe, script, style, [aria-hidden='true'], .katex, [data-chat-find-exclude]";
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
 	while (walker.nextNode()) {
 		const current = walker.currentNode;
 		if (current.nodeType === Node.ELEMENT_NODE && (current as Element).tagName !== "BR") continue;
-		// React Markdown emits <br> followed by a newline text node for a hard
-		// break. Use that real node once, preserving offsets and Range endpoints.
 		if (current.nodeType === Node.ELEMENT_NODE && current.nextSibling?.nodeType === Node.TEXT_NODE && current.nextSibling.textContent?.startsWith("\n")) continue;
 		const node = current.nodeType === Node.TEXT_NODE ? current as Text : document.createTextNode("\n");
 		const parent = current.parentElement;
 		if (!node.data || parent?.closest(excluded)) continue;
 		const closest = parent?.closest("pre, p, h1, h2, h3, h4, h5, h6, td, th, li");
 		const element = closest && root.contains(closest) ? closest : root;
-		// Ignore layout whitespace between independent Markdown blocks. A loose list
-		// item holds "\n" beside its <p>; that must not count as a block of its own.
 		if ((element === root || element.tagName === "LI" && !blocks.has(element)) && !node.data.trim()) continue;
 		const block = blocks.get(element) ?? { text: "", nodes: [] };
 		block.text += node.data; block.nodes.push(node); blocks.set(element, block);

@@ -14,10 +14,8 @@ import { Button } from "./ui/button";
 import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from "./ui/dropdown-menu";
 import { PanelMessage } from "./WorkspaceDiffView";
 
-// Version rows shown before "Show more".
 const VERSIONS_SHOWN = 8;
 
-/** "Today at 8:31 PM", "Yesterday at …", else "Oct 11 at …". */
 export function formatVersionTime(isoDate: string, now: Date = new Date()): string {
 	const date = new Date(isoDate);
 	if (Number.isNaN(date.getTime())) return "";
@@ -42,12 +40,9 @@ function VersionItem({
 	version,
 }: {
 	current: boolean;
-	/** The session's agent, for a version recorded before its own was kept. */
 	fallbackHarness: string;
-	/** The user's GitHub username, once known; a version they saved shows their avatar. */
 	login?: string;
 	onSelect: () => void;
-	/** "Restored from …", for a version that came from a restore. */
 	restoredNote?: string;
 	selected: boolean;
 	version: ArtifactVersionSummary;
@@ -63,7 +58,6 @@ function VersionItem({
 				</span>
 				{restoredNote ? <span className="truncate text-caption text-passive">{restoredNote}</span> : null}
 			</span>
-			{/* Who wrote it: the agent's logo, or the user's avatar for a save made in the app. One fixed box keeps both the same size and centre. */}
 			<span className="ml-auto flex size-icon-lg shrink-0 items-center justify-center" title={version.source === "user" ? login || t("artifacts.history.you") : undefined}>
 				{version.source === "user" ? (
 					login ? (
@@ -81,13 +75,6 @@ function VersionItem({
 	);
 }
 
-/**
- * The History submenu in the viewer's title menu: every kept version in one list,
- * newest first, the first marked current. Choosing one previews it in the
- * viewer; the current version returns to the live file. The list and the
- * user's avatar load when the title menu opens, so the submenu is ready to read, and
- * opening it records any edit the observer has not picked up yet.
- */
 export function ArtifactHistoryMenu({
 	cloud,
 	fallbackHarness,
@@ -97,14 +84,11 @@ export function ArtifactHistoryMenu({
 	selectedVersion,
 	sessionId,
 }: {
-	/** A cloud session's versions, kept by the control plane. */
 	cloud?: CloudArtifactVersions;
-	/** The session's agent, shown for versions recorded before their own agent was kept. */
 	fallbackHarness: string;
 	hostId?: string;
 	onSelect: (version: number | null) => void;
 	path: string;
-	/** The previewed version; null is the live file. */
 	selectedVersion: number | null;
 	sessionId: string;
 }) {
@@ -112,13 +96,11 @@ export function ArtifactHistoryMenu({
 	const [showAll, setShowAll] = useState(false);
 	const versions = useArtifactVersions({ cloud, enabled: true, hostId, path, sessionId });
 	const syncVersions = useSyncArtifactVersions({ cloud, hostId, path, sessionId });
-	// Whose avatar marks a version saved in the app: the GitHub account the daemon is signed in as.
 	const { data: github } = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000 });
 	const login = github?.login;
 	const list = versions.data ?? [];
 	const shown = showAll ? list : list.slice(0, VERSIONS_SHOWN);
 	const currentVersion = list[0]?.version;
-	// A restore says which version it came from; the source may have been pruned since.
 	const restoredNoteOf = (version: ArtifactVersionSummary) => {
 		if (!version.restoredFrom) return undefined;
 		const source = list.find((candidate) => candidate.version === version.restoredFrom);
@@ -161,7 +143,6 @@ export function ArtifactHistoryMenu({
 				{!showAll && list.length > VERSIONS_SHOWN ? (
 					<DropdownMenuItem
 						className="text-caption text-passive"
-						// Showing the rest keeps the menu open.
 						onSelect={(event) => {
 							event.preventDefault();
 							setShowAll(true);
@@ -175,13 +156,6 @@ export function ArtifactHistoryMenu({
 	);
 }
 
-/**
- * A saved version shown read-only in place of the live file, with the actions
- * that leave it: restore it, or go back to the current file. Markdown renders,
- * a local image, PDF, video or audio file plays as the live file does, and
- * anything else, HTML included for now, shows as source. A long version shows only its
- * start, and a restore still writes all of it.
- */
 export function ArtifactVersionPreview({
 	artifactOrigin,
 	cloud,
@@ -199,10 +173,8 @@ export function ArtifactVersionPreview({
 	cloud?: CloudArtifactVersions;
 	hostId?: string;
 	onBack: () => void;
-	/** Absent when this person only views the file. */
 	onRestore?: () => void;
 	path: string;
-	/** The live file's link, which a local media version loads through. */
 	rawUrl?: string;
 	restoreError?: string;
 	restoring: boolean;
@@ -211,7 +183,6 @@ export function ArtifactVersionPreview({
 }) {
 	const { t } = useTranslation();
 	const media = fileMediaKind(path);
-	// A media version is loaded by its viewer, so only its row is read here.
 	const query = useArtifactVersion({ cloud, hostId, path, sessionId, version: media ? null : version });
 	const versions = useArtifactVersions({ cloud, enabled: Boolean(media), hostId, path, sessionId });
 	const createdAt = media ? versions.data?.find((item) => item.version === version)?.createdAt : query.data?.createdAt;

@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Claude Code's own running/idle report becomes provider.state, so a cycle the
-// agent starts without an ACP prompt still shows as work.
 func TestClaudeSDKSessionStateBecomesProviderState(t *testing.T) {
 	conv := &conversation{
 		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -28,8 +26,6 @@ func TestClaudeSDKSessionStateBecomesProviderState(t *testing.T) {
 	notify(`{"sessionId":"claude-session","message":{"type":"system","subtype":"session_state_changed","state":"running"},"_meta":{"` +
 		persistenthost.ACPEventIDMetaKey + `":"ev-1"}}`)
 	notify(`{"sessionId":"claude-session","message":{"type":"system","subtype":"session_state_changed","state":"idle"}}`)
-	// Ignored: an approval reports requires_action itself, other sessions and
-	// other SDK messages say nothing about this conversation's work.
 	notify(`{"sessionId":"claude-session","message":{"type":"system","subtype":"session_state_changed","state":"requires_action"}}`)
 	notify(`{"sessionId":"other-session","message":{"type":"system","subtype":"session_state_changed","state":"running"}}`)
 	notify(`{"sessionId":"claude-session","message":{"type":"assistant"}}`)

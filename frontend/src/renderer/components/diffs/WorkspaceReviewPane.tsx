@@ -42,21 +42,13 @@ import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
 
 const parsedPatchCache = new Map<string, { patch: string; files: FileDiffMetadata[] }>();
 const MAX_PARSED_GROUPS = 24;
-// Height of the custom per-file header row below (h-9).
 const FILE_HEADER_HEIGHT_PX = 36;
-// Keeps an item's version (a 32-bit content hash, two flag bits, then this) a safe integer.
 const ANNOTATION_REVISION_SPAN = 65_536;
 const REVIEW_CODE_VIEW_LAYOUT = { gap: 4, paddingBottom: 8, paddingTop: 0 };
 const REVIEW_CODE_VIEW_METRICS = { diffHeaderHeight: FILE_HEADER_HEIGHT_PX };
 const REVIEW_CODE_VIEW_THEME = { dark: "github-dark", light: "github-light" } as const;
-// Files whose patch proves they end at the last hunk get their full contents up
-// front, so their diff has no dead "More unchanged context may be available"
-// row. Bounded so a big review doesn't fetch every file; beyond these limits the
-// row stays and still loads on click.
 const MAX_END_OF_FILE_PREFETCHES = 40;
 const END_OF_FILE_PREFETCH_MAX_BYTES = 128 * 1024;
-// Keep speculative reads serial within a host/session, without allowing one
-// stalled host to block other reviews. Every active pair has its own deadline.
 const FULL_CONTEXT_PREFETCH_TIMEOUT_MS = 30_000;
 const fullContextPrefetchTails = new Map<string, Promise<void>>();
 function prefetchFullContext<T>(key: string, load: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
@@ -79,7 +71,6 @@ function prefetchFullContext<T>(key: string, load: (signal: AbortSignal) => Prom
 			return await Promise.race([load(controller.signal), cancelled]);
 		} finally {
 			clearTimeout(timer);
-			// Stop a sibling request if the other side failed first.
 			controller.abort();
 			signal.removeEventListener("abort", onAbort);
 			controller.signal.removeEventListener("abort", onCancelled);
@@ -103,8 +94,6 @@ function patchCacheKey(workspaceVersion: string | undefined, scope: WorkspaceDif
 function parseGroupPatch(workspaceVersion: string | undefined, scope: WorkspaceDiffScope, selectionKey: string, repository: string | undefined, patch: string) {
 	const key = patchCacheKey(workspaceVersion, scope, selectionKey, repository, patch);
 	const cached = parsedPatchCache.get(key);
-	// The bounded key is only a lookup hint: same-sized edits can preserve
-	// both outer slices and the metadata-based workspace version.
 	if (cached?.patch === patch) return cached.files;
 	const prefix = repository ? `${repository}/` : "";
 	const files = parsePatchFiles(patch, key, true).flatMap((entry) => entry.files);
@@ -189,31 +178,19 @@ export function WorkspaceReviewPane({
 	scrollRequest,
 }: {
 	annotation: FileAnnotationModel;
-	/** What to review: the Files header's branch and changes. */
 	target: ReviewTarget;
-	/** Reads a failed target again. */
 	onRetry?: () => void;
 	filter: string;
-	/** Offered when there is nothing to review; omitted where the file tree can't show the change. */
 	onBrowseAll?: () => void;
-	/** Opens the file at the selected review source, including historical targets. */
 	onOpenFile?: (path: string, options?: FileOpenOptions) => void;
-	/**
-	 * False only when the host has no center navigation callback. A maximized
-	 * host closes its overlay before handing the file to the center.
-	 */
 	canOpenInCenter?: boolean;
-	/** Ways out of commits that can't be combined. */
 	onIncludeCommitsBetween?: () => void;
 	onShowAllCommits?: () => void;
 	sessionId: string;
 	hostId?: string;
 	split: boolean;
-	/** From the Files toolbar: collapse (or expand) every file; a new key asks again. */
 	collapseRequest?: { expand: boolean; key: number };
-	/** Tells the toolbar whether every file is collapsed, so it offers the other action. */
 	onAllCollapsedChange?: (allCollapsed: boolean) => void;
-	/** From the changed-files rail: bring this file's diff into view; a new key asks again. */
 	scrollRequest?: { path: string; key: number };
 }) {
 	const { t } = useTranslation();
@@ -227,13 +204,9 @@ export function WorkspaceReviewPane({
 	const codeViewRef = useRef<CodeViewHandle<"feedback", undefined> | null>(null);
 	const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null);
 	const gutterHover = usePersistentGutterUtility(reviewRef);
-	// Set when a file row's overflow menu hands off to another surface (an editor,
-	// a preview, the feedback composer) so closing the menu doesn't pull focus
-	// back to its trigger; dismissing it without a choice still restores focus.
 	const fileMenuHandoffRef = useRef(false);
 
 	const { scope, selectionKey, workspaceVersion } = target;
-	// Reads and navigation share the selected source and revision.
 	const onOpenFile = onOpenFileProp;
 	const allFiles = useMemo(() => target.files ?? [], [target.files]);
 	const filesKnown = target.files !== undefined;
@@ -244,8 +217,6 @@ export function WorkspaceReviewPane({
 		() => (normalizedFilter ? allFiles.filter((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(normalizedFilter)) : allFiles),
 		[allFiles, normalizedFilter],
 	);
-	// A fresh target/filter starts on its first page in the same render, so it
-	// cannot briefly fetch a previous target's page before an effect resets it.
 	const pageKey = JSON.stringify([viewedSessionKey, reviewSelectionKey, selectionKey, normalizedFilter]);
 	const [page, setPage] = useState({ key: pageKey, index: 0 });
 	const pageCount = Math.max(1, Math.ceil(filteredFiles.length / WORKSPACE_REVIEW_PAGE_SIZE));
@@ -260,7 +231,6 @@ export function WorkspaceReviewPane({
 	}, [pageKey, pageIndex]);
 	const { viewed, toggle: toggleViewed } = useViewedFiles(viewedSessionKey, reviewSelectionKey, allFiles);
 
-	// Feedback drafted against one review target doesn't apply to the next.
 	const previousTargetKey = useRef(reviewSelectionKey);
 	useEffect(() => {
 		if (previousTargetKey.current === reviewSelectionKey) return;
@@ -268,11 +238,6 @@ export function WorkspaceReviewPane({
 		cancelFileAnnotations(annotation, (entry) => entry.surface === "review");
 	}, [annotation, reviewSelectionKey]);
 
-	// Reset the collapse / deferred / batch state only when the review target
-	// itself changes (workspace version, target, its files arriving, session) — computed
-	// from the unfiltered allFiles. Keying on the filtered `files` instead would
-	// reset all of this on every file-filter keystroke, discarding the user's manual
-	// expand/collapse, loaded deferred diffs, and progressive batch progress.
 	useEffect(() => {
 		const savedViewed = readViewedRecords(viewedStorageKey(viewedSessionKey, reviewSelectionKey));
 		setCollapsedPaths(new Set(allFiles.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
@@ -282,7 +247,6 @@ export function WorkspaceReviewPane({
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
 	}, [workspaceVersion, reviewSelectionKey, filesKnown, viewedSessionKey]);
 
-	// Opening a deferred file must not change the regular batches' query keys.
 	const regularBatches = useMemo(() => chunked(files.filter((file) => !isDeferredByDefault(file)).map((file) => file.path), WORKSPACE_REVIEW_BATCH_SIZE), [files]);
 	const batches = useMemo(() => [
 		...regularBatches,
@@ -291,7 +255,6 @@ export function WorkspaceReviewPane({
 	const patchQueries = useQueries({
 		queries: batches.map((paths, index) => ({
 			...sessionWorkspaceDiffsQueryOptions({
-				// endsAtLastHunk reads the trailing context, so request exactly what it assumes.
 				contextLines: REVIEW_CONTEXT_LINES,
 				errorMessage: t("files.error.loadWorkspace"),
 				paths,
@@ -322,13 +285,9 @@ export function WorkspaceReviewPane({
 				try {
 					for (const metadata of parseGroupPatch(query.data?.workspaceVersion, scope, selectionKey, group.repository, group.patch)) {
 						result.set(metadata.name, metadata);
-						// A truncated group can cut its last patch short, which would look
-						// like that file ending early.
 						if (!group.truncated && endsAtLastHunk(metadata)) endOfFile.add(metadata.name);
 					}
 				} catch {
-					// The group retains its retry/error surface below; one malformed patch
-					// must not prevent other repositories from rendering.
 				}
 			}
 		}
@@ -343,10 +302,6 @@ export function WorkspaceReviewPane({
 		}
 		return result;
 	}, [patchQueries]);
-	// A batch still in flight (or still queued behind activeBatchCount) is the
-	// only reason a requested file can legitimately have no patch yet. Once its
-	// batch settles, a file with no diff is a failure the user can retry or step
-	// around, not a load that will finish on its own.
 	const pendingDiffPaths = useMemo(() => {
 		const result = new Set<string>();
 		batches.forEach((paths, index) => {
@@ -357,21 +312,15 @@ export function WorkspaceReviewPane({
 	}, [batches, patchQueries]);
 
 	const summaryById = useMemo(() => new Map(files.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [files, reviewSelectionKey]);
-	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
-	// session has a Chat composer; each file's header carries its item id.
 	const askInChat = useAskInChat(sessionId, hostId);
 	const captureSource = fileReferenceSource(target.source, target.sha);
 	const codeSelection = useCodeSelection(reviewRef, (selection) => {
-		// Pierre portals the custom header into this host's light DOM; the selected
-		// code is in its shadow root. Search this host to keep the file lookup local.
 		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
 		return file && captureSource ? askInChat?.({ ...codeReference(file.path, selection, true), ...captureSource, scope, previousPath: file.previousPath, fileFingerprint: file.fileFingerprint, workspaceVersion }) ?? false : false;
 	}, askInChat !== undefined && captureSource !== undefined);
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {
-			// Pierre may hand this callback a normalized metadata object rather than
-			// the exact object stored in our parse cache, so resolve by stable path.
 			const file = files.find((candidate) => candidate.path === metadata.name);
 			if (!file) throw new Error(t("files.error.loadFile"));
 			const read = { commitShas: target.commitShas, view: target.view, sessionId, path: file.path, scope, workspaceVersion, hostId, signal };
@@ -387,8 +336,6 @@ export function WorkspaceReviewPane({
 		[files, scope, sessionId, hostId, t, target.commitShas, target.view, workspaceVersion],
 	);
 
-	// Keyed by patch content (not workspace version), so a refresh that leaves a
-	// file's diff unchanged reuses the contents instead of flashing the row back.
 	const endOfFileFiles = useMemo(
 		() => files.filter((file) => endOfFilePaths.has(file.path) && file.size <= END_OF_FILE_PREFETCH_MAX_BYTES).slice(0, MAX_END_OF_FILE_PREFETCHES),
 		[endOfFilePaths, files],
@@ -409,8 +356,6 @@ export function WorkspaceReviewPane({
 		}),
 	});
 
-	// CodeView re-renders an item whenever the item object changes, and Pierre
-	// 1.4.1 throws if that render sees a different object with the same cache key.
 	const publishedItemsRef = useRef(new Map<string, CodeViewItem<"feedback">>());
 	const annotationRevisionsRef = useRef(new Map<string, { key: string; revision: number }>());
 
@@ -434,8 +379,6 @@ export function WorkspaceReviewPane({
 				const fileAnnotationActive = fileTargets.some((target) => target.side === "file");
 				const activeTargets = fileTargets.filter((target) => target.side !== "file" && target.line != null);
 				const id = itemId(file.path);
-				// Each set of open boxes gets its own revision, so opening or closing
-				// one among several still changes the item's version.
 				const annotationKey = activeTargets.map(fileAnnotationKey).join("\n");
 				const lastRevision = annotationRevisionsRef.current.get(id);
 				const annotationRevision = lastRevision?.key === annotationKey ? lastRevision.revision : (lastRevision?.revision ?? 0) + 1;
@@ -453,9 +396,6 @@ export function WorkspaceReviewPane({
 						side: target.side === "old" ? "deletions" : "additions",
 						metadata: "feedback",
 					})) : undefined,
-					// CodeView only re-reads an item when its version changes: the content
-					// part lets changed or newly hydrated diffs through, the low bits carry
-					// the collapsed/annotation state.
 					version,
 				};
 				publishedItemsRef.current.set(id, item);
@@ -483,8 +423,6 @@ export function WorkspaceReviewPane({
 	}, [annotation, workspaceVersion, scope, summaryById]);
 	const toggleCollapsed = useCallback((file: WorkspaceFileSummary) => {
 		const path = file.path;
-		// An explicit expansion opts deferred files into loading, just like
-		// Expand all. Keep that choice when the file is collapsed again.
 		if (collapsedPaths.has(path) && isDeferredByDefault(file) && !loadedDeferredPaths.has(path)) {
 			setLoadedDeferredPaths((current) => current.has(path) ? current : new Set(current).add(path));
 			setPendingScrollPath(path);
@@ -531,8 +469,6 @@ export function WorkspaceReviewPane({
 	useEffect(() => {
 		onAllCollapsedChange?.(allFilesCollapsed);
 	}, [allFilesCollapsed, onAllCollapsedChange]);
-	// Only a request made while this pane is showing acts; one already handled
-	// before a remount must not collapse the next review.
 	const handledCollapseKey = useRef(collapseRequest?.key);
 	const collapseActions = useRef({ collapseAll, expandAll });
 	collapseActions.current = { collapseAll, expandAll };
@@ -542,9 +478,6 @@ export function WorkspaceReviewPane({
 		if (collapseRequest.expand) collapseActions.current.expandAll();
 		else collapseActions.current.collapseAll();
 	}, [collapseRequest]);
-	// The rail can pick a file whose diff isn't in the list yet: a deferred file
-	// loads, a queued batch starts, and the scroll waits until the diff is there.
-	// The picked file opens, since it was asked for.
 	const handledScrollKey = useRef(scrollRequest?.key);
 	useEffect(() => {
 		if (!scrollRequest || scrollRequest.key === handledScrollKey.current) return;
@@ -577,8 +510,6 @@ export function WorkspaceReviewPane({
 			return;
 		}
 		if (batchIndex >= 0 && pendingDiffPaths.has(pendingScrollPath)) return;
-		// Footer rows are real DOM elements rather than virtualized items. Wait
-		// for CodeView's footer portal to commit before bringing one into view.
 		const frame = requestAnimationFrame(() => {
 			fallbackRows.current.get(pendingScrollPath)?.scrollIntoView({ block: "start" });
 			setPendingScrollPath(null);
@@ -611,15 +542,12 @@ export function WorkspaceReviewPane({
 		: changes.kind === "combined" ? t("files.noneChanged") : t("files.noneInSource");
 	const conflict = target.conflict;
 
-	// A moved tip or base fails the read it fenced; the views' new tips key new reads.
 	const refMoved = [...patchQueries, ...endOfFileContents].some((query) => workspaceErrorCode(query.error) === "WORKSPACE_REF_MOVED");
 	useEffect(() => {
 		if (refMoved) invalidateWorkspaceViews(queryClient, sessionId, hostId);
 	}, [hostId, queryClient, refMoved, sessionId]);
 
 	const fallbackFiles = files.filter((file) => file.binary || !metadataByPath.has(file.path));
-	// Keep non-text rows in Pierre's measured scroll content, including reviews
-	// with no text items. Its ResizeObserver tracks late image loads and collapse.
 	const renderFallbackFiles = () => (
 		<>
 			{fallbackFiles.map((file) => {
@@ -738,8 +666,6 @@ export function WorkspaceReviewPane({
 							hunkSeparators: "line-info",
 							lineDiffType: "word-alt",
 							layout: REVIEW_CODE_VIEW_LAYOUT,
-							// Must match the custom file header height (h-9 = 36px). Pierre's default
-							// (44px) reserves the difference and pushes the header down by 8px.
 							itemMetrics: REVIEW_CODE_VIEW_METRICS,
 							lineHoverHighlight: "line",
 							loadDiffFiles,
@@ -782,11 +708,7 @@ export function WorkspaceReviewPane({
 							const fileAnnotationActive = fileAnnotationTarget != null;
 							return (
 								<Popover onOpenChange={(open) => { if (!open && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationActive}>
-									{/* Lets a code selection in this file's surface find its item. */}
 									<div className="relative bg-background" data-review-item-id={item.id}>
-										{/* The whole row toggles the file (the chevron just rotates);
-										    name + stats on the left, every action grouped on the right
-										    with "viewed" pinned to the far edge. */}
 										<PopoverAnchor asChild>
 											<div data-selection-toolbar-header="" className="group/file-header flex h-9 min-w-0 cursor-pointer items-center gap-2 pl-4 pr-1.5 hover:bg-interactive-hover/40" onClick={() => toggleCollapsed(file)}>
 												<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-hover/file-header:text-foreground", !isCollapsed && "rotate-90")} />
@@ -809,10 +731,6 @@ export function WorkspaceReviewPane({
 														</span>
 													</span>
 												</div>
-												{/* Same 4px gap as the inspector tab buttons. In a narrow pane the
-												    secondary actions fold into one ⋮ menu (like the browser's
-												    controls) and the extra lead-in goes, so the file name keeps its
-												    room; the row's own gap still separates it from the stats. */}
 												<div className="ml-auto flex shrink-0 items-center gap-1 pl-2 @max-[25rem]/review:pl-0" onClick={(event) => event.stopPropagation()}>
 													<div className="flex items-center gap-1">
               {onOpenFile && target.source?.kind === "snapshot" ? <HeaderActionTooltip label={t("files.readOnlySnapshot")}><span className="@max-[25rem]/review:hidden" tabIndex={0}><Button aria-label={t("files.editFile")} disabled size="icon-xs" type="button" variant="quiet"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></HeaderActionTooltip> : null}
@@ -863,8 +781,6 @@ export function WorkspaceReviewPane({
 														</DropdownMenuContent>
 													</DropdownMenu>
 													<HeaderActionTooltip label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}>
-														{/* A 24px slot like the buttons beside it keeps the checkbox
-														    centred on the header's trailing action column. */}
 														<span className="grid size-6 place-items-center">
 															<Checkbox
 																aria-label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}
@@ -878,11 +794,6 @@ export function WorkspaceReviewPane({
 											</div>
 										</PopoverAnchor>
 									</div>
-									{/* Whole-file feedback floats under the header's right edge, like the
-									    browser's comment box: portaled above the list so no later file
-									    header can cover it, and the same in split and unified views. It
-									    stays open on outside clicks so a draft isn't lost; the close
-									    button, Esc, or this file's feedback button close it. */}
 									<PopoverContent
 										align="end"
 										aria-label={t("files.addFeedback")}

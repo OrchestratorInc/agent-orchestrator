@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Run explicitly with AO_LIVE_KIMCHI_ACP=1. It uses the user's existing Kimchi
-// executable, settings, and account; CI never depends on any of them.
 func TestLiveKimchiACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_KIMCHI_ACP") != "1" {
 		t.Skip("set AO_LIVE_KIMCHI_ACP=1 to run against the local Kimchi account")
@@ -23,12 +21,10 @@ func TestLiveKimchiACP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	// Probe: version check + auth status.
 	if _, err := driver.Probe(ctx); err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
 
-	// Start a fresh session (no resume — Kimchi does not advertise session/resume).
 	conversation, err := driver.Start(ctx, ports.ChatStartConfig{
 		SessionID:     "live-kimchi-acp",
 		DataDir:       t.TempDir(),
@@ -41,7 +37,6 @@ func TestLiveKimchiACP(t *testing.T) {
 	}
 	defer conversation.Close()
 
-	// Send a turn and verify streaming + completion.
 	ref, err := conversation.SendTurn(ctx, ports.ChatUserMessage{
 		Text:            "Reply with exactly: AO Kimchi ACP works",
 		ClientMessageID: "live-1",

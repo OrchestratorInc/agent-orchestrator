@@ -12,9 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// A restart must not re-index the world. The cursor rows are durable, so a new
-// service over the same database should skip everything it already covered and
-// still pick up work that arrived while it was down.
 func TestRestartResumesWithoutReindexing(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -36,7 +33,6 @@ func TestRestartResumesWithoutReindexing(t *testing.T) {
 		t.Fatalf("close store: %v", err)
 	}
 
-	// "Restart": a new store handle and a new service over the same data dir.
 	reopened, err := sqlite.Open(dir)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
@@ -44,11 +40,9 @@ func TestRestartResumesWithoutReindexing(t *testing.T) {
 	t.Cleanup(func() { _ = reopened.Close() })
 	second := sessionsearch.New(sessionsearch.Options{Store: reopened, Now: func() time.Time { return testNow }})
 
-	// Everything already indexed is still searchable before any new pass.
 	if got := search(t, second, "searchable"); len(got.Results) != 1 {
 		t.Fatalf("index did not survive the restart: %+v", got.Results)
 	}
-	// A backfill after restart must write nothing: the cursors say it is done.
 	written, err := second.IndexAll(ctx)
 	if err != nil {
 		t.Fatalf("second IndexAll: %v", err)
@@ -56,7 +50,6 @@ func TestRestartResumesWithoutReindexing(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("restart re-indexed %d documents, want 0", written)
 	}
-	// Work that arrived while the service was down is picked up.
 	record, found, err := reopened.GetSession(ctx, session.ID)
 	if err != nil || !found {
 		t.Fatalf("GetSession: found=%v err=%v", found, err)
@@ -70,8 +63,6 @@ func TestRestartResumesWithoutReindexing(t *testing.T) {
 	}
 }
 
-// A native transcript must also resume from its stored byte offset, not from
-// zero, or every restart would duplicate its documents.
 func TestRestartResumesNativeTranscriptsFromTheirOffset(t *testing.T) {
 	root := t.TempDir()
 	dir := t.TempDir()
@@ -111,17 +102,11 @@ func TestRestartResumesNativeTranscriptsFromTheirOffset(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("restart re-indexed %d documents, want 0", written)
 	}
-	// Exactly one document for the line: a duplicated pass would leave two.
 	if got := search(t, second, "original"); len(got.Results) != 1 {
 		t.Fatalf("restart duplicated the transcript line: %+v", got.Results)
 	}
 }
 
-// Found in review: a backup of ao.db carries the index's owner token, so
-// restoring it beside the current search.db keeps the index, sessions created
-// after the backup included. No delete ever recorded those, so they stayed in
-// results (and opened nothing) for good. A backfill now checks the indexed
-// sessions against the database.
 func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -140,7 +125,6 @@ func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 		}
 	}
 
-	// Before the backup: two sessions, indexed.
 	store, svc := open()
 	kept := seedChatSession(t, store, "proj", "sess-kept", "conv-kept")
 	appendUserMessage(t, store, kept, "conv-kept", "msg-1", "turn-1", "zzkept was written before the backup")
@@ -160,8 +144,6 @@ func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 		}
 	}
 
-	// After it: another session, another message in the first, and the second
-	// deleted, its documents removed by the sweep.
 	store, svc = open()
 	later := seedChatSession(t, store, "proj", "sess-later", "conv-later")
 	appendUserMessage(t, store, later, "conv-later", "msg-later", "turn-later", "zzlater was created after the backup")
@@ -189,7 +171,6 @@ func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 	}
 	closeStore(store)
 
-	// Restore only ao.db; search.db stays as it is.
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(filepath.Join(dir, "ao.db"+suffix))
 	}
@@ -203,7 +184,6 @@ func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 	if _, found, err := store.GetSession(ctx, later.ID); err != nil || found {
 		t.Fatalf("the restored database must not have the later session (found=%v err=%v)", found, err)
 	}
-	// The index was kept, not rebuilt: it is the same database's, by its token.
 	if count, err := store.CountSessionSearchDocsForSource(ctx, "chat:"+string(later.ID)); err != nil || count == 0 {
 		t.Fatalf("documents of the later session after the restore = %d (err %v), want the kept index", count, err)
 	}
@@ -211,23 +191,18 @@ func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 	if _, err := svc.IndexAll(ctx); err != nil {
 		t.Fatalf("IndexAll after the restore: %v", err)
 	}
-	// The session the database no longer has is not a result at once.
 	if got := search(t, svc, "zzlater").Results; len(got) != 0 {
 		t.Fatalf("results for a session the restored database does not have: %s", describe(got))
 	}
-	// A message the database no longer has goes with its conversation's re-read.
 	if got := search(t, svc, "zzafterword").Results; len(got) != 0 {
 		t.Fatalf("results for a message the restored database does not have: %s", describe(got))
 	}
 	if got := search(t, svc, "zzkept").Results; len(got) != 1 || got[0].SessionID != string(kept.ID) {
 		t.Fatalf("the session the backup holds: %s", describe(got))
 	}
-	// A session deleted after the backup is back in the database; its documents
-	// were removed with it, so it is indexed again.
 	if got := search(t, svc, "zzdoomed").Results; len(got) != 1 || got[0].SessionID != string(doomed.ID) {
 		t.Fatalf("the session the restore brought back: %s", describe(got))
 	}
-	// The sweep then removes the dropped session's documents and its record.
 	if _, err := svc.Sweep(ctx); err != nil {
 		t.Fatalf("Sweep after the restore: %v", err)
 	}
@@ -237,7 +212,6 @@ func TestRestoringAnOlderDatabaseDropsTheSessionsItDoesNotHave(t *testing.T) {
 	if orphans, err := store.SessionSearchOrphanSessions(ctx, 10); err != nil || len(orphans) != 0 {
 		t.Fatalf("sessions still recorded as deleted = %v (err %v), want none", orphans, err)
 	}
-	// Nothing is left to do: another backfill writes nothing and drops nothing.
 	if written, err := svc.IndexAll(ctx); err != nil || written != 0 {
 		t.Fatalf("a second backfill wrote %d (err %v), want 0", written, err)
 	}

@@ -1,8 +1,3 @@
-/**
- * AO-owned browser profile data. The renderer may use profile IDs, but it must
- * never receive filesystem paths or raw Electron partition names.
- */
-
 export const BROWSER_PROFILE_REGISTRY_VERSION = 1 as const;
 export const BROWSER_PROFILE_NAME_MAX_LENGTH = 64;
 export const BROWSER_PROFILE_MAX_COUNT = 32;
@@ -24,7 +19,6 @@ export type BrowserProfile = {
 };
 
 export type BrowserProfileBinding = {
-	/** `null` is an explicit, durable choice of Temporary — distinct from no binding at all. */
 	profileId: BrowserProfileId | null;
 	updatedAt: string;
 };
@@ -33,12 +27,7 @@ export type BrowserProfileRegistry = {
 	version: typeof BROWSER_PROFILE_REGISTRY_VERSION;
 	profiles: BrowserProfile[];
 	bindings: Record<string, BrowserProfileBinding>;
-	/** Profile new sessions fall back to when they have no session-specific binding. */
 	defaultProfileId: BrowserProfileId | null;
-	/**
-	 * Set once the oldest profile has been offered as the default. Registries
-	 * saved without it get that default on load, so a later unset stays unset.
-	 */
 	defaultProfileSeeded: true;
 };
 
@@ -57,11 +46,9 @@ export type BrowserProfileViewState = {
 	viewId: string;
 	profileId: BrowserProfileId | null;
 	profileName?: string;
-	/** True when the selection is the per-worker temporary profile. */
 	temporary: boolean;
 };
 
-/** Live browsers affected by deleting a named profile; no paths or partitions. */
 export type BrowserProfileUsage = {
 	viewId: string;
 	sessionId: string;
@@ -108,11 +95,6 @@ export function normalizeBrowserProfileId(value: unknown): BrowserProfileId | nu
 	return isBrowserProfileId(value) ? value.toLowerCase() : null;
 }
 
-/**
- * Names are display-only. They are deliberately not used in a path or an
- * Electron partition, but control characters are still rejected so a profile
- * cannot forge terminal/UI output.
- */
 export function normalizeBrowserProfileName(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 	const name = value.trim();
@@ -137,7 +119,6 @@ export function isValidBrowserProfileSessionId(value: unknown): value is string 
 	);
 }
 
-/** The only partition constructor used by AO-owned named profiles. */
 export function browserProfilePartition(id: BrowserProfileId): string {
 	const normalized = normalizeBrowserProfileId(id);
 	if (!normalized) throw new Error("Invalid browser profile ID");

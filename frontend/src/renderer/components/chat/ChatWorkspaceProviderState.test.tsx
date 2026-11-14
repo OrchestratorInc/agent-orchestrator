@@ -12,9 +12,6 @@ import {
 import type { ConversationSnapshot } from "../../types/conversation";
 import { renderChat as render } from "../../test/render-chat";
 
-// The surface-level wiring: which snapshot fields produce which chrome, and — the part
-// that is easy to get wrong — which combinations stay quiet.
-
 const MODELS = [
 	{ id: "gpt-5.6-terra", displayName: "gpt-5.6-terra", default: true },
 	{ id: "gpt-5.6-terra-mini", displayName: "gpt-5.6-terra-mini", default: false },
@@ -45,8 +42,6 @@ describe("plan", () => {
 		expect(screen.getByText("Run the backend tests")).toBeInTheDocument();
 	});
 
-	// The daemon writes the plan twice — on the turn and as a row — from one event. Both
-	// rendered would be the same list twice in the same turn.
 	it("does not also render the plan row the turn already carries", () => {
 		const withPlanRow: ConversationSnapshot = {
 			...chatFixture,
@@ -74,10 +69,6 @@ describe("plan", () => {
 		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
 	});
 
-	// The group's identity is reused across polls to keep the memo boundary from
-	// re-rendering finished history. A plan and a diff are current state the daemon
-	// overwrites while the turn's items stay put, so they have to take part in that
-	// comparison — otherwise a checklist stops ticking until something else changes.
 	it("ticks a step off on the next poll even though the items did not change", () => {
 		const before = chatFixture;
 		const { rerender } = render(<ChatWorkspace snapshot={before} />);
@@ -104,9 +95,6 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
 	});
 
-	// Claude keeps one task list for the session and re-sends it into every later turn.
-	// Those are copies of one list. The daemon marks every copy but the newest
-	// superseded, so only the latest turn's copy shows.
 	it("shows a list that spans turns once, on the latest turn that carries it", () => {
 		const current = chatFixture.turns[1]!.plan!;
 		const spanning: ConversationSnapshot = {
@@ -128,10 +116,6 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
 	});
 
-	// Claude can keep working after its turn ends (a background job finishing). That
-	// work belongs to no turn, so its task list arrives as a row, one per run of such
-	// work. Only the newest copy is current: neither the turn's older copy nor an
-	// earlier run's may show.
 	it("shows a list revised after its turn ended once, at its newest state", () => {
 		const current = chatFixture.turns[1]!.plan!;
 		const planRow = (id: string, sequence: number, done: number, superseded: boolean) => ({
@@ -168,8 +152,6 @@ describe("plan", () => {
 		expect(screen.getByText("4/4")).toBeInTheDocument();
 	});
 
-	// Provider turns AO never correlated each carry their own plan row. Without the
-	// cross-turn flag those are separate plans, not revisions of one, so each shows.
 	it("keeps each plan row that is not a copy of a cross-turn list", () => {
 		const orphanRow = (id: string, sequence: number, text: string) => ({
 			kind: "activity" as const,
@@ -192,8 +174,6 @@ describe("plan", () => {
 		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
 	});
 
-	// A turn that failed or was stopped is not working on anything, so the step it
-	// left unfinished must not look busy.
 	it.each(["failed", "interrupted", "completed"] as const)(
 		"stops the step spinner once the turn has %s",
 		(state) => {
@@ -225,7 +205,6 @@ describe("plan", () => {
 		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
 	});
 
-	// A plan whose turn AO never correlated — one from before this controller started.
 	it("still renders a plan row whose turn carries none", () => {
 		const orphan: ConversationSnapshot = {
 			...chatFixture,
@@ -252,7 +231,6 @@ describe("plan", () => {
 });
 
 describe("provider state chrome", () => {
-	// The notice never repeats the provider's error; the timeline already shows it once.
 	const expiredNotice = "Your Codex login has expired. Log in again to keep using this chat.";
 
 	it.each(["completion", "notification", "both"])("keeps the %s failure in chat while preserving sign-in guidance", (source) => {
@@ -333,7 +311,6 @@ describe("provider state chrome", () => {
 	it("reports a provider-side thread fault while the controller is healthy", () => {
 		render(<ChatWorkspace snapshot={chatFixtureThreadError} />);
 		expect(screen.getByText(/thread hit an internal error/i)).toBeInTheDocument();
-		// The controller banner is a separate claim and must not appear for this.
 		expect(screen.queryByText(/agent controller stopped/i)).not.toBeInTheDocument();
 	});
 
@@ -366,8 +343,6 @@ describe("model reroute", () => {
 				onChooseSettings={vi.fn()}
 			/>,
 		);
-		// The control the user reads to know which model is in play now names the model
-		// that replied, and says whose place it took.
 		const trigger = screen.getByRole("button", {
 			name: "Model and reasoning effort for the next turn",
 		});

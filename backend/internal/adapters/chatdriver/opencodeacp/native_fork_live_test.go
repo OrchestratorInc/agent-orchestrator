@@ -21,8 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Opt-in account-backed verification, like TestLiveOpenCodeACP. CI sends no
-// prompts; run AO_LIVE_NATIVE_FORKS=1 go test -run TestLiveNativeACPForks -v.
 func TestLiveNativeACPForks(t *testing.T) {
 	if os.Getenv("AO_LIVE_NATIVE_FORKS") != "1" {
 		t.Skip("set AO_LIVE_NATIVE_FORKS=1 to verify installed authenticated ACP providers")

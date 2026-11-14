@@ -22,10 +22,6 @@ function renderHost() {
 }
 
 describe("opening a share link", () => {
-	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
-	// Unmount, then wait one tick so that timer fires while this file's DOM
-	// still exists; left pending, it fires into the next test file's jsdom
-	// window on a shared CI worker and fails the run as an unhandled error.
 	afterEach(async () => {
 		cleanup();
 		await new Promise((resolve) => setTimeout(resolve, 0));

@@ -51,7 +51,6 @@ describe("AppLink", () => {
 		</AppBrowserLinkContext.Provider>);
 		const link = screen.getByRole("link", { name: "PR" });
 
-		// Enter on a focused link dispatches this same click event.
 		expect(fireEvent.click(link)).toBe(false);
 		expect(fireEvent.click(link, { metaKey: true })).toBe(false);
 		expect(fireEvent.click(link, { ctrlKey: true })).toBe(false);

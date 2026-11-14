@@ -10,7 +10,6 @@ func TestBridgeConversationToCLIAndACP(t *testing.T) {
 	geminiHome := t.TempDir()
 	id := "test-conv-1234"
 
-	// 1. Setup an ACP conversation
 	acpDir := filepath.Join(geminiHome, "antigravity-acp")
 	if err := os.MkdirAll(filepath.Join(acpDir, "conversations"), 0700); err != nil {
 		t.Fatal(err)
@@ -31,7 +30,6 @@ func TestBridgeConversationToCLIAndACP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 2. Bridge to CLI
 	if err := BridgeConversationToCLI(geminiHome, id); err != nil {
 		t.Fatalf("BridgeConversationToCLI: %v", err)
 	}
@@ -66,7 +64,6 @@ func TestBridgeConversationToCLIAndACP(t *testing.T) {
 		t.Fatalf("bridged cli brain missing: %v", err)
 	}
 
-	// 3. Update CLI db and bridge back to ACP
 	if err := os.WriteFile(cliDB, []byte("cli-updated-data"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +110,6 @@ func TestBridgeRequiresSourceDatabase(t *testing.T) {
 	home := t.TempDir()
 	const id = "conv-missing-src"
 
-	// If destination DB exists but source DB is missing, bridge must fail.
 	dst := filepath.Join(home, "antigravity-acp", "conversations")
 	if err := os.MkdirAll(dst, 0700); err != nil {
 		t.Fatal(err)
@@ -126,7 +122,6 @@ func TestBridgeRequiresSourceDatabase(t *testing.T) {
 		t.Fatal("BridgeConversationToACP succeeded with missing source CLI db; want error")
 	}
 
-	// Reverse direction: missing ACP source db must also fail.
 	cliDst := filepath.Join(home, "antigravity-cli", "conversations")
 	if err := os.MkdirAll(cliDst, 0700); err != nil {
 		t.Fatal(err)
@@ -182,7 +177,6 @@ func TestBridgeSyncsBrainDeletionsAndAbsentFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. Initial bridge ACP -> CLI
 	if err := BridgeConversationToCLI(home, id); err != nil {
 		t.Fatalf("BridgeConversationToCLI: %v", err)
 	}
@@ -194,7 +188,6 @@ func TestBridgeSyncsBrainDeletionsAndAbsentFolder(t *testing.T) {
 		}
 	}
 
-	// 2. CLI deletes f2.txt and sub/, adds f4.txt
 	if err := os.Remove(filepath.Join(cliBrain, "f2.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +198,6 @@ func TestBridgeSyncsBrainDeletionsAndAbsentFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 3. Bridge CLI -> ACP: ACP must remove f2.txt and sub/, and reflect f4.txt
 	if err := BridgeConversationToACP(home, id); err != nil {
 		t.Fatalf("BridgeConversationToACP: %v", err)
 	}
@@ -223,7 +215,6 @@ func TestBridgeSyncsBrainDeletionsAndAbsentFolder(t *testing.T) {
 		t.Fatalf("sub/ directory still present in ACP after deletion; want not exist, err=%v", err)
 	}
 
-	// 4. Repeated handoff back to CLI: deleted files must not be copied back
 	if err := BridgeConversationToCLI(home, id); err != nil {
 		t.Fatalf("second BridgeConversationToCLI: %v", err)
 	}
@@ -234,7 +225,6 @@ func TestBridgeSyncsBrainDeletionsAndAbsentFolder(t *testing.T) {
 		t.Fatalf("sub/ resurrected in CLI after second handoff: %v", err)
 	}
 
-	// 5. CLI removes entire brain folder: bridge must clean ACP destination brain
 	if err := os.RemoveAll(cliBrain); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +256,6 @@ func TestBridgeBrainHandlesExistingSymlinksSafely(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Case 1: Destination brain folder itself is a symlink pointing to an outside dir
 	outsideDir := filepath.Join(home, "outside-victim-dir")
 	if err := os.MkdirAll(outsideDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -289,13 +278,11 @@ func TestBridgeBrainHandlesExistingSymlinksSafely(t *testing.T) {
 		t.Fatalf("BridgeConversationToCLI over symlinked dst brain: %v", err)
 	}
 
-	// Verify outside file was NOT removed or corrupted
 	outsideContent, err := os.ReadFile(outsideFile)
 	if err != nil || string(outsideContent) != "sensitive-outside-data" {
 		t.Fatalf("outside file was affected: content=%q, err=%v", string(outsideContent), err)
 	}
 
-	// Verify cliBrain is now a real directory with bridged data
 	info, err := os.Lstat(cliBrain)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		t.Fatalf("cliBrain should now be a real directory, got info=%v, err=%v", info, err)
@@ -305,11 +292,9 @@ func TestBridgeBrainHandlesExistingSymlinksSafely(t *testing.T) {
 		t.Fatalf("bridged data mismatch: %q, %v", string(bridgedData), err)
 	}
 
-	// Case 2: Destination brain is absent source, and destination was a symlink
 	if err := os.RemoveAll(acpBrain); err != nil {
 		t.Fatal(err)
 	}
-	// Make dstBrain a symlink again to outside dir
 	if err := os.RemoveAll(cliBrain); err != nil {
 		t.Fatal(err)
 	}

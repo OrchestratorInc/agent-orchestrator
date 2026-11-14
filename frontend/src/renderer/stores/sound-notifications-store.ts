@@ -30,7 +30,6 @@ export const useSoundNotificationsStore = create<SoundNotificationsState>((set, 
 				const settings = await aoBridge.uiSettings.get();
 				enabled = settings.soundNotificationsEnabled;
 			} catch {
-				// A missing bridge or unreadable setting must not prevent the UI from starting.
 			}
 			if (revisionAtStart === settingRevision) set({ enabled, loaded: true });
 		})();

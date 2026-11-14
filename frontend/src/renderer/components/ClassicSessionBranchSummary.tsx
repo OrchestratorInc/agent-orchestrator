@@ -28,15 +28,12 @@ import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const PENDING_MAX_MS = 10 * 60_000;
-// After the session goes idle, how long to wait for the result to show up.
-// A new PR reaches the session through SCM discovery, which lags the push.
 const SETTLE_MS: Record<SessionGitActionKind, number> = {
 	createPR: 60_000,
 	createDraftPR: 60_000,
 	commit: 10_000,
 	commitPush: 15_000,
 	push: 15_000,
-	// Only the PR view offers these; one started there can still be pending here.
 	updateBase: 20_000,
 	resolveConflicts: 30_000,
 };
@@ -45,18 +42,11 @@ type GitFacts = {
 	loaded: boolean;
 	uncommitted: WorkspaceFileSummary[];
 	committed: WorkspaceFileSummary[];
-	/** The daemon's commit and push facts; undefined until it has observed the branch. */
 	branch?: SessionBranchState;
 	base?: string;
 };
 
 type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind[] };
-
-/*
- * The branch summary as it was before the PR view: git rows above a list of
- * PR cards. The inspector shows it while the PR view preview (Developer mode)
- * is off. Delete this file with the prView flag.
- */
 
 export function ClassicSessionBranchSummary({
 	hostId,
@@ -70,7 +60,6 @@ export function ClassicSessionBranchSummary({
 	hostId?: string;
 	merged?: boolean;
 	onOpenFiles: () => void;
-	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
@@ -82,11 +71,7 @@ export function ClassicSessionBranchSummary({
 	const startPending = useSessionGitActionStore((state) => state.start);
 	const updatePending = useSessionGitActionStore((state) => state.update);
 	const clearPending = useSessionGitActionStore((state) => state.clear);
-	// Cloud sessions have no local workspace facts; orchestrators coordinate
-	// workers rather than shipping a branch of their own. An imported chat has
-	// no branch until it is opened.
 	const showGit = !session.cloud && session.kind !== "orchestrator" && !session.needsResume;
-	// No worktree yet means a guaranteed 404; read it once the start publishes one.
 	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit && sessionWorkspaceReady(session) });
 
 	const sections = manifest.data?.sections;
@@ -95,7 +80,6 @@ export function ClassicSessionBranchSummary({
 		uncommitted: sections ? uniqueByPath([...sections.staged, ...sections.unstaged, ...sections.untracked]) : [],
 		committed: sections?.committed ?? [],
 		branch: session.branchState,
-		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
 	const plan = gitActionPlan(facts, openPRNumber, merged);
@@ -318,7 +302,6 @@ function menuIcon(kind: SessionGitActionKind) {
 function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: string; noteTone?: "warn" | "muted" } | null {
 	const branch = facts.branch;
 	if (!branch) {
-		// Not observed yet: still say the branch carries committed work.
 		return facts.committed.length > 0 ? { label: t("inspector.git.committedFiles", { count: facts.committed.length }) } : null;
 	}
 	if (branch.commits === 0) return null;
@@ -354,14 +337,12 @@ function gitActionDone(kind: SessionGitActionKind, facts: GitFacts, openPRNumber
 			return facts.loaded && facts.uncommitted.length === 0 && isPushed(facts.branch);
 		case "push":
 			return isPushed(facts.branch);
-		// Only the PR view offers these, and only its summary follows them.
 		case "updateBase":
 		case "resolveConflicts":
 			return true;
 	}
 }
 
-// Instructions for the session's agent, delivered through AO's automation relay.
 function gitActionMessage(kind: SessionGitActionKind, base: string | undefined, openPRNumber: number | undefined): string {
 	const target = base ? `\`${base}\`` : "the default branch";
 	const toPR = openPRNumber === undefined ? "" : ` to update PR #${openPRNumber}`;
@@ -375,7 +356,6 @@ function gitActionMessage(kind: SessionGitActionKind, base: string | undefined, 
 			return `Commit all uncommitted changes with a clear message and push this branch${toPR}.`;
 		case "push":
 			return `Push this branch${toPR}.`;
-		// Never offered here: only the PR view's summary sends these.
 		case "updateBase":
 		case "resolveConflicts":
 			return "";

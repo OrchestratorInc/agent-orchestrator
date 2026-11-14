@@ -56,33 +56,23 @@ type CenterPaneProps = {
 	reviewerChatSelected?: boolean;
 	reviewerChatContent?: ReactNode;
 	onSelectReviewerChat?: (target: { reviewId: string; harness: string }) => void;
-	/** Standalone shells to render as tabs beside the session's own pane. */
 	shellTerminals?: ShellTerminal[];
 	onSelectSessionTerminal?: () => void;
 	onSelectShellTerminal?: (handleId: string) => void;
 	onCloseShellTerminal?: (handleId: string) => void;
 	onRenameShellTerminal?: (handleId: string, title: string) => void;
-	/** Workspace-level controls (e.g. shell topbar) rendered beside the tab strip. */
 	topbarActions?: ReactNode;
-	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
-	/** Keep the primary tab's action showing while an interface switch runs. */
 	sessionTabActionPinned?: boolean;
-	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	workspaceTabs?: CenterPaneWorkspaceTab[];
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
-	/** Session-owned order shared with the Chat surface. */
 	auxiliaryTabOrder?: string[];
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
-	/** Stop forwarding the agent pane's keystrokes while its controller drains. */
 	agentInputDisabled?: boolean;
-	/** The agent terminal is coming up after an interface switch. */
 	terminalBooting?: boolean;
-	/** An account move is restarting the worker agent; see TerminalPane. */
 	terminalSwitchingLabel?: string;
-	/** Reports attachment of the session's own agent terminal. */
 	onSessionTerminalAttached?: (attached: boolean) => void;
 };
 
@@ -91,7 +81,6 @@ export type CenterPaneWorkspaceTab = {
 	content: ReactNode;
 	onSelect: () => void;
 	onClose?: () => void;
-	/** The tab's menu; absent, the tab draws its own (a split group's tab). */
 	menu?: TabMenuSpec;
 };
 
@@ -108,15 +97,11 @@ const isLinux = isLinuxPlatform();
 
 const PANE_DRAG_IGNORE = "[data-terminal-tab-action],input,a";
 
-// The session's own tab does not reorder, but it can still be dragged out of
-// the strip into a split.
 export function startSessionTabPaneDrag(event: PointerEvent<HTMLElement>) {
 	if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 	beginPaneTabDrag(event, SESSION_TAB_KEY, event.currentTarget);
 }
 
-// The strip's slot for the session's own tab. It drags out like any tab, and
-// it is left out while the tab is shown in a split group's tab.
 export function SessionTabSlot({ children }: { children: ReactNode }) {
 	if (useSplitHiddenTabKeys().has(SESSION_TAB_KEY)) return null;
 	return (
@@ -126,9 +111,6 @@ export function SessionTabSlot({ children }: { children: ReactNode }) {
 	);
 }
 
-// A reorderable strip tab. It stays inside its group, so it never covers the
-// pinned session tab or the toolbar, and keeps its hover look while dragged.
-// Pulled out of the strip vertically, it hands over to the split-pane drag.
 export function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
 	const dragControls = useDragControls();
 	const itemRef = useRef<HTMLDivElement>(null);
@@ -136,17 +118,11 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 	const [dragging, setDragging] = useState(false);
 	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-		// A middle-click closes the tab and a right-click opens its menu; neither drags.
 		if (event.button !== 0 || (event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
 		const item = itemRef.current;
 		if (item) beginPaneTabDrag(event, value, item, settleInSlot);
 	};
-	// While dragging, the tab's x is derived from the pointer and the group's
-	// current box, not from framer's pointer delta: Reorder's edge auto-scroll
-	// and each reorder move the layout, and framer only catches x up a frame
-	// later. Recomputing on every write, scroll and commit keeps the tab under
-	// the pointer and inside the group, so it never covers the session tab.
 	const followPointer = useCallback(() => {
 		const drag = dragRef.current;
 		const item = itemRef.current;
@@ -159,10 +135,6 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 		if (Math.abs(x.get() - next) > 0.01) x.set(next);
 	}, [x]);
 	useEffect(() => x.on("change", followPointer), [x, followPointer]);
-	// Lifting the tab out into a split hands its motion to the drag ghost. The
-	// tab goes straight back to its slot: letting the reorder drag animate home
-	// while followPointer still tracked the pointer could strand it a few
-	// pixels off, leaving a gap in the strip.
 	const settleInSlot = useCallback(() => {
 		dragRef.current?.scroller?.removeEventListener("scroll", followPointer);
 		dragRef.current = null;
@@ -171,14 +143,12 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 		x.set(0);
 		setDragging(false);
 	}, [dragControls, followPointer, x]);
-	// A tab removed mid-drag gets no onDragEnd; drop its scroll listener anyway.
 	useEffect(() => () => dragRef.current?.scroller?.removeEventListener("scroll", followPointer), [followPointer]);
 	useLayoutEffect(followPointer);
 
 	return (
 		<Reorder.Item
 			as="div"
-			// The opaque background keeps a dragged tab from showing the tabs it passes over.
 			className="flex shrink-0 self-stretch touch-pan-y bg-background"
 			data-dragging={dragging || undefined}
 			data-terminal-tab-key={value}
@@ -207,8 +177,6 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 			onPointerDown={startDrag}
 			ref={itemRef}
 			style={{ x }}
-			// Reorder needs layout measurement, but tabs should snap into place
-			// when a sibling opens or closes rather than slide.
 			transition={{ layout: { duration: 0 } }}
 			value={value}
 		>
@@ -455,11 +423,7 @@ export function CenterPane({
 				: target.kind === "reviewer"
 					? `reviewer:${target.handleId}`
 					: undefined);
-	// Sorted, so reordering by drag does not scroll the strip under the pointer.
 	const auxiliaryTabSet = orderedAuxiliaryTabs.map((tab) => tab.key).sort().join("|");
-	// Reveal the active tab only when the selection or tab set changes. Keyed on
-	// strings, not the tab objects, which are rebuilt on every render and would
-	// otherwise yank a manually scrolled strip back to the active tab.
 	useEffect(() => {
 		const activeKey = activeAuxiliaryTabKey;
 		if (!activeKey) return;
@@ -484,8 +448,6 @@ export function CenterPane({
 		const workspaceSurface = pane.closest<HTMLElement>(".center-panel-surface");
 		const measure = () => {
 			const paneRect = pane.getBoundingClientRect();
-			// leftInset/rightInset are kept for the terminal region width calculation
-			// but no longer used for viewport-alignment padding (topbar is inside the surface).
 			const workspaceRect = workspaceSurface?.getBoundingClientRect() ?? paneRect;
 			const next = {
 				leftInset: workspaceRect.left,
@@ -577,11 +539,7 @@ export function CenterPane({
 									data-tab-scroll-region
 									layoutScroll
 								>
-								{/* The macOS header is a window drag region outside its controls; the
-								    whole tab row opts out so separators and tab edges still take
-								    wheel scrolling and clicks. */}
 								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
-									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
 									<SessionTabSlot>
 										{session ? (
 											<SessionPaneTab
@@ -682,10 +640,6 @@ export function CenterPane({
 							createMux={hostId ? remoteCreateMux : undefined}
 							daemonReady={hostId ? Boolean(remoteBase) : daemonReady}
 							fontSize={fontSize}
-						// A terminal you can type into should already hold the caret when you
-						// open or switch to the session, the same way the chat composer does.
-						// Worker input is off during an interface transition; every other target
-						// is interactive as soon as it is on screen.
 							focusRequested={target.kind !== "worker" || !workerInputDisabled}
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
@@ -706,11 +660,6 @@ export function CenterPane({
 	);
 }
 
-// The interface switch arrives as a shared topbar control (28px button, or a
-// 28px status with a cancel button). In the slot after the tab's title it is
-// resized to match the close and menu controls: a 16px box, 13px glyph, 28px
-// hit area. Like them it is a pure ghost: the quiet button's hover pill
-// (its ::before) loses its fill, and ::before stays as the hit area.
 const sessionTabActionClassName = cn(
 	"grid place-items-center [&_svg]:size-icon-sm [&_button]:before:bg-transparent!",
 	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
@@ -723,22 +672,15 @@ type SessionPaneTabProps = {
 	onSelect?: () => void;
 	onRenamed?: () => void | Promise<void>;
 	session?: WorkspaceSession;
-	/** The agent shown without a session; its mark is the icon and its name joins the label. */
 	provider?: string;
 	icon?: ReactNode;
 	title?: string;
-	/** The control after the tab's title: the session's ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest (the session tab's ⋮ always shows). */
 	tabActionPinned?: boolean;
-	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
-	/** The tab's strip key, for split actions in its menu. */
 	tabKey?: string;
 };
 
-// The session, reviewer and no-session tabs of the strip. The full label only
-// becomes the hover tooltip when the tab strip is crowded enough to truncate it.
 export function SessionPaneTab({
 	label,
 	isActive,
@@ -758,10 +700,6 @@ export function SessionPaneTab({
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
 	const providerLabel = provider ? agentLabel(provider) : undefined;
 	const tabIcon = provider ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
-	// A session object supplies the tab presentation; refresh wiring explicitly
-	// opts the owning surface into rename so shared preview/cloud tabs cannot
-	// persist a title without updating their query cache. The project
-	// orchestrator's tab shows its role, not a name, so it is never renamable.
 	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
@@ -787,7 +725,6 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			// Renaming hides the ⋮ but keeps its slot, so the tab keeps its width.
 			action={tabAction ? <span className={cn(sessionTabActionClassName, rename.isEditing && "invisible")} data-testid="session-tab-action">{tabAction}</span> : undefined}
 			actionPosition="end"
 			actionPinned={tabActionPinned}
@@ -828,8 +765,6 @@ export function SessionPaneTab({
 		/>
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
-	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
-	// an active local, remote, or Cloud worker. The orchestrator goes with its project.
 	const menu: TabMenuSpec = session
 		? {
 				kind: "session",
@@ -839,7 +774,6 @@ export function SessionPaneTab({
 				canArchive: canArchiveWorkerSession(session),
 			}
 		: { kind: "plain", tabKey };
-	// The ⋮ button in the action slot opens this same spec.
 	return (
 		<TabMenuSpecContext.Provider value={menu}>
 			<TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>

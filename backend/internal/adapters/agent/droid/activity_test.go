@@ -16,10 +16,6 @@ func TestDeriveActivityState(t *testing.T) {
 	}{
 		{"user prompt -> active", "user-prompt-submit", `{}`, domain.ActivityActive, true},
 		{"stop -> idle", "stop", `{}`, domain.ActivityIdle, true},
-		// Droid notifications fire only on permission-needed or 60s-idle, and the
-		// payload carries no notification_type to discriminate — so every
-		// notification maps to waiting_input (an automated Enter must
-		// never answer a pending permission decision).
 		{"notification -> waiting_input", "notification", `{"message":"Droid needs your permission"}`, domain.ActivityWaitingInput, true},
 		{"notification empty payload -> waiting_input", "notification", `{}`, domain.ActivityWaitingInput, true},
 		{"notification malformed payload -> waiting_input", "notification", `not json`, domain.ActivityWaitingInput, true},

@@ -19,7 +19,6 @@ function setup(sourceHarness?: string) {
 	return { ...renderHook(() => useRememberProjectPermissions("project-one", sourceHarness), { wrapper }), invalidate, client };
 }
 
-// The daemon's copy of the project: GET reads what the last successful write left.
 let stored: string | undefined;
 beforeEach(() => {
 	stored = undefined;

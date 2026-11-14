@@ -26,10 +26,8 @@ const (
 	workspaceReviewTimeout     = 15 * time.Second
 )
 
-// WorkspaceDiffScope selects the two revisions used by the review APIs.
 type WorkspaceDiffScope string
 
-// Supported workspace comparison scopes.
 const (
 	WorkspaceDiffCombined    WorkspaceDiffScope = "combined"
 	WorkspaceDiffUncommitted WorkspaceDiffScope = "uncommitted"
@@ -39,9 +37,6 @@ const (
 	WorkspaceDiffUntracked   WorkspaceDiffScope = "untracked"
 )
 
-// WorkspaceDiffInput requests a bounded set of patches from one comparison
-// scope. A branch or pull request View, CommitSHAs, or the legacy single
-// CommitSHA select commits instead, and require the committed scope.
 type WorkspaceDiffInput struct {
 	Scope            WorkspaceDiffScope
 	Paths            []string
@@ -53,13 +48,11 @@ type WorkspaceDiffInput struct {
 	CommitSHAs       []string
 }
 
-// WorkspaceDiffDeferred identifies a file intentionally omitted from a patch group.
 type WorkspaceDiffDeferred struct {
 	Path   string
 	Reason string
 }
 
-// WorkspaceDiffGroup is one repository-local unified patch.
 type WorkspaceDiffGroup struct {
 	Repository    string
 	Patch         string
@@ -69,20 +62,17 @@ type WorkspaceDiffGroup struct {
 	Errors        []WorkspaceDiffError
 }
 
-// WorkspaceDiffError is a redacted repository-local failure.
 type WorkspaceDiffError struct {
 	Code    string
 	Message string
 }
 
-// WorkspaceDiffs is the grouped response consumed by virtualized review surfaces.
 type WorkspaceDiffs struct {
 	SessionID        domain.SessionID
 	WorkspaceVersion string
 	Groups           []WorkspaceDiffGroup
 }
 
-// WorkspaceFileRevision is one text-capable side of a comparison.
 type WorkspaceFileRevision struct {
 	SessionID        domain.SessionID
 	Path             string
@@ -98,7 +88,6 @@ type WorkspaceFileRevision struct {
 	Content          string
 }
 
-// WorkspaceFileSearchResult is one path match in the complete workspace tree.
 type WorkspaceFileSearchResult struct {
 	Path            string
 	Status          WorkspaceFileStatus
@@ -107,7 +96,6 @@ type WorkspaceFileSearchResult struct {
 	FileFingerprint string
 }
 
-// WorkspaceFileSearch is a bounded, cursor-paginated path search result.
 type WorkspaceFileSearch struct {
 	SessionID  domain.SessionID
 	Query      string
@@ -147,8 +135,6 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 	for commitIndex := range files.Commits {
 		for fileIndex := range files.Commits[commitIndex].Files {
 			file := &files.Commits[commitIndex].Files[fileIndex]
-			// A commit review is an immutable historical snapshot. Editing remains
-			// available from working-tree scopes, never from a selected commit.
 			file.Editable = false
 			file.FileFingerprint = summaryFingerprint(*file)
 		}
@@ -196,7 +182,6 @@ func finalizeWorkspaceManifest(manifest WorkspaceManifest) WorkspaceManifest {
 func finalizeWorkspaceFileDetail(detail WorkspaceFileDetail) WorkspaceFileDetail {
 	detail.Editable = workspaceFileEditable(detail.Size, detail.Binary, detail.Deleted) && !detail.ContentTruncated
 	detail.FileFingerprint = hashWorkspaceReviewValue(detail.Path, detail.PreviousPath, string(detail.Status), detail.Content, detail.Diff, strconv.FormatInt(detail.Size, 10), strconv.FormatBool(detail.Binary), strconv.FormatBool(detail.Deleted))
-	// Binary bytes are omitted from the detail, so track same-size file rewrites by mtime.
 	if detail.Binary && !detail.fileModTime.IsZero() {
 		detail.FileFingerprint = hashWorkspaceReviewValue(detail.FileFingerprint, strconv.FormatInt(detail.fileModTime.UnixNano(), 10))
 	}
@@ -221,8 +206,6 @@ type workspaceDiffTargetGroup struct {
 	targets []workspaceFileTarget
 }
 
-// GetWorkspaceDiffs returns one bounded unified patch per repository. The
-// response deliberately remains renderer-agnostic.
 func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, input WorkspaceDiffInput) (WorkspaceDiffs, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -316,10 +299,6 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 		return group, nil
 	}
 
-	// git diff never reports an untracked file, so the scopes that end at the
-	// worktree have to synthesize its added-file patch the same way
-	// GetWorkspaceFile already does. Without this the path returns a successful
-	// but patchless group and the review pane has no diff to render for it.
 	var untrackedPatch strings.Builder
 	tracked := make([]workspaceFileTarget, 0, len(targetGroup.targets))
 	for _, target := range targetGroup.targets {
@@ -369,18 +348,11 @@ func workspaceDiffGroup(ctx context.Context, targetGroup *workspaceDiffTargetGro
 	if err != nil {
 		return WorkspaceDiffGroup{}, err
 	}
-	// git's own output stays first so the group cap still drops synthesized
-	// untracked content before anything git already reported.
 	group.Patch, group.Truncated = truncateUTF8(out+untrackedPatch.String(), maxWorkspaceDiffGroupBytes)
 	group.Truncated = group.Truncated || truncated
 	return group, nil
 }
 
-// untrackedWorkingTarget reports whether target is a working-tree file git's
-// diff machinery cannot see for this scope. The combined, uncommitted, and
-// unstaged scopes end at the worktree, where an untracked file is a genuine
-// addition (git status lists it beside unstaged changes); the staged and
-// committed scopes have no untracked side by definition.
 func untrackedWorkingTarget(target workspaceFileTarget, scope WorkspaceDiffScope) bool {
 	if scope != WorkspaceDiffCombined && scope != WorkspaceDiffUncommitted && scope != WorkspaceDiffUnstaged {
 		return false
@@ -389,8 +361,6 @@ func untrackedWorkingTarget(target workspaceFileTarget, scope WorkspaceDiffScope
 	return ok
 }
 
-// appendSyntheticAddedPatch writes target's working-tree content to patch as an
-// added-file diff, or records on group why it was left out instead.
 func appendSyntheticAddedPatch(group *WorkspaceDiffGroup, patch *strings.Builder, target workspaceFileTarget) error {
 	file, info, err := confinedWorkspaceFile(target.root, target.rel)
 	if err != nil {
@@ -413,8 +383,6 @@ func appendSyntheticAddedPatch(group *WorkspaceDiffGroup, patch *strings.Builder
 	return nil
 }
 
-// GetWorkspaceFileRevision returns a comparison side for diff expansion and
-// complete-file viewing. Missing sides are represented explicitly.
 func (s *Service) GetWorkspaceFileRevision(ctx context.Context, id domain.SessionID, rawPath string, scope WorkspaceDiffScope, side WorkspaceFileBlobSide, workspaceVersion, expectedRevision string) (WorkspaceFileRevision, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -425,8 +393,6 @@ func (s *Service) GetWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	if side != WorkspaceBlobBefore && side != WorkspaceBlobAfter {
 		return WorkspaceFileRevision{}, apierr.Invalid("INVALID_WORKSPACE_REVISION_SIDE", "side must be before or after", nil)
 	}
-	// Unversioned live text reads are independent of Git comparison metadata.
-	// Snapshot-fenced and historical reads retain the complete validation path.
 	fastWorktree := side == WorkspaceBlobAfter && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUncommitted || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
 	target, err := s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, !fastWorktree)
 	if err != nil {
@@ -457,8 +423,6 @@ func (s *Service) GetWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	return completeWorkspaceFileRevision(result, data, size, exists, truncated, expectedRevision)
 }
 
-// completeWorkspaceFileRevision fills result from one read side, fenced by
-// expectedRevision.
 func completeWorkspaceFileRevision(result WorkspaceFileRevision, data []byte, size int64, exists, truncated bool, expectedRevision string) (WorkspaceFileRevision, error) {
 	result.Size = size
 	result.Exists = exists
@@ -625,8 +589,6 @@ func readGitRevision(ctx context.Context, root, spec string) ([]byte, int64, boo
 	return []byte(out), size, true, false, nil
 }
 
-// SearchWorkspaceFiles performs a bounded case-insensitive path search over
-// AO's existing confined all-files read model.
 func (s *Service) SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (WorkspaceFileSearch, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {

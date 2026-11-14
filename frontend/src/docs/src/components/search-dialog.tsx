@@ -16,10 +16,6 @@ import {
 
 const client = oramaStaticClient({ from: "/api/search" });
 
-/**
- * Searches the English index whatever the interface language is. The default
- * dialog would look for a per-language index, and the articles are English.
- */
 export function DocsSearchDialog(props: SharedProps) {
   const { search, setSearch, query } = useDocsSearch({ client });
 

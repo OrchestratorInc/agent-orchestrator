@@ -97,11 +97,6 @@ func TestCodexDeviceReconciliationReportsMalformedCredentialSafely(t *testing.T)
 	}
 }
 
-// The credential-file helpers summarize CreateTemp, Write, Sync, Close, and
-// rename failures behind an opaque message but must preserve the underlying os
-// error so bootstrap can still tell a transient I/O fault from an unsafe-storage
-// rejection. Before the cause was preserved, every one of these was classified
-// account_storage_unsafe with retryable=false and blocked Codex until restart.
 func TestBootstrapStorageFailureClassifiesPreservedIOCause(t *testing.T) {
 	const summary = "codex replacement staging could not be written"
 	for name, tc := range map[string]struct {
@@ -138,7 +133,6 @@ func TestBootstrapStorageFailureClassifiesPreservedIOCause(t *testing.T) {
 			if failure.reason != tc.reason || failure.retryable != tc.retryable {
 				t.Fatalf("classified %s retryable=%t, want %s retryable=%t", failure.reason, failure.retryable, tc.reason, tc.retryable)
 			}
-			// The preserved cause must never surface a path through the message.
 			if strings.Contains(tc.err.Error(), "/private/") {
 				t.Fatalf("opaque summary leaked a path: %q", tc.err.Error())
 			}
@@ -161,7 +155,6 @@ func TestCodexBootstrapPermanentSafetyFailure(t *testing.T) {
 		if !errors.As(err, &apiError) || apiError.Details["reasonCode"] != "account_storage_unsafe" || apiError.Details["retryable"] != false {
 			t.Fatalf("failure %d = %#v", i, err)
 		}
-		// Even correcting the layout cannot silently reopen a safety latch.
 		if i == 0 {
 			if err := os.Remove(pending); err != nil {
 				t.Fatal(err)

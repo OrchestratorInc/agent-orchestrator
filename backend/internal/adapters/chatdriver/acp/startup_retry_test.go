@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// exitingSpawn is an agent that exits before answering anything.
 func exitingSpawn(Launch, string) (*process, error) {
 	stdinR, stdinW := io.Pipe()
 	go func() { _, _ = io.Copy(io.Discard, stdinR) }()

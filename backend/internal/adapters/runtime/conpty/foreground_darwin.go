@@ -9,8 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// processArgv reads pid's argv from kern.procargs2: a native-endian int32
-// argc, the executable path, NUL padding, then argc NUL-terminated strings.
 func processArgv(pid int) []string {
 	raw, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil || len(raw) < 4 {
@@ -18,7 +16,6 @@ func processArgv(pid int) []string {
 	}
 	argc := int(binary.LittleEndian.Uint32(raw[:4]))
 	rest := raw[4:]
-	// Skip the executable path and the padding after it.
 	end := bytes.IndexByte(rest, 0)
 	if end < 0 {
 		return nil
@@ -40,5 +37,4 @@ func processArgv(pid int) []string {
 	return argv
 }
 
-// ForegroundPGID reports the terminal's foreground process group.
 func (c *darwinPTYConn) ForegroundPGID() (int, bool) { return ttyForegroundPGID(c.pty) }

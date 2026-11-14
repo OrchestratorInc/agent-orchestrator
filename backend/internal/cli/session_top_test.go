@@ -61,12 +61,6 @@ func TestSessionTop_SortsByMemoryAndDashesUnsampled(t *testing.T) {
 	}
 }
 
-// TestSessionTop_JSONDoesNotFabricateZeroForUnmeasured guards the JSON
-// contract against synthesizing a measurement: demo-3 has no entry in the
-// memory response (unsampled), so its JSON fields must be null, exactly like
-// the text table shows "-" instead of "0 B". A bare zero there would be
-// indistinguishable from a genuinely-empty process tree to any automation
-// reading --json.
 func TestSessionTop_JSONDoesNotFabricateZeroForUnmeasured(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := sessionTopServer(t, http.StatusOK, topMemoryBody)
@@ -138,9 +132,6 @@ func TestFormatBytes(t *testing.T) {
 	}
 }
 
-// TestSessionTop_ActiveSessionShowsNoIdleTime: the activity field carries the
-// raw enum ("active"), not the derived status ("working"), so an active row
-// must print a dash where an idle row prints how long it has been quiet.
 func TestSessionTop_ActiveSessionShowsNoIdleTime(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

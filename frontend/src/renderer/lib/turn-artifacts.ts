@@ -7,14 +7,8 @@ import type { SessionArtifact } from "../types/workspace";
 
 export { artifactRelativePath } from "../../../../packages/shared/artifacts/turn-artifacts";
 
-/** A deliverable this turn created or edited, with how the turn changed it. */
 export type TurnArtifact = SharedTurnArtifact<SessionArtifact>;
 
-/**
- * Splits what a turn changed into the deliverables it touched and every other
- * changed file. The rule lives in packages/shared so the phone draws the same
- * cards; see its splitTurnArtifacts.
- */
 export function splitTurnArtifacts(
 	diff: TurnDiff | undefined,
 	sessionId: string | undefined,

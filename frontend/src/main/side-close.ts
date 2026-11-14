@@ -15,14 +15,10 @@ export interface SideLaunchSnapshot {
 	numbers?: Record<string, number>;
 }
 
-// Close intent is owned by Electron for this launch, including while the daemon
-// is unavailable. A stale open snapshot must never replace a cleanup record.
 export class SideCloseRecovery {
 	state?: SideLaunchSnapshot;
 	private closing = new Map<string, { original: RecoveryRecord; cleanup: RecoveryRecord; observed: boolean; accepted: boolean; conversationClosed: boolean }>();
 	private closed = new Set<string>();
-	// Retain shutdown proof for this Electron launch, including across renderer
-	// remounts and snapshots that no longer contain the native fork cleanup.
 	private confirmedClosed = new Map<string, string>();
 
 	private rememberClosed(side: RecoveryRecord["side"]): void {
@@ -35,7 +31,6 @@ export class SideCloseRecovery {
 		const previous = (this.state?.sides ?? []) as RecoveryRecord[];
 		const covered = (id: string) => !coverage || coverage.ids.includes(id);
 		const numbers = this.state?.numbers || state.numbers ? Object.fromEntries([...new Set([...Object.keys(this.state?.numbers ?? {}), ...Object.keys(state.numbers ?? {})])].map(id => [id, Math.max(this.state?.numbers?.[id] ?? 0, state.numbers?.[id] ?? 0)])) : undefined;
-		// A replacement renderer can discover cleanup without having issued DELETE.
 		for (const record of records) {
 			if (record.cleanupOnly && record.hostStopped) this.rememberClosed(record.side);
 			if (record.cleanupOnly && !record.hostStopped && !this.closing.has(record.side.id) && !this.closed.has(record.side.id)) {
@@ -95,8 +90,6 @@ export class SideCloseRecovery {
 	}
 
 	markRestoreAttempt(snapshot?: SideLaunchSnapshot): void {
-		// Once cleanup may have reached a replacement daemon, an old daemon's
-		// rejection cannot establish that the close was never accepted.
 		for (const [id, intent] of this.closing) {
 			if (!snapshot || (snapshot.sides as RecoveryRecord[]).some(record => record.side.id === id && record.cleanupOnly)) intent.observed = true;
 		}
@@ -108,8 +101,6 @@ export class SideCloseRecovery {
 		}
 	}
 
-	// Only call after an already-closed DELETE and a fresh snapshot from the
-	// same daemon: absence then proves its stop-before-delete cleanup finished.
 	reconcileMissing(id: string, snapshot: SideLaunchSnapshot, coverage?: SideSnapshotCoverage): SideCloseOutcome {
 		const record = (snapshot.sides as RecoveryRecord[]).find((record) => record.side?.id === id);
 		if ((!record && (!coverage || coverage.ids.includes(id))) || (record?.cleanupOnly && record.hostStopped)) {

@@ -1,7 +1,3 @@
-// Package providerkeys stores provider environment credentials for AO-launched
-// harnesses. Values never appear in API responses or command arguments:
-// runtimes hand them to sessions through the process environment, and the
-// tmux runtime through a 0600 file the pane's shell reads and deletes.
 package providerkeys
 
 import (
@@ -17,13 +13,8 @@ import (
 )
 
 const (
-	filename = "provider-api-keys.json"
-	// deviceFilename lists the variable names (never values) that the user
-	// chose to publish to the OS user environment.
-	deviceFilename = "provider-api-keys-device.json"
-	// userValueFilename lists shared names whose value the OS user
-	// environment already held, set by the user, when AO first shared them.
-	// AO never removes those values.
+	filename          = "provider-api-keys.json"
+	deviceFilename    = "provider-api-keys-device.json"
 	userValueFilename = "provider-api-keys-device-user.json"
 )
 
@@ -31,7 +22,6 @@ var mu sync.Mutex
 
 func path(dataDir string) string { return filepath.Join(dataDir, filename) }
 
-// Load returns a fresh copy of the credentials stored for this AO device.
 func Load(dataDir string) (map[string]string, error) {
 	if dataDir == "" {
 		return nil, errors.New("AO data directory is empty")
@@ -63,8 +53,6 @@ func Load(dataDir string) (map[string]string, error) {
 	return keys, nil
 }
 
-// Save atomically updates one reviewed environment variable. The caller owns
-// the allowlist; this package only enforces environment-safe syntax.
 func Save(ctx context.Context, dataDir, name, value string) error {
 	if !validName(name) || !validValue(value) || value == "" {
 		return errors.New("invalid provider credential")
@@ -79,8 +67,6 @@ func Save(ctx context.Context, dataDir, name, value string) error {
 	return writeJSON(ctx, dataDir, filename, keys)
 }
 
-// Remove deletes one variable and its device-environment marker. Removing an
-// absent variable succeeds.
 func Remove(ctx context.Context, dataDir, name string) error {
 	if !validName(name) {
 		return errors.New("invalid provider credential")
@@ -103,16 +89,12 @@ func Remove(ctx context.Context, dataDir, name string) error {
 	return setDeviceLocked(ctx, dataDir, name, false)
 }
 
-// DeviceNames returns the variables the user chose to publish to the OS user
-// environment, so they can be reapplied in a new login session.
 func DeviceNames(dataDir string) (map[string]bool, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	return loadDevice(dataDir)
 }
 
-// SetDevice records whether name is published to the OS user environment.
-// It never stores a credential value.
 func SetDevice(ctx context.Context, dataDir, name string, published bool) error {
 	if !validName(name) {
 		return errors.New("invalid provider credential")
@@ -122,15 +104,12 @@ func SetDevice(ctx context.Context, dataDir, name string, published bool) error 
 	return setDeviceLocked(ctx, dataDir, name, published)
 }
 
-// UserValueNames returns the shared variables whose value the user had
-// already set in the OS user environment when AO shared them.
 func UserValueNames(dataDir string) (map[string]bool, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	return loadNames(dataDir, userValueFilename)
 }
 
-// SetUserValue records whether name's shared value was the user's own.
 func SetUserValue(ctx context.Context, dataDir, name string, users bool) error {
 	if !validName(name) {
 		return errors.New("invalid provider credential")
@@ -140,11 +119,6 @@ func SetUserValue(ctx context.Context, dataDir, name string, users bool) error {
 	return setNameLocked(ctx, dataDir, userValueFilename, name, users)
 }
 
-// setDeviceLocked records whether name is published. Unpublishing clears the
-// device marker before the user-owned one: if the second write fails, the
-// name is left unpublished with a stale ownership mark, which nothing
-// withdraws, rather than published with no mark, which a later withdrawal
-// would take for AO's copy and remove from the user's environment.
 func setDeviceLocked(ctx context.Context, dataDir, name string, published bool) error {
 	if err := setNameLocked(ctx, dataDir, deviceFilename, name, published); err != nil {
 		return err

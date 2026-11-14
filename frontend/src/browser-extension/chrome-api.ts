@@ -1,7 +1,3 @@
-// The slice of Chrome's extension API the AO Browser Bridge uses, typed
-// locally so the frontend does not need @types/chrome. MV3 methods return
-// promises when called without a callback.
-
 type Listener<A extends unknown[]> = {
 	addListener(callback: (...args: A) => void): void;
 	removeListener(callback: (...args: A) => void): void;

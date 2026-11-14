@@ -20,7 +20,6 @@ func TestSessionCleanupFactsRoundTrip(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	// A session with no facts row reads back as absent.
 	if _, ok, err := s.GetSessionCleanupFacts(ctx, rec.ID); err != nil || ok {
 		t.Fatalf("get absent facts = ok=%v err=%v, want ok=false err=nil", ok, err)
 	}
@@ -46,12 +45,11 @@ func TestSessionCleanupFactsRoundTrip(t *testing.T) {
 	}
 	requireCleanupEqual(t, got, want)
 
-	// Upsert-updates the same row in place (disposition + bookkeeping change).
 	want.WorkspaceDisposition = domain.DispositionFailed
 	want.AttemptCount = 5
 	want.FailureCode = "worktree_locked"
 	want.ReportOnly = false
-	want.RuntimeReleasedAt = time.Time{} // clear back to NULL
+	want.RuntimeReleasedAt = time.Time{}
 	if err := s.UpsertSessionCleanupFacts(ctx, want); err != nil {
 		t.Fatalf("re-upsert facts: %v", err)
 	}
@@ -62,9 +60,6 @@ func TestSessionCleanupFactsRoundTrip(t *testing.T) {
 	requireCleanupEqual(t, got, want)
 }
 
-// The session list reads cleanup facts for all of its archived sessions at once.
-// For every requested id the batch must return what the single-session read
-// returns, and leave out sessions that have no facts row.
 func TestListSessionCleanupFactsForSessionsMatchesSingleReads(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -83,8 +78,6 @@ func TestListSessionCleanupFactsForSessionsMatchesSingleReads(t *testing.T) {
 	unrequested := terminalSession(t, s, "cfb", 0)
 	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: unrequested.ID, WorkspaceDisposition: domain.DispositionRemoved})
 
-	// More ids than SQLite's default bound-parameter limit: the ids travel as one
-	// JSON value, so the size of the list is not limited by it.
 	ids := []domain.SessionID{full.ID, stale.ID, noFacts.ID}
 	for i := 0; i < 2000; i++ {
 		ids = append(ids, domain.SessionID(fmt.Sprintf("cfb-missing-%d", i)))
@@ -115,11 +108,6 @@ func TestListSessionCleanupFactsForSessionsMatchesSingleReads(t *testing.T) {
 	}
 }
 
-// TestSessionCleanupFactsCDCEmitsSessionUpdated pins the facts-table CDC
-// contract: an insert and any disposition / runtime-release change fan out the
-// existing session_updated event with an {id}-only payload (deliberately no
-// isTerminated field), while a retry-bookkeeping-only write is suppressed by the
-// trigger WHEN guard so it cannot self-wake the reconciler.
 func TestSessionCleanupFactsCDCEmitsSessionUpdated(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -131,8 +119,6 @@ func TestSessionCleanupFactsCDCEmitsSessionUpdated(t *testing.T) {
 	base, _ := s.LatestSeq(ctx)
 
 	released := time.Now().UTC().Truncate(time.Second)
-	// (1) insert -> session_updated. (2) disposition + runtime release change ->
-	// session_updated. (3) attempt/next-attempt-only change -> suppressed.
 	steps := []domain.SessionCleanupRecord{
 		{SessionID: r.ID, WorkspaceDisposition: domain.DispositionPending},
 		{SessionID: r.ID, WorkspaceDisposition: domain.DispositionRemoved, RuntimeReleasedAt: released},
@@ -175,31 +161,21 @@ func TestSessionCleanupFactsCDCEmitsSessionUpdated(t *testing.T) {
 	}
 }
 
-// TestListTerminalCleanupCandidates covers the coarse sessions-driven scan: it
-// surfaces terminated sessions with no facts row (the pre-existing backlog),
-// with facts stale relative to cleanup_generation, and with a pending cleanup
-// due for retry — while excluding current, not-yet-due, and live sessions.
 func TestListTerminalCleanupCandidates(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "cand")
 	now := time.Now().UTC().Truncate(time.Second)
 
-	// A: terminal, no facts row -> candidate (the leaked backlog).
 	a := terminalSession(t, s, "cand", 0)
-	// B: terminal, facts current (removed, generation matches) -> excluded.
 	b := terminalSession(t, s, "cand", 0)
 	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: b.ID, SessionGeneration: 0, WorkspaceDisposition: domain.DispositionRemoved})
-	// C: terminal, facts stale (session bumped to gen 2, facts written at gen 1) -> candidate.
 	c := terminalSession(t, s, "cand", 2)
 	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: c.ID, SessionGeneration: 1, WorkspaceDisposition: domain.DispositionRemoved})
-	// D: terminal, pending and due -> candidate.
 	d := terminalSession(t, s, "cand", 0)
 	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: d.ID, WorkspaceDisposition: domain.DispositionPending, NextAttemptAt: now.Add(-time.Hour)})
-	// E: terminal, pending but not yet due -> excluded.
 	e := terminalSession(t, s, "cand", 0)
 	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: e.ID, WorkspaceDisposition: domain.DispositionPending, NextAttemptAt: now.Add(time.Hour)})
-	// F: live (not terminated) -> excluded.
 	if _, err := s.CreateSession(ctx, sampleRecord("cand")); err != nil {
 		t.Fatalf("create live session: %v", err)
 	}
@@ -271,9 +247,6 @@ func requireCleanupEqual(t *testing.T, got, want domain.SessionCleanupRecord) {
 	}
 }
 
-// Ordinary UpdateSession writes cannot change controller ownership. Only
-// Lifecycle Manager's dedicated compare-and-swap may do that, so unrelated
-// metadata updates cannot accidentally switch the interface.
 func TestOrdinarySessionUpdatesCannotChangeControllerMode(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "cm")
@@ -290,7 +263,6 @@ func TestOrdinarySessionUpdatesCannotChangeControllerMode(t *testing.T) {
 		t.Fatalf("created mode = %q, want chat", created.Mode)
 	}
 
-	// A caller trying to flip the mode, alongside a legitimate change.
 	created.Mode = domain.SessionModeTUI
 	created.Metadata.ProviderConversationID = "thread-2"
 	if err := s.UpdateSession(ctx, created); err != nil {
@@ -304,8 +276,6 @@ func TestOrdinarySessionUpdatesCannotChangeControllerMode(t *testing.T) {
 	if after.Mode != domain.SessionModeChat {
 		t.Fatalf("ordinary update changed controller mode to %q", after.Mode)
 	}
-	// The controller handle, by contrast, is meant to be updatable: a resume
-	// rebinds it.
 	if after.Metadata.ProviderConversationID != "thread-2" {
 		t.Errorf("provider conversation id = %q, want the update to have applied",
 			after.Metadata.ProviderConversationID)

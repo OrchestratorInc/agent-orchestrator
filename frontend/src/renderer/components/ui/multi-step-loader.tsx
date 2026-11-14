@@ -17,12 +17,8 @@ export function MultiStepLoader({
 	complete?: boolean;
 	duration?: number;
 	steps: readonly string[];
-	/** Optional controls rendered beside a step's label, by step index. */
 	stepAccessories?: readonly ReactNode[];
 }) {
-	// Animate a step only when the loader advances to it. The step it mounts on
-	// shows at once: a loader that takes over from another (the board's while
-	// an orchestrator starts, then the session's) must not blank its label.
 	const mountedIndex = useRef(activeIndex);
 	if (steps.length === 0) return null;
 

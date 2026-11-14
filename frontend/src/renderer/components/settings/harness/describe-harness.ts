@@ -35,7 +35,6 @@ export type HarnessDescribeInput = {
 	plan?: AgentInstallPlan;
 	job?: InstallJob;
 	installed: boolean;
-	/** The install method the user picked after a failure, if any. */
 	selectedMethodId?: string;
 	advisoryQuery?: Pick<UseQueryResult<AgentUpdateAdvisory>, "data" | "isError" | "isPending" | "isFetching">;
 	pending: boolean;
@@ -48,20 +47,16 @@ export type HarnessDescribeInput = {
 	authPlansPending: boolean;
 	authPlansFailed: boolean;
 	authState?: AgentAuthState;
-	/** The login or logout terminal, when it belongs to this harness. */
 	authWorkflow: AuthTerminalWorkflow | null;
 	/** The last login check for this harness failed. */
 	authCheckFailed?: boolean;
 	updatedAt?: string;
 };
 
-/** Everything the list row and the harness page show for one harness. */
 export function describeHarness(input: HarnessDescribeInput) {
 	const { agentId, t, plan, job, readinessAgent, authPlan, authState, attempt, actionError, pending } = input;
 	const isInstalled = input.installed;
 	const availableMethods = plan?.methods.filter((method) => method.available) ?? [];
-	// The recommended method unless the user picked another, so an install
-	// that fails one way can be retried through another available method.
 	const installMethod = availableMethods.find((method) => method.id === input.selectedMethodId)
 		?? availableMethods.find((method) => method.recommended) ?? availableMethods[0];
 	const advisoryQuery = input.advisoryQuery;
@@ -69,14 +64,10 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const methodId = maintenanceMethodId(advisory);
 	const maintenanceMethod = plan?.methods.find((method) => method.id === methodId);
 	const canUpdate = supportsUpdate(maintenanceMethod);
-	// A harness with no installable method (built into AO, or an installer
-	// that must run interactively here) explains itself; ownership is not the question.
 	const manualOnly = Boolean(plan?.methods.length) && plan!.methods.every((method) => method.id === "manual");
 	const ownershipReason = !methodId ? (manualOnly && plan?.reason ? plan.reason : t("settings.harness.ownershipUnknown")) : undefined;
 	const updateReason = ownershipReason || maintenanceMethod?.updateReason || maintenanceMethod?.reason || t("settings.harness.updateUnsupported");
 	const updateUnknown = advisoryQuery?.isError || !hasDefinitiveUpdateStatus(advisory);
-	// A failed background fetch is not a new observation. Keep the last
-	// action; the click-time probe still verifies target and ownership.
 	const updateAvailable = hasConfirmedHarnessUpdate(advisory);
 	const currentVersion = advisory?.currentVersion?.trim();
 	const busy = pending || isActiveInstallJob(job);
@@ -86,19 +77,12 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const availableMethodsLabel = availableMethods.length > 0
 		? new Intl.ListFormat(input.language, { style: "short", type: "conjunction" }).format(availableMethods.map((method) => method.label))
 		: undefined;
-	// Unknown inventory is not proof that installing is safe. Preserve the
-	// existing cached-readiness fallback when fetching the snapshot fails.
 	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
 	const isSetupAction = authPlan?.action === "setup";
-	// Inline key methods replace the documentation card: the button opens the
-	// Account login panel instead of the setup docs.
 	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation" && !authPlan?.methods?.length;
 	const authStatus = readinessAgent?.authentication.state;
-	// Who the harness is signed in as, when its own login check names it.
 	const account = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;
 	const accountWho = account?.email || account?.name;
-	// Who and how the harness is signed in. Where the credential was found
-	// stays in the readiness data for diagnostics; the row does not show it.
 	const accountDescription = account ? [
 		accountWho ? t("settings.harness.signedInAs", { account: accountWho })
 			: account.method === "api_key" ? t("settings.harness.usingApiKey")
@@ -113,8 +97,6 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const needsLogin = needsHarnessLogin(authPlan, authStatus);
 	const showSetup = isSetupAction && authStatus === "unknown";
 	const showUpdate = updateAvailable && !input.authPlansPending && !input.authPlansFailed;
-	// The daemon retains this component-repair instruction in persisted output,
-	// including after CLI verification succeeds or AO restarts.
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
@@ -135,8 +117,6 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
 		: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
-	// Once the installer reports progress, the label names its step, with a
-	// percentage only when its output stated one.
 	const stage = installStage(job);
 	const percent = installPercent(job);
 	const progressLabel = job?.status === "waiting_for_idle" ? t("settings.harness.waitingForIdle")
@@ -152,7 +132,6 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: rowAuthWorkflow?.phase === "closing" ? t("settings.harness.authClosing")
 		: rowAuthWorkflow && rowAuthWorkflow.phase !== "running" ? rowAuthWorkflow.reason ?? t("settings.harness.loginUnknown")
 		: t(rowAuthWorkflow?.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress");
-	// Why a harness is not installed (or cannot be), without repeating the error alert.
 	const installNote = isInstalled || installationPending ? undefined
 		: job?.status === "interrupted" ? t("settings.harness.interrupted")
 		: installMethod && availableMethodsLabel ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : plan?.reason ?? t("settings.harness.manualRequired");
@@ -175,23 +154,16 @@ export type HarnessDetails = ReturnType<typeof describeHarness>;
 
 export type InstallStage = "downloading" | "installing" | "verifying" | "done";
 
-/** The step a running job is on. The daemon reads download and install from the
- * installer's own output, so a job that has not reported progress yet is on no
- * step; it reports verification itself. */
 export function installStage(job?: Pick<InstallJob, "status" | "progress">): InstallStage | undefined {
 	if (job?.status === "verifying") return "verifying";
 	if (job?.status === "installing" || job?.status === "running") return job.progress?.phase;
 	return undefined;
 }
 
-/** An install or update is running its command or verifying, not waiting for idle sessions. */
 export function showsInstallProgress(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "installing" || job?.status === "running" || job?.status === "verifying";
 }
 
-/** The percentage the installer's output stated while its command runs. A bar
- * with no named phase (a script printing only "45%") still fills; the label
- * then stays generic. */
 export function installPercent(job?: Pick<InstallJob, "status" | "progress">): number | undefined {
 	const percent = job?.progress?.percent;
 	return (job?.status === "installing" || job?.status === "running") && typeof percent === "number" ? Math.max(0, Math.min(100, Math.round(percent))) : undefined;

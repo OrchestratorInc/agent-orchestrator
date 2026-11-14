@@ -27,14 +27,8 @@ import (
 const postHogBufferSize = 128
 const maxCommandShapeLength = 48
 
-// 3 marks the {product}.{object}.{verb} names: legacy clients sent ao.cli.invoked
-// and ao.app.active without a version, and 2 used the ao.v2.* names.
 const remoteTelemetrySchemaVersion = 3
 
-// legacyEventNames lists the names an event was exported under before the
-// {product}.{object}.{past_tense_verb} rename. Export uses the current name only;
-// these exist so a kill-switch entry written against an old name
-// (AO_TELEMETRY_DISABLED_EVENTS) still silences the renamed stream.
 var legacyEventNames = map[string][]string{
 	"ao.sessions.spawned":            {"ao.session.spawned"},
 	"ao.sessions.spawn_failed":       {"ao.session.spawn_failed"},
@@ -49,10 +43,8 @@ var legacyEventNames = map[string][]string{
 	"ao.usage.cli_usage_errors":      {"ao.cli.usage_errors"},
 	"ao.harnesses.updated":           {"ao.harness.update"},
 	"ao.harnesses.version_switched":  {"ao.harness.version_switch"},
-	// ao.app.active is the desktop heartbeat's current name, so it does not
-	// silence the CLI one; the shared pre-rename ao.v2.app.active does.
-	"ao.cli.active":  {"ao.v2.app.active"},
-	"ao.cli.invoked": {"ao.v2.cli.invoked"},
+	"ao.cli.active":                  {"ao.v2.app.active"},
+	"ao.cli.invoked":                 {"ao.v2.cli.invoked"},
 }
 
 var remoteCommandTokens = map[string]struct{}{
@@ -107,8 +99,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.automation.created":     {"use_case": {}, "template_id": {}},
 	"ao.daemon.write_lock_held": {"caller": {}, "duration_ms": {}},
 
-	// count is direct human Chat messages; steer_count and send_count are the
-	// other human sends; the surface counts split all three by client.
 	"ao.usage.messages_sent": {
 		"project_telemetry_id": {},
 		"session_telemetry_id": {},
@@ -121,7 +111,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":                 {},
 		"harness":              {},
 	},
-	// Historical backfill is grouped; new outcomes are one per PR with detail.
 	"ao.usage.worker_pr_associated": {
 		"project_telemetry_id": {},
 		"count":                {},
@@ -158,9 +147,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"review_rounds":        {},
 		"ao_review_used":       {},
 	},
-	// Reported by the LAN listener on the first authenticated request per
-	// transport per day (httpd/mobile_connect_telemetry.go). "transport" is a
-	// closed vocabulary — lan / tailscale / loopback / other — never an address.
 	"ao.mobile.device_connected": {
 		"transport": {},
 	},
@@ -182,10 +168,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"error_kind":   {},
 		"fingerprint":  {},
 		"operation":    {},
-		// Rolled up by AggregatingSink (adapters/telemetry/aggregate.go) into
-		// one event per minute; without these, a rollup's whole reason for
-		// existing - the true occurrence count of a burst - is silently
-		// stripped before it ever reaches PostHog.
 		"count":        {},
 		"day":          {},
 		"window_start": {},
@@ -203,9 +185,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"window_start":      {},
 		"window_end":        {},
 	},
-	// Install lifecycle anchors. Segmentation (install_source, installed_at,
-	// $os, arch, is_ci, ...) rides every event as a common property; launcher
-	// says whether the desktop app or the CLI started the daemon that sent it.
 	"ao.app.installed": {
 		"launcher": {},
 	},
@@ -284,7 +263,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"async":             {},
 		"model":             {},
 	},
-	// A start cancelled on purpose; same props as spawn_failed.
 	"ao.sessions.spawn_cancelled": {
 		"component":         {},
 		"duration_ms":       {},
@@ -336,8 +314,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"async":             {},
 		"model":             {},
 	},
-	// Whether a session delivered: outcome is pr_opened, completed, killed,
-	// failed or abandoned (internal/deliverytelemetry).
 	"ao.sessions.ended": {
 		"created_by":           {},
 		"project_telemetry_id": {},
@@ -380,46 +356,29 @@ type postHogClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// PostHogSink exports allowlisted telemetry events to PostHog.
 type PostHogSink struct {
-	apiKey           string
-	host             string
-	defaultAgent     string
-	tenure           *tenureTracker
-	lifetimeSessions func(context.Context) (int64, error)
-	// env and install carry the segmentation context (OS, arch, CI, install
-	// source, release channel) stamped on every event. See environment.go.
-	env     staticEnvironment
-	install *installContext
-	// experimentCohort is this install's fixed 0-99 bucket (cohort.go). Unset
-	// when it could not be read or assigned, which omits the property.
+	apiKey              string
+	host                string
+	defaultAgent        string
+	tenure              *tenureTracker
+	lifetimeSessions    func(context.Context) (int64, error)
+	env                 staticEnvironment
+	install             *installContext
 	experimentCohort    int
 	hasExperimentCohort bool
-	// ident carries the opt-out switch and the signed-in user attributes. Nil
-	// (zero-value sinks in tests) behaves as anonymous and opted in.
-	ident *Identity
-	// setKey is the last identity whose person `$set` send succeeded, so
-	// it goes out once per identity change rather than on every event. See
-	// properties().
-	setMu  sync.Mutex
-	setKey string
-	// appVersion stamps app_version/ao_version on every exported event. Empty
-	// leaves the properties off entirely rather than reporting a misleading
-	// "unknown" that would show up as a real version in release breakdowns.
-	appVersion string
-	client     postHogClient
-	log        *slog.Logger
-	ch         chan queuedPostHogEvent
-	wg         sync.WaitGroup
-	closeOnce  sync.Once
-	queueMu    sync.RWMutex
-	closed     bool
-	// ctx bounds every in-flight send and its retry backoff. Close cancels it
-	// when the caller's shutdown context is done, so pending retry work stops
-	// promptly instead of outliving shutdown on an uncancellable sleep or a
-	// long HTTP timeout.
-	ctx    context.Context
-	cancel context.CancelFunc
+	ident               *Identity
+	setMu               sync.Mutex
+	setKey              string
+	appVersion          string
+	client              postHogClient
+	log                 *slog.Logger
+	ch                  chan queuedPostHogEvent
+	wg                  sync.WaitGroup
+	closeOnce           sync.Once
+	queueMu             sync.RWMutex
+	closed              bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
 }
 
 type queuedPostHogEvent struct {
@@ -427,12 +386,10 @@ type queuedPostHogEvent struct {
 	lifetimeSessions *int64
 }
 
-// SetLifetimeSessions reads the durable counter when an event enters the sink.
 func (s *PostHogSink) SetLifetimeSessions(read func(context.Context) (int64, error)) {
 	s.lifetimeSessions = read
 }
 
-// NewPostHogSink starts a buffered PostHog exporter with a stable install ID.
 func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, client postHogClient, log *slog.Logger) (*PostHogSink, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("posthog api key is required")
@@ -469,9 +426,6 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	return s, nil
 }
 
-// SetInstallStateDir points the sink at the directory holding the desktop
-// app's app-state.json and update-settings.json (dirname of running.json).
-// Unset, install_source and release_channel report "unknown".
 func (s *PostHogSink) SetInstallStateDir(dir string) {
 	if s.install == nil {
 		return
@@ -482,14 +436,10 @@ func (s *PostHogSink) SetInstallStateDir(dir string) {
 	s.install.mu.Unlock()
 }
 
-// Identity returns the live identity (install ID, signed-in user, opt-out).
 func (s *PostHogSink) Identity() *Identity { return s.ident }
 
-// suppressed reports an opt-out or an unpersistable identity: nothing is exported.
 func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.ExportSuppressed() }
 
-// Emit enqueues an event for best-effort export. An opted-out install exports
-// nothing, so the stream stops the moment the user flips the switch.
 func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if s.suppressed() {
 		return
@@ -502,8 +452,6 @@ func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	entry := queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)}
 	queued := false
 	if strings.HasPrefix(ev.Name, "ao.usage.") || ev.Name == "ao.prs.closed" {
-		// Usage summaries have already been reserved in SQLite. Wait for queue
-		// capacity so a burst cannot discard them behind the caller's back.
 		select {
 		case s.ch <- entry:
 			queued = true
@@ -525,7 +473,6 @@ func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 }
 
-// Close drains the exporter until completion or context cancellation.
 func (s *PostHogSink) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		s.queueMu.Lock()
@@ -540,9 +487,6 @@ func (s *PostHogSink) Close(ctx context.Context) error {
 	}()
 	select {
 	case <-ctx.Done():
-		// The caller's shutdown deadline elapsed: cancel in-flight sends and
-		// their retry backoff so the drain goroutine exits promptly rather than
-		// blocking on a sleep or a long HTTP timeout.
 		s.cancel()
 		<-done
 		return ctx.Err()
@@ -570,13 +514,6 @@ func (s *PostHogSink) snapshotLifetimeSessions(ctx context.Context) *int64 {
 	return &count
 }
 
-// Bounded retry for a single event. A dropped send is a permanent gap,
-// because the upstream reservoir has already marked this event's dedup slot
-// (ao.app.active per UTC day, ao.cli.invoked per command/day) spent before it
-// ever reached this sink, so there is no second attempt from the caller. Only
-// failed sends are retried, so a healthy path still makes exactly one request
-// per event and adds no billable volume. A sustained outage gives up after
-// postHogSendMaxAttempts rather than blocking the drain goroutine forever.
 const (
 	postHogSendMaxAttempts = 2
 	postHogSendRetryDelay  = 200 * time.Millisecond
@@ -589,17 +526,8 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) {
 	ev := entry.event
 	eventName := ev.Name
-	// A stable per-event UUID, reused across every attempt, is PostHog's
-	// idempotency key. A transport error only means AO received no response;
-	// PostHog may already have ingested the first attempt, so without a shared
-	// UUID a retry would land as a duplicate (inflating counts and the billed
-	// volume, breaking the "retries add no volume" guarantee). PostHog dedupes
-	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
 	props := s.propertiesWithCount(ev, entry.lifetimeSessions)
-	// A signed-in install reports as the AO Cloud user, so its events never
-	// depend on which account the anonymous install ID was once merged into.
-	// Signed out, the current anonymous install ID is used.
 	cloudUserID, _ := props["ao_cloud_user_id"].(string)
 	identity := ports.TelemetryIdentity{CloudUserID: cloudUserID}
 	if s.ident != nil {
@@ -622,8 +550,6 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 	}
 
 	for attempt := 1; attempt <= postHogSendMaxAttempts; attempt++ {
-		// The payload is already built, so a retry after a failed first attempt
-		// must honor an opt-out that landed during the request or the backoff.
 		if s.suppressed() {
 			return
 		}
@@ -642,8 +568,6 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 			s.log.Warn("telemetry posthog export failed", "name", ev.Name, "attempts", attempt, "error", err)
 			return
 		}
-		// Cancellable backoff: shutdown must be able to stop pending retry work
-		// instead of waiting out the full delay.
 		timer := time.NewTimer(postHogSendRetryDelay)
 		select {
 		case <-ctx.Done():
@@ -654,11 +578,6 @@ func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) 
 	}
 }
 
-// sendOnce posts a single capture attempt. retryable is true only for
-// transient failures a retry might clear (connection errors, HTTP 429, and
-// 5xx); a permanent rejection (any other non-2xx, e.g. a 4xx auth/shape error)
-// returns retryable=false so a retry does not waste a call that will fail
-// identically.
 func (s *PostHogSink) sendOnce(ctx context.Context, payload []byte) (retryable bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.host+"/capture/", bytes.NewReader(payload))
 	if err != nil {
@@ -688,36 +607,18 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		"source":                   ev.Source,
 		"level":                    string(ev.Level),
 		"telemetry_schema_version": remoteTelemetrySchemaVersion,
-		// Classifies this install as the CLI/daemon on every event, matching the
-		// desktop renderer (client="desktop") and mobile (client="mobile"), so a
-		// shared event like ao.app.active splits by one property across surfaces.
-		"client": "cli",
-		// The distinct ID is a random install ID with no person data behind it,
-		// so skip PostHog person-profile processing: identified events bill at
-		// several times the anonymous rate and the profiles would hold nothing.
-		"$process_person_profile": false,
-		// PostHog's default; pinned so coarse geo breakdowns can't silently flip off.
-		"$geoip_disable": false,
+		"client":                   "cli",
+		"$process_person_profile":  false,
+		"$geoip_disable":           false,
 	}
-	// Without this, every daemon event lands with no version at all, so a
-	// failure rate cannot be attributed to a release. Renderer events already
-	// carry app_version; these are the matching daemon-side values.
 	if s.appVersion != "" {
 		props["app_version"] = s.appVersion
 		props["ao_version"] = s.appVersion
-		// Channel of the build actually running, from the version string. A
-		// nightly build carries "-nightly." (CI stamps 0.11.3-nightly.5); plain
-		// semver is stable. The renderer sends the same property.
 		props["version_channel"] = versionChannel(s.appVersion)
 	}
-	// Which agent this install actually defaults to. Without it, "how many people
-	// use Claude versus Codex" is only answerable for sessions that were spawned,
-	// which silently excludes everyone who installed and never ran one.
 	if s.defaultAgent != "" {
 		props["default_agent"] = s.defaultAgent
 	}
-	// Tenure turns retention into a property rather than a cohort query, so the
-	// spread of first-day versus long-standing installs is one breakdown.
 	if s.tenure != nil {
 		ageDays, activeDays, bucket := s.tenure.observe()
 		props["install_age_days"] = ageDays
@@ -752,19 +653,11 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
 			props["days_since_install"] = age
 		}
-		// The durable binding (telemetry_bound_user) restores a sign-in across
-		// restarts, so no binding means not signed in on this install.
 		props["is_signed_in"] = s.ident.Snapshot().CloudUserID != ""
 	}
 	return props
 }
 
-// stampIdentity attaches who this install is to an event. The GitHub login and
-// AO Cloud user ID ride every event as event properties; the person profile is
-// only processed (billed as identified) once there is a login to mirror or a
-// signed-in user to link, and the person `$set` is resent only when either
-// changes, so a busy daemon does not multiply identified-event cost. Email is
-// deliberately absent: it is set once by the signed-in desktop at identify time.
 func (s *PostHogSink) stampIdentity(props map[string]any) {
 	var uid string
 	if s.ident != nil {
@@ -777,8 +670,6 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	actor, _ := props["github_actor"].(string)
 	if uid != "" {
 		props["ao_cloud_user_id"] = uid
-		// Linked to the person the desktop identify() selected; the stable
-		// installation ID remains an event property.
 		props["$process_person_profile"] = true
 	}
 	if actor == "" && uid == "" {
@@ -793,8 +684,6 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	}
 	set := map[string]any{}
 	if actor != "" {
-		// github_actor is the long-standing person property; github_login is the
-		// name the desktop identify() uses. Same value, kept in step.
 		set["github_actor"], set["github_login"] = actor, actor
 	}
 	if uid != "" {
@@ -932,12 +821,6 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var sessionTelemetryIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
-// agentSlugPattern is the shape of a real adapter id (claude-code, codex, ...).
-// AO_AGENT is free text and cfg.Agent is only validated against the registry
-// when the daemon builds its resolver, which happens after ao.daemon.started is
-// already emitted. So a malformed value, including a filesystem path, could ride
-// on that first event. safeAgentSlug drops anything that is not a plain slug, so
-// telemetry carries a known-shape id or nothing, never a path.
 var agentSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 
 func safeAgentSlug(agent string) string {
@@ -948,8 +831,6 @@ func safeAgentSlug(agent string) string {
 	return ""
 }
 
-// versionChannel derives stable/nightly from the version string, matching the
-// renderer's versionChannelFrom.
 func versionChannel(appVersion string) string {
 	if strings.Contains(strings.ToLower(appVersion), "-nightly.") {
 		return "nightly"
@@ -996,9 +877,6 @@ func loadOrCreateInstallID(dataDir string) (string, error) {
 	return "", fmt.Errorf("telemetry install id creation did not settle")
 }
 
-// recoverEmptyInstallID serializes repair of a legacy empty file with the
-// renderer. A second process must re-read after taking the lock, or it could
-// delete an ID that the first process just published.
 func recoverEmptyInstallID(dataDir, path string) (string, error) {
 	lockPath := path + ".recovery"
 	deadline := time.Now().Add(20 * time.Second)
@@ -1041,8 +919,6 @@ func recoverEmptyInstallID(dataDir, path string) (string, error) {
 	return loadOrCreateInstallID(dataDir)
 }
 
-// writeFileAtomic swaps data in through a temp file in the same directory, so a
-// concurrent reader never sees a partial file and a failure leaves the old one.
 func writeFileAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {

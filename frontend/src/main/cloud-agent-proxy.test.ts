@@ -10,7 +10,6 @@ import { WebSocket, WebSocketServer } from "ws";
 import { previewCertificate } from "./preview-certificate";
 
 const token = vi.hoisted(() => ({ value: "cloud-token" as string | null }));
-// Listens to fail before the real one runs.
 const listenFailures = vi.hoisted(() => ({ left: 0 }));
 vi.mock("electron", () => ({ ipcMain: {} }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => token.value) }));
@@ -50,8 +49,6 @@ afterEach(async () => {
 	proxy = undefined;
 });
 
-// A fake control plane on loopback: answers every request with the handler's
-// status and records what reached it.
 async function startCp(
 	status: (req: IncomingMessage) => number = () => 200,
 	answer = "ok",
@@ -86,7 +83,6 @@ function send(agent: URL, method: string, target: string, headers: Record<string
 	});
 }
 
-// The raw handshake, so a refused upgrade shows as the socket closing unanswered.
 function upgrade(agent: URL, origin?: string, host = agent.host): Promise<string> {
 	return new Promise((resolve) => {
 		const socket = tlsConnect({ host: "127.0.0.1", port: Number(agent.port), ...trust(agent) });
@@ -264,7 +260,6 @@ describe("cloud agent proxy", () => {
 		expect(upgradeUrl).toBe(route("ws/cdp?token=null"));
 		expect(upgradeAuth).toBe("Bearer cloud-token");
 		expect(upgradeCookie).toBeUndefined();
-		// Either side closing closes the other.
 		const [upstream] = [...wss.clients];
 		const closed = new Promise<void>((resolve) => viewer.once("close", () => resolve()));
 		upstream.close();

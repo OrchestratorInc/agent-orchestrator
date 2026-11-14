@@ -76,13 +76,10 @@ export function setChatDraftBoundary(
 
 export function getChatDraftBoundary(sessionId: string): ChatDraftBoundaryKind | undefined {
 	const active = getChatDraftBoundaries(sessionId);
-	// A known failed write is more serious than an in-flight write and provides
-	// the more accurate discard copy when both composer slices are unsafe.
 	if (active.includes("persistence-failed")) return "persistence-failed";
 	return active[0];
 }
 
-/** Every distinct risk currently active for one logical Chat session. */
 export function getChatDraftBoundaries(sessionId: string): readonly ChatDraftBoundaryKind[] {
 	return boundarySnapshots.get(sessionId) ?? EMPTY_BOUNDARIES;
 }

@@ -8,7 +8,6 @@ for (const mixed of [false, true]) {
 		test(`@P0 ${mixed ? "mixed text/image" : "image-only"} review scrolls and collapses at ${width}px`, async ({ page }) => {
 			await page.setViewportSize({ width, height: 600 });
 			await page.route("**/api/v1/sessions/review-fixture/workspace/file/blob?*", async (route) => {
-				// Exercise the virtualizer's resize handling after image decoding.
 				await new Promise((resolve) => setTimeout(resolve, 150));
 				await route.fulfill({ contentType: "image/png", body: png });
 			});
@@ -25,7 +24,6 @@ for (const mixed of [false, true]) {
 			await page.mouse.wheel(0, 3000);
 			await expect(lastImage).toBeInViewport({ ratio: 0.9 });
 			await expect.poll(() => scroller.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
-			// The review scrolls; the surrounding app/document stays fixed.
 			expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
 
 			const collapseFirst = review.getByRole("button", { name: "Collapse first.png", exact: true });
@@ -52,7 +50,6 @@ for (const mixed of [false, true]) {
 			await page.mouse.wheel(0, 3000);
 			await expect(lastImage).toBeInViewport({ ratio: 0.9 });
 
-			// The changed-files rail must reach footer rows, including a collapsed image.
 			await review.getByRole("button", { name: "Collapse last.png", exact: true }).click();
 			await scroller.hover();
 			await page.mouse.wheel(0, -3000);

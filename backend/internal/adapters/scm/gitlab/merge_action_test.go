@@ -27,7 +27,6 @@ func TestMergePullRequest_UsesSquashAndExpectedHead(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("method = %s, want PUT", r.Method)
 		}
-		// Path: /projects/myorg%2Fmyrepo/merge_requests/42/merge
 		wantPath := "/api/v4/projects/myorg%2Fmyrepo/merge_requests/42/merge"
 		if r.URL.EscapedPath() != wantPath {
 			t.Fatalf("path = %s, want %s", r.URL.EscapedPath(), wantPath)

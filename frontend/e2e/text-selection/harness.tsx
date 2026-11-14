@@ -1,6 +1,3 @@
-// Mounts read-only content surfaces under the app's global stylesheet, whose
-// `body { user-select: none }` they must opt out of, so the selection spec can
-// drag across them in a real browser. The Files tab has no dev:web fixture.
 import { createRoot } from "react-dom/client";
 import { MarkdownFileView } from "../../src/renderer/components/markdown/MarkdownFileView";
 import "../../src/renderer/styles.css";

@@ -96,7 +96,6 @@ function timestamp(value?: string) {
 	return value ? Date.parse(value) || 0 : 0;
 }
 
-/** Orders the list: soonest next run first with paused ones last, by name, or newest first. */
 function sortAutomations(items: Automation[], order: SortOrder) {
 	const byName = (left: Automation, right: Automation) => left.displayName.localeCompare(right.displayName);
 	return [...items].sort((left, right) => {
@@ -109,13 +108,11 @@ function sortAutomations(items: Automation[], order: SortOrder) {
 	});
 }
 
-/** "Weekdays at 9:00 AM": a rule's cadence and clock time as a person reads it. */
 function useScheduleLabel() {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.resolvedLanguage;
 	return (rrule: string) => {
 		const summary = describeSchedule(rrule);
-		// Rule times are wall-clock values in the automation's timezone, so format them without shifting.
 		const time = summary.time
 			? new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(Date.UTC(2000, 0, 1, summary.time.hour, summary.time.minute)))
 			: null;
@@ -164,7 +161,6 @@ export function AutomationsView() {
 	const [actionError, setActionError] = useState<string | null>(null);
 	const automations = useMemo(() => query.data ?? [], [query.data]);
 	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? id;
-	// Projects that own at least one automation, so the filter never offers an empty choice.
 	const projectOptions = [...new Set(automations.map((item) => item.projectId))].map((id) => ({ id, name: projectName(id) }));
 	const needle = search.trim().toLocaleLowerCase();
 	const visibleAutomations = sortAutomations(
@@ -301,7 +297,6 @@ export function AutomationsView() {
 	);
 }
 
-/** The page's one primary action: a blank automation or one of the starters. */
 function NewAutomationMenu({ onCreate }: { onCreate: (template?: AutomationTemplateID) => void }) {
 	const { t } = useTranslation();
 	return (
@@ -537,22 +532,15 @@ function AutomationFormDialog({
 		setInitialSchedule(nextSchedule);
 		setSchedule(starter ? scheduleFieldsFromRRule(starter.rrule) : nextSchedule);
 		setValidationErrors({});
-	// Language changes must not discard edits to an open form.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, automation, initialTemplateId]);
 
-	// Automations run on this machine's daemon, which knows no Cloud project (it
-	// answers "Unknown project"), and a Cloud standalone agent takes no session
-	// but its own: neither is a project for an automation.
 	const projectOptions = workspaces
 		.filter((item) => item.kind !== CLOUD_PROJECT_KIND && !item.standaloneAgent)
 		.map((item) => ({ value: item.id, label: item.name }));
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
 	}
-	// Prefer an explicit choice, then the project's resolved worker, then the
-	// first ready harness so Model isn't stuck on "Select agent" before a
-	// project is picked.
 	const fallbackHarness =
 		buildRankedAgentOptions({
 			agents: harnesses,
@@ -561,7 +549,6 @@ function AutomationFormDialog({
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
 	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
-	// Match the daemon's base config plus overrides for a matching worker harness.
 	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
 	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
 	const inheritedMode = inheritedWorker?.mode || projectDefaults.agentConfig?.mode || "";
@@ -573,7 +560,6 @@ function AutomationFormDialog({
 	useEffect(() => {
 		if (!open || awaitingInheritedHarness) { previousHarness.current = null; return; }
 		if (!previousHarness.current || previousHarness.current.automation !== automation) {
-			// Opening an edit hydrates its saved harness in the preceding effect.
 			previousHarness.current = { automation, harness: automation?.harness || selectedHarness };
 			return;
 		}
@@ -634,21 +620,15 @@ function AutomationFormDialog({
 				};
 		try {
 			await onSubmit({
-				// Kind is not a form choice: automations are workers, and editing
-				// leaves the stored kind untouched.
 				...(editing ? {} : { projectId, timezone, templateId, useCase: template?.useCase ?? "unknown", kind: "worker" as const }),
 				displayName: name,
 				prompt,
 				...tuning,
-				// A new pin resets omitted backend fields, so persist the complete tuple.
 				...(harnessChanged && selectedHarness ? { harness: selectedHarness, model, mode, effort } : {}),
 				...(scheduleChanged ? { rrule: nextRRule } : {}),
 			});
 		} catch (error) {
 			if (!funnel) throw error;
-			// The dialog already renders the mutation's error, so letting this
-			// reject only reported the same failure a second time as an
-			// unhandled renderer exception.
 			void captureRendererEvent("ao.renderer.automation_create_failed", funnel);
 			return;
 		}

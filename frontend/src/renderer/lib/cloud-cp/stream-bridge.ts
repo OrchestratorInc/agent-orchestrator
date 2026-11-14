@@ -1,18 +1,9 @@
-// SSE subscription over the Electron-main cloud-cp proxy. EventSource/fetch
-// cannot be used renderer-side (no CORS on the CP, and only main holds the
-// bearer token), so the stream is opened by main and its chunks arrive over
-// aoBridge.cloudCp stream events. This module reassembles those chunks with
-// the shared SSE frame parser and delivers the same CloudCpClientEvent
-// payloads — and the same resolve/onError contract — as the typed client's
-// subscribeSessionEvents.
-
 import type { CloudCpProxyRequestInit, CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
 import { aoBridge } from "../bridge";
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser, type CloudCpSseFrame } from "./sse";
 import type { CloudCpClientEvent, CloudCpNotificationEvent, CloudCpSessionLive } from "./types";
 
-/** The slice of the preload cloudCp bridge this adapter needs. */
 export interface CloudCpStreamBridge {
 	openStream(init: CloudCpProxyRequestInit): Promise<{ streamId: string }>;
 	closeStream(streamId: string): void;
@@ -30,39 +21,22 @@ export interface SubscribeNotificationEventsBridgedOptions {
 }
 
 export interface SubscribeSessionEventsBridgedOptions {
-	/** Control-plane origin, e.g. "https://cloud.example.com". A trailing slash is tolerated. */
 	baseUrl: string;
 	orgId: string;
 	sessionId: string;
-	/** Resume strictly after this sequence; omit to replay from the beginning. */
 	after?: number;
-	/**
-	 * Lists the caller as a viewer of the session while the stream is open,
-	 * and adds its session.live frames, delivered to `onLive`.
-	 */
 	live?: boolean;
-	/** Only these client event types (the control plane's types filter). */
 	types?: readonly string[];
-	/** Invoked once per parsed event, in stream order. */
 	onEvent: (event: CloudCpClientEvent) => void;
-	/** Invoked with each session.live frame of a live stream; each replaces the last. */
 	onLive?: (live: CloudCpSessionLive) => void;
-	/** Invoked once the stream is open (the control plane accepted it), before any frame. */
 	onOpen?: () => void;
-	/** Invoked on setup or mid-stream failure. Aborts via `signal` are silent. */
 	onError?: (error: CloudCpError) => void;
-	/** Aborting closes the stream and resolves the subscription promise. */
 	signal?: AbortSignal;
-	/** Bridge override for tests; defaults to the preload cloudCp bridge. */
 	bridge?: CloudCpStreamBridge;
 }
 
-// openStream failures cross IPC as flattened message strings; main tags them
-// with this marker (see main/cloud-cp-proxy.ts) so the status survives.
 const STREAM_ERROR_MARKER = /CLOUD_CP_STREAM_ERROR (\d+) ([\s\S]*)/;
 
-// Through a helper so TS does not narrow `signal.aborted` to `false` after an
-// early-return check — the flag flips concurrently across awaits.
 function isAborted(signal: AbortSignal | undefined): boolean {
 	return signal?.aborted === true;
 }
@@ -81,12 +55,6 @@ function errorFromOpenFailure(error: unknown): CloudCpError {
 	return new CloudCpError(message, { status: 0, cause: error });
 }
 
-/**
- * Subscribe to a session's live SSE stream through the main-process proxy.
- * Resolves when the stream ends (server close or abort); failures are
- * reported through `onError`, never as a rejection, so fire-and-forget
- * callers cannot leak unhandled rejections.
- */
 export async function subscribeSessionEventsBridged(options: SubscribeSessionEventsBridgedOptions): Promise<void> {
 	const { baseUrl, orgId, sessionId, after, live, types, onEvent, onLive, onOpen, onError, signal } = options;
 	const bridge = options.bridge ?? aoBridge.cloudCp;
@@ -118,8 +86,6 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 		return;
 	}
 
-	// Aborted while the stream was being opened: main already holds it open,
-	// so close it instead of leaking a slot from the per-window stream cap.
 	if (isAborted(signal)) {
 		bridge.closeStream(streamId);
 		return;
@@ -131,9 +97,6 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 		let removeAbortListener: () => void = () => undefined;
 		let unsubscribe: () => void = () => undefined;
 
-		// Subscribing synchronously in the same microtask as the openStream
-		// resolution matters: main defers the first chunk to a later macrotask,
-		// so this listener is guaranteed to be attached before any event lands.
 		unsubscribe = bridge.onStreamEvent(streamId, (event) => {
 			if (settled) return;
 			if (event.type === "chunk") {
@@ -187,14 +150,11 @@ export async function subscribeSessionEventsBridged(options: SubscribeSessionEve
 			removeAbortListener = () => {
 				signal.removeEventListener("abort", onAbort);
 			};
-			// Raced with the subscription setup above.
 			if (isAborted(signal)) onAbort();
 		}
 	});
 }
 
-/** The org-level durable notification stream, kept on the Electron proxy so
- * renderer code never sees the cloud bearer credential. */
 export async function subscribeNotificationEventsBridged(options: SubscribeNotificationEventsBridgedOptions): Promise<void> {
 	const { baseUrl, orgId, after, onEvent, onError, signal } = options;
 	const bridge = options.bridge ?? aoBridge.cloudCp;
@@ -229,19 +189,12 @@ export interface SubscribeSessionLiveBridgedOptions {
 	baseUrl: string;
 	orgId: string;
 	sessionId: string;
-	/** Invoked with each session.live frame; each replaces the last. */
 	onLive: (live: CloudCpSessionLive) => void;
 	onError?: (error: CloudCpError) => void;
 	signal?: AbortSignal;
 	bridge?: CloudCpStreamBridge;
 }
 
-/**
- * Subscribe to a shared session's live state: who has it open and who holds
- * the composer. Opening the stream counts the caller as a viewer until it
- * closes. The types filter names no event type, so the stream carries only
- * session.live frames. Resolves when the stream ends; failures go to onError.
- */
 export async function subscribeSessionLiveBridged(options: SubscribeSessionLiveBridgedOptions): Promise<void> {
 	const { baseUrl, orgId, sessionId, onLive, onError, signal } = options;
 	const bridge = options.bridge ?? aoBridge.cloudCp;

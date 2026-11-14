@@ -16,9 +16,6 @@ import (
 
 const aoBinaryName = "ao"
 
-// MergeEnv overlays child-specific values on project values. The AO_ namespace
-// belongs to AO, including when a child has no value for a particular key.
-// A new process receives its own map so a launch cannot mutate saved config.
 func MergeEnv(project, child map[string]string) map[string]string {
 	env := make(map[string]string, len(project)+len(child))
 	for i, source := range []map[string]string{project, child} {
@@ -39,8 +36,6 @@ func MergeEnv(project, child map[string]string) map[string]string {
 	return env
 }
 
-// RedactValues removes configured values before command output reaches a
-// user-visible error or log. Longer values go first to cover shared prefixes.
 func RedactValues(output string, configured map[string]string) string {
 	values := make([]string, 0, len(configured))
 	for _, value := range configured {
@@ -55,8 +50,6 @@ func RedactValues(output string, configured map[string]string) string {
 	return output
 }
 
-// RedactError hides the original error when it contains a sensitive value so
-// unwrapping and telemetry cannot expose that value; errors.Is still matches it.
 func RedactError(err error, configured map[string]string) error {
 	if err == nil {
 		return nil
@@ -77,9 +70,6 @@ func (e redactedError) Error() string { return e.message }
 
 func (e redactedError) Is(target error) bool { return errors.Is(e.cause, target) }
 
-// PinnedPATH prepends an AO-only directory to the supplied
-// PATH. It rejects executables not named ao because their directory cannot
-// guarantee the identity of a bare ao command.
 func PinnedPATH(executable func() (string, error), getenv func(string) string, configured map[string]string, dataDir string) (string, error) {
 	exe, err := executable()
 	if err != nil {
@@ -116,7 +106,6 @@ func configuredPATH(configured map[string]string, caseInsensitive bool) string {
 	return ""
 }
 
-// PinnedDir returns the directory PinnedPATH would place first.
 func PinnedDir(executable func() (string, error), dataDir string) string {
 	exe, err := executable()
 	if err != nil {
@@ -137,10 +126,6 @@ func pinnedDirForExecutable(exe string) string {
 	return filepath.Dir(exe)
 }
 
-// AugmentRuntimePATHForLaunchBinary prepends the resolved launch binary
-// directory to the child PATH. For Node-backed CLI shims, it also prepends a
-// concrete Node runtime directory so shebangs like #!/usr/bin/env node work for
-// children of GUI-launched processes whose PATH may omit shell-manager setup.
 func AugmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]string, argv []string, lookPath func(string) (string, error), pinnedDir string) {
 	bin, ok := launchBinary(argv)
 	if !ok || !filepath.IsAbs(bin) {
@@ -169,10 +154,6 @@ func AugmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]strin
 	env["PATH"] = strings.Join(parts, string(os.PathListSeparator))
 }
 
-// ProcessEnvForLaunchBinary returns this process's environment with PATH
-// augmented for bin exactly as session launches are, for direct children such
-// as native login flows and auth-status probes. Without it an npm launcher
-// resolved outside PATH fails with `env: node: No such file or directory`.
 func ProcessEnvForLaunchBinary(ctx context.Context, bin string) []string {
 	overlay := map[string]string{"PATH": os.Getenv("PATH")}
 	AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, "")
@@ -295,9 +276,6 @@ func nodeRuntimeDir(ctx context.Context, lookPath func(string) (string, error)) 
 	candidates := make([]string, 0, len(nvm)+len(fnmMatches)+3)
 	candidates = append(candidates, nvm...)
 	candidates = append(candidates, fnmMatches...)
-	// Prefer explicitly selected/versioned runtimes over manager and package-
-	// manager shims. A dormant ~/.volta installation must not override the NVM
-	// default or newest fnm runtime merely because the GUI omitted shell setup.
 	candidates = append(candidates, filepath.Join(voltaHome, "bin", "node"), "/opt/homebrew/bin/node", "/usr/local/bin/node")
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {

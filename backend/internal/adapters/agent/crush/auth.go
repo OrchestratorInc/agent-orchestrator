@@ -12,7 +12,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -62,9 +61,6 @@ func crushLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("VERTEXAI_PROJECT").WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	// providers.json is Crush's downloaded model/provider catalog, not a
-	// credential store. It can contain provider metadata and must not be used
-	// as evidence that a user is authenticated.
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 

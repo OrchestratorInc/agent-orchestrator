@@ -58,7 +58,6 @@ import {
 
 type LoadedProps = { project: CloudCpProject; readOnly: boolean; onSaveState?: (state: ProjectSettingsSaveState) => void };
 
-/** Loads a Cloud project for one of its settings pages, with the same loading and error states as Scripts. */
 function CloudProjectSettingsPage({ projectId, cloudOrgId, onSaveState, children }: {
 	projectId: string;
 	cloudOrgId: string;
@@ -68,9 +67,6 @@ function CloudProjectSettingsPage({ projectId, cloudOrgId, onSaveState, children
 	const { t } = useTranslation();
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
-	// Like Setup and Cleanup, these shape every member's later sessions, so only
-	// owners and admins change them. A role the renderer does not know yet
-	// leaves the decision to the server.
 	const readOnly = org?.id === cloudOrgId && org.role !== undefined && !canManageBilling(org);
 	const query = useQuery({
 		queryKey: cloudProjectSettingsQueryKey(baseUrl, cloudOrgId, projectId), enabled: ready, retry: false,
@@ -82,14 +78,6 @@ function CloudProjectSettingsPage({ projectId, cloudOrgId, onSaveState, children
 	return <>{children({ project: query.data, readOnly, onSaveState })}</>;
 }
 
-/**
- * Saves one settings page's patch on "Save changes" and reports its state to
- * the dialog the way the Scripts page does.
- */
-/**
- * busy is other work the page must finish before the dialog closes (a folder
- * upload): it reads as a save in flight, so closing waits for it.
- */
 function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable: boolean, onSaveState?: (state: ProjectSettingsSaveState) => void, busy = false) {
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
@@ -107,8 +95,6 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 			phase: mutation.isPending || busy ? "saving" : mutation.isError ? "failed" : savedAt && !dirty ? "saved" : "idle",
 			dirty,
 			requestPending: mutation.isPending || busy,
-			// An invalid draft cannot be saved, so closing the dialog drops it
-			// instead of waiting for a save that never starts.
 			unsaveable: dirty && unsaveable,
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
@@ -116,7 +102,6 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 	return { mutation, edited: () => setSavedAt(false) };
 }
 
-/** labelHidden keeps the label for assistive technology only, where the pane's title already says it. */
 function Field({ label, htmlFor, hint, labelHidden, children }: { label: string; htmlFor?: string; hint?: ReactNode; labelHidden?: boolean; children: ReactNode }) {
 	return <div className="space-y-2">
 		<label className={labelHidden ? "sr-only" : "block text-sm font-medium text-settings-label"} htmlFor={htmlFor}>{label}</label>
@@ -126,7 +111,6 @@ function Field({ label, htmlFor, hint, labelHidden, children }: { label: string;
 }
 
 
-/** The control plane's reason for each working directory problem (domain.ValidateCoderWorkingDirectory). */
 function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workingDirectoryProblem>): string {
 	switch (problem) {
 		case "length":
@@ -146,11 +130,6 @@ function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workin
 	}
 }
 
-/**
- * A Cloud project's repositories and layout: the main repository (fixed), the
- * additional ones every session clones beside it, where the agent starts, and
- * (bring-your-own Coder) the folder sessions work in.
- */
 export function CloudProjectRepositoriesSettings(props: { projectId: string; cloudOrgId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	return <CloudProjectSettingsPage {...props}>{(loaded) => <RepositoriesForm key={`${props.cloudOrgId}/${props.projectId}`} {...loaded} />}</CloudProjectSettingsPage>;
 }
@@ -159,7 +138,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const { t } = useTranslation();
 	const offering = useCloudOffering();
 	const standalone = isStandaloneCloudProject(project);
-	// A workspace's agent always starts in the folder holding every repository.
 	const workspace = isCloudWorkspaceProject(project);
 	const storedRepos = projectAdditionalRepos(project.config);
 	const [extras, setExtras] = useState<string[]>(() => storedRepos.map((repo) => repo.url));
@@ -170,16 +148,8 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const reposChanged = JSON.stringify(filledExtras) !== JSON.stringify(saved.extras);
 	const dirty = reposChanged || startsIn !== saved.startsIn || normalizeWorkingDirectory(workingDirectory) !== saved.workingDirectory;
 	const repos = useCloudGitHubAppRepositories(project.orgId, !standalone);
-	// The working folder is the folder a session run as the workspace user
-	// adopts, and, once the control plane checks ao-worker sessions out there
-	// (offering.coderWorkerWorkingFolder), where any Coder session checks the
-	// main repository out; show it for a bring-your-own Coder org, or while a
-	// value is stored so it can be cleared.
 	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder, project.orgId).data != null;
 	const showWorkingDirectory = (orgOwnsCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER) || saved.workingDirectory !== "";
-	// A Setup or Cleanup step runs in its repository's folder, so a repository a
-	// step still uses cannot be removed until that step is moved or deleted (the
-	// control plane refuses it too).
 	const stepFolders = scriptStepFolders(project.config, project.repositoryUrl);
 	const removedInUse = storedRepos
 		.filter((repo) => !filledExtras.some((url) => sameRepository(url, repo.url)) && stepFolders.has(repoDirName(repo.url)))
@@ -187,7 +157,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const reposInvalid = additionalReposProblem(project.repositoryUrl, extras) !== undefined || removedInUse.length > 0;
 	const workingDirectoryError = workingDirectoryProblem(workingDirectory, { standalone });
 	const workingDirectoryInvalid = workingDirectoryError !== undefined;
-	// A folder upload in flight keeps the dialog open until it ends.
 	const [uploading, setUploading] = useState(false);
 	const { mutation, edited } = useSettingsPageSave(project, dirty, reposInvalid || workingDirectoryInvalid, onSaveState, uploading);
 	const locked = readOnly || mutation.isPending;
@@ -195,15 +164,11 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		const branch = storedRepos.find((repo) => sameRepository(repo.url, url))?.branch;
 		return branch ? { url, branch } : { url };
 	});
-	// What the server last saved, read by a save when it runs rather than when
-	// it was started: a folder upload's save starts when the upload does, and
-	// the page may have saved other changes (a repository removed) meanwhile.
 	const savedRef = useRef(saved);
 	const commitSaved = (next: typeof saved) => {
 		savedRef.current = next;
 		setSaved(next);
 	};
-	// Saves run one at a time, each on top of what the one before it saved.
 	const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 	const queueSave = <T,>(save: () => Promise<T>): Promise<T> => {
 		const run = saveQueue.current.then(save);
@@ -211,8 +176,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		return run;
 	};
 	const addToDraft = (url: string) => setExtras((current) => current.some((item) => sameRepository(item, url)) ? current : [...current.filter((item) => item !== ""), url]);
-	// What the saved workspace and the draft would make of one more
-	// repository; checked before a folder's repository is made.
 	const workspaceFolderProblem = (url: string) => {
 		for (const list of [saved.extras, filledExtras]) {
 			const problem = additionalReposProblem(project.repositoryUrl, [...list, url]);
@@ -220,9 +183,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		}
 		return undefined;
 	};
-	// An uploaded folder's repository is saved into the workspace at once, on
-	// top of what is saved when its save runs (the draft's other edits stay a
-	// draft).
 	const saveUploadedRepository = (url: string) => queueSave(async () => {
 		const latest = savedRef.current;
 		if (sameRepository(project.repositoryUrl, url) || latest.extras.some((item) => sameRepository(item, url))) {
@@ -233,7 +193,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		try {
 			await mutation.mutateAsync({ config: { repos: savedRepos(extras) } });
 		} catch (err) {
-			// Left in the draft, so Save tries again.
 			addToDraft(url);
 			edited();
 			throw err;
@@ -243,23 +202,19 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	});
 	const submit = () => {
 		if (reposInvalid || workingDirectoryInvalid) return;
-		// The draft as it is now, saved against what is saved when the save runs.
 		const draft = { extras: filledExtras, startsIn, workingDirectory: normalizeWorkingDirectory(workingDirectory) };
 		void queueSave(async () => {
 			const latest = savedRef.current;
 			const config: NonNullable<CloudCpProjectSettingsRequest["config"]> = {};
 			if (JSON.stringify(draft.extras) !== JSON.stringify(latest.extras)) {
-				// Keep a stored branch for a repository that stays.
 				config.repos = savedRepos(draft.extras);
 			}
 			if (!workspace && draft.startsIn !== latest.startsIn) config.agentStartsIn = draft.startsIn;
-			// Saved as the control plane stores it, so the field shows what was saved.
 			if (draft.workingDirectory !== latest.workingDirectory) config.workingDirectory = draft.workingDirectory;
 			await mutation.mutateAsync({ config });
 			setWorkingDirectory(draft.workingDirectory);
 			commitSaved(draft);
 		}).catch(() => {
-			// The footer shows the mutation's error.
 		});
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -354,21 +309,10 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	</form>;
 }
 
-/**
- * Uploads a local folder into a new private repository in the workspace's
- * GitHub account (or, when its origin is a repository the org already grants,
- * hands that one to the editor). The new repository's name starts as the
- * folder's and can be changed before upload. Once uploaded, onUploaded saves it
- * into the workspace right away, so leaving Settings never strands a
- * repository that was made and filled. While it runs, onBusyChange keeps the
- * Settings dialog open: an upload cannot be cancelled.
- */
 function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisting, onUploaded, onBusyChange }: {
 	project: CloudCpProject;
 	disabled: boolean;
-	/** The workspace has as many repositories as it can hold. */
 	atLimit: boolean;
-	/** Why a repository at this URL could not join the workspace, if it could not. */
 	folderProblem: (url: string) => string | undefined;
 	onAddExisting: (url: string) => void;
 	onUploaded: (url: string) => Promise<void>;
@@ -381,16 +325,11 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 	const mounted = useMountedRef();
 	const [phase, setPhase] = useState<"idle" | "creating" | "uploading" | "saving">("idle");
 	const [pending, setPending] = useState<{ folder: string; name: string; committed?: { branch?: string }; leftOut?: string[] } | null>(null);
-	// Kept across a failed upload, so a retry pushes to the repository already made.
 	const [created, setCreated] = useState<{ folder: string; repository: CreatedFolderRepository } | null>(null);
-	// note: what became of a repository made for the folder (emptyRepositoryNotice).
 	const [error, setError] = useState<{ message: string; detail?: string; note?: string } | null>(null);
 	const busy = phase !== "idle";
 	useReportBusy(busy, onBusyChange);
 	const owner = repositoryOwner(gitHubFullName(project.repositoryUrl) ?? "");
-	// While a folder is picked, then checked (folder, once picked): the checks
-	// are every check the upload makes, which can take a while on a long
-	// history, so Add waits for them rather than starting another.
 	const [choosing, setChoosing] = useState<{ folder?: string } | null>(null);
 	const choose = async () => {
 		setError(null);
@@ -406,7 +345,6 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 				onAddExisting(canonicalGitHubUrl(existing.fullName));
 				return;
 			}
-			// A folder that cannot be uploaded at all is refused before a repository is made.
 			if (refusal) {
 				setError(folderPushErrorText(t, refusal, folder));
 				return;
@@ -419,8 +357,6 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 	};
 	const madeForPending = pending !== null && created?.folder === pending.folder ? created.repository : undefined;
 	const nameInvalid = pending !== null && !madeForPending && !isValidGitHubRepositoryName(pending.name.trim());
-	// Checked before anything is made: a repository the workspace cannot take
-	// would be left on GitHub.
 	const plannedUrl = pending === null || nameInvalid ? undefined
 		: madeForPending ? createdRepositoryUrl(madeForPending) : canonicalGitHubUrl(`${owner || "new"}/${pending.name.trim()}`);
 	const problem = plannedUrl ? folderProblem(plannedUrl) : undefined;
@@ -451,8 +387,6 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 		}
 		void queryClient.invalidateQueries({ queryKey: cloudGitHubAppReposQueryKey(baseUrl, project.orgId) });
 		const url = createdRepositoryUrl(repository);
-		// The repository is filled; it joins the workspace even if this page
-		// has gone, so it is never left out.
 		setPhase("saving");
 		try {
 			await onUploaded(url);
@@ -527,10 +461,6 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 	</div>;
 }
 
-/**
- * A Cloud project's instructions: text added to every worker's prompt
- * (agentRules) and to the orchestrator's (orchestratorRules).
- */
 export function CloudProjectInstructionsSettings(props: { projectId: string; cloudOrgId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	return <CloudProjectSettingsPage {...props}>{(loaded) => <InstructionsForm key={`${props.cloudOrgId}/${props.projectId}`} {...loaded} />}</CloudProjectSettingsPage>;
 }

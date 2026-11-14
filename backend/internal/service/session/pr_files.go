@@ -13,20 +13,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// PRFiles is the exact base...head read model for one associated pull request.
 type PRFiles struct {
-	SessionID domain.SessionID
-	Files     []WorkspaceFileSummary
-	// Commits are the PR's own commits (base..head), newest first.
-	Commits []CommitSummary
-	// CommitsTruncated means older commits were left out of Commits.
+	SessionID        domain.SessionID
+	Files            []WorkspaceFileSummary
+	Commits          []CommitSummary
 	CommitsTruncated bool
 	Truncated        bool
 	Summary          WorkspaceSummary
 }
 
-// ListPRFiles returns the committed changed-file set for an associated PR.
-// Git reads are revision-only and never inspect or mutate the worktree/index.
 func (s *Service) ListPRFiles(ctx context.Context, id domain.SessionID, number int, sourceURL string) (PRFiles, error) {
 	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
@@ -59,14 +54,10 @@ func (s *Service) ListPRFiles(ctx context.Context, id domain.SessionID, number i
 		binary := status != WorkspaceFileDeleted && !hasTextCounts
 		files = append(files, WorkspaceFileSummary{Path: rel, PreviousPath: previous[rel], Status: status, Additions: additions, Deletions: deletions, Size: size, Binary: binary})
 	}
-	// The commit list is best-effort: a PR whose files load still opens, just
-	// without its per-commit menu, if its log cannot be read.
 	commits, commitsTruncated, _ := prCommitLog(ctx, root, pr)
 	return PRFiles{SessionID: id, Files: files, Commits: commits, CommitsTruncated: commitsTruncated, Truncated: truncated, Summary: workspaceSummaryFromFiles(files)}, nil
 }
 
-// GetPRFileAtCommit returns one file's immutable snapshot and patch for a
-// single commit of an associated PR.
 func (s *Service) GetPRFileAtCommit(ctx context.Context, id domain.SessionID, number int, sourceURL, rawPath, commitSHA string) (WorkspaceFileDetail, error) {
 	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
@@ -84,7 +75,6 @@ func (s *Service) GetPRFileAtCommit(ctx context.Context, id domain.SessionID, nu
 	return workspaceCommitFileDetail(ctx, id, root, "", rel, commit.SHA, summary)
 }
 
-// GetPRFile returns one file and its exact base...head diff for an associated PR.
 func (s *Service) GetPRFile(ctx context.Context, id domain.SessionID, number int, sourceURL, rawPath string, rawPreviousPath *string) (WorkspaceFileDetail, error) {
 	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
@@ -152,9 +142,6 @@ func (s *Service) GetPRFile(ctx context.Context, id domain.SessionID, number int
 	return detail, nil
 }
 
-// GetPRFileRevision reads one immutable side of the selected PR comparison.
-// It intentionally does not delegate to workspace revision readers: a PR view
-// must never fall back to the mutable session worktree while expanding a hunk.
 func (s *Service) GetPRFileRevision(ctx context.Context, id domain.SessionID, number int, sourceURL, rawPath string, side WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
 	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
@@ -184,8 +171,6 @@ func (s *Service) GetPRFileRevision(ctx context.Context, id domain.SessionID, nu
 	return readPRFileRevision(ctx, rec.Metadata.WorkspacePath, id, rel, side, revision+":"+path)
 }
 
-// GetPRFileRevisionAtCommit reads one immutable side of a single PR commit: the
-// commit's first parent before, the commit itself after.
 func (s *Service) GetPRFileRevisionAtCommit(ctx context.Context, id domain.SessionID, number int, sourceURL, rawPath string, side WorkspaceFileBlobSide, commitSHA string) (WorkspaceFileRevision, error) {
 	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
@@ -213,7 +198,6 @@ func (s *Service) GetPRFileRevisionAtCommit(ctx context.Context, id domain.Sessi
 	return readPRFileRevision(ctx, root, id, rel, side, revision+":"+path)
 }
 
-// readPRFileRevision reads one immutable <revision>:<path> spec of a PR view.
 func readPRFileRevision(ctx context.Context, root string, id domain.SessionID, rel string, side WorkspaceFileBlobSide, spec string) (WorkspaceFileRevision, error) {
 	data, size, exists, truncated, err := readGitRevision(ctx, root, spec)
 	if err != nil {
@@ -233,15 +217,10 @@ func readPRFileRevision(ctx context.Context, root string, id domain.SessionID, r
 	return result, nil
 }
 
-// prCommitLog lists the PR's own commits (base..head), newest first, up to
-// maxCommitLogCommits of them. truncated reports that older commits were left
-// out.
 func prCommitLog(ctx context.Context, root string, pr domain.PullRequest) ([]CommitSummary, bool, error) {
 	return prCommits(ctx, root, pr.BaseSHA+".."+pr.HeadSHA, maxCommitLogCommits)
 }
 
-// prCommits reads up to maxCommits commits in revRange with their changed
-// files, reporting any Git failure as an unavailable PR source.
 func prCommits(ctx context.Context, root, revRange string, maxCommits int) ([]CommitSummary, bool, error) {
 	commits, truncated, err := revisionCommitList(ctx, root, []string{revRange}, maxCommits)
 	if err != nil {
@@ -250,10 +229,6 @@ func prCommits(ctx context.Context, root, revRange string, maxCommits int) ([]Co
 	return commits, truncated, nil
 }
 
-// revisionCommitList reads up to maxCommits commits selected by revArgs with
-// their changed files. It reads revisions only, never the session worktree,
-// so file sizes are left unset: the list only picks and filters files, and
-// reading a file reports its real size.
 func revisionCommitList(ctx context.Context, root string, revArgs []string, maxCommits int) ([]CommitSummary, bool, error) {
 	commits, changes, counts, truncated, err := gitCommitLogChangesArgs(ctx, root, revArgs, maxCommits, maxCommitLogBytes)
 	if err != nil {
@@ -277,24 +252,16 @@ func revisionCommitList(ctx context.Context, root string, revArgs []string, maxC
 	return commits, truncated, nil
 }
 
-// prCommitFile resolves one of the PR's own commits and the file rel within
-// it. A SHA outside base..head is rejected, so a commit view never reads
-// revisions the selected PR does not contain. Only the selected commit is read,
-// never the PR's whole history, so a commit older than the Commits menu's cap
-// still resolves.
 func prCommitFile(ctx context.Context, root string, pr domain.PullRequest, rawSHA, rel string) (CommitSummary, WorkspaceFileSummary, error) {
 	sha := strings.TrimSpace(rawSHA)
 	if !prContainsCommit(ctx, root, pr, sha) {
 		return CommitSummary{}, WorkspaceFileSummary{}, apierr.NotFound("PR_COMMIT_NOT_FOUND", "Commit is not part of the selected pull request")
 	}
-	// <sha>^! is that commit alone, read exactly as the Commits menu reads it.
 	commits, _, err := prCommits(ctx, root, sha+"^!", 1)
 	if err != nil {
 		return CommitSummary{}, WorkspaceFileSummary{}, err
 	}
 	if len(commits) == 0 {
-		// The commit's own changes overflow the byte cap, so no Commits menu
-		// lists it either.
 		return CommitSummary{}, WorkspaceFileSummary{}, apierr.NotFound("PR_COMMIT_TOO_LARGE", "Commit changes too many files to read")
 	}
 	for _, file := range commits[0].Files {
@@ -305,18 +272,12 @@ func prCommitFile(ctx context.Context, root string, pr domain.PullRequest, rawSH
 	return CommitSummary{}, WorkspaceFileSummary{}, apierr.NotFound("PR_COMMIT_FILE_NOT_FOUND", "File was not changed by this commit")
 }
 
-// fullCommitSHA matches a complete object name as git prints it (SHA-1 or
-// SHA-256). Only such a name reaches git as a revision, never an option.
 var fullCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
-// prContainsCommit reports whether sha is one of the PR's own commits:
-// reachable from head but not from base, exactly git's base..head.
 func prContainsCommit(ctx context.Context, root string, pr domain.PullRequest, sha string) bool {
 	if !fullCommitSHA.MatchString(sha) || !gitIsAncestor(ctx, root, sha, pr.HeadSHA) {
 		return false
 	}
-	// Counts the commits reachable from sha but not base, which is zero
-	// exactly when base already contains sha. A failed read rejects.
 	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--count", sha, "^"+pr.BaseSHA)
 	if err != nil {
 		return false
@@ -354,10 +315,6 @@ func (s *Service) prFileSource(ctx context.Context, id domain.SessionID, number 
 	return domain.SessionRecord{}, domain.PullRequest{}, apierr.NotFound("PR_NOT_FOUND", "Pull request is not associated with this session")
 }
 
-// prWorkspaceRoot chooses the registered repository and remote matching the
-// PR's persisted provider repository. Workspace projects can contain child
-// repositories, and a fork checkout can keep the PR base repository on a
-// non-origin remote.
 func (s *Service) prWorkspaceRoot(ctx context.Context, rec domain.SessionRecord, pr domain.PullRequest) (string, string, error) {
 	rows, err := s.store.ListSessionWorktrees(ctx, rec.ID)
 	if err != nil {
@@ -393,9 +350,6 @@ func (s *Service) prWorkspaceRoot(ctx context.Context, rec domain.SessionRecord,
 	return "", "", apierr.NotFound("PR_SOURCE_REPOSITORY_NOT_FOUND", "No registered workspace repository matches the selected pull request")
 }
 
-// ensurePRRevisionObjects fetches provider-owned review refs only when the
-// persisted immutable SHAs are absent. Fetch updates git object/ref storage but
-// never HEAD, the index, or worktree files.
 func ensurePRRevisionObjects(ctx context.Context, root, remote string, pr domain.PullRequest) error {
 	baseExists := gitCommitExists(ctx, root, pr.BaseSHA)
 	headExists := gitCommitExists(ctx, root, pr.HeadSHA)

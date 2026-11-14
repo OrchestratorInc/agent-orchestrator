@@ -53,8 +53,6 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 		return err
 	}
 
-	// The daemon is the sole writer; refuse to open the store underneath a live
-	// one. A stale run-file (dead PID) is treated as safe.
 	if live, err := runfile.CheckStale(cfg.RunFilePath); err != nil {
 		return fmt.Errorf("inspect run-file: %w", err)
 	} else if live != nil {
@@ -65,10 +63,6 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 	if root == "" {
 		root = legacyimport.DefaultLegacyRootDir()
 	}
-	// Surface a parse error instead of masking it as "no data" (issue #2186):
-	// a broken legacy store is distinct from an absent or empty one. Return the
-	// error so cmd/ao/main.go renders it once; printing here too would duplicate
-	// it on stderr.
 	if parseErr := legacyimport.LegacyConfigError(cmd.Context(), root); parseErr != nil {
 		return fmt.Errorf("legacy config at %s: %w", root, parseErr)
 	}
@@ -103,19 +97,11 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 	return writeImportSummary(cmd.OutOrStdout(), rep)
 }
 
-// executeImport opens the rewrite store, runs the import, and closes the store.
-// It is the one CLI path that opens the database directly: the import is a
-// one-time bootstrap that must run with the daemon stopped, so it cannot go
-// through the daemon's loopback API. The caller's run-file check misses a
-// daemon with another AO_RUN_FILE or one still starting, so the import also
-// takes the daemon's data-dir lock before opening the store.
 func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, opts legacyimport.Options) (legacyimport.Report, error) {
 	lock, err := datadirlock.Acquire(ctx, cfg.DataDir, 0)
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return legacyimport.Report{}, usageError{fmt.Errorf("%w; stop that process before importing", err)}
 	}
-	// A file system that cannot lock files leaves only the run-file check, as
-	// before the lock; lock is nil then and Release a no-op.
 	if err != nil && !errors.Is(err, datadirlock.ErrUnsupported) {
 		return legacyimport.Report{}, err
 	}
@@ -145,9 +131,6 @@ func writeImportSummary(w io.Writer, rep legacyimport.Report) error {
 	return err
 }
 
-// confirm prompts for a yes/no answer. When stdin is not an interactive
-// terminal it returns the default without prompting, so headless invocations
-// behave deterministically.
 func confirm(in io.Reader, out io.Writer, prompt string, defaultYes bool) (bool, error) {
 	suffix := " [Y/n] "
 	if !defaultYes {
@@ -161,7 +144,6 @@ func confirm(in io.Reader, out io.Writer, prompt string, defaultYes bool) (bool,
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && line == "" {
-		// EOF with no input: fall back to the default.
 		return defaultYes, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
@@ -176,10 +158,6 @@ func confirm(in io.Reader, out io.Writer, prompt string, defaultYes bool) (bool,
 	}
 }
 
-// stdinIsInteractive reports whether in is an interactive terminal. It only
-// treats the real os.Stdin as potentially interactive; a piped reader or test
-// buffer is non-interactive. It is a var so tests can exercise prompt paths
-// without a real terminal, mirroring start.go's appScanLocations.
 var stdinIsInteractive = func(in io.Reader) bool {
 	f, ok := in.(*os.File)
 	if !ok {
@@ -192,11 +170,6 @@ var stdinIsInteractive = func(in io.Reader) bool {
 	if info.Mode()&os.ModeCharDevice == 0 {
 		return false
 	}
-	// A terminal is a character device, but so is /dev/null, which is what
-	// `docker run` without -i hands a process. Treating that as a terminal makes
-	// a prompt "answer itself" with the default at EOF, so exclude it. Checking
-	// for a real tty needs an ioctl (golang.org/x/term); this covers the only
-	// non-tty character device that shows up as stdin in practice.
 	if devNull, err := os.Stat(os.DevNull); err == nil && os.SameFile(info, devNull) {
 		return false
 	}

@@ -1,7 +1,5 @@
 package sessionimport
 
-// Mirrors Grok's UserRunTurnTracker: after the first promptIndex, unmarked
-// phantom runs no longer open rewind boundaries. Non-user updates end a run.
 type grokPromptTracker struct {
 	seenMarker, inUser bool
 	current            *int

@@ -68,8 +68,6 @@ func TestScanImportedClineHistoryStructure(t *testing.T) {
 	}
 }
 
-// A single huge string (a large tool output) must be skipped without being
-// materialized, so memory use stays far below the string's size.
 func TestScanImportedClineHistorySkipsHugeStringWithoutBuffering(t *testing.T) {
 	const huge = 64 << 20
 	doc := `{"sessionId":"abc","messages":[{"role":"user","content":"hi"},{"role":"tool","content":"` +

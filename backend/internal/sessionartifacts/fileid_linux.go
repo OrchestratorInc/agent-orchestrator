@@ -12,13 +12,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// fsIOCGetVersion is FS_IOC_GETVERSION, _IOR('v', 1, long): the inode's
-// generation number, which ext4, btrfs and XFS change whenever they reuse an
-// inode number for a new file.
 const fsIOCGetVersion = 2<<30 | uint(unsafe.Sizeof(int(0)))<<16 | 'v'<<8 | 1
 
-// quickIdentity is the device, inode and modification time in info. The
-// birth time and generation take a statx and an open, which fullIdentity adds.
 func quickIdentity(info fs.FileInfo) domain.FileIdentity {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -27,12 +22,6 @@ func quickIdentity(info fs.FileInfo) domain.FileIdentity {
 	return domain.FileIdentity{Dev: uint64(st.Dev), Ino: st.Ino, ModTime: info.ModTime().UnixNano()} //nolint:unconvert // Dev is not uint64 on every Linux architecture
 }
 
-// fullIdentity adds the birth time and generation of the file at path, where
-// its file system records them. Linux birth times are only as fine as the
-// kernel's coarse clock, so a file written right after another was deleted can
-// share its inode and birth time: the generation tells them apart. Where there
-// is no generation, the modification time stays in the identity instead, so a
-// file renamed and then modified before the next scan is a new file.
 func fullIdentity(path string, info fs.FileInfo) domain.FileIdentity {
 	id := quickIdentity(info)
 	if id.Ino == 0 {

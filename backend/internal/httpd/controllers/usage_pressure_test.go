@@ -42,8 +42,6 @@ func TestPressureRouteReturnsTheKernelVerdict(t *testing.T) {
 	}
 }
 
-// An unreadable platform is permanent for the run, so it must read as 501
-// (the renderer stops retrying) rather than a 500.
 func TestPressureRouteIsNotImplementedWhereUnsupported(t *testing.T) {
 	if rec := getPressure(t, &UsageController{Pressure: fakePressure{err: procmem.ErrUnsupported}}); rec.Code != http.StatusNotImplemented {
 		t.Fatalf("unsupported: status = %d", rec.Code)

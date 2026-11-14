@@ -2,11 +2,6 @@ import { Mail } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { avatarInitials, teamInitials } from "../../hooks/useTeams";
 
-/**
- * A person: a circle with their initials, or a dashed circle with a mail mark
- * while they are only an email. Teams are rounded squares (TeamTile), so the
- * two read differently without color.
- */
 export function PersonAvatar({ name, email, invited, size = "md", className }: {
 	name?: string;
 	email?: string;

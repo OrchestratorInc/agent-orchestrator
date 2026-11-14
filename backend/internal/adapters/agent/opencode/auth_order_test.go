@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// opencode's own stored credentials decide first, then `opencode auth list`,
-// and a global key in the environment only answers when neither has one.
 func TestOpencodeStoredCredentialWinsOverEnvironmentKey(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("OPENCODE_DATA_DIR", dataDir)

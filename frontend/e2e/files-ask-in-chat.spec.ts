@@ -5,9 +5,6 @@ import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent, installFakeBridge } from "./support/fake-bridge";
 import { openInspector } from "./support/open-inspector";
 
-// AO_E2E_ELECTRON=1 runs these specs inside AO's own Electron (its Chromium can
-// differ from Playwright's: Electron 33 reports a shadow-root selection as
-// collapsed while it holds text, which only showed up there).
 let activeElectron: ElectronApplication | undefined;
 const test = process.env.AO_E2E_ELECTRON
 	? base.extend({
@@ -47,14 +44,10 @@ const patch = [
 	"",
 ].join("\n");
 
-// No daemon serves the live event streams here, so each would fail and
-// reconnect every few seconds, refetching and redrawing the review mid-drag.
-// Answer them once and ask the browser not to reconnect for a while.
 function quietEventStream(route: Parameters<Parameters<Page["route"]>[1]>[0]) {
 	return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: "retry: 600000\n: connected\n\n" });
 }
 
-/** Serves one changed file for `id`, and records what the session's chat sends. */
 async function stubWorkspace(page: Page, id: string, fullText = after, selectedPath = filePath) {
 	const sentToChat: Array<{ text: string; fileReferences: ChatFileReference[] }> = [];
 	const file = { path: selectedPath, status: "modified", additions: 2, deletions: 1, size: after.length, binary: false, editable: true, fileFingerprint: "fp-1" };
@@ -88,7 +81,6 @@ async function stubWorkspace(page: Page, id: string, fullText = after, selectedP
 	return sentToChat;
 }
 
-/** A Chat-mode worker with one changed file, opened on its Files tab. */
 async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", files = true, checkingSide = false) {
 	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat" }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
@@ -132,7 +124,6 @@ async function openFilesTab(page: Page, id: string, project: string, selectedPat
 const REVIEW = "#inspector";
 const CENTER = '[data-testid="session-file-workspace"]';
 
-// Rows live in Pierre's open shadow root; Playwright's CSS engine pierces it.
 function row(page: Page, scope: string, line: number, type = "context") {
 	const kind = type === "context" ? '[data-line-type^="context"]' : `[data-line-type="${type}"]`;
 	return page.locator(`${scope} diffs-container [data-line="${line}"]${kind}`).first();
@@ -140,14 +131,9 @@ function row(page: Page, scope: string, line: number, type = "context") {
 
 const askButton = (page: Page) => page.locator("[data-selection-ask]");
 
-/** Highlights code with the mouse, from the start of one row to the end of another. */
 async function selectText(page: Page, from: Locator, to: Locator, { release = true } = {}) {
 	await expect(from).toBeVisible();
 	await expect(to).toBeVisible();
-	// Pierre redraws rows once syntax highlighting loads (dropping a selection in
-	// progress) and can load context above them (moving them); start once both
-	// rows have stayed the same nodes in the same place for a second, which a
-	// loaded machine running several workers needs.
 	await expect.poll(async () => {
 		const now = JSON.stringify([await from.boundingBox(), await to.boundingBox()]);
 		return from.evaluate((element, position) => {
@@ -166,7 +152,6 @@ async function selectText(page: Page, from: Locator, to: Locator, { release = tr
 	if (release) await page.mouse.up();
 }
 
-/** The entire toolbar remains inside the visible window. */
 async function expectButtonInView(page: Page) {
 	const button = (await askButton(page).boundingBox())!;
 	const view = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
@@ -233,14 +218,11 @@ test.describe("Add to chat from highlighted code", () => {
 
 	test("review list: the button follows a drag, asks about lines 2–4, and the chip sends their code", async ({ page }) => {
 		const { composer, sentToChat } = await openChatSession(page);
-		// The review header is slotted from the selected surface's light DOM,
-		// so the file lookup must succeed on that same host (review regression).
 		await expect.poll(() => row(page, REVIEW, 2).evaluate((element) => {
 			const root = element.getRootNode();
 			return root instanceof ShadowRoot ? root.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") : undefined;
 		})).toContain(filePath);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
-		// Shown while the selection is still being dragged, letting the drag through.
 		await expect(askButton(page)).toBeVisible();
 		await expect(askButton(page)).toHaveCSS("pointer-events", "none");
 		await page.mouse.up();
@@ -500,14 +482,13 @@ test.describe("Add to chat from highlighted code", () => {
 		await page.evaluate(async () => {
 			const modulePath = "/src/renderer/lib/query-client.ts";
 			const { queryClient } = await import(/* @vite-ignore */ modulePath);
-			// A cache write represents a request already in flight when selection began.
 			queryClient.setQueriesData({ predicate: (query: { state: { data?: unknown } }) => {
 				const data = query.state.data as { path?: string; content?: string } | undefined;
 				return data?.path === "src/retry.ts" && typeof data.content === "string";
 			} }, (data: { content: string; fileFingerprint?: string } | undefined) => data ? { ...data, content: data.content + "\n// refreshed", fileFingerprint: "new-background-revision" } : data);
 			window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus"));
 		});
-		await page.waitForTimeout(6000); // Exceed the viewer's five-second freshness interval.
+		await page.waitForTimeout(6000);
 		await expect(askButton(page)).toBeVisible();
 		expect(await first.evaluate(element => element === (window as unknown as { selectionProbe: Element }).selectionProbe)).toBe(true);
 		await askButton(page).getByRole("button", { name: "Add to chat" }).click();
@@ -539,9 +520,6 @@ test.describe("Add to chat from highlighted code", () => {
 		await scroll("top");
 		await expect(askButton(page)).toBeVisible();
 
-		// Replace every row with a fresh copy, as the viewer does when it redraws.
-		// The selection survives the rebuild (so a drag or shift+click anchor
-		// outlives it), and the button with it.
 		await page.locator(`${CENTER} diffs-container`).first().evaluate((host) => {
 			for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 				column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
@@ -635,7 +613,6 @@ test.describe("Add to chat from highlighted code", () => {
 		await page.keyboard.down("Shift");
 		await page.mouse.click(box.x + 60, box.y + box.height / 2);
 		await page.keyboard.up("Shift");
-		// Extending the selection keeps the toolbar by its first selected line.
 		await expect.poll(async () => {
 			const button = await askButton(page).boundingBox();
 			const line = await row(page, REVIEW, 2).boundingBox();
@@ -660,8 +637,6 @@ test.describe("Add to chat from highlighted code", () => {
 	test("a redraw mid-drag keeps the selection when dragging continues", { tag: "@P0" }, async ({ page }) => {
 		const { sentToChat } = await openChatSession(page);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
-		// Replace every row with a fresh copy WHILE the button is still held, as
-		// the viewer does when a loaded highlighter re-tokenizes or a snapshot lands.
 		await page.locator(`${REVIEW} diffs-container`).first().evaluate(async (host) => {
 			for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 				column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
@@ -672,7 +647,6 @@ test.describe("Add to chat from highlighted code", () => {
 		await page.mouse.move(extended.x + 60, extended.y + extended.height / 2, { steps: 8 });
 		await page.mouse.up();
 		await expect(askButton(page)).toBeVisible();
-		// Visibility also holds during dragging; wait for the release capture.
 		await expect(askButton(page).getByRole("button", { name: "Add to chat" })).toBeEnabled();
 		await expect(askButton(page)).not.toHaveCSS("pointer-events", "none");
 		await page.keyboard.press("ControlOrMeta+L");
@@ -697,7 +671,6 @@ test.describe("Add to chat from highlighted code", () => {
 		const code = (await row(page, REVIEW, 4).boundingBox())!;
 		const digits = await page.locator(`${REVIEW} diffs-container`).first().evaluate((host) => [...host.shadowRoot!.querySelectorAll("[data-line-number-content]")]
 			.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0).map(({ left, right, top, bottom }) => ({ left, right, top, bottom })));
-		// A drag from the start of a line selects its text instead of pressing the +.
 		expect(box.x + box.width).toBeLessThanOrEqual(code.x);
 		expect(digits.some((digit) => digit.top < box.y + box.height && box.y < digit.bottom && box.x + box.width > digit.left && digit.right > box.x)).toBe(false);
 		await plus.click();
@@ -734,7 +707,6 @@ test("file annotations show captured code and open a verified selected range", a
   const range=document.createRange();range.selectNodeContents(element);
   window.getSelection()!.removeAllRanges();window.getSelection()!.addRange(range);
  });
- // Dispatch without pointer-down so the selection remains intact.
  await preview.dispatchEvent("click");
  await expect(page.getByRole("dialog")).toBeVisible();
  await preview.evaluate(()=>window.getSelection()!.removeAllRanges());

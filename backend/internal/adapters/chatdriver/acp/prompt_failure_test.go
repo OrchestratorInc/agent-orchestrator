@@ -64,8 +64,6 @@ func TestControllerReadyReleasesActiveTurn(t *testing.T) {
 			t.Fatalf("ControllerReady emitted while activeTurn = %q", active)
 		}
 	case <-time.After(20 * time.Millisecond):
-		// The turn-state transition is correctly waiting for the mutex, so Ready
-		// cannot be observable until activeTurn has been released.
 		conv.mu.Unlock()
 		select {
 		case ready := <-readyEvents:
@@ -188,7 +186,6 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 				if usagesSeen != wantUsage || completionsSeen != 1 {
 					t.Fatalf("events: usage=%d completions=%d", usagesSeen, completionsSeen)
 				}
-				// A successful follow-up must not inherit the preceding error.
 				agent.mu.Lock()
 				agent.promptResponse = &acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}
 				agent.mu.Unlock()
@@ -285,7 +282,7 @@ func TestPromptResponseFailureIgnoresNonErrors(t *testing.T) {
 }
 
 func TestRetryEpisodesKeepRecoveredDiagnosticsAndReplayIdentity(t *testing.T) {
-	for range 2 { // Replaying the same host events reconstructs the same row IDs.
+	for range 2 {
 		conv := &conversation{
 			activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
 			promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
@@ -322,8 +319,6 @@ func TestTurnHooksSeeTheModelTheTurnStartedWith(t *testing.T) {
 		want      string
 	}{
 		{name: "model changed mid-turn", turnModel: "model-A", want: "model-A"},
-		// A turn reattached after a restart has no recorded model; the current
-		// selection is not evidence of what it ran on.
 		{name: "reattached turn", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,7 +329,6 @@ func TestTurnHooksSeeTheModelTheTurnStartedWith(t *testing.T) {
 				events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
 				configOptions: []ports.ChatConfigOption{{
 					ID: "model", Type: ports.ChatConfigOptionSelect,
-					// The user switched to B while the turn was still running on A.
 					Current: ports.ChatConfigOptionValue{Select: "model-B"},
 				}},
 				promptResponseFailure: func(_ acpsdk.PromptResponse, model string) error {
@@ -390,7 +384,6 @@ func TestModelSwitchRefusesWhatTheBindingRejects(t *testing.T) {
 	if _, err := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "hi", Settings: ports.ChatTurnSettings{Model: "model-new"}}); !errors.Is(err, rejected) {
 		t.Fatalf("SendTurn error = %v, want the binding's rejection", err)
 	}
-	// A session already on the model is not re-checked, so it still opens.
 	if err := conv.checkModelSwitch(ctx, "model-old"); err != nil {
 		t.Fatalf("current model refused: %v", err)
 	}
@@ -461,9 +454,6 @@ func TestACPReplayedPromptFailure(t *testing.T) {
 	}
 }
 
-// promptResponseFailure is a test binding used to exercise the generic
-// provider callback without placing Claude's vendor contract in production ACP
-// code.
 func promptResponseFailure(meta map[string]any) error {
 	failure := sessionFailure(meta)
 	if failure["severity"] != "error" {

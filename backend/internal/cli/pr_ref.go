@@ -21,10 +21,6 @@ func (c *commandContext) resolvePRRef(ctx context.Context, ref string, project p
 			repo = project.Config.CanonicalRepoURL
 		}
 		if repo == "" {
-			// The daemon must not shell out to external CLIs from its loopback API;
-			// when the durable project record lacks repo_origin_url, the thin CLI
-			// does the one-off gh lookup from the registered project checkout and
-			// sends the daemon a normalized URL.
 			out, err := c.deps.CommandOutputInDir(ctx, project.Path, "gh", "repo", "view", "--json", "url", "-q", ".url")
 			if err != nil || strings.TrimSpace(string(out)) == "" {
 				return "", usageError{errors.New("gh not available; pass the full PR URL")}
@@ -51,8 +47,6 @@ func isNumericPRRef(ref string) bool {
 	return err == nil && n > 0
 }
 
-// cliPRURLFromParts constructs the canonical PR/MR URL for a provider.
-// GitHub uses /pull/N; GitLab uses /-/merge_requests/N.
 func cliPRURLFromParts(host, owner, repo string, number int) string {
 	if isCLIGitHubHost(host) {
 		return fmt.Sprintf("https://%s/%s/%s/pull/%d", host, owner, repo, number)
@@ -71,7 +65,6 @@ func cliParsePRURL(raw string) (host, owner, name string, number int, err error)
 	host = u.Host
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 
-	// GitHub: /owner/repo/pull/N → 4 parts, parts[2] == "pull"
 	if isCLIGitHubHost(host) && len(parts) == 4 && parts[2] == "pull" {
 		n, parseErr := strconv.Atoi(parts[3])
 		if parseErr != nil || n <= 0 {
@@ -80,8 +73,6 @@ func cliParsePRURL(raw string) (host, owner, name string, number int, err error)
 		return host, parts[0], strings.TrimSuffix(parts[1], ".git"), n, nil
 	}
 
-	// GitLab: /owner/repo/-/merge_requests/N
-	// Supports nested groups: /group/subgroup/repo/-/merge_requests/N
 	if !isCLIGitHubHost(host) && len(parts) >= 5 && parts[len(parts)-2] == "merge_requests" && parts[len(parts)-3] == "-" {
 		n, parseErr := strconv.Atoi(parts[len(parts)-1])
 		if parseErr != nil || n <= 0 {

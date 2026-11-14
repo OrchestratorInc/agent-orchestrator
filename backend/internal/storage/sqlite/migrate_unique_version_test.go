@@ -6,18 +6,13 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// TestMigrationVersionsAreUnique scans the embedded migration filenames and
-// parses each version with goose.NumericComponent — the same function goose
-// itself uses — so prefixes that parse to the same int64 (e.g. "014" vs
-// "0014") are caught as a collision, not just identical strings. Catches the
-// conflict with a clear message instead of a goose panic at runtime.
 func TestMigrationVersionsAreUnique(t *testing.T) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
 
-	seen := map[int64]string{} // parsed version -> filename
+	seen := map[int64]string{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() {

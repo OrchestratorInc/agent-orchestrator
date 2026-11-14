@@ -35,7 +35,6 @@ describe("SettingsRow", () => {
 		);
 		const control = screen.getByRole("button", { name: "Action" }).parentElement;
 		const text = control?.previousElementSibling;
-		// The text column flexes; the control slot never shrinks, so it cannot spill over the text.
 		expect(text).toHaveClass("min-w-0", "flex-1");
 		expect(control).toHaveClass("shrink-0");
 		expect(control).not.toHaveClass("flex-1");
@@ -74,8 +73,6 @@ describe("SettingsSection", () => {
 			</SettingsPageTitleContext.Provider>,
 		);
 		expect(screen.queryByRole("heading", { name: "Harness" })).not.toBeInTheDocument();
-		// The page title is in the top bar, so nothing in the body to tuck under:
-		// a negative top margin would pull the search onto the panel's top edge.
 		expect(screen.getByTestId("toolbar").parentElement?.className).not.toMatch(/(^|\s)-mt-/);
 	});
 

@@ -16,12 +16,10 @@ import (
 )
 
 type process struct {
-	stdin     io.WriteCloser
-	stdout    io.Reader
-	stop      func() error
-	terminate func() error
-	// quickStop: the provider answered session/close or never exits on stdin
-	// closing, so a persistent host signals it without the stdin grace.
+	stdin       io.WriteCloser
+	stdout      io.Reader
+	stop        func() error
+	terminate   func() error
 	quickStop   atomic.Bool
 	reconnected bool
 	gate        *gatedReader
@@ -73,8 +71,6 @@ func spawnAgent(launch Launch, workdir string) (*process, error) {
 		return nil, fmt.Errorf("start %s: %w", launch.Command, err)
 	}
 
-	// ACP owns stdout. Always drain stderr separately so a verbose adapter cannot
-	// fill its OS pipe and deadlock the protocol.
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
 
 	done := make(chan error, 1)
@@ -125,8 +121,6 @@ func persistentTerminate(
 		once.Do(func() {
 			gate.Open()
 			_ = stdin.Close()
-			// The host's own shutdown can take about 6 s; on a loaded machine 5 s ran
-			// out first and failed a provider switch.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			result = shutdown(ctx, quickStop.Load())
@@ -141,7 +135,6 @@ func processExitError(err error) error {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		// A provider that exits during shutdown has already released its resources.
 		return nil
 	}
 	return err

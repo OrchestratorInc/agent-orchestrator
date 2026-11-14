@@ -8,14 +8,11 @@ import (
 	"strings"
 )
 
-// The storage roots under GEMINI_HOME where the ACP server and the terminal
-// CLI keep their conversations, settings, and brain files.
 const (
 	ACPStorageDir = "antigravity-acp"
 	CLIStorageDir = "antigravity-cli"
 )
 
-// GeminiHome resolves Antigravity's storage directory (~/.gemini or $GEMINI_HOME).
 func GeminiHome(env map[string]string) (string, error) {
 	if dir := strings.TrimSpace(env["GEMINI_HOME"]); dir != "" {
 		return dir, nil
@@ -30,8 +27,6 @@ func GeminiHome(env map[string]string) (string, error) {
 	return filepath.Join(home, ".gemini"), nil
 }
 
-// BridgeConversationToCLI ensures Antigravity conversation files created in
-// antigravity-acp are accessible to antigravity-cli under geminiHome.
 func BridgeConversationToCLI(geminiHome, conversationID string) error {
 	id := strings.TrimSpace(conversationID)
 	if id == "" {
@@ -42,8 +37,6 @@ func BridgeConversationToCLI(geminiHome, conversationID string) error {
 	return bridgeConversation(srcDir, dstDir, id)
 }
 
-// BridgeConversationToACP ensures Antigravity conversation files created in
-// antigravity-cli are accessible to antigravity-acp under geminiHome.
 func BridgeConversationToACP(geminiHome, conversationID string) error {
 	id := strings.TrimSpace(conversationID)
 	if id == "" {
@@ -62,9 +55,6 @@ func bridgeConversation(srcDir, dstDir, conversationID string) error {
 	if !validConversationID(conversationID) {
 		return fmt.Errorf("invalid Antigravity conversation id %q", conversationID)
 	}
-	// The caller must invoke this only after the source process is stopped. Copy
-	// SQLite's database and sidecars together; hardlinks would let later writes
-	// from one interface silently mutate the other interface's database.
 	srcDB := filepath.Join(srcDir, "conversations", conversationID+".db")
 	if _, err := os.Stat(srcDB); err != nil {
 		return fmt.Errorf("find source conversation database %s: %w", conversationID, err)

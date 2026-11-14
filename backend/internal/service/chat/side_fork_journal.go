@@ -13,7 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Only provider ownership is durable; side transcripts and launch secrets stay in RAM.
 type sideForkRecord struct {
 	MainConversationID string              `json:"mainConversationId"`
 	SideID             string              `json:"sideId"`
@@ -50,7 +49,6 @@ func (m *sideManager) writeForkRecord(ctx context.Context, side domain.SideConve
 	return nil
 }
 
-// Call with m.mu held; writes and cleanup removal share this metadata gate.
 func (m *sideManager) writeForkRecordLocked(ctx context.Context, side domain.SideConversation, id string, adopted bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -143,8 +141,6 @@ func (m *sideManager) enqueueForkCleanupLocked(side domain.SideConversation, id 
 	store.closed[side.ID] = true
 	store.hostCleanup[side.ID] = side
 	store.cleanupEpoch[side.ID]++
-	// A newly reported child is new cleanup evidence, not a stale restore of
-	// the previously stopped, fork-less opening host.
 	store.hostStopped[side.ID] = false
 	if id != "" {
 		store.cleanup[id] = domain.SideProviderCleanup{ForkID: id, SessionID: side.SessionID, Harness: side.Harness}
@@ -250,8 +246,6 @@ func (m *sideManager) recoverForkRecordsLocked(ctx context.Context, runID string
 		if record.MainConversationID == "" || record.SideID == "" || record.RunID == "" || record.SessionID == "" || record.ForkID == "" || record.HostID != "btw-"+record.RunID+"-"+record.SideID || entry.Name() != filepath.Base(m.forkJournalPath(record.SideID)) {
 			return fmt.Errorf("invalid side fork cleanup record %s", entry.Name())
 		}
-		// Electron restores adopted sides from this launch. An interrupted load
-		// cannot be adopted: retire its host before deleting its recorded child.
 		if record.Adopted && record.RunID == runID {
 			continue
 		}

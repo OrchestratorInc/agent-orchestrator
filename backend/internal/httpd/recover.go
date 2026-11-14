@@ -22,9 +22,6 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					// A handler that cannot finish its response, as ReverseProxy cannot
-					// after a broken body copy, asks the server to abort it. That is no
-					// daemon failure, and only the server can cut the response short.
 					if rec == http.ErrAbortHandler { //nolint:errorlint // net/http aborts quietly on exactly this value
 						panic(rec)
 					}
@@ -59,7 +56,6 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 							},
 						})
 					}
-					// Sentry keeps safe stack frames without raw panic text.
 					sentryobs.CapturePanic(r.Context(), map[string]string{
 						"component":  "httpd",
 						"operation":  "http_request_panic",

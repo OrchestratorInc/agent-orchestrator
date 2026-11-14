@@ -29,7 +29,6 @@ func testDrain(wait time.Duration) *SteerDrain {
 		Response: func(texts []string) any {
 			return map[string]any{"messages": texts}
 		},
-		// No agent here answers it; a failed nudge must not affect delivery.
 		Nudge: "test/sendNow",
 		Wait:  wait,
 	}
@@ -38,13 +37,9 @@ func testDrain(wait time.Duration) *SteerDrain {
 type drainAgent struct {
 	*fakeAgent
 	collected chan []string
-	// gate, when set before the turn starts, holds the agent's collection
-	// requests until it is closed.
-	gate chan struct{}
+	gate      chan struct{}
 }
 
-// newDrainAgent runs prompts that ask AO for mid-turn guidance at a steady
-// cadence, the way Qwen Code does at its step boundaries, until release closes.
 func newDrainAgent(release <-chan struct{}) *drainAgent {
 	agent := &drainAgent{fakeAgent: &fakeAgent{}, collected: make(chan []string, 8)}
 	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
@@ -83,7 +78,6 @@ func newDrainAgent(release <-chan struct{}) *drainAgent {
 	return agent
 }
 
-// startDrainConversation opens a conversation on agent and starts one turn.
 func startDrainConversation(
 	t *testing.T,
 	agent *fakeAgent,
@@ -91,7 +85,6 @@ func startDrainConversation(
 ) (*conversation, string) {
 	t.Helper()
 	if agent.agentInfo == nil {
-		// testDrain offers Steer only to this agent, as a real binding would.
 		agent.agentInfo = &acpsdk.Implementation{Name: "drainer", Version: "1.0.0"}
 	}
 	driver := New(Config{
@@ -122,8 +115,6 @@ func startDrainConversation(
 	return opened.(*conversation), ref.ProviderTurnID
 }
 
-// acceptImages lets prompts carry images, so a drain's own text-only rule is
-// what refuses them.
 func acceptImages(agent *fakeAgent) {
 	agent.capabilities = &acpsdk.AgentCapabilities{
 		PromptCapabilities:  acpsdk.PromptCapabilities{Image: true},
@@ -193,8 +184,6 @@ func TestACPSteerDrainWithdrawsGuidanceTheAgentDoesNotCollect(t *testing.T) {
 	if !errors.Is(err, ports.ErrChatTurnNotSteerable) {
 		t.Fatalf("Steer error = %v, want ErrChatTurnNotSteerable", err)
 	}
-	// The agent collects only after AO gave up. It must get nothing, or the
-	// guidance would reach it after the caller was told it did not.
 	result, err := conv.HandleExtensionMethod(context.Background(), testDrainMethod, json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("drain after withdrawal: %v", err)
@@ -272,8 +261,7 @@ func TestACPSteerDrainSupportComesFromTheBinding(t *testing.T) {
 	}
 	other := acpsdk.InitializeResponse{
 		AgentInfo: &acpsdk.Implementation{Name: "other"},
-		// A drain binding decides by itself; the ACP extension flag is not its signal.
-		Meta: map[string]any{"steering": map[string]any{"supported": true}},
+		Meta:      map[string]any{"steering": map[string]any{"supported": true}},
 	}
 	if conversationCapabilities(nil, other, steeringFor(Config{SteerDrain: testDrain(0)})).Has(ports.ChatCapabilitySteer) {
 		t.Fatal("drain binding enabled steering for an agent it does not support")
@@ -466,9 +454,6 @@ func TestACPSteerStartsANewMessageForIdlessText(t *testing.T) {
 	}
 }
 
-// Stop withdraws a steer that is still waiting for the agent, so it does not
-// sit behind the steer's wait. The caller is told to retry, not to send the
-// guidance as a new turn, because the turn is being stopped.
 func TestACPSteerDrainStopWithdrawsAWaitingSteer(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	acceptImages(agent)
@@ -511,8 +496,6 @@ func TestACPSteerDrainStopWithdrawsAWaitingSteer(t *testing.T) {
 	}
 }
 
-// A steer goes to the parent turn. A subagent's reply that streams across it
-// stays one message instead of starting a second subagent activity.
 func TestACPSteerKeepsASubagentReplyInOneMessage(t *testing.T) {
 	collected := make(chan struct{})
 	agent := &fakeAgent{}
@@ -577,10 +560,6 @@ func TestACPSteerKeepsASubagentReplyInOneMessage(t *testing.T) {
 	}
 }
 
-// Stop withdraws a turn's guidance before it takes the dispatch lock. A steer
-// that reaches the conversation after that, such as one that already held the
-// lock, is refused at once instead of joining, or holding up, the turn being
-// stopped. A later turn steers as usual.
 func TestACPSteerAfterStopBeganIsRefused(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	conv, turn := startDrainConversation(t, agent, testDrain(time.Minute))
@@ -594,7 +573,7 @@ func TestACPSteerAfterStopBeganIsRefused(t *testing.T) {
 	}
 	conv.mu.Lock()
 	parked := len(conv.pendingSteers)
-	conv.activeTurn = "next-turn" // the stopped turn is over; another runs
+	conv.activeTurn = "next-turn"
 	conv.steering.drain = testDrain(50 * time.Millisecond)
 	conv.mu.Unlock()
 	if parked != 0 {
@@ -606,13 +585,11 @@ func TestACPSteerAfterStopBeganIsRefused(t *testing.T) {
 	}
 }
 
-// The nudge asking a drain agent to collect now is best effort. A write that
-// stalls must not hold Steer past its wait.
 func TestACPSteerDrainStalledNudgeCannotHoldSteer(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	conv, turn := startDrainConversation(t, agent, testDrain(100*time.Millisecond))
 	writer := conv.legacyWire.writer
-	writer.mu.Lock() // every write to the agent now stalls
+	writer.mu.Lock()
 	unlock := sync.OnceFunc(writer.mu.Unlock)
 	t.Cleanup(unlock)
 
@@ -632,8 +609,6 @@ func TestACPSteerDrainStalledNudgeCannotHoldSteer(t *testing.T) {
 	unlock()
 }
 
-// An agent version that would drop images sent with its steering request gets
-// a clear refusal instead, and nothing is sent.
 func TestACPSteerRequestRefusesImagesTheAgentWouldDrop(t *testing.T) {
 	for _, takesImages := range []bool{false, true} {
 		t.Run(fmt.Sprintf("takes images %v", takesImages), func(t *testing.T) {
@@ -718,10 +693,6 @@ func TestACPSteerRequestRefusesImagesTheAgentWouldDrop(t *testing.T) {
 	}
 }
 
-// Kimchi and OMP tag every streamed message with an id. A request-mode steer,
-// counted when the agent queues the guidance, then cannot split a reply that
-// is still streaming: text keeps its own message until the agent starts a new
-// one.
 func TestACPSteerKeepsAnIdentifiedReplyInOneMessage(t *testing.T) {
 	agent := &fakeAgent{
 		capabilities: &acpsdk.AgentCapabilities{
@@ -788,7 +759,6 @@ func TestACPSteerKeepsAnIdentifiedReplyInOneMessage(t *testing.T) {
 	}
 }
 
-// A Stop that fails leaves the turn running, and the turn can be steered again.
 func TestACPSteerAfterAFailedStopIsAccepted(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	conv, turn := startDrainConversation(t, agent, testDrain(50*time.Millisecond))
@@ -804,8 +774,6 @@ func TestACPSteerAfterAFailedStopIsAccepted(t *testing.T) {
 	}
 }
 
-// Only one nudge is in flight. Steers that time out behind a stalled write do
-// not each leave another blocked request behind.
 func TestACPSteerDrainNudgesOneAtATime(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	conv, turn := startDrainConversation(t, agent, testDrain(60*time.Millisecond))
@@ -827,24 +795,21 @@ func TestACPSteerDrainNudgesOneAtATime(t *testing.T) {
 	unlock()
 }
 
-// Stops can overlap. One that fails gives steering back only once no other
-// Stop of the turn is still under way.
 func TestACPSteerOverlappingStopsKeepSteeringStopped(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	conv, turn := startDrainConversation(t, agent, testDrain(50*time.Millisecond))
-	restoreA := conv.WithdrawPendingSteers() // Stop A
-	restoreB := conv.WithdrawPendingSteers() // Stop B
-	restoreA()                               // Stop A fails; B is still stopping the turn
-	restoreA()                               // a second call gives nothing more back
+	restoreA := conv.WithdrawPendingSteers()
+	restoreB := conv.WithdrawPendingSteers()
+	restoreA()
+	restoreA()
 	if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "refused"}); !errors.Is(err, errSteerTurnStopping) {
 		t.Fatalf("Steer while another Stop is under way = %v, want it refused", err)
 	}
-	restoreB() // Stop B fails too
+	restoreB()
 	_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "parked again"})
 	if err == nil || !strings.Contains(err.Error(), "did not collect") {
 		t.Fatalf("Steer after both Stops failed = %v, want it parked for the agent like any steer", err)
 	}
-	// A later turn starts with no Stop of its own under way.
 	conv.WithdrawPendingSteers()
 	conv.mu.Lock()
 	conv.activeTurn = "next-turn"
@@ -856,17 +821,15 @@ func TestACPSteerOverlappingStopsKeepSteeringStopped(t *testing.T) {
 	}
 }
 
-// A Stop of an earlier turn that fails late gives back only its own turn's
-// steering. It cannot lift a Stop the next turn has under way.
 func TestACPSteerLateRestoreFromAnEarlierTurnKeepsTheNextTurnStopped(t *testing.T) {
 	agent := &fakeAgent{promptBlock: true}
 	conv, _ := startDrainConversation(t, agent, testDrain(50*time.Millisecond))
-	restoreA := conv.WithdrawPendingSteers() // Stop A, for the first turn, stalls before it fails
+	restoreA := conv.WithdrawPendingSteers()
 	conv.mu.Lock()
-	conv.activeTurn = "next-turn" // the first turn ends and the next starts
+	conv.activeTurn = "next-turn"
 	conv.mu.Unlock()
-	conv.WithdrawPendingSteers() // Stop B, for the next turn
-	restoreA()                   // Stop A fails at last
+	conv.WithdrawPendingSteers()
+	restoreA()
 	if _, err := conv.Steer(context.Background(), "next-turn", ports.ChatUserMessage{Text: "refused"}); !errors.Is(err, errSteerTurnStopping) {
 		t.Fatalf("Steer while the next turn's Stop is under way = %v, want it refused", err)
 	}

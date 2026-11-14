@@ -1,14 +1,8 @@
-// Per-session consent. The first command from an AO session opens a small
-// extension window asking the user to allow it; only a person can answer
-// (agents cannot reach extension pages, and their tab group never contains
-// one). Nothing runs for a session until it is allowed.
-
 import type { ChromeApi } from "./chrome-api";
 import { BridgeError, isRecord } from "./protocol";
 
 const APPROVALS_KEY = "aoApprovals";
 const DENIALS_KEY = "aoDenials";
-/** Approval entry for "allow every AO session in this Chrome". */
 const ALL_SESSIONS = "*";
 const CONSENT_TIMEOUT_MS = 120_000;
 const DENIAL_COOLDOWN_MS = 10 * 60_000;
@@ -34,9 +28,7 @@ export class ConsentManager {
 	start(): void {
 		this.chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 			if (!isRecord(message) || message.type !== "ao-consent-decision") return;
-			// Decisions come only from the extension's own consent page.
 			if (sender.id !== this.chrome.runtime.id || !String(sender.url ?? "").startsWith(this.chrome.runtime.getURL("consent.html"))) return;
-			// Answer only once the decision is stored, so the page closes after it.
 			this.decide(message as unknown as ConsentDecision).then(
 				() => sendResponse({ ok: true }),
 				(error) => sendResponse({ ok: false, error: String(error) }),
@@ -58,7 +50,6 @@ export class ConsentManager {
 		return isRecord(stored[APPROVALS_KEY]) ? (stored[APPROVALS_KEY] as Record<string, Approval>) : {};
 	}
 
-	/** Resolve once the session is allowed; ask the user if it is not. */
 	async ensure(sessionId: string): Promise<Approval> {
 		const approvals = await this.approvals();
 		const approval = approvals[sessionId] ?? approvals[ALL_SESSIONS];
@@ -105,8 +96,6 @@ export class ConsentManager {
 	}
 
 	async decide(decision: ConsentDecision): Promise<void> {
-		// Claim the prompt first: the consent window may close while the
-		// decision is being stored, and that must not count as a denial.
 		const pending = this.pending.get(decision.sessionId);
 		this.pending.delete(decision.sessionId);
 		if (decision.allow) {
@@ -127,16 +116,10 @@ export class ConsentManager {
 		if (pending?.windowId !== undefined) await this.chrome.windows.remove(pending.windowId).catch(() => undefined);
 	}
 
-	/** The approval a session runs under, if any. */
 	approvalFor(approvals: Record<string, Approval>, sessionId: string): Approval | undefined {
 		return approvals[sessionId] ?? approvals[ALL_SESSIONS];
 	}
 
-	/**
-	 * Revoke one session, or every session (the kill switch). A session ending
-	 * leaves "allow every session" alone; a person revoking one session also
-	 * ends it, or that session would stay allowed.
-	 */
 	async revoke(sessionId?: string, includeAllSessions = false): Promise<void> {
 		const approvals = sessionId ? await this.approvals() : {};
 		if (sessionId) delete approvals[sessionId];

@@ -13,7 +13,6 @@ import (
 )
 
 func TestSwitchRejectsFileReferenceBeforeAnyLifecycleWork(t *testing.T) {
-	// An uninitialized service panics if lifecycle/storage work is reached.
 	ref := testFileReference()
 	var svc Service
 	_, switched, err := svc.SwitchProviderAndSend(context.Background(), domain.SessionID("other"), domain.ProviderSwitchRequest{}, ports.ChatUserMessage{Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}})
@@ -216,7 +215,6 @@ func TestMixedAnnotationDeliveryUsesAttachmentOrderWithoutMutatingStoredContent(
 			if string(before) != string(after) {
 				t.Fatal("mutated stored annotations")
 			}
-			// Queued/retried delivery reconstructs the same structured content.
 			var restored ports.ChatUserMessage
 			if err := json.Unmarshal(before, &restored); err != nil {
 				t.Fatal(err)

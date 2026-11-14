@@ -12,7 +12,6 @@ interface SwitchRequest {
 	message?: { text: string; clientMessageId: string };
 }
 
-/** One switch the daemon made, with the message sent in it. */
 interface Switch {
 	from: string;
 	to: string;
@@ -20,9 +19,7 @@ interface Switch {
 	clientMessageId: string;
 }
 
-/** The chat as the daemon reports it: on harness, after the switches made so far. */
 function snapshot(harness: string, switches: Switch[]) {
-	// Each switch is its marker, then the message's completed turn.
 	return {
 		conversationId: "conversation-provider-switch",
 		sessionId,
@@ -48,10 +45,6 @@ function snapshot(harness: string, switches: Switch[]) {
 	};
 }
 
-/**
- * A chat on Codex whose daemon switches agents as asked, or refuses with
- * refusal. Returns the switch requests the app sent.
- */
 async function installSwitchingChat(
 	page: Page,
 	refusal?: { status: number; code: string; message: string },
@@ -152,10 +145,8 @@ async function installSwitchingChat(
 
 const picker = (page: Page) => page.getByRole("button", { name: "Agent, model and reasoning effort for the next message" });
 
-/** Picks agent for the next message from the composer's picker. */
 async function pickAgent(page: Page, agent: string) {
 	await picker(page).click();
-	// By keyboard: the submenu slides in, so a pointer can land on it mid-move.
 	await page.getByRole("menuitem", { name: /^Agent/ }).focus();
 	await page.keyboard.press("ArrowRight");
 	const choice = page.getByRole("menuitemradio", { name: agent });
@@ -199,7 +190,6 @@ test("a refused switch keeps the draft and the previous agent @T0", async ({ pag
 	await expect.poll(() => requests.length).toBe(1);
 	const notice = page.getByRole("alert").filter({ hasText: "Couldn't switch agent" });
 	await expect(notice).toContainText("the provider is still working");
-	// Nothing was sent: the message stays to edit, and the chat stays on Codex.
 	await expect(page.getByRole("combobox", { name: "Message the agent" })).toHaveText("Carry on with the login page");
 	await expect(picker(page)).toContainText("Codex");
 	await notice.getByRole("button", { name: "Dismiss" }).click();

@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// Removing the exactly-one schedule-input guard must make this test fail; an
-// ambiguous request cannot have a deterministic canonical schedule.
 func TestCanonicalizeScheduleRejectsAmbiguousInputs(t *testing.T) {
 	now := time.Date(2026, time.March, 6, 15, 0, 0, 0, time.UTC)
 	for _, input := range []ScheduleInput{
@@ -20,8 +18,6 @@ func TestCanonicalizeScheduleRejectsAmbiguousInputs(t *testing.T) {
 	}
 }
 
-// Accepting timezone abbreviations or second-level recurrence must make this
-// test fail; both violate the durable scheduling contract.
 func TestCanonicalizeScheduleRejectsUnsafeTimezoneAndFrequency(t *testing.T) {
 	now := time.Date(2026, time.March, 6, 15, 0, 0, 0, time.UTC)
 	for _, input := range []ScheduleInput{
@@ -41,8 +37,6 @@ func TestCanonicalizeScheduleRejectsUnsafeTimezoneAndFrequency(t *testing.T) {
 }
 
 func TestCanonicalizeScheduleWeeklyUIFiresOnChosenWeekday(t *testing.T) {
-	// Friday 6 March 2026, 08:00 UTC — before the 09:00 occurrence, so Friday
-	// itself is still a valid next run.
 	now := time.Date(2026, time.March, 6, 8, 0, 0, 0, time.UTC)
 	want := map[string]time.Time{
 		"MO": time.Date(2026, time.March, 9, 9, 0, 0, 0, time.UTC),
@@ -76,7 +70,6 @@ func TestCanonicalizeScheduleWeeklyUIFiresOnChosenWeekday(t *testing.T) {
 }
 
 func TestCanonicalizeScheduleWeeklyKeepsWallClockAcrossDST(t *testing.T) {
-	// Friday 6 March 2026 is still EST. The following Friday, 13 March, is EDT.
 	now := time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC)
 	schedule, err := CanonicalizeSchedule(ScheduleInput{
 		RRule: "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", Timezone: "America/New_York",
@@ -84,11 +77,11 @@ func TestCanonicalizeScheduleWeeklyKeepsWallClockAcrossDST(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanonicalizeSchedule: %v", err)
 	}
-	wantThisFriday := time.Date(2026, time.March, 6, 14, 0, 0, 0, time.UTC) // 09:00 EST
+	wantThisFriday := time.Date(2026, time.March, 6, 14, 0, 0, 0, time.UTC)
 	if !schedule.NextRunAt.Equal(wantThisFriday) {
 		t.Fatalf("next run = %s, want %s", schedule.NextRunAt, wantThisFriday)
 	}
-	wantNextFriday := time.Date(2026, time.March, 13, 13, 0, 0, 0, time.UTC) // 09:00 EDT
+	wantNextFriday := time.Date(2026, time.March, 13, 13, 0, 0, 0, time.UTC)
 	next, err := NextOccurrence(schedule.RRuleText, schedule.Timezone, schedule.NextRunAt)
 	if err != nil {
 		t.Fatalf("NextOccurrence: %v", err)
@@ -110,11 +103,8 @@ func TestCanonicalizeScheduleAllowsLowFrequencySecondOffsets(t *testing.T) {
 	}
 }
 
-// Breaking five-field weekday cron conversion or timezone-local recurrence
-// must make this test fail. The expected UTC instant is hand-derived from New
-// York switching to daylight time on 8 March 2026.
 func TestCanonicalizeScheduleConvertsWeekdayCronAcrossDST(t *testing.T) {
-	now := time.Date(2026, time.March, 6, 15, 0, 0, 0, time.UTC) // Friday 10:00 EST.
+	now := time.Date(2026, time.March, 6, 15, 0, 0, 0, time.UTC)
 	schedule, err := CanonicalizeSchedule(ScheduleInput{
 		Cron: "0 9 * * 1-5", Timezone: "America/New_York",
 	}, now)
@@ -135,17 +125,15 @@ func TestCanonicalizeScheduleConvertsWeekdayCronAcrossDST(t *testing.T) {
 	}
 }
 
-// Recomputing a rule from the current UTC offset instead of its IANA timezone
-// must make this test fail at the spring-forward boundary.
 func TestCanonicalizeScheduleKeepsDailyWallClockAcrossDST(t *testing.T) {
-	now := time.Date(2026, time.March, 7, 15, 0, 0, 0, time.UTC) // Saturday 10:00 EST.
+	now := time.Date(2026, time.March, 7, 15, 0, 0, 0, time.UTC)
 	schedule, err := CanonicalizeSchedule(ScheduleInput{
 		Cron: "0 9 * * *", Timezone: "America/New_York",
 	}, now)
 	if err != nil {
 		t.Fatalf("CanonicalizeSchedule: %v", err)
 	}
-	want := time.Date(2026, time.March, 8, 13, 0, 0, 0, time.UTC) // Sunday 09:00 EDT.
+	want := time.Date(2026, time.March, 8, 13, 0, 0, 0, time.UTC)
 	if !schedule.NextRunAt.Equal(want) {
 		t.Fatalf("next run = %s, want %s", schedule.NextRunAt, want)
 	}

@@ -147,8 +147,6 @@ await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
 			if !strings.Contains(text, `"source":"`+tc.wantStopFrom+`"`) {
 				t.Fatalf("stop hook did not come from %s:\n%s", tc.wantStopFrom, text)
 			}
-			// The run's final assistant text rides on the stop hook, whichever
-			// event fires it, and nothing but its text parts is taken.
 			if !strings.Contains(text, `last_assistant_message\":\"Bug fixed.\"`) || strings.Contains(text, "private reasoning") {
 				t.Fatalf("stop hook did not carry only the final assistant text:\n%s", text)
 			}

@@ -93,12 +93,6 @@ func TestCLIRepoFromURL(t *testing.T) {
 	}
 }
 
-// TestNumericClaimNestedNamespace verifies that a numeric claim against a
-// project whose repo origin URL uses a nested GitLab namespace constructs the
-// correct merge-request path and round-trips through cliParsePRURL. This is the
-// regression scenario from reviewer Item 10: before the fix, cliRepoFromURL
-// truncated the namespace to the first component, so a numeric claim built
-// /group/subgroup/-/merge_requests/N and failed same-repository validation.
 func TestNumericClaimNestedNamespace(t *testing.T) {
 	const repoOrigin = "https://gitlab.com/group/subgroup/repo.git"
 	host, owner, repo, err := cliRepoFromURL(repoOrigin)
@@ -111,8 +105,6 @@ func TestNumericClaimNestedNamespace(t *testing.T) {
 	if mrURL != wantURL {
 		t.Fatalf("mrURL = %q, want %q", mrURL, wantURL)
 	}
-	// Round-trip: the constructed MR URL must parse back to the same
-	// host/owner/repo/number so same-repository validation passes.
 	pHost, pOwner, pRepo, pNum, err := cliParsePRURL(mrURL)
 	if err != nil {
 		t.Fatalf("cliParsePRURL(%q): %v", mrURL, err)

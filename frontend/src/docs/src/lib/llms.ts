@@ -6,21 +6,17 @@ import { articlePath } from "./translations";
 type Page = NonNullable<ReturnType<typeof source.getPage>>;
 type Node = ReturnType<typeof source.getPageTree>["children"][number];
 
-/** A short summary of the product, at the top of llms.txt. */
 export const PRODUCT_SUMMARY =
   "Orchestrator, also known as Agent Orchestrator or AO, is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.";
 
-/** The Markdown copy of an English article, e.g. `/quickstart.md`. The home page is `/index.md`. */
 export function markdownPath(slugs: string[]): string {
   return `/${slugs.length ? slugs.join("/") : "index"}.md`;
 }
 
-/** Where the article's source file lives in the repository. */
 export function sourceUrl(page: Page): string {
   return `${COMPANY.GITHUB_URL}/blob/main/frontend/src/docs/content/${page.path}`;
 }
 
-/** The article as Markdown, headed by its title, URL and description. */
 export async function pageMarkdown(page: Page): Promise<string> {
   const header = [`# ${page.data.title}`, "", `URL: ${COMPANY.DOCS_URL}${articlePath(page.slugs)}`];
   if (page.data.description) header.push("", `> ${page.data.description}`);
@@ -38,7 +34,6 @@ function listItem(page: Page): string {
   return text ? `${item}: ${text}` : item;
 }
 
-/** The pages under a sidebar node, in sidebar order, folder index pages first. */
 function nodePages(node: Node): Page[] {
   if (node.type === "separator") return [];
   if (node.type === "page") {
@@ -48,7 +43,6 @@ function nodePages(node: Node): Page[] {
   return [...(node.index ? nodePages(node.index) : []), ...node.children.flatMap(nodePages)];
 }
 
-/** Every English article grouped by sidebar section. Articles left out of the sidebar come last. */
 function sections(): { title: string; pages: Page[] }[] {
   const result: { title: string; pages: Page[] }[] = [];
   for (const node of source.getPageTree(DEFAULT_LOCALE).children) {
@@ -64,10 +58,6 @@ function sections(): { title: string; pages: Page[] }[] {
   return result;
 }
 
-/**
- * The index of the English docs: a summary, then every article grouped by
- * sidebar section, each linking to its Markdown copy.
- */
 export function llmsIndex(): string {
   const out = ["# Orchestrator.inc Docs", "", `> ${PRODUCT_SUMMARY}`, ""];
   out.push(
@@ -80,7 +70,6 @@ export function llmsIndex(): string {
   return `${out.join("\n")}\n`;
 }
 
-/** Every English article's Markdown in one file, in sidebar order. */
 export async function llmsFull(): Promise<string> {
   const pages = sections().flatMap((section) => section.pages);
   const texts = await Promise.all(pages.map(pageMarkdown));

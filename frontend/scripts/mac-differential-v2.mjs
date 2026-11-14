@@ -1,5 +1,3 @@
-// Explicit opt-in local preparation for a separately reviewed conductor change.
-// Never called by feed.mjs, package, make or publish. No upload operation exists.
 import semver from "semver";
 import { createPublicKey, sign } from "node:crypto";
 import { basename, join } from "node:path";
@@ -52,7 +50,6 @@ export async function generateMacV2Assets({ allow = false, channel, minimumClien
   }
 }
 
-/** Apply before upload and to a downloaded exact release inventory after upload. */
 export function verifyMacV2Assets({ allow = false, dir, trustedKeys = {}, candidate, channel }) {
   const names = readdirSync(dir);
   if (names.some(name => /\.zip\.blockmap$/.test(name))) throw new Error("Conventional macOS blockmap forbidden");
@@ -72,8 +69,6 @@ export function verifyMacV2Assets({ allow = false, dir, trustedKeys = {}, candid
   }
   const expected = [MAC_V2_METADATA];
   for (const artifact of payload.artifacts) {
-    // Candidate ZIP must exist on this release. Baseline ZIP remains on its own
-    // historical release; its signed identity is verified against the local cache.
     for (const file of [artifact.zip, artifact.blockmap, artifact.baseline.blockmap]) {
       const name = decodeURIComponent(new URL(file.url).pathname.split("/").at(-1));
       const bytes = readFileSync(join(dir, name));

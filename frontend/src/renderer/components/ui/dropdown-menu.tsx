@@ -11,12 +11,6 @@ import {
 	actionMenuSeparatorClass,
 } from "./menu-styles";
 
-/**
- * Not modal by default. A modal menu locks scrolling (a stylesheet added and removed)
- * and turns off pointer events on <body>; either restyles every element on the page
- * when the menu opens and again when it closes. Unless `modal` is passed, an outside
- * click still only closes the menu, as a modal one's would.
- */
 export function DropdownMenu({ modal, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
 	return (
 		<ShieldOutsideClick.Provider value={modal === undefined}>
@@ -52,8 +46,6 @@ export function DropdownMenuContent({
 				}}
 				onContextMenu={(event) => {
 					onContextMenu?.(event);
-					// Portals bubble React events up the component tree; keep a right-click
-					// here from opening the context menu of a row that renders this menu.
 					event.stopPropagation();
 				}}
 				sideOffset={sideOffset}
@@ -95,10 +87,6 @@ export function DropdownMenuItem({
 
 export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
-/**
- * A single-choice row. The trailing check sits in a reserved slot so labels
- * never shift when the selection moves; picking a row closes the menu.
- */
 export function DropdownMenuRadioItem({
 	className,
 	children,
@@ -108,7 +96,6 @@ export function DropdownMenuRadioItem({
 		<DropdownMenuPrimitive.RadioItem className={cn(actionMenuItemClass, className)} {...props}>
 			{children}
 			<span className="ml-auto flex size-4 shrink-0 items-center justify-center">
-				{/* ! because the row's [&_svg] colour outranks a plain utility. */}
 				<DropdownMenuPrimitive.ItemIndicator className="flex">
 					<Check aria-hidden="true" className="text-logo-accent!" />
 				</DropdownMenuPrimitive.ItemIndicator>
@@ -117,12 +104,6 @@ export function DropdownMenuRadioItem({
 	);
 }
 
-/**
- * A multi-choice row with a trailing box drawn like the review pane's viewed
- * checkbox, in the same reserved column as a radio row's check. Radix closes
- * the menu on select; callers that toggle several rows in one visit call
- * `event.preventDefault()` in `onSelect`.
- */
 export function DropdownMenuCheckboxItem({
 	className,
 	children,
@@ -131,7 +112,6 @@ export function DropdownMenuCheckboxItem({
 	return (
 		<DropdownMenuPrimitive.CheckboxItem className={cn(actionMenuItemClass, "group/checkbox-item", className)} {...props}>
 			{children}
-			{/* The row forces 15px icons; the check fits the 16px box at 12px. */}
 			<span
 				aria-hidden="true"
 				className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-sm border border-muted-foreground/70 group-data-[state=checked]/checkbox-item:border-foreground group-data-[state=checked]/checkbox-item:bg-foreground [&_svg]:size-3! [&_svg]:text-background!"
@@ -144,12 +124,6 @@ export function DropdownMenuCheckboxItem({
 	);
 }
 
-/**
- * An on/off setting as a menu row with a trailing switch, drawn with the same
- * `switch-inset` styling as {@link Switch} but not a nested control, so the row
- * keeps `menuitemcheckbox` semantics. The menu stays open on toggle so the new
- * state is visible.
- */
 export function DropdownMenuSwitchItem({
 	checked,
 	className,
@@ -216,7 +190,6 @@ export function DropdownMenuShortcut({ className, ...props }: React.ComponentPro
 
 export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 
-/** A row that opens a side submenu; same row styling as DropdownMenuItem. */
 export function DropdownMenuSubTrigger({
 	className,
 	children,
@@ -233,12 +206,8 @@ export function DropdownMenuSubTrigger({
 	);
 }
 
-/** The side panel a DropdownMenuSubTrigger opens; same surface as DropdownMenuContent. */
 export function DropdownMenuSubContent({
 	className,
-	// Offsets are measured from the sub-trigger row, which sits inside the parent
-	// menu's 1px border + 4px padding: 9 leaves a visible 4px gap instead of the
-	// panels touching, and -5 lines the submenu's first row up with the trigger.
 	sideOffset = 9,
 	alignOffset = -5,
 	...props

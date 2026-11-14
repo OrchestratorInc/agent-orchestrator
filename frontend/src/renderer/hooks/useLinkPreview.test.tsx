@@ -9,9 +9,6 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: () => "request failed",
 }));
 
-// The hook caches per URL in the shared module-level queryClient, so each test
-// uses distinct URLs to stay isolated.
-
 afterEach(() => {
 	vi.useRealTimers();
 	getMock.mockReset();
@@ -25,8 +22,6 @@ describe("useLinkPreview", () => {
 	});
 
 	it("refetches when the url changes on the same hook instance", async () => {
-		// Regression: XtermTerminal reuses one hook instance across hovered links;
-		// a previous URL's preview must never be returned for the current URL.
 		const urlA = "https://videos.example.test/never-gonna";
 		const urlB = "https://social.example.test/home";
 		getMock.mockImplementation((_path: string, opts: { params: { query: { url: string } } }) =>
@@ -43,7 +38,6 @@ describe("useLinkPreview", () => {
 		await waitFor(() => expect(result.current.data?.url).toBe(urlB));
 		expect(getMock).toHaveBeenCalledTimes(2);
 
-		// Re-hovering the first URL serves the cache without another request.
 		rerender({ url: urlA });
 		await waitFor(() => expect(result.current.data?.url).toBe(urlA));
 		expect(getMock).toHaveBeenCalledTimes(2);
@@ -57,8 +51,6 @@ describe("useLinkPreview", () => {
 	});
 
 	it("refetches a failed URL when re-enabled after being disabled", async () => {
-		// A transient blip on first hover must not permanently kill previews for
-		// this component: leaving and returning retries the same URL.
 		const url = "https://retry.example.test/";
 		getMock.mockResolvedValue({ data: undefined, error: { message: "upstream down" } });
 

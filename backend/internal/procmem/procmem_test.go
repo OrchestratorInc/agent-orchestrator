@@ -80,7 +80,6 @@ func TestParseReadsOptionalCPUTime(t *testing.T) {
 func TestCPUPercentIsRateBetweenSnapshots(t *testing.T) {
 	prev, _ := Parse("300 200 100 00:00:10 claude\n")
 	cur, _ := Parse("300 200 100 00:00:14 claude\n310 300 100 00:00:01 node\n")
-	// 4s of claude plus 1s of a brand-new node over a 5s gap: one full core.
 	if got := CPUPercent(cur.Tree(300).Processes, prev, 5); got != 100 {
 		t.Fatalf("cpu = %v, want 100", got)
 	}
@@ -99,8 +98,6 @@ func TestParseDropsZombies(t *testing.T) {
 	}
 }
 
-// TestParseDropsZombiesWithLongCommands: ps appends <defunct> after the argv,
-// so a command longer than the cap must not lose the marker to truncation.
 func TestParseDropsZombiesWithLongCommands(t *testing.T) {
 	long := strings.Repeat("x", maxCommandLen+50)
 	tbl, err := Parse("300 200 1000 00:00:01 claude\n301 300 0 00:00:00 node " + long + " <defunct>\n")
@@ -126,9 +123,6 @@ func TestParseKeepsFullCommandLineAndCapsIt(t *testing.T) {
 	}
 }
 
-// TestParseHandlesRowsPastTheDefaultScannerLimit guards against bufio.Scanner's
-// default 64 KiB token limit silently truncating a long electron/node argv
-// line: the process it belongs to, and every row after it, must still parse.
 func TestParseHandlesRowsPastTheDefaultScannerLimit(t *testing.T) {
 	longArgs := strings.Repeat("x", 70*1024)
 	tbl, err := Parse("300 200 100 00:00:01 node " + longArgs + "\n301 300 200 00:00:01 claude\n")

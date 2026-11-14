@@ -25,8 +25,6 @@ type artifactDetail struct {
 	} `json:"artifact"`
 }
 
-// artifactRows reads the conversation's "artifact" activities straight from the
-// store: a report records them before it returns.
 func artifactRows(t *testing.T, h *harness) []artifactDetail {
 	t.Helper()
 	snapshot, err := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
@@ -61,7 +59,6 @@ func writeArtifact(t *testing.T, dir, rel string) string {
 func TestRecordReportedArtifactShowsTheHTMLPageInTheRunningTurn(t *testing.T) {
 	h, _ := steerHarness(t)
 	ctx := context.Background()
-	// The session's stored artifact directory wins over the default one.
 	dir := t.TempDir()
 	if _, err := h.st.UpdateSessionArtifactOutput(ctx, testSession, dir, domain.SessionOutputNone); err != nil {
 		t.Fatal(err)
@@ -79,7 +76,6 @@ func TestRecordReportedArtifactShowsTheHTMLPageInTheRunningTurn(t *testing.T) {
 		t.Fatalf("rows = %+v, want %+v", rows, want)
 	}
 
-	// The same file again in this turn, by a relative path, keeps its one row.
 	h.svc.RecordReportedArtifact(ctx, testSession, "./q3/../q3/Q3 (final).html")
 	if rows := artifactRows(t, h); len(rows) != 1 {
 		t.Fatalf("rows after a repeat = %+v, want one", rows)
@@ -98,7 +94,6 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 	dir := sessionartifacts.Dir(h.rendersDir, testSession)
 	writeArtifact(t, dir, "notes.md")
 	writeArtifact(t, dir, "folder.html/index.html")
-	// One byte past what the artifact file route serves; sparse, so cheap.
 	huge := writeArtifact(t, dir, "huge.html")
 	if err := os.Truncate(huge, attachmentstore.MaxFileBytes+1); err != nil {
 		t.Fatal(err)
@@ -124,7 +119,6 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 		t.Fatalf("rows = %+v, want none", rows)
 	}
 
-	// A terminal session has no thread.
 	tui := domain.SessionID("p1-2")
 	tuiDir := t.TempDir()
 	page := writeArtifact(t, tuiDir, "page.html")
@@ -139,7 +133,6 @@ func TestRecordReportedArtifactSkipsWhatItCannotShow(t *testing.T) {
 		t.Fatalf("rows = %+v, want none", rows)
 	}
 
-	// A page in the default directory (no stored one) does show.
 	writeArtifact(t, dir, "page.html")
 	h.svc.RecordReportedArtifact(ctx, testSession, "page.html")
 	if rows := artifactRows(t, h); len(rows) != 1 || rows[0].Artifact.Path != "page.html" {
@@ -157,8 +150,6 @@ func TestRecordReportedArtifactWithoutARunningTurnShowsNothing(t *testing.T) {
 		t.Fatalf("rows = %+v, want none", rows)
 	}
 
-	// The same controller shows the page once a turn runs, so the skip above
-	// was the missing turn, not a missing controller.
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "go", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -169,8 +160,6 @@ func TestRecordReportedArtifactWithoutARunningTurnShowsNothing(t *testing.T) {
 	}
 }
 
-// An agent that keeps a render as an artifact and then reports that file would
-// otherwise show the same page twice in the turn.
 func TestRecordReportedArtifactSkipsARenderKeptInTheSameTurn(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -187,14 +176,12 @@ func TestRecordReportedArtifactSkipsARenderKeptInTheSameTurn(t *testing.T) {
 		t.Fatalf("renders = %d, artifacts = %+v; want the render alone", len(renders), artifacts)
 	}
 
-	// A different file in the same turn still shows.
 	writeArtifact(t, filepath.Dir(result.ArtifactPath), "appendix.html")
 	h.svc.RecordReportedArtifact(ctx, testSession, "appendix.html")
 	if rows := artifactRows(t, h); len(rows) != 1 || rows[0].Artifact.Path != "appendix.html" {
 		t.Fatalf("rows = %+v, want appendix.html", rows)
 	}
 
-	// The kept page reported in the next turn shows there.
 	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted

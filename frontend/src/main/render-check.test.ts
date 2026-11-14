@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTENT_HEIGHT_SCRIPT, checkRender, measureRender } from "./render-check";
 import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
 
-// The proxy itself is tested over real sockets in render-check-proxy.test.ts.
 vi.mock("./render-check-proxy", () => ({
 	startRenderCheckProxy: vi.fn(async (network: string) => (network === "none" ? 1081 : 1080)),
 	allowRenderPage: vi.fn(() => vi.fn()),
@@ -16,27 +15,17 @@ type FakeOptions = {
 	emptyImage?: boolean;
 	manualPaint?: boolean;
 	refused?: string[];
-	/** The height the page needs; 412 unless set. */
 	contentHeight?: number;
-	/** How many frames after the resize are still the size from before it. */
 	staleFrames?: number;
-	/** PNG bytes per pixel of the captured image, to make large screenshots. */
 	pngBytesPerPixel?: number;
-	/** Requests the page makes while it loads; the session's guard decides each. */
 	requests?: string[];
 };
 
-/**
- * A hidden window around a page. The page's viewport reaches a new size one
- * read after setContentSize, as a real resize does; reads go through the
- * isolated world, so the page's main world is never used.
- */
 function fakes(options: FakeOptions = {}) {
 	const events: string[] = [];
 	const listeners = new Map<string, (...args: unknown[]) => void>();
 	const paintListeners: Array<(...args: unknown[]) => void> = [];
 	let staleFrames = options.staleFrames ?? 0;
-	// A paint carries the whole frame, the way Electron's offscreen paint event does.
 	const paint = () => {
 		events.push("paint");
 		const stale = staleFrames > 0;
@@ -62,7 +51,6 @@ function fakes(options: FakeOptions = {}) {
 			if (event === "paint") paintListeners.push(listener);
 		},
 		loadURL: vi.fn(async () => {
-			// The proxy refuses these while the page loads.
 			const onRefused = vi.mocked(allowRenderPage).mock.lastCall?.[2];
 			for (const destination of options.refused ?? []) onRefused?.(destination);
 			const guard = contents.session.webRequest.onBeforeRequest.mock.lastCall?.[0] as
@@ -75,7 +63,6 @@ function fakes(options: FakeOptions = {}) {
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
 		executeJavaScript: vi.fn((_script: string): Promise<unknown> => Promise.resolve(undefined)),
-		// A script that fails in an isolated world resolves undefined.
 		executeJavaScriptInIsolatedWorld: vi.fn((_worldId: number, scripts: Array<{ code: string }>): Promise<unknown> => {
 			if (options.measureNeverReturns) return new Promise(() => {});
 			const code = scripts[0]?.code;
@@ -87,14 +74,10 @@ function fakes(options: FakeOptions = {}) {
 			}
 			return Promise.resolve(undefined);
 		}),
-		// Electron 44's offscreen invalidate() re-sends the last frame before it
-		// returns; manualPaint holds that frame back.
 		invalidate: vi.fn(() => {
 			events.push("invalidate");
 			if (!options.manualPaint) paint();
 		}),
-		// What Electron 44 does for an offscreen window whose compositor has no
-		// frame at the new size yet, which is every check's case.
 		capturePage: vi.fn(async () => {
 			events.push("capture");
 			throw new Error("UnknownVizError");
@@ -118,7 +101,6 @@ function fakes(options: FakeOptions = {}) {
 		}),
 		destroy: vi.fn(),
 	};
-	// A function, not an arrow: checkRender calls it with `new` (vitest 4 rejects arrow constructors).
 	const BrowserWindow = vi.fn(function (options: { width: number; height: number }) {
 		created = [options.width, options.height];
 		viewport = [...created];
@@ -135,7 +117,6 @@ describe("checkRender", () => {
 		const f = fakes();
 		await expect(checkRender(f as never, { url: "https://example.com/", width: 720 })).rejects.toThrow(/daemon render URL/);
 		await expect(checkRender(f as never, { url: url.replace("/renders/", "/files/"), width: 720 })).rejects.toThrow(/daemon render URL/);
-		// The pattern passes it; parsing does not.
 		await expect(checkRender(f as never, { url: url.replace("3001", "99999"), width: 720 })).rejects.toMatchObject({
 			code: "INVALID_ARGUMENT",
 		});
@@ -155,9 +136,6 @@ describe("checkRender", () => {
 			contentHeight: 412,
 			consoleMessages: [{ level: "error", text: "Uncaught ReferenceError: d3 is not defined" }],
 		});
-		// Offscreen so it paints without ever being on screen; one fixed partition
-		// with no "persist:" prefix, so checks share one in-memory session. The
-		// size is the viewport's, so the page lays out at the asked-for width.
 		expect(f.BrowserWindow).toHaveBeenCalledWith({
 			show: false,
 			width: 390,
@@ -175,7 +153,6 @@ describe("checkRender", () => {
 		const decide = vi.fn();
 		f.permissionRequest({}, "media", decide);
 		expect(decide).toHaveBeenCalledWith(false);
-		// Read where the page's own globals cannot reach.
 		expect(f.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(999, [{ code: `[${CONTENT_HEIGHT_SCRIPT}]` }]);
 		expect(f.contents.executeJavaScript).not.toHaveBeenCalled();
 		expect(f.window.destroy).toHaveBeenCalled();
@@ -185,7 +162,6 @@ describe("checkRender", () => {
 		const f = fakes();
 		await checkRender(f as never, { url, width: 390 });
 		await checkRender(f as never, { url, width: 390 });
-		// Without <-loopback>, Chromium would reach loopback directly.
 		expect(f.contents.session.setProxy).toHaveBeenCalledTimes(1);
 		expect(f.contents.session.setProxy).toHaveBeenCalledWith({ proxyRules: "socks5://127.0.0.1:1080", proxyBypassRules: "<-loopback>" });
 		expect(f.contents.session.setProxy.mock.invocationCallOrder[0]).toBeLessThan(f.contents.loadURL.mock.invocationCallOrder[0]!);
@@ -207,7 +183,6 @@ describe("checkRender", () => {
 		const linkPreview = "http://127.0.0.1:3001/api/v1/link-preview?url=https://attacker.example/?d=secret";
 		const f = fakes({ requests: [url, linkPreview, "https://cdn.example/d3.js"] });
 		const result = await checkRender(f as never, { url, width: 390, network: "none" });
-		// Public addresses are the proxy's to refuse; the guard only holds the daemon to the page.
 		expect(f.cancelled).toEqual({ [url]: false, [linkPreview]: true, "https://cdn.example/d3.js": false });
 		expect(result.consoleMessages[0]).toEqual({
 			level: "warning",
@@ -232,8 +207,6 @@ describe("checkRender", () => {
 		expect(f.events).toEqual(["resize 390x412", "invalidate", "paint"]);
 	});
 
-	// Regression: on Electron 44 every check, even of a one-line page, failed
-	// with UnknownVizError from capturePage().
 	it("passes a trivial page without capturePage(), which Electron 44 rejects for an offscreen window", async () => {
 		const f = fakes({ contentHeight: 18 });
 		await expect(checkRender(f as never, { url, width: 720 })).resolves.toMatchObject({
@@ -415,11 +388,6 @@ describe("measureRender", () => {
 
 	const published = "http://127.0.0.1:3001/api/v1/sessions/p-1/renders/0b7c4f6e-1d2a-4e8b-9c3d-5a6f7e8d9c0b";
 
-	/**
-	 * A page whose viewport reaches each new width one read late, as a real
-	 * resize does, and whose height follows its viewport one read later still,
-	 * as a page that lays itself out again in a resize handler does.
-	 */
 	function measuring(f: ReturnType<typeof fakes>, heightAt: (width: number) => number) {
 		let viewport = 0;
 		let laidOutAt = 0;
@@ -447,8 +415,6 @@ describe("measureRender", () => {
 		expect(f.BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({ show: false, width: 640, height: 80 }));
 		expect(f.contents.loadURL).toHaveBeenCalledTimes(1);
 		expect(f.contents.loadURL).toHaveBeenCalledWith(published);
-		// A read from before the page reached the width is not used, and the
-		// height is read again once the page's resize handlers have run.
 		expect(f.events).toEqual([
 			"resize 640x80",
 			"read 0",
@@ -463,7 +429,6 @@ describe("measureRender", () => {
 			"read 1144",
 			"read 1144",
 		]);
-		// Read where the page's own globals cannot reach.
 		expect(f.contents.executeJavaScriptInIsolatedWorld).toHaveBeenCalledWith(999, [{ code: expect.stringContaining(CONTENT_HEIGHT_SCRIPT) }]);
 		expect(f.contents.executeJavaScript).not.toHaveBeenCalled();
 		expect(f.window.destroy).toHaveBeenCalled();
@@ -471,7 +436,6 @@ describe("measureRender", () => {
 
 	it("takes each height after the page has laid itself out at that width", async () => {
 		const f = fakes();
-		// The height a resize handler sets from innerWidth.
 		measuring(f, (width) => (width < 500 ? 900 : 300));
 		await expect(measureRender(f as never, { url: published, widths: [320, 640, 375] })).resolves.toEqual({
 			heights: [
@@ -545,7 +509,6 @@ describe("measureRender", () => {
 
 	it("fails within a second at a width the viewport never reaches, and destroys the window", async () => {
 		vi.useFakeTimers();
-		// A platform that clamps the window, and an isolated-world script that fails.
 		for (const answer of [[1_000, 300], undefined]) {
 			const f = fakes();
 			f.contents.executeJavaScriptInIsolatedWorld.mockResolvedValue(answer);

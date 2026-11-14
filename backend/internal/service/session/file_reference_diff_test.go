@@ -33,7 +33,7 @@ func TestFileReferenceExpandedContextAcrossSourceBoundaries(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	runGit(t, repo, "remote", "add", "origin", "https://example.test/acme/repo.git")
 	before, after := expandedContextFixture()
-	writeWorkspaceFile(t, repo, "README.md", strings.Join(before, "\n")) // No final newline.
+	writeWorkspaceFile(t, repo, "README.md", strings.Join(before, "\n"))
 	runGit(t, repo, "add", "README.md")
 	runGit(t, repo, "commit", "-m", "expanded context base")
 	base := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
@@ -67,7 +67,6 @@ func TestFileReferenceExpandedContextAcrossSourceBoundaries(t *testing.T) {
 	pr := ports.ChatFileReferenceSource{Kind: "pull_request", Number: 42, Snapshot: head}
 	check(t, &Service{store: store}, pr, "")
 	check(t, &Service{store: store}, pr, head)
-	// A pinned commit/PR must ignore subsequent live changes.
 	writeWorkspaceFile(t, repo, "README.md", "unrelated live contents\n")
 	check(t, &Service{store: store}, pr, head)
 }
@@ -99,7 +98,6 @@ func TestCapturedDiffExpandedMixedInterval(t *testing.T) {
 			if !ok || result.Line != 50 || result.EndLine != 70 {
 				t.Fatalf("ending=%q final=%v: %+v %v", ending, finalNewline, result, ok)
 			}
-			// Dropping even a context row cannot join unrelated code into a highlight.
 			ref.Lines = append(ref.Lines[:3:3], ref.Lines[4:]...)
 			if _, ok := resolveCapturedDiffInterval(ref, result, patch, WorkspaceFileRevision{Exists: true, Content: oldText}, WorkspaceFileRevision{Exists: true, Content: newText}); ok {
 				t.Fatal("accepted a nonconsecutive capture")

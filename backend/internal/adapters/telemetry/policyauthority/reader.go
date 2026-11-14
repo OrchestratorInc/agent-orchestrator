@@ -1,5 +1,3 @@
-// Package policyauthority reads the desktop-owned telemetry policy file: the
-// user's "Share error events" choice, which also gates the daemon's events.
 package policyauthority
 
 import (
@@ -16,24 +14,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// FileName is the policy file the desktop app writes into the data dir.
 const FileName = "telemetry_policy.json"
 
-// Snapshot is one read of the policy file. Present is false when the app has
-// not written one yet.
 type Snapshot struct {
 	Present           bool
 	EventsEnabled     bool
 	ConsentGeneration string
 }
 
-// Reader reads one fixed telemetry-policy authority path.
 type Reader struct{ path string }
 
-// New constructs an authority reader for path.
 func New(path string) *Reader { return &Reader{path: path} }
 
-// Read validates and reads the durable authority.
 func (r *Reader) Read(ctx context.Context) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
@@ -101,8 +93,6 @@ func validTimestamp(value string) bool {
 	return err == nil && parsed.Location() == time.UTC
 }
 
-// EventsAllowed reports whether the daemon may send error events. A missing
-// policy permits sending; a recorded opt-out or environment veto stops it.
 func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool) bool {
 	if !envEvents || !envExplicit {
 		return false

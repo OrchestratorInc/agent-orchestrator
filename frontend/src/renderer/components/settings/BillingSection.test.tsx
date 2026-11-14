@@ -69,8 +69,6 @@ describe("BillingSection", () => {
 		await appI18n.changeLanguage("en");
 		vi.clearAllMocks();
 		mocks.orgRole = "owner";
-		// An older control plane without `offering`: the billing mode comes from
-		// the /billing summary (the fallback path).
 		mocks.client.me.mockResolvedValue({ user: { id: "user-1" }, organizations: [{ id: "org-1", role: "owner" }] });
 	});
 
@@ -88,7 +86,6 @@ describe("BillingSection", () => {
 		expect(within(card("starter")).getByText("2 simultaneous cloud agents")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("4 simultaneous cloud agents")).toBeInTheDocument();
 		expect(within(card("pro")).queryByText("16 sessions in total")).not.toBeInTheDocument();
-		// Session-hour windows and resets stay on the Usage section, not the plan cards.
 		expect(within(card("pro")).queryByText("16 session hours every 6 h")).not.toBeInTheDocument();
 		expect(within(card("starter")).queryByText("1 usage reset a month")).not.toBeInTheDocument();
 		expect(screen.queryByText("Usage")).not.toBeInTheDocument();
@@ -110,7 +107,6 @@ describe("BillingSection", () => {
 		expect(within(card("starter")).getByText("Agents keep working when your computer sleeps")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Cloud relay for seamless connectivity across devices")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Unlimited devices, including mobile (bring your own)")).toBeInTheDocument();
-		// Plan limits only cap cloud agents, so they sit under their own label.
 		const starterCloud = within(card("starter")).getByRole("list", { name: "Cloud agents" });
 		expect(within(starterCloud).getByText("1 cloud project")).toBeInTheDocument();
 		expect(within(starterCloud).getByText("2 simultaneous cloud agents")).toBeInTheDocument();
@@ -121,7 +117,6 @@ describe("BillingSection", () => {
 		expect(within(enterpriseCloud).getByText("Unlimited cloud projects")).toBeInTheDocument();
 		expect(within(enterpriseCloud).getByText("Unlimited simultaneous cloud agents")).toBeInTheDocument();
 		expect(within(card("enterprise")).getByText("Collaborate on cloud agents")).toBeInTheDocument();
-		// Bring-your-own Coder is a Pro feature.
 		expect(within(card("pro")).getByText("Bring your own Coder deployment")).toBeInTheDocument();
 		expect(within(card("enterprise")).queryByText("Bring your own Coder deployment")).not.toBeInTheDocument();
 		expect(within(card("starter")).queryByText(/Coder/)).not.toBeInTheDocument();
@@ -178,8 +173,6 @@ describe("BillingSection", () => {
 		renderSection();
 		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
-		// When Free starts is a status, so it is plain text in the Free row, not a
-		// disabled button.
 		expect(within(card("free")).getByText(/^Starts /)).toBeInTheDocument();
 		expect(within(card("free")).queryByRole("button", { name: /^Starts / })).not.toBeInTheDocument();
 		expect(within(card("free")).queryByRole("button", { name: "Downgrade" })).not.toBeInTheDocument();

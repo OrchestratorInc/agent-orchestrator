@@ -110,7 +110,6 @@ func TestActionServiceChangeState_TransitionsPersistAndNotifyLifecycle(t *testin
 		wantDraft bool
 	}{
 		{action: "close", want: domain.PRStateClosed},
-		// A closed draft stays a draft, and reopens as one.
 		{action: "close", modify: func(pr *domain.PullRequest) { pr.Draft = true }, want: domain.PRStateClosed, wantDraft: true},
 		{action: "reopen", modify: func(pr *domain.PullRequest) { pr.Closed = true }, want: domain.PRStateOpen},
 		{action: "reopen", modify: func(pr *domain.PullRequest) { pr.Closed = true; pr.Draft = true }, want: domain.PRStateDraft, wantDraft: true},
@@ -152,9 +151,6 @@ func TestActionServiceChangeState_TransitionsPersistAndNotifyLifecycle(t *testin
 	}
 }
 
-// The provider read after a state change has no CI log tails; the stored ones
-// keep an unchanged failure's CI nudge signature, so the agent is not told
-// about the same failure again because the PR went to draft.
 func TestActionServiceChangeState_CarriesStoredCILogTailsToLifecycle(t *testing.T) {
 	pr := openPRFixture()
 	failed := ports.SCMCheckObservation{Name: "format", Status: string(domain.PRCheckFailed), ProviderID: "job-1"}
@@ -164,7 +160,6 @@ func TestActionServiceChangeState_CarriesStoredCILogTailsToLifecycle(t *testing.
 	}}}
 	store := &fakeActionStore{pr: pr, ok: true, checks: []domain.PullRequestCheck{
 		{Name: "format", CommitHash: pr.HeadSHA, Status: domain.PRCheckFailed, LogTail: "gofmt: main.go"},
-		// An older head's tail is not this failure's.
 		{Name: "format", CommitHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: domain.PRCheckFailed, LogTail: "stale"},
 	}}
 	lifecycle := &fakeActionLifecycle{}
@@ -317,7 +312,6 @@ func TestActionServicePostComment_ThreadMustBelongToPR(t *testing.T) {
 	if len(scm.commentRequests) != 0 {
 		t.Fatalf("posted to a foreign thread")
 	}
-	// A thread only the live listing knows is accepted but not stored early.
 	scm.commentResult = ports.SCMCommentResult{ID: "PRRC_9"}
 	if _, err := svc.PostComment(context.Background(), CommentRequest{PRID: "42", PRURL: pr.URL, Body: "x", ThreadID: "PRRT_live"}); err != nil {
 		t.Fatal(err)

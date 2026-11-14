@@ -19,11 +19,6 @@ import { localePath, splitLocalePath, type Translations, withTrailingSlash } fro
 import { frameworkTranslations } from "@/i18n/ui-messages";
 import { DocsSearchDialog } from "./search-dialog";
 
-/**
- * The URL of `path` with the current query and section, so a reader moved to
- * another language keeps both. Each language has its own root layout, so the
- * move is a full page load, and the browser then scrolls to the section.
- */
 function withLocationSuffix(path: string): string {
   return `${path}${window.location.search}${window.location.hash}`;
 }
@@ -31,15 +26,6 @@ function withLocationSuffix(path: string): string {
 const LOCALE_ITEMS = SUPPORTED_LOCALES.map((locale) => ({ locale, name: LOCALE_LABELS[locale] }));
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
-/**
- * A translated article has its own URL, and `urlLocale` is its language. The
- * interface follows the URL there, whatever language is saved.
- *
- * Every other page has one URL and is prerendered in English. The saved
- * language is applied after hydration, and the switcher changes it in place.
- * When the saved language has a translation of the page, the reader is sent
- * to it.
- */
 export function Providers({
   urlLocale,
   translations = {},
@@ -50,8 +36,6 @@ export function Providers({
   children: ReactNode;
 }) {
   const pathname = usePathname();
-  // Null until the cookie is read. Renders in English meanwhile, so the
-  // first render matches the prerendered HTML.
   const [saved, setSaved] = useState<SupportedLocale | null>(null);
   const locale = urlLocale ?? saved ?? DEFAULT_LOCALE;
 
@@ -59,14 +43,10 @@ export function Providers({
     if (!urlLocale) setSaved(readLocaleCookie(document.cookie));
   }, [urlLocale]);
 
-  // The inline head script already set <html lang> from the cookie, so
-  // only write it once the cookie has been read.
   useEffect(() => {
     if (saved) document.documentElement.lang = saved;
   }, [saved]);
 
-  // The head script handles the first page load; this handles navigation
-  // to a translated article inside the site.
   useEffect(() => {
     if (urlLocale || !saved || saved === DEFAULT_LOCALE) return;
     const path = withTrailingSlash(pathname);
@@ -87,7 +67,6 @@ export function Providers({
       if (next !== DEFAULT_LOCALE && translations[path]?.includes(next)) {
         window.location.assign(withLocationSuffix(localePath(path, next)));
       } else if (urlLocale) {
-        // No translation in that language, so go to the English article.
         window.location.assign(withLocationSuffix(path));
       } else {
         setSaved(next);

@@ -31,9 +31,6 @@ var (
 	_ ports.AgentTranscriptLocator       = (*Plugin)(nil)
 )
 
-// NativeHistoryID names Aider's one native history file per repository. Aider
-// persists no UUID; the original canonical filename remains the stable handle
-// after its native Markdown is copied into AO's worktree.
 func NativeHistoryID(root string) string {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
@@ -42,7 +39,6 @@ func NativeHistoryID(root string) string {
 	return "aider_" + hex.EncodeToString(sum[:])
 }
 
-// NativeHistoryFingerprint pins the exact native Markdown bytes by size and SHA256.
 func NativeHistoryFingerprint(data []byte) string {
 	sum := sha256.Sum256(data)
 	return strconv.Itoa(len(data)) + ":" + hex.EncodeToString(sum[:])
@@ -115,9 +111,6 @@ func checkAiderIdentity(ctx context.Context, root *os.Root, cwd, id string) erro
 	return nil
 }
 
-// relocateAiderHistory copies the selected native Markdown into the AO
-// worktree. Existing history is accepted only against the pinned import-time
-// snapshot. A marker preserves its file-based identity; no file is overwritten.
 func relocateAiderHistory(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if !aiderHistoryID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.LaunchCWD) || filepath.Clean(r.TranscriptPath) != filepath.Join(filepath.Clean(r.ConfigDir), aiderHistoryFile) {
 		return errors.New("aider import identity or source path changed")
@@ -177,8 +170,6 @@ func relocateAiderHistory(ctx context.Context, r ports.ImportedSessionRelocation
 	return writeAiderPreparation(ctx, dst, r)
 }
 
-// PrepareImportedSession returns the native copy for AO's separate resume
-// checkpoint, preserving the original repository and history as provenance.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	if err := relocateAiderHistory(ctx, r); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -186,8 +177,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.LaunchCWD, TranscriptPath: filepath.Join(r.LaunchCWD, aiderHistoryFile)}, nil
 }
 
-// GetRestoreCommand restores Aider's native Markdown into its own message
-// history. Explicit flags pin the file in the AO worktree, overriding config.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	id := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if !aiderHistoryID.MatchString(id) {
@@ -218,7 +207,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// LocateTranscript finds the repository's exact native Markdown history.
 func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if !aiderHistoryID.MatchString(ref.NativeSessionID) || ref.ConfigDir == "" {
 		return "", false, ctx.Err()
@@ -241,7 +229,6 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	return filepath.Join(ref.ConfigDir, aiderHistoryFile), err == nil, err
 }
 
-// ProbeNativeSession reports whether the selected file still holds native history.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if ref.ConfigDir == "" {
 		return ports.NativeSessionAvailabilityUnknown, ctx.Err()

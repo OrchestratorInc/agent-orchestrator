@@ -78,8 +78,6 @@ func TestNativeForkHandoffRetainsEachExchangeOnce(t *testing.T) {
 			if err := svc.StopChat(ctx, rec.ID); err != nil {
 				t.Fatal(err)
 			}
-			// The Terminal's app-server forks A. Exercise the production protocol
-			// operation before resuming its full copied transcript through Chat.
 			terminalDriver, terminalServer := newTestDriver(t)
 			terminalServer.reply("thread/resume", `{"thread":{"id":"thread-A"}}`)
 			terminal, err := terminalDriver.Resume(ctx, ports.ChatResumeConfig{WorkspacePath: "/tmp/ws", ProviderConversationID: "thread-A"})
@@ -189,12 +187,10 @@ func TestNativeForkHandoffRetainsEachExchangeOnce(t *testing.T) {
 			if err := svc.StopChat(ctx, rec.ID); err != nil {
 				t.Fatal(err)
 			}
-			// A new driver and service exercise a daemon restart, not cached replay.
 			restartedDriver, restartedServer := newTestDriver(t)
 			restartedServer.reply("thread/resume", `{"thread":{"id":"thread-B"}}`)
 			restartedServer.reply("thread/read", replay)
 			if tc.parent == "thread-middle" {
-				// Restart resolves the chain again; no in-memory ancestry cache.
 				restartedServer.respondSequence("thread/read", forkHandoffHistory("thread-B", tc.parent, tc.firstAnswer, true), `{"thread":{"id":"thread-middle","forkedFromId":"thread-A"}}`)
 			}
 			svc = chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Reader: reader, Drivers: handoffDriverRegistry{restartedDriver}, NewID: uuid.NewString})

@@ -1,10 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
-/**
- * Dialog semantics for a maximized pop-out overlay: focus moves into the
- * overlay on open and returns to the opener on close, and Escape un-maximizes
- * unless a nested menu or popup already consumed it.
- */
 export function usePopOutDialog<T extends HTMLElement>(onClose?: () => void) {
 	const ref = useRef<T>(null);
 	useEffect(() => {

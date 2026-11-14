@@ -1,9 +1,5 @@
 package github
 
-// This file contains the GitHub implementation of the provider-neutral SCM observer contract.
-// It handles repository parsing, REST ETag guards, branch PR discovery, GraphQL
-// batch PR reads, failed-check log tails, and review-thread pagination.
-
 import (
 	"context"
 	"crypto/sha256"
@@ -24,31 +20,18 @@ import (
 const scmBatchCheckContextLimit = 20
 
 const (
-	// githubReviewThreadPageSize fetches the latest review window cheaply for
-	// the common case while still covering active review feedback.
-	githubReviewThreadPageSize = 50
-	// githubReviewCommentLimitPerThread stores only the leading comments needed
-	// to understand a thread without making one pathological thread dominate
-	// GraphQL cost.
+	githubReviewThreadPageSize        = 50
 	githubReviewCommentLimitPerThread = 5
-	// githubReviewThreadMaxPages bounds the explicit older-thread fallback.
-	githubReviewThreadMaxPages = 2
-	// githubReviewSummaryLimit bounds submitted decisive reviews used for summary links.
-	githubReviewSummaryLimit = 20
-	// githubCheckRunsMaxPages bounds the pagination when fetching all check runs
-	// for a commit. This prevents unbounded pagination on malformed responses.
-	githubCheckRunsMaxPages = 10
+	githubReviewThreadMaxPages        = 2
+	githubReviewSummaryLimit          = 20
+	githubCheckRunsMaxPages           = 10
 )
 
-// ParseRepository normalizes a GitHub remote/origin URL into a provider-neutral
-// repository key. It accepts https://github.com/owner/repo(.git),
-// git@github.com:owner/repo(.git), and path-only owner/repo inputs used by tests.
 func (p *Provider) ParseRepository(remote string) (ports.SCMRepo, bool) {
 	repo, ok := parseGitHubRepo(remote)
 	return repo, ok
 }
 
-// RepoPRListGuard checks GitHub's cheap open-PR-list ETag guard.
 func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag string) (ports.SCMGuardResult, error) {
 	q := url.Values{}
 	q.Set("state", "open")
@@ -62,9 +45,6 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag), NotModified: resp.NotModified}, nil
 }
 
-// ListPRsByRepo lists pull requests in the repository, optionally filtered to
-// those updated after updatedAfter (zero = full listing). It paginates the REST
-// pulls endpoint using state=open and sort=updated
 func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
 	out := []ports.SCMPRObservation{}
@@ -95,13 +75,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	}
 }
 
-// ListOpenPRsByBranch lists the open pull requests whose head is branch in
-// repo itself (head=<owner>:<branch>), so PRs from forks are not returned. One
-// request: GitHub filters on the server, so a repository's other open PRs
-// are never paged through. Reading only the first page of 100 is deliberate:
-// GitHub allows one open PR per head and base, so a branch with more than 100
-// open PRs would need more than 100 base branches. The GitLab provider pages
-// because its client already has a pagination helper; this one has none.
 func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
 	q := url.Values{}
 	q.Set("state", "open")
@@ -122,36 +95,19 @@ func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, 
 	return out, nil
 }
 
-// githubCheckRunsPageSize fetches the complete check-run set for a commit in a
-// single REST page when the commit has no more than this many runs. A commit
-// virtually never exceeds GitHub's 100-result cap, so one request carries the
-// whole representation and GitHub's ETag reflects every contributing run.
 const githubCheckRunsPageSize = 100
 
-// restCheckRunsPage is the GitHub list-check-runs response envelope.
 type restCheckRunsPage struct {
 	TotalCount int                  `json:"total_count"`
 	CheckRuns  []restCommitCheckRun `json:"check_runs"`
 }
 
-// restCommitCheckRun is the subset of a GitHub check-run we condition the
-// aggregate CI-state guard on.
 type restCommitCheckRun struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 }
 
-// CommitChecksGuard checks GitHub's per-commit check-runs guard. It conditions
-// the fast CI-state guard on the complete check-run set rather than a single
-// item: GitHub's ETag for a per_page=1 response only reflects that one run, so
-// a different workflow finishing (or failing, or going pending) can leave the
-// returned item unchanged and GitHub answers 304 even though the aggregate CI
-// state AO displays has changed. Requesting the full page makes the guard
-// represent all runs that contribute to the state, and paginating plus
-// fingerprinting stays correct when a commit carries more than one page of
-// runs. DefaultPRMaxAge remains the safety backstop for PR metadata changes not
-// represented by check-state guards.
 func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, headSHA, etag string) (ports.SCMGuardResult, error) {
 	if strings.TrimSpace(headSHA) == "" {
 		return ports.SCMGuardResult{}, fmt.Errorf("%w: empty head sha", ErrNotFound)
@@ -163,21 +119,13 @@ func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, he
 		return ports.SCMGuardResult{}, err
 	}
 	if resp.NotModified {
-		// GitHub confirmed the whole first page is unchanged, which covers every
-		// run for the overwhelmingly common single-page case.
 		return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag), NotModified: true}, nil
 	}
 	page, err := decodeRestCheckRunsPage(resp.Body)
 	if err != nil {
-		// Decode failure is unexpected but shouldn't block the whole repo poll.
-		// Return NotModified=false with no ETag so the observer falls back to the
-		// full GraphQL refresh path; DefaultPRMaxAge bounds staleness.
 		return ports.SCMGuardResult{}, nil //nolint:nilerr // decode failure falls back to the max-age refresh path
 	}
 	if page.TotalCount > len(page.CheckRuns) {
-		// The commit has more runs than one page fits; rely on a stable
-		// fingerprint over the complete set instead of a single page's ETag so a
-		// transition on a later page still invalidates the guard.
 		runs, err := p.fetchRemainingCommitCheckRuns(ctx, repo, headSHA, page)
 		if err != nil {
 			return ports.SCMGuardResult{}, err
@@ -188,12 +136,9 @@ func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, he
 		}
 		return ports.SCMGuardResult{ETag: fp}, nil
 	}
-	// A single page carried the whole representation: GitHub's ETag is the
-	// correct validator, so any run transition yields a fresh ETag.
 	return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag)}, nil
 }
 
-// decodeRestCheckRunsPage unmarshals a GitHub list-check-runs body.
 func decodeRestCheckRunsPage(body []byte) (restCheckRunsPage, error) {
 	var page restCheckRunsPage
 	if err := json.Unmarshal(body, &page); err != nil {
@@ -202,8 +147,6 @@ func decodeRestCheckRunsPage(body []byte) (restCheckRunsPage, error) {
 	return page, nil
 }
 
-// fetchRemainingCommitCheckRuns gathers the check runs a commit carries beyond
-// the first page and returns every run across all pages.
 func (p *Provider) fetchRemainingCommitCheckRuns(ctx context.Context, repo ports.SCMRepo, headSHA string, page restCheckRunsPage) ([]restCommitCheckRun, error) {
 	runs := append([]restCommitCheckRun(nil), page.CheckRuns...)
 	for pageNum := 2; len(runs) < page.TotalCount && pageNum <= githubCheckRunsMaxPages; pageNum++ {
@@ -226,9 +169,6 @@ func (p *Provider) fetchRemainingCommitCheckRuns(ctx context.Context, repo ports
 	return runs, nil
 }
 
-// commitCheckRunsFingerprint is a stable hash of a commit's complete check-run
-// set, sorted so the order GitHub returns runs in cannot matter. It only hashes
-// the fields that determine the aggregate CI state (name, status, conclusion).
 func commitCheckRunsFingerprint(runs []restCommitCheckRun) string {
 	parts := make([]string, len(runs))
 	for i, r := range runs {
@@ -237,29 +177,12 @@ func commitCheckRunsFingerprint(runs []restCommitCheckRun) string {
 	return stableCheckFingerprint(parts)
 }
 
-// stableCheckFingerprint computes a stable SHA256 hash of a sorted string slice.
-// The slice is sorted, joined with "\x1e", then hashed. This shared logic is
-// used by both commitCheckRunsFingerprint and githubFailedFingerprint.
 func stableCheckFingerprint(parts []string) string {
 	sort.Strings(parts)
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1e")))
 	return hex.EncodeToString(sum[:])
 }
 
-// FetchPullRequests fetches normalized PR/check metadata for up to 25 PR refs
-// in one GraphQL request, positionally aligned with refs: out[i] answers
-// refs[i]. A PR the batch query could not resolve (deleted repo, permissions,
-// an old name recreated so the redirect no longer lands) leaves a
-// Fetched=false placeholder carrying ErrNotFound at its index, so the
-// observer marks that ref refresh-incomplete and can log the permanent miss
-// distinctly from a transient provider failure. The observer owns chunking;
-// this method rejects larger batches so tests catch accidental over-batching.
-//
-// PR details cost far more than the rest of the query, so they are read only
-// when they can have changed. A ref with no DetailsUpdatedAt gets them in the
-// batch query itself. A ref with one gets the light fields; if the PR's
-// updatedAt has moved from it, one follow-up query reads the details of every
-// such PR in the batch, and otherwise the observation's Details stay nil.
 func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	if len(refs) == 0 {
 		return nil, nil
@@ -307,18 +230,12 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 	for i := range out {
 		out[i].PR.Details = details[i]
 	}
-	// Details that were needed but not read stay owed until a poll stores them.
 	for _, i := range stale {
 		out[i].PR.DetailsPending = details[i] == nil
 	}
 	return out, nil
 }
 
-// fetchPullRequestDetails reads, in one query, the details of the PRs at the
-// stale indexes of refs into details. Details are view-only, so a failed read
-// is logged and leaves them nil: the observation still carries the PR's state
-// and CI, the stored details are kept, and the observation is marked
-// DetailsPending so the next poll reads them again.
 func (p *Provider) fetchPullRequestDetails(ctx context.Context, refs []ports.SCMPRRef, stale []int, details []*domain.PullRequestDetails) {
 	if len(stale) == 0 {
 		return
@@ -341,7 +258,6 @@ func (p *Provider) fetchPullRequestDetails(ctx context.Context, refs []ports.SCM
 	}
 }
 
-// FetchFailedCheckLogTail fetches and tails a failed GitHub Actions job log.
 func (p *Provider) FetchFailedCheckLogTail(ctx context.Context, repo ports.SCMRepo, check ports.SCMCheckObservation) (string, error) {
 	if check.ProviderID == "" {
 		return "", nil
@@ -360,7 +276,6 @@ func (p *Provider) FetchFailedCheckLogTail(ctx context.Context, repo ports.SCMRe
 	return tailLines(log, ciFailureLogTailLines), nil
 }
 
-// FetchReviewThreads fetches review threads separately from the fast PR/CI path.
 func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (ports.SCMReviewObservation, error) {
 	latest, reviews, decision, pi, err := p.fetchReviewThreadPage(ctx, ref, "", true)
 	if err != nil {
@@ -371,10 +286,6 @@ func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (
 	}
 	out := latest
 	startCursor := str(pi["startCursor"])
-	// GitHub returns nodes in connection order even when selecting last:N, so
-	// latest[0] is the oldest thread in the latest window. If that boundary
-	// thread is still unresolved, fetch one older window to avoid hiding older
-	// active review feedback behind the normal 50-thread cost cap.
 	oldestLatestUnresolved := len(latest) == 0 || !latest[0].Resolved
 	if oldestLatestUnresolved {
 		if startCursor == "" {
@@ -454,8 +365,6 @@ func restListPullToSCM(pull restListPull) ports.SCMPRObservation {
 	}
 }
 
-// buildSCMBatchQuery selects the light PR fields for every ref, plus the
-// details fields for a ref with no DetailsUpdatedAt.
 func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
 	return buildPRQuery(refs, func(ref ports.SCMPRRef) string {
 		if ref.DetailsUpdatedAt.IsZero() {
@@ -465,7 +374,6 @@ func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
 	})
 }
 
-// buildSCMDetailsQuery selects only the details fields of each ref's PR.
 func buildSCMDetailsQuery(refs []ports.SCMPRRef) (string, []string) {
 	return buildPRQuery(refs, func(ports.SCMPRRef) string { return scmPRDetailsFields() })
 }
@@ -484,7 +392,6 @@ func buildPRQuery(refs []ports.SCMPRRef, fields func(ports.SCMPRRef) string) (st
 	return b.String(), aliases
 }
 
-// scmPRFields are the state, CI and merge fields every poll reads.
 func scmPRFields() string {
 	return strings.ReplaceAll(`
 number id url state isDraft merged closed title additions deletions changedFiles
@@ -500,10 +407,6 @@ commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONT
 `, "CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit))
 }
 
-// scmPRDetailsFields are the view-only details: description, labels,
-// requested reviewers, commits and conversation comments. Editing the
-// description, labels or reviewers, pushing commits and commenting all move
-// the PR's updatedAt, which is what lets a poll skip them.
 func scmPRDetailsFields() string {
 	return strings.NewReplacer(
 		"LABEL_LIMIT", strconv.Itoa(scmDetailsLabelLimit),
@@ -672,10 +575,6 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	return mapRollupState(str(roll["state"]))
 }
 
-// scmCISummary is GitHub's rollup state, except a FAILURE that only superseded
-// or cancelled check runs cause: rollup state counts every run on the commit
-// and treats cancelled as failed, so with the full context list in hand the
-// verdict comes from the newest run per check.
 func scmCISummary(pr map[string]any) domain.CIState {
 	ci := ciSummaryFromRollupState(pr)
 	if ci != domain.CIFailing || scmContextsPaginated(pr) {
@@ -773,11 +672,6 @@ func mergeabilityObservation(providerMergeable, providerMergeState, ci, review s
 		out.State = string(domain.MergeBlocked)
 		addBlocker("blocked_by_provider")
 	}
-	// UNSTABLE outranks draft / CI / review (doc.go rule 3, and the
-	// mergeabilityFromGraphQL sibling): GitHub reports UNSTABLE when the PR
-	// *is* mergeable but a non-required check failed or is pending. Such a PR
-	// also has a FAILURE rollup (-> ci == failing), so leaving this below the
-	// blockers downgraded every genuinely-mergeable UNSTABLE PR to blocked.
 	if state == "UNSTABLE" {
 		out.State = string(domain.MergeUnstable)
 		return out

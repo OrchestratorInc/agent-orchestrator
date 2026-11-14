@@ -201,7 +201,6 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
-		// The click re-checks the release, then installs exactly that one here.
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "claude-code" } },
 			body: { method: "official-installer", operation: "update", expectedVersion: "2.1.292" },
@@ -225,7 +224,6 @@ describe("startup harness update notice", () => {
 		const before = useUiStore.getState().settingsModal;
 		mountNotice();
 		await screen.findByRole("button", { name: "Update all" });
-		// Collapsed, several updates read as one summary card.
 		expect(screen.queryAllByRole("article")).toHaveLength(0);
 		expect(screen.getByRole("group", { name: "Agent updates available" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
@@ -243,7 +241,6 @@ describe("startup harness update notice", () => {
 		mockUpdatableStack();
 		mountNotice();
 		const updateAll = await screen.findByRole("button", { name: "Update all" });
-		// tailwind-merge drops text-primary-foreground when given a bare custom size such as text-caption.
 		expect(updateAll.className).toContain("text-primary-foreground");
 		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getByRole("button", { name: "Update all" }).className).toContain("text-primary-foreground");
@@ -261,7 +258,6 @@ describe("startup harness update notice", () => {
 			] });
 			client.setQueryData(installJobsQueryKey, [{ target: "cursor", status: "installing" }]);
 		});
-		// Claude Code is still eligible.
 		expect(screen.getByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => client.setQueryData(installerQueryKey, []));
 		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
@@ -285,7 +281,6 @@ describe("startup harness update notice", () => {
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		let replaced = false;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
-			// The updater replaced the binary before it exited with an error.
 			if (path === "/api/v1/agents/{agent}/update-advisory" && replaced) return { data: { agentId: "claude-code", status: "current", currentVersion: "2.1.292", latestVersion: "2.1.292", maintenanceMethod: "official-installer" } } as never;
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
@@ -311,7 +306,6 @@ describe("startup harness update notice", () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory") {
 				if (started) return { data: { agentId: "claude-code", status: "current", currentVersion: "2.1.293", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
-				// A release published after the card was checked.
 				if ((options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
 			}
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
@@ -439,7 +433,6 @@ describe("startup harness update notice", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
 		await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
 		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-		// Closed, the rows stay mounted but leave the accessibility tree.
 		await waitFor(() => expect(screen.queryAllByRole("article")).toHaveLength(0));
 		expect(screen.getByRole("button", { name: "Show all (2)" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss all updates" }));
@@ -726,7 +719,6 @@ describe("harness updates while sessions run", () => {
 		});
 		jobs = [{ target: "claude-code", status: "succeeded" }];
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", expect.anything()), { timeout: 3000 });
-		// The cached advisory still says behind; the card must not offer Update again.
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 		expect(screen.getByRole("button", { name: /Updating/ })).toBeDisabled();
 		advisories["claude-code"] = { ...claudeAdvisory, status: "current", currentVersion: "2.1.292" };

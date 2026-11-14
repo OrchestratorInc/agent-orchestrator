@@ -56,9 +56,6 @@ func TestOpenCodeV2ACPProviderHelper(t *testing.T) {
 	if os.Getenv("AO_TEST_OPENCODE_V2_ACP_PROVIDER") != "1" {
 		return
 	}
-	// With steering on, the fake answers like OpenCode 2.2.7: it advertises
-	// `_meta.steering`, holds each prompt open until a steer is injected, and
-	// refuses guidance worded "too late" the way an idle session does.
 	steering := os.Getenv("AO_TEST_OPENCODE_V2_STEERING") == "1"
 	var heldPrompt json.RawMessage
 	for scanner := bufio.NewScanner(os.Stdin); scanner.Scan(); {
@@ -412,11 +409,6 @@ func TestOtherOpenCodeHarnessCannotResumeColdConversation(t *testing.T) {
 	}
 }
 
-// OpenCode 2.2.7 added `_session/steering` and advertises it in the ACP
-// handshake. Steer must follow that handshake through the real OpenCode 2
-// binding and AO's persistent chat host: offered and delivered when the agent
-// advertises it, and absent on earlier 2.x builds, which leaves Chat on its
-// normal queue.
 func TestOpenCodeV2SteeringFollowsTheHandshake(t *testing.T) {
 	for _, test := range []struct {
 		name, version string
@@ -457,8 +449,6 @@ func TestOpenCodeV2SteeringFollowsTheHandshake(t *testing.T) {
 					t.Fatalf("StartDeferredTurn: %v", err)
 				}
 			}
-			// StartDeferredTurn sends session/prompt from a goroutine. Steer only
-			// once the fake has logged it, so the steer cannot overtake the prompt.
 			waitForCall(ctx, t, calls, "session/prompt:")
 			steerer := conversation.(ports.ChatSteerer)
 			if _, err := steerer.Steer(ctx, ref.ProviderTurnID, ports.ChatUserMessage{Text: "too late"}); !errors.Is(err, ports.ErrChatNoSteerableTurn) {
@@ -503,9 +493,6 @@ func TestOpenCodeV2SteeringFollowsTheHandshake(t *testing.T) {
 	}
 }
 
-// waitForCall waits until the fake OpenCode has logged a request whose line
-// starts with prefix. The fake reads requests in order, so anything sent after
-// this returns reaches it after that request.
 func waitForCall(ctx context.Context, t *testing.T, calls, prefix string) {
 	t.Helper()
 	for {

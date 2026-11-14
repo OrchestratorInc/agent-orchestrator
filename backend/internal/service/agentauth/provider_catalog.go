@@ -17,17 +17,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// catalogKeyMethod is the login method for a key whose provider the user
-// picks from the harness's own provider catalog.
 const catalogKeyMethod = "provider_key"
 
-// CatalogProvider is one provider from a harness's own catalog that AO can
-// configure with a key alone. Providers that also need a region, account,
-// or endpoint stay with the harness's native sign-in.
 type CatalogProvider struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	// Env is the first environment variable the harness reads for the key.
+	ID     string `json:"id"`
+	Name   string `json:"name"`
 	Env    string `json:"env,omitempty"`
 	Models int    `json:"models"`
 }
@@ -37,9 +31,6 @@ type catalogEntry struct {
 	models []string
 }
 
-// providerCatalog lists a harness's providers, from a catalog file the
-// harness keeps on disk (path and read) or a table generated from its
-// release (static), and saves a key in that harness's own credential store.
 type providerCatalog struct {
 	path   func() (string, error)
 	read   func([]byte) ([]catalogEntry, error)
@@ -47,7 +38,6 @@ type providerCatalog struct {
 	save   func(ctx context.Context, harness catalogHarness, providerID, key string) error
 }
 
-// catalogHarness is what a save needs to reach the installed harness.
 type catalogHarness struct {
 	binary  string
 	workDir string
@@ -68,8 +58,7 @@ var providerCatalogs = map[string]providerCatalog{
 }
 
 var (
-	catalogProviderID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	// A variable that holds the key itself, not a region, account, or URL.
+	catalogProviderID  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	catalogKeyVariable = regexp.MustCompile(`^[A-Z][A-Z0-9_]*(_API_KEY|_APIKEY|_KEY|_TOKEN)$`)
 )
 
@@ -86,8 +75,6 @@ var (
 	catalogCache   = map[string]catalogCacheEntry{}
 )
 
-// catalogProviders returns agentID's key-only providers sorted by name, or
-// ok=false when the harness has no readable catalog on this machine.
 func catalogProviders(agentID string) ([]catalogEntry, bool) {
 	catalog, ok := providerCatalogs[agentID]
 	if !ok {
@@ -133,8 +120,6 @@ func catalogProviders(agentID string) ([]catalogEntry, bool) {
 	return entries, len(entries) > 0
 }
 
-// readModelsDevCatalog reads the models.dev catalog shape:
-// {"<id>": {"id", "name", "env": [...], "models": {"<model>": {...}}}}.
 func readModelsDevCatalog(data []byte) ([]catalogEntry, error) {
 	var raw map[string]struct {
 		ID     string                     `json:"id"`
@@ -188,13 +173,10 @@ func openCodeCatalogPath() (string, error) {
 	return filepath.Join(cache, "opencode", "models.json"), nil
 }
 
-// saveOpenCodeProviderKey stores an API key under providerID in OpenCode's
-// auth.json, the same record OpenCode writes after `opencode auth login`.
 func saveOpenCodeProviderKey(ctx context.Context, providerID, key string) error {
 	return saveOpenCodeAPIKey(ctx, providerID+"_key", key)
 }
 
-// CatalogProviders lists the key-only providers in agentID's own catalog.
 func (s *Service) CatalogProviders(_ context.Context, agentID string) ([]CatalogProvider, error) {
 	if _, ok := planByAgentID[agentID]; !ok {
 		return nil, apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", "Unknown agent authentication target.", nil)
@@ -210,7 +192,6 @@ func (s *Service) CatalogProviders(_ context.Context, agentID string) ([]Catalog
 	return out, nil
 }
 
-// CatalogModels lists the model IDs agentID's catalog offers for providerID.
 func (s *Service) CatalogModels(_ context.Context, agentID, providerID string) ([]string, error) {
 	entry, err := catalogProvider(agentID, providerID)
 	if err != nil {
@@ -232,8 +213,6 @@ func catalogProvider(agentID, providerID string) (catalogEntry, error) {
 	return catalogEntry{}, apierr.Invalid("AGENT_AUTH_PROVIDER_UNKNOWN", "Choose a provider from this harness's catalog.", nil)
 }
 
-// saveCatalogKey writes key for providerID to the harness's own store. The
-// caller holds the harness's login reservation.
 func (s *Service) saveCatalogKey(ctx context.Context, plan Plan, providerID, key string) error {
 	agentID := plan.AgentID
 	if _, err := catalogProvider(agentID, providerID); err != nil {
@@ -244,8 +223,6 @@ func (s *Service) saveCatalogKey(ctx context.Context, plan Plan, providerID, key
 		harness.binary = plan.command[0]
 	}
 	if s.dataDir != "" {
-		// A neutral directory, so a harness that reads .env files from its
-		// working directory never picks up a project's.
 		harness.workDir = filepath.Join(s.dataDir, authWorkspaceRootName, "ui-"+agentID)
 		if err := os.MkdirAll(harness.workDir, 0o700); err != nil {
 			return apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")

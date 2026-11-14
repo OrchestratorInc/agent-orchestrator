@@ -13,73 +13,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Cline's hook system is git-style: each lifecycle hook is an executable script
-// placed in the workspace-local `.clinerules/hooks/` directory, named exactly
-// after the hook event, reading a JSON payload on stdin and writing a JSON
-// result on stdout (see docs.cline.bot hooks reference).
-//
-// The script naming is platform-dependent. On Unix, Cline discovers and runs an
-// extensionless script named after the event (`TaskStart`) via its shebang. On
-// Windows, Cline only discovers `<Event>.ps1` and runs it via
-// `powershell -File` (its VS Code hook discovery intentionally ignores
-// extensionless files on Windows, and the SDK maps `.ps1` to PowerShell), so AO
-// writes `<Event>.ps1` there. Writing the Unix form on Windows leaves the hooks
-// undiscovered: no activity callbacks fire and no native session id is ever
-// captured (see issue #4976).
-//
-// AO installs one wrapper script per managed event. Each script forwards the
-// hook payload to `ao hooks cline <subcommand>` and emits the no-op
-// continuation result Cline expects. Scripts carry a marker line (a comment in
-// both bash and PowerShell) so install is idempotent and uninstall recognizes
-// AO-owned scripts without an embedded template to diff against; user-authored
-// hooks (lacking the marker) are never touched.
 const (
 	clineHooksDirName = ".clinerules"
 	clineHooksSubDir  = "hooks"
 
-	// clineHookCommandPrefix identifies the hook commands AO owns. The CLI hook
-	// dispatcher routes "ao hooks cline <subcommand>" to DeriveActivityState.
 	clineHookCommandPrefix = "ao hooks cline "
 
-	// clineHookMarker tags AO-generated hook scripts so install/uninstall can
-	// distinguish them from user-authored Cline hooks in the same directory.
-	// It is a comment line in both bash and PowerShell.
 	clineHookMarker = "# ao-managed-cline-hook"
 )
 
-// clineHookSpec describes one hook AO installs: the native Cline hook event
-// (used as the script's filename) and the AO sub-command its wrapper forwards
-// to (used by DeriveActivityState).
 type clineHookSpec struct {
-	// Event is the native Cline hook name, which is also the script filename.
-	Event string
-	// Subcommand is the fixed AO hook sub-command name the wrapper invokes.
+	Event      string
 	Subcommand string
 }
 
-// clineManagedHooks is the source of truth for the hooks AO installs. The
-// native Cline events are mapped onto AO's fixed sub-command names so activity
-// derivation stays uniform across adapters:
-//   - TaskStart/Resume -> session-start       (a task begins or resumes: active)
-//   - UserPromptSubmit -> user-prompt-submit  (user message submitted: active)
-//   - PreToolUse       -> permission-resolved (approval answered: active work)
-//   - TaskCancel       -> stop                (task cancelled/aborted: idle)
-//   - TaskComplete     -> stop                (task completed normally: idle)
-//
-// PreToolUse maps to permission-resolved, NOT permission-request or
-// pre-tool-use: since upstream cline/cline#7446 it fires AFTER the user
-// approves (or with no prompt at all under auto-approve), so it proves the
-// decision is closed and work resumed rather than a decision pending. Two
-// properties follow:
-//   - it derives active, so a tool invocation never pins the session to
-//     waiting_input (the bug in #6414);
-//   - permission-resolved is a turn boundary, so it also clears a
-//     waiting_input the terminal detector wrote while the approval dialog was
-//     on screen. A plain pre-tool-use signal would be suppressed against that
-//     sticky state, leaving the session on Input needed after approval.
-//
-// Genuine approval dialogs carry no hook of their own and are observed via the
-// terminal detector instead (see activity.go).
 var clineManagedHooks = []clineHookSpec{
 	{Event: "TaskStart", Subcommand: "session-start"},
 	{Event: "TaskResume", Subcommand: "session-start"},
@@ -89,9 +36,6 @@ var clineManagedHooks = []clineHookSpec{
 	{Event: "TaskCancel", Subcommand: "stop"},
 }
 
-// GetAgentHooks installs AO's Cline hook scripts into the worktree-local
-// `.clinerules/hooks/` directory. Existing user-authored hook scripts are
-// preserved, and re-running install simply rewrites AO-owned scripts in place.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -105,13 +49,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return fmt.Errorf("cline.GetAgentHooks: create hook dir: %w", err)
 	}
 
-	// Only scripts AO actually wrote go into the workspace .gitignore: a
-	// user-authored script at one of these paths must keep counting as dirt so
-	// workspace teardown preserves it.
 	written := make([]string, 0, len(clineManagedHooks))
 	for _, spec := range clineManagedHooks {
 		scriptPath := filepath.Join(hooksDir, clineHookScriptName(spec.Event))
-		// Never clobber a user-authored hook with the same event name.
 		if hookutil.FileExists(scriptPath) && !isManagedClineHook(scriptPath) {
 			continue
 		}
@@ -121,12 +61,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		}
 		written = append(written, clineHookScriptName(spec.Event))
 	}
-	// Drop pre-fix marker-owned scripts under the other platform's name (on
-	// Windows, the extensionless bash form written before .ps1 discovery was
-	// understood). Without this, upgrade-seeded worktrees keep the old files
-	// as untracked entries once .gitignore is rewritten with only the new
-	// names, leaving the worktree dirty and blocking normal teardown.
-	// User-authored files at the legacy path (no marker) are never touched.
 	for _, spec := range clineManagedHooks {
 		legacy := clineLegacyScriptName(spec.Event)
 		if legacy == clineHookScriptName(spec.Event) {
@@ -145,9 +79,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// UninstallHooks removes AO's Cline hook scripts from the workspace-local
-// `.clinerules/hooks/` directory, leaving user-authored hooks untouched. A
-// missing directory is a no-op.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -175,8 +106,6 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	return nil
 }
 
-// AreHooksInstalled reports whether any AO Cline hook script is present in the
-// workspace-local hooks directory. A missing directory means none.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -205,9 +134,6 @@ func clineHooksDir(workspacePath string) string {
 	return filepath.Join(workspacePath, clineHooksDirName, clineHooksSubDir)
 }
 
-// clineHookScriptName returns the script filename Cline discovers for a hook
-// event on the current platform: extensionless on Unix, `<Event>.ps1` on
-// Windows (see the package comment for why).
 func clineHookScriptName(event string) string {
 	if runtime.GOOS == "windows" {
 		return event + ".ps1"
@@ -215,9 +141,6 @@ func clineHookScriptName(event string) string {
 	return event
 }
 
-// clineLegacyScriptName returns the filename a pre-fix install wrote for the
-// event on the other platform: the extensionless bash form on Windows, the
-// `.ps1` form on Unix (for Windows-created workspaces moved across platforms).
 func clineLegacyScriptName(event string) string {
 	if runtime.GOOS == "windows" {
 		return event
@@ -225,9 +148,6 @@ func clineLegacyScriptName(event string) string {
 	return event + ".ps1"
 }
 
-// clineAllScriptNames returns every filename AO may have written for the event
-// (current platform first, legacy second) so install migration, uninstall, and
-// installed-detection all recognize pre-fix workspaces.
 func clineAllScriptNames(event string) []string {
 	current := clineHookScriptName(event)
 	legacy := clineLegacyScriptName(event)
@@ -237,11 +157,6 @@ func clineAllScriptNames(event string) []string {
 	return []string{current, legacy}
 }
 
-// renderClineHookScript builds an executable wrapper that forwards the Cline
-// hook payload (JSON on stdin) to the AO CLI hook dispatcher and prints the
-// no-op continuation result Cline expects ({"cancel": false}). The marker line
-// identifies it as AO-owned. The script dialect follows the platform: bash on
-// Unix, PowerShell on Windows.
 func renderClineHookScript(subcommand string) string {
 	if runtime.GOOS == "windows" {
 		return renderPowerShellClineHookScript(subcommand)
@@ -253,10 +168,7 @@ func renderBashClineHookScript(subcommand string) string {
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
 	b.WriteString(clineHookMarker + "\n")
-	// Forward stdin to the AO dispatcher; ignore its exit code so a missing/old
-	// `ao` binary can never block Cline's own execution.
 	b.WriteString(clineHookCommandPrefix + subcommand + " || true\n")
-	// Cline requires a JSON result on stdout; never block the agent.
 	b.WriteString(`echo '{"cancel": false}'` + "\n")
 	return b.String()
 }
@@ -264,14 +176,6 @@ func renderBashClineHookScript(subcommand string) string {
 func renderPowerShellClineHookScript(subcommand string) string {
 	var b strings.Builder
 	b.WriteString(clineHookMarker + "\n")
-	// Forward raw process-stdin bytes to the AO dispatcher; swallow any error
-	// so a missing/old `ao` binary can never block Cline's own execution.
-	// Cline spawns `powershell -File <script>` and writes the JSON payload to
-	// the child process stdin. Piping a decoded string (`$input`, or
-	// `[Console]::In.ReadToEnd()` piped to a native exe) re-encodes it via the
-	// pipeline (UTF-16 with BOM trailer/CRLF), which breaks the JSON the `ao`
-	// hook dispatcher parses for the native session id. Copying the raw byte
-	// stream preserves it exactly.
 	b.WriteString("try {\n")
 	b.WriteString("  $psi = New-Object System.Diagnostics.ProcessStartInfo\n")
 	b.WriteString("  $psi.FileName = 'ao'\n")
@@ -284,7 +188,6 @@ func renderPowerShellClineHookScript(subcommand string) string {
 	b.WriteString("  $p.StandardInput.Close()\n")
 	b.WriteString("  $p.WaitForExit()\n")
 	b.WriteString("} catch {}\n")
-	// Cline requires a JSON result on stdout; never block the agent.
 	b.WriteString(`Write-Output '{"cancel": false}'` + "\n")
 	return b.String()
 }

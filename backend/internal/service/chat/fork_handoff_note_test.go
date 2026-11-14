@@ -17,8 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// A text-handoff fork's agent gets the copied conversation as standing
-// context, and keeps it when its controller restarts later.
 func TestForkHandoffNoteStaysWithTheForkAcrossRestarts(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -60,8 +58,6 @@ func TestForkHandoffNoteStaysWithTheForkAcrossRestarts(t *testing.T) {
 	}
 }
 
-// An agent with no native fork is forked with its conversation copied as
-// text, from its latest turn only.
 func TestAnAgentThatCantForkIsForkedWithItsConversationAsText(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -92,7 +88,6 @@ func TestAnAgentThatCantForkIsForkedWithItsConversationAsText(t *testing.T) {
 	if source.AnyTurn || source.PrepareChat != nil || source.Handoff == nil {
 		t.Fatalf("source = %+v, want latest turn only, no native fork, a handoff", source)
 	}
-	// A turn the original finishes after the fork was planned isn't the fork's.
 	h.advance(time.Minute)
 	later, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "a later question", Origin: domain.MessageOriginHuman})
 	if err != nil {
@@ -128,8 +123,6 @@ func TestAnAgentThatCantForkIsForkedWithItsConversationAsText(t *testing.T) {
 	}
 }
 
-// Forking a fork that was given its conversation as text passes that
-// conversation on: it lives in the fork's saved note, not its own turns.
 func TestForkOfATextForkKeepsTheEarlierConversation(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -165,8 +158,6 @@ func (f failingBranchStore) ConversationBranch(ctx context.Context, conversation
 	return f.Store.ConversationBranch(ctx, conversationID, branchID)
 }
 
-// A fork whose source's earlier conversation can't be read must fail, not
-// start without it.
 func TestForkNoteFailsWhenTheEarlierConversationCannotBeRead(t *testing.T) {
 	var fail atomic.Bool
 	h := newHarnessWithConversationAndStore(t, nil, func(st *sqlite.Store) chatsvc.Store { return failingBranchStore{st, &fail} })
@@ -181,9 +172,6 @@ func TestForkNoteFailsWhenTheEarlierConversationCannotBeRead(t *testing.T) {
 	}
 }
 
-// A fork's first start resumes the provider conversation copied for it, into
-// a conversation row with no settings yet. It runs with the session's model,
-// effort, and approval mode, and saves them, as a new conversation does.
 func TestForkFirstStartKeepsTheSessionsSettings(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()

@@ -54,7 +54,6 @@ describe("terminal-mux framing", () => {
 	});
 });
 
-// Minimal fake socket so we can assert client behaviour without a live daemon.
 class FakeSocket {
 	static OPEN = 1;
 	static instances: FakeSocket[] = [];
@@ -176,7 +175,7 @@ describe("createTerminalMux client", () => {
 		const mux = createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
 		const socket = FakeSocket.instances.at(-1)!;
 		mux.open("s", 80, 24);
-		expect(socket.sent).toHaveLength(0); // not open yet → queued
+		expect(socket.sent).toHaveLength(0);
 		socket.emitOpen();
 		expect(JSON.parse(socket.sent[0])).toMatchObject({ type: "open", id: "s" });
 	});
@@ -267,7 +266,7 @@ describe("createTerminalMux client", () => {
 		const states: string[] = [];
 		mux.onConnectionChange((state) => states.push(state));
 		mux.dispose();
-		socket.emitClose(); // browser fires close after socket.close()
+		socket.emitClose();
 		expect(states).toEqual([]);
 	});
 });

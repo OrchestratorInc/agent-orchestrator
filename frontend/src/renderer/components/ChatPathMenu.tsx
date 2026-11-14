@@ -12,16 +12,8 @@ import { OpenTargetIcon } from "./OpenTargetIcon";
 
 type ChatPathMenuScope = { sessionId?: string; remote: boolean };
 
-/** Native actions are available only for the local desktop session. */
 export const ChatPathMenuContext = createContext<ChatPathMenuScope | undefined>(undefined);
 
-/**
- * A path's actions as menu entries: copy, then `afterCopy`, reveal and open
- * with each editor. Shared by markdown anchors, inline-code paths and file
- * tabs; call it from menu content, which mounts only while open.
- * `showUnavailable` keeps the native rows, disabled, where they cannot run.
- * An absent path yields no entries and looks nothing up.
- */
 export function useChatPathMenuEntries(
 	path: string | undefined,
 	{ scope, showUnavailable = false, afterCopy = [] }: { scope?: ChatPathMenuScope; showUnavailable?: boolean; afterCopy?: MenuEntry[] } = {},
@@ -39,12 +31,11 @@ export function useChatPathMenuEntries(
 		setState(undefined);
 		void aoBridge.editorHandoff.getState(sessionId).then(
 			(result) => { if (active) setState(result); },
-			() => { /* Copy remains available when native targets cannot be checked. */ },
+			() => { },
 		);
 		return () => { active = false; };
 	}, [native, sessionId]);
 	if (path === undefined) return [];
-	// Callers normalize once, preserving filenames containing literal percent escapes.
 	const reference = path;
 	const run = (action: () => Promise<void>) => {
 		void action().catch((error: unknown) => showGlobalToast(t("chat.path.actionFailed"), editorHandoffErrorMessage(error) ?? undefined, "error"));
@@ -94,7 +85,6 @@ export function useChatPathMenuEntries(
 	return entries;
 }
 
-/** A path's actions in the surrounding menu. */
 export function ChatPathMenuItems({ path, showUnavailable = false }: { path: string; showUnavailable?: boolean }) {
 	return <MenuEntries entries={useChatPathMenuEntries(path, { showUnavailable })} />;
 }

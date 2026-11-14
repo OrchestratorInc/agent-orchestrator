@@ -12,7 +12,6 @@ import (
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 )
 
-// ImportService is the controller-facing import service contract.
 type ImportService interface {
 	Status(ctx context.Context) (importsvc.Status, error)
 	Run(ctx context.Context) (legacyimport.Report, error)
@@ -20,20 +19,15 @@ type ImportService interface {
 	PrepareGit(ctx context.Context, in importsvc.GitPreparationInput) (importsvc.GitPreparationResult, error)
 }
 
-// ImportGitHubService answers the GitHub questions a project import's remote
-// step asks: which owners gh can create a repository under, and whether a
-// name is free. The desktop app asks gh itself; clients without gh ask here.
 type ImportGitHubService interface {
 	GitHubOwners(ctx context.Context) (importsvc.GitHubOwnersResult, error)
 	GitHubRepositoryAvailability(ctx context.Context, in importsvc.GitHubAvailabilityQuery) (importsvc.GitHubAvailabilityResult, error)
 }
 
-// ImportController owns the /import routes.
 type ImportController struct {
 	Svc ImportService
 }
 
-// Register mounts import REST routes on the supplied router.
 func (c *ImportController) Register(r chi.Router) {
 	r.Get("/import", c.status)
 	r.Post("/import", c.run)

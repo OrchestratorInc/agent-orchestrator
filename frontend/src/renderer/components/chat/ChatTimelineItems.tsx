@@ -1,14 +1,6 @@
 import { AppLink } from "../AppLink";
 import { TurnForkButton } from "../SessionForkControls";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
-/**
- * Timeline entries for the Chat surface.
- *
- * One component per durable item shape, keyed by sequence so a streaming rewrite
- * updates a message in place instead of remounting it. Every component is a pure
- * function of a domain item: no lifecycle decisions, no capability checks, no
- * re-sorting. Those belong to the daemon.
- */
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
@@ -86,7 +78,6 @@ import {
 	X,
 } from "@/components/app-icons";
 
-/** The mark beside a command, tool or file-edit step, by what the step did. */
 const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
 	list: FolderOpen,
 	read: FileText,
@@ -113,7 +104,6 @@ const stepIcon: Record<StepIcon, typeof SquareTerminal> = {
 	run: SquareTerminal,
 };
 
-/** Fixed icon column, matching the prototype's row anatomy. */
 const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
 	command: SquareTerminal,
 	file_change: FileDiff,
@@ -205,32 +195,15 @@ function originReportPreview(text: string): string {
 	return `${preview.trimEnd()}…`;
 }
 
-/**
- * Each update reveals the share of the backlog that decays over the settle time, so
- * bursts of provider text spread across the gap before the next one instead of landing
- * at once. The settle time follows how far apart the bursts arrive: a stream that
- * lands every ~50ms settles in STREAM_SETTLE_MS, while one that lands a second at a
- * time (a slow link, a polled transcript) is spread over most of that second rather
- * than revealed in a fraction of it and then left still. Updates are capped at ~30 Hz:
- * every one re-parses the message's markdown.
- */
 const STREAM_SETTLE_MS = 140;
 const STREAM_MAX_SETTLE_MS = 700;
-// The share of the gap between bursts the reveal is spread over; less than all of it,
-// so text stays close behind the stream instead of trailing a whole burst.
 const STREAM_SETTLE_GAP_SHARE = 0.6;
 const STREAM_MAX_GAP_MS = 1_500;
 const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
-// Long open Markdown blocks are reparsed on each reveal. Beyond this size,
-// coalesce provider snapshots rather than adding intermediate renders.
 const STREAM_SMOOTH_MAX_CHARS = 4000;
 const STREAM_LONG_UPDATE_MS = 100;
-// No frame for this long means the tab was occluded or throttled: nobody watched the
-// animation, so show the current text instead of replaying it.
 const STREAM_STALL_MS = 1000;
-// Once the reply is done, what is still unrevealed plays out quickly rather than
-// landing at once; a backlog beyond this is shown whole.
 const STREAM_FINISH_SETTLE_MS = 90;
 const STREAM_FINISH_MAX_BACKLOG = 2000;
 const STREAM_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -251,11 +224,6 @@ function reconciledStreamPrefix(visibleText: string, targetGraphemes: string[]) 
 	return { text: visibleText.slice(0, boundary), count };
 }
 
-/**
- * Whether replies pace their reveal to how far apart bursts arrive and play
- * out their last burst (Cloud chat, whose text can arrive a poll at a time).
- * Elsewhere a reply settles in STREAM_SETTLE_MS and shows whole once done.
- */
 export const AdaptiveStreamPacingContext = createContext(false);
 
 function useSmoothStreamingText(message: ConversationMessage): string {
@@ -263,11 +231,8 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	const [reducedMotion, setReducedMotion] = useState(
 		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
 	);
-	// Set while a finished reply's last burst is still playing out.
 	const [finishing, setFinishing] = useState(false);
 	const smooth = (message.streaming || finishing) && !reducedMotion && message.text.length <= STREAM_SMOOTH_MAX_CHARS;
-	// A snapshot can first reach the renderer after the provider has already emitted
-	// text. Keep that first durable burst visible; only later deltas need smoothing.
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
@@ -385,16 +350,11 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		const grew = message.text !== targetRef.current && message.text.startsWith(targetRef.current);
 		targetRef.current = message.text;
 		targetGraphemesRef.current = targetGraphemes;
-		// A hidden window draws no frames, so a reveal would stall and replay once the
-		// reader is back. Show what arrived now; the fade treats it as settled too.
 		if (reducedMotion || pageHidden()) {
 			showWhole();
 			return;
 		}
 		if (!message.streaming) {
-			// The reply is done. A short remainder plays out; anything else, a reply
-			// too long to reveal smoothly, or one that was never being revealed,
-			// shows whole.
 			const remaining = message.text.startsWith(visibleRef.current) ? message.text.length - visibleRef.current.length : -1;
 			if (!adaptive || remaining <= 0 || remaining > STREAM_FINISH_MAX_BACKLOG || message.text.length > STREAM_SMOOTH_MAX_CHARS) {
 				showWhole();
@@ -403,24 +363,18 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			if (!finishingRef.current) {
 				finishingRef.current = true;
 				setFinishing(true);
-				// The graphemes are computed once `finishing` is set.
 				return;
 			}
 		}
 		if (adaptive && grew && message.streaming) {
-			// Spread each burst over most of the gap since the last one.
 			const now = performance.now();
 			if (lastGrowthAtRef.current !== undefined) {
-				// A pause (the agent running a tool) is not a burst rhythm; past a
-				// second and a half it counts as no longer than that.
 				const gap = Math.min(now - lastGrowthAtRef.current, STREAM_MAX_GAP_MS);
 				gapMsRef.current = gapMsRef.current === undefined ? gap : gapMsRef.current * 0.6 + gap * 0.4;
 				settleMsRef.current = Math.min(STREAM_MAX_SETTLE_MS, Math.max(STREAM_SETTLE_MS, gapMsRef.current * STREAM_SETTLE_GAP_SHARE));
 			}
 			lastGrowthAtRef.current = now;
 		}
-		// A provider correction or rollback can replace the current prefix. In that
-		// case the durable snapshot is authoritative and should be shown immediately.
 		if (!message.text.startsWith(visibleRef.current)) {
 			showWhole();
 			return;
@@ -440,9 +394,6 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			}
 			return;
 		}
-		// A later combining mark or ZWJ can merge the last visible grapheme into a
-		// different target grapheme. Reconcile that trailing fragment before using
-		// the old grapheme count, otherwise the drain can skip the merged suffix.
 		const reconciled = reconciledStreamPrefix(visibleRef.current, targetGraphemesRef.current);
 		visibleGraphemeCountRef.current = reconciled.count;
 		if (reconciled.text !== visibleRef.current) {
@@ -461,7 +412,6 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	return visibleText;
 }
 
-/** A status message followed by a full-width rule, with no text inside the rule. */
 function TwoRowTimelineMarker({
 	message,
 	detail,
@@ -471,7 +421,6 @@ function TwoRowTimelineMarker({
 	message: string;
 	detail?: string;
 	detailTone?: string;
-	/** The detail is an instruction the reader needs whole, so it wraps instead of truncating. */
 	wrapDetail?: boolean;
 }) {
 	return (
@@ -507,13 +456,10 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 	);
 }
 
-/** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: the agent's mark, then its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
-	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
 	const hostId = useContext(ChatHostId);
 	const catalog = useQuery({ ...agentModelsQueryOptions(harness, "", hostId), enabled: Boolean(model) }).data;
 	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
@@ -527,13 +473,11 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	);
 }
 
-/** Where one agent handed the conversation to another. */
 export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
 	const { t } = useTranslation();
 	const detail = activity.detail;
 	const switching = Boolean(detail?.switching);
 	const named = Boolean(detail?.sourceHarness && detail.targetHarness);
-	// A switched row only seconds old is the one just made, so it opens from closed; older ones start open.
 	const [open, setOpen] = useState(() => switching || !(Date.now() - Date.parse(activity.createdAt) < 8000));
 	useEffect(() => {
 		if (switching || open) return;
@@ -555,7 +499,6 @@ export function ProviderSwitchMarker({ activity }: { activity: ConversationActiv
 					{switching ? t("agentSwitch.switching") : t("agentSwitch.switched")}
 				</span>
 				{named ? (
-					// Closed while the switch runs, then its width grows from 0 to its own.
 					<div
 						className={cn(
 							"grid min-w-0 transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",
@@ -584,11 +527,8 @@ export interface TurnOutcomeRetryControl {
 	disabled?: boolean;
 }
 
-/** Where the user continued a stopped turn: a marker in place of the continue message. */
 export function ContinuedMarker() {
 	return (
-		// Closer to the stopped turn above and the turn it starts below: the marker joins
-		// them, so it should not sit apart from either.
 		<div className="-mb-1 -mt-2.5">
 			<TwoRowTimelineMarker message="Continued" />
 		</div>
@@ -614,14 +554,12 @@ const TURN_OUTCOME_COPY = {
 		tone: "font-medium text-destructive",
 		iconTone: "text-destructive",
 	},
-	// It ended before the agent started on it; the reason follows in the turn's voice.
 	not_run: {
 		label: "This message was not run",
 		icon: Ban,
 		tone: "text-muted-foreground",
 		iconTone: "text-muted-foreground/70",
 	},
-	// The controller went away mid-turn, so nothing reported how it ended.
 	unknown: {
 		label: "The agent stopped before this turn finished",
 		icon: CircleHelp,
@@ -630,15 +568,6 @@ const TURN_OUTCOME_COPY = {
 	},
 } as const;
 
-/**
- * How a turn ended when it did not end with an answer: in the answer's place, and
- * closing on the same action row a finished answer gets.
- *
- * It used to be three shapes for one ending — a status line drawn across a rule,
- * retry off at the far right, undo floating above on a row of its own. Now it reads
- * like a short reply (mark, what happened, the provider's reason) so a stopped or
- * failed turn keeps the outline of every other turn.
- */
 export function TurnOutcome({
 	state,
 	error,
@@ -656,12 +585,9 @@ export function TurnOutcome({
 	error?: string;
 	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
-	/** The provider refused the agent's login: a quiet line in place of its CLI advice. */
 	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
-	// A usage limit has its own notice, whose resume action stands in for Retry. The
-	// turn still closes on the shared row, so copy and undo stay where they always are.
 	if (state === "failed" && usageLimit) {
 		return (
 			<div className="group/message flex min-w-0 flex-col gap-2" data-turn-outcome={state}>
@@ -685,15 +611,7 @@ export function TurnOutcome({
 			</div>
 		);
 	}
-	// A refused login is offered on the chat box, where the user was about to
-	// write. The turn keeps one quiet line saying what happens to its message;
-	// the provider's own advice ("run /login") is for its CLI and never shows.
 	if (state === "failed" && failureCode === "auth_required" && login) {
-		// A turn that did work still closes on the shared row, so its copy and undo
-		// stay where they always are; the band sends the latest refusal again, so that
-		// one has no Retry. One that did nothing else has its line under the message,
-		// whose row has them.
-		// An earlier refusal, past what the band offers, keeps its Retry like any failed turn.
 		const closesTurn = login.align === "start";
 		const ownRetry = login.ownRetry ? retry : undefined;
 		return (
@@ -716,8 +634,6 @@ export function TurnOutcome({
 	const Icon = copy.icon;
 	const needsDeepSeekKey = state === "failed" && failureCode === "provider_key_missing" && onConfigure;
 	return (
-		// A stopped turn is three short lines, so they sit close: 4px under "Worked for",
-		// as an answer's action row does, not the turn's 10px.
 		<div className="group/message -mt-1.5 flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
@@ -740,10 +656,6 @@ export function TurnOutcome({
 				<div
 					className={cn(
 						"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",
-						// A provider's failure text is code-like (status lines, request ids, URLs):
-						// it sits in a quiet mono block like command output, spanning the turn's
-						// width under the title. A stop or recovery note stays in the turn's own
-						// voice, indented with the title.
 						state === "failed" ? "rounded-md bg-surface px-3 py-2 font-mono text-xs" : "pl-[22px] text-sm",
 					)}
 				>
@@ -764,14 +676,8 @@ export function TurnOutcome({
 
 const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Loader2, resend: undefined, stopped: undefined } as const;
 
-/**
- * What happens to a message the agent refused for its login. A message whose
- * turn did nothing else leads its own row under the bubble with it, before the
- * time and copy; otherwise it is the turn's last line.
- */
 export function LoginStatusNote({ status, retry }: {
 	status: TurnOutcomeLogin["status"];
-	/** An earlier refusal's Retry, on the line itself when the message's row carries it. */
 	retry?: TurnOutcomeRetryControl;
 }) {
 	const { t } = useTranslation();
@@ -791,7 +697,6 @@ export function LoginStatusNote({ status, retry }: {
 		<div className="flex min-w-0 items-center gap-1">
 			{note}
 			<RetryTurnButton retry={retry} />
-			{/* The row is one line, so a failed retry says why where its button is. */}
 			{retry.error ? (
 				<span role="alert" title={retry.error} className="min-w-0 truncate text-xs leading-5 text-destructive">
 					{retry.error}
@@ -801,22 +706,12 @@ export function LoginStatusNote({ status, retry }: {
 	);
 }
 
-/** How a message the agent refused for its login reads in the timeline. */
 export interface TurnOutcomeLogin {
-	/**
-	 * queued: sends again by itself once the user logs in. waiting: the Agents
-	 * page was opened and the login has not taken yet. sending: logged in, sending
-	 * it again. resend: the user sends it again (it did work, or nothing watches
-	 * the login). stopped: an earlier refusal, since sent again or moved past.
-	 */
 	status: "queued" | "waiting" | "sending" | "resend" | "stopped";
-	/** On the message, under its bubble, when the turn did nothing else; otherwise the turn's last line. */
 	align: "end" | "start";
-	/** An earlier refusal the band no longer offers: it keeps its own Retry, as any failed turn does. */
 	ownRetry?: boolean;
 }
 
-/** Sends a failed turn's prompt again as a new turn. */
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 	return (
 		<Button
@@ -839,27 +734,13 @@ function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 }
 
 interface TurnActionsProps {
-	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
-	/** The answer's stored markdown, so a paste gives back what the agent wrote. */
 	copyText?: string;
-	/** Discard this turn and everything after it. */
 	onRollback?: () => void;
-	/** Keep rollback mounted but inert while another turn is active. */
 	rollbackDisabled?: boolean;
-	/** When the answer was written, revealed on hover of the enclosing `group/message`. */
 	timestamp?: string;
 }
 
-/**
- * The row a turn closes on: retry, copy, roll back, then the time on hover. How
- * long the turn ran heads it instead, in "Worked for".
- *
- * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
- * one — so the controls are always in the same place. The negative margin is on the
- * row rather than its first button, so the leading glyph lines up with the text
- * above whichever control comes first.
- */
 export function TurnActions({
 	retry,
 	copyText,
@@ -924,10 +805,6 @@ function formatTokens(tokens: number): string {
 	return `${(tokens / 1000).toFixed(1)}k`;
 }
 
-/**
- * The bubble's text renderer: inline image chips when the message has images,
- * nothing otherwise, so a message without them keeps UserMarkdown's memo.
- */
 function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUrl: string | null) {
 	if (apiBaseUrl === null || !attachments.some((path) => IMAGE_ATTACHMENT_PATH.test(path))) return undefined;
 	return (text: string) => (
@@ -935,11 +812,6 @@ function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUr
 	);
 }
 
-/**
- * The bubble's text renderer: skills and files it sent as chips in the accent
- * color, and inline image chips. Undefined when neither applies, which keeps
- * UserMarkdown's memo; stable while the message and its attachments are.
- */
 function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null) {
 	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	const attachmentKey = attachments.join("\n");
@@ -949,17 +821,10 @@ function useUserTextRenderer(sessionId: string, body: string, attachments: strin
 	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
 }
 
-// A list, quote or code block at either end of a message sits flush with the
-// bubble's padding instead of adding its own outer margin.
 const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
 
 const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
 
-/**
- * Copying the whole of a rendered message gives back what the person typed, list
- * markers and backticks included, as the Copy button does. A partial selection
- * copies what it shows.
- */
 function copyWholeMessageAsTyped(event: ClipboardEvent<HTMLDivElement>, typed: string) {
 	const selected = window.getSelection()?.toString() ?? "";
 	if (!selected.trim() || collapseWhitespace(selected) !== collapseWhitespace(event.currentTarget.textContent ?? "")) return;
@@ -967,11 +832,6 @@ function copyWholeMessageAsTyped(event: ClipboardEvent<HTMLDivElement>, typed: s
 	event.clipboardData.setData("text/plain", typed);
 }
 
-/**
- * Prose whose inline staged image paths (written by the composer's image chips)
- * render as chips that open the image. "Image N" counts images in attachment
- * order, the same label the attachment row and the composer use.
- */
 function ProseWithInlineImages({
 	text,
 	attachments,
@@ -1003,21 +863,16 @@ function ProseWithInlineImages({
 	);
 }
 
-/** An inline image chip, drawn from the composer's copy while the file was just sent. */
 function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
-	// A local copy that fails to draw hands the chip to the daemon's copy.
 	const local = useSentAttachmentPreview(path);
 	return <ChatImage inline src={local.url ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} onError={local.onError} />;
 }
 
-/** Collapse the home directory so a long absolute path does not eat the row. */
 function shortenPaths(text: string): string {
 	return text.replace(/\/(?:Users|home)\/[^/\s]+/g, "~");
 }
 
 function formatDuration(ms: number): string {
-	// Status labels are intentionally discrete: start at one second and advance
-	// in whole seconds so the live and settled rows never show fractional time.
 	if (ms < 60_000) return `${Math.max(1, Math.floor(ms / 1000))}s`;
 	const totalMinutes = Math.floor(ms / 60_000);
 	if (totalMinutes < 60) return `${totalMinutes}m`;
@@ -1031,20 +886,8 @@ function formatDecisionDuration(ms: number): string {
 	return `${(ms / 1_000).toFixed(1)}s`;
 }
 
-/**
- * The step rows' icon column (ACTIVITY_SUMMARY_BUTTON_CLASS: a 12px icon at the
- * turn's edge, then an 8px gap). The live row, its setup checklist and their marks
- * use the same box, so a mark sits on the step icons' left edge and the label
- * starts where the step labels do. The lattice is 13px across, a pixel wider than
- * the slot: it starts at the slot's left edge and overhangs into the gap. Centred,
- * it would sit half a pixel outside the column, where the live row clips it.
- */
 export const STEP_MARK_SLOT_CLASS = "flex size-3 shrink-0 items-center justify-start";
 
-/**
- * A running setup step's mark: the live row's lattice, so setup and work share one
- * "working" signal, in the step icons' slot (STEP_MARK_SLOT_CLASS).
- */
 export function ResponseSpinner() {
 	return (
 		<span aria-hidden="true" data-testid="response-spinner" className={cn(STEP_MARK_SLOT_CLASS, "text-muted-foreground")}>
@@ -1053,11 +896,6 @@ export function ResponseSpinner() {
 	);
 }
 
-/**
- * The live turn's working mark: a lattice of dots with a trail running round it
- * (see LatticeLoader), in the step icons' slot (STEP_MARK_SLOT_CLASS). Decorative
- * here, since the label and timer beside it carry the meaning.
- */
 export function LiveWorkingMark() {
 	return <ResponseSpinner />;
 }
@@ -1079,11 +917,6 @@ function formatMessageTimestamp(iso: string, now = new Date()): string {
 	return dateFormatter.format(parsed);
 }
 
-/* -------------------------------------------------------------------------- */
-/* messages                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/** The user's bubble. A queued one reads as not-yet-sent rather than as sent-and-ignored. */
 export function humanBubbleClass(queued?: boolean): string {
 	return cn(
 		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
@@ -1107,7 +940,6 @@ export function QueuedNote() {
 	);
 }
 
-/** What the user typed. Right-aligned and enclosed so it reads as theirs. */
 const WORKER_REPORT_OPEN = "<ao-worker-reports>";
 const WORKER_REPORT_CLOSE = "</ao-worker-reports>";
 
@@ -1168,13 +1000,9 @@ export function HumanMessage({
 	status,
 }: {
 	message: ConversationMessage;
-	/** The staged paths are relative to this session's workspace. */
 	sessionId: string;
-	/** The live daemon origin; passed by the timeline so daemon restarts refresh images. */
 	apiBaseUrl?: string | null;
-	/** Typed while the agent was busy, and not sent yet. */
 	queued?: boolean;
-	/** True only for a human message added after the timeline first mounted. */
 	animateIn?: boolean;
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
@@ -1193,14 +1021,8 @@ export function HumanMessage({
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
-	/**
-	 * Where the message stands (a refused login's). It leads the row under the
-	 * bubble, and the row then stays in place with its time and actions in view.
-	 */
 	status?: ReactNode;
 }) {
-	// A cloud message's files are listed by the message itself; the references
-	// its local echo carries until the server's copy arrives are not prose.
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
 	const excerptReferences = (message.content ?? []).filter(
 		(content) => (content.type === "excerpt" && (Boolean(content.text) || content.snapshot?.badgeOnly === true)) || Boolean(content.fileReference),
@@ -1221,18 +1043,10 @@ export function HumanMessage({
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
-	// The skills and files it sent as chips, drawn as colored text.
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
-	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
-	// Hover-only actions float under the bubble instead of reserving a blank row;
-	// a branch navigator is always visible, so it keeps its place in the flow.
-	// So does a status: it leads the row, and the time and actions follow it in
-	// view, one line under the bubble.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
 	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10 mt-1");
-	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
-	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
 	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
 	return (
 		<div
@@ -1247,10 +1061,7 @@ export function HumanMessage({
 					{message.authorName}
 				</span>
 			) : null}
-			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
-			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
-				// The bubble itself becomes the editor: same box, text and attachments.
 				<HumanMessageEditor
 					text={editText ?? visibleMessageText}
 					originalText={visibleMessageText}
@@ -1277,7 +1088,6 @@ export function HumanMessage({
 				/>
 			) : (
 				<>
-					{/* Attachments sit above the text they came with, outside its bubble and fold. */}
 					{hasAttachments ? (
 						<AttachmentStrip className={cn(animateIn && "chat-human-message-enter")}>
 							{annotationSummary}
@@ -1293,8 +1103,6 @@ export function HumanMessage({
 					) : null}
 					{showBubble ? (
 						<div
-							/* Themes draw sent and queued differently; light theme needs to tell them
-							   apart in CSS because it paints an enclosure only around a sent one. */
 							data-queued={queued ? "" : undefined}
 							className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 						>
@@ -1352,10 +1160,6 @@ export function HumanMessage({
 	);
 }
 
-/**
- * A message from a worker, automation, or the daemon. Attribution comes from the
- * durable origin field, never from a prefix parsed out of the text.
- */
 export function OriginMessage({ message }: { message: ConversationMessage }) {
 	const [expanded, setExpanded] = useState(false);
 	const senderSessionId = message.senderSessionId?.trim();
@@ -1421,7 +1225,6 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 	);
 }
 
-/** The agent's prose. Streaming is represented by text arriving in place. */
 export function AssistantMessage({
 	message,
 	showCopy = false,
@@ -1430,24 +1233,13 @@ export function AssistantMessage({
 	rollbackDisabled = false,
 }: {
 	message: ConversationMessage;
-	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
-	/** The enclosing turn is still active, even if its last text chunk has landed. */
 	live?: boolean;
-	/**
-	 * Discard this turn and everything after it. Lives next to copy so the finished
-	 * answer owns both "keep this" and "undo from here".
-	 */
 	onRollback?: () => void;
-	/** Keep the rollback action mounted while another response is streaming. */
 	rollbackDisabled?: boolean;
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	// Copy copies the stored markdown, so it need not wait for the typewriter to catch
-	// up. Rollback acts on the turn, so it waits for it to settle. While the turn is
-	// live the row below the answer is the live status; both actions take its place
-	// when the turn settles, so nothing moves.
 	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
 	const showActions = copyReady || rollbackReady;
@@ -1462,9 +1254,6 @@ export function AssistantMessage({
 		>
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
-				// One action row for the completed answer, not one after every prose
-				// fragment the provider emitted while working. Copy and rollback stay
-				// visible; only the wall-clock time reveals on hover.
 				<TurnActions
 					className="mt-1"
 					copyText={copyReady ? message.text : undefined}
@@ -1478,11 +1267,6 @@ export function AssistantMessage({
 }
 
 
-/**
- * What the live row says the agent is doing right now, in the words its own row
- * uses: "Reading" while the step is in progress, and "Read" for the moment a
- * finished one stays on the row before it moves up.
- */
 export function liveTaskLabel(activity: ConversationActivity): string {
 	if (activity.activityKind === "reasoning") return "Thinking";
 	if (activity.activityKind === "auto_review") return "Reviewing";
@@ -1498,46 +1282,22 @@ export function liveTaskLabel(activity: ConversationActivity): string {
 	return path ? `${label} ${path}` : label;
 }
 
-/**
- * A step still under way. Claude Code reports a tool call as pending and then done,
- * with nothing in between, so a pending step is in progress too: "Reading a.ts",
- * not "Read a.ts", and "Deleting build" while it waits for approval.
- */
 export function stepInProgress(activity: ConversationActivity): boolean {
 	return activity.status === "running" || activity.status === "pending";
 }
 
-/**
- * What the reader chose on the live row for a step, open or closed, by step id.
- * The step's own row starts from it once the step moves up from the live row, so
- * output the reader opened to follow stays open where it lands.
- */
 export const LiveStepChoices = createContext<Map<string, boolean> | undefined>(undefined);
-/** The activity a search match opened at: the folds that hold it open, and its row opens on its output. */
 export const RevealedChatActivity = createContext<string | undefined>(undefined);
 
-/**
- * Which form of a step's label to show. In progress reads in the present tense, and
- * so does a step that failed or stopped when its past tense would claim the result:
- * "Deleting build  failed", not "Deleted build  failed". "Ran tests  exit 1" is true
- * as it stands. `step` is absent for a file edit, whose past tense always claims it.
- */
 function stepTense(activity: ConversationActivity, step?: CommandStep): "live" | "done" {
 	if (stepInProgress(activity)) return "live";
 	const unfinished = activity.status === "failed" || activity.status === "cancelled" || activity.status === "recovered";
 	return unfinished && !(step && pastTenseHoldsOnFailure(step)) ? "live" : "done";
 }
 
-/**
- * A provider retry, split for display: the attempt count up front and the reason
- * behind it, so "Reconnecting… 4/5" reads as a state and the 401 as its detail.
- * Codex puts the whole error in the summary; Claude keeps the reason in `text`.
- */
 export function reconnectCopy(activity: ConversationActivity): { label: string; detail?: string } {
 	const summary = activity.summary.trim();
 	const text = activity.detail?.text?.trim() || undefined;
-	// Only a summary that is about reconnecting carries the attempt count; a count
-	// elsewhere in some other error text is not one.
 	const match = /^\W*(?:re-?connect|retry)/i.test(summary) ? /(\d+)\s*(?:\/|of)\s*(\d+)/.exec(summary) : null;
 	if (!match) return { label: summary || "Reconnecting…", detail: text };
 	const rest = summary.slice(match.index + match[0].length).replace(/^[\s.:,;—–-]+/, "").trim();
@@ -1547,43 +1307,22 @@ export function reconnectCopy(activity: ConversationActivity): { label: string; 
 const LIVE_RECONNECT_CHIP =
 	"inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-1.5 py-px text-xs tabular-nums text-muted-foreground";
 
-/**
- * The live edge of a turn: the orb, what the agent is doing, and for how long.
- *
- * It sits at the end of the turn and follows the work down. It says only what the
- * reader cannot see for themselves: the orb is the liveness, the label the current
- * step (or the retry the provider is on), the timer the duration. No "Working for":
- * when the turn settles this row fades out where it is and "Worked for" opens at the
- * top of the turn, so nothing appears to travel between the two.
- */
 export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
-	/** Names this row across remounts (windowing), so its label's entrance plays once. */
 	entranceKey?: string;
 	startedAt?: string;
-	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
 	failed?: boolean;
-	/** What the agent is doing right now, named the way its activity row names it. */
 	task?: string;
-	/**
-	 * The running step `task` names, when this row stands in for its own row. The
-	 * row then opens onto the step's command and output, as that row would.
-	 */
 	step?: ConversationActivity;
-	/** The provider is retrying; the row says so in place of the task. */
 	reconnect?: { label: string; detail?: string };
 	children?: ReactNode;
 }) {
 	const reducedMotion = useReducedMotion();
 	const labelId = useId();
-	// Per step: the row stays one line, even while the step prints, until the reader
-	// opens it. The next step starts closed again.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
 	const stepChoices = useContext(LiveStepChoices);
 	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
 	const stepOpen = expandable && stepChoice?.id === step?.id && stepChoice!.open;
-	// A finished step stays on the row for a moment before it moves up. It says what
-	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
 	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
 	const started = useMemo(() => {
 		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
@@ -1596,20 +1335,11 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	}, []);
 	const elapsedMs = Math.max(0, now - started);
 	const label = startupLabel ?? reconnect?.label ?? task;
-	// The provider re-saves its retry on every attempt, and the step label changes
-	// with every tool call. Keyed by its text the label would remount, and replay its
-	// entrance, each time; keyed by kind it updates in place and crossfades only when
-	// the row changes what it is showing.
 	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
-	// A row that mounts with its chat (a switch to a working session) shows the
-	// label it opened with in place; any label after that fades in.
 	const labelEnters = useChatEntrance(entranceKey ?? labelId);
 	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
 	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
 	const labelEntrance = quietLabelKind.current === null;
-	// The mark takes the step rows' icon slot and gap (STEP_MARK_SLOT_CLASS), so the
-	// dots sit on the step icons' left edge and the label starts where theirs do: a
-	// step that moves up from here into its own row keeps both edges.
 	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
@@ -1622,8 +1352,6 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 				data-testid="live-working-label"
 				className="flex min-w-0 items-center gap-2 text-sm"
 			>
-				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
-				    while the text inside updates in place. */}
 				{label && labelKind ? (
 					<span key={labelKind} className={cn(labelEntrance && "chat-live-label", "min-w-0 truncate")} data-testid="live-working-task">
 						{reconnect && !startupLabel ? (
@@ -1638,7 +1366,6 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 						)}
 					</span>
 				) : null}
-				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's. */}
 				{label && labelKind && !startupLabel ? (
 					<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">
 						·
@@ -1663,10 +1390,6 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	);
 	return (
 		<div className="min-w-0">
-			{/* The row is the same element whether or not it opens, so the loader's beat,
-			    the label's entrance and the status region are not remounted each time a
-			    step with details takes over from Thinking and hands back. When there is
-			    something to open, the toggle lies over the whole row. */}
 			<div className={cn(rowClass, "group/live relative")}>
 				{row}
 				{expandable && step ? (
@@ -1723,11 +1446,6 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	);
 }
 
-/**
- * Delivery state, stated rather than implied. `uncertain` is its own outcome:
- * the provider may have accepted the turn while AO lost the connection, and
- * pretending otherwise in either direction would be a lie.
- */
 function DeliveryNote({ state }: { state: DeliveryState }) {
 	const copy: Record<DeliveryState, string> = {
 		queued: "Queued — will send when the agent is idle",
@@ -1748,28 +1466,13 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
 	);
 }
 
-/* -------------------------------------------------------------------------- */
-/* activities                                                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * One activity, routed to the renderer for its kind.
- *
- * The dispatch lives here rather than in the timeline because a run collapses
- * activities too, and both paths must agree about what an MCP call looks like. A
- * kind this build does not recognize still renders as a generic row — dropping it
- * would hide work the agent really did.
- */
 export function ActivityRow({
 	activity,
 	repeats,
 }: {
 	activity: ConversationActivity;
-	/** Earlier calls with the same label, folded into this row. */
 	repeats?: readonly ConversationActivity[];
 }) {
-	// A call already in the chat when it opened, or scrolled back into view, is
-	// drawn in place; only a call that arrives fades in.
 	const entering = useChatEntrance(`row:${activity.id}`, activity.sequence);
 	const toolActivity =
 		activity.activityKind === "command" ||
@@ -1777,8 +1480,6 @@ export function ActivityRow({
 		activity.activityKind === "mcp_tool" ||
 		activity.activityKind === "auto_review" ||
 		activity.activityKind === "ao_action";
-	// AO records pages as system rows; a page named by any other row (a cloud
-	// session's, say) is not one this daemon serves.
 	const renderRef = activity.activityKind === "system" ? readRenderRef(activity.detail) : undefined;
 	const artifactRef = activity.activityKind === "system" ? readArtifactRef(activity.detail) : undefined;
 
@@ -1788,7 +1489,6 @@ export function ActivityRow({
 	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.activityKind === "ao_action") content = <AOActionRow activity={activity} />;
-	// The model picker already names the model that answered.
 	else if (isModelReroute(activity)) return null;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
@@ -1816,7 +1516,6 @@ export function ActivityTransition({
 	value: string;
 	children: ReactNode;
 	inline?: boolean;
-	/** Fades in on mount. Off for content that was already on screen (see chat-entrance.ts). */
 	enter?: boolean;
 }) {
 	const reducedMotion = useReducedMotion();
@@ -1826,7 +1525,6 @@ export function ActivityTransition({
 	useEffect(() => {
 		if (previousValue.current === value) return;
 		previousValue.current = value;
-		// A change made while the window is hidden would dip on the reader's return.
 		if (pageHidden()) return;
 		setSettling(true);
 	}, [value]);
@@ -1910,12 +1608,6 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/**
- * A collapsed activity row: icon, label, target, state. Expands to its payload.
- *
- * A `running` activity with no completion is a real terminal state here, not a
- * spinner that hangs forever — a provider can start a command and supersede it.
- */
 function GenericActivityRow({
 	activity,
 	repeats = [],
@@ -1923,12 +1615,7 @@ function GenericActivityRow({
 	activity: ConversationActivity;
 	repeats?: readonly ConversationActivity[];
 }) {
-	// Closed until the reader opens it, and their choice sticks: auto-collapsing a log
-	// someone is reading is worse than leaving a finished row open. That goes for a
-	// choice made on the live row too, which the row starts from when the step moves
-	// up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	// A folded row of repeated commands opens for a reveal of any call in it.
 	const revealedId = useContext(RevealedChatActivity);
 	const revealed = revealedId !== undefined
 		&& (revealedId === activity.id || repeats.some((each) => each.id === revealedId));
@@ -1938,7 +1625,6 @@ function GenericActivityRow({
 	}, [revealed]);
 	const toggle = (next: boolean) => {
 		setOpen(next);
-		// Kept current, so a later remount starts from the reader's latest choice.
 		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, next);
 	};
 	const reducedMotion = useReducedMotion();
@@ -1947,16 +1633,9 @@ function GenericActivityRow({
 	const hasBody = genericActivityHasBody(activity);
 	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
 	const StepMark = stepIcon[stepIconName ?? "run"];
-	// Commands and file edits share the explore-style summary line: a small mark for
-	// what the step did, muted label, always-visible chevron. Everything else keeps
-	// the denser bordered activity row.
 	const compactSummary =
 		activity.activityKind === "command" || activity.activityKind === "file_change";
-	// A provider retry ("Reconnecting… 4/5") is a note on the turn, not a row in a
-	// list: no rule above it and no inset, so it lines up with the turn's text.
 	const notice = activity.activityKind === "system" && activity.detail?.event === "provider.failure";
-	// Only a retry with an attempt count splits; other provider notes keep their summary
-	// whole, and their reason stays behind the disclosure like any other row's.
 	const retry = notice ? reconnectCopy(activity) : undefined;
 	const noticeLabel = retry?.label.startsWith("Reconnecting…") ? retry.label : undefined;
 	const noticeDetail = noticeLabel ? retry?.detail : undefined;
@@ -2021,9 +1700,6 @@ function GenericActivityRow({
 						) : null}
 					</span>
 				) : compactSummary && path ? (
-					// Verb and target sit as close together as a file edit's verb and name.
-					// The space is not drawn in the flex row, but it keeps the accessible
-					// name "Read README.md" rather than "ReadREADME.md".
 					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<strong className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground">
 							<ActivityTitle text={label} />
@@ -2092,8 +1768,6 @@ function GenericActivityRow({
 					>
 						{repeats.length > 0 ? (
 							<div className="flex flex-col gap-1">
-								{/* The row itself is the last call's target; each earlier call's
-								    output is its own, so a reveal finds and marks that call. */}
 								{repeats.map((each) => (
 									<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
 										<GenericActivityBody activity={each} />
@@ -2112,11 +1786,6 @@ function GenericActivityRow({
 	);
 }
 
-/**
- * Whether a command or file-edit step has anything to open onto. A single edit
- * with no patch has nothing: the header already named the file. Multi-file edits
- * open onto a list, and a lone patch onto the diff itself.
- */
 function genericActivityHasBody(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
@@ -2129,7 +1798,6 @@ function genericActivityHasBody(activity: ConversationActivity): boolean {
 	);
 }
 
-/** What a step's row opens onto: the command and its output, a patch, or a file list. */
 function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
@@ -2142,16 +1810,11 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	}
 	return (
 		<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
-			{/* One file: open straight onto its patch. Listing the same
-			    basename again under "Edited name" is noise. */}
 			{files.length === 1 && fileChangePatch(files[0]) ? (
 				<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
 			) : null}
 			{files.length > 1 ? <FileChangeList files={files} /> : null}
 			{!isFileChange && detail?.command ? (
-				// Said explicitly rather than implied by the label: "Ran command"
-				// alone never tells the reader what ran, and the collapsed row
-				// deliberately keeps only the category.
 				<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 					{detail.command}
 				</pre>
@@ -2172,13 +1835,7 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/**
- * The running step the live row names in place of its own row: a command, a file
- * edit, or a tool call. Other kinds keep their row.
- */
 export function isLiveStepKind(activity: ConversationActivity): boolean {
-	// AO's own tools answer the agent, so their row opens only onto what a reader can
-	// use. The live row would open onto the raw answer.
 	if (aoToolView(activity)) return false;
 	return (
 		activity.activityKind === "command" ||
@@ -2187,22 +1844,15 @@ export function isLiveStepKind(activity: ConversationActivity): boolean {
 	);
 }
 
-/** Whether the step on the live row has details to open: command, output, patch, or payload. */
 function liveStepHasDetail(activity: ConversationActivity): boolean {
 	if (activity.activityKind === "mcp_tool") return mcpToolHasBody(activity);
 	return isLiveStepKind(activity) && genericActivityHasBody(activity);
 }
 
-/** The step's details, opened from the live row. */
 const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: ConversationActivity }) {
 	return activity.activityKind === "mcp_tool" ? <McpToolBody activity={activity} /> : <GenericActivityBody activity={activity} />;
 });
 
-/**
- * Expanded command / explore body: one soft chat-surface card with the shell
- * line nested in its own chip, then muted monospace output underneath — the
- * same anatomy as the Cursor explore block, restated in AO chat tokens.
- */
 function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const command = detail?.command?.trim();
@@ -2257,19 +1907,6 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/**
- * What the agent typed into a running command's terminal.
- *
- * Shown apart from the output, and labelled as input, because it is the one thing in
- * the row the agent did rather than observed — usually `^C` on a command that was
- * never going to finish. The daemon keeps it out of `output` for the same reason it
- * is drawn separately here: the PTY echoes keystrokes, so merging them would print
- * the abort twice and leave no way to tell which was which.
- *
- * Control characters are spelled the way a terminal spells them. Stripping them
- * would leave an empty box where the interesting thing happened: an abort IS one
- * unprintable byte.
- */
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const shown = useMemo(() => caretNotation(text), [text]);
 	return (
@@ -2290,34 +1927,17 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 	);
 }
 
-/**
- * A command's output, with an honest account of what it is.
- *
- * The pre scrolls to its own end while the command runs, because output that
- * arrives below the fold is output nobody sees. It only auto-scrolls while the
- * activity is `running` and only when the reader has not scrolled up: hijacking
- * the viewport of someone reading back through a build log is worse than making
- * them scroll down once.
- *
- * The text is what a terminal would have shown, not the bytes: output arrives with
- * its escape sequences intact — nothing in the stack strips them — so a colourized
- * test run rendered here verbatim is a wall of `[0m`, and a progress bar is a
- * hundred stacked copies of itself. See `lib/ansi.ts` for why this is a text pass
- * rather than a terminal.
- */
 function CommandOutput({
 	activity,
 	embedded = false,
 }: {
 	activity: ConversationActivity;
-	/** Inside the explore card: no second bordered surface. */
 	embedded?: boolean;
 }) {
 	const pre = useRef<HTMLPreElement>(null);
 	const detail = activity.detail;
 	const hostId = useContext(ChatHostId);
 	const sessionId = useChatSessionId();
-	// A remote page carries only the head and tail of a long output; outputBytes is its full size.
 	const cutBytes = typeof detail?.outputBytes === "number" ? detail.outputBytes : undefined;
 	const [whole, setWhole] = useState<{ revision: number; output?: string; loading?: boolean }>();
 	const wholeOutput = whole?.revision === activity.revision ? whole.output : undefined;
@@ -2329,16 +1949,8 @@ function CommandOutput({
 			.then((output) => setWhole({ revision, output }))
 			.catch(() => setWhole(undefined));
 	};
-	// Older ACP-backed conversations may contain the provider's structured
-	// rawOutput even though AO's view model promises a string. New events are
-	// normalized at the adapter boundary; this compatibility read keeps those
-	// already-durable rows from taking down the entire session surface.
 	const raw = commandOutputText((wholeOutput ?? detail?.output) as unknown);
-	// Memoized per row: the timeline re-renders once a second while a turn runs, and
-	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
-	// A scroll container still lays out all its text. Bound both a single long
-	// line and newline-heavy logs before Chromium measures the expanding row.
 	const preview = useMemo(() => {
 		let tail = output.slice(-64 * 1024);
 		const first = tail.charCodeAt(0);
@@ -2350,8 +1962,6 @@ function CommandOutput({
 	useEffect(() => {
 		const node = pre.current;
 		if (!node || !streaming) return;
-		// Within a line of the bottom counts as "following along". Anything further
-		// up is a deliberate scroll and is left alone.
 		const atBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
 		if (atBottom) node.scrollTop = node.scrollHeight;
 	}, [output, streaming]);
@@ -2412,12 +2022,6 @@ function commandOutputText(raw: unknown): string {
 	}
 }
 
-/**
- * Split a summary into an action and a muted target, which is how the row scans:
- * what happened, then what it happened to ("Read" README.md, "Searched for" TODO).
- * A step still in progress says it in the present tense ("Reading"). Anything
- * without a natural split keeps its whole label.
- */
 function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
 	if (activity.activityKind === "command") {
 		const step = activityCommandStep(activity);
@@ -2427,14 +2031,11 @@ function splitSummary(activity: ConversationActivity): { label: string; path?: s
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
 		const status = files[0]!.status ?? "modified";
-		// Basename sits in the chip next to the status verb; the full path is the hover.
 		return {
 			label: `${tense === "live" ? liveFileChangeVerb(status) : fileChangeVerb(status)} ${fileBasename(files[0]!.path)}`,
 			icon: fileChangeIcon(status),
 		};
 	}
-	// The provider sums up an edit of several files once it is done ("Edited 3 files");
-	// while it is under way, the row says so itself.
 	if (activity.activityKind === "file_change" && files.length > 1 && tense === "live") {
 		const statuses = new Set(files.map((file) => file.status ?? "modified"));
 		const verb = statuses.size === 1 ? liveFileChangeVerb([...statuses][0]!) : "Editing";
@@ -2504,9 +2105,6 @@ function ActivityState({
 			</span>
 		);
 	}
-	// Everything else settled fine, which is the boring majority. A chevron on
-	// hover is the whole affordance; a duration or timestamp on every row builds a
-	// column of numbers nobody reads.
 	if (hasBody && showDisclosure) {
 		return (
 			<ChevronRight
@@ -2521,13 +2119,6 @@ function ActivityState({
 	return null;
 }
 
-/**
- * The files one edit touched, and what it did to them.
- *
- * Styled like the explore summary's nested lines — "Edited FAQ.tsx +1 −1" — so an
- * expanded edit reads the same as the turn-level changed-files list. Hovering the
- * basename shows the full location; a file that carries a patch can still open it.
- */
 export function FileChangeList({ files }: { files: FileChangeFile[] }) {
 	if (!files.length) return null;
 	return (
@@ -2561,8 +2152,6 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 		</>
 	);
 
-	// A file with no patch is not a button: nothing opens, and a control that does
-	// nothing when pressed is worse than plain text.
 	if (!hasPatch) {
 		return (
 			<li className="flex items-center gap-1.5 py-0.5 pr-1" aria-label={accessibleName}>
@@ -2593,17 +2182,6 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 	);
 }
 
-/**
- * One file's unified diff.
- *
- * Highlighted by the same engine the prose fences use — `diff` is one of the shipped
- * grammars — rather than by a second highlighter that would double the payload and
- * eventually disagree with the first.
- *
- * An added file's "patch" is its whole contents with no hunk header, which the diff
- * grammar renders as plain text. That is the right outcome: there is no diff to
- * colour, only a new file to read.
- */
 function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
 	if (!file) return undefined;
 	if (file.patch) return file.patch;
@@ -2620,8 +2198,6 @@ function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
 
 function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 	return (
-		// `chat-code` is what the token colours are scoped to, so a patch without it
-		// tokenizes correctly and renders in one flat colour.
 			<div className="mb-1 mt-0.5 overflow-hidden bg-background">
 			<ToolDiffCode text={patch} />
 			{truncated ? (
@@ -2634,24 +2210,6 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 	);
 }
 
-/* -------------------------------------------------------------------------- */
-/* reasoning                                                                   */
-/* -------------------------------------------------------------------------- */
-
-/**
- * The model's own account of what it is doing.
- *
- * Rendered as prose on a rail rather than as a collapsed row, because a reader only
- * ever sees this after deliberately turning reasoning on — hiding it again behind a
- * second click would make the toggle do nothing. It is markdown: the provider writes
- * bolded section headers into its summaries, and showing those as literal asterisks
- * was the visible half of this being unread.
- *
- * The text streams. Earlier builds read a field the payload does not have, so these
- * rows arrived blank even when the provider was sending; it now lands in `text`
- * while the model works and is replaced by the provider's settled summary when the
- * item completes, so one field is read either way.
- */
 function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 	const text = activity.detail?.text ?? activity.detail?.reason ?? "";
 	if (!text) return null;
@@ -2683,19 +2241,6 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/* -------------------------------------------------------------------------- */
-/* MCP tool calls                                                              */
-/* -------------------------------------------------------------------------- */
-
-/**
- * A call to a tool served by an MCP server.
- *
- * Deliberately not shaped like a command row. These used to render as though the
- * agent had run something in the worktree, which is a different and more alarming
- * claim than "it asked a tool server a question": nothing was executed here, and the
- * cwd it appeared to run in did not exist. So the row names the server and the tool,
- * and opens onto the arguments and the answer rather than onto terminal output.
- */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const aoView = aoToolView(activity);
 	if (aoView) return aoView.hidden ? null : <AOToolRow view={aoView} />;
@@ -2703,7 +2248,6 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 }
 
 function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
-	// A choice made on the live row carries over when the call moves up from there.
 	const stepChoices = useContext(LiveStepChoices);
 	const revealed = useContext(RevealedChatActivity) === activity.id;
 	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
@@ -2716,8 +2260,6 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	};
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
-	// An agent's built-in tool (a read, a web search) is named like a command step;
-	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
 	const StepMark = step ? stepIcon[step.icon] : undefined;
 	const name = mcpToolName(activity);
@@ -2746,7 +2288,6 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 			>
 				{StepMark ? <StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" /> : null}
 				{step?.target ? (
-					// Laid out like a command step: verb, then what it acted on.
 					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
 						<strong
 							className={cn(
@@ -2822,7 +2363,6 @@ function mcpToolHasBody(activity: ConversationActivity): boolean {
 	);
 }
 
-/** What a tool call opens onto: its error, arguments, result, content and progress. */
 function McpToolBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const args = mcpToolArguments(activity);
@@ -2852,11 +2392,6 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/**
- * A call to one of AO's own tools, told in the user's words: what was done, and
- * what went wrong when something did. The tool's answer is written for the agent,
- * so it is never shown as is.
- */
 function AOToolRow({ view }: { view: AOToolView }) {
 	const [open, setOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
@@ -3015,13 +2550,6 @@ function toolContentText(value: unknown): string {
 	return "";
 }
 
-/**
- * A tool's arguments or answer, as JSON.
- *
- * A payload the daemon could not store arrives as a stand-in object rather than as
- * the real thing, and printing that stand-in as if it were the tool's answer would
- * be a small lie with a confusing shape. It is recognized and said plainly instead.
- */
 function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	const capped = truncationNote(value);
 	const text = useMemo(() => (capped ? "" : formatJson(value)), [capped, value]);
@@ -3046,7 +2574,6 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	);
 }
 
-/** The daemon's stand-in for a payload past its cap, or nothing. */
 function truncationNote(value: unknown): string | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const record = value as { truncated?: unknown; bytes?: unknown; note?: unknown };
@@ -3070,15 +2597,10 @@ function formatJson(value: unknown): string {
 	}
 }
 
-/** The most recent line of a progress stream, for the collapsed row. */
 function lastLine(text: string): string {
 	const lines = text.trimEnd().split("\n");
 	return lines[lines.length - 1] ?? "";
 }
-
-/* -------------------------------------------------------------------------- */
-/* auto review                                                                 */
-/* -------------------------------------------------------------------------- */
 
 const RISK_TONE: Record<string, string> = {
 	low: "text-muted-foreground",
@@ -3087,15 +2609,6 @@ const RISK_TONE: Record<string, string> = {
 	critical: "text-destructive",
 };
 
-/**
- * A decision the provider made instead of asking.
- *
- * This is not an approval card and must not read like one: nobody was asked, and
- * there is nothing to answer. What the row owes the user is the fact that a decision
- * was taken on their behalf, what it allowed, and — reachable rather than shouted —
- * the reasoning that allowed it. Denials are called out more loudly than approvals,
- * because a denial is why something the user expected did not happen.
- */
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
 	const detail = activity.detail;
@@ -3159,8 +2672,6 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 
 			{open && hasBody ? (
 				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
-					{/* Said in full rather than implied by the label: "auto-approved" alone
-					    leaves it ambiguous whether the user set something up that did this. */}
 					<p className="text-xs leading-relaxed text-muted-foreground">
 						{denied
 							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
@@ -3204,9 +2715,6 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 							<>
 								<dt className="text-muted-foreground/70">decided by</dt>
 								<dd className="text-muted-foreground">
-									{/* A model making the call is a materially different thing to be
-									    told than a policy rule matching, so the provider's own word
-									    for it is carried rather than flattened to "automatically". */}
 									{detail.decisionSource}
 									{detail.durationMs !== undefined && detail.durationMs > 0
 										? ` · ${formatDecisionDuration(detail.durationMs)}`
@@ -3221,28 +2729,10 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/* -------------------------------------------------------------------------- */
-/* system events                                                               */
-/* -------------------------------------------------------------------------- */
-
-/** A provider's note that another model answered. Never drawn: the model picker already names that model. */
 export function isModelReroute(item: ConversationItem): boolean {
 	return item.kind === "activity" && item.detail?.event === "model.rerouted";
 }
 
-/**
- * A provider error item — reconnect storms, credit exhaustion, and similar.
- *
- * Codex (and peers) often put the whole JSON envelope in `message` / `summary`.
- * Rendering that as a generic activity label made one long unbreakable line that
- * widened the chat column under the sidebars, and five reconnect attempts painted
- * five walls of red JSON. This row unwraps the human parts and always wraps inside
- * the column.
- *
- * Not a live region: the enclosing timeline is already a `role="log"`, and the
- * controller banner announces a terminal failure. Marking every historical
- * reconnect row as `role="alert"` would interrupt a screen reader once per attempt.
- */
 function ErrorActivityRow({ activity }: { activity: ConversationActivity }) {
 	const { headline, detail } = providerErrorCopy(activity);
 	const actionUrl = String(activity.detail?.actionUrl ?? "").trim();
@@ -3292,7 +2782,6 @@ function ProviderErrorLink({ href }: { href: string }) {
 	);
 }
 
-/** Render provider prose verbatim, activating only literal HTTP(S) URLs. */
 function linkifiedProviderErrorText(text: string): ReactNode[] {
 	const parts: ReactNode[] = [];
 	let cursor = 0;
@@ -3313,10 +2802,6 @@ function linkifiedProviderErrorText(text: string): ReactNode[] {
 	return parts;
 }
 
-/**
- * Prefer the provider's short status line and `additionalDetails` over a raw JSON
- * dump. Falls back to the stored text when it is already plain language.
- */
 export function providerErrorCopy(activity: ConversationActivity): {
 	headline: string;
 	detail?: string;
@@ -3358,7 +2843,6 @@ function unwrapProviderErrorJson(raw: string): { headline: string; detail?: stri
 	return { headline: message || additional };
 }
 
-/** Read a complete string field from an envelope whose trailing JSON was truncated. */
 function readJsonStringField(raw: string, field: "message" | "additionalDetails"): string {
 	const match = new RegExp(`"${field}"\\s*:\\s*("(?:\\\\.|[^"\\\\])*")`).exec(raw);
 	if (!match?.[1]) return "";
@@ -3370,7 +2854,6 @@ function readJsonStringField(raw: string, field: "message" | "additionalDetails"
 	}
 }
 
-/** AO used to persist `provider error: {…}`; parse the JSON object even when prefixed. */
 function parseJsonObjectSuffix(raw: string): Record<string, unknown> | undefined {
 	const start = raw.indexOf("{");
 	if (start < 0) return undefined;
@@ -3392,26 +2875,11 @@ function parseJsonObjectSuffix(raw: string): Record<string, unknown> | undefined
 	}
 }
 
-/**
- * Where the provider stopped accepting work until someone signs in.
- *
- * The banner above the timeline is what the user acts on; this row is the record of
- * when it happened, so a turn that failed for this reason is not left looking like an
- * ordinary failure.
- */
-/** Whole seconds for a short duration, minutes and seconds past a minute. */
 function setupDuration(durationMs: number): { minutes: number; seconds: number } {
 	const total = Math.max(0, Math.round(durationMs / 1000));
 	return { minutes: Math.floor(total / 60), seconds: total % 60 };
 }
 
-/**
- * How the project's Setup commands (Project settings > Scripts) ended, before
- * the agent started. Compact like the other system rows; the failed step's
- * output (the tail the worker kept, already redacted) opens below it in
- * monospace. Workers that publish workspace.script.step events get the
- * ScriptRunPanel instead; this row stays for workers that predate them.
- */
 function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
@@ -3433,8 +2901,6 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 				: t("chat.projectSetup.failed", { step });
 	const failed = status !== "succeeded";
 	const stepOutput = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
-	// The failed step's command, who and where it ran, and its full log, one
-	// fact per line above its output.
 	const setupFailure = failed ? detail?.setupFailure : undefined;
 	const contextLines: string[] = [];
 	if (setupFailure?.command) contextLines.push(t("chat.projectSetup.stepCommand", { step, command: setupFailure.command }));
@@ -3473,8 +2939,6 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/** Where an account switch stopped the turn: not a failure, the conversation
- * continues on the new account with the next message. */
 function AccountSwitchedRow({ accountId }: { accountId?: string }) {
 	const { t } = useTranslation();
 	const label = useAgentAccountLabel(true, useContext(ChatHostId));
@@ -3506,15 +2970,6 @@ function ReauthRow({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
-/**
- * Guidance the user delivered into a turn that was already running.
- *
- * Drawn as the user's own words, because they are — the daemon records it as an
- * activity only because a message would have opened a second turn. It carries a
- * marker rather than looking identical to an ordinary message: a reader scrolling
- * back needs to see that this arrived mid-turn, since it explains why the agent
- * changed course without a new exchange starting.
- */
 export function SteerMessage({
 	activity,
 	sessionId,
@@ -3532,24 +2987,18 @@ export function SteerMessage({
 	const senderSessionId = activity.detail?.senderSessionId?.trim();
 	const senderProjectId = activity.detail?.senderProjectId?.trim();
 	const senderLabel = activity.detail?.senderDisplayName?.trim() || senderSessionId;
-	// From another AO session, or from the orchestrator that spawned this one (a Cloud
-	// orchestrator's message steered into a busy worker names only its label).
 	const automationSteer = Boolean(senderSessionId) || (activity.detail?.origin === "automation" && Boolean(senderLabel));
 	const senderHref = senderSessionId && senderProjectId
 		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
 		: undefined;
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
-	// Only the person's own steer is marked; a steer from another session is not theirs.
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
 		: body;
 	let stagedImagesToMatch = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path)).length;
-	// Composer images are recorded twice: once as durable staged paths and once as
-	// native prompt blocks. Suppress only the corresponding leading native images;
-	// later image blocks may be distinct provider content and must remain visible.
 	const annotationSummary = annotations.length > 0
 		? <ChatAnnotationSummary annotations={annotations} onSelect={onSelectAnnotation} />
 		: null;
@@ -3597,7 +3046,6 @@ export function SteerMessage({
 				</AutomationMessageFrame>
 			) : (
 				<>
-					{/* As on a sent message: attachments above the text, outside its bubble. */}
 					{annotationSummary || attachments.length > 0 || remainingContent.length > 0 ? (
 						<AttachmentStrip>
 							{annotationSummary}
@@ -3644,17 +3092,6 @@ export function stripSteerSenderPrefix(text: string, senderSessionId: string): s
 	return text.replace(prefix, "");
 }
 
-/* -------------------------------------------------------------------------- */
-/* approval                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * A decision the agent is blocked on.
- *
- * Decisions come from `activity.decisions` — the provider's own list — never from
- * a fixed set. The UI still presents common permission choices with AO/Codex copy
- * so provider-flavored labels do not leak into the chat surface.
- */
 export function ApprovalCard({
 	activity,
 	onDecide,
@@ -3664,7 +3101,6 @@ export function ApprovalCard({
 	activity: ConversationActivity;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	busy?: boolean;
-	/** Render inside the shared chat composer instead of drawing another card shell. */
 	embedded?: boolean;
 }) {
 	const resolved = activity.status !== "pending";
@@ -3690,10 +3126,6 @@ export function ApprovalCard({
 			decision !== allowOnceDecision &&
 			!alternateAllowDecisions.includes(decision),
 	);
-	// Some agents ask a question through a permission request, offering each
-	// answer as its own option of the same kind. A generic per-kind label would
-	// render identical buttons, so a kind offered more than once keeps the
-	// provider's own wording.
 	const repeatedKinds = repeatedDecisionKinds(decisions);
 	const decisionLabel = (decision: DecisionOption) =>
 		repeatedKinds.has(approvalDecisionKind(decision) ?? "") && decision.label.trim()
@@ -3961,11 +3393,6 @@ function resolvedApprovalOutcome(
 	return { label: "Resolved", success: false };
 }
 
-/* -------------------------------------------------------------------------- */
-/* turn diff                                                                   */
-/* -------------------------------------------------------------------------- */
-
-/** Single letter per change kind, which is how a diff list is normally read. */
 const diffStatusMark: Record<DiffStatus, { mark: string; tone: string; label: string }> = {
 	added: { mark: "A", tone: "text-success", label: "added" },
 	modified: { mark: "M", tone: "text-accent", label: "modified" },
@@ -3973,7 +3400,6 @@ const diffStatusMark: Record<DiffStatus, { mark: string; tone: string; label: st
 	renamed: { mark: "R", tone: "text-muted-foreground", label: "renamed" },
 };
 
-/** Match the daemon's file_change summary verbs (Created/Deleted/Renamed/Edited). */
 function fileChangeVerb(status: DiffStatus): string {
 	switch (status) {
 		case "added":
@@ -4013,15 +3439,8 @@ function fileChangeIcon(status: DiffStatus): StepIcon {
 	}
 }
 
-/** Fills a 5:4 tile with a page laid out 1000 wide, as the Summary's previews do. */
 const TURN_ARTIFACT_PAGE_HEIGHT = 800;
 
-/**
- * The end-of-turn results: deliverables the turn created or edited as preview
- * cards, then every other changed file in the changed-files card. An artifact
- * is the thing the reader asked for, not a code change to review, so it never
- * appears in both.
- */
 export function TurnResults({
 	diff,
 	reportedArtifacts,
@@ -4030,14 +3449,11 @@ export function TurnResults({
 	onOpenFile,
 	onOpenArtifact,
 }: {
-	/** Absent for an agent that reports no diffs, or a turn that only wrote artifacts. */
 	diff?: TurnDiff;
-	/** The artifacts the daemon saw the turn create or edit. */
 	reportedArtifacts?: TurnArtifactChange[];
 	items?: ConversationItem[];
 	onReview?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
-	/** Opens an artifact in the inspector's Artifacts tab, by its artifact path. */
 	onOpenArtifact?: (target: { path: string }) => void;
 }) {
 	const source = useChatArtifactFiles();
@@ -4057,7 +3473,6 @@ export function TurnResults({
 	);
 }
 
-/** Preview cards for the deliverables one turn created or edited. */
 export function TurnArtifacts({
 	artifacts,
 	sessionId,
@@ -4067,11 +3482,6 @@ export function TurnArtifacts({
 	artifacts: TurnArtifact[];
 	sessionId: string;
 	cloud?: ArtifactRow["cloud"];
-	/**
-	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
-	 * cloud chat resolves that against workspace files, which never holds the
-	 * artifact, so a card would open the wrong file or none.
-	 */
 	onOpenArtifact?: (target: { path: string }) => void;
 }) {
 	return (
@@ -4117,16 +3527,6 @@ export function TurnArtifacts({
 	);
 }
 
-/**
- * What a turn changed on disk.
- *
- * A bordered summary card at the end of the turn (kept near rollback), not the
- * compact explore line used for mid-turn activity. Always shows the changed
- * files; Review opens the Files rail, and clicking a row focuses that path.
- *
- * Rendered only when the daemon reported a diff. An agent that cannot report one
- * gets no empty panel implying it changed nothing.
- */
 export function TurnChangedFiles({
 	diff,
 	live,
@@ -4136,15 +3536,8 @@ export function TurnChangedFiles({
 }: {
 	diff: TurnDiff;
 	live?: boolean;
-	/** Opens the session Files inspector for the full workspace diff. */
 	onReview?: () => void;
-	/** Opens the Files inspector focused on this path. */
 	onOpenFile?: (path: string, line?: number) => void;
-	/**
-	 * Timeline items from the same turn. Turn diffs often carry repo-relative
-	 * basenames (`random_words.txt`); file_change rows and command cwds often
-	 * carry the absolute worktree path the Edited tooltip already shows.
-	 */
 	items?: ConversationItem[];
 }) {
 	const [expanded, setExpanded] = useState(false);
@@ -4290,10 +3683,6 @@ export function TurnChangedFiles({
 	);
 }
 
-/**
- * Basename only — color distinguishes it from "Edited", no hover fill. Hovering
- * shows the home-shortened worktree path in a monospace tooltip.
- */
 function FileLocationLabel({
 	path,
 	oldPath,
@@ -4303,7 +3692,6 @@ function FileLocationLabel({
 }: {
 	path: string;
 	oldPath?: string;
-	/** Absolute/worktree path for the tooltip when `path` is only a basename. */
 	locationPath?: string;
 	locationOldPath?: string;
 	className?: string;
@@ -4313,8 +3701,6 @@ function FileLocationLabel({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				{/* `title=""` blocks Chromium's native ellipsis tooltip so only the
-				    path tooltip below appears — otherwise hover shows the basename. */}
 				<span
 					className={cn(
 						"min-w-0 truncate text-xs text-foreground/65 outline-none",
@@ -4332,13 +3718,8 @@ function FileLocationLabel({
 	);
 }
 
-/**
- * What a command step acted on, after its verb: a file, a pattern, a PR number.
- * Styled like a file edit's name. A shortened target keeps the whole one in a tooltip.
- */
 function StepTarget({ text, title }: { text: string; title?: string }) {
 	const label = <span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>;
-	// A short target that is shown whole needs no tooltip repeating it.
 	if ((!title || title === text) && text.length <= 48) return label;
 	return (
 		<Tooltip>
@@ -4354,14 +3735,8 @@ function fileLocationLabel(path: string, oldPath?: string): string {
 	return oldPath ? `${shortenPaths(oldPath)} → ${shortenPaths(path)}` : shortenPaths(path);
 }
 
-/* -------------------------------------------------------------------------- */
-/* turn boundary                                                               */
-/* -------------------------------------------------------------------------- */
-
-/** Turn wall-clock duration, after "Worked for" at the head of a settled turn. */
 export function TurnDuration({ durationMs }: { durationMs: number }) {
 	if (durationMs <= 0) return null;
-	// The summary's own color (and the fold's hover color) carries the number with the words.
 	return <span className="shrink-0 font-sans text-sm leading-none tabular-nums">{formatDuration(durationMs)}</span>;
 }
 

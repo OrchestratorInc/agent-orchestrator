@@ -1,58 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CloudCpClient, CloudCpComposerAnswer, CloudCpComposerParticipant, CloudCpSessionLive } from "../lib/cloud-cp";
 
-/** How often a holder renews while the composer is in use. */
 export const COMPOSER_RENEW_MS = 3_000;
-/** At most how often a holder's draft is shared while they type. */
 export const COMPOSER_DRAFT_PUBLISH_MS = 120;
 
 export interface ComposerLeaseState {
-	/**
-	 * Someone else has this session open right now, so the lease applies and
-	 * the holder's draft is shared, a viewer's view included.
-	 */
 	shared: boolean;
-	/** This person holds the lease. */
 	holding: boolean;
-	/** Someone else holds the lease, or is ahead in line for it. */
 	locked: boolean;
-	/** Who holds the lease when it is not this person. */
 	holder?: CloudCpComposerParticipant;
-	/** This person's place in line, from 1, when waiting. */
 	position?: number;
 	canTakeOver: boolean;
-	/** The grant to present with a send or steer, when holding. */
 	epoch?: number;
 	error?: string;
-	/** What the holder is typing, when someone else holds the lease and has typed. */
 	remoteDraft?: { holder: CloudCpComposerParticipant; text: string; cursor: number };
-	/**
-	 * Report a draft edit or caret move: takes the lease on the first keystroke,
-	 * shares the draft live while holding it, releases when cleared.
-	 */
 	noteDraft: (text: string, caret?: number) => void;
 	requestTurn: () => void;
 	leaveLine: () => void;
 	takeOver: () => void;
-	/** The send or steer that used the grant was accepted; the server released the lease. */
 	sent: () => void;
 }
 
 type ComposerClient = Pick<CloudCpClient, "acquireComposer" | "renewComposer" | "releaseComposer" | "requestComposerTurn" | "leaveComposerQueue" | "takeOverComposer" | "publishComposerDraft">;
 
-/**
- * Drives a shared cloud session's composer lease from its live state. While
- * nobody else has the session open it does nothing at all, so solo use costs
- * no extra requests: the server admits a send without a grant while the lease
- * is free and nobody waits.
- */
 export function useComposerLease({ client, orgId, sessionId, userId, live, canWrite }: {
 	client: ComposerClient;
 	orgId: string | undefined;
 	sessionId: string;
 	userId: string;
 	live: CloudCpSessionLive | undefined;
-	/** False for a read-only participant, who never takes the lease. */
 	canWrite: boolean;
 }): ComposerLeaseState {
 	const [grant, setGrant] = useState<number>();
@@ -69,8 +45,6 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 	const composer = live?.composer;
 	const liveHolder = composer?.holder ?? undefined;
 	const holdingLive = Boolean(liveHolder && liveHolder.userId === userId);
-	// Anyone else here, a viewer too, watches the holder's draft, so the lease
-	// (which carries the draft) applies as soon as someone else has it open.
 	const othersHere = (live?.viewers ?? []).some((viewer) => viewer.userId !== userId);
 	const shared = canWrite && Boolean(live) && (othersHere || Boolean(liveHolder && !holdingLive) || (composer?.waitlist.length ?? 0) > 0);
 	const holding = holdingLive || (grant !== undefined && !(liveHolder && !holdingLive));
@@ -80,17 +54,12 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 	const locked = shared && !holding && (Boolean(liveHolder) || aheadInLine);
 	epochRef.current = shared && holding ? epoch : undefined;
 
-	// The live state is the authority: a grant it no longer shows (taken over,
-	// lapsed) is gone, and one it shows passed to this person (from the line)
-	// is theirs.
 	useEffect(() => {
 		if (!composer) return;
 		if (holdingLive) setGrant(composer.epoch);
 		else if (liveHolder) setGrant(undefined);
 	}, [composer, holdingLive, liveHolder]);
 
-	// Automatic calls (taking the lease on a keystroke, renewing) skip while
-	// another is in flight; a person's own click always goes through.
 	const run = useCallback(async (call: () => Promise<CloudCpComposerAnswer>, automatic = false) => {
 		if (!orgId || (automatic && pendingRef.current)) return;
 		if (automatic) pendingRef.current = true;
@@ -110,8 +79,6 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 		void run(() => client.acquireComposer(orgId, sessionId), true);
 	}, [client, orgId, run, sessionId]);
 
-	// Share the newest draft with everyone else; a draft typed while the last
-	// one was on its way goes next, so the others always end on the latest.
 	const publishDraft = useCallback(async () => {
 		const grantEpoch = epochRef.current;
 		if (!orgId || grantEpoch === undefined || draftRef.current.trim() === "") return;
@@ -136,8 +103,6 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 			}
 		}
 	}, [client, orgId, sessionId]);
-	// Throttled, not debounced: steady typing still reaches the others every
-	// COMPOSER_DRAFT_PUBLISH_MS, and the publish sends the newest draft.
 	const scheduleDraft = useCallback(() => {
 		if (publishTimerRef.current !== undefined) return;
 		publishTimerRef.current = window.setTimeout(() => {
@@ -163,19 +128,14 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 		else if (!locked && edited) acquire();
 	}, [acquire, client, epoch, holding, locked, orgId, run, scheduleDraft, sessionId, shared]);
 
-	// A grant just arrived (taken on the first keystroke, or handed over from
-	// the line) for a draft already written: share it.
 	useEffect(() => {
 		if (shared && holding && epoch !== undefined && draftRef.current.trim() !== "") scheduleDraft();
 	}, [epoch, holding, scheduleDraft, shared]);
 
-	// Someone joined while this person had a draft: take the lease for it.
 	useEffect(() => {
 		if (shared && !holding && !locked && draftRef.current.trim() !== "") acquire();
 	}, [acquire, holding, locked, shared]);
 
-	// Renew while holding; report whether there was a keystroke since the last
-	// renewal, so an idle holder loses the lease on the server's schedule.
 	useEffect(() => {
 		if (!shared || !holding || epoch === undefined || !orgId) return;
 		const timer = window.setInterval(() => {

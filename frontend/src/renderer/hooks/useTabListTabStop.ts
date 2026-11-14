@@ -2,14 +2,6 @@ import { useEffect, useRef } from "react";
 
 const FALLBACK_ATTR = "data-tab-stop-fallback";
 
-/**
- * Keeps the selected tab visible: when selection moves (⌃Tab, arrows, a
- * shortcut) in a strip that scrolls horizontally, scroll it into view.
- *
- * Roving-tabindex fallback: when no tab in the list is active (so none has
- * tabindex 0), make the first tab tabbable. The fallback is stripped and
- * recomputed on every render so it never leaves a second tab stop behind.
- */
 export function useTabListTabStop<T extends HTMLElement>() {
 	const ref = useRef<T | null>(null);
 	const lastSelected = useRef<Element | null>(null);
@@ -22,9 +14,6 @@ export function useTabListTabStop<T extends HTMLElement>() {
 		if (!list) return;
 		const selected = list.querySelector('[role="tab"][aria-selected="true"]');
 		if (selected && selected !== lastSelected.current) {
-			// scrollIntoView forces a layout. Run synchronously, it laid out the whole
-			// page mid-commit on every new tab; in the next frame it shares the
-			// layout the browser does anyway, and a burst of tabs scrolls once.
 			if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
 			scrollFrame.current = requestAnimationFrame(() => {
 				scrollFrame.current = null;

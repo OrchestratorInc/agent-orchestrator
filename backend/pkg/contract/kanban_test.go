@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
-// deriveColumn asserts only the stage-one placement. The column is derived from
-// lifecycle facts alone, so it needs neither worker activity nor the clock.
 func deriveColumn(session contract.KanbanSessionFacts, prs []contract.KanbanPRFacts) contract.KanbanColumn {
 	return contract.DeriveKanbanPresentation(session, prs, time.Time{}, 0).Column
 }
@@ -333,9 +331,6 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 	}
 }
 
-// A run recorded for an earlier head is dropped before the reducer sees it, so
-// the PR reads as an unreviewed head and the review-feedback loop restarts: AO
-// takes the next turn with auto review on, a person takes it with it off.
 func TestDeriveKanbanColumnStaleReviewRunStartsANewCycle(t *testing.T) {
 	t.Parallel()
 	session := contract.KanbanSessionFacts{AutoReview: true}
@@ -464,9 +459,6 @@ func TestDeriveKanbanPresentationBuilding(t *testing.T) {
 	}
 }
 
-// An AO changes request with auto-inject on reads "Addressing comments" only
-// while the worker is busy; once it is idle the card shows the outcome it is
-// sitting on, even though AO already delivered the feedback.
 func TestDeriveKanbanPresentationAOChangesRequestedNeedsActiveWorker(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
@@ -519,7 +511,6 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 		wantColumn contract.KanbanColumn
 		want       contract.DisplayStatus
 	}{
-		// Validating: the AO-driven loop.
 		{
 			name:       "a draft with nothing else to say is a draft",
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Draft: true},
@@ -689,7 +680,6 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayReviewCancelled,
 		},
 
-		// In review: the loop seen from the person's side.
 		{
 			name:       "an open pr nobody is handling is awaiting review",
 			pr:         contract.KanbanPRFacts{URL: "pr/1"},
@@ -851,7 +841,6 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayChangesRequested,
 		},
 
-		// Ready: how the pr landed, or what stands between it and the button.
 		{
 			name:       "a mergeable pr is mergeable",
 			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeMergeable},
@@ -987,9 +976,6 @@ func TestDeriveKanbanPresentationTerminatedArchives(t *testing.T) {
 	}
 }
 
-// A pass recorded for an earlier commit is filtered out before the reducer
-// sees it, so the head it left behind reads as unreviewed rather than as a
-// finished review.
 func TestDeriveKanbanPresentationIgnoresAPassForAnEarlierHead(t *testing.T) {
 	t.Parallel()
 	got := contract.DeriveKanbanPresentation(
@@ -1002,8 +988,6 @@ func TestDeriveKanbanPresentationIgnoresAPassForAnEarlierHead(t *testing.T) {
 	}
 }
 
-// The display status must describe the PR the column was chosen from, so a
-// landed PR cannot speak for a session whose other PR still needs work.
 func TestDeriveKanbanPresentationSpeaksForTheChosenPR(t *testing.T) {
 	t.Parallel()
 	older := time.Unix(100, 0)

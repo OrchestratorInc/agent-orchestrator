@@ -1,5 +1,3 @@
-// Package copilot adapts the GitHub Copilot CLI worker for persistent,
-// restricted AO code-review sessions.
 package copilot
 
 import (
@@ -41,23 +39,18 @@ type agent interface {
 	InstallAgentProfile(context.Context, ports.WorkspaceHookConfig) error
 }
 
-// Reviewer is the GitHub Copilot CLI code-review adapter.
 type Reviewer struct {
 	agent agent
 }
 
-// New builds the Copilot reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{agent: workeragent.New()}
 }
 
-// Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCopilot
 }
 
-// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
-// the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
 	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
 		invalidator.InvalidateBinaryResolution()
@@ -67,8 +60,6 @@ func (r *Reviewer) InvalidateBinaryResolution() {
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
-// PreLaunch installs only the AO-owned custom-agent profile. Reviewer panes do
-// not use worker lifecycle hooks, so this must not create .github/hooks/ao.json.
 func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) error {
 	return r.agent.InstallAgentProfile(ctx, ports.WorkspaceHookConfig{
 		DataDir:          inv.DataDir,
@@ -78,9 +69,6 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 	})
 }
 
-// ReviewCommand launches one persistent interactive pane with a narrow,
-// read-only Copilot policy. PermissionModeDefault is intentional: the worker
-// adapter maps auto to --allow-all-tools, which would defeat this policy.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config:           inv.Config,
@@ -114,19 +102,15 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	return ports.ReviewCommandSpec{Argv: insertBeforeInteractive(argv, policy...)}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Copilot reviewer pane by relaunching
-// with the reviewer profile and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// ReviewMessage returns the centrally-authored task for the existing pane.
 func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel interrupts twice, matching Copilot's interactive cancellation.
 func (r *Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInterrupt, Interrupts: 2}, nil
 }

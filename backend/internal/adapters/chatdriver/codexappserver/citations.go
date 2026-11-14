@@ -25,10 +25,6 @@ var (
 	citationLocator = regexp.MustCompile(`^L\d+(?:-L\d+)?$`)
 )
 
-// citationFormatter keeps native thread state separate even though Codex
-// multiplexes child-thread notifications over one connection. Codex owns the
-// marker grammar and reference IDs; the events it emits contain ordinary
-// Markdown, which every Chat provider and renderer already understands.
 type citationFormatter struct {
 	sources  map[citationTurnKey]map[string]citation.Source
 	messages map[citationMessageKey]*citationMessage
@@ -103,9 +99,6 @@ func (f *citationFormatter) observeItem(threadID, turnID string, item codexproto
 	}
 }
 
-// formatEvent keeps streamed output append-only. A marker split across deltas,
-// or one whose source has not arrived yet, stays buffered until it can be shown
-// as a link. The settled event always replaces the stream with the full answer.
 func (f *citationFormatter) formatEvent(threadID string, ev ports.ChatEvent) (ports.ChatEvent, bool) {
 	key := citationMessageKey{
 		threadID: threadID,
@@ -126,8 +119,6 @@ func (f *citationFormatter) formatEvent(threadID string, ev ports.ChatEvent) (po
 		}
 		rendered, pending := f.markdownWithPending(message.raw, threadID, ev.ProviderTurnID, false)
 		if !strings.HasPrefix(rendered, message.rendered) {
-			// A late source or an unfinished Markdown construct changed an already
-			// emitted prefix. Completion will settle the authoritative full text.
 			return ev, false
 		}
 		ev.Delta = strings.TrimPrefix(rendered, message.rendered)
@@ -138,7 +129,6 @@ func (f *citationFormatter) formatEvent(threadID string, ev ports.ChatEvent) (po
 		delete(f.messages, key)
 		ev.Text = f.markdown(ev.Text, threadID, ev.ProviderTurnID)
 	case ports.ChatEventTurnCompleted:
-		// A failed or cancelled turn may never complete its last message.
 		for key := range f.messages {
 			if key.threadID == threadID && key.turnID == ev.ProviderTurnID {
 				delete(f.messages, key)
@@ -239,8 +229,6 @@ func (f *citationFormatter) source(threadID, turnID, id string) citation.Source 
 	if source, ok := f.sources[key][id]; ok {
 		return source
 	}
-	// A later answer can cite an earlier search. Keep the fallback only when the
-	// native ID has one destination across all multiplexed threads.
 	var found citation.Source
 	for _, sources := range f.sources {
 		if source, ok := sources[id]; ok {
@@ -267,8 +255,6 @@ func inRange(ranges []byteRange, offset int) bool {
 	return false
 }
 
-// Ask the same Markdown parser used elsewhere in the Go backend which bytes
-// are literal code. Citation-looking examples in code remain untouched.
 func markdownCodeRanges(raw string) []byteRange {
 	source := []byte(raw)
 	doc := goldmark.DefaultParser().Parse(gmtext.NewReader(source))

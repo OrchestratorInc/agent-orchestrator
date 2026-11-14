@@ -2,14 +2,12 @@ package project
 
 import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
 
-// GetResult is the discriminated result returned by Service.Get.
 type GetResult struct {
 	Status   string
 	Project  *Project
 	Degraded *Degraded
 }
 
-// AddInput is the body shape for POST /api/v1/projects.
 type AddInput struct {
 	Path               string                `json:"path"`
 	ProjectID          *string               `json:"projectId,omitempty"`
@@ -19,9 +17,6 @@ type AddInput struct {
 	ClonePreparationID string                `json:"clonePreparationId,omitempty"`
 }
 
-// CloneInput is the body shape for POST /api/v1/projects/clone. The daemon
-// derives the checkout directory name from RemoteURL and creates it directly
-// beneath DestinationParent before registering the resulting project.
 type CloneInput struct {
 	RemoteURL         string                `json:"remoteUrl" minLength:"1"`
 	DestinationParent string                `json:"destinationParent" minLength:"1"`
@@ -30,17 +25,14 @@ type CloneInput struct {
 	Config            *domain.ProjectConfig `json:"config,omitempty"`
 }
 
-// ClonePreparationResult is the checkout returned before project registration.
 type ClonePreparationResult struct {
 	Path          string `json:"path"`
 	RemoteURL     string `json:"remoteUrl"`
 	PreparationID string `json:"preparationId"`
 }
 
-// CloneProgressPhase names the git clone step a checkout is in.
 type CloneProgressPhase string
 
-// The steps a clone reports, in the order git reaches them.
 const (
 	ClonePhaseEnumeratingObjects CloneProgressPhase = "enumerating_objects"
 	ClonePhaseCountingObjects    CloneProgressPhase = "counting_objects"
@@ -49,22 +41,15 @@ const (
 	ClonePhaseResolvingDeltas    CloneProgressPhase = "resolving_deltas"
 	ClonePhaseUpdatingFiles      CloneProgressPhase = "updating_files"
 	ClonePhaseFilteringContent   CloneProgressPhase = "filtering_content"
-	// ClonePhaseRetrying starts another attempt after a temporary connection failure.
-	ClonePhaseRetrying CloneProgressPhase = "retrying"
+	ClonePhaseRetrying           CloneProgressPhase = "retrying"
 )
 
-// CloneProgress reports the step a running clone has reached. It never
-// carries git's own output: git can print the remote URL, which may hold
-// credentials.
 type CloneProgress struct {
-	Phase CloneProgressPhase `json:"phase" enum:"enumerating_objects,counting_objects,compressing_objects,receiving_objects,resolving_deltas,updating_files,filtering_content,retrying"`
-	// Attempt is the 1-based clone attempt the phase belongs to.
-	Attempt int `json:"attempt" minimum:"1"`
-	// Percent is how far git says the phase is, when it reports one.
-	Percent *int `json:"percent,omitempty" minimum:"0" maximum:"100"`
+	Phase   CloneProgressPhase `json:"phase" enum:"enumerating_objects,counting_objects,compressing_objects,receiving_objects,resolving_deltas,updating_files,filtering_content,retrying"`
+	Attempt int                `json:"attempt" minimum:"1"`
+	Percent *int               `json:"percent,omitempty" minimum:"0" maximum:"100"`
 }
 
-// CloneDestination reports local destination readiness without contacting the remote.
 type CloneDestination struct {
 	RemoteURL      string `json:"remoteUrl"`
 	Path           string `json:"path"`
@@ -72,53 +57,36 @@ type CloneDestination struct {
 	CanUseExisting bool   `json:"canUseExisting"`
 }
 
-// ClonePreparationCleanupInput identifies a checkout created by prepare-clone
-// that the user abandoned before project registration.
 type ClonePreparationCleanupInput struct {
 	Path          string `json:"path" minLength:"1"`
 	PreparationID string `json:"preparationId" minLength:"1"`
 	KeepCheckout  bool   `json:"keepCheckout,omitempty"`
 }
 
-// InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.
 type InitializeRepositoryInput struct {
-	Path string `json:"path"`
-	// Create makes Path, which must not exist yet, before initializing it: a
-	// new, empty project. Missing parent folders are created too. The folder is
-	// removed again when initialization fails.
-	Create bool `json:"create,omitempty"`
-	// CreateID names one create request, so a retry after a lost response
-	// resumes the folder that request made instead of failing on PATH_EXISTS.
-	// It is recorded in the new repository's local Git config; a folder that
-	// does not carry it is never taken over.
+	Path     string `json:"path"`
+	Create   bool   `json:"create,omitempty"`
 	CreateID string `json:"createId,omitempty" maxLength:"64"`
 }
 
-// InitializeRepositoryResult reports the repository path initialized for onboarding.
 type InitializeRepositoryResult struct {
 	Path string `json:"path"`
 }
 
-// UpdateSettingsInput is the body shape for PUT /api/v1/projects/{id}. It
-// atomically replaces the user-facing display name and per-project config.
 type UpdateSettingsInput struct {
 	DisplayName string               `json:"displayName" minLength:"1" maxLength:"100"`
 	Config      domain.ProjectConfig `json:"config"`
 }
 
-// SetConfigInput is the body shape for PUT /api/v1/projects/{id}/config. Config
-// replaces the project's stored config wholesale; a zero-value config clears it.
 type SetConfigInput struct {
 	Config domain.ProjectConfig `json:"config"`
 }
 
-// RemoveResult reports what DELETE /api/v1/projects/{id} actually did.
 type RemoveResult struct {
 	ProjectID         domain.ProjectID `json:"projectId"`
 	RemovedStorageDir bool             `json:"removedStorageDir"`
 }
 
-// SetPermissionsInput remembers a project-wide policy for future sessions.
 type SetPermissionsInput struct {
 	SourceHarness domain.AgentHarness   `json:"sourceHarness,omitempty"`
 	Permissions   domain.PermissionMode `json:"permissions" enum:"default,accept-edits,auto,bypass-permissions"`

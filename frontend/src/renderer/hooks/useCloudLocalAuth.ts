@@ -1,13 +1,3 @@
-/**
- * Dev-only local (email/password) cloud sign-in for the renderer.
- *
- * Whether the surface is offered is decided authoritatively in the main process
- * (unpackaged/dev build AND a loopback control plane); this hook only mirrors
- * that decision for UI visibility and forwards the credentials over the bridge.
- * On success the main process pushes the new session over cloud:sessionChanged,
- * so useCloudSession flips to "authenticated" on its own — no manual refresh.
- */
-
 import { useEffect, useState } from "react";
 import type { CloudAccount } from "../../shared/cloud-account";
 import { aoBridge } from "../lib/bridge";
@@ -27,9 +17,7 @@ export interface LocalLoginFields {
 }
 
 export interface UseCloudLocalAuthResult {
-	/** Whether the dev-only local sign-in surface should be shown. */
 	available: boolean;
-	/** Resolved loopback control-plane base URL the credentials are sent to. */
 	cpUrl: string;
 	register: (fields: LocalRegisterFields) => Promise<CloudAccount>;
 	login: (fields: LocalLoginFields) => Promise<CloudAccount>;

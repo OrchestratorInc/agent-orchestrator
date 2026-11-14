@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// Search is optional: with an index that cannot be opened the daemon still
-// gets a working store, and search answers "unavailable" instead of failing.
 func TestSessionSearchIsOffWhenItsIndexCannotOpen(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "search.db"), 0o700); err != nil {

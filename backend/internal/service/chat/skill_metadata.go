@@ -11,15 +11,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// skillMetadataLimit caps how much of one metadata file is read. The file holds a
-// name and a sentence; anything larger is not one.
 const skillMetadataLimit = 64 << 10
 
-// skillCommandPrefix is how Pi-style ACP agents list a skill: `skill:<name>`.
 const skillCommandPrefix = "skill:"
 
-// skillMetadataFile is the display metadata a skill can carry in
-// `agents/openai.yaml`, the file Codex reads for its own skill list.
 type skillMetadataFile struct {
 	Interface struct {
 		DisplayName      string `yaml:"display_name"`
@@ -27,8 +22,6 @@ type skillMetadataFile struct {
 	} `yaml:"interface"`
 }
 
-// skillRoots lists the folders skills are installed in, the session's own
-// workspace first so a project skill wins over a same-named user skill.
 func skillRoots(workspace, home string) []string {
 	var roots []string
 	for _, base := range []string{strings.TrimSpace(workspace), home} {
@@ -47,15 +40,6 @@ func skillRoots(workspace, home string) []string {
 	return roots
 }
 
-// withSkillMetadata gives skills their own display name and short description
-// when the agent listed only the invocation name.
-//
-// ACP agents such as Claude report a skill by its folder name (`better-interface`)
-// and its full trigger text, written for the model. The skill's own
-// `agents/openai.yaml` says how it should read (`Better Interface`, a one-line
-// summary), which is what Codex already shows. Name stays untouched: it is what
-// the composer inserts and the agent runs. A skill with no metadata file keeps
-// the name it was listed by; casing is never guessed.
 func withSkillMetadata(skills []ports.ChatSkill, roots []string) []ports.ChatSkill {
 	if len(roots) == 0 {
 		return skills
@@ -85,9 +69,6 @@ func withSkillMetadata(skills []ports.ChatSkill, roots []string) []ports.ChatSki
 	return out
 }
 
-// skillFolderName is the folder a listed skill name lives in, when the name maps
-// to exactly one path segment. A namespaced plugin skill (`plugin:skill`) lives
-// elsewhere and is left as listed.
 func skillFolderName(name string) (string, bool) {
 	folder := strings.TrimPrefix(strings.TrimSpace(name), skillCommandPrefix)
 	if folder == "" || folder == "." || folder == ".." || strings.ContainsAny(folder, `/\:`) {
@@ -96,10 +77,6 @@ func skillFolderName(name string) (string, bool) {
 	return folder, true
 }
 
-// readSkillMetadata reads the metadata of the skill folder the agent resolves:
-// the first root that holds it. That folder alone is read. A project skill with
-// no metadata file keeps its listed name rather than borrowing the label of a
-// same-named user skill the agent does not run.
 func readSkillMetadata(roots []string, folder string) (skillMetadataFile, bool) {
 	for _, root := range roots {
 		dir := filepath.Join(root, folder)

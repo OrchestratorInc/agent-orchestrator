@@ -72,13 +72,11 @@ func TestOfferingFromConfigCarriesTrackerIntake(t *testing.T) {
 	}
 }
 
-// Cloud is on for everyone with a configured control plane. Only the
-// AO_CLOUD_OFFERING escape hatch or a missing control-plane URL turns it off.
 func TestOfferingCloudEnabled(t *testing.T) {
 	const url = "https://cp.example.com"
 	cases := []struct {
 		name     string
-		offering bool // AO_CLOUD_OFFERING, on unless switched off
+		offering bool
 		cpURL    string
 		want     bool
 	}{
@@ -146,8 +144,6 @@ func (s *computerUseStore) SetComputerUse(_ context.Context, enabled bool, _ tim
 	return nil
 }
 
-// The toggle is read at every spawn, so a change applies to the next session
-// without a daemon restart, and an unreadable store never turns it on.
 func TestComputerUseToggle(t *testing.T) {
 	ctx := context.Background()
 	store := &computerUseStore{}
@@ -165,8 +161,6 @@ func TestComputerUseToggle(t *testing.T) {
 	}
 }
 
-// Turning computer use on needs Cua Driver installed, whatever client asks;
-// turning it off always works.
 func TestComputerUseNeedsCuaDriverToTurnOn(t *testing.T) {
 	ctx := context.Background()
 	store := &computerUseStore{}
@@ -213,8 +207,6 @@ func (s *retentionStore) SetSessionRetentionDays(_ context.Context, days int, _ 
 	return nil
 }
 
-// Retention is days a session stays archived; anything outside 0 (keep) to ten
-// years is refused before it is stored.
 func TestSessionRetentionDays(t *testing.T) {
 	ctx := context.Background()
 	store := &retentionStore{days: 30}

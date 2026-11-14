@@ -1,11 +1,5 @@
 import net from "node:net";
 
-// ponytail: no heartbeat. The open socket IS the liveness signal. When the
-// Electron process dies the kernel closes the fd and the daemon detects EOF
-// immediately (proven against the real daemon with a write-free held
-// connection). A heartbeat adds nothing for a Unix domain socket or named
-// pipe and is omitted deliberately.
-
 const BACKOFF_INIT_MS = 200;
 const BACKOFF_MAX_MS = 2_000;
 
@@ -14,17 +8,6 @@ export interface SupervisorLinkHandle {
 	dispose(): void;
 }
 
-/**
- * Hold one client connection to the daemon's supervisor socket for the
- * lifetime of the Electron process. When this process exits for any reason
- * (Cmd+Q, crash, SIGKILL), the OS closes the fd. The daemon detects EOF and
- * self-stops after its ~5s grace period, leaving tmux/ConPTY sessions alive
- * for the next boot to adopt.
- *
- * Retry semantics: if the daemon has not created the socket yet (or restarts),
- * we reconnect with bounded exponential backoff so the link re-establishes
- * automatically. dispose() cancels any pending retry and destroys the socket.
- */
 export function connectSupervisor(addr: string, opts?: { log?: (msg: string) => void }): SupervisorLinkHandle {
 	const log = opts?.log ?? (() => undefined);
 
@@ -76,17 +59,13 @@ export function connectSupervisor(addr: string, opts?: { log?: (msg: string) => 
 			}
 			connected = true;
 			log("supervisor-link: connected");
-			// Reset backoff on successful connection.
 			backoff = BACKOFF_INIT_MS;
 		});
 
-		// Drain inbound data: the daemon never sends payload; discard so the
-		// socket buffer never stalls. ponytail: no payload to process.
 		s.on("data", () => undefined);
 
 		s.on("error", (err) => {
 			log(`supervisor-link: error: ${err.message}`);
-			// close fires after error, which schedules the reconnect.
 		});
 
 		s.on("close", () => {

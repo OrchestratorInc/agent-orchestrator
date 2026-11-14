@@ -19,16 +19,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// A rollback with files puts the worktree back to the moment the rolled-back turn
-// was sent: the first turn's edits stay, the second turn's go.
 func TestRollbackWithFilesRestoresTheWorktreeFromBeforeTheTurn(t *testing.T) {
 	recorder := newHistoryRecorder()
 	workspace := gitWorkspace(t)
 	h := newGitHarness(t, recorder, workspace)
 	ctx := context.Background()
 
-	// Each turn settles before its files change, so the next turn is sent, and
-	// snapshotted, only after them.
 	completeTurn(t, h, "first", "provider-turn-1")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
 	writeWorkspaceFile(t, workspace, "a.txt", "first turn\n")
@@ -62,15 +58,12 @@ func TestRollbackWithFilesRestoresTheWorktreeFromBeforeTheTurn(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "added.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("added.txt survived the rollback: %v", err)
 	}
-	// What the restore overwrote is kept under a ref, not left to gc.
 	saved := filesnapshot.BeforeRollbackRef(testSession, second)
 	if got := gitOutputIn(t, workspace, "show", saved+":added.txt"); got != "second turn" {
 		t.Fatalf("added.txt under %s = %q, want the overwritten contents", saved, got)
 	}
 }
 
-// Files edited after the preview was shown were never listed, so the rollback is
-// refused before anything changes and the user is shown the list again.
 func TestRollbackWithFilesRefusesWhenTheFilesChangedSinceThePreview(t *testing.T) {
 	recorder := newHistoryRecorder()
 	workspace := gitWorkspace(t)
@@ -100,8 +93,6 @@ func TestRollbackWithFilesRefusesWhenTheFilesChangedSinceThePreview(t *testing.T
 	}
 }
 
-// The provider is asked after the files move, so its refusal has to move them back:
-// the user is told nothing changed, and nothing did.
 func TestRollbackWithFilesPutsFilesBackWhenTheProviderRefuses(t *testing.T) {
 	recorder := newHistoryRecorder()
 	recorder.rollbackErr = refusedError{msg: "thread is busy"}
@@ -133,8 +124,6 @@ func TestRollbackWithFilesPutsFilesBackWhenTheProviderRefuses(t *testing.T) {
 	}
 }
 
-// Without a snapshot the request is refused before the provider is asked, so a
-// client that promised files never gets a conversation-only rollback instead.
 func TestRollbackWithFilesRefusesWhenFilesCannotBeRestored(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -175,7 +164,6 @@ func TestRollbackWithoutFilesLeavesTheWorktreeAlone(t *testing.T) {
 	}
 }
 
-// Agents that cannot roll back never pay for a snapshot.
 func TestTurnsAreNotSnapshottedForAnAgentThatCannotRollBack(t *testing.T) {
 	workspace := gitWorkspace(t)
 	h := newGitHarness(t, nil, workspace)
@@ -194,8 +182,6 @@ func TestTurnsAreNotSnapshottedForAnAgentThatCannotRollBack(t *testing.T) {
 	}
 }
 
-// newGitHarness starts the controller in workspace and records it on the session,
-// where the preview reads it.
 func newGitHarness(t *testing.T, conv ports.ChatConversation, workspace string) *harness {
 	t.Helper()
 	return newGitHarnessFor(t, conv, workspace, domain.HarnessCodex)
@@ -252,9 +238,6 @@ func gitOutputIn(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// With session forks on, a turn of an agent that can fork older turns is
-// snapshotted so such a fork can start from that turn's files, even where
-// rollback can't use them.
 func TestForksSnapshotTurnsForAnAgentThatCannotRollBack(t *testing.T) {
 	chatsvc.EnableForkSnapshots(true)
 	t.Cleanup(func() { chatsvc.EnableForkSnapshots(false) })
@@ -269,8 +252,6 @@ func TestForksSnapshotTurnsForAnAgentThatCannotRollBack(t *testing.T) {
 	}
 }
 
-// With session forks on, a turn start also keeps the session's artifacts as
-// they are, so a fork of an older turn can copy them as they were.
 func TestForksKeepArtifactsAtEachTurnStart(t *testing.T) {
 	chatsvc.EnableForkSnapshots(true)
 	var mu sync.Mutex
@@ -295,14 +276,11 @@ func TestForksKeepArtifactsAtEachTurnStart(t *testing.T) {
 	if len(kept) == 0 || kept[0] != testSession {
 		t.Fatalf("artifacts kept for %v", kept)
 	}
-	// Kept under the turn being started, which a fork of the turn before it reads.
 	if len(keptFor[0]) == 0 || keptFor[0][0] == "" {
 		t.Fatalf("artifacts kept under turns %v, want the turn being started", keptFor[0])
 	}
 }
 
-// An agent that can fork only its latest turn never forks from an older
-// turn's snapshot, so its turns don't wait for one, even with forks on.
 func TestForksDontSnapshotAnAgentThatOnlyForksItsLatestTurn(t *testing.T) {
 	chatsvc.EnableForkSnapshots(true)
 	var mu sync.Mutex

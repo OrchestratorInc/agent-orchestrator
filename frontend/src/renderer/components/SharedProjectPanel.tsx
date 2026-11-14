@@ -12,21 +12,6 @@ import { PRSummaryCard } from "./SessionInspector";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
-/**
- * The shared project control in a shared project orchestrator's header:
- * every pull request the project's sessions opened, who opened it and in
- * which session, and the merge requests guests sent. Its owner approves
- * (which merges) or rejects a request here; a guest sees where theirs stands.
- * Nothing shows for a project nobody was given, nor before the project has a
- * pull request or a merge request.
- *
- * It lives in the header, not over the conversation or terminal, so it never
- * covers a message or terminal output; the list opens as a popover.
- *
- * Every participant sees every pull request: the orchestrator lists all of its
- * project's, so one opened in a session this person was not given (a guest
- * given only the orchestrator) still shows, under the project.
- */
 export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	orchestrator: WorkspaceSession;
 	sessions: readonly WorkspaceSession[];
@@ -43,16 +28,11 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	const guest = orchestrator.cloud?.shared === true;
 	const ownerName = participants.find((person) => person.role === "owner")?.name;
 	const workers = sessions.filter((session) => !isOrchestratorSession(session) && session.cloud);
-	// Each pull request shows once: under the session that opened it when this
-	// person was given it, else under the project.
 	const listed = new Set(workers.flatMap((session) => session.prs.map(prDisplayKey)));
 	const elsewhere = (projectPRs.data?.prs ?? []).filter((pr) => !listed.has(prDisplayKey(pr)));
 	const prCount = workers.reduce((count, session) => count + session.prs.length, 0) + elsewhere.length;
 	const pending = (requests.data ?? []).filter((request) => request.status === "pending");
-	// Only a project with something to show: a shared project with no pull
-	// requests and no merge requests has nothing to say in the header.
 	const visible = Boolean(orgId) && shared && (prCount > 0 || pending.length > 0);
-	// Hidden while open (its last pull request closed), it opens closed next time.
 	useEffect(() => {
 		if (!visible) setOpen(false);
 	}, [visible]);
@@ -76,7 +56,6 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 				>
 					<span className="relative inline-flex shrink-0">
 						<Users aria-hidden="true" className="size-icon-md" />
-						{/* On the icon, so a request waiting on the owner shows when the label compacts away. */}
 						{toApprove ? (
 							<span aria-hidden="true" className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-status-in-review ring-1 ring-background" data-shared-project-pending="" />
 						) : null}
@@ -152,8 +131,6 @@ function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy
 }) {
 	const { t } = useTranslation();
 	const scm = useSessionScmSummary(session.id, true, orgId, session.autoInjectCI === true, hostId);
-	// Only the ones this session opened: a pull request it claimed shows under
-	// the session that opened it, or under the project.
 	const own = new Set(session.prs.map(prDisplayKey));
 	const prs = sessionPRDisplaySummaries(session, scm.data?.prs).filter((pr) => own.has(prDisplayKey(pr)));
 	return (
@@ -176,11 +153,6 @@ function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy
 	);
 }
 
-/**
- * A session's pull requests, each with the merge request a guest sent for it:
- * the owner decides it here, a guest sees it waiting. Merging itself, and
- * asking for it, is on the card, which offers a guest only the asking.
- */
 function PullRequestRows({ canDecide, guest, hostId, liveSessionId, orgId, projectId, prs, requests, sessionId }: {
 	canDecide: boolean;
 	guest: boolean;

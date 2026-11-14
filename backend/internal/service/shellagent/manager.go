@@ -16,50 +16,35 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// State is what a shell tab shows about the agent running in it.
 type State string
 
 const (
-	// StateWorking means the agent is drawing output.
 	StateWorking State = "working"
-	// StateIdle means the agent is at its prompt with nothing to ask.
-	StateIdle State = "idle"
-	// StateWaiting means the agent stopped on a question or permission prompt.
+	StateIdle    State = "idle"
 	StateWaiting State = "waiting"
 )
 
-// Agent is the coding agent running in one shell terminal.
 type Agent struct {
 	HandleID string              `json:"handleId"`
 	Harness  domain.AgentHarness `json:"harness"`
 	State    State               `json:"state"`
 }
 
-// Runtime is the slice of the runtime adapter the manager needs.
 type Runtime interface {
 	ports.TerminalForegroundWatcher
 	GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error)
 }
 
-// Variables so tests can shorten them.
 var (
 	screenLines            = 60
 	screenReadTimeout      = 3 * time.Second
 	initialWatchRetryDelay = 500 * time.Millisecond
 	watchRetryMax          = 30 * time.Second
-	// maxWatchFailures ends a watch whose host keeps refusing connections:
-	// the host died while its record still resolves. The next subscription
-	// starts it again.
-	maxWatchFailures = 6
+	maxWatchFailures       = 6
 )
 
-// shellWatch is one running watch. Its pointer identifies the owner of a
-// tracked entry, so an ending watch cannot clear a newer one.
 type shellWatch struct{ cancel context.CancelFunc }
 
-// Manager remembers shell terminals and watches them while a client subscribes.
-// The terminal host pushes readings when the foreground program changes or
-// starts or stops drawing, so nothing polls.
 type Manager struct {
 	rt     Runtime
 	styled ports.StyledTerminalOutputReader
@@ -68,14 +53,12 @@ type Manager struct {
 	base   context.Context
 
 	mu      sync.Mutex
-	tracked map[string]*shellWatch // nil: tracked, not watched
+	tracked map[string]*shellWatch
 	current map[string]Agent
 	subs    map[int]func(json.RawMessage)
 	nextSub int
 }
 
-// NewManager builds a manager whose watches live while clients subscribe and
-// ctx is active. agents may be nil; then generic prompts detect waiting.
 func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -89,7 +72,6 @@ func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log
 	}
 }
 
-// TrackShellTerminal starts following a shell terminal; tracking twice is a no-op.
 func (m *Manager) TrackShellTerminal(handleID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -109,7 +91,6 @@ func (m *Manager) startWatchLocked(handleID string) {
 	go m.watch(ctx, handleID, w)
 }
 
-// UntrackShellTerminal stops following a terminal and forgets its agent.
 func (m *Manager) UntrackShellTerminal(handleID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,16 +101,12 @@ func (m *Manager) UntrackShellTerminal(handleID string) {
 	m.setLocked(handleID, nil)
 }
 
-// SubscribeShellAgents calls fn with the current agents as JSON at once and
-// after every change. fn runs with the manager's lock held and must not block.
 func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := m.nextSub
 	m.nextSub++
 	m.subs[id] = fn
-	// The first subscriber starts every watch; later ones restart watches
-	// that gave up on an unreachable host.
 	for handleID, w := range m.tracked {
 		if w == nil {
 			m.startWatchLocked(handleID)
@@ -177,12 +154,10 @@ func (m *Manager) watch(ctx context.Context, handleID string, self *shellWatch) 
 					m.setLocked(handleID, nil)
 				}
 				m.mu.Unlock()
-				// Release the context from the daemon's; nothing else will.
 				self.cancel()
 				return
 			}
 		}
-		// The host went away; forget the agent until a new reading arrives.
 		m.apply(ctx, handleID, nil)
 		m.log.Debug("shell agent watch interrupted; retrying", "handleId", handleID, "err", err, "in", backoff)
 		select {
@@ -201,9 +176,6 @@ func (m *Manager) observe(ctx context.Context, handleID string, fg ports.Termina
 	}
 	state := StateWorking
 	if !fg.Busy {
-		// Typing at an idle agent's prompt only echoes: keep the idle reading
-		// rather than reading the screen on every pause. A waiting agent is
-		// re-read, since the keys may have answered its question.
 		if fg.EchoOnly && m.currentState(handleID, harness) == StateIdle {
 			return
 		}
@@ -224,8 +196,6 @@ func (m *Manager) currentState(handleID string, harness domain.AgentHarness) Sta
 	return ""
 }
 
-// apply records a reading unless its watch already ended: a screen read can
-// finish after the terminal closed.
 func (m *Manager) apply(ctx context.Context, handleID string, next *Agent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -234,9 +204,6 @@ func (m *Manager) apply(ctx context.Context, handleID string, next *Agent) {
 	}
 }
 
-// waiting reports whether a quiet agent's screen shows a question or a
-// permission prompt. It asks the harness's own screen check, the one AO uses
-// for its managed sessions, and falls back to common approval wording.
 func (m *Manager) waiting(ctx context.Context, handleID string, harness domain.AgentHarness) bool {
 	ctx, cancel := context.WithTimeout(ctx, screenReadTimeout)
 	defer cancel()
@@ -295,13 +262,10 @@ func (m *Manager) snapshotLocked() json.RawMessage {
 }
 
 var (
-	ansiEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x40-\x5f])`)
-	// approvalPrompt matches the questions agent TUIs ask before acting.
+	ansiEscape     = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x40-\x5f])`)
 	approvalPrompt = regexp.MustCompile(`(?i)(do you want to (proceed|continue|make this edit|create|run|allow|apply)|would you like to (run|make|apply|proceed)|allow (once|always|this|command|execution|edit|tool)|requires? (your )?(approval|permission)|permission (required|request)|approve (this|the|command|edit)|waiting for (your )?(approval|confirmation|input)|\((y/n|yes/no)\)|\[(y/n|yes/no)\])`)
 )
 
-// looksLikeApprovalPrompt checks the last 15 non-blank lines, where a live
-// prompt sits, so a question answered earlier does not match.
 func looksLikeApprovalPrompt(screen string) bool {
 	lines := strings.Split(ansiEscape.ReplaceAllString(strings.ReplaceAll(screen, "\r", ""), ""), "\n")
 	kept := make([]string, 0, 15)

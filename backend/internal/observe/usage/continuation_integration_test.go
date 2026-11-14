@@ -13,11 +13,6 @@ import (
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
-// TestPipelineIngestsDiscoveredClaudeContinuation reproduces the #5745 shape:
-// a claude session resumes into a new transcript uuid in the same project
-// directory without emitting any hook. Reconcile must register the continuation
-// (cwd matches the session workspace) and the pipeline must ingest both files,
-// with the write-once event key keeping replays clean.
 func TestPipelineIngestsDiscoveredClaudeContinuation(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0).UTC()
@@ -59,10 +54,8 @@ func TestPipelineIngestsDiscoveredClaudeContinuation(t *testing.T) {
 
 	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
 	ingestAllWatchable(ctx, t, store, ingestor)
-	// old-root: 8+2; continuation-root: 30+10.
 	assertTokenAggregate(t, store, session.ID, 50)
 
-	// A reconcile replay must not double count.
 	mustNoError(t, collector.ReconcileSources(ctx, -1))
 	ingestAllWatchable(ctx, t, store, ingestor)
 	assertTokenAggregate(t, store, session.ID, 50)

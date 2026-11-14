@@ -472,12 +472,9 @@ type transitionRuntime struct {
 	styledOutputCalls          int
 	styledOutputErr            error
 	blockAliveUntilContextDone bool
-	onCreate                   func() // runs as a target terminal starts
+	onCreate                   func()
 }
 
-// unstyledTransitionRuntime models a legacy runtime that cannot return a
-// current rendered screen with SGR styling. Embedding would promote the optional
-// styled capability, so delegate the required Runtime methods only.
 type unstyledTransitionRuntime struct{ runtime *transitionRuntime }
 
 func (r *unstyledTransitionRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
@@ -580,7 +577,7 @@ type transitionChat struct {
 	relayMessages    []string
 	relayIDs         []string
 	supportsChat     bool
-	switchMarks      []string // account moves that told the chat why its turn stopped
+	switchMarks      []string
 }
 
 type historyPolicyTransitionChat struct {
@@ -588,9 +585,6 @@ type historyPolicyTransitionChat struct {
 	policies []domain.SessionInterfaceTransitionHistoryPolicy
 }
 
-// sqliteTransitionLifecycle keeps this restart regression at the public
-// Manager/SQLite boundary without pulling Lifecycle Manager internals into the
-// fixture. Every method delegates the durable writes production wiring owns.
 type sqliteTransitionLifecycle struct {
 	store *sqlite.Store
 }
@@ -708,11 +702,6 @@ func (c *historyPolicyTransitionChat) StartChat(ctx context.Context, cfg ChatSta
 	return c.transitionChat.StartChat(ctx, cfg)
 }
 
-// checkpointAwareHistoryTransitionChat models the public Chat replay seam: a
-// strict launch fails only while the session still carries the poisoned legacy
-// checkpoint. This prevents the transition test from manufacturing the same
-// failure after rollback has accidentally erased the fact it was meant to
-// recover from.
 type checkpointAwareHistoryTransitionChat struct {
 	*transitionChat
 	store    *transitionStore
@@ -962,9 +951,6 @@ func TestInterfaceTransitionStatusAllowsSwitchToTUIWhenChatUnsupported(t *testin
 func TestInterfaceTransitionRejectsNativeIdentityNotConfirmedByCurrentTUILaunch(t *testing.T) {
 	manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	rec := store.sessions["session-1"]
-	// MarkSpawned clears this receipt for every new runtime generation. Until a
-	// hook from that generation lands, AgentSessionID can only be an old resume
-	// hint; it is not proof that the visible TUI is still on that conversation.
 	rec.FirstSignalAt = time.Time{}
 	rec.Metadata.AgentSessionIDLaunchID = "previous-tui-generation"
 	store.sessions["session-1"] = rec
@@ -1020,9 +1006,6 @@ func TestInterfaceTransitionStatusBlocksFreshStartWithoutPositiveTerminalProof(t
 	}
 }
 
-// Regression for #4842: a fresh TUI session has a hook-confirmed native id but
-// no transcript on disk yet. Status must agree with start instead of drawing an
-// enabled switch that fails with NATIVE_SESSION_MISSING on POST.
 func TestInterfaceTransitionStatusBlocksReservedNativeIDWithoutHistoryOrFreshProof(t *testing.T) {
 	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	manager.agents = singleAgent{agent: emptyTransitionAgent{}}
@@ -1251,8 +1234,6 @@ func TestInterfaceTransitionReportsNativeHistoryReplayFailure(t *testing.T) {
 	}{
 		{name: "unavailable", err: ports.ErrChatHistoryUnavailable, code: "TARGET_HISTORY_UNAVAILABLE", wantStarts: 1},
 		{name: "load rejected", err: ports.ErrChatHistoryLoadFailed, code: "TARGET_HISTORY_LOAD_FAILED", wantStarts: 1},
-		// The reporter's shape: AO's settle deadline expired while the provider
-		// kept answering session/load with -32603. Not retried with a second target.
 		{name: "load rejected after unsettled wait", err: fmt.Errorf("wait for settled native conversation history: %w: %w",
 			ports.ErrChatHistoryUnsettled, fmt.Errorf("%w: %w", context.DeadlineExceeded, ports.ErrChatHistoryLoadFailed)),
 			code: "TARGET_HISTORY_LOAD_FAILED", wantStarts: 1},
@@ -2425,8 +2406,6 @@ func TestInterfaceTransitionRefreshesNativeIDAfterPromptlessAdmission(t *testing
 		"gpt-5.6-sol low · /ws/session-1\n"
 	runtime.outputForCall = func(call int) string {
 		if call == 1 {
-			// Model the provider hook arriving immediately after the admission
-			// snapshot but before the background worker freezes terminal input.
 			rec := store.sessions["session-1"]
 			rec.Metadata.AgentSessionID = id
 			rec.Metadata.AgentSessionIDLaunchID = rec.Metadata.RuntimeLaunchID
@@ -2542,11 +2521,6 @@ func TestInterfaceTransitionTUIToChatReusesPersistedCodexRollout(t *testing.T) {
 	}
 }
 
-// TestInterfaceTransitionFreshTUISessionResumesAfterHookCapture is a regression
-// test for a fresh TUI session where the SessionStart hook captures the native
-// session id. The transition must resume the persisted Codex conversation
-// rather than starting fresh, proving the identifiers are populated before
-// transition and the original conversation is resumed afterward.
 func TestInterfaceTransitionFreshTUISessionResumesAfterHookCapture(t *testing.T) {
 	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
 	codexHome := t.TempDir()
@@ -2654,9 +2628,6 @@ func TestInterfaceTransitionChatToTUIInterruptsThenStopsBeforeStarting(t *testin
 	}
 }
 
-// modelRecordingTransitionAgent records the restore config the TUI rebuild
-// hands the harness, so a Chat-to-TUI handoff test can assert which model the
-// rebuilt terminal resumes with.
 type modelRecordingTransitionAgent struct {
 	transitionAgent
 	mu             sync.Mutex
@@ -2679,17 +2650,8 @@ func (a *modelRecordingTransitionAgent) restores() []ports.RestoreConfig {
 	return append([]ports.RestoreConfig(nil), a.restoreConfigs...)
 }
 
-// TestInterfaceTransitionChatToTUIRebuildUsesChatModel is the regression for
-// the ChatUI ↔ TUI model-persistence bug (#4893), including the handoff race
-// where the old terminal is still closing: the transition interrupts and stops
-// the Chat source before starting the TUI target, and the rebuilt TUI harness
-// restore command must carry the model the user picked in ChatUI — refreshed
-// from the session's durable metadata, not the project default — while still
-// resuming the SAME native conversation.
 func TestInterfaceTransitionChatToTUIRebuildUsesChatModel(t *testing.T) {
 	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
-	// The project default would otherwise win: the ChatUI choice persisted on
-	// the session must take precedence in the rebuilt TUI restore command.
 	store.projects["proj"] = domain.ProjectRecord{
 		ID: "proj", Path: "/repo",
 		Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "project-default-model"}},
@@ -2710,9 +2672,6 @@ func TestInterfaceTransitionChatToTUIRebuildUsesChatModel(t *testing.T) {
 		t.Fatalf("phase = %s, error = %s", settled.Phase, settled.ErrorDetail)
 	}
 
-	// The preflight and the rebuild both resume with the ChatUI model — every
-	// restore command the handoff builds (target preflight happens while the
-	// old terminal is still closing, then the rebuild itself) carries it.
 	restores := agent.restores()
 	if len(restores) != 2 {
 		t.Fatalf("harness restore calls = %d, want 2 (target preflight + rebuild)", len(restores))
@@ -2723,8 +2682,6 @@ func TestInterfaceTransitionChatToTUIRebuildUsesChatModel(t *testing.T) {
 		}
 	}
 
-	// History is preserved across the handoff: same native conversation, no new
-	// session, and the terminal was rebuilt exactly once.
 	rec := store.sessions["session-1"]
 	if rec.Mode != domain.SessionModeTUI {
 		t.Fatalf("mode = %s, want tui", rec.Mode)
@@ -2941,8 +2898,6 @@ func TestTransitionDeliveryWaitsForFirstTUISignal(t *testing.T) {
 	rec.FirstSignalAt = time.Time{}
 	store.sessions["session-1"] = rec
 
-	// Longer than the normal idle-settle window: without the first-signal check,
-	// this would incorrectly return ready.
 	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
 	defer cancel()
 	_, err := manager.waitForTransitionDeliveryReady(ctx, "session-1", time.Time{})
@@ -3393,13 +3348,11 @@ func TestAgyAdapterEnablesInterfaceTransitionStatusInBothDirections(t *testing.T
 }
 
 func TestInterfaceTransitionAgyFailsWhenSourceDatabaseMissing(t *testing.T) {
-	// A TUI session with an older ACP DB but missing CLI DB must fail interface transition.
 	manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	geminiHome := t.TempDir()
 	store.projects["proj"] = domain.ProjectRecord{
 		ID: "proj", Path: "/repo", Config: domain.ProjectConfig{Env: map[string]string{"GEMINI_HOME": geminiHome}},
 	}
-	// Destination ACP db exists:
 	conversationDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "native-1.db")
 	if err := os.MkdirAll(filepath.Dir(conversationDB), 0700); err != nil {
 		t.Fatal(err)

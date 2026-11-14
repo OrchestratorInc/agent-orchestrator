@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// findSnapshot takes one lock and never calls SideSnapshot, which can restore a
-// provider. Side transcripts stay in the existing launch-owned memory store.
 func (m *memorySideStore) findSnapshot(ctx context.Context, id string) (domain.SideSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.SideSnapshot{}, err

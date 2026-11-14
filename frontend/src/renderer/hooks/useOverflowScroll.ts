@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// Tracks horizontal overflow of a scrollable strip (e.g. a tab bar) so the UI
-// can reveal scroll indicators only when content actually overflows, and
-// scrolls the strip when an indicator is activated. `watch` should change
-// whenever the strip's children change (e.g. tab IDs/order) so measurements
-// and child observation stay current.
 export function useOverflowScroll<T extends HTMLElement>(watch: unknown) {
 	const ref = useRef<T | null>(null);
 	const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -19,10 +14,6 @@ export function useOverflowScroll<T extends HTMLElement>(watch: unknown) {
 		};
 		update();
 		el.addEventListener("scroll", update, { passive: true });
-		// Vertical mouse wheel scrolls the strip horizontally. Ctrl/meta wheel is
-		// left alone so terminal font zoom keeps working, and the wheel is only
-		// hijacked when the strip actually overflows. Attached natively because
-		// React registers wheel handlers as passive, which cannot preventDefault.
 		const onWheel = (event: WheelEvent) => {
 			if (event.ctrlKey || event.metaKey) return;
 			const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;

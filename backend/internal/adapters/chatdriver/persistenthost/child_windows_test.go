@@ -86,8 +86,6 @@ func TestWindowsProviderBridge(t *testing.T) {
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestWindowsProviderGrandchild$")
 	child.Env = append(os.Environ(), "AO_WINDOWS_JOB_GRANDCHILD=1")
-	// Keep the host's stderr-copy pipe open after the bridge exits. The job
-	// must reap descendants before exec.Cmd.Wait can finish draining stderr.
 	child.Stderr = os.Stderr
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
@@ -138,8 +136,6 @@ func TestWindowsProviderJobReapsGrandchild(t *testing.T) {
 			for time.Now().Before(deadline) {
 				raw, err := os.ReadFile(pidFile)
 				if err == nil {
-					// WriteFile can be visible before its bytes are, so an empty
-					// read is a retry, not a malformed pid.
 					parsed, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
 					if parseErr == nil && parsed > 0 {
 						pid = parsed
@@ -188,9 +184,6 @@ func TestWindowsProviderJobReapsGrandchild(t *testing.T) {
 	}
 }
 
-// Shutdown polls host.json while the exiting host deletes it. Each must still
-// succeed while the other holds the file, or the descriptor outlives its host
-// (Shutdown waits out its deadline) or the poll fails with a sharing violation.
 func TestWindowsHostDescriptorReadAndRemovalDoNotBlockEachOther(t *testing.T) {
 	dataDir := t.TempDir()
 	d := Descriptor{Version: ProtocolVersion, SessionID: "busy", Address: "127.0.0.1:1", Token: "token", PID: os.Getpid()}
@@ -199,7 +192,6 @@ func TestWindowsHostDescriptorReadAndRemovalDoNotBlockEachOther(t *testing.T) {
 	}
 	path, _ := descriptorPath(dataDir, d.SessionID)
 
-	// A reader that denies deletion, as os.Open does, makes the host's delete fail.
 	plain, err := os.Open(path) //nolint:gosec // Test-owned temp path.
 	if err != nil {
 		t.Fatal(err)
@@ -223,8 +215,6 @@ func TestWindowsHostDescriptorReadAndRemovalDoNotBlockEachOther(t *testing.T) {
 		t.Fatalf("host.json after Remove: %v, want it gone", err)
 	}
 
-	// A handle opened for deletion, as DeleteFile and MoveFileEx hold one,
-	// denies an os.Open reader but not readDescriptor.
 	if err := writeDescriptor(dataDir, d); err != nil {
 		t.Fatal(err)
 	}
@@ -252,8 +242,6 @@ func TestWindowsHostDescriptorReadAndRemovalDoNotBlockEachOther(t *testing.T) {
 }
 
 func TestWindowsHostDescriptorReadsPastMaxPath(t *testing.T) {
-	// A data directory deep enough that host.json passes MAX_PATH. os writes
-	// it with the extended-length prefix; the share-delete reader must too.
 	dataDir := t.TempDir()
 	for len(dataDir) < windows.MAX_PATH {
 		dataDir = filepath.Join(dataDir, strings.Repeat("d", 40))

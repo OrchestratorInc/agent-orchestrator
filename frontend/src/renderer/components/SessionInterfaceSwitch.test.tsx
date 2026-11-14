@@ -73,7 +73,6 @@ describe("SessionInterfaceSwitchButton", () => {
 		const onCancel = vi.fn();
 		render(
 			<TooltipProvider>
-				{/* TerminalTabFrame marks the session tab with Tailwind `group`. */}
 				<div className="group">
 					<SessionInterfaceSwitchButton
 						target="chat"
@@ -545,8 +544,6 @@ describe("a Cloud session that started in the terminal", () => {
 			vi.spyOn(status, "getBoundingClientRect").mockReturnValue(new DOMRect(516, 72, 544, 60));
 			expect(status.style.left).toBe("");
 			act(() => publishHarnessUpdateNoticeRect({ left: 1004, top: 72, right: 1304, bottom: 140 }));
-			// The pane reaches 1316px; the notice starts at 1004px, 12px of gap kept.
-			// The browser normalizes the calc(); both still subtract the 324px.
 			expect(status.style.left).toMatch(/^calc\(.*100% - 324px.*\)$/);
 			expect(status.style.maxWidth).toMatch(/^calc\(.*324px.*1\.5rem.*\)$/);
 			act(() => publishHarnessUpdateNoticeRect(null));
@@ -572,7 +569,6 @@ describe("a Cloud session that started in the terminal", () => {
 				/>,
 			);
 			const status = screen.getByRole("status");
-			// Centered, the 544px notice spans 988px to 1532px, well left of the update notice.
 			vi.spyOn(status, "getBoundingClientRect").mockReturnValue(new DOMRect(988, 72, 544, 60));
 			act(() => publishHarnessUpdateNoticeRect({ left: 1956, top: 72, right: 2256, bottom: 140 }));
 			expect(status.style.left).toBe("");

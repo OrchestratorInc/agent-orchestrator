@@ -14,27 +14,16 @@ import (
 )
 
 const (
-	// Kiro reads hooks from a workspace-local agent configuration file at
-	// .kiro/agents/<name>.json. AO installs its hooks into a dedicated agent
-	// file so it never clobbers a user's own agents.
-	// See https://kiro.dev/docs/cli/hooks/ and
-	// https://kiro.dev/docs/cli/custom-agents/configuration-reference#hooks-field
 	kiroHooksDirName  = ".kiro"
 	kiroAgentsDirName = "agents"
 	kiroAgentFileName = "ao.json"
 
-	// kiroHookCommandPrefix identifies the hook commands AO owns, so install
-	// skips duplicates and uninstall recognizes AO entries by prefix without an
-	// embedded template to diff against.
 	kiroHookCommandPrefix = "ao hooks kiro "
 
 	kiroAgentName        = "ao"
 	kiroAgentDescription = "Agent Orchestrator session instructions"
 )
 
-// kiroHookFile is the on-disk shape of .kiro/agents/ao.json. It is used by
-// tests to decode the written file. Kiro hooks are a map of camelCase event
-// name to a flat array of {matcher?, command} entries.
 type kiroHookFile struct {
 	Name   string                     `json:"name"`
 	Prompt *string                    `json:"prompt"`
@@ -46,29 +35,11 @@ type kiroHookEntry struct {
 	Command string `json:"command"`
 }
 
-// kiroHookSpec describes one hook AO installs, defined in code rather than read
-// from an embedded hooks file.
 type kiroHookSpec struct {
-	// Event is the native Kiro hook event name (camelCase).
-	Event string
-	// Command is the AO hook command line.
+	Event   string
 	Command string
 }
 
-// kiroManagedHooks is the source of truth for the hooks AO installs. The native
-// Kiro events are mapped onto AO hook sub-command names (the trailing word) so
-// the CLI hook dispatcher routes them to DeriveActivityState:
-//
-//	agentSpawn       -> session-start       (ActivityActive)
-//	userPromptSubmit -> user-prompt-submit  (ActivityActive)
-//	preToolUse       -> pre-tool-use        (ActivityActive: tool traffic is work)
-//	stop             -> stop                (ActivityIdle)
-//
-// PreToolUse maps to pre-tool-use (active), NOT permission-request: it fires
-// for every tool invocation including auto-approved/trusted tools, so treating
-// it as waiting_input pins ordinary tool use to sticky Input needed. Genuine
-// approval dialogs carry no hook of their own and are observed via
-// DetectTerminalActivity instead (see activity.go).
 var kiroManagedHooks = []kiroHookSpec{
 	{Event: "agentSpawn", Command: kiroHookCommandPrefix + "session-start"},
 	{Event: "userPromptSubmit", Command: kiroHookCommandPrefix + "user-prompt-submit"},
@@ -76,15 +47,8 @@ var kiroManagedHooks = []kiroHookSpec{
 	{Event: "stop", Command: kiroHookCommandPrefix + "stop"},
 }
 
-// kiroLegacyPreToolUseCommand is the pre-fix sub-command installed for the
-// preToolUse event. Install strips it so upgraded workspaces stop emitting
-// sticky waiting_input; DeriveActivityState also maps it to active as a
-// safety net for workspaces that have not been reinstalled yet.
 const kiroLegacyPreToolUseCommand = kiroHookCommandPrefix + "permission-request"
 
-// GetAgentHooks installs AO's Kiro hooks into the worktree-local
-// .kiro/agents/ao.json file. Existing hook entries are preserved and duplicate
-// AO commands are not appended.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -127,9 +91,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// UninstallHooks removes AO's Kiro hooks from the workspace-local
-// .kiro/agents/ao.json file, leaving user-defined hooks untouched. A missing
-// file is a no-op.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -164,8 +125,6 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	return nil
 }
 
-// AreHooksInstalled reports whether any AO Kiro hook is present in the
-// workspace-local agent file. A missing file means none are installed.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -201,9 +160,6 @@ func kiroAgentPath(workspacePath string) string {
 	return filepath.Join(workspacePath, kiroHooksDirName, kiroAgentsDirName, kiroAgentFileName)
 }
 
-// readKiroHooks loads the agent file into a top-level raw map plus the decoded
-// "hooks" sub-map, preserving keys AO doesn't manage. A missing or empty file
-// yields empty maps.
 func readKiroHooks(hooksPath string) (topLevel, rawHooks map[string]json.RawMessage, err error) {
 	topLevel = map[string]json.RawMessage{}
 	rawHooks = map[string]json.RawMessage{}
@@ -229,8 +185,6 @@ func readKiroHooks(hooksPath string) (topLevel, rawHooks map[string]json.RawMess
 	return topLevel, rawHooks, nil
 }
 
-// writeKiroHooks folds rawHooks back into topLevel and writes the file. An
-// empty hooks map drops the "hooks" key entirely.
 func writeKiroHooks(hooksPath string, topLevel, rawHooks map[string]json.RawMessage, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig) error {
 	if err := setKiroAgentDefaults(topLevel, systemPrompt, systemPromptFile, agentConfig); err != nil {
 		return err
@@ -300,8 +254,6 @@ func setKiroAgentDefaults(topLevel map[string]json.RawMessage, systemPrompt, sys
 	return nil
 }
 
-// groupKiroHooksByEvent groups the managed hook specs by their Kiro event so
-// each event's array is rewritten once.
 func groupKiroHooksByEvent() map[string][]kiroHookSpec {
 	byEvent := map[string][]kiroHookSpec{}
 	for _, spec := range kiroManagedHooks {
@@ -310,8 +262,6 @@ func groupKiroHooksByEvent() map[string][]kiroHookSpec {
 	return byEvent
 }
 
-// kiroManagedEvents returns the distinct Kiro events AO manages, in the order
-// they first appear in kiroManagedHooks.
 func kiroManagedEvents() []string {
 	seen := map[string]bool{}
 	events := make([]string, 0, len(kiroManagedHooks))
@@ -328,10 +278,6 @@ func isKiroManagedHook(command string) bool {
 	return strings.HasPrefix(command, kiroHookCommandPrefix)
 }
 
-// removeKiroLegacyPreToolUse drops the pre-fix permission-request entry from
-// the preToolUse event so upgraded workspaces stop emitting sticky
-// waiting_input. Other events are untouched, and user-authored entries are
-// never touched (the legacy command carries the AO prefix by construction).
 func removeKiroLegacyPreToolUse(entries []kiroHookEntry, event string) []kiroHookEntry {
 	if event != "preToolUse" {
 		return entries
@@ -346,7 +292,6 @@ func removeKiroLegacyPreToolUse(entries []kiroHookEntry, event string) []kiroHoo
 	return kept
 }
 
-// removeKiroManagedHooks strips AO hook entries from an event's array.
 func removeKiroManagedHooks(entries []kiroHookEntry) []kiroHookEntry {
 	kept := make([]kiroHookEntry, 0, len(entries))
 	for _, entry := range entries {

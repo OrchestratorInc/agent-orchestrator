@@ -1,15 +1,3 @@
-// Checks the translated articles in content/. A translation is `page.<locale>.mdx`
-// beside the English `page.mdx`, and its frontmatter records the English file
-// it was translated from:
-//
-//   translatedFrom: <first 12 hex characters of the English file's SHA-256>
-//
-// Fails when a translation has no English article, no `translatedFrom`, or its
-// language has no route, or when it lacks a section link the English article
-// has. Translated headings get different ids, so each one keeps the English id
-// as `<span id="..." />` and existing links still reach the section. Warns
-// when the English article changed since the translation, so the translation
-// can be brought up to date.
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -31,8 +19,6 @@ function* walk(dir) {
   }
 }
 
-// The ids the docs give headings: the heading text in lower case, without
-// punctuation, with spaces as hyphens.
 function headingIds(text) {
   const ids = [];
   let fence = false;
@@ -53,7 +39,6 @@ function headingIds(text) {
   return ids;
 }
 
-/** Every id a link can point at: heading ids and explicit `id="..."` anchors. */
 function anchors(text) {
   return new Set([...headingIds(text), ...[...text.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1])]);
 }

@@ -16,19 +16,10 @@ type staleTerminalStore interface {
 	SetSessionVersionSwitchFailed(ctx context.Context, id domain.SessionID, version string, at time.Time) error
 }
 
-// terminalViewers reports whether a client shows a terminal.
 type terminalViewers interface {
 	TerminalOnScreen(terminalID string) bool
 }
 
-// RefreshStaleTerminals restarts idle terminal sessions that still run a
-// replaced harness release on the installed one. A restart is the Resume
-// action run in place: the agent process is replaced and its conversation
-// resumed natively, while the session, worktree, reviewer, shells and browser
-// stay as they are. A session is left alone while anyone is attached to its
-// terminal on screen, while it has been active within minIdle, while its terminal has
-// input newer than its idle report, while its agent runs any shell command,
-// or when its conversation cannot be resumed natively.
 func (m *Manager) RefreshStaleTerminals(ctx context.Context, minIdle time.Duration) error {
 	store, ok := m.store.(staleTerminalStore)
 	if !ok {
@@ -66,8 +57,6 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 	if !m.terminalRestartEligible(rec, minIdle) {
 		return nil
 	}
-	// Close the terminal's input path, then require the idle report to be newer
-	// than any keystroke accepted before the gate: text being typed is never lost.
 	lastInputAt, releaseInput := m.beginTerminalInputDrain(rec)
 	if releaseInput != nil {
 		defer releaseInput()
@@ -88,14 +77,11 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 		SessionID: current.ID, LaunchID: current.Metadata.RuntimeLaunchID,
 	})
 	if err != nil || commands > 0 {
-		// A command the agent started (tests, a dev server) would die with it.
 		return nil
 	}
 	if !terminalRefreshIdentityVerified(current) {
 		return nil
 	}
-	// Hold the harness like any launch, so an update cannot replace the binary
-	// while the new process starts.
 	releaseHarness, err := m.beginHarnessUse(current.Harness)
 	if err != nil {
 		return nil
@@ -117,12 +103,6 @@ func (m *Manager) refreshStaleTerminal(ctx context.Context, store staleTerminalS
 	return nil
 }
 
-// terminalIdleForRestart proves, with the input gate closed, that restarting
-// loses nothing typed. An idle report newer than the last input is proof.
-// Input that changed nothing (a focus change when a viewer leaves, the
-// terminal's reply to a query) sends no new idle report, so it would keep the
-// session on the old release for good. Then the provider's screen, sampled
-// once that input settled, must show an idle agent with an empty composer.
 func (m *Manager) terminalIdleForRestart(ctx context.Context, rec domain.SessionRecord, lastInputAt time.Time) bool {
 	if tuiIdleAfterInput(rec, lastInputAt) {
 		return true
@@ -163,8 +143,6 @@ func (m *Manager) terminalIdleForRestart(ctx context.Context, rec domain.Session
 	return true
 }
 
-// terminalRestartEligible is the durable-fact and viewer check, read before
-// and again after the input gate closes.
 func (m *Manager) terminalRestartEligible(rec domain.SessionRecord, minIdle time.Duration) bool {
 	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || rec.IsTerminated || rec.Kind == domain.KindOrchestrator ||
 		!m.terminalVersionRefreshSupported(rec.Harness) || rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt != nil ||
@@ -179,7 +157,6 @@ func (m *Manager) terminalRestartEligible(rec domain.SessionRecord, minIdle time
 	gate := m.terminalInputGate
 	m.terminalInputGateMu.Unlock()
 	viewers, ok := gate.(terminalViewers)
-	// Without a way to tell, assume someone may be watching.
 	return ok && !viewers.TerminalOnScreen(handle.ID)
 }
 
@@ -192,19 +169,12 @@ func (m *Manager) terminalVersionRefreshSupported(harness domain.AgentHarness) b
 	return ok && capability.SupportsTerminalVersionRefresh()
 }
 
-// A stored resume hint may outlive a failed or fresh launch. Only the native
-// identity reported for this exact running generation authorizes auto-refresh.
-// Terminal-only adapters need no Chat identity or Chat history bridge.
 func terminalRefreshIdentityVerified(rec domain.SessionRecord) bool {
 	return strings.TrimSpace(rec.Metadata.AgentSessionID) != "" &&
 		strings.TrimSpace(rec.Metadata.RuntimeLaunchID) != "" &&
 		rec.Metadata.AgentSessionIDLaunchID == rec.Metadata.RuntimeLaunchID
 }
 
-// verifyRefreshedTerminal waits out immediate CLI argument/history failures.
-// Seeing the supervisor spawn once is not startup success: its child can still
-// exit on invalid resume arguments. Unknown probes fail closed without treating
-// the process as dead or deleting its previous release reference.
 func (m *Manager) verifyRefreshedTerminal(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) error {
 	alive, err := m.waitForExactLaunch(ctx, handle, id, launchID)
 	if err != nil || !alive {

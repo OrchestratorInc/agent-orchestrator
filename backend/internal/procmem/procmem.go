@@ -1,6 +1,3 @@
-// Package procmem measures the resident memory of a process tree. It takes one
-// snapshot of the whole process table so many sessions can be costed from a
-// single `ps` run, then walks each root's descendants.
 package procmem
 
 import (
@@ -13,51 +10,34 @@ import (
 	"strings"
 )
 
-// ErrUnsupported is returned where the process table cannot be read.
 var ErrUnsupported = errors.New("procmem: process memory is not supported on " + runtime.GOOS)
 
-// Runner executes a command and returns its combined output. It matches the
-// shape the runtime adapters already inject for tests. Declared here, rather
-// than beside the one platform that shells out, because Snapshot's exported
-// signature must be identical on every platform.
 type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
-// Process is one row of the process table.
 type Process struct {
-	PID      int
-	PPID     int
-	RSSBytes uint64
-	// CPUSeconds is the process's total user+system CPU time so far. Two
-	// snapshots apart give a rate; one alone says nothing about now.
+	PID        int
+	PPID       int
+	RSSBytes   uint64
 	CPUSeconds float64
 	Command    string
 }
 
-// Tree is the memory reading for one root and all of its descendants.
 type Tree struct {
 	RSSBytes   uint64
 	CPUSeconds float64
 	Processes  []Process
 }
 
-// Table is a snapshot of every process, indexed for tree walks.
 type Table struct {
 	byPID    map[int]Process
 	children map[int][]int
 }
 
-// maxCommandLen caps a stored command line. Long node and electron argv
-// lists run to kilobytes; nobody reads past the first couple of hundred.
 const maxCommandLen = 200
 
-// Parse builds a Table from `ps -axo pid=,ppid=,rss=,time=,args=` output.
-// The time column is optional so a table without it still parses, and a
-// bare comm= column is just a one-word command line.
 func Parse(out string) (*Table, error) {
 	t := &Table{byPID: map[int]Process{}, children: map[int][]int{}}
 	sc := bufio.NewScanner(strings.NewReader(out))
-	// A long args= column (electron/node argv) can exceed the scanner's
-	// default 64 KiB token limit; grow it rather than silently truncate.
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
@@ -79,10 +59,6 @@ func Parse(out string) (*Table, error) {
 			}
 		}
 		p.Command = strings.Join(rest, " ")
-		// A zombie has exited and holds no memory; it only waits for its
-		// parent to collect the exit code. Listing it reads as a leak. Check
-		// before capping: ps appends the marker, so a long argv pushes it
-		// past the cap.
 		if strings.Contains(p.Command, "<defunct>") {
 			continue
 		}
@@ -98,9 +74,6 @@ func Parse(out string) (*Table, error) {
 	return t, nil
 }
 
-// All returns every process in the table, zombies already excluded by Parse.
-// Used where a reading needs the whole machine rather than one root's tree,
-// such as deriving host CPU on a platform with no system-wide ticks of its own.
 func (t *Table) All() []Process {
 	out := make([]Process, 0, len(t.byPID))
 	for _, p := range t.byPID {
@@ -109,9 +82,6 @@ func (t *Table) All() []Process {
 	return out
 }
 
-// Tree sums the root and every descendant. A root that no longer exists
-// yields an empty tree. Each pid is counted once even if several roots share
-// descendants.
 func (t *Table) Tree(roots ...int) Tree {
 	var tree Tree
 	seen := map[int]bool{}
@@ -138,8 +108,6 @@ func (t *Table) Tree(roots ...int) Tree {
 	return tree
 }
 
-// parseCPUTime reads ps's TIME column: [[dd-]hh:]mm:ss[.cc] on both Linux
-// and macOS. Anything else (a command name, say) is reported as not a time.
 func parseCPUTime(s string) (float64, bool) {
 	days := 0.0
 	if d, rest, ok := strings.Cut(s, "-"); ok {
@@ -164,11 +132,6 @@ func parseCPUTime(s string) (float64, bool) {
 	return days*86400 + secs, true
 }
 
-// CPUPercent is the share of one core a set of processes used between two
-// snapshots: the growth in their CPU time over the wall-clock gap. Processes
-// absent from prev started inside the gap, so their whole CPU time counts.
-// Without a previous snapshot there is no rate, only a lifetime total, so the
-// answer is zero rather than a misleading spike.
 func CPUPercent(procs []Process, prev *Table, elapsed float64) float64 {
 	if prev == nil || elapsed <= 0 {
 		return 0

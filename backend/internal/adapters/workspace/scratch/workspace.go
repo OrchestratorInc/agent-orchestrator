@@ -12,12 +12,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Options configures the scratch workspace adapter.
 type Options struct {
 	ManagedRoot string
 }
 
-// Workspace creates per-session plain directories under AO's managed root.
 type Workspace struct {
 	managedRoot string
 }
@@ -26,7 +24,6 @@ var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
 
-// New validates ManagedRoot and returns a scratch workspace adapter.
 func New(opts Options) (*Workspace, error) {
 	if strings.TrimSpace(opts.ManagedRoot) == "" {
 		return nil, errors.New("scratch workspace: ManagedRoot is required")
@@ -41,7 +38,6 @@ func New(opts Options) (*Workspace, error) {
 	return &Workspace{managedRoot: filepath.Clean(root)}, nil
 }
 
-// Create materializes a branchless scratch directory for one session.
 func (w *Workspace) Create(_ context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	path, err := w.managedPath(cfg)
 	if err != nil {
@@ -58,7 +54,6 @@ func (w *Workspace) Create(_ context.Context, cfg ports.WorkspaceConfig) (ports.
 	return ports.WorkspaceInfo{Path: path, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
-// Restore ensures the preserved scratch directory exists and returns it.
 func (w *Workspace) Restore(_ context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	path, err := w.restorePath(cfg)
 	if err != nil {
@@ -70,17 +65,11 @@ func (w *Workspace) Restore(_ context.Context, cfg ports.WorkspaceConfig) (ports
 	return ports.WorkspaceInfo{Path: path, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
-// Destroy removes only an empty scratch directory. Non-empty directories are
-// treated as dirty user work and preserved.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	_, err := w.destroy(ctx, info)
 	return err
 }
 
-// DestroyReclaim is Destroy plus the reclaim outcome. os.Remove is tolerated on
-// a missing path, so a scratch directory that was already gone tears down
-// without error while releasing nothing; callers counting reclaimed workspaces
-// need that separated from a real removal.
 func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
 	return w.destroy(ctx, info)
 }
@@ -90,9 +79,6 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 	if err != nil {
 		return ports.WorkspaceReclaimAlreadyAbsent, err
 	}
-	// Only a definite absence counts as already-absent; any other stat failure
-	// stays on the removed path so an unknown is never reported as "nothing to
-	// do".
 	reclaim := ports.WorkspaceReclaimRemoved
 	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
 		reclaim = ports.WorkspaceReclaimAlreadyAbsent
@@ -110,18 +96,14 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 	return reclaim, nil
 }
 
-// ForceDestroy intentionally follows Destroy semantics for scratch. Normal AO
-// paths must never force-delete non-empty scratch work.
 func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	return w.Destroy(ctx, info)
 }
 
-// StashUncommitted is a no-op for scratch because there is no git object store.
 func (w *Workspace) StashUncommitted(context.Context, ports.WorkspaceInfo) (string, error) {
 	return "", nil
 }
 
-// ApplyPreserved is a no-op unless a caller incorrectly supplies a git ref.
 func (w *Workspace) ApplyPreserved(_ context.Context, _ ports.WorkspaceInfo, ref string) error {
 	if strings.TrimSpace(ref) != "" {
 		return errors.New("scratch workspace: preserved refs are not supported")
@@ -129,14 +111,10 @@ func (w *Workspace) ApplyPreserved(_ context.Context, _ ports.WorkspaceInfo, ref
 	return nil
 }
 
-// AddExclude is a no-op for scratch because scratch workspaces are plain
-// directories with no git status or commit surface.
 func (w *Workspace) AddExclude(context.Context, ports.WorkspaceInfo, ...string) error {
 	return nil
 }
 
-// ObserveWorkspace validates the managed path and returns a path-only
-// observation. Scratch projects intentionally have no fabricated Git facts.
 func (w *Workspace) ObserveWorkspace(_ context.Context, info ports.WorkspaceInfo) (ports.WorkspaceObservation, error) {
 	path, err := w.validateManagedPath(info.Path)
 	if err != nil {

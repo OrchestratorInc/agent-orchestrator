@@ -3,15 +3,11 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-// Capture buildForge's args without pulling in electron-builder's real machinery.
 const buildForge = vi.fn<(forge: { dir: string }, options: any) => Promise<string[]>>(async () => [
 	"/out/make/Agent Orchestrator-0.10.3-arm64.dmg",
 ]);
 vi.mock("app-builder-lib", () => ({ buildForge }));
 
-// Capture the commands sealDmg would run, without ever spawning codesign or
-// xcrun. maker-dmg promisifies execFile at module load, so the stub has to keep
-// the callback shape promisify expects.
 const commands: Array<[string, string[]]> = [];
 let nextError: Error | undefined;
 vi.mock("node:child_process", async (importOriginal) => {
@@ -47,9 +43,6 @@ const makeOptions = {
 	packageJSON: {},
 };
 
-// What Forge actually hands the maker: `dir` is the PACKAGE directory and the
-// bundle sits inside it. electron-builder's mac path treats buildForge's `dir`
-// as the .app itself, so this is the only correct value to pass through.
 const APP_PATH = "/tmp/app/Agent Orchestrator-darwin-arm64/Agent Orchestrator.app";
 
 beforeEach(() => {
@@ -76,19 +69,11 @@ describe("MakerDMG", () => {
 		expect(artifacts).toEqual(["/out/make/Agent Orchestrator-0.10.3-arm64.dmg"]);
 		const [, options] = buildForge.mock.calls[0];
 		expect(options.mac).toEqual(["dmg:arm64"]);
-		// electron-builder must not try to publish; the workflow does that.
 		expect(options.config.publish).toBeNull();
 		expect(options.config.appId).toBe("dev.agent-orchestrator.desktop");
 		expect(options.config.productName).toBe("Agent Orchestrator");
 	});
 
-	// The layout check. buildForge sets `prepackaged: resolve(dir)`, and
-	// macPackager.packMacTargets uses prepackaged AS the app path
-	// (`appPath = prepackaged ?? join(computeAppOutDir(...), "<name>.app")`), then
-	// dmg-builder copies appPath into the image renamed to "<name>.app". Passing
-	// Forge's package directory here nests the whole directory under that name and
-	// yields "Agent Orchestrator.app/Agent Orchestrator.app", an outer bundle with
-	// no Contents that cannot launch. Verified against app-builder-lib 26.15.3.
 	it("hands buildForge the .app inside the package dir, not the package dir", async () => {
 		await new MakerDMG().make(makeOptions);
 		const [forgeOptions] = buildForge.mock.calls.at(-1)!;
@@ -96,10 +81,6 @@ describe("MakerDMG", () => {
 		expect(forgeOptions.dir).not.toBe(makeOptions.dir);
 	});
 
-	// buildForge's own default output is dirname(dir)/make, which was correct only
-	// while `dir` was the package directory. Now that we pass the .app, that
-	// default would land in <packageDir>/make, so the explicit override has to be
-	// Forge's own makeDir.
 	it("writes artifacts to Forge's makeDir, not a path derived from the .app", async () => {
 		await new MakerDMG().make(makeOptions);
 		const [, options] = buildForge.mock.calls.at(-1)!;
@@ -107,8 +88,6 @@ describe("MakerDMG", () => {
 	});
 
 	it("never lets electron-builder re-sign the already notarized .app", () => {
-		// packagerConfig.osxSign/osxNotarize seal the bundle before any maker runs.
-		// identity: null is what keeps this maker from touching that seal.
 		return new MakerDMG().make(makeOptions).then(() => {
 			const [, options] = buildForge.mock.calls.at(-1)!;
 			expect(options.config.mac.identity).toBeNull();
@@ -118,15 +97,9 @@ describe("MakerDMG", () => {
 	it("leaves the dmg container unsigned for the postMake seal to handle", async () => {
 		await new MakerDMG().make(makeOptions);
 		const [, options] = buildForge.mock.calls.at(-1)!;
-		// electron-builder's docs warn that dmg.sign conflicts with notarization;
-		// sealDmg signs + notarizes + staples the container instead.
 		expect(options.config.dmg.sign).toBe(false);
 	});
 
-	// dmg-builder 26.15.3 defaults writeUpdateInfo ON, and DmgTarget.build then
-	// calls createBlockmap BEFORE postMake's sealDmg rewrites the dmg bytes. macOS
-	// ships full-download-only permanently (#3151, #3267 decision 4), so the
-	// sidecar is both against policy and stale on arrival.
 	it("disables dmg blockmap generation", async () => {
 		await new MakerDMG().make(makeOptions);
 		const [, options] = buildForge.mock.calls.at(-1)!;
@@ -138,13 +111,9 @@ describe("MakerDMG", () => {
 			"/out/make/Agent Orchestrator-0.10.3-arm64.dmg",
 			"/out/make/Agent Orchestrator-0.10.3-arm64.dmg.blockmap",
 		]);
-		// This array is exactly what Forge hands its publisher, so filtering here is
-		// what keeps a sidecar off the release regardless of how it got generated.
 		expect(await new MakerDMG().make(makeOptions)).toEqual(["/out/make/Agent Orchestrator-0.10.3-arm64.dmg"]);
 	});
 
-	// Without these options electron-builder still writes a .DS_Store, but with
-	// its generic template background, 80pt icons and a versioned volume name.
 	it("lays out the install window: branded background, large icons, app left of Applications", async () => {
 		await new MakerDMG().make(makeOptions);
 		const [, options] = buildForge.mock.calls.at(-1)!;
@@ -153,7 +122,6 @@ describe("MakerDMG", () => {
 		expect(dmg.iconSize).toBe(128);
 		expect(dmg.background).toBe(BACKGROUND_IMAGE);
 		expect(path.basename(BACKGROUND_IMAGE)).toBe("background.png");
-		// electron-builder only merges in the Retina art if it sits beside the 1x file.
 		expect(existsSync(BACKGROUND_IMAGE)).toBe(true);
 		expect(existsSync(BACKGROUND_IMAGE.replace(/\.png$/, "@2x.png"))).toBe(true);
 		expect(dmg.icon).toBe(VOLUME_ICON);
@@ -170,7 +138,6 @@ describe("MakerDMG", () => {
 		await maker.make(makeOptions);
 		const [, options] = buildForge.mock.calls.at(-1)!;
 		expect(options.config.dmg).toMatchObject({ sign: false, writeUpdateInfo: false, iconSize: 100 });
-		// The layout must not drop the volume or artifact naming either.
 		expect(options.config.dmg.artifactName).toBeUndefined();
 	});
 });
@@ -179,16 +146,10 @@ describe("sealDmg", () => {
 	const dmg = "/out/make/app.dmg";
 
 	it("does nothing when there is no signing material at all (unsigned local builds)", async () => {
-		// The ONLY tolerated incomplete state: no identity and no notary creds.
-		// desktop-testing.yml and a plain local `npm run make` rely on this.
 		expect(await sealDmg(dmg, {})).toBe(false);
 		expect(commands).toEqual([]);
 	});
 
-	// Partial credentials used to fail OPEN in both directions: an identity with
-	// no notary creds warned and returned success (publishing a signed but
-	// unnotarized dmg), and notary creds with no identity returned before doing
-	// anything. Both now fail the build.
 	it("throws when a signing identity is present but notary credentials are not", async () => {
 		await expect(sealDmg(dmg, { APPLE_SIGNING_IDENTITY: "id" })).rejects.toThrow(/no notarization credentials/);
 		expect(commands).toEqual([]);
@@ -212,8 +173,6 @@ describe("sealDmg", () => {
 			AO_NOTARY_PROFILE: "ao",
 		});
 
-		// The return value gates postMake's verify step: only a sealed dmg can pass
-		// verify-mac-artifact.sh, so an unsigned local build must report false.
 		expect(sealed).toBe(true);
 		expect(commands[0]).toEqual([
 			"codesign",
@@ -259,12 +218,9 @@ describe("sealDmg", () => {
 
 describe("verifyDmg", () => {
 	const dmg = "/out/make/app.dmg";
-	// Any file that exists; verifyDmg only shells out to it, and execFile is stubbed.
 	const existingScript = fileURLToPath(import.meta.url);
 
 	it("runs the canonical verifier script on the dmg", async () => {
-		// Sealing proves three commands exited 0 here; only the canonical script
-		// proves Gatekeeper accepts the bytes with a stapled ticket (#3288 ws 1/2).
 		await verifyDmg(dmg, existingScript);
 		expect(commands).toEqual([["bash", [existingScript, dmg]]]);
 	});

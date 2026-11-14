@@ -63,9 +63,6 @@ export function SessionFileTab({
 }) {
 	const { t } = useTranslation();
 	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-	// The close button takes the file icon's slot on hover, matching the other
-	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
-	// to the cross on hover.
 	const closeAction = (
 		<Pressable
 			aria-label={t("files.closeTab", { name })}
@@ -109,22 +106,13 @@ export function SessionFileTab({
 	);
 }
 
-/** A file, diff or artifact tab, for its menu. */
 export type FileTabMenuTarget = {
 	path: string;
 	source?: FilesSource;
 	sessionId: string;
-	/** Another host's or a Cloud session: nothing to open on this machine. */
 	remote: boolean;
 };
 
-/**
- * A file tab's own menu rows: the path actions chat paths have (copy, reveal,
- * open with an editor), the workspace-relative path, and Open in AO Browser
- * for an HTML page. An artifact lives outside the workspace, so it gets the
- * artifact menu's Show in actions instead. Native rows stay listed, disabled,
- * where this machine has no copy of the file. No file, no entries.
- */
 export function useFileTabMenuEntries(file: FileTabMenuTarget | undefined): MenuEntry[] {
 	const { t } = useTranslation();
 	const copyToClipboard = useCopyToClipboard();
@@ -144,7 +132,6 @@ export function useFileTabMenuEntries(file: FileTabMenuTarget | undefined): Menu
 	const { path, source, sessionId, remote } = file;
 	if (artifact) {
 		const showIn = (targetId: "file-manager" | "terminal", name: string) => {
-			// The menu unmounts on select, so report failure from the promise.
 			openArtifacts.mutateAsync({ sessionId, targetId, path }).catch((error: unknown) => {
 				showGlobalToast(t("artifacts.showIn", { name }), error instanceof Error ? error.message : undefined, "error");
 			});
@@ -157,7 +144,6 @@ export function useFileTabMenuEntries(file: FileTabMenuTarget | undefined): Menu
 		];
 	}
 	if (!/\.html?$/i.test(path)) return pathEntries;
-	// Same rule as the file viewer's button: the Browser serves the live file.
 	const workspaceFile = !source || source.kind === "workspace";
 	return [
 		...pathEntries,

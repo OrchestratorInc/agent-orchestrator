@@ -288,7 +288,7 @@ func TestLowBatteryRecoversWithFreshSafeReadings(t *testing.T) {
 			if h.active || s.Status().Reason != "low_battery" || !s.needsObservations() {
 				t.Fatal("battery stop must release wake and keep observing")
 			}
-			h.reason = "low_battery" // The helper can retain the previous stop reason.
+			h.reason = "low_battery"
 			h.observation.BatteryPercent, h.observation.OnBattery = &test.percent, &test.onBattery
 			h.observation.Thermal = test.thermal
 			if test.unknown {
@@ -320,7 +320,6 @@ func TestLowBatteryRecoversWithFreshSafeReadings(t *testing.T) {
 func TestFreshBatteryReadingStillReleasesNativeBlockedLease(t *testing.T) {
 	s, _, h, _, _ := fixture(t)
 	start(t, s, domain.StartAwakeRequest{Mode: "indefinite"})
-	// The helper can report its stop after the battery has already recovered.
 	h.reason = "low_battery"
 	tick(t, s)
 	if h.active || s.Status().Reason != "low_battery" {
@@ -476,7 +475,6 @@ func TestSafetyLatchSaveRetriesBeforeRestart(t *testing.T) {
 			if store.writes != writes {
 				t.Fatal("durable latch was saved again on an unchanged tick")
 			}
-			// No manual sessions: reconstruction cannot incidentally save the latch.
 			nextHost := &fakeHost{observation: h.observation}
 			nextHost.observation.Thermal = "nominal"
 			next, err := New(context.Background(), store, nextHost, bindings)
@@ -552,7 +550,6 @@ func TestUnknownConditionsCannotActivateOrClearSuppression(t *testing.T) {
 	rule := domain.AwakeRule{ID: "rule", Name: "AC", Enabled: true, Suppressed: true, Match: "all", Conditions: []domain.AwakeCondition{{Kind: "power", Value: "ac"}}}
 	s.doc.Rules = []domain.AwakeRule{rule}
 	tick(t, s)
-	// fixture supplies known AC; switch it to unknown and check the raw three-valued evaluator.
 	s.observation.OnBattery = nil
 	if got := s.matchRule(context.Background(), rule); got != -1 {
 		t.Fatalf("unknown became %d", got)
@@ -625,9 +622,6 @@ func TestIdleOwnersCannotExtendClosedLidDeadline(t *testing.T) {
 					if !h.lid || !h.deadline.Equal(now.Add(expiresAfter)) {
 						t.Fatalf("idle owner extended closed-lid permission: lid=%t deadline=%v", h.lid, h.deadline)
 					}
-					// Capture the native boundary without further policy reconciliation.
-					// PolicyTests.swift exercises continued sequence renewal against this
-					// fixed deadline, including renewals after it has already expired.
 					*now = now.Add(120 * time.Second)
 					bindings.alive = false
 					tick(t, s)
@@ -817,8 +811,6 @@ func TestAwakeAgentRecoveryRequiresEvidenceAndNeverRepeatsGeneration(t *testing.
 	b.recovery = true
 	connected := true
 	s.observation.NetworkConnected = &connected
-	// Exercise the retained foundation directly; the shipped settings service
-	// rejects enabling reconnect until its follow-up release.
 	s.doc.Settings.AgentReconnect = true
 	if s.agentTask(context.Background()) != nil {
 		t.Fatal("reconnected without awake ownership")
@@ -955,8 +947,6 @@ func TestNetworkRecoveryPersistsFreshBudgetAcrossRestart(t *testing.T) {
 		t.Fatal("outage debounce was skipped")
 	}
 	advance := func() {
-		// The real loop samples rules every five seconds; preserve that
-		// freshness while advancing the retry cooldown in this regression.
 		for range 6 {
 			*now = now.Add(5 * time.Second)
 			tick(t, s)
@@ -971,7 +961,7 @@ func TestNetworkRecoveryPersistsFreshBudgetAcrossRestart(t *testing.T) {
 		s.runNetwork(ctx, *task)
 	}
 	episodeA := s.doc.Network.Episode
-	advance() // cooldown is not an alternative blocker
+	advance()
 	if s.networkTask(ctx) != nil {
 		t.Fatal("outage A exceeded its budget")
 	}
@@ -981,8 +971,6 @@ func TestNetworkRecoveryPersistsFreshBudgetAcrossRestart(t *testing.T) {
 		t.Fatal("connected observation triggered a handoff")
 	}
 	closedDocument := store.document
-	// No intervening document save may mask the recovery transition. There are
-	// no manual sessions for New to end/save during reconstruction.
 	connected = false
 	nextHost := &fakeHost{observation: h.observation}
 	next, err := New(ctx, store, nextHost, bindings)
@@ -990,8 +978,6 @@ func TestNetworkRecoveryPersistsFreshBudgetAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	next.now = s.now
-	// Startup disables deferred policies. Enable this internal fixture only to
-	// retain coverage of the future recovery foundation's durable budget.
 	next.doc.Settings.HotspotRecovery = true
 	next.doc.Settings.HotspotName = "saved"
 	tick(t, next)

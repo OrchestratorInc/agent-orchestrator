@@ -24,9 +24,6 @@ import {
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-// Windows-only: macOS keeps its system menu bar and inset traffic lights; Linux
-// keeps the existing minimal chrome. Only Windows loses the native title bar and
-// needs the app to paint its own (see the win32 branch in main.ts).
 const isWindows =
   typeof navigator !== "undefined" &&
   /win/i.test(
@@ -38,14 +35,10 @@ const isWindows =
 
 type MenuKey = "view" | "help";
 
-// Dispatch a native-menu action to the main process (see menu:action in main.ts).
 const act = (action: string) => () => {
   void window.ao?.menu?.action(action);
 };
 
-// One top-level menu (View/Help). Declared at module scope, not inside
-// WindowTitlebar, so React keeps it mounted across renders and the open dropdown
-// doesn't reset while `openMenu` state changes.
 function TopMenu({
   id,
   label,
@@ -60,8 +53,6 @@ function TopMenu({
   children: React.ReactNode;
 }) {
   return (
-    // modal={false} so pointer events still reach the sibling triggers while a
-    // menu is open — that's what lets hover switch between the visible menus.
     <DropdownMenu
       modal={false}
       open={openMenu === id}
@@ -165,18 +156,11 @@ export function WindowTitlebar({ onBack }: { onBack?: () => void }) {
     };
   }, []);
 
-  // Tell main when a non-browser shell surface is used. BrowserPanel reports
-  // its own interactions separately; the titlebar menu intentionally preserves
-  // the previous target so its actions still apply to the underlying panel.
   useEffect(() => {
     const onShellUse = (event: Event) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('[class*="window-titlebar"]')) return;
       if (target?.closest('[data-testid="browser-panel"]')) return;
-      // The docked omnibox is portaled into the inspector header, outside the
-      // browser-panel div — but focusing/clicking it is still browser use. If it
-      // reported shell focus, main would drop the browser shortcut target and the
-      // next ⌘T/⌘W would open/close a terminal instead of a browser tab.
       if (target?.closest('[data-testid="browser-address-bar"], .browser-panel__topbar-host')) return;
       void window.ao?.menu?.notifyShellFocus();
     };
@@ -192,9 +176,6 @@ export function WindowTitlebar({ onBack }: { onBack?: () => void }) {
 
   return (
     <header className="window-titlebar">
-      {/* Sidebar collapse toggle — same ui-store path as the macOS TitlebarNav
-			    cluster, so it stays in sync with the SidebarProvider. The brand
-			    logo + name stay in the sidebar header instead of duplicating here. */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Pressable

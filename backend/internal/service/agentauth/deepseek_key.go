@@ -22,9 +22,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// DeepSeek Harness serializes writers of its credential store with an
-// exclusive "<file>.lock" holding "<pid>\n" (@deepseek-ai/dsh-atomic-write).
-// A lock whose holder has exited is taken over; any other is waited for.
 const (
 	dshLockWait       = 2 * time.Second
 	dshLockRetryFirst = 20 * time.Millisecond
@@ -34,10 +31,6 @@ const (
 
 var dshLockRecord = regexp.MustCompile(`^\d+\n$`)
 
-// saveDeepSeekHarnessKey stores key as refs.DEEPSEEK_API_KEY in DeepSeek
-// Harness's own credential store, the record its Models page writes. The
-// running Harness reloads the file, and the key applies inside and outside AO.
-// Comments and every other entry are kept.
 func saveDeepSeekHarnessKey(ctx context.Context, _, key string) error {
 	path, err := deepseekharness.CredentialsPath()
 	if err != nil || !filepath.IsAbs(path) {
@@ -83,9 +76,6 @@ func saveDeepSeekHarnessKey(ctx context.Context, _, key string) error {
 	return writeDeepSeekStore(path, out.Bytes())
 }
 
-// setDeepSeekRef sets refs.DEEPSEEK_API_KEY in a version 1 document, or
-// starts one. Harness refuses unversioned layouts and unknown top-level keys,
-// so AO only ever touches refs.
 func setDeepSeekRef(doc *yaml.Node, key string) error {
 	str := func(value string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value} }
 	if doc.Kind == 0 {
@@ -149,12 +139,10 @@ func lockDeepSeekStore(ctx context.Context, path string) (func(), error) {
 		}
 		switch {
 		case dshLockContention(err, lock):
-			// Continue at once only when the exited holder's lock is gone.
 			if dshTakeOverExitedLock(lock) {
 				continue
 			}
 		case runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission) && !retriedPermission:
-			// A lock just removed can stay "delete pending" for a moment.
 			retriedPermission = true
 		default:
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "DeepSeek Harness's credential file could not be locked.")
@@ -171,8 +159,6 @@ func lockDeepSeekStore(ctx context.Context, path string) (func(), error) {
 	}
 }
 
-// dshLockContention reports that err means another writer holds lock, as
-// Harness's isLockContention: EEXIST, or EPERM while the lock exists.
 func dshLockContention(err error, lock string) bool {
 	if errors.Is(err, os.ErrExist) {
 		return true
@@ -184,10 +170,6 @@ func dshLockContention(err error, lock string) bool {
 	return false
 }
 
-// dshHolderExited reports that record names a holder proven gone, as
-// Harness's holderExited: a well-formed record for a PID other than 0 and this
-// process, and signal 0 reporting no such process. A partial record, a live
-// or zombie process, or one owned by another user keeps the lock.
 func dshHolderExited(record []byte) bool {
 	if !dshLockRecord.Match(record) {
 		return false
@@ -199,11 +181,6 @@ func dshHolderExited(record []byte) bool {
 	return processalive.Exited(pid)
 }
 
-// dshTakeOverExitedLock removes lock when its holder has exited, as Harness's
-// takeOverExitedLock: contenders that read the same record race for one
-// exclusive "<lock>.takeover-<sha256(record)[:16]>" claim, and the winner
-// removes the lock only if it still holds that record and the holder is
-// still gone. It reports whether the lock was removed.
 func dshTakeOverExitedLock(lock string) bool {
 	record, err := os.ReadFile(lock) //nolint:gosec // the Harness lock beside its store
 	if err != nil || !dshHolderExited(record) {
@@ -228,8 +205,6 @@ func dshTakeOverExitedLock(lock string) bool {
 	return true
 }
 
-// dshRename is os.Rename with Harness's Windows retry: a file another process
-// has open (a scanner, an editor) can refuse the rename for a moment.
 func dshRename(from, to string) error {
 	delay := dshLockRetryFirst
 	for attempt := 0; ; attempt++ {
@@ -242,8 +217,6 @@ func dshRename(from, to string) error {
 	}
 }
 
-// writeDeepSeekStore commits through a "<file>.<hex>.tmp" sibling at 0600 and
-// a rename, as Harness does; Harness refuses a store others can read.
 func writeDeepSeekStore(path string, data []byte) error {
 	suffix := make([]byte, 6)
 	if _, err := rand.Read(suffix); err != nil {
@@ -268,13 +241,10 @@ func writeDeepSeekStore(path string, data []byte) error {
 	return nil
 }
 
-// dshTransientWindowsError matches the rename failures Harness retries on
-// Windows: EPERM and EACCES (access denied) and EBUSY (sharing or lock
-// violation).
 func dshTransientWindowsError(err error) bool {
 	if errors.Is(err, os.ErrPermission) {
 		return true
 	}
 	var errno syscall.Errno
-	return errors.As(err, &errno) && (errno == 32 || errno == 33) // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+	return errors.As(err, &errno) && (errno == 32 || errno == 33)
 }

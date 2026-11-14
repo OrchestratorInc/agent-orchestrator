@@ -112,7 +112,6 @@ describe("CloudWorkspaceExplorer", () => {
 		);
 		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
 		const calls = getWorkspaceReview.mock.calls.length;
-		// The worker goes away again (a pause): the files read stay, and nothing more is asked.
 		view.rerender(
 			<QueryClientProvider client={queryClient}>
 				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false }} /></TooltipProvider>
@@ -137,10 +136,8 @@ describe("CloudWorkspaceExplorer", () => {
 		expect(screen.getByText("The sandbox could not start.")).toBeInTheDocument();
 		expect(screen.queryByText("Loading files...")).not.toBeInTheDocument();
 		expect(getWorkspaceReview).not.toHaveBeenCalled();
-		// Retry asks AO to start the session again.
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(resumeSession).toHaveBeenCalledWith("org-1", "session-1");
-		// A deleted session's worker is gone for good: no Retry.
 		view.rerender(
 			<QueryClientProvider client={queryClient}>
 				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false, isTerminated: true }} /></TooltipProvider>
@@ -502,7 +499,6 @@ describe("CloudWorkspaceExplorer", () => {
 			sections: { staged: [], unstaged: [file(path)], untracked: [], committed: [] },
 			...(withRepositories ? { repositories: [
 				{ name: "11x", repository: "acme/11x", present: true },
-				// Freestyle and Coder check the main repository out into a fixed folder.
 				{ name: "repository", label: "alice", repository: "acme/alice", main: true, present: true },
 				{ name: "voice-calling-ai", present: false },
 			] } : {}),
@@ -518,14 +514,12 @@ describe("CloudWorkspaceExplorer", () => {
 		);
 		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
 		const tabs = screen.getByRole("tablist", { name: "Repositories" });
-		// The main repository comes first; a missing checkout cannot be picked.
 		expect(within(tabs).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["alice", "11x", "voice-calling-ai"]);
 		expect(within(tabs).getByRole("tab", { name: "voice-calling-ai" })).toBeDisabled();
 		await userEvent.click(within(tabs).getByRole("tab", { name: "11x" }));
 		expect(await screen.findByText("server/main.go")).toBeInTheDocument();
 		expect(getWorkspaceReview).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ repository: "11x" }));
 		expect(getWorkspaceReviewDiffs).toHaveBeenCalledWith("org-1", "session-1", expect.anything(), expect.objectContaining({ repository: "11x" }));
-		// A sibling's file opens as ../<repository>/<path>.
 		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("../11x/server/main.go", expect.anything());
 	});

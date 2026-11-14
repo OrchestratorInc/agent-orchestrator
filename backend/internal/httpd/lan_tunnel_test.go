@@ -79,10 +79,6 @@ func TestLANTunnelAuthorizesTheUpgradeAndEveryRequestInside(t *testing.T) {
 	}
 }
 
-// Behind cloudflared every tunnel arrives from loopback, and Cloudflare writes
-// the visitor's address on the upgrade only. Requests inside a tunnel count
-// against the tunnel's client: a CF-Connecting-IP written inside cannot move
-// them, and one tunnel's failures do not lock out another's visitor.
 func TestLANTunnelLocksOutTheTunnelsClient(t *testing.T) {
 	st := &authState{}
 	st.setHash(mobilebridge.HashPassword("secret12"))
@@ -162,8 +158,6 @@ func TestLANTunnelClosesWhenThePasswordRotates(t *testing.T) {
 	}
 }
 
-// One WebSocket message may carry more than 1 MiB of HTTP/2 frames: the tunnel
-// sets no message size limit.
 func TestLANTunnelCarriesMessagesOverOneMiB(t *testing.T) {
 	st := &authState{}
 	st.setHash(mobilebridge.HashPassword("secret12"))
@@ -175,7 +169,7 @@ func TestLANTunnelCarriesMessagesOverOneMiB(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	defer m.Stop(context.Background())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // fail, never hang
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ws, _, err := websocket.Dial(ctx, fmt.Sprintf("ws://127.0.0.1:%d%s", port, lanTunnelPath), &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer secret12"}},
@@ -204,19 +198,16 @@ func TestLANTunnelCarriesMessagesOverOneMiB(t *testing.T) {
 	}
 }
 
-// paddedOpening sends the HTTP/2 client's opening flush (preface, SETTINGS,
-// WINDOW_UPDATE) as one message over 1 MiB, padded with connection
-// WINDOW_UPDATEs of 1.
 type paddedOpening struct {
 	net.Conn
-	sent atomic.Int64 // size of that message, once sent
+	sent atomic.Int64
 }
 
 func (c *paddedOpening) Write(p []byte) (int, error) {
 	if c.sent.Load() > 0 {
 		return c.Conn.Write(p)
 	}
-	windowUpdate := []byte{0, 0, 4, 0x8, 0, 0, 0, 0, 0, 0, 0, 0, 1} // length 4, WINDOW_UPDATE, stream 0, increment 1
+	windowUpdate := []byte{0, 0, 4, 0x8, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	message := append(bytes.Clone(p), bytes.Repeat(windowUpdate, 1<<20/len(windowUpdate)+1)...)
 	if _, err := c.Conn.Write(message); err != nil {
 		return 0, err

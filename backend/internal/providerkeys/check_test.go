@@ -96,7 +96,6 @@ func TestCheckReadsEachProvidersRejection(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}`))
 	}))
 	t.Cleanup(server.Close)
-	// Gemini answers a mistyped key with 400, which must not read as an outage.
 	withCheckEndpoint(t, "GEMINI_API_KEY", checkEndpoint{url: server.URL, authorize: bearer, rejectsWith400: true})
 	if result, err := Check(context.Background(), "GEMINI_API_KEY", "typo"); err != nil || result.Status != CheckInvalid {
 		t.Fatalf("Check(Gemini 400) = %+v, %v", result, err)
@@ -105,7 +104,6 @@ func TestCheckReadsEachProvidersRejection(t *testing.T) {
 	if result, err := Check(context.Background(), "OPENAI_API_KEY", "key"); err != nil || result.Status != CheckUnreachable {
 		t.Fatalf("Check(OpenAI 400) = %+v, %v", result, err)
 	}
-	// A key for another region's endpoint is not proven wrong.
 	rejecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
 	t.Cleanup(rejecting.Close)
 	withCheckEndpoint(t, "MOONSHOT_API_KEY", checkEndpoint{url: rejecting.URL, authorize: bearer, regional: true})

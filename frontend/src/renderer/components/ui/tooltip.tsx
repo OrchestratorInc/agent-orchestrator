@@ -27,7 +27,6 @@ function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimiti
 	return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
 }
 
-/** The user's current first binding for a command (honours custom keybindings), or undefined if unbound. */
 function useShortcutKeys(id: AppShortcutId | undefined): readonly string[] | undefined {
 	const overrides = useKeybindingsStore((state) => state.overrides);
 	if (!id) return undefined;
@@ -45,7 +44,6 @@ function TooltipContent({
 	...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content> & {
 	hideArrow?: boolean;
-	/** Command whose keybinding is shown beside the label as muted glyphs (⌘ K), like the Cmd+K palette. */
 	shortcut?: AppShortcutId;
 }) {
 	const keys = useShortcutKeys(shortcut);

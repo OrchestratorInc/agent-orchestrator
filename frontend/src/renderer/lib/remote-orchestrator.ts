@@ -4,8 +4,6 @@ import { sessionAgentExited, type WorkspaceSession } from "../types/workspace";
 
 const inFlight = new Map<string, Promise<string>>();
 
-/** Open one project's orchestrator on its owning daemon. Shared by the board
- * and sidebar so two rapid clicks cannot launch two copies. */
 export function openRemoteOrchestrator(
 	hostId: string,
 	projectId: string,

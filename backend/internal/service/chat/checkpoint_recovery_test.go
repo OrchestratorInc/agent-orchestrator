@@ -28,9 +28,6 @@ func TestInterfaceHandoffRecoversLegacyCheckpointFromUnsettledChatTurn(t *testin
 			if err != nil || !found {
 				t.Fatalf("read legacy checkpoint: found=%v err=%v", found, err)
 			}
-			// AppendUserMessage, not a fabricated provenance assignment, wrote
-			// this legacy fact at exactly the durable turn's request time. This
-			// models the cancelled queued prompt reported on September 11.
 			if rec.Metadata.LatestUserPrompt != "Say hi to" ||
 				!rec.Metadata.LatestUserPromptAt.Equal(promptAt) ||
 				rec.Metadata.ConversationCheckpointState != domain.ConversationCheckpointLegacy ||
@@ -56,9 +53,6 @@ func TestInterfaceHandoffRecoversLegacyCheckpointFromUnsettledChatTurn(t *testin
 				WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryRequired,
 				HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
 			}
-			// Latest main can retire legacy text when its unsettled AO message
-			// remains in the snapshot. Cancelled queue messages are filtered out,
-			// so those still need explicit provider-history recovery consent.
 			policies := []domain.SessionInterfaceTransitionHistoryPolicy{
 				domain.SessionInterfaceTransitionHistoryStrict,
 				domain.SessionInterfaceTransitionHistoryProvider,

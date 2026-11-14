@@ -46,8 +46,6 @@ func sampleRecord(project string) domain.SessionRecord {
 	}
 }
 
-// Regression: the sessions.harness CHECK must allow the 'fake' harness (added
-// in migration 0024) so fake-driven e2e sessions can be created.
 func TestSessionCreateAllowsFakeHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -394,7 +392,6 @@ func TestDeleteTaskPreparationRemovesItsCDC(t *testing.T) {
 	if _, ok, err := s.GetSession(ctx, created.ID); err != nil || ok {
 		t.Fatalf("get deleted preparation = %v, %v", ok, err)
 	}
-	// A preparation is never listed, so its delete asks no client to refetch.
 	if events, err := s.EventsAfter(ctx, before, 10); err != nil || len(events) != 0 {
 		t.Fatalf("events after deleting a preparation = %+v, %v; want none", events, err)
 	}
@@ -657,8 +654,6 @@ func TestRecordSessionLatestUserPromptIsNarrowAndMonotonic(t *testing.T) {
 	}
 }
 
-// Regression: the sessions.harness CHECK must allow the 'kimchi' harness (added
-// in migration 0054) so Kimchi sessions can be created.
 func TestSessionCreateAllowsKimchiHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -773,7 +768,6 @@ func TestProjectCRUDAndArchive(t *testing.T) {
 	if list, _ := s.ListProjects(ctx); len(list) != 1 {
 		t.Fatalf("active list = %d, want 1", len(list))
 	}
-	// archive hides from the active list but still resolves by id.
 	if ok, err := s.ArchiveProject(ctx, "mer", time.Now().UTC()); err != nil || !ok {
 		t.Fatalf("archive: ok=%v err=%v", ok, err)
 	}
@@ -868,8 +862,6 @@ func TestProjectConfigRoundTrips(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 
-	// A config with mixed field kinds (scalar, map, list, nested) survives the
-	// JSON round trip.
 	cfg := domain.ProjectConfig{
 		DefaultBranch:     "develop",
 		Env:               map[string]string{"FOO": "bar"},
@@ -894,14 +886,12 @@ func TestProjectConfigRoundTrips(t *testing.T) {
 		t.Fatalf("config = %#v, want %#v", got.Config, cfg)
 	}
 
-	// An unset config round-trips back to a zero value rather than an empty object.
 	seedProject(t, s, "nocfg")
 	got, _, _ = s.GetProject(ctx, "nocfg")
 	if !got.Config.IsZero() {
 		t.Fatalf("unset config = %#v, want zero", got.Config)
 	}
 
-	// Clearing replaces a previously-set config with a zero value.
 	if err := s.UpsertProject(ctx, domain.ProjectRecord{
 		ID: "cfg", Path: "/tmp/cfg", RegisteredAt: now, Config: domain.ProjectConfig{},
 	}); err != nil {
@@ -1055,11 +1045,6 @@ func TestSessionCreateAvoidsStandaloneProjectCollisionAfterStandaloneSession(t *
 	}
 }
 
-// TestDeleteSessionOnlyRemovesSeedRows covers Bug 4's storage-layer guarantee:
-// DeleteSession removes a session row only when the row is still in seed state
-// (no workspace, no runtime handle, no agent session id, no prompt, not
-// terminated). Rows that already carry spawn output are immutable so the
-// no-resurrection guarantee for live sessions still holds.
 func TestDeleteSessionOnlyRemovesSeedRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1103,8 +1088,6 @@ func TestDeleteSessionOnlyRemovesSeedRows(t *testing.T) {
 			name:   "recorded user interaction",
 			record: sampleRecord("mer"),
 			prepare: func(rec *domain.SessionRecord) {
-				// Keep the legacy seed predicates empty; the durable interaction
-				// fact alone is observable progress and must prevent deletion.
 				rec.Metadata.WorkspacePath = ""
 				rec.Metadata.LatestUserPrompt = "Continue the task."
 			},
@@ -1361,7 +1344,6 @@ func TestSessionFirstSignalRoundTrip(t *testing.T) {
 	seedProject(t, s, "mer")
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 
-	// Fresh sessions have no signal receipt: NULL round-trips as zero time.
 	got, _, _ := s.GetSession(ctx, r.ID)
 	if !got.FirstSignalAt.IsZero() {
 		t.Fatalf("fresh session has receipt: %v", got.FirstSignalAt)
@@ -1377,7 +1359,6 @@ func TestSessionFirstSignalRoundTrip(t *testing.T) {
 		t.Fatalf("receipt not persisted: got %v want %v", again.FirstSignalAt, stamp)
 	}
 
-	// Clearing it (spawn/restore re-proves the hook pipeline) round-trips too.
 	again.FirstSignalAt = time.Time{}
 	if err := s.UpdateSession(ctx, again); err != nil {
 		t.Fatal(err)
@@ -1469,9 +1450,6 @@ func TestMarkPRMergedPreservesObservedFactsAndEmitsCDC(t *testing.T) {
 		t.Fatalf("merge event payload = %#v", payload)
 	}
 
-	// A provider poll may have fetched the old open state before the merge
-	// completed and reach SQLite afterward. That stale observation must not
-	// regress the authoritative merge result.
 	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatal(err)
 	}
@@ -1591,8 +1569,6 @@ func TestPRAutoInjectCITracksSessionPolicyChanges(t *testing.T) {
 		t.Fatalf("autoInjectCI payload = %#v, want false", payload["autoInjectCI"])
 	}
 
-	// Re-observing the first PR after changing the session policy must preserve
-	// the currently selected policy.
 	first.UpdatedAt = changedAt.Add(time.Minute)
 	if err := s.WritePR(ctx, first, nil, nil); err != nil {
 		t.Fatal(err)
@@ -1684,7 +1660,6 @@ func TestPRCommentsReplace(t *testing.T) {
 	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 2 {
 		t.Fatalf("comments = %d, want 2", len(list))
 	}
-	// replace with a smaller set drops the rest.
 	_ = s.WritePR(ctx, domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: now}, nil, []domain.PullRequestComment{{ID: "c1", Body: "x", CreatedAt: now}})
 	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 1 {
 		t.Fatalf("after replace, comments = %d, want 1", len(list))
@@ -1803,7 +1778,6 @@ func TestUpsertPRReviewUpdatesBody(t *testing.T) {
 		t.Fatalf("initial body not persisted: %+v", got)
 	}
 
-	// A re-observation of the same review id must overwrite the stored body.
 	review.State = domain.ReviewApproved
 	review.Body = "resolved, approving"
 	review.AutoInjectReview = true
@@ -2038,12 +2012,10 @@ func TestCDCTriggersPopulateChangeLog(t *testing.T) {
 	seedProject(t, s, "mer")
 
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
-	// a real state change logs; a metadata-only change does not (WHEN guard).
 	r.Activity.State = domain.ActivityIdle
 	_ = s.UpdateSession(ctx, r)
 	r.Metadata.Prompt = "only metadata changed"
 	_ = s.UpdateSession(ctx, r)
-	// a PR insert logs too.
 	_ = s.WritePR(ctx, domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: r.UpdatedAt}, nil, nil)
 
 	evs, err := s.EventsAfter(ctx, 0, 100)
@@ -2100,9 +2072,6 @@ func TestSetSessionPreviewURLBumpsRevisionAndFiresCDCOnSameURL(t *testing.T) {
 		t.Fatalf("preview revision = %d, want 2 after two sets", got.Metadata.PreviewRevision)
 	}
 
-	// Both sets fire session_updated even though the URL never changed — the
-	// revision bump is what trips the trigger, so a same-URL `ao preview` re-run
-	// still reaches the browser panel.
 	evs, err := s.EventsAfter(ctx, base, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -2130,13 +2099,6 @@ func TestRenameSessionFiresCDCEvent(t *testing.T) {
 		t.Fatalf("rename: ok=%v err=%v", ok, err)
 	}
 
-	// A rename must reach the live SSE stream: display_name is in the
-	// sessions_cdc_update WHEN guard, so the rename writes exactly one
-	// session_updated row. The event is an invalidation-only nudge (renderer
-	// consumers refetch the workspace and read the new name from durable
-	// state), so we assert the fan-out fired, not the payload contents — the
-	// payload carries the shared {id,activity,isTerminated,preview*} shape
-	// common to every session_updated emitter.
 	evs, err := s.EventsAfter(ctx, base, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -2279,11 +2241,6 @@ func TestSessionWorktreesRoundTrip(t *testing.T) {
 	}
 }
 
-// TestUpsertSessionWorktreeEmptyStateDefaultsToActive exercises the guard in
-// UpsertSessionWorktree: when State is left at its zero value "", the store
-// must default it to "active" so the SQLite CHECK constraint is satisfied.
-// Without the guard, the generated upsert would insert "" and the CHECK would
-// reject it. This test catches any regression that removes that guard.
 func TestUpsertSessionWorktreeEmptyStateDefaultsToActive(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2293,7 +2250,6 @@ func TestUpsertSessionWorktreeEmptyStateDefaultsToActive(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	// State is intentionally left at zero value "" to exercise the guard.
 	row := domain.SessionWorktreeRecord{
 		SessionID:    rec.ID,
 		RepoName:     domain.RootWorkspaceRepoName,
@@ -2344,7 +2300,7 @@ func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
 		row.OutputType = domain.SessionOutputNone
 		row.Metadata.Permissions = tc.want
 		if tc.saved == "" {
-			row.Revision++ // Pinning permissions writes even without changing updated_at.
+			row.Revision++
 		}
 		rows = append(rows, row)
 	}
@@ -2391,7 +2347,6 @@ func TestSessionRequestedOutputRoundTripsAndSurvivesUpdate(t *testing.T) {
 	if got.RequestedOutput != domain.RequestedOutputArtifact {
 		t.Fatalf("RequestedOutput = %q, want artifact", got.RequestedOutput)
 	}
-	// A generic update from a record without the field must not clear it.
 	got.RequestedOutput = ""
 	got.DisplayName = "renamed"
 	if err := s.UpdateSession(ctx, got); err != nil {
@@ -2435,8 +2390,6 @@ func TestClaimChatControllerGenerationPreservesRecency(t *testing.T) {
 	}
 }
 
-// The chat surface refetches a session on session_updated, so publishing a
-// start's checklist must persist it and fire that event exactly when it changes.
 func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2510,7 +2463,6 @@ func TestSessionArtifacts(t *testing.T) {
 	if err != nil || !found || !slices.Equal(got, []string{"b.md", "z.html"}) {
 		t.Fatalf("add = %v, %v, %v", got, found, err)
 	}
-	// Adding a path again keeps its row, and so its place: oldest first.
 	got, _, err = st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("a.md", "b.md"), first.Add(time.Minute))
 	if err != nil || !slices.Equal(got, []string{"b.md", "z.html", "a.md"}) {
 		t.Fatalf("add again = %v, %v", got, err)
@@ -2570,8 +2522,6 @@ func registeredPaths(rows []domain.SessionArtifactRecord) []string {
 	return paths
 }
 
-// Registration is one row per path, so nothing bounds how many files a session
-// can register in total.
 func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -2590,8 +2540,6 @@ func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
 	}
 }
 
-// A rename moves an artifact's row and its versions to the new path, keeping
-// its ID; artifacts that take each other's paths do not collide on one.
 func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -2625,7 +2573,6 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 	version("b.html", "sha-b1")
 	version("gone.html", "sha-gone")
 
-	// a and b swap paths, and c.html, once a file that is gone, takes nothing.
 	freed, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Move: []domain.SessionArtifactMove{
 		{ID: "id-a", From: "a.html", To: "b.html", File: file(1), PreviousPaths: []string{"a.html"}},
 		{ID: "id-b", From: "b.html", To: "a.html", File: file(2), PreviousPaths: []string{"b.html"}},
@@ -2666,8 +2613,6 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 		t.Fatalf("versions at a.html = %v, want b's", got)
 	}
 
-	// A move onto the path of a file that was gone drops that row and its
-	// history, and returns the history's blobs.
 	freed, err = st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
 		Drop: []domain.SessionArtifactFileUpdate{{ID: "id-gone", Path: "gone.html"}},
 		Move: []domain.SessionArtifactMove{{ID: "id-a", From: "b.html", To: "gone.html", File: file(1), PreviousPaths: []string{"a.html", "b.html"}}},
@@ -2679,7 +2624,6 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 		t.Fatalf("versions at gone.html = %v", got)
 	}
 
-	// Changes planned from rows that have changed since apply nothing.
 	_, err = st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
 		Insert: []domain.SessionArtifactRecord{{ID: "id-new", Path: "new.html", CreatedAt: now}},
 		Move:   []domain.SessionArtifactMove{{ID: "id-a", From: "b.html", To: "c.html"}},
@@ -2692,8 +2636,6 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 	}
 }
 
-// A move onto a gone registered artifact's path takes its registration, and a
-// gone file is forgotten only when it was never registered nor versioned.
 func TestApplySessionArtifactChangesMovesOntoADroppedPathAndForgets(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -2737,7 +2679,6 @@ func TestApplySessionArtifactChangesMovesOntoADroppedPathAndForgets(t *testing.T
 	if _, ok := byPath["page.tmp"]; ok {
 		t.Fatal("an unregistered file with no history was kept")
 	}
-	// A scan reads which rows have history, so it can keep them at their path.
 	if kept, ok := byPath["kept.md"]; !ok || kept.ID != "id-kept" || !kept.HasVersions {
 		t.Fatalf("a file with history was forgotten or not marked: %+v", rows)
 	}

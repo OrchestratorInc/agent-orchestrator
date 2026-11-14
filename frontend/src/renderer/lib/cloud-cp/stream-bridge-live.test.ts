@@ -42,7 +42,6 @@ describe("subscribeSessionLiveBridged", () => {
 			headers: { Accept: "text/event-stream" },
 		}));
 		bridge.emit({ type: "chunk", data: `retry: 2000\n\nevent: session.live\ndata: ${JSON.stringify(frame)}\n\n: keepalive\n\n` });
-		// An ordinary event on the same stream is not live state.
 		bridge.emit({ type: "chunk", data: `id: 4\nevent: chat.user_message\ndata: {"type":"chat.user_message"}\n\n` });
 		bridge.emit({ type: "end" });
 		await done;

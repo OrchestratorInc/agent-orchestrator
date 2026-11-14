@@ -25,10 +25,6 @@ func TestParseCPUTicksSkipsIdleAndIOWait(t *testing.T) {
 	}
 }
 
-// TestParseCPUTicksExcludesGuestTime guards against double-counting: the
-// kernel already folds VM time into user and nice, so a guest-heavy line
-// must not inflate busy past what idle alone implies. 100 user ticks
-// (entirely guest) plus 100 idle ticks is 50% busy, not ~67%.
 func TestParseCPUTicksExcludesGuestTime(t *testing.T) {
 	busy, total := ParseCPUTicks("cpu  100 0 0 100 0 0 0 0 100 0\n")
 	if busy != 100 || total != 200 {
@@ -42,13 +38,7 @@ func TestAvailablePressureIsUsedShare(t *testing.T) {
 	}
 }
 
-// TestParseVMStatComputesAvailableAsTotalLessMemoryUsed pins the Activity
-// Monitor split: used is app memory (anonymous less purgeable), wired and the
-// compressor's own pages. Inactive must not count as free — on a busy Mac
-// most of it is app memory that has to be compressed before it can be reused.
 func TestParseVMStatComputesAvailableAsTotalLessMemoryUsed(t *testing.T) {
-	// A real vm_stat header plus the six lines the reader uses; other rows are
-	// present in the real tool and must be ignored, not misparsed.
 	out := `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                             10000.
 Pages active:                          200000.
@@ -94,15 +84,11 @@ Swapouts:                                  0.
 	if got := stat.AvailableBytes(total); got != wantAvailable {
 		t.Fatalf("available = %d, want %d", got, wantAvailable)
 	}
-	// A reading larger than RAM (counters racing) clamps to zero, never wraps.
 	if got := stat.AvailableBytes(1 << 30); got != 0 {
 		t.Fatalf("available = %d, want 0 when used exceeds total", got)
 	}
 }
 
-// TestParseVMStatDistinguishesSwapFromOrdinaryPaging guards against reading
-// Pageins/Pageouts (routine file-backed paging) as if they were swap
-// activity: only Swapins/Swapouts should feed SwapIns/SwapOuts.
 func TestParseVMStatDistinguishesSwapFromOrdinaryPaging(t *testing.T) {
 	out := `Mach Virtual Memory Statistics: (page size of 4096 bytes)
 Pages free:                             10000.
@@ -127,10 +113,9 @@ func TestParseVMStatRejectsOutputWithNoPageSize(t *testing.T) {
 }
 
 func TestParseSwapUsageReadsTotalAndUsedFromXswUsage(t *testing.T) {
-	// xsw_usage: uint64 total, uint64 avail, uint64 used, then fields ignored here.
 	raw := make([]byte, 32)
-	binary.LittleEndian.PutUint64(raw[0:8], 2<<30)   // total: 2 GiB
-	binary.LittleEndian.PutUint64(raw[16:24], 1<<30) // used: 1 GiB
+	binary.LittleEndian.PutUint64(raw[0:8], 2<<30)
+	binary.LittleEndian.PutUint64(raw[16:24], 1<<30)
 	total, used := parseSwapUsage(raw)
 	if total != 2<<30 || used != 1<<30 {
 		t.Fatalf("total=%d used=%d", total, used)
@@ -141,7 +126,6 @@ func TestParseSwapUsageReadsTotalAndUsedFromXswUsage(t *testing.T) {
 }
 
 func TestParseLoadavgDividesByItsOwnScale(t *testing.T) {
-	// struct loadavg: uint32[3] ldavg, then long fscale at offset 16.
 	raw := make([]byte, 24)
 	binary.LittleEndian.PutUint32(raw[0:4], 150)
 	binary.LittleEndian.PutUint64(raw[16:24], 100)

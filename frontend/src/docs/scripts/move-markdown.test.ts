@@ -13,7 +13,6 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-/** Runs a copy of the script from a checkout whose path is `name`. */
 function runFrom(name: string) {
   const root = join(mkdtempSync(join(tmpdir(), "docs-")), name);
   roots.push(root);

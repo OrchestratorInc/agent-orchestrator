@@ -39,8 +39,6 @@ type agyNamedHook struct {
 	Stop          []agyHookEntry    `json:"Stop"`
 }
 
-// GetAgentHooks installs AO's named hook in the current AGY workspace hook
-// file. All other top-level entries are preserved.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -68,7 +66,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// UninstallHooks removes only AO's named AGY hook. A missing file is a no-op.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -94,7 +91,6 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	return nil
 }
 
-// AreHooksInstalled reports whether AO's exact managed AGY hook is installed.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -143,8 +139,6 @@ func managedAgyHook() agyNamedHook {
 	}
 }
 
-// readAgyHooks preserves unowned top-level entries as raw JSON values. Missing
-// and blank files are treated as empty configuration.
 func readAgyHooks(hooksPath string) (map[string]json.RawMessage, error) {
 	topLevel := map[string]json.RawMessage{}
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // caller-owned workspace path

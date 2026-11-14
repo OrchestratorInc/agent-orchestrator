@@ -15,14 +15,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionsearch"
 )
 
-// claudeToolUseLine is an assistant record that calls a tool.
 func claudeToolUseLine(t *testing.T, name, arguments, timestamp string) string {
 	t.Helper()
 	return `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"` +
 		name + `","input":` + arguments + `}]},"timestamp":"` + timestamp + `"}`
 }
 
-// claudeToolResultLine is a user record that carries a tool's output.
 func claudeToolResultLine(t *testing.T, output, timestamp string) string {
 	t.Helper()
 	return `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"` +
@@ -50,8 +48,6 @@ func seedTUI(t *testing.T, store interface {
 	return session
 }
 
-// Claude Code writes tool calls and tool results into the transcript. Both are
-// part of "every word of the session" and neither is prose.
 func TestNativeClaudeToolCallsAndOutputAreIndexed(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
@@ -76,8 +72,6 @@ func TestNativeClaudeToolCallsAndOutputAreIndexed(t *testing.T) {
 	}
 }
 
-// Codex records a shell command as an item_completed CommandExecution with its
-// output; that output is searchable like any other text.
 func TestNativeCodexCommandOutputIsIndexed(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{CodexSessions: root})
@@ -96,9 +90,6 @@ func TestNativeCodexCommandOutputIsIndexed(t *testing.T) {
 	}
 }
 
-// OpenCode keeps its history in its own SQLite database. The indexer must read
-// it read-only and pick up both the newer session_message schema and the older
-// message one.
 func TestOpenCodeStoreIsIndexedReadOnly(t *testing.T) {
 	dataHome := t.TempDir()
 	databaseDir := filepath.Join(dataHome, "opencode")
@@ -177,7 +168,6 @@ func seedOpenCodeDatabase(t *testing.T, path string) {
 	}
 }
 
-// The older OpenCode schema stores one row per message with no type column.
 func TestOpenCodeLegacySchemaIsIndexed(t *testing.T) {
 	dataHome := t.TempDir()
 	databaseDir := filepath.Join(dataHome, "opencode")
@@ -219,8 +209,6 @@ func TestOpenCodeLegacySchemaIsIndexed(t *testing.T) {
 	}
 }
 
-// A missing OpenCode install must not be reported as an error the person sees;
-// the session stays findable by title.
 func TestOpenCodeWithoutAStoreStaysFindableByTitle(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{OpenCodeData: t.TempDir()})
 	seedTUIProject(t, f.store, "proj")
@@ -229,7 +217,6 @@ func TestOpenCodeWithoutAStoreStaysFindableByTitle(t *testing.T) {
 	if err := f.store.UpdateSession(context.Background(), record); err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
-	// UpdateSession no longer writes the title; renames have their own narrow writer.
 	if _, err := f.store.RenameSession(context.Background(), record.ID, record.DisplayName, time.Now()); err != nil {
 		t.Fatalf("RenameSession: %v", err)
 	}
@@ -241,7 +228,6 @@ func TestOpenCodeWithoutAStoreStaysFindableByTitle(t *testing.T) {
 	}
 }
 
-// The index must never hold a lock on a provider database after a pass.
 func TestOpenCodeStoreIsReleasedAfterIndexing(t *testing.T) {
 	dataHome := t.TempDir()
 	databaseDir := filepath.Join(dataHome, "opencode")
@@ -256,17 +242,12 @@ func TestOpenCodeStoreIsReleasedAfterIndexing(t *testing.T) {
 	if _, err := f.svc.IndexAll(context.Background()); err != nil {
 		t.Fatalf("IndexAll: %v", err)
 	}
-	// A read-only open of the same file succeeds only if no writer is holding it
-	// in a way that blocks readers; more importantly, the file is removable,
-	// which proves the reader closed its handles.
 	if err := os.Remove(databasePath); err != nil {
 		t.Fatalf("opencode store still held open after indexing: %v", err)
 	}
 	_ = time.Now
 }
 
-// Every Codex rollout that writes the item stream also writes the
-// response_item stream for the same turns. Reading both doubled every match.
 func TestNativeCodexRolloutWithBothStreamsIndexesEachMessageOnce(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{CodexSessions: root})
@@ -286,8 +267,6 @@ func TestNativeCodexRolloutWithBothStreamsIndexesEachMessageOnce(t *testing.T) {
 	if len(results.Results) != 1 || results.Results[0].SessionMatches != 1 {
 		t.Fatalf("results = %+v, want one session with one match", results.Results)
 	}
-	// The edit is found by the file it touched, not by the code it wrote
-	// (coverage.go).
 	if got := search(t, f.svc, "reaper.go"); len(got.Results) != 1 || got.Results[0].Kind != domain.SessionSearchKindPath {
 		t.Fatalf("file change = %+v", got.Results)
 	}
@@ -299,9 +278,6 @@ func TestNativeCodexRolloutWithBothStreamsIndexesEachMessageOnce(t *testing.T) {
 	}
 }
 
-// A transcript indexed by an older reader is read again from the start, so
-// text the old reader skipped (here a prompt queued while Claude was busy)
-// becomes findable without the transcript changing.
 func TestNativeTranscriptIsReadAgainAfterAReaderUpgrade(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
@@ -322,8 +298,6 @@ func TestNativeTranscriptIsReadAgainAfterAReaderUpgrade(t *testing.T) {
 		t.Fatalf("source = %v %v", ok, err)
 	}
 
-	// Rewind to what the previous reader left: the whole file consumed, the
-	// queued prompt never indexed, and no reader format recorded.
 	if err := f.store.DeleteSessionSearchDocsForSource(ctx, sourceKey); err != nil {
 		t.Fatalf("delete docs: %v", err)
 	}
@@ -346,9 +320,6 @@ func TestNativeTranscriptIsReadAgainAfterAReaderUpgrade(t *testing.T) {
 	}
 }
 
-// A rollout read before Codex wrote its first item_completed line is read from
-// the response_item stream. When the item stream appears, the source is read
-// again from the item stream rather than indexing the first turn from both.
 func TestNativeCodexRolloutThatGainsItsItemStreamIsNotDoubled(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{CodexSessions: root})

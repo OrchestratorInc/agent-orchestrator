@@ -8,19 +8,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// codexComposerChromeLabels names provider-owned text that Codex paints into
-// the current composer row. After a Chat to Terminal UI switch the placeholder
-// can arrive without dim styling, so its visible characters would otherwise
-// read as an unsent draft. It is not human input and must not fail an
-// interface switch.
 var codexComposerChromeLabels = []string{"Ask Codex to do anything"}
 
-// codexPromptMarkers start Codex's prompt-shaped rows. Through v0.161 the
-// current composer, submitted prompts, and picker selections all use "›";
-// from v0.162 the current composer is "»" and the others keep "›".
 var codexPromptMarkers = []string{"»", "›"}
 
-// codexPromptMarker returns the marker that starts a plain row, if any.
 func codexPromptMarker(line string) (string, bool) {
 	line = strings.TrimSpace(line)
 	for _, marker := range codexPromptMarkers {
@@ -36,8 +27,6 @@ func codexPromptLine(line string) bool {
 	return ok
 }
 
-// codexLastPromptMarker is the marker of the last prompt-shaped row, the only
-// one that can be the current composer.
 func codexLastPromptMarker(output string) string {
 	lines := terminalui.PlainTerminalLines(output)
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -48,7 +37,6 @@ func codexLastPromptMarker(output string) string {
 	return "›"
 }
 
-// DetectTerminalActivity reports idle only when Codex's composer and footer are visible.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	observation := p.InspectTerminalSurface(output)
 	if observation.Work == ports.TerminalSurfaceWorkIdle {
@@ -57,9 +45,6 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	return "", false
 }
 
-// InspectTerminalSurface reports Codex work and composer facts separately.
-// A visible prompt can contain a draft, and Codex can render that prompt while
-// an active turn remains interruptible.
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
 	frame := codexComposerFrame(output)
 	observation := ports.TerminalSurfaceObservation{
@@ -80,9 +65,6 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 	}
 	prompt, _ := codexPromptFooter(lines, start)
 	if prompt < 0 && terminalui.LastPromptHasBoldMarker(output, codexLastPromptMarker(output)) {
-		// Codex hides its footer in constrained viewports but retains a bold,
-		// non-dim current-prompt marker. Plain or dim transcript prompts do not
-		// satisfy this fallback, so missing structural evidence still fails closed.
 		for i := len(lines) - 1; i >= start; i-- {
 			if codexPromptLine(lines[i]) {
 				prompt = i
@@ -129,8 +111,6 @@ func codexConfirmationFrame(lines []string, start int) bool {
 		if !ok {
 			continue
 		}
-		// An ordinary composer below a completed picker makes the picker
-		// transcript. Only the current, last prompt-shaped row can be selected.
 		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, marker))) {
 			return false
 		}
@@ -197,9 +177,6 @@ func codexConfirmationHint(line string) bool {
 		strings.Contains(lower, "esc to go back")
 }
 
-// codexComposerFrame excludes Codex's normal non-dim footer while retaining
-// ANSI styling and any wrapped composer rows. Without this provider-owned
-// boundary, safe parsing would have to mistake footer chrome for a draft.
 func codexComposerFrame(output string) string {
 	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
 	start := len(raw) - 16
@@ -211,15 +188,12 @@ func codexComposerFrame(output string) string {
 		if !strings.Contains(plainFooter, " · ") {
 			continue
 		}
-		// Codex can stack several " · " footer rows; the frame ends above all of them.
 		for footer > start && strings.Contains(terminalui.PlainTerminalText(raw[footer-1]), " · ") {
 			footer--
 		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
 			if codexPromptLine(plainPrompt) {
-				// The composer ends at the first status row with a " · " (model
-				// row, or a hint row's warnings badge), else it reads as draft text.
 				end := footer
 				for row := prompt + 1; row < footer; row++ {
 					if strings.Contains(terminalui.PlainTerminalText(raw[row]), " · ") {

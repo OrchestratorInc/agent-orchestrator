@@ -1,6 +1,3 @@
-// Package mobilebridge owns the durable state and helpers for the Connect
-// Mobile LAN listener: the ~/.ao/mobile/config.json store and the rotating
-// connection password. It has no httpd/daemon dependencies.
 package mobilebridge
 
 import (
@@ -14,67 +11,28 @@ import (
 	"path/filepath"
 )
 
-// DefaultPort is the LAN listener's default port for the Connect Mobile
-// bridge. Distinct from config.DefaultPort (the loopback API port) since the
-// two listeners can run concurrently.
 const DefaultPort = 3011
 
-// State is the persisted Connect Mobile bridge config in ~/.ao/mobile/config.json.
-// Password is stored in plaintext by deliberate decision: it is a low-value,
-// rotating LAN enabler that already travels in plaintext over the LAN and is
-// shown on the desktop screen, so persisting it (in a 0600 file under ~/.ao)
-// lets the desktop redisplay it while the bridge is enabled. The daemon derives
-// the auth hash from it in memory (HashPassword) — see BridgeService.
 type State struct {
-	Enabled  bool   `json:"enabled"`
-	Password string `json:"password"`
-	LastPort int    `json:"lastPort"`
-	// The last rotated credential stays recognizable as stale after restart.
-	RetiredPasswordHash string `json:"retiredPasswordHash,omitempty"`
-	// AccountTokenHash permits a separate, machine-scoped credential to be
-	// synchronized across devices without uploading the pairing password.
-	AccountTokenHash string `json:"accountTokenHash,omitempty"`
-	// AccountToken is kept beside the pairing password in this owner-only file
-	// so a failed cloud registration can retry the same credential instead of
-	// rotating the host on every sync.
-	AccountToken string `json:"accountToken,omitempty"`
-	// AccountTokenOwner makes issuance idempotent for retries by the same AO
-	// account while still allowing an intentional re-link by another account.
-	AccountTokenOwner string `json:"accountTokenOwner,omitempty"`
-	// RequireDeviceCredentials makes the remote listener refuse the pairing password.
-	RequireDeviceCredentials bool `json:"requireDeviceCredentials,omitempty"`
-	// NoPublicTunnel keeps the self-hosted remote listener off the managed
-	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile
-	// configs default to false and keep their existing behavior.
-	NoPublicTunnel bool `json:"noPublicTunnel"`
-	// LoopbackOnly keeps the authenticated listener reachable only by a local
-	// connector. Old Connect Mobile configs remain LAN-bound by default.
-	LoopbackOnly bool `json:"loopbackOnly,omitempty"`
-	// SecurePairing is the opt-in TLS-over-Tailscale mode. Persisted so a daemon
-	// restart (backend/internal/daemon/mobile_restore.go, via
-	// BridgeService.RestoreOnBoot) knows to re-apply the `tailscale serve` proxy
-	// — pointed at whatever port the restarted LAN listener actually bound, not
-	// this struct's LastPort, since Start can fall back to an ephemeral port.
-	SecurePairing bool `json:"securePairing"`
-	// ServeCleanupPending survives a failed Tailscale Serve teardown so a later
-	// tunnel-only setup cannot inherit an AO-owned tailnet route.
-	ServeCleanupPending bool `json:"serveCleanupPending,omitempty"`
-	// KeepAwake is an independent wake choice. Changing the mobile listener's
-	// Enabled state does not acquire or release wake ownership.
-	KeepAwake    bool `json:"keepAwake"`
-	KeepAwakeLid bool `json:"keepAwakeLid,omitempty"`
-	// BrowserRemoteAccess is an explicit, additional opt-in for streaming and
-	// controlling the desktop-owned browser from a paired phone. Existing
-	// installations deserialize the omitted field as false.
-	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
+	Enabled                  bool   `json:"enabled"`
+	Password                 string `json:"password"`
+	LastPort                 int    `json:"lastPort"`
+	RetiredPasswordHash      string `json:"retiredPasswordHash,omitempty"`
+	AccountTokenHash         string `json:"accountTokenHash,omitempty"`
+	AccountToken             string `json:"accountToken,omitempty"`
+	AccountTokenOwner        string `json:"accountTokenOwner,omitempty"`
+	RequireDeviceCredentials bool   `json:"requireDeviceCredentials,omitempty"`
+	NoPublicTunnel           bool   `json:"noPublicTunnel"`
+	LoopbackOnly             bool   `json:"loopbackOnly,omitempty"`
+	SecurePairing            bool   `json:"securePairing"`
+	ServeCleanupPending      bool   `json:"serveCleanupPending,omitempty"`
+	KeepAwake                bool   `json:"keepAwake"`
+	KeepAwakeLid             bool   `json:"keepAwakeLid,omitempty"`
+	BrowserRemoteAccess      bool   `json:"browserRemoteAccess"`
 }
 
-// Path returns the Connect Mobile config file location under the data dir
-// (~/.ao/mobile/config.json).
 func Path(dataDir string) string { return filepath.Join(dataDir, "mobile", "config.json") }
 
-// Load reads the Connect Mobile config from path. A missing file is not an
-// error: it yields the zero State (bridge disabled).
 func Load(path string) (State, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -90,9 +48,6 @@ func Load(path string) (State, error) {
 	return s, nil
 }
 
-// Save atomically writes s to path (0600) via a temp file + rename, creating the
-// parent dir if needed. State.Password is persisted in plaintext by deliberate,
-// documented decision — see the State doc comment.
 func Save(path string, s State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir mobile dir: %w", err)
@@ -105,8 +60,6 @@ func Save(path string, s State) error {
 	return writeFileAtomic(path, b)
 }
 
-// writeFileAtomic replaces path with b, readable by this user only, so a
-// reader never sees half a file.
 func writeFileAtomic(path string, b []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
@@ -122,7 +75,6 @@ func writeFileAtomic(path string, b []byte) error {
 		_ = tmp.Close()
 		return err
 	}
-	// On disk before the rename, so a power loss cannot leave an empty file.
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
@@ -133,8 +85,6 @@ func writeFileAtomic(path string, b []byte) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
-	// The rename on disk too, so a power loss cannot bring back the old file
-	// or none. Best effort: Windows cannot sync a directory.
 	if dir, err := os.Open(filepath.Dir(path)); err == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
@@ -144,8 +94,6 @@ func writeFileAtomic(path string, b []byte) error {
 
 const pwAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
-// GeneratePassword returns a fresh 8-character alphanumeric connection password
-// drawn from a cryptographically secure source.
 func GeneratePassword() (string, error) {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
@@ -157,15 +105,11 @@ func GeneratePassword() (string, error) {
 	return string(buf), nil
 }
 
-// HashPassword returns the hex-encoded SHA-256 of pw, the in-memory auth hash the
-// LAN listener validates against (the plaintext is never used for comparison).
 func HashPassword(pw string) string {
 	sum := sha256.Sum256([]byte(pw))
 	return hex.EncodeToString(sum[:])
 }
 
-// PasswordMatches reports whether pw hashes to hash, using a constant-time
-// comparison to avoid leaking the hash via timing.
 func PasswordMatches(hash, pw string) bool {
 	return subtle.ConstantTimeCompare([]byte(hash), []byte(HashPassword(pw))) == 1
 }

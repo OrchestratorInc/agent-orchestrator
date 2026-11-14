@@ -22,23 +22,18 @@ var hooks = hooksjson.Manager{
 	},
 }
 
-// GetAgentHooks installs Gemini hooks. BeforeAgent receives AO's instructions through the native
-// additionalContext response from ao hooks, preserving Gemini's system prompt.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	return hooks.Install(ctx, cfg.WorkspacePath)
 }
 
-// UninstallHooks removes only AO-managed hook entries.
 func (p *Plugin) UninstallHooks(ctx context.Context, ws string) error {
 	return hooks.Uninstall(ctx, ws)
 }
 
-// AreHooksInstalled reports whether any AO hook entry exists.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, ws string) (bool, error) {
 	return hooks.AreInstalled(ctx, ws)
 }
 
-// DeriveActivityState translates native hook events into AO activity.
 func DeriveActivityState(event string, payload []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "session-start", "user-prompt-submit", "after-tool":

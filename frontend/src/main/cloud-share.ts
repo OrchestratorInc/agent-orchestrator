@@ -1,14 +1,3 @@
-/**
- * Publishing a local artifact as a public share link: the main-process half.
- *
- * Only a person publishes. The renderer names a file; this module resolves it
- * strictly inside the session's artifacts folder, copies it once into a
- * private snapshot while hashing it, and uploads that snapshot straight to
- * storage through the control plane's presigned multipart upload. The bytes
- * that go public are exactly the ones copied, even if an agent rewrites the
- * file meanwhile. The sign-in token never leaves this process.
- */
-
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -16,18 +5,11 @@ import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
-/** The folder in a session's artifacts that holds version history; never shared. */
 export const VERSIONS_DIR = ".versions";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const READ_CHUNK = 1 << 20;
-/** Parts presigned per request; the control plane allows up to 100. */
 const PRESIGN_BATCH = 8;
-/** Parts uploaded at once. */
 const UPLOAD_CONCURRENCY = 2;
-/**
- * Headers Chromium sets itself: net.fetch refuses a request that names them
- * (net::ERR_INVALID_ARGUMENT). The body's own length is the signed one.
- */
 const CHROMIUM_MANAGED_HEADERS = new Set(["content-length", "host"]);
 
 function partHeaders(headers: Record<string, string>): Record<string, string> {
@@ -46,23 +28,14 @@ export class CloudShareError extends Error {
 }
 
 export interface ResolvedShareFile {
-	/** The file's real path, inside the session's artifacts folder. */
 	realPath: string;
 	name: string;
-	/** Slash-separated path in the artifacts folder. */
 	relativePath: string;
 	size: number;
-	/** The file's identity when it resolved: a later open must find the same file. */
 	dev: number;
 	ino: number;
 }
 
-/**
- * Resolves a file in a local session's artifacts folder,
- * <dataDir>/artifacts/<sessionId>. Anything that resolves outside it, through
- * "..", an absolute path or a symlink, is refused, as is the version history
- * folder and anything that is not a regular file.
- */
 export async function resolveShareFile(dataDir: string, sessionId: unknown, relPath: unknown): Promise<ResolvedShareFile> {
 	if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId) || sessionId === "." || sessionId === "..") {
 		throw new CloudShareError("invalid_file", "Not a session's artifact.");
@@ -91,16 +64,10 @@ export async function resolveShareFile(dataDir: string, sessionId: unknown, relP
 	return { realPath: realFile, name: path.basename(realFile), relativePath: segments.join("/"), size: stat.size, dev: stat.dev, ino: stat.ino };
 }
 
-/**
- * A local file's fingerprint: its size and modification time. Publishing
- * refuses a file whose fingerprint changed since the panel showed it. Taken
- * from the file's metadata alone, so nothing is read before publishing.
- */
 export function shareFileFingerprint(stat: { size: number; mtimeMs: number }): string {
 	return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
 }
 
-/** The fingerprint of a resolved file, read from its metadata. */
 export async function statShareFile(file: ResolvedShareFile): Promise<string> {
 	const handle = await openResolved(file);
 	try {
@@ -114,23 +81,14 @@ export interface ShareSnapshot {
 	path: string;
 	size: number;
 	sha256: string;
-	/** The source's fingerprint as it was copied; see shareFileFingerprint. */
 	fingerprint: string;
 }
 
 export interface SnapshotOptions {
-	/** Stops the copy between chunks. */
 	signal?: AbortSignal;
-	/** Bytes copied so far. */
 	onProgress?: (copiedBytes: number) => void;
 }
 
-/**
- * Copies a shared file into a private snapshot under snapshotDir, hashing it
- * as it goes. A file written while it is copied is refused (source_changed):
- * the snapshot would not be the version its fingerprint names. The upload reads only the snapshot. The copy
- * needs as much free space as the file, which is checked first.
- */
 export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: string, options: SnapshotOptions = {}): Promise<ShareSnapshot> {
 	await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
 	const free = await fs.statfs(snapshotDir).then((stats) => stats.bavail * stats.bsize, () => Number.POSITIVE_INFINITY);
@@ -154,11 +112,6 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 			size += bytesRead;
 			options.onProgress?.(size);
 		}
-		// The fingerprint is taken before the copy, so the copy must end on the
-		// same version: a write while it ran (an agent rewriting a part not yet
-		// read) leaves bytes the fingerprint does not name. The same open file
-		// is checked again, by its size, modification and change time, and the
-		// bytes copied must be all of it.
 		const after = await source.stat();
 		if (size !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
 			throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
@@ -175,17 +128,10 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 	}
 }
 
-/** Removes snapshots left by an earlier run. */
 export async function clearShareSnapshots(snapshotDir: string): Promise<void> {
 	await fs.rm(snapshotDir, { recursive: true, force: true });
 }
 
-/**
- * Opens a resolved file, refusing anything but the very file that resolved.
- * O_NOFOLLOW refuses a final symlink swapped in since; comparing the opened
- * file's device and inode with the resolved ones refuses a folder on the way
- * swapped for a symlink, which O_NOFOLLOW does not see.
- */
 async function openResolved(file: ResolvedShareFile): Promise<fs.FileHandle> {
 	const handle = await fs.open(file.realPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
 	try {
@@ -203,7 +149,6 @@ async function openResolved(file: ResolvedShareFile): Promise<fs.FileHandle> {
 
 export interface CloudShareApi {
 	fetch: (url: string, init: RequestInit) => Promise<Response>;
-	/** The sign-in token, or null when signed out. */
 	getToken: () => Promise<string | null>;
 }
 
@@ -212,27 +157,13 @@ function apiUrl(baseUrl: string, apiPath: string): string {
 	return base.origin + base.pathname.replace(/\/+$/, "") + API_PREFIX + apiPath;
 }
 
-/**
- * How long a request may take before it fails. A connection that dropped
- * (Wi-Fi off and on) can otherwise leave a request that never answers, and
- * the popover waiting on it for good.
- */
 export const SHARE_TIMEOUTS: Record<"api" | "probe" | "transfer" | "publish", number> = {
-	/** An ordinary control-plane request. */
 	api: 30_000,
-	/** Whether the control plane serves share links at all. */
 	probe: 10_000,
-	/** Each upload part. */
 	transfer: 5 * 60_000,
-	/** Finalizing an upload or copying a cloud session's file: the control plane may be moving a large file. */
 	publish: 15 * 60_000,
 };
 
-/**
- * fetch with a time limit. A request that takes longer is refused with
- * CloudShareError "timeout"; one the caller's signal stopped still throws as
- * an abort, so a cancel stays a cancel. The limit covers reading the body too.
- */
 async function fetchWithin<T>(
 	timeoutMs: number,
 	signal: AbortSignal | undefined,
@@ -249,11 +180,6 @@ async function fetchWithin<T>(
 	}
 }
 
-/**
- * `promise`, or the signal's abort as soon as it comes. For a step that takes
- * no signal, such as reading the session token, which may refresh it over
- * the network, so it counts against the request's own time limit.
- */
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const stop = () => reject(signal.reason);
@@ -291,14 +217,7 @@ async function callApi<T>(
 	});
 }
 
-/**
- * Whether the control plane serves share links: the routes exist only while
- * its share flag is on, so a 404 means it does not. It needs no sign-in: a
- * signed-out request gets 401 from a control plane that serves them. Null
- * when the control plane could not be reached.
- */
 export async function shareLinksAvailable(api: CloudShareApi, baseUrl: string): Promise<boolean | null> {
-	// The token read (which may refresh it) and the request share one limit.
 	const limited = AbortSignal.timeout(SHARE_TIMEOUTS.probe);
 	try {
 		const token = await untilAborted(api.getToken(), limited);
@@ -331,17 +250,14 @@ export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, sh
 	await callApi<void>(api, baseUrl, "DELETE", shareLinkPath(shareId));
 }
 
-/** Makes a link private or public. Its URL stays the same. */
 export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId: string, access: CloudShareAccess): Promise<CloudShareLink> {
 	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
 }
 
-/** The emails a link is shared with. */
 export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
 	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
 }
 
-/** Shares a link with emails at once, and returns everyone it is shared with now. */
 export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
 	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
 }
@@ -351,10 +267,6 @@ export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shar
 	await callApi<void>(api, baseUrl, "DELETE", `${shareLinkPath(shareId)}/grants/${grantId}`);
 }
 
-/**
- * What a publish asks a new link to start with. Neither is sent when unset:
- * a control plane that predates private links refuses fields it does not know.
- */
 export interface ShareAccessInput {
 	access?: CloudShareAccess;
 	emails?: string[];
@@ -367,7 +279,6 @@ function accessFields(input: ShareAccessInput): ShareAccessInput {
 	};
 }
 
-/** One committed file of a cloud session, named by its organization, session and path. */
 export interface CloudSessionArtifactRef {
 	orgId: string;
 	sessionId: string;
@@ -383,12 +294,6 @@ function sessionApiPath(ref: CloudSessionArtifactRef): string {
 	return `/orgs/${ref.orgId}/sessions/${ref.sessionId}`;
 }
 
-/**
- * A cloud session's file as its session lists it: its name, size and
- * committed version (SHA-256). One request, made only when the renderer did
- * not already name the version, or after the control plane refused a
- * version that changed. The file itself is never read.
- */
 export async function cloudSessionArtifactVersion(
 	api: CloudShareApi,
 	baseUrl: string,
@@ -400,12 +305,6 @@ export async function cloudSessionArtifactVersion(
 	return { name: artifact.path.split("/").pop() || artifact.name, size: artifact.size, sha256: artifact.sha256 };
 }
 
-/**
- * Publishes a cloud session's file as a share link. The control plane copies
- * the file's committed version to the link inside its bucket, so nothing is
- * uploaded from here. It refuses (artifact_share_source_changed) when the
- * committed version is no longer sha256, the one the person was shown.
- */
 export function shareCloudSessionArtifact(
 	api: CloudShareApi,
 	baseUrl: string,
@@ -420,10 +319,8 @@ export interface ShareUploadInput extends ShareAccessInput {
 	baseUrl: string;
 	snapshot: ShareSnapshot;
 	name: string;
-	/** With feature and name, names the document the link serves. */
 	project: string;
 	feature: string;
-	/** Update this active link instead. */
 	shareId?: string;
 }
 
@@ -458,11 +355,6 @@ async function hashRange(handle: fs.FileHandle, range: { offset: number; length:
 	return hash.digest("hex");
 }
 
-/**
- * Uploads a snapshot as a share link's file: starts the upload, presigns and
- * puts its parts, and finalizes it. A failure or cancel before finalizing
- * aborts the upload so its parts are discarded.
- */
 export async function uploadShare(
 	api: CloudShareApi,
 	input: ShareUploadInput,
@@ -470,15 +362,11 @@ export async function uploadShare(
 	signal?: AbortSignal,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	const { baseUrl, snapshot } = input;
-	// An update names where the file is now too, so its link follows a file
-	// moved to another folder.
 	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
 		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
 		...(input.shareId ? { shareId: input.shareId } : {}),
 	}, signal);
 	const handle = await fs.open(snapshot.path, "r");
-	// One failed part stops the others before the upload is aborted and the
-	// snapshot closed.
 	const batch = new AbortController();
 	const stop = () => batch.abort();
 	signal?.addEventListener("abort", stop, { once: true });
@@ -495,8 +383,6 @@ export async function uploadShare(
 			const presigned = await callApi<{ parts: PresignedPart[] }>(api, baseUrl, "POST", "/me/artifact-shares/uploads/parts",
 				{ uploadToken: start.uploadToken, parts }, signal);
 			const queue = [...presigned.parts];
-			// The snapshot does not change, so each part is read again only as it
-			// is sent: at most UPLOAD_CONCURRENCY parts are in memory.
 			const worker = async () => {
 				for (let part = queue.shift(); part && !batch.signal.aborted; part = queue.shift()) {
 					const signed = parts.find((candidate) => candidate.partNumber === part!.partNumber);
@@ -523,8 +409,6 @@ export async function uploadShare(
 	} catch (error) {
 		batch.abort();
 		await Promise.allSettled(running);
-		// The upload was never finalized: discard its parts. Finalize itself
-		// failing leaves nothing to discard but aborting is harmless.
 		await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
 		throw error;
 	} finally {

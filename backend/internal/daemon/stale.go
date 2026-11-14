@@ -10,25 +10,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
-// staleProbeTimeout bounds the startup ownership probe so a run-file pointing at
-// an unreachable port cannot stall daemon startup.
 const staleProbeTimeout = 2 * time.Second
 
-// runFileOwnerServing reports whether an AO daemon matching info is actually
-// serving on the recorded loopback port.
-//
-// runfile.CheckStale only confirms the recorded PID is alive, which is not
-// enough to conclude a predecessor still owns the port. On Windows the desktop
-// supervisor can only TerminateProcess the daemon (no POSIX signal reaches it),
-// so the daemon's graceful shutdown never runs and running.json is never
-// removed; the leaked file then survives into the next launch. Because Windows
-// reuses PIDs aggressively, the recorded PID routinely belongs to an unrelated
-// process, making the PID-only check report "alive" for a daemon that is long
-// gone — which is what made the daemon refuse to start (issue #256).
-//
-// Probing /healthz and matching both the service name and the PID is the ground
-// truth that a real predecessor is still listening. When it is not, the
-// run-file is stale and the caller should overwrite it instead of refusing.
 func runFileOwnerServing(client *http.Client, host string, info *runfile.Info) bool {
 	if info == nil || info.Port <= 0 {
 		return false

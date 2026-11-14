@@ -155,10 +155,6 @@ func TestEmbeddedReviewGuidanceUsesReviewClaims(t *testing.T) {
 	}
 }
 
-// TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
-// skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
-// second run must clobber cleanly, leaving no stale files. This is the whole
-// contract the daemon boot hook relies on.
 func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	dataDir := t.TempDir()
 
@@ -182,7 +178,6 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 		t.Fatalf("commands/browser.md missing: %v", err)
 	}
 
-	// A stale file inside the skill dir must not survive a reinstall (clobber).
 	stale := filepath.Join(Dir(dataDir), "stale.md")
 	if err := os.WriteFile(stale, []byte("old"), 0o644); err != nil {
 		t.Fatalf("seed stale file: %v", err)
@@ -216,8 +211,6 @@ func TestEmbeddedRemoteBrowserGuidanceMatchesRemoteInterface(t *testing.T) {
 	}
 }
 
-// TestMaterialize_WritesIntoArbitraryDest covers the opencode adapter path:
-// materialize the skill into .opencode/skills/using-ao (not the data-dir layout).
 func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), ".opencode", "skills", SkillName)
 	if err := Materialize(dest); err != nil {
@@ -274,8 +267,6 @@ func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 	}
 }
 
-// AO_SESSION_ARTIFACTS_DIR is set only in cloud sandboxes, and these docs run on
-// local sessions too, where it would expand to nothing.
 func TestArtifactGuidanceUsesPathsThatWorkInLocalSessions(t *testing.T) {
 	body, err := files.ReadFile("using-ao/commands/artifact.md")
 	if err != nil {

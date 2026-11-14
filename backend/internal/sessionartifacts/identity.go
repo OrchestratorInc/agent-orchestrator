@@ -13,21 +13,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// MaxPreviousPaths bounds how many earlier paths an artifact remembers.
 const MaxPreviousPaths = 20
 
-// Observation is what one scan saw in a session's artifact directory: its
-// files as List returns them, with Registered added for registered paths the
-// walk did not reach, and the identity of each file and bundle directory.
 type Observation struct {
 	Files []domain.SessionArtifactFile
-	// quick holds what the walk's stat reported for each observed path. On
-	// Linux it lacks the birth time, which only fullIdentity reads.
 	quick map[string]domain.FileIdentity
 	dir   string
 }
 
-// Observe lists dir as ListRegistered does and records each path's identity.
 func Observe(ctx context.Context, dir string, registered []string) (Observation, error) {
 	quick := make(map[string]domain.FileIdentity)
 	files, err := listRegistered(ctx, dir, registered, quick)
@@ -38,8 +31,6 @@ func Observe(ctx context.Context, dir string, registered []string) (Observation,
 	return Observation{Files: files, quick: quick, dir: dir}, nil
 }
 
-// observeBundles adds the identity of each bundle directory that holds an
-// observed file: a registered bundle is one artifact, renamed as one.
 func observeBundles(dir string, files []domain.SessionArtifactFile, quick map[string]domain.FileIdentity) {
 	for _, file := range files {
 		for i := 0; i < len(file.Path); i++ {
@@ -57,26 +48,6 @@ func observeBundles(dir string, files []domain.SessionArtifactFile, quick map[st
 	}
 }
 
-// Changes plans what the observation changes in rows, the session's artifact
-// rows. Every observed path ends up with a row. A path whose file is not the
-// one its row last saw, or that has no row, is matched against the rows whose
-// file has left their path: a row whose file turns up at another path is a
-// renamed artifact and moves there with its version history. Anything else at
-// a path is a new artifact, or the same one written again in place.
-//
-// A rename never takes a path from an artifact that is kept there: one whose
-// file is still there, or whose file is gone but which is registered or has
-// version history. A file moved over another replaces its content, so the
-// artifact at that path keeps its identity, its history and its share link,
-// and the renamed artifact's own row goes as a gone file's does. Whether a
-// scan ran while the path was empty must not change that: a script that
-// removes report.html, writes report.tmp.html and moves it onto report.html
-// keeps the report either way. Only a row with none of these, which nothing
-// would miss, gives its path to the renamed artifact.
-//
-// A gone file's row stays, with no file, so the same artifact comes back if a
-// file is written there again; a gone file that was never registered is
-// forgotten instead, unless it has version history.
 func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time, newID func() string) domain.SessionArtifactChanges {
 	byPath := make(map[string]domain.SessionArtifactRecord, len(rows))
 	for _, row := range rows {
@@ -103,8 +74,6 @@ func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time,
 		full[path] = o.fullIdentity(path)
 	}
 
-	// A row is a rename source when its file left its path: the path is gone,
-	// or holds another file now.
 	sources := make(map[domain.FileIdentity]domain.SessionArtifactRecord)
 	for _, row := range gone {
 		addSource(sources, row)
@@ -120,8 +89,6 @@ func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time,
 			matches[path] = source
 		}
 	}
-	// Drop matches into a path whose artifact stays, until only moves remain
-	// whose destination is free, held by a gone file, or being vacated.
 	for changed := true; changed; {
 		changed = false
 		moving := make(map[string]bool, len(matches))
@@ -173,15 +140,10 @@ func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time,
 	return changes
 }
 
-// keepsItsPath reports whether the artifact at row's path stays there when
-// another artifact's file is moved onto it: its file is there, or it is
-// registered, or it has version history.
 func keepsItsPath(row domain.SessionArtifactRecord) bool {
 	return row.File.Ino != 0 || row.RegisteredAt != nil || row.HasVersions
 }
 
-// forgetOrClear records that row's file is gone: a registered row keeps its
-// place with no file, anything else is forgotten unless it has history.
 func forgetOrClear(changes *domain.SessionArtifactChanges, row domain.SessionArtifactRecord) {
 	update := domain.SessionArtifactFileUpdate{ID: row.ID, Path: row.Path}
 	if row.RegisteredAt != nil {
@@ -191,9 +153,6 @@ func forgetOrClear(changes *domain.SessionArtifactChanges, row domain.SessionArt
 	changes.Forget = append(changes.Forget, update)
 }
 
-// goneRows returns the rows that last saw a file at a path that now holds
-// nothing. The walk stops at MaxFiles, so a path it did not reach is checked
-// on disk before it counts as gone.
 func (o Observation) goneRows(rows []domain.SessionArtifactRecord) []domain.SessionArtifactRecord {
 	var gone []domain.SessionArtifactRecord
 	for _, row := range rows {
@@ -216,17 +175,12 @@ func (o Observation) fullIdentity(path string) domain.FileIdentity {
 	return fullIdentity(full, info)
 }
 
-// addSource indexes row by its file, when that file is identified well enough
-// to be recognized at another path.
 func addSource(sources map[domain.FileIdentity]domain.SessionArtifactRecord, row domain.SessionArtifactRecord) {
 	if row.File.SameFile(row.File) {
 		sources[row.File] = row
 	}
 }
 
-// sameQuick reports whether quick, which may lack the birth time and
-// generation, names the file stored. The modification time counts only where
-// it is part of the stored identity.
 func sameQuick(stored, quick domain.FileIdentity) bool {
 	if stored.Dev != quick.Dev || stored.Ino != quick.Ino || (stored.ModTime != 0 && stored.ModTime != quick.ModTime) {
 		return false
@@ -234,8 +188,6 @@ func sameQuick(stored, quick domain.FileIdentity) bool {
 	return stored.Birth == 0 || quick.Birth == 0 || stored.Birth == quick.Birth
 }
 
-// previousPaths is previous with from added as the latest, and to removed in
-// case the artifact moves back to a path it had.
 func previousPaths(previous []string, from, to string) []string {
 	out := slices.DeleteFunc(slices.Clone(previous), func(path string) bool { return path == from || path == to })
 	out = append(out, from)
@@ -245,9 +197,6 @@ func previousPaths(previous []string, from, to string) []string {
 	return out
 }
 
-// Apply sets ID, Registered and PreviousPaths on each observed file from rows,
-// the session's artifact rows after its changes. A file inside a registered
-// bundle directory is registered with it.
 func (o Observation) Apply(rows []domain.SessionArtifactRecord) []domain.SessionArtifactFile {
 	byPath := make(map[string]domain.SessionArtifactRecord, len(rows))
 	registered := make(map[string]bool)
@@ -267,7 +216,6 @@ func (o Observation) Apply(rows []domain.SessionArtifactRecord) []domain.Session
 	return files
 }
 
-// RegisteredPaths returns the paths of the registered rows.
 func RegisteredPaths(rows []domain.SessionArtifactRecord) []string {
 	var paths []string
 	for _, row := range rows {

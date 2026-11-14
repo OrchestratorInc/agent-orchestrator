@@ -18,14 +18,6 @@ const SETUP_TOKEN_STEPS = [
 	"cloudCredential.setupTokenStep3",
 ] as const;
 
-// The cloud harnesses and the ways each can log in. Browser login is the
-// default where the harness has one: the desktop app runs the agent CLI's own
-// login locally and securely sends the resulting credential to the control
-// plane, so no token is pasted or displayed. Pasting a Claude setup token or a
-// provider API key remains available as a fallback; each API key links to the
-// page where it is created. OpenCode is multi-provider, so its credential type
-// doubles as the provider the worker injects the key for. Method names and
-// placeholders are translated whole; only the provider brand is inserted.
 export type CloudHarness = (typeof CLOUD_AGENT_PROVIDERS)[number];
 
 type LoginMethod =
@@ -57,18 +49,10 @@ const CLOUD_LOGIN_METHODS: Record<CloudHarness, readonly LoginMethod[]> = {
 	],
 };
 
-/** Where a login goes when the harness can hold several accounts: "new" saves
- * it as another account, an account id signs that account in again. Signing
- * in again takes only the account's kind of login (credentialType): the
- * control plane refuses another kind, since its sessions were set up for it. */
 export type CloudHarnessLoginAccount = { id: "new" | string; credentialType?: string };
 
-// The credential a browser login produces, per harness.
 const BROWSER_LOGIN_CREDENTIAL: Partial<Record<CloudHarness, string>> = { "claude-code": "oauth_token", codex: "auth_json" };
 
-// The harness's login methods that produce credentialType, or all of them
-// when none does (a kind the desktop cannot log in with, such as a pasted
-// Codex access token).
 function loginMethodsFor(agent: CloudHarness, credentialType: string | undefined): readonly LoginMethod[] {
 	const methods = CLOUD_LOGIN_METHODS[agent];
 	if (!credentialType) return methods;
@@ -77,11 +61,6 @@ function loginMethodsFor(agent: CloudHarness, credentialType: string | undefined
 	return matching.length > 0 ? matching : methods;
 }
 
-// Logs one harness in for cloud sessions, expanded inline under its row on the
-// Harness settings page (the only place cloud agent logins are made). Every
-// credential is personal: it runs the caller's cloud sessions in every org they
-// belong to. Without `account` the login replaces the harness's one login
-// (PUT /me/providers/{agent}); with it, it adds or signs in one of its accounts.
 export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: CloudHarness; account?: CloudHarnessLoginAccount; onClose: () => void }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
@@ -92,8 +71,6 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	const [secret, setSecret] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Set when the user cancels the browser login, so the resulting rejection is
-	// treated as a cancellation rather than shown as an error.
 	const loginCancelledRef = useRef(false);
 
 	const selectedMethod = methods.find((entry) => entry.value === credentialType) ?? methods[0];
@@ -117,14 +94,11 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 		void aoBridge.cloud.cancelProviderAuth();
 	};
 
-	// Closing mid-login abandons the login rather than leaving the agent CLI
-	// waiting in the background.
 	const close = () => {
 		if (browserLoginPending) cancelBrowserLogin();
 		onClose();
 	};
 
-	// On success the panel closes; the row's status line shows the connection.
 	const finish = async () => {
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
@@ -163,11 +137,6 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 		setError(null);
 		loginCancelledRef.current = false;
 		try {
-			// One login for local and cloud: the credential becomes the caller's
-			// personal cloud connection and, for Claude Code, is also persisted
-			// locally so local sessions use the same login. Only the default
-			// account's (the main process reads which account the control plane
-			// saved it as): another account must not change what local sessions use.
 			await aoBridge.cloud.connectProviderAuth({
 				baseUrl,
 				provider: agent,

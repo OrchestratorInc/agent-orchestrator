@@ -170,7 +170,6 @@ func automationServer(t *testing.T, status int, response string) (*httptest.Serv
 	return server, capture
 }
 
-// The CLI must remain a thin HTTP client and preserve camel-case wire fields.
 func TestAutomationCreatePostsDaemonContract(t *testing.T) {
 	cfg := setConfigEnv(t)
 	server, capture := automationServer(t, http.StatusCreated, `{"automation":{"id":"automation-1","displayName":"Morning","nextRunAt":"2026-08-26T03:30:00Z"}}`)

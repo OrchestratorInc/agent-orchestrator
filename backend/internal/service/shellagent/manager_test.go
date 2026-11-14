@@ -13,15 +13,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestMain shortens the retry delays once: watch goroutines from an earlier
-// test can still read them while a later test starts, so tests never write them.
 func TestMain(m *testing.M) {
 	initialWatchRetryDelay, watchRetryMax = time.Millisecond, time.Millisecond
 	os.Exit(m.Run())
 }
 
-// fakeRuntime replays readings pushed on readings, the way a terminal host
-// pushes changes, and serves a fixed screen.
 type fakeRuntime struct {
 	readings chan ports.TerminalForeground
 	screen   string
@@ -142,7 +138,6 @@ func TestManagerFollowsAnAgentThroughATurn(t *testing.T) {
 	waitForState(t, m, StateIdle)
 
 	rt.screen = "Do you want to proceed?\n❯ 1. Yes\n  2. No"
-	// A fast prompt can arrive as a settled screen without an intervening busy state.
 	rt.readings <- ports.TerminalForeground{PGID: 20, Argv: claude}
 	waitForState(t, m, StateWaiting)
 
@@ -150,7 +145,6 @@ func TestManagerFollowsAnAgentThroughATurn(t *testing.T) {
 	waitForState(t, m, "")
 }
 
-// A screen read can finish after the terminal closed; its reading is dropped.
 func TestManagerDropsAReadingForAClosedTerminal(t *testing.T) {
 	m, _ := newTestManager(t)
 	closed, cancel := context.WithCancel(context.Background())
@@ -197,7 +191,6 @@ func TestManagerKeepsAnIdleReadingWhileTheUserTypes(t *testing.T) {
 	for range 3 {
 		rt.readings <- ports.TerminalForeground{PGID: 9, Argv: claude, EchoOnly: true}
 	}
-	// A reading the watch handles after the echoes proves they were processed.
 	rt.readings <- ports.TerminalForeground{PGID: 9, Argv: claude, Busy: true}
 	waitForState(t, m, StateWorking)
 	if got := rt.reads.Load(); got != before {
@@ -212,13 +205,11 @@ func TestManagerRereadsAWaitingAgentAfterTyping(t *testing.T) {
 	rt.readings <- ports.TerminalForeground{PGID: 9, Argv: []string{"claude"}}
 	waitForState(t, m, StateWaiting)
 
-	// The answer cleared the prompt; the echo-only update must notice.
 	rt.screen = "> "
 	rt.readings <- ports.TerminalForeground{PGID: 9, Argv: []string{"claude"}, EchoOnly: true}
 	waitForState(t, m, StateIdle)
 }
 
-// unreachableRuntime fails every connection the way a dead host's pipe does.
 type unreachableRuntime struct{ dials atomic.Int32 }
 
 func (u *unreachableRuntime) WatchTerminalForeground(context.Context, ports.RuntimeHandle, func(ports.TerminalForeground)) error {
@@ -268,7 +259,6 @@ func TestManagerRestartsAGivenUpWatchForANewSubscriber(t *testing.T) {
 		t.Fatal("the watch never gave up on the unreachable host")
 	}
 
-	// Another client subscribes while the first is still connected.
 	t.Cleanup(m.SubscribeShellAgents(func(json.RawMessage) {}))
 	deadline = time.Now().Add(2 * time.Second)
 	for int(rt.dials.Load()) <= maxWatchFailures && time.Now().Before(deadline) {

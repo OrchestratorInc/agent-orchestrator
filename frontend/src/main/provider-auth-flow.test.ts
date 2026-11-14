@@ -10,9 +10,6 @@ import {
 	readClaudeOAuthTokenFromDir,
 } from "./provider-auth-flow";
 
-// firstExecutable is the core of the GUI-launched-app PATH fix: it must locate an
-// agent CLI in an install directory that a Finder-launched app's minimal inherited
-// PATH would never include, and must ignore a same-named non-executable file.
 describe("firstExecutable", () => {
 	const dirs: string[] = [];
 
@@ -60,8 +57,6 @@ describe("firstExecutable", () => {
 	});
 });
 
-// The claude token is extracted by shape, not from a fixed file, so it survives
-// claude moving its credential store between versions.
 describe("extractClaudeOAuthToken", () => {
 	it("pulls an sk-ant-oat token out of setup-token stdout", () => {
 		const stdout = "Authenticated!\nYour token:\nsk-ant-oat01-AbC_dEf-123456789 \nDone.\n";
@@ -73,10 +68,6 @@ describe("extractClaudeOAuthToken", () => {
 	});
 });
 
-// AO runs Claude's own PKCE loopback flow (instead of scraping `claude
-// setup-token`, whose Ink TUI prints nothing on a non-TTY pipe). The authorize URL
-// must carry the exact parameters Claude Code's OAuth client expects, or the
-// browser round-trip / token exchange fails.
 describe("buildClaudeAuthorizeUrl", () => {
 	it("emits the loopback PKCE authorize URL Claude Code's client expects", () => {
 		const url = new URL(buildClaudeAuthorizeUrl("http://localhost:54321/callback", "CHALLENGE_abc", "STATE_xyz"));

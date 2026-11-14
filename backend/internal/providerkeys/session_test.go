@@ -26,14 +26,12 @@ func TestForSessionWithholdsSubscriptionKeysSavedForOtherHarnesses(t *testing.T)
 	if inject, withhold, _ := ForSession(dir, ""); len(withhold) != 0 || len(inject) != 3 {
 		t.Fatalf("unknown harness inject=%v withhold=%v", inject, withhold)
 	}
-	// Saved from Claude Code's own panel, the key reaches Claude Code.
 	if err := ClaimForHarness(ctx, dir, "ANTHROPIC_API_KEY", "claude-code"); err != nil {
 		t.Fatal(err)
 	}
 	if inject, withhold, _ := ForSession(dir, "claude-code"); len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "ant" {
 		t.Fatalf("claimed inject=%v withhold=%v", inject, withhold)
 	}
-	// Removing the key forgets the claim.
 	if err := Remove(ctx, dir, "ANTHROPIC_API_KEY"); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +54,6 @@ func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A harness that owns no subscription variable has nothing to release.
 	if released, err := ReleaseHarness(ctx, dir, "goose"); err != nil || released != "" {
 		t.Fatalf("released=%q err=%v", released, err)
 	}
@@ -66,7 +63,6 @@ func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
 	if _, withhold, _ := ForSession(dir, "claude-code"); !reflect.DeepEqual(withhold, []string{"ANTHROPIC_API_KEY"}) {
 		t.Fatalf("Claude Code still receives its released key: withhold=%v", withhold)
 	}
-	// The key stays saved, and other harnesses keep receiving it.
 	if inject, withhold, _ := ForSession(dir, "crush"); len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "ant" {
 		t.Fatalf("crush inject=%v withhold=%v", inject, withhold)
 	}
@@ -74,7 +70,6 @@ func TestReleaseHarnessDropsOnlyThatHarnessesClaim(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(claims["ANTHROPIC_API_KEY"], []string{"crush"}) {
 		t.Fatalf("claims=%v err=%v", claims, err)
 	}
-	// Releasing again is a no-op, and says nothing was released.
 	if released, err := ReleaseHarness(ctx, dir, "claude-code"); err != nil || released != "" {
 		t.Fatalf("second release released=%q err=%v", released, err)
 	}
@@ -97,19 +92,15 @@ func TestWithheldKeepsTheUsersValueAndFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Claude Code gets back the key the user exported before AO replaced it.
 	if got := Withheld(dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": "users-own"}) {
 		t.Fatalf("Withheld(claude-code) = %v", got)
 	}
-	// Codex had none of its own, so AO's copy is blanked; other harnesses
-	// receive every key.
 	if got := Withheld(dir, "codex"); !reflect.DeepEqual(got, map[string]string{"OPENAI_API_KEY": ""}) {
 		t.Fatalf("Withheld(codex) = %v", got)
 	}
 	if got := Withheld(dir, "goose"); len(got) != 0 {
 		t.Fatalf("Withheld(goose) = %v", got)
 	}
-	// A claimed key reaches its harness's sessions, but never its sign-in.
 	if err := ClaimForHarness(ctx, dir, "OPENAI_API_KEY", "codex"); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +110,6 @@ func TestWithheldKeepsTheUsersValueAndFailsClosed(t *testing.T) {
 	if got := WithheldForSignIn("codex"); !reflect.DeepEqual(got, map[string]string{"OPENAI_API_KEY": ""}) {
 		t.Fatalf("WithheldForSignIn(codex) = %v", got)
 	}
-	// An unreadable claim list withholds rather than handing over AO's key.
 	if err := os.WriteFile(filepath.Join(dir, harnessFilename), []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -135,8 +125,6 @@ func TestEnvListReplacesEarlierEntries(t *testing.T) {
 	}
 }
 
-// Work run for a harness outside a session holds back what its sessions do,
-// but keeps a value the work set itself.
 func TestHoldBackAddsWithheldKeysWithoutReplacingSetOnes(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -162,8 +150,6 @@ func TestHoldBackAddsWithheldKeysWithoutReplacingSetOnes(t *testing.T) {
 	}
 }
 
-// An ended context reads nothing and fails closed: a key Claude Code's own
-// sign-in would yield to is blanked even though the store would allow it.
 func TestHoldBackFailsClosedOnAnEndedContext(t *testing.T) {
 	dir := t.TempDir()
 	if err := Save(context.Background(), dir, "ANTHROPIC_API_KEY", "ao-ant"); err != nil {

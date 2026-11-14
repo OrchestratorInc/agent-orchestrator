@@ -46,7 +46,5 @@ func TestE2E_DaemonBindsPortWithRecoverableChatReviewer(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Recovery can fail for this deliberately missing thread. It must never
-	// prevent the listener from becoming ready or deadlock daemon shutdown.
 	e.startDaemon(t)
 }

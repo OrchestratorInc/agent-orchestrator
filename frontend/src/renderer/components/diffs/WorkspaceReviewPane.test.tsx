@@ -31,9 +31,6 @@ vi.mock("../../lib/host-clients", async (importOriginal) => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
 }));
 
-// Minimal patch-only "change" metadata. A patch containing "ends-at-eof" gets a
-// last hunk that ends on a change (the file provably ends there); any other
-// keeps three lines of trailing context (the file may continue).
 vi.mock("@pierre/diffs", () => ({
 	hydratePartialDiff: (_mode: string, fileDiff: object) => ({ ...fileDiff, isPartial: false }),
 	parsePatchFiles: (patch: string) => patch ? [{ files: [{
@@ -100,8 +97,6 @@ function workspace(files: WorkspaceFilesResponse["files"]): WorkspaceFilesRespon
 	};
 }
 
-// A workspace project (multi-repository) session leaves every git-state section
-// and the commit list empty, so its review can only ask for the combined scope.
 function workspaceProject(files: WorkspaceFilesResponse["files"]): WorkspaceFilesResponse {
 	const data = workspace([]);
 	data.files = files;
@@ -137,7 +132,6 @@ function history(data: WorkspaceFilesResponse, view?: WorkspaceHistoryResponse["
 	return { sessionId: data.sessionId, commits: data.commits, commitsTruncated: false, view };
 }
 
-// What the Files header hands the pane: the default review, or the picked changes.
 function reviewTarget(data: WorkspaceFilesResponse, changes?: FilesChanges): ReviewTarget {
 	if (!changes) return defaultWorkspaceReviewTarget(data);
 	const legacy = isLegacyManifest(data);
@@ -202,7 +196,6 @@ describe("WorkspaceReviewPane", () => {
 
 		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
 		await waitFor(() => expect(scrollToMock).toHaveBeenCalledWith({ type: "item", id: `${target.key}:src/App.tsx`, align: "start" }));
-		// A request is acted on once; a new key asks again.
 		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
 		expect(scrollToMock).toHaveBeenCalledTimes(1);
 		view.rerender(pane({ path: "src/App.tsx", key: 2 }));
@@ -349,7 +342,6 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		const firstImage = await screen.findByAltText("After version of one.png");
-		// Image-only reviews must mount CodeView too, so its footer owns scrolling.
 		expect(screen.getByTestId("code-view")).toContainElement(firstImage);
 		await userEvent.click(screen.getByRole("button", { name: "Collapse one.png" }));
 		expect(screen.queryByAltText("After version of one.png")).not.toBeInTheDocument();
@@ -409,7 +401,6 @@ describe("WorkspaceReviewPane", () => {
 		expect(postMock.mock.calls.slice(8).flatMap((call) => call[1].body.paths)).toEqual(files.slice(5088).map((file) => file.path));
 		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(35);
 		expect(screen.getByRole("button", { name: "Next files" })).toBeDisabled();
-		// Filtering a late page must show its first result immediately.
 		view.rerender(pane("file-4000.ts"));
 		expect(await screen.findByRole("checkbox", { name: "Mark file-4000.ts as viewed" })).toBeInTheDocument();
 		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
@@ -511,7 +502,6 @@ describe("WorkspaceReviewPane", () => {
 	it.each([false, true])("renders a same-sized edit with an unchanged version (pane already open: %s)", async (alreadyOpen) => {
 		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false }]);
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		// Both patches have identical lengths and first/last 80 characters.
 		const patch = (change: string) => `diff --git a/src/App.tsx b/src/App.tsx\n${"x".repeat(120)}${change}${"x".repeat(120)}`;
 		const response = (change: string) => ({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [{ repository: "", patch: patch(change), truncated: false, includedPaths: ["src/App.tsx"], deferred: [], errors: [] }] } });
 		const mount = () => render(<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>);
@@ -544,8 +534,6 @@ describe("WorkspaceReviewPane", () => {
 		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
-		// Checked styling uses theme tokens with opaque ink, so the check follows
-		// light and dark mode without disappearing on transparent window surfaces.
 		const viewedBox = screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" });
 		expect(viewedBox).toHaveAttribute("data-state", "checked");
 		expect(viewedBox).toHaveClass("data-[state=checked]:bg-foreground", "data-[state=checked]:text-on-foreground");
@@ -626,7 +614,6 @@ describe("WorkspaceReviewPane", () => {
 			getMock.mockImplementation((_url: string, init: { signal: AbortSignal; params: { query: { path: string; side: string } } }) => {
 				if (init.params.query.path === "README.md") {
 					stalledSignals.push(init.signal);
-					// Even a transport that never settles after abort must release the slot.
 					return new Promise(() => {});
 				}
 				return Promise.resolve({ data: { binary: false, content: "contents", revision: `rev-${init.params.query.side}`, truncated: false } });
@@ -760,7 +747,6 @@ describe("WorkspaceReviewPane", () => {
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 		await screen.findByTestId("review-patch");
 		expect(onAllCollapsedChange).toHaveBeenLastCalledWith(false);
-		// The pane carries no title row of its own: the Files header names the review.
 		expect(screen.queryByText(/of 1 viewed/)).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Collapse all files" })).not.toBeInTheDocument();
 
@@ -895,9 +881,6 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		const composer = await screen.findByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
-		// A popover under the header, portaled above the list (so a later file's
-		// header can't cover it), not a row inside one diff column.
-		// (jsdom boxes are zero-sized, so Radix's hideWhenDetached hides it from role queries.)
 		expect(composer.closest('[role="dialog"]')).toHaveAttribute("aria-label", "Add feedback");
 		expect(composer.closest("[data-annotation-line]")).toBeNull();
 		expect(screen.getByTestId("code-view").querySelector("[data-annotation-line]")).toBeNull();
@@ -1075,7 +1058,6 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getAllByRole("button", { name: "Open full file" })).toHaveLength(2);
 		expect(screen.getByRole("button", { name: "Open diff in center" })).toBeInTheDocument();
 		expect(screen.getAllByRole("button", { name: "Add feedback" }).length).toBeGreaterThan(0);
-		// The image preview reads the worktree, so another branch's image falls back to the placeholder.
 		expect(screen.getByText("Binary file preview is not available.")).toBeInTheDocument();
 		expect(screen.queryByAltText(/version of logo\.png/)).not.toBeInTheDocument();
 	});

@@ -4,11 +4,6 @@ import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy"
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-/**
- * Opens a bring-your-own Coder session's workspace page in the system browser.
- * Renders nothing without an http(s) URL (managed Coder, other providers, or a
- * control plane that predates the field).
- */
 export function CoderWorkspaceLinkButton({ url }: { url?: string }) {
 	const { t } = useTranslation();
 	if (!url || !isWebLink(url)) return null;
@@ -32,10 +27,6 @@ export function CoderWorkspaceLinkButton({ url }: { url?: string }) {
 	);
 }
 
-/**
- * The Coder workspace name in a session's workspace page URL
- * (<base>/@<owner>/<workspace name>), or "" when the URL has no such segment.
- */
 export function coderWorkspaceNameFromUrl(url: string): string {
 	try {
 		const segments = new URL(url).pathname.split("/").filter(Boolean);
@@ -46,12 +37,6 @@ export function coderWorkspaceNameFromUrl(url: string): string {
 	}
 }
 
-/**
- * The topbar control naming a bring-your-own Coder session's workspace and
- * opening it in the system browser, for the whole life of the session (the
- * startup screens show only the icon button above). Renders nothing without a
- * workspace page URL.
- */
 export function CoderWorkspaceTopbarButton({ url, style }: { url?: string; style?: React.CSSProperties }) {
 	const { t } = useTranslation();
 	if (!url || !isWebLink(url)) return null;

@@ -69,7 +69,6 @@ function AccountLimitRows({ account, peers, harness, first, now }: { account: Ag
 	].filter(Boolean).join(" · ");
 	const problem = describeAccountProblem(account, t);
 	const issue = problem?.text ?? (account.signedIn ? null : t("usage.limits.signedOut"));
-	// A check that failed on its own clears by itself: no warning for it.
 	const needsUser = problem ? problem.actionable : Boolean(issue);
 	const fetchedAt = account.limits?.fetchedAt;
 	const staleFrom = issue && windows.length > 0 && fetchedAt ? t("usage.limits.staleFrom", { value: formatRelativeTime(fetchedAt, now, i18n.language) }) : null;
@@ -118,7 +117,6 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 			>
 				<div className={cn("h-full rounded-full", tone)} style={{ width: `${used}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
 				{usedAtReset !== null && usedAtReset > used ? (
-					// Clamped by the marker's own width so a projection that hits 100% stays inside the clipped track.
 					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `min(${usedAtReset}%, calc(100% - 0.125rem))` }} />
 				) : null}
 			</div>

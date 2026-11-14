@@ -88,11 +88,9 @@ describe("SessionForksSection", () => {
 		} });
 		renderSection();
 		const [origin, fork] = await screen.findAllByRole("button", { name: long });
-		// A left-aligned, shrinkable button whose label truncates at its end.
 		expect(fork).toHaveClass("justify-start", "min-w-0", "shrink");
 		expect(fork.querySelector("span.truncate")).toHaveTextContent(long);
 		expect(fork).toHaveAttribute("title", long);
-		// In the sentence, a long name wraps with it instead of spilling out.
 		expect(origin).toHaveClass("inline", "whitespace-normal");
 	});
 

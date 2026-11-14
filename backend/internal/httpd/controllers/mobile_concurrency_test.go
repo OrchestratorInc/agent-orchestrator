@@ -11,9 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// concurrencyLAN is a channel-controlled, race-safe LANController. The
-// production LAN manager owns its own synchronization; this fake does the same
-// so race failures in these tests identify BridgeService rather than the fake.
 type concurrencyLAN struct {
 	mu sync.Mutex
 
@@ -79,9 +76,6 @@ func (f *concurrencyLAN) PasswordHash() string {
 	return f.hash
 }
 
-// Removing synchronization around the serve error snapshot makes this test
-// fail under the race detector: Status reads it while the secure-pairing
-// transition replaces it after each failed clear.
 func TestBridgeStatusConcurrentSecurePairing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile.json")
 	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "pw", LastPort: 3011, ServeCleanupPending: true}); err != nil {
@@ -119,10 +113,6 @@ func TestBridgeStatusConcurrentSecurePairing(t *testing.T) {
 	wg.Wait()
 }
 
-// Removing the transition mutex lets Disable reach LAN.Stop while Enable is
-// still inside LAN.Start. Besides overlapping listener operations, the later
-// Enable save can overwrite the disabled state with a password/hash for a
-// listener the caller expected Disable to stop.
 func TestBridgeSerializesConcurrentEnableAndDisable(t *testing.T) {
 	startEntered := make(chan struct{})
 	startRelease := make(chan struct{})
@@ -160,7 +150,6 @@ func TestBridgeSerializesConcurrentEnableAndDisable(t *testing.T) {
 	case <-stopEntered:
 		overlapped = true
 	case <-time.After(100 * time.Millisecond):
-		// Disable is waiting at the transition boundary, as required.
 	}
 	close(startRelease)
 	if err := awaitResult(t, enableDone, "Enable"); err != nil {
@@ -185,8 +174,6 @@ func TestBridgeSerializesConcurrentEnableAndDisable(t *testing.T) {
 	}
 }
 
-// Status must not hold the short error-snapshot lock while a connector call is
-// blocked. Otherwise ordinary UI polling freezes behind a slow Tailscale CLI.
 func TestBridgeStatusResponsiveWhileSecurePairingConnectorIsSlow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile.json")
 	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "pw", LastPort: 3011, ServeCleanupPending: true}); err != nil {
@@ -231,9 +218,6 @@ func TestBridgeStatusResponsiveWhileSecurePairingConnectorIsSlow(t *testing.T) {
 	}
 }
 
-// Resolving a connector may inspect the filesystem and launch a version probe.
-// Holding tunnelMu across that work makes Status wait before it can report the
-// last known connector state.
 func TestBridgeStatusResponsiveWhileTunnelResolutionIsSlow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile.json")
 	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "pw", LastPort: 3011}); err != nil {

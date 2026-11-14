@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inTriangle, resetSessionPreviewWarmth, safeTriangle, useSessionPreviewHover } from "./useSessionPreviewHover";
 
-// Rows sit at x 0..180; the open card sits to their right at x 200..400.
 const CARD = { left: 200, right: 400, top: 0, bottom: 200 };
 
 function Row({ id }: { id: string }) {
@@ -36,19 +35,16 @@ function openFirstRow() {
 
 describe("safeTriangle", () => {
 	it("aims at the card edge facing the exit point, wherever the card sits", () => {
-		// Card to the right of the row: its left edge.
 		const right = safeTriangle({ x: 180, y: 40 }, CARD);
 		expect(right?.slice(1)).toEqual([
 			{ x: 200, y: 0 },
 			{ x: 200, y: 200 },
 		]);
-		// Flipped to the left: its right edge.
 		const left = safeTriangle({ x: 450, y: 40 }, CARD);
 		expect(left?.slice(1)).toEqual([
 			{ x: 400, y: 0 },
 			{ x: 400, y: 200 },
 		]);
-		// Above or below: its bottom or top edge.
 		expect(safeTriangle({ x: 300, y: 260 }, CARD)?.slice(1)).toEqual([
 			{ x: 200, y: 200 },
 			{ x: 400, y: 200 },
@@ -89,7 +85,6 @@ describe("useSessionPreviewHover safe triangle", () => {
 	it("keeps the card open across other rows while the pointer heads for it", () => {
 		openFirstRow();
 		fireEvent.pointerLeave(screen.getByTestId("row-a"), { clientX: 180, clientY: 40 });
-		// Crossing row b on the way: its preview stays shut.
 		fireEvent.pointerEnter(screen.getByTestId("row-b"), { clientX: 185, clientY: 50 });
 		move(185, 50);
 		wait(250);
@@ -98,7 +93,6 @@ describe("useSessionPreviewHover safe triangle", () => {
 		expect(screen.getByTestId("card-a")).toBeInTheDocument();
 		expect(screen.queryByTestId("card-b")).not.toBeInTheDocument();
 
-		// On the card it stays open until the pointer leaves the card.
 		fireEvent.pointerEnter(screen.getByTestId("card-a"));
 		move(210, 70);
 		wait(1000);

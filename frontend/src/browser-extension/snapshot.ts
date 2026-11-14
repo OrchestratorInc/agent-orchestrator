@@ -1,8 +1,3 @@
-// Accessibility-style page snapshot for the AO Browser Bridge content script.
-// Runs in the extension's isolated world, so page JavaScript cannot observe
-// it. Output matches agent-browser's compact format (`- role "name" [ref=eN]`)
-// and refs map, so `ao browser act` and agent prompts work unchanged.
-
 import { BridgeError } from "./protocol";
 
 export type RefInfo = { role: string; name: string };
@@ -34,7 +29,6 @@ export const INTERACTIVE_ROLES = new Set([
 	"treeitem",
 ]);
 
-// Roles whose accessible name comes from their content.
 const NAME_FROM_CONTENT = new Set([
 	"button",
 	"link",
@@ -54,7 +48,6 @@ const NAME_FROM_CONTENT = new Set([
 	"tooltip",
 ]);
 
-// Non-interactive roles worth a line in the full snapshot.
 const STRUCTURAL_ROLES = new Set([
 	"heading",
 	"navigation",
@@ -88,10 +81,8 @@ const STRUCTURAL_ROLES = new Set([
 	"paragraph",
 ]);
 
-// Elements whose refs are useful even outside interactive mode.
 const REF_ROLES = new Set([...INTERACTIVE_ROLES, "heading", "img", "iframe"]);
 
-/** Stable element refs for one document. */
 export class RefRegistry {
 	private readonly byElement = new WeakMap<Element, string>();
 	private readonly byRef = new Map<string, WeakRef<Element>>();
@@ -131,7 +122,6 @@ function inputType(element: Element): string {
 	return (element.getAttribute("type") ?? "text").toLowerCase();
 }
 
-/** The element's ARIA role: explicit role first, then the HTML-AAM default. */
 export function roleOf(element: Element): string {
 	const explicit = element.getAttribute("role")?.trim().split(/\s+/)[0]?.toLowerCase();
 	if (explicit && explicit !== "presentation" && explicit !== "none") return explicit;
@@ -268,13 +258,10 @@ function labelText(element: Element): string {
 		}
 	}
 	const wrapping = element.closest("label");
-	// Exclude the control itself (for example a select's options) from a
-	// wrapping label's text.
 	if (wrapping) parts.push(textOf(wrapping, 0, element));
 	return normalize(parts.join(" "));
 }
 
-/** A practical subset of the accessible-name computation. */
 export function accessibleName(element: Element, role = roleOf(element)): string {
 	const fromAttributes = accessibleNameFromAttributes(element);
 	if (fromAttributes) return truncate(fromAttributes, MAX_NAME);
@@ -357,7 +344,6 @@ function childNodes(element: Element): Node[] {
 
 type Line = { depth: number; text: string };
 
-/** Build the compact snapshot for a document. */
 export function buildSnapshot(document: Document, registry: RefRegistry, options: SnapshotOptions = {}): SnapshotResult {
 	const interactive = options.interactive === true;
 	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -388,7 +374,6 @@ export function buildSnapshot(document: Document, registry: RefRegistry, options
 		if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template" || tag === "head") return;
 		if (isHidden(element)) return;
 		if (tag === "label") {
-			// A label's text is its control's name; keep only the controls.
 			for (const child of childNodes(element)) visitControlsOnly(child, depth);
 			return;
 		}
@@ -399,7 +384,6 @@ export function buildSnapshot(document: Document, registry: RefRegistry, options
 		let childDepth = depth;
 		if (include) {
 			const name = accessibleName(element, role);
-			// Unnamed generic structure adds noise without helping navigation.
 			const keep = isInteractive || role === "iframe" || name || ["list", "listitem", "table", "row", "navigation", "main", "banner", "contentinfo", "dialog", "form", "paragraph"].includes(role);
 			if (keep) {
 				let line = `- ${role}`;
@@ -413,8 +397,6 @@ export function buildSnapshot(document: Document, registry: RefRegistry, options
 					line += ` [ref=${ref}]`;
 				}
 				if (role === "paragraph" && !name) {
-					// Summarize running text in one line, then keep any links
-					// or controls inside it addressable.
 					const text = normalize(textOf(element));
 					if (text && !emit(depth, `- paragraph: ${truncate(text, MAX_TEXT)}`)) return;
 					for (const child of childNodes(element)) visitControlsOnly(child, depth + 1);
@@ -423,7 +405,6 @@ export function buildSnapshot(document: Document, registry: RefRegistry, options
 				if (!emit(depth, line)) return;
 				childDepth = depth + 1;
 				if (NAME_FROM_CONTENT.has(role) || isInteractive) {
-					// Content already summarized in the name; still surface nested controls.
 					for (const child of childNodes(element)) visitControlsOnly(child, childDepth);
 					return;
 				}

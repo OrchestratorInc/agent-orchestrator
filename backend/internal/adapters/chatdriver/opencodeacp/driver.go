@@ -1,5 +1,3 @@
-// Package opencodeacp binds the user's own OpenCode installation to AO's
-// reusable ACP Chat transport.
 package opencodeacp
 
 import (
@@ -18,9 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches `opencode acp` from the exact binary resolved by the existing
-// OpenCode agent plugin. AO adds only a per-session inline overlay for its
-// standing instructions and an explicit bypass-permissions choice.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessOpenCode,
@@ -48,10 +43,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model != "" {
 		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model})
 	}
-	// OpenCode advertises effort as id "effort" (category "thought_level") with
-	// the model's variant names as values. The model setter resets the variant
-	// to "default" else the first variant when no explicit variant is given,
-	// so the model must be applied first and the effort second.
 	if settings.Effort != "" {
 		options = append(options, acpdriver.SessionOption{ID: "effort", Value: settings.Effort})
 	}
@@ -61,9 +52,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-// OpenCode parses model overrides as provider/model. A provider display name is
-// not an alias for its configured default model; keep that default only when
-// the override is empty. Leave model availability to the user's OpenCode.
 func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
 	if settings.Model == "" {
 		return nil
@@ -75,12 +63,6 @@ func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSetting
 	return nil
 }
 
-// permissionPolicy is AO's side of accept-edits and auto, and mirrors how
-// OpenCode implements --auto: reply to each permission request rather than
-// granting anything up front. A tool the user or repository denied never
-// raises a request, so provider policy stays authoritative and AO never has to
-// reconstruct it. Bypass needs no entry — its agent allows everything, so
-// nothing is asked.
 func permissionPolicy(
 	mode ports.PermissionMode,
 	params acpsdk.RequestPermissionRequest,
@@ -91,7 +73,6 @@ func permissionPolicy(
 		(*kind != acpsdk.ToolKindEdit && *kind != acpsdk.ToolKindDelete && *kind != acpsdk.ToolKindMove)) {
 		return "", false
 	}
-	// Once, not always: --auto answers each request and persists nothing.
 	for _, option := range params.Options {
 		if option.Kind == acpsdk.PermissionOptionKindAllowOnce {
 			return option.OptionId, true

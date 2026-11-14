@@ -17,18 +17,12 @@ import (
 )
 
 var (
-	// ErrSideClosed indicates that a side is closed or has a stale generation.
-	ErrSideClosed = errors.New("side chat is closed")
-	// ErrSideLaunchUnclaimed indicates that no desktop launch owns the side state.
-	ErrSideLaunchUnclaimed = errors.New("desktop launch has not claimed side chats")
-	// ErrSideIdempotencyConflict indicates that a request key was reused for another question.
+	ErrSideClosed              = errors.New("side chat is closed")
+	ErrSideLaunchUnclaimed     = errors.New("desktop launch has not claimed side chats")
 	ErrSideIdempotencyConflict = errors.New("side request key belongs to another question")
-	// ErrSideNameLimit indicates that the highest open default name is already 99.
-	ErrSideNameLimit = errors.New("side chat numbering has reached 99; close or rename the highest-numbered tab before creating another")
+	ErrSideNameLimit           = errors.New("side chat numbering has reached 99; close or rename the highest-numbered tab before creating another")
 )
 
-// memorySideStore is deliberately process-local. Electron owns recovery across
-// supervised daemon restarts; AO never writes side transcripts or drafts to DB.
 type memorySideStore struct {
 	mu             sync.Mutex
 	runID          string
@@ -51,8 +45,6 @@ type sideCreateIdentity struct {
 	key     string
 }
 
-// SideRecoveryRecord travels only between the daemon and Electron main process.
-// Electron holds it in RAM for this desktop launch and never writes it to disk.
 type SideRecoveryRecord struct {
 	CleanupOnly         bool                    `json:"cleanupOnly,omitempty"`
 	HostStopped         bool                    `json:"hostStopped,omitempty"`
@@ -80,7 +72,6 @@ type SideRecoveryRecord struct {
 	Draft               string                  `json:"draft"`
 }
 
-// SideRecoveryTurn pairs a recoverable side turn with its structured content.
 type SideRecoveryTurn struct {
 	DispatchAttempt   int                  `json:"dispatchAttempt,omitempty"`
 	ProviderTurnID    string               `json:"providerTurnId,omitempty"`
@@ -169,7 +160,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 			}
 			previous, pending := m.hostCleanup[side.ID]
 			if m.closed[side.ID] && !pending {
-				continue // Cleanup already drained in this daemon; an old replay cannot recreate it.
+				continue
 			}
 			side.AppRunID = runID
 			side.Harness = record.Harness
@@ -349,8 +340,6 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 	return side, true, nil
 }
 
-// Remember request aliases when anchor reuse returns a side created by another
-// request. A retry must find that same destination even after the main advances.
 func (m *memorySideStore) SideConversationByCreateKey(_ context.Context, session domain.SessionID, runID, key string) (domain.SideConversation, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -364,7 +353,6 @@ func (m *memorySideStore) SideConversationByCreateKey(_ context.Context, session
 		}
 		return side, true, nil
 	}
-	// Primary keys are restored by the existing desktop recovery contract.
 	for _, side := range m.sides {
 		if side.SessionID == session && side.AppRunID == runID && side.ClosedAt == nil && side.CreateKey == key {
 			return side, true, nil
@@ -923,7 +911,6 @@ func sideReferenceContexts(refs []domain.SideReference) []string {
 	return out
 }
 
-// SetSideTurnProviderID records acceptance before streaming or deferred execution starts.
 func (m *memorySideStore) SetSideTurnProviderID(_ context.Context, sideID, turnID, generation, providerID string) error {
 	if providerID == "" {
 		return ErrSidePolicyRecreate
@@ -948,8 +935,6 @@ func (m *memorySideStore) SetSideTurnProviderID(_ context.Context, sideID, turnI
 	return ErrSideClosed
 }
 
-// PrepareSideBoundary records the first delivery before provider I/O. An
-// unacknowledged boundary is never replayed into a possibly accepted history.
 func (m *memorySideStore) PrepareSideBoundary(_ context.Context, sideID, turnID, generation string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

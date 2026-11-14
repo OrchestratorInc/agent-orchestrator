@@ -1,12 +1,6 @@
 import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
 import type { ConversationSnapshot } from "../types/conversation";
 
-// What a remote host showed last: its project and session lists and the live page
-// of each chat. It shows at once after a restart, also while the host connects or
-// is offline, and fresh reads replace it. Renderer IndexedDB is in Electron
-// userData, which main.ts pins under ~/.ao/electron.
-// ponytail: whole live page per chat, newest MAX_CHATS kept; trim items if pages grow large.
-
 const DB_NAME = "ao-remote-chats";
 const STORE = "pages";
 const MAX_CHATS = 50;
@@ -33,7 +27,6 @@ function done<T>(request: IDBRequest<T>): Promise<T> {
 	});
 }
 
-/** The host of a query worth keeping: a chat, or the host's project or session list. */
 function cachedHost(key: QueryKey): string | undefined {
 	if (typeof key[1] !== "string" || key.length !== 3) return undefined;
 	if (key[0] === "remote-conversation" && typeof key[2] === "string") return key[1];
@@ -43,15 +36,10 @@ function cachedHost(key: QueryKey): string | undefined {
 
 const isChat = (key: QueryKey) => key[0] === "remote-conversation";
 
-// Data read from disk or already written is not written again.
 const saved = new WeakSet<object>();
 
 let loaded = false;
 
-/**
- * Keeps the cache to the configured hosts. The first call also shows what the disk
- * holds; a query already in memory keeps its own data.
- */
 export async function syncRemoteCache(queryClient: QueryClient, hostIds: string[]): Promise<void> {
 	const hosts = new Set(hostIds);
 	for (const query of queryClient.getQueryCache().findAll()) {
@@ -81,11 +69,9 @@ export async function syncRemoteCache(queryClient: QueryClient, hostIds: string[
 			queryClient.setQueryData(entry.queryKey, data, { updatedAt: entry.savedAt });
 		}
 	} catch {
-		// A cache that cannot be read only costs the first read of each list and chat.
 	}
 }
 
-/** Drops everything kept for a host, for one that refused this device's password. */
 export async function forgetRemoteHost(queryClient: QueryClient, hostId: string): Promise<void> {
 	queryClient.removeQueries({ queryKey: ["remote-conversation", hostId] });
 	queryClient.removeQueries({ queryKey: ["remote-workspaces", hostId] });
@@ -96,11 +82,9 @@ export async function forgetRemoteHost(queryClient: QueryClient, hostId: string)
 			if (JSON.parse(key)[1] === hostId) store.delete(key);
 		}
 	} catch {
-		// Nothing more to drop.
 	}
 }
 
-/** Saves each kept query shortly after its data changes. Returns the unsubscribe. */
 export function persistRemoteCache(queryClient: QueryClient): () => void {
 	if (typeof indexedDB === "undefined") return () => {};
 	const timers = new Map<string, ReturnType<typeof setTimeout>>();

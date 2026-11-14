@@ -18,15 +18,9 @@ const (
 	hooksDirName      = ".openhands"
 	hooksFileName     = "hooks.json"
 	hookCommandPrefix = "ao hooks openhands "
-	// hookTimeout is in seconds, OpenHands' HookDefinition.timeout unit.
-	hookTimeout = 30
+	hookTimeout       = 30
 )
 
-// managedHooks is the source of truth for the hooks AO installs. OpenHands has
-// no permission-request event (confirmation happens inside the TUI), so AO
-// installs the session/prompt/stop signals that the standard activity deriver
-// understands. UserPromptSubmit is also where AO instructions are injected via
-// additionalContext, since OpenHands ignores SessionStart output.
 var managedHooks = []hooksjson.HookSpec{
 	{Event: "SessionStart", Command: hookCommandPrefix + "session-start"},
 	{Event: "UserPromptSubmit", Command: hookCommandPrefix + "user-prompt-submit"},
@@ -45,8 +39,6 @@ func hooksPath(workspacePath string) string {
 	return filepath.Join(workspacePath, hooksDirName, hooksFileName)
 }
 
-// hookEvents lists OpenHands' hook events in PascalCase. OpenHands also
-// accepts each one in snake_case, with or without a {"hooks": {...}} wrapper.
 var hookEvents = []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart", "SessionEnd", "Stop"}
 
 func toSnake(pascal string) string {
@@ -63,7 +55,6 @@ func toSnake(pascal string) string {
 	return b.String()
 }
 
-// GetAgentHooks installs AO's OpenHands hooks, preserving user-defined hooks.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -76,28 +67,14 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return hooks.Install(ctx, cfg.WorkspacePath)
 }
 
-// UninstallHooks removes AO's OpenHands hooks, leaving user-defined hooks untouched.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	return hooks.Uninstall(ctx, workspacePath)
 }
 
-// AreHooksInstalled reports whether any AO OpenHands hook is present.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	return hooks.AreInstalled(ctx, workspacePath)
 }
 
-// normalizeHooksFile rewrites an existing hooks file into the wrapped
-// PascalCase form hooksjson manages, so AO's entries merge with the user's
-// instead of breaking them. Two OpenHands behaviors make this necessary:
-//
-//   - When a top-level "hooks" key is present, OpenHands reads only that key
-//     and drops every other top-level key. Adding a wrapper to a direct-format
-//     file ({"stop": [...]}) would silently disable the user's hooks.
-//   - A file that spells one event both ways ("stop" and "Stop") fails
-//     validation as a duplicate, which disables every hook in it.
-//
-// Matcher groups for one event keep the PascalCase spelling's groups first.
-// A missing, empty, or already-normalized file is left untouched.
 func normalizeHooksFile(path string) error {
 	data, err := os.ReadFile(path) //nolint:gosec // path built from caller-owned workspace dir
 	if errors.Is(err, os.ErrNotExist) {
@@ -124,9 +101,6 @@ func normalizeHooksFile(path string) error {
 		}
 	}
 
-	// Move every event spelling into the wrapper under its PascalCase key,
-	// PascalCase groups first, then snake_case ones. Non-event keys stay where
-	// they were: OpenHands ignores extra top-level keys next to a wrapper.
 	wrappedEvents := map[string]json.RawMessage{}
 	changed := !wrapped
 	for _, pascal := range hookEvents {
@@ -163,7 +137,6 @@ func normalizeHooksFile(path string) error {
 
 	out := top
 	if wrapped {
-		// Unknown keys inside the wrapper are the user's; keep them there.
 		for key, raw := range events {
 			wrappedEvents[key] = raw
 		}

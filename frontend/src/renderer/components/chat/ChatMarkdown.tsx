@@ -1,28 +1,6 @@
 import type { Element as HastElement } from "hast";
 import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
 import { pageHidden } from "../../lib/page-hidden";
-/**
- * Markdown for agent prose.
- *
- * Agents write markdown — headings, lists, tables, fenced code — and rendering it
- * as preformatted text was showing the syntax instead of the structure. `## Plan`
- * appeared as literal hashes, a table as a wall of pipes, a code block bracketed by
- * visible backticks.
- *
- * Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
- *     files it just read, so `rehype-raw` runs only where a caller passes it with a
- *     sanitizer (GitHub review bodies); otherwise markdown-only is
- *     the whole sanitization story and there is no schema to get wrong, with two
- *     exceptions: ```mermaid fences render as diagrams through `MermaidBlock`,
- *     whose SVG passes through mermaid's strict mode plus DOMPurify with
- *     active-content tags forbidden; and formulas render through `MathFormula`,
- *     whose KaTeX markup is typeset with `trust: false`. Syntax
- *     highlighting keeps that property — it renders a token tree as elements
- *     rather than injecting the highlighter's HTML string.
- *
- * Streaming reuses completed blocks and repairs incomplete inline formatting
- * for display only. Copy actions continue to use the stored source.
- */
 
 import {
 	createContext,
@@ -86,8 +64,6 @@ import { CopyButton } from "./CopyButton";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
-// Activity titles live inside disclosure buttons: keep inline formatting, but
-// unwrap block elements and links so provider text cannot nest interactive UI.
 const TITLE_ELEMENTS = ["code", "em", "strong", "del"];
 const TITLE_COMPONENTS: Components = {
 	code: ({ children }) => <code className="font-mono text-[0.95em]">{children}</code>,
@@ -101,25 +77,13 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 	);
 });
 
-/** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
 const MATH_PLUGINS = [...PLUGINS, remarkMath];
-// Reduced motion gets plain text, not a span per character that never animates.
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-// How long a settled reply keeps its fade spans, so the last characters (and the final
-// flush of buffered text) finish fading in before they are dropped.
 const FADE_SHED_MS = 450;
 
-/**
- * Whether the prose is still arriving, for the fences inside it.
- *
- * A context rather than a prop because `COMPONENTS` has to stay module-level:
- * rebuilding that map per render would defeat react-markdown's own memoization
- * and re-parse every message on every poll.
- */
 const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
-/** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
 const InsideArtifactLink = createContext(false);
 const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
@@ -136,22 +100,10 @@ const OpenChatLink = createContext<{
 }>({ workspacePaths: [], findFile: () => undefined });
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 const EMPTY_LINK_WORKSPACES: WorkspaceSummary[] = [];
-/**
- * The workspaces this chat's session and artifact links resolve against,
- * read once for the chat, from the first link that asks, and shared by every
- * link in it. Empty outside a ChatLinkProvider, or without a query client to
- * read them with.
- */
 const ChatLinkWorkspaces = createContext<{ workspaces: WorkspaceSummary[]; demand?: () => void }>({ workspaces: EMPTY_LINK_WORKSPACES });
 
-/**
- * Reads the link workspaces for its ChatLinkProvider. A leaf beside the chat,
- * not a wrapper around it, so starting the read never remounts the chat.
- */
 function ChatLinkWorkspacesSource({ hostId, kind, onWorkspaces }: { hostId?: string; kind?: "cloud"; onWorkspaces: (workspaces: WorkspaceSummary[]) => void }) {
 	const { workspaces } = useSessionLinkSource(hostId, kind);
-	// A source with no data answers a fresh [] on every render; one empty list
-	// keeps the provider's re-render from asking again.
 	const shared = workspaces.length === 0 ? EMPTY_LINK_WORKSPACES : workspaces;
 	useLayoutEffect(() => onWorkspaces(shared), [onWorkspaces, shared]);
 	return null;
@@ -193,9 +145,6 @@ export function ChatLinkProvider({
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
 		[sessionId, remoteHost, sessionLinkHostId, sessionLinkSourceKind],
 	);
-	// The link workspaces come from queries, read only once something in the
-	// chat asks for them. A render without a query client (an isolated tree)
-	// links nothing to an artifact rather than throwing.
 	const hasQueryClient = useContext(QueryClientContext) !== undefined;
 	const [linkWorkspacesDemanded, setLinkWorkspacesDemanded] = useState(false);
 	const [linkWorkspaces, setLinkWorkspaces] = useState(EMPTY_LINK_WORKSPACES);
@@ -212,18 +161,11 @@ export function ChatLinkProvider({
 }
 
 function chatUrlTransform(url: string, key: string): string | undefined {
-	// react-markdown correctly strips unknown schemes, but a Windows absolute
-	// path resembles one (C:). Preserve only hrefs that look like local paths;
-	// the click still goes through the workspace-confined preview endpoint.
 	if (isAoLink(url)) return url;
 	if (key === "href" && isPotentialWorkspaceFileLink(url)) return url;
 	return defaultUrlTransform(url);
 }
 
-/**
- * True while the surrounding chat is rendering its first commit. A stable ref,
- * not a value, so ending the opening never re-renders every reply.
- */
 export const ChatOpeningRef = createContext<{ readonly current: boolean }>({ current: false });
 
 export const ChatMarkdown = memo(function ChatMarkdown({
@@ -237,27 +179,14 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 }: {
 	text: string;
 	streaming?: boolean;
-	/**
-	 * Prose that is not the answer. Reasoning is the case: it reads alongside the
-	 * agent's reply and must not compete with it, so it steps back a tone rather than
-	 * being dimmed with opacity — which would wash out code and links too.
-	 */
 	muted?: boolean;
 	className?: string;
 	safeOrigin?: boolean;
-	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
 	remarkPlugins?: Options["remarkPlugins"];
 	rehypePlugins?: Options["rehypePlugins"];
 }) {
-	// Replies opened from history mount settled and never wrap; live ones keep the fade a
-	// beat past the end of the stream.
 	const [fading, setFading] = useState(streaming);
 	if (streaming && !fading) setFading(true);
-	// A reply already on screen when its chat opens (switching to a chat
-	// mid-stream) is not new; only characters that arrive afterwards fade in. A
-	// reply that arrives later fades from its first character. Text that arrives
-	// while the window is hidden is not watched either: its fade could only play
-	// once the reader is back, replaying the whole stretch at once.
 	const chatOpening = useContext(ChatOpeningRef);
 	const [openedOffset] = useState(() => (chatOpening.current ? text.length : 0));
 	const hiddenOffset = useRef(0);
@@ -268,15 +197,9 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
 		return remarkPlugins ? [...base, ...remarkPlugins] : base;
 	}, [renderMath, remarkPlugins]);
-	// History stays on the single-parser path. Replies that streamed retain
-	// their chunks on completion, preserving code controls and diagram state.
 	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text, undefined, renderMath) : {
 		source: text, math: renderMath, blocks: [{ source: text, start: 0, repairInline: false }], stableCount: 0,
 	});
-	// Chunks are cut, and their prose repair decided, in the math dialect they
-	// render in, so turning math on or off re-cuts them. A settled single block
-	// is exempt: it is a whole document in either dialect, and repair only runs
-	// while streaming.
 	const current = parsed.source === text && (parsed.math === renderMath || (!streaming && parsed.blocks.length === 1));
 	const blocks = current ? parsed : splitStreamingMarkdown(text, parsed, renderMath);
 	if (blocks !== parsed) setParsed(blocks);
@@ -314,8 +237,6 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	);
 });
 
-// No wrapper DOM: list/table layout, image galleries and prose spacing keep
-// their existing parent. Only the changing chunk enters react-markdown again.
 const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins, rehypePlugins }: {
 	source: string;
 	sourceOffset: number;
@@ -331,8 +252,6 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 		katex: false, setextHeadings: false, comparisonOperators: false,
 	}) : source, [source, streaming, repairInline]);
 	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
-		// Repaired streaming tails cannot be selected. Settled chunks retain only
-		// source bounds; detailed mappings are built when a selection is captured.
 		const entries: NonNullable<Options["rehypePlugins"]> = [...(rehypePlugins ?? [])];
 		if (!streaming) entries.push([rehypeExcerptSource, { offset: sourceOffset }]);
 		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
@@ -345,25 +264,8 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 	</StreamingProse.Provider>;
 });
 
-/**
- * Wrapping is a reading preference, not a property of one block: a fence that
- * scrolled out of view and back must not silently lose it, and a reader who
- * turned wrapping on is usually about to want it again — so the last choice seeds
- * the next block. Deliberately not persisted; reflowing every block of a
- * conversation on launch because of a choice made days ago is worse than starting
- * from the readable default.
- */
 let preferredWrap = false;
 
-/**
- * A fenced code block: language on the left, quiet actions on the right, its own
- * scroll.
- *
- * The block scrolls rather than wrapping because a wrapped line of code is harder
- * to read than a scrolled one, and it must never widen the conversation column.
- * The toggle is there for the case that argument loses — a single 300-character
- * line, where scrolling means losing the rest of the block.
- */
 function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
 	const positions = excerptElementProps(sourceNode);
 	const streaming = useContext(StreamingProse);
@@ -380,9 +282,6 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
-				{/* Hover-revealed, and focus-revealed so the keyboard can reach it. The
-				    timeline's whole point is that prose dominates; a permanent row of
-				    controls on every fence is the opposite. */}
 				<div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
 					<Button
 						type="button"
@@ -441,10 +340,6 @@ type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: stri
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
-	// Safe-origin text links only what it wrote as an ao:// link. Mapping its
-	// file links to artifacts first would hand the safe-origin check a link the
-	// text never wrote, so they stay text there. A chat that cannot open an
-	// artifact link keeps the file link it can open.
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { openSession } = useContext(OpenChatLink);
 	return href && !safeOriginContent && openSession && !isWebLink(href) && !isAoLink(href) && hasArtifactDirectorySegment(href)
@@ -452,12 +347,6 @@ function MarkdownLink(props: MarkdownLinkProps) {
 		: <MarkdownLinkTarget {...props} />;
 }
 
-/**
- * A link to the file a session artifact was written to (the worker writes it
- * under .../artifacts/<session>/<path>), opened as that artifact when the
- * session lists it: the file lives outside the checkout, so the workspace file
- * view cannot read it. Its path actions still name the file linked.
- */
 function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 	const artifact = artifactLinkForTarget(props.href, useChatLinkWorkspaces());
 	return artifact
@@ -465,17 +354,10 @@ function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 		: <MarkdownLinkTarget {...props} />;
 }
 
-/** Whether a markdown link wraps a picture, which marks itself. */
 function linksImage(node: HastElement | undefined): boolean {
 	return node?.children.some((child) => child.type === "element" && child.tagName === "img") ?? false;
 }
 
-/**
- * A web link's site icon before its text, behind a shimmering globe until it
- * arrives and a still one when none does. Asked for as soon as the link
- * renders (its site root only, once per site). A fixed 14px slot, so the text
- * never moves when the icon arrives or fails.
- */
 function InlineLinkFavicon({ href }: { href: string }) {
 	const cachedState = useCachedLinkFavicons(href);
 	const favicons = cachedState === "failed" ? undefined : cachedState;
@@ -508,11 +390,6 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
-	// An HTML file opens as a page in the Browser, except one in this session's
-	// artifact directory: the file opener shows it in Artifacts, listed or not.
-	// That file is named by the link's own path, never by a workspace file that
-	// shares its name, and the link's query or fragment is cut while the target
-	// is still encoded, so a name's own "#" or "?" (%23, %3F) stays.
 	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
 	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
 	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
@@ -570,7 +447,6 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 	);
 }
 
-/** Render one safe in-app session or artifact link using the surrounding ChatLinkProvider. */
 export function SessionLabelLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
 	return <MarkdownLink href={href} className={className}>{children}</MarkdownLink>;
 }
@@ -593,11 +469,6 @@ const ORIGIN_PREVIEW_COMPONENTS: Components = {
 	code: ({ children }) => <code className="font-mono text-[0.95em] text-markdown-code">{children}</code>,
 };
 
-/**
- * A collapsed cross-boundary report preview. Inline formatting and canonical
- * session links remain useful, while block UI, external links, and remote image
- * fetches stay inert until the reader expands the report.
- */
 export const OriginPreviewMarkdown = memo(function OriginPreviewMarkdown({ text }: { text: string }) {
 	return (
 		<div className="chat-md whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
@@ -614,7 +485,6 @@ export const OriginPreviewMarkdown = memo(function OriginPreviewMarkdown({ text 
 	);
 });
 
-/** Linkify canonical session URLs without interpreting any surrounding text as Markdown. */
 export const SessionLinkedText = memo(function SessionLinkedText({ text }: { text: string }) {
 	const links = findSessionLinks(text);
 	if (links.length === 0) return text;
@@ -633,13 +503,6 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
 	return <>{content}</>;
 });
 
-/**
- * A mermaid fence with the streaming state it was rendered under.
- *
- * A separate component rather than a hook call in the `pre` override because
- * overrides are not components: hooks are illegal there, and `COMPONENTS`
- * must stay module-level so react-markdown's memoization survives polling.
- */
 function MermaidFence({ code }: { code: string }) {
 	const streaming = useContext(StreamingProse);
 	const { open: onLinkOpen, remoteHost } = useContext(OpenChatLink);
@@ -655,7 +518,6 @@ function MermaidFence({ code }: { code: string }) {
 		: diagram;
 }
 
-/** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
 function useWorkspaceFile(path: string | undefined) {
 	const { openFile, findFile } = useContext(OpenChatLink);
 	const filePath = path && openFile ? findFile(path) : undefined;
@@ -664,10 +526,6 @@ function useWorkspaceFile(path: string | undefined) {
 	return { filePath, open: (line?: number) => (line == null ? openFile(target) : openFile(target, line)) };
 }
 
-/**
- * A workspace file named outside markdown: opens in Files at the line when this
- * chat can find it, as an inline code path does; otherwise plain text.
- */
 export function FileReference({ path, line, className, children }: { path: string; line?: number; className?: string; children: ReactNode }) {
 	const file = useWorkspaceFile(path);
 	if (!file) return <span className={className} title={path}>{children}</span>;
@@ -678,30 +536,20 @@ export function FileReference({ path, line, className, children }: { path: strin
 	);
 }
 
-/** Opens a URL in this chat session's Browser panel; undefined when the chat cannot. */
 export function useChatBrowserOpen() {
 	return useContext(OpenChatLink).open;
 }
 
-/** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
 export function useChatLinkWorkspaces(): WorkspaceSummary[] {
 	const { workspaces, demand } = useContext(ChatLinkWorkspaces);
-	// Before paint, so a link already known to name an artifact never shows as a file link first.
 	useLayoutEffect(() => demand?.(), [demand]);
 	return workspaces;
 }
 
-/**
- * Inline code naming a listed session artifact, linked to that artifact's
- * preview and showing `children`; a path the session does not list shows
- * `unlisted` (default `children`).
- */
 export function ArtifactPathCode({ text, children, unlisted = children }: { text: string; children: ReactNode; unlisted?: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
 	const path = explicitWorkspaceFilePath(text);
-	// Every workspace refresh, for any session's status, reaches here; the same
-	// element back lets the path menu below skip it unless the link changed.
 	return useMemo(() => {
 		if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
 		return path ? <ChatPathMenu path={path}><span>{unlisted}</span></ChatPathMenu> : <>{unlisted}</>;
@@ -716,8 +564,6 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	const text = typeof children === "string" ? children : undefined;
 	const file = useWorkspaceFile(text);
 	if (isInlineMath(className)) return <span {...positions} data-excerpt-block=""><MathFormula tex={text ?? ""} /></span>;
-	// An artifact's name is not code: it reads in the UI font, like its rows and
-	// headers. It is still inline code in the source, so excerpts map it as one.
 	const name = <span {...positions} data-excerpt-kind="inline-code">{children}</span>;
 	if (insideArtifactLink) return name;
 	const code = (
@@ -749,8 +595,6 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 
 const COMPONENTS: Components = {
 	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
-	// Headings step down in size but stay in the conversation's voice — an agent's
-	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (
 		<h3 {...props} className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
 			{children}
@@ -772,7 +616,6 @@ const COMPONENTS: Components = {
 		</h6>
 	),
 
-	// A paragraph of nothing but images is a set of pictures, not prose.
 	p: ({ children, node, ...props }) =>
 		isImageOnlyParagraph(node) ? (
 			<ChatImageGallery>{children}</ChatImageGallery>
@@ -781,18 +624,14 @@ const COMPONENTS: Components = {
 		),
 
 	ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 first:mt-0">{children}</ul>,
-	// Keep the source's first number: a reply of "6." is one item numbered 6, not 1.
 	ol: ({ children, start }) => (
 		<ol start={start} className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
 	),
 	li: ({ children, className, node: _node, ...props }) => (
-		// A task-list item drops its bullet: the checkbox is the marker.
 		<li {...props} className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
 			{compactEmoji(children)}
 		</li>
 	),
-	// Read-only on purpose. The checkbox reflects what the agent wrote; clicking it
-	// would imply AO could change the agent's plan, which it cannot.
 	input: ({ checked, type }) =>
 		type === "checkbox" ? (
 			<input
@@ -804,26 +643,15 @@ const COMPONENTS: Components = {
 			/>
 		) : null,
 
-	// A fenced block arrives as `pre > code`, with the language — when the agent
-	// gave one — as a class on the inner element. It is claimed here rather than in
-	// `code` because a fence with no language carries no class at all, and matching
-	// on the class alone rendered those as inline code.
 	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
 		if (!fence) return <CodeBlock code={textOf(children).replace(/\n$/, "")} sourceNode={node} />;
-		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
-		// path rather than the highlighter. See `MermaidBlock.tsx`.
 		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
-		// Display formulas (`$$…$$`, `\[…\]`) arrive as `language-math` fences too,
-		// so one check covers them and explicit ```math fences.
 		if (fence.language?.toLowerCase() === "math") return <div {...excerptElementProps(node)} data-excerpt-block=""><MathFormula tex={fence.code} display /></div>;
 		return <CodeBlock code={fence.code} language={fence.language} sourceNode={node} />;
 	},
-	// Only inline code and inline formulas reach here; `pre` above takes every fence.
 	code: InlineCode,
 
-	// Wide tables scroll inside their own container so the conversation column
-	// never scrolls sideways.
 	table: ({ children }) => (
 		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
 			<table className="w-full border-collapse text-xs">{children}</table>
@@ -852,22 +680,11 @@ const COMPONENTS: Components = {
 		<summary {...props} className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground">{children}</summary>
 	),
 
-	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
-	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,
-	// and right-click offers the system browser and copying the address.
 	a: MarkdownLink,
 
 	img: MarkdownImage,
 };
 
-/**
- * What markdown leaves literal in a person's own message. Pasted text keeps its
- * look: `# notes` is not a heading, four spaces are not a code block, a `---`
- * under a line is not a rule, and `<Component>` stays visible text. Images,
- * tables, footnotes, link definitions and strikethrough are out for the same
- * reason. The daemon's find splits these messages the same way
- * (`FindUserBlocks`), so change both together.
- */
 const USER_LITERAL_CONSTRUCTS = [
 	"headingAtx", "setextUnderline", "thematicBreak", "codeIndented", "htmlFlow", "htmlText",
 	"definition", "labelStartImage", "table", "strikethrough",
@@ -881,7 +698,6 @@ function remarkUserSubset(this: Processor) {
 
 type MarkdownParent = { children: RootContent[] };
 
-/** A newline the person typed is a line break, as it was in the plain bubble. */
 function splitSoftBreaks(parent: MarkdownParent) {
 	parent.children = parent.children.flatMap((child): RootContent[] => {
 		if ("children" in child) splitSoftBreaks(child as MarkdownParent);
@@ -901,7 +717,6 @@ const USER_PLUGINS: Options["remarkPlugins"] = [remarkGfm, remarkSessionLinks, r
 
 const UserTextRenderer = createContext<((text: string) => ReactNode) | undefined>(undefined);
 
-/** Hands the message's words to the bubble's own text renderer (inline images, chips), inside lists and emphasis too. */
 function UserProse({ children }: { children?: ReactNode }) {
 	const render = useContext(UserTextRenderer);
 	if (!render) return <>{children}</>;
@@ -912,7 +727,6 @@ function UserProse({ children }: { children?: ReactNode }) {
 
 const USER_COMPONENTS: Components = {
 	...COMPONENTS,
-	// Paragraphs the person split with a blank line keep a blank line's gap.
 	p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0 [p+&]:mt-[1lh]"><UserProse>{children}</UserProse></p>,
 	li: ({ children, className }) => (
 		<li className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
@@ -921,23 +735,14 @@ const USER_COMPONENTS: Components = {
 	),
 	em: ({ children }) => <em><UserProse>{children}</UserProse></em>,
 	strong: ({ children }) => <strong className="font-semibold"><UserProse>{children}</UserProse></strong>,
-	// Every fence is code here, a ```mermaid one included: nothing in a person's
-	// own message runs or renders as something else.
 	pre: ({ children }) => {
 		const fence = fenceOf(children);
 		return fence ? <CodeBlock code={fence.code} language={fence.language} /> : <>{children}</>;
 	},
 };
 
-/**
- * A person's own message with the light markdown people type: lists, task
- * boxes, bold and italic, inline and fenced code, links and quotes. Display
- * only: the stored text, the text sent to the agent and the Copy action all
- * stay the raw source. Links open only when clicked.
- */
 export const UserMarkdown = memo(function UserMarkdown({ text, renderText }: {
 	text: string;
-	/** Renders each run of plain text, for inline images and chips; keep it stable. */
 	renderText?: (text: string) => ReactNode;
 }) {
 	return (

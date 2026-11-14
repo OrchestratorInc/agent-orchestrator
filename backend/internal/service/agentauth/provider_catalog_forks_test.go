@@ -111,8 +111,6 @@ func TestCrushCatalogKeepsKeyOnlyProvidersAndOtherSettings(t *testing.T) {
 			t.Fatalf("accepted %q, which Crush would expand", key)
 		}
 	}
-	// As when Crush saves a key itself, a stored ChatGPT sign-in and its model
-	// list go, or a token refresh would replace the key.
 	if _, err := svc.StartLoginWithOptions(t.Context(), "crush", catalogKeyMethod, "sk-openai", LoginOptions{Provider: "openai"}); err != nil {
 		t.Fatal(err)
 	}

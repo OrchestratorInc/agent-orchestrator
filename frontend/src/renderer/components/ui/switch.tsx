@@ -5,15 +5,6 @@ import { Switch as SwitchPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 
-/**
- * One switch for the whole app. Size is deliberately not a prop: the control
- * reads as the same affordance in a settings row and in a dense menu row, so a
- * per-call-site size only lets those surfaces drift apart.
- *
- * The thumb sits 1px inside the track (the transparent 1px border) on every
- * side. The track and thumb use inset shading only; pressing changes the
- * track background without moving the control.
- */
 function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {
 	return (
 		<SwitchPrimitive.Root

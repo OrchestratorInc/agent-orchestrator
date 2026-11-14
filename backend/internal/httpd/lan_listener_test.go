@@ -43,8 +43,6 @@ func TestMobileLANRejectsReassignedAddressWithSamePassword(t *testing.T) {
 		calls++
 		w.WriteHeader(http.StatusAccepted)
 	})
-	// The address formerly belonged to h_A; h_B now answers there and happens
-	// to use the same connection password.
 	m := NewMobileLAN(inner, "h_B", 0, nil, nil)
 	m.SetPasswordHash(mobilebridge.HashPassword("same-secret"))
 	request := func(expectedHostID, password string) *httptest.ResponseRecorder {
@@ -114,7 +112,7 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	})
 	st := &authState{}
 	st.setHash(mobilebridge.HashPassword("secret12"))
-	m := NewLANManager(inner, st, 0, slog.Default(), nil) // port 0 → ephemeral
+	m := NewLANManager(inner, st, 0, slog.Default(), nil)
 	port, err := m.Start(0)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -125,12 +123,10 @@ func TestLANManagerAuthGatesSharedHandler(t *testing.T) {
 	}
 
 	base := fmt.Sprintf("http://127.0.0.1:%d/anything", port)
-	// no auth → 401
 	resp, _ := http.Get(base)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no-auth: got %d want 401", resp.StatusCode)
 	}
-	// with auth → 200
 	req, _ := http.NewRequest(http.MethodGet, base, nil)
 	req.Header.Set("Authorization", "Bearer secret12")
 	resp2, _ := http.DefaultClient.Do(req)
@@ -225,8 +221,6 @@ func TestAccountTokenIssuanceReturnsThroughRealLANListener(t *testing.T) {
 	}
 }
 
-// TestLANManagerIdentityEndpoint verifies the unauthenticated identity probe
-// works as expected for mobile pairing (ADR 0003).
 func TestLANManagerIdentityEndpoint(t *testing.T) {
 	inner := chi.NewRouter()
 	inner.Get("/api/v1/identity", func(w http.ResponseWriter, r *http.Request) {
@@ -242,7 +236,6 @@ func TestLANManagerIdentityEndpoint(t *testing.T) {
 	}
 	defer m.Stop(context.Background())
 
-	// Identity endpoint should be accessible without auth (ADR 0003)
 	base := fmt.Sprintf("http://127.0.0.1:%d/api/v1/identity", port)
 	resp, err := http.Get(base)
 	if err != nil {
@@ -258,7 +251,6 @@ func TestLANManagerIdentityEndpoint(t *testing.T) {
 		t.Fatalf("identity probe response: got %s want hostId", string(body))
 	}
 
-	// Other endpoints should still require auth
 	authBase := fmt.Sprintf("http://127.0.0.1:%d/api/v1/anything", port)
 	resp2, _ := http.Get(authBase)
 	if resp2.StatusCode != http.StatusUnauthorized {
@@ -266,13 +258,6 @@ func TestLANManagerIdentityEndpoint(t *testing.T) {
 	}
 }
 
-// TestLANManagerBlocksLoopbackOnlyControlRoutes proves the LAN listener never
-// serves /shutdown, /internal/*, /api/v1/mobile*, /api/v1/dev*,
-// /api/v1/browser*, or the Codex credential routes under
-// /api/v1/agents/codex/accounts* —
-// even when the request carries a spoofed Host: 127.0.0.1
-// and valid LAN auth, since gating on Host alone (localControlRequest) is what
-// let a LAN client reach these routes.
 func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok")
@@ -314,7 +299,7 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 	}
 	for _, path := range blocked {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
-		req.Host = "127.0.0.1" // spoofed loopback Host
+		req.Host = "127.0.0.1"
 		req.Header.Set("Authorization", "Bearer secret12")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -350,7 +335,6 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		}
 	}
 
-	// Paired clients can request the daemon's fixed harness installer.
 	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/agents/cursor/install", port), nil)
 	req.Host = "127.0.0.1"
 	req.Header.Set("Authorization", "Bearer secret12")
@@ -390,8 +374,6 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		t.Fatalf("preview app: got %d want 200", previewResp.StatusCode)
 	}
 
-	// The read-only Codex model routes and the subscription account routes
-	// must stay reachable for mobile and remote desktops.
 	for _, tc := range []struct {
 		method string
 		path   string
@@ -415,9 +397,6 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		}
 	}
 
-	// A normal app route must still be reachable through the LAN listener
-	// (not swallowed by the control-route filter). Auth-gating, not the
-	// control filter, decides its fate.
 	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions", port), nil)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
@@ -435,12 +414,8 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		t.Fatalf("/api/v1/agents: got 404, should not be blocked by the control-route filter")
 	}
 
-	// Browsing a remote host for a project path is the whole point of fs/dirs,
-	// so it must behave like every other data route: credential-gated, and
-	// specifically NOT a loopback-only control route. A 404 here would be a
-	// silent feature kill that no loopback-side test could catch.
 	fsReq, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/v1/fs/dirs", port), nil)
-	fsReq.Host = "127.0.0.1" // spoofed loopback Host, as above
+	fsReq.Host = "127.0.0.1"
 	fsReq.Header.Set("Authorization", "Bearer secret12")
 	fsResp, err := http.DefaultClient.Do(fsReq)
 	if err != nil {
@@ -461,7 +436,7 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 func TestLANManagerStartStopIdempotent(t *testing.T) {
 	m := NewLANManager(http.NotFoundHandler(), &authState{}, 0, slog.Default(), nil)
 	p1, _ := m.Start(0)
-	p2, _ := m.Start(0) // idempotent — same port, no error
+	p2, _ := m.Start(0)
 	if p1 != p2 {
 		t.Fatalf("second start changed port: %d != %d", p1, p2)
 	}
@@ -473,13 +448,9 @@ func TestLANManagerStartStopIdempotent(t *testing.T) {
 	if m.Running() {
 		t.Fatal("still running after stop")
 	}
-	_ = m.Stop(ctx) // second stop is a no-op
+	_ = m.Stop(ctx)
 }
 
-// End-to-end through the real LAN stack (lanControlBlock + authMiddleware +
-// router): the identity probe answers without a credential, and nothing else
-// does. The middleware unit tests cover the exemption in isolation; this covers
-// the composition, which is where a wiring mistake would actually live.
 func TestLANManagerServesIdentityProbeWithoutAPassword(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok")
@@ -496,7 +467,7 @@ func TestLANManagerServesIdentityProbeWithoutAPassword(t *testing.T) {
 	get := func(path string) int {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
-		resp, err := http.DefaultClient.Do(req) // deliberately no Authorization
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)
 		}
@@ -512,9 +483,6 @@ func TestLANManagerServesIdentityProbeWithoutAPassword(t *testing.T) {
 	}
 }
 
-// lanFakeAgentCatalog is a controllers.AgentCatalog that records whether the
-// real handler was actually reached. Only the Codex model/probe routes are
-// exercised; the rest satisfy the interface.
 type lanFakeAgentCatalog struct{ calls int }
 
 func (c *lanFakeAgentCatalog) CachedReadiness(context.Context) (agentsvc.Readiness, error) {
@@ -552,12 +520,6 @@ func (c *lanFakeAgentCatalog) RevalidateModels(_ context.Context, agentID, _ str
 	return ports.AgentModelCatalog{AgentID: agentID}, nil
 }
 
-// TestLANListenerServesCodexModelRoutesFromRealRouter pins the actual bug: the
-// LAN control block used to list the whole /api/v1/agents/codex prefix, so the
-// model routes mobile calls answered 404 even though the router mounts them.
-// A stub inner handler cannot prove that (it answers anything), so this drives
-// the real AgentsController routes through the real LAN listener over a real
-// socket and asserts the handler ran, while the credential routes stay blocked.
 func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 	catalog := &lanFakeAgentCatalog{}
 	router := chi.NewRouter()
@@ -595,8 +557,6 @@ func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 		t.Fatalf("catalog calls = %d, want 3 — requests never reached the real handler", catalog.calls)
 	}
 
-	// The credential surface stays unreachable over LAN, even with a spoofed
-	// loopback Host and valid auth.
 	for _, path := range []string{
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/accounts/events",
@@ -616,9 +576,6 @@ func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 	}
 }
 
-// A paired phone must not turn on "Let agents use this computer": that hands
-// desktop control to every new chat on this machine. The block is the switch's
-// own route; the rest of settings stays reachable.
 func TestLANBlocksTheComputerUseSwitchOnly(t *testing.T) {
 	reached := false
 	handler := lanControlBlock(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))

@@ -39,8 +39,6 @@ func TestTheHostKeyIsMadeOnceAndKeptPrivate(t *testing.T) {
 	}
 }
 
-// AO Cloud checks the signature over the method, the path, the time and the
-// exact body the machine sent.
 func TestTheMachineSignsItsTunnelRequestWithItsHostKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "mobile"), 0o700); err != nil {
@@ -73,9 +71,6 @@ func TestTheMachineSignsItsTunnelRequestWithItsHostKey(t *testing.T) {
 	}
 }
 
-// A fixed vector pins the signed message. AO Cloud's verifier accepts
-// signatures from this code, so a change here would split the two apart. A
-// control-plane URL with a path prefix signs the path from /api/cloud/ on.
 func TestTheHostSignatureMatchesAFixedVector(t *testing.T) {
 	seed := make([]byte, ed25519.SeedSize)
 	for i := range seed {
@@ -90,8 +85,6 @@ func TestTheHostSignatureMatchesAFixedVector(t *testing.T) {
 	}
 }
 
-// A machine whose clock is off still signs within AO Cloud's 5 minutes: the
-// signature carries AO Cloud's time, from the Date of its last answer.
 func TestASignatureCarriesAOCloudsTime(t *testing.T) {
 	t.Cleanup(func() { aoCloudSkew.Store(0) })
 	NoteAOCloudDate(time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
@@ -104,8 +97,6 @@ func TestASignatureCarriesAOCloudsTime(t *testing.T) {
 	}
 }
 
-// Without a readable host key the request goes unsigned, which a listing
-// without a key and an AO Cloud that takes none still accept.
 func TestAMachineWithoutAHostKeySendsTheDigestAlone(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://cp.example/api/cloud/v1/remote-hosts/h_x/tunnel", nil)
 	AuthorizeHostRequest(req, nil, "digest", "")
@@ -114,7 +105,6 @@ func TestAMachineWithoutAHostKeySendsTheDigestAlone(t *testing.T) {
 	}
 }
 
-// A damaged host.key is replaced, and kept aside rather than lost.
 func TestADamagedHostKeyIsReplacedAndKeptAside(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "config.json")
 	keyPath := filepath.Join(filepath.Dir(statePath), "host.key")
@@ -132,9 +122,6 @@ func TestADamagedHostKeyIsReplacedAndKeptAside(t *testing.T) {
 	}
 }
 
-// A request signed before AO Cloud's clock was known, on a machine an hour
-// fast, is refused; signed again on AO Cloud's clock, it goes through. A
-// refusal on a clock that did not move is AO Cloud's answer, not retried.
 func TestAHostRequestIsSignedAgainOnceAOCloudsClockIsKnown(t *testing.T) {
 	aoCloudSkew.Store(0)
 	t.Cleanup(func() { aoCloudSkew.Store(0) })

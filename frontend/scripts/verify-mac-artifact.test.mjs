@@ -5,22 +5,6 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Smoke coverage for scripts/verify-mac-artifact.sh.
-//
-// Honest scope: the three real checks (codesign, spctl, stapler) cannot be
-// exercised here. Mocking them convincingly would require real Apple signing
-// material, and a mock that always passes proves nothing about the gate. The
-// meaningful verification of the core logic happens against real published
-// artifacts: the public mac-update-e2e workflow runs this script against the
-// published baseline and the installed app, developers run it as the local
-// diagnostic, and the release conductor's pre-publication gate applies the
-// same nested-Node rules (frontend/docs/desktop-release.md).
-//
-// What IS covered here, on any platform with no signing material at all:
-// the script parses, every usage/precondition path exits 2 with a clear
-// message, and mocked trust failures prove nested code is never executed before
-// verification succeeds. Real Apple trust decisions remain release evidence.
-
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "verify-mac-artifact.sh");
 
 function run(args, env = {}) {
@@ -98,10 +82,6 @@ describe("verify-mac-artifact.sh", () => {
 		expect(stderr).toContain("expected an .app bundle directory");
 	});
 
-	// A .dmg is a first-class input now: forge.config.ts's postMake seals the dmg
-	// and then gates on this script (#3267 decision 3 step 4). Same usage
-	// contract, so the same paths have to exit 2 rather than fall through to
-	// macOS-only tooling.
 	it("accepts .dmg as a known artifact type", async () => {
 		const { readFileSync } = await import("node:fs");
 		const src = readFileSync(SCRIPT, "utf8");
@@ -189,20 +169,12 @@ describe("verify-mac-artifact.sh", () => {
 	it("encodes the verified command set (ditto, spctl -vv, stapler validate)", async () => {
 		const { readFileSync } = await import("node:fs");
 		const src = readFileSync(SCRIPT, "utf8");
-		// These exact forms are load-bearing and were each verified empirically;
-		// see the header comment. A drive-by "simplification" of any of them
-		// silently turns the gate into a no-op, so pin them here.
 		expect(src).toContain("ditto -x -k");
 		expect(src).not.toMatch(/^\s*unzip /m);
 		expect(src).toContain("codesign --verify --deep --strict");
 		expect(src).toContain("xcrun stapler validate");
-		// The .zip/.app path must keep assessing executable code...
 		expect(src).toContain("spctl -a -vv -t exec");
-		// ...and the dmg container must be assessed on open against the primary
-		// signature (#3267 decision 3 step 4), never with -t exec.
 		expect(src).toContain("spctl -a -vv -t open --context context:primary-signature");
-		// A valid outer seal can still contain the Intel Node regression from
-		// #3879, so the canonical gate also checks the final nested executable.
 		expect(src).toContain("Contents/Resources/acp-runtime/node/bin/node");
 		expect(src).toContain("com.apple.security.cs.allow-jit");
 		expect(src).toContain("com.apple.security.cs.allow-unsigned-executable-memory");

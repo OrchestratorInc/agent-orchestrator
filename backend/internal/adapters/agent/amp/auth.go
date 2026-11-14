@@ -18,18 +18,14 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	// Amp's own stored login and settings decide first, then `amp usage`,
-	// and only then AMP_API_KEY in the environment.
 	status, ok, login, storedErr := ampStoredAuthStatus(ctx)
 	if storedErr == nil && ok && status == ports.AgentAuthStatusAuthorized {
 		if login {
-			// A stored login names no account; Amp's own account list does.
 			ports.AddAuthEvidence(ctx, domain.AgentAccountIdentity{Email: ampActiveAccountEmail(ctx, binary, ampSecretsPath())})
 		}
 		return status, nil
@@ -52,16 +48,11 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return status, nil
 }
 
-// ampAccountEmails remembers the active account per binary and stored
-// login, so repeated checks of an unchanged login run `amp account list` once.
 var ampAccountEmails = struct {
 	sync.Mutex
 	byLogin map[string]string
 }{byLogin: map[string]string{}}
 
-// ampActiveAccountEmail reads the account `amp account list` marks active
-// ("* user@example.com (user_…)"), or "" when Amp cannot say. The answer is
-// reused until the secrets file changes.
 func ampActiveAccountEmail(ctx context.Context, binary, secretsPath string) string {
 	if binary == "" {
 		return ""
@@ -111,8 +102,6 @@ func ampEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
 	return ports.AgentAuthStatusUnknown, false
 }
 
-// ampStoredAuthStatus reads Amp's secrets file, then its settings. login
-// reports that the stored login, not a settings key, decided.
 func ampStoredAuthStatus(ctx context.Context) (status ports.AgentAuthStatus, ok, login bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, false, err
@@ -135,9 +124,6 @@ func ampStoredAuthStatus(ctx context.Context) (status ports.AgentAuthStatus, ok,
 	return status, ok, false, nil
 }
 
-// Amp documents its persisted CLI credentials in ~/.local/share/amp/secrets.json.
-// The schema has changed across CLI releases, so only credential-shaped fields
-// are considered; arbitrary settings in the file must not imply authentication.
 func ampSecretsPath() string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".local", "share", "amp", "secrets.json")
@@ -208,9 +194,6 @@ func ampSettingsAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// ampUsageAuthStatus recognizes Amp's own signed-in account output. It is
-// deliberately authorization-only: a failed or unfamiliar usage command does
-// not prove that an interactive launch cannot authenticate.
 func ampUsageAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
 	if binary == "" {
 		return ports.AgentAuthStatusUnknown, nil
@@ -234,8 +217,6 @@ func ampUsageAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStat
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// ampSignedInEmail returns the email `amp usage` prints after "signed in
-// as", or "".
 func ampSignedInEmail(output string) string {
 	lower := strings.ToLower(output)
 	index := strings.Index(lower, "signed in as")

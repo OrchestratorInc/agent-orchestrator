@@ -6,8 +6,6 @@ import type { ConversationMessage, ConversationSnapshot } from "../types/convers
 const inactiveQueryKey = ["conversation-prompt-suggestion", "inactive"] as const;
 const busyError = new Error("Prompt suggestion capacity is busy");
 const staleError = new Error("Prompt suggestion controller state changed");
-// Navigation and query GC must not undo Escape. Bound this to recent contexts and
-// let the QueryClient's lifetime own it, rather than retaining every past turn.
 const dismissedContextsByClient = new WeakMap<QueryClient, Set<string>>();
 
 function replyFingerprint(text: string): string {
@@ -37,16 +35,9 @@ export function useConversationPromptSuggestion(
 	});
 }
 
-/** Thrown by a suggestion fetch when the suggester is busy, so it is asked again shortly. */
 export const promptSuggestionBusy = busyError;
-/** Thrown by a suggestion fetch when the controller state changed under it, so the answer is not cached. */
 export const promptSuggestionStale = staleError;
 
-/**
- * The next-message suggestion after a settled turn, fetched by `fetchPrompt`
- * for the turn and its reply. `scope` keys where the conversation lives (a
- * local or remote daemon, or Cloud), so dismissals and answers never cross.
- */
 export function usePromptSuggestion(
 	snapshot: ConversationSnapshot | undefined,
 	enabled: boolean,
@@ -69,15 +60,12 @@ export function usePromptSuggestion(
 			if (item.kind === "message" && item.role === "assistant") { reply = item; break; }
 		}
 	}
-	// This is only a content version of the settled answer. The daemon owns context
-	// selection/truncation; streaming text and activity-only replay are never hashed.
 	const sourceVersion = useMemo(() => replyFingerprint(reply?.text ?? ""), [reply?.text]);
 	const sessionId = snapshot?.sessionId ?? "";
 	const queryKey = useMemo(() => turnId
 		? ["conversation-prompt-suggestion", scope, sessionId, snapshot?.conversationId ?? "", snapshot?.activeBranchId ?? "", turnId, reply?.id ?? "", sourceVersion]
 		: inactiveQueryKey,
 	[scope, sessionId, snapshot?.conversationId, snapshot?.activeBranchId, turnId, reply?.id, sourceVersion]);
-	// The query reads the snapshot it was keyed for; later renders only change the key.
 	const snapshotRef = useRef(snapshot);
 	snapshotRef.current = snapshot;
 	const id = useMemo(() => JSON.stringify(queryKey), [queryKey]);
@@ -104,7 +92,6 @@ export function usePromptSuggestion(
 				return { id, text: prompt };
 			} catch (error) {
 				if (signal.aborted || error === busyError || error === staleError) throw error;
-				// Successful omissions are cached like hints; capacity errors stay transient.
 				return null;
 			}
 		},

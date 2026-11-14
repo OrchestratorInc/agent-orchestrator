@@ -1,19 +1,3 @@
-/**
- * A run of consecutive tool calls, collapsed to one line.
- *
- * The agent may run fifteen commands to answer one question. Rendering each as
- * its own row turns the conversation into a log: the prose that actually answers
- * the question gets pushed off screen by the mechanics of finding it.
- *
- * So a run summarizes itself — "Explored 4 files, 3 searches" — and expands to the
- * individual calls only when asked. The summary is not decoration: it counts what
- * the agent did by category, so a reader can tell "it looked around" from "it
- * changed something" without opening anything.
- *
- * It stays folded while the turn runs too: the live row names the step in progress.
- * Only a call that failed shows without being asked for, under the line that folds it.
- */
-
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
@@ -50,8 +34,6 @@ export function ActivityRun({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, next);
 		else setLocalOpen(next);
 	};
-	// A search match inside this run opens it, as a reader's choice would, so it
-	// stays open once the match has been shown.
 	const revealed = useContext(RevealedChatActivity);
 	const holdsRevealed = Boolean(revealed && activities.some((activity) => activity.id === revealed));
 	useEffect(() => {
@@ -59,8 +41,6 @@ export function ActivityRun({
 	}, [holdsRevealed, revealed]);
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
-	// The group fades in when it forms while the chat is on screen, never when the
-	// chat opens onto it or it scrolls back into view.
 	const entering = useChatEntrance(`run:${activities[0]?.id ?? ""}`, newestSequence(activities));
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
@@ -80,8 +60,6 @@ export function ActivityRun({
 		{ additions: 0, deletions: 0 },
 	);
 
-	// A single call is its own best summary — collapsing one row into a count of
-	// one would be worse than just showing it.
 	const hierarchy = buildHierarchy(activities);
 	const nodesByActivityID = new Map(hierarchy.map((node) => [node.activity.id, node]));
 	const rootActivities = hierarchy.map((node) => node.activity);
@@ -135,8 +113,6 @@ export function ActivityRun({
 				{running ? (
 					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
 				) : null}
-				{/* Always visible: the line has to read as openable, or a reader who
-				    wants the detail has no reason to think it is there. */}
 				<ChevronRight
 					aria-hidden="true"
 					className={cn(
@@ -177,7 +153,6 @@ export function ActivityRun({
 	);
 }
 
-/** The calls that failed, kept on screen while the disclosure holding them is folded. */
 function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
 	const reducedMotion = useReducedMotion();
 	const failed = activities.filter(isFailedCall);
@@ -204,11 +179,6 @@ function newestSequence(activities: readonly ConversationActivity[]): number {
 	return activities.reduce((newest, activity) => Math.max(newest, activity.sequence), 0);
 }
 
-/**
- * The rows of a run. Back-to-back commands that finished and read the same
- * ("Checked the browser console" twice) show as one row; opening it still
- * shows every call.
- */
 function renderActivityRows(
 	activities: readonly ConversationActivity[],
 	nodesByActivityID: ReadonlyMap<string, ActivityNode>,
@@ -240,7 +210,6 @@ function renderActivityRows(
 	return rows;
 }
 
-/** The label two finished commands must share to fold into one row, or undefined. */
 function repeatableLabel(activity: ConversationActivity): string | undefined {
 	if (activity.activityKind !== "command" || activity.status !== "completed") return undefined;
 	const step = activityCommandStep(activity);
@@ -296,7 +265,6 @@ function ActivitySubgroup({
 		else setLocalOpen(next);
 	};
 	const revealed = useContext(RevealedChatActivity);
-	// A subgroup lists top-level calls; a match inside a subagent below one counts too.
 	const holdsRevealed = Boolean(revealed && activities.some((activity) => {
 		const node = nodesByActivityID.get(activity.id);
 		return node ? nodeActivities(node).some((nested) => nested.id === revealed) : activity.id === revealed;
@@ -446,7 +414,6 @@ function ActivityTree({ node }: { node: ActivityNode }) {
 }
 
 function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
-	// A search match in one of the subagent's calls opens the fold that holds it.
 	const revealed = useContext(RevealedChatActivity);
 	const holdsRevealed = Boolean(revealed && nodes.some((node) => nodeActivities(node).some((activity) => activity.id === revealed)));
 	const [open, setOpen] = useState(holdsRevealed);

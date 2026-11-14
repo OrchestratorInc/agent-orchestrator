@@ -21,7 +21,6 @@ type wireRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f wireRoundTripper) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
-// captured is one PostHog capture request as it actually left the process.
 type captured struct {
 	event string
 	props map[string]any
@@ -60,12 +59,6 @@ func (r *wireRecorder) names() []string {
 	return out
 }
 
-// newWireSink builds the same remote chain newTelemetrySink wires in the daemon
-// (denylist -> aggregation -> rate limit -> PostHog) in front of a fake
-// transport, so a test can assert what an emit site actually puts on the wire
-// rather than what it handed to a sink. flushEvery is long on purpose: the
-// aggregator is flushed by Close, never by the background ticker, so nothing
-// here depends on timing.
 func newWireSink(t *testing.T) (ports.EventSink, *wireRecorder, func()) {
 	t.Helper()
 	rec := &wireRecorder{}
@@ -99,11 +92,6 @@ func newWireSink(t *testing.T) (ports.EventSink, *wireRecorder, func()) {
 	}
 }
 
-// End to end: the review service's real emit sites, through the real export
-// chain, onto the wire. Every assertion here is one a unit test cannot make,
-// because the payload allowlist that decides what actually reaches PostHog
-// lives in the adapter and is keyed by event name, with nothing tying it to the
-// emit site at compile time.
 func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 	sink, rec, closeSink := newWireSink(t)
 
@@ -159,7 +147,7 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 		"harness":            "claude-code",
 		"trigger":            "auto",
 		"posted_to_provider": true,
-		"duration_ms":        float64(90_000), // JSON numbers decode as float64
+		"duration_ms":        float64(90_000),
 		"body_bytes":         float64(len(reviewBody)),
 	} {
 		if got := submitted.props[key]; got != want {
@@ -167,8 +155,6 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 		}
 	}
 
-	// The review prose, the repository, and the commit must not appear anywhere
-	// in what left the process, in any event, under any key.
 	for _, ev := range rec.events {
 		for _, forbidden := range []string{
 			reviewBody, "secret-repo", "deadbeefcafe", "prod.ts", "github.com", "gh-review-42",

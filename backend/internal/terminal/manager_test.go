@@ -18,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeConn is an in-memory wsConn driven by channels.
 type fakeConn struct {
 	in     chan clientMsg
 	out    chan serverMsg
@@ -27,11 +26,8 @@ type fakeConn struct {
 	closed chan struct{}
 }
 
-// AllowsPanes makes the fake a page connection, as the desktop app's is.
 func (f *fakeConn) AllowsPanes() bool { return true }
 
-// plainConn is a connection that does not vouch for itself, like a local
-// program with no Origin: it has only the wsConn methods.
 type plainConn struct{ wsConn }
 
 func newFakeConn() *fakeConn {
@@ -65,7 +61,6 @@ func (c *fakeConn) Close(string) error {
 	return nil
 }
 
-// recv waits for a frame of the given channel+type, draining others.
 func recv(t *testing.T, c *fakeConn, ch, typ string, d time.Duration) serverMsg {
 	t.Helper()
 	deadline := time.After(d)
@@ -261,7 +256,6 @@ func TestBeginInputDrainBlocksMuxWritesUntilReleased(t *testing.T) {
 	recv(t, conn, chTerminal, msgOpened, time.Second)
 	_, release := mgr.BeginInputDrain("t1")
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("lost work\n"))}
-	// The pong proves the sequential read loop has already handled the data frame.
 	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
 	recv(t, conn, chSystem, msgPong, time.Second)
 	if got := string(pty.writtenBytes()); got != "" {
@@ -269,16 +263,12 @@ func TestBeginInputDrainBlocksMuxWritesUntilReleased(t *testing.T) {
 	}
 
 	release()
-	release() // release is safe under duplicate cleanup paths.
+	release()
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("allowed\n"))}
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "allowed\n" })
 }
 
 func TestHoldInputFencesInputBufferedDuringAttach(t *testing.T) {
-	// A keystroke typed while the attach is still in flight is buffered and
-	// replayed by setPTY. That replay is a pane write like any other: it must
-	// wait for a held fence, or a draft lands after the guard's final empty-frame
-	// proof and concatenates with AO's paste (#5711).
 	pty := newFakePTY()
 	attached := make(chan struct{})
 	src := &fakeSource{alive: true, attachFn: func(ctx context.Context, _, _ uint16) (ports.Stream, error) {
@@ -361,11 +351,6 @@ func TestBufferedInputReplayUpdatesLastInputAt(t *testing.T) {
 }
 
 func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
-	// HoldInput fences AO's composer check and write against human keystrokes
-	// without dropping them (unlike BeginInputDrain): t1's keys wait on its fence
-	// and land in order on release (#5711). The desktop app multiplexes every
-	// terminal over one connection, so the wait must not stall the connection's
-	// read loop: typing in t2, and pings, keep flowing.
 	p1, p2 := newFakePTY(), newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{p1, p2}}}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -392,14 +377,11 @@ func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
 		t.Fatalf("t1's keystrokes passed its held fence: %q", got)
 	}
 	release()
-	release() // idempotent
+	release()
 	eventually(t, time.Second, func() bool { return string(p1.writtenBytes()) == "held" })
 }
 
 func TestClosingATerminalStillWritesKeysQueuedBehindItsFence(t *testing.T) {
-	// The client may switch away (close) right after typing. Keys it sent first
-	// still reach the pane once the fence releases, as they did when writes were
-	// synchronous.
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -422,9 +404,6 @@ func TestClosingATerminalStillWritesKeysQueuedBehindItsFence(t *testing.T) {
 }
 
 func TestClosedTerminalsDoNotKeepInputWriters(t *testing.T) {
-	// One long-lived desktop connection opens and closes many terminals. Each
-	// terminal's writer must be retired once it is closed and drained, not kept
-	// until the connection ends.
 	const terminals = 20
 	ptys := make([]*fakePTY, terminals)
 	for i := range ptys {
@@ -434,8 +413,6 @@ func TestClosedTerminalsDoNotKeepInputWriters(t *testing.T) {
 	defer mgr.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// Drive the connection's read-loop handlers directly so the test can see
-	// its writers.
 	c := &connState{mgr: mgr, conn: newFakeConn(), ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}, writers: map[string]*inputWriter{}}
 	defer c.cleanup()
 
@@ -447,15 +424,12 @@ func TestClosedTerminalsDoNotKeepInputWriters(t *testing.T) {
 		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgClose})
 	}
 	eventually(t, time.Second, func() bool {
-		c.closeTerminal("none") // any close sweeps writers that finished draining
+		c.closeTerminal("none")
 		return len(c.writers) == 0
 	})
 }
 
 func TestReopenedTerminalsWriterWaitsForTheRetiredOne(t *testing.T) {
-	// After a close and reopen, keys the retired writer still holds (behind a
-	// fence or a slow write) must reach the pane before keys typed after the
-	// reopen, so the new writer starts only once the old one has drained.
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -490,8 +464,6 @@ func TestReopenedTerminalsWriterWaitsForTheRetiredOne(t *testing.T) {
 }
 
 func TestKeystrokeReceivedDuringADrainIsDroppedEvenIfWrittenLater(t *testing.T) {
-	// A drain refuses input received while it is held. A keystroke that also
-	// waits on a held fence must not slip through once the drain has ended.
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -513,7 +485,6 @@ func TestKeystrokeReceivedDuringADrainIsDroppedEvenIfWrittenLater(t *testing.T) 
 		_, release := mgr.BeginInputDrain("t1")
 		drained <- release
 	}()
-	// The drain waits on the held fence; the next keystroke arrives meanwhile.
 	time.Sleep(20 * time.Millisecond)
 	releaseHold()
 	releaseDrain := <-drained
@@ -583,7 +554,6 @@ func TestLastInputAtReadsWithoutBlockingInput(t *testing.T) {
 	if first.IsZero() {
 		t.Fatal("accepted input was not recorded")
 	}
-	// Reading must not close input: the next keystroke is still written.
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("second\n"))}
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "first\nsecond\n" })
 	if !mgr.LastInputAt("t1").After(first) {
@@ -591,8 +561,6 @@ func TestLastInputAtReadsWithoutBlockingInput(t *testing.T) {
 	}
 }
 
-// nextTerminal returns the next frame on conn.out (no skipping), so callers can
-// assert frame ordering rather than just presence.
 func nextTerminal(t *testing.T, c *fakeConn) serverMsg {
 	t.Helper()
 	select {
@@ -604,10 +572,6 @@ func nextTerminal(t *testing.T, c *fakeConn) serverMsg {
 	}
 }
 
-// Opening a pane whose runtime is already dead must report exited without
-// spawning an attach. The conn entry still has to clear so a later open for the
-// same id on this connection is served instead of being silently dropped by the
-// already-open guard.
 func TestServeOpenDeadRuntimeReportsExitedAndAllowsReopen(t *testing.T) {
 	sp := &fakeSpawner{ptys: []*fakePTY{newFakePTY()}}
 	src := &fakeSource{alive: false, spawner: sp}
@@ -634,13 +598,10 @@ func TestServeOpenDeadRuntimeReportsExitedAndAllowsReopen(t *testing.T) {
 	}
 }
 
-// A session that exits after being opened must clear its connection entry on
-// exit, so a later open for the same id is served rather than dropped by the
-// already-open guard.
 func TestServeExitAfterOpenClearsEntryAllowingReopen(t *testing.T) {
 	p := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{p}}
-	src := &fakeSource{alive: true, spawner: sp} // alive for the first attach
+	src := &fakeSource{alive: true, spawner: sp}
 	mgr := NewManager(src, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
 
@@ -652,8 +613,8 @@ func TestServeExitAfterOpenClearsEntryAllowingReopen(t *testing.T) {
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
 	recv(t, conn, chTerminal, msgOpened, time.Second)
 
-	src.setAlive(false) // a dropped pty must not re-attach -> session exits
-	p.Close()           // drop the pty; IsAlive false => session exits, no re-attach
+	src.setAlive(false)
+	p.Close()
 	recv(t, conn, chTerminal, msgExited, time.Second)
 
 	src.setAlive(true)
@@ -661,18 +622,11 @@ func TestServeExitAfterOpenClearsEntryAllowingReopen(t *testing.T) {
 	recv(t, conn, chTerminal, msgOpened, 2*time.Second)
 }
 
-// An attachment that exits the moment it is opened (dead runtime) fires onExit
-// from its run goroutine, racing the reopen that follows the exited frame. The
-// identity-guarded delete in onExit must never evict a successor attachment
-// registered under the same id: every reopen must be served (exited again for a
-// still-dead runtime), never silently dropped by the already-open guard.
-// Stressed across many iterations
-// to shake the exit/reopen interleavings out.
 func TestServeReopenAfterImmediateExitNeverStuck(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		sp := &fakeSpawner{}
 		src := &fakeSource{spawner: sp}
-		src.setAlive(false) // dead runtime -> the open exits without attaching
+		src.setAlive(false)
 		mgr := NewManager(src, nil, testLogger(), WithHeartbeat(0))
 
 		conn := newFakeConn()
@@ -683,8 +637,6 @@ func TestServeReopenAfterImmediateExitNeverStuck(t *testing.T) {
 
 		recv(t, conn, chTerminal, msgExited, time.Second)
 
-		// The reopen must be served even while the first open's exit teardown is
-		// still in flight.
 		conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
 		recv(t, conn, chTerminal, msgExited, time.Second)
 
@@ -719,7 +671,6 @@ func TestServeForwardsSessionChannelFromCDC(t *testing.T) {
 	go mgr.Serve(ctx, conn)
 
 	conn.in <- clientMsg{Ch: chSubscribe, Type: msgSubscribe}
-	// Give the subscription time to register before publishing.
 	eventually(t, time.Second, func() bool {
 		bc.Publish(cdc.Event{Seq: 9, ProjectID: "p1", SessionID: "s1", Type: cdc.EventSessionUpdated})
 		select {
@@ -816,7 +767,7 @@ func TestServeRelaysPaneCommandsLayoutsAndResults(t *testing.T) {
 	go mgr.Serve(ctx, conn)
 
 	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe}
-	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe} // a second subscribe is ignored
+	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe}
 	conn.in <- clientMsg{Ch: chPanes, Type: msgLayout, SessionID: "s1", Layout: json.RawMessage(`{"selected":"session"}`)}
 	eventually(t, time.Second, func() bool {
 		src.mu.Lock()
@@ -861,7 +812,6 @@ func TestServeIgnoresPanesFromAConnectionThatIsNotAPage(t *testing.T) {
 
 	conn.in <- clientMsg{Ch: chPanes, Type: msgSubscribe}
 	conn.in <- clientMsg{Ch: chPanes, Type: msgLayout, SessionID: "s1", Layout: json.RawMessage(`{"selected":"session"}`)}
-	// Frames are handled in order, so the pong means the two above were too.
 	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
 	recv(t, conn, chSystem, msgPong, time.Second)
 	src.mu.Lock()
@@ -901,7 +851,7 @@ func TestServeClosesConnOnReadEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go mgr.Serve(ctx, conn)
 
-	cancel() // client/server context ends
+	cancel()
 	select {
 	case <-conn.closed:
 	case <-time.After(time.Second):
@@ -909,11 +859,6 @@ func TestServeClosesConnOnReadEnd(t *testing.T) {
 	}
 }
 
-// Each connection opening the same pane gets its OWN attach PTY — that is the
-// per-client model: the runtime replays its init handshake + full repaint to every
-// fresh attach, so no client depends on bytes another client consumed. Output
-// pushed to one client's PTY must reach only that client, and closing one
-// client's terminal must not touch the other's PTY.
 func TestServePerClientAttachIsolation(t *testing.T) {
 	p1, p2 := newFakePTY(), newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{p1, p2}}
@@ -935,8 +880,6 @@ func TestServePerClientAttachIsolation(t *testing.T) {
 	recv(t, connB, chTerminal, msgOpened, time.Second)
 	eventually(t, time.Second, func() bool { return sp.calls() == 2 })
 
-	// The runtime fans output out per attach; here each fake PTY stands in for one
-	// attach process, so its bytes must reach exactly its own connection.
 	p1.push([]byte("for-A"))
 	data := recv(t, connA, chTerminal, msgData, time.Second)
 	got, _ := base64.StdEncoding.DecodeString(data.Data)
@@ -949,7 +892,6 @@ func TestServePerClientAttachIsolation(t *testing.T) {
 	default:
 	}
 
-	// Closing A's terminal detaches A only: B's PTY stays live.
 	connA.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
 	eventually(t, time.Second, func() bool {
 		select {
@@ -966,8 +908,6 @@ func TestServePerClientAttachIsolation(t *testing.T) {
 	}
 }
 
-// The open frame carries the client's grid; the PTY must start at that size
-// rather than the kernel default, even though the attach is asynchronous.
 func TestServeOpenAppliesInitialSize(t *testing.T) {
 	pty := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{pty}}
@@ -1015,11 +955,6 @@ func TestServeDeduplicatesResizeUnlessExplicitlyForced(t *testing.T) {
 	eventually(t, time.Second, func() bool { return len(pty.resizeCalls()) == 2 })
 }
 
-// A primary and a secondary client share one PTY: the primary drives the grid,
-// the secondary is told the primary's grid (not its own) and its attach Stream is
-// sized to it, and when the primary leaves the grid falls back to the secondary.
-// This is the multi-client sizing that keeps a phone from stripping down the
-// desktop while keeping both clients' grids matched to the single PTY.
 func TestServePrimaryDrivesSharedGridSecondaryFollows(t *testing.T) {
 	p1, p2 := newFakePTY(), newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{p1, p2}}
@@ -1033,14 +968,11 @@ func TestServePrimaryDrivesSharedGridSecondaryFollows(t *testing.T) {
 	go mgr.Serve(ctx, primary)
 	go mgr.Serve(ctx, secondary)
 
-	// Primary opens at 120x40 and drives the shared grid.
 	primary.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen, Cols: 120, Rows: 40}
 	if r := recv(t, primary, chTerminal, msgResize, time.Second); r.Cols != 120 || r.Rows != 40 {
 		t.Fatalf("primary grid = %dx%d, want 120x40", r.Cols, r.Rows)
 	}
 
-	// Secondary opens smaller; it must be told the primary's grid, not its own,
-	// and its own attach Stream must start at the primary's grid (not 55x48).
 	secondary.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen, Cols: 55, Rows: 48, Role: roleSecondary}
 	if r := recv(t, secondary, chTerminal, msgResize, time.Second); r.Cols != 120 || r.Rows != 40 {
 		t.Fatalf("secondary follows grid = %dx%d, want the primary's 120x40", r.Cols, r.Rows)
@@ -1054,8 +986,6 @@ func TestServePrimaryDrivesSharedGridSecondaryFollows(t *testing.T) {
 	})
 	primaryResizeCount, secondaryResizeCount := len(p1.resizeCalls()), len(p2.resizeCalls())
 
-	// A secondary may change its local viewport, but while the primary still
-	// drives the same 120x40 authoritative grid that must not re-signal either PTY.
 	secondary.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgResize, Cols: 60, Rows: 50}
 	secondary.in <- clientMsg{Ch: chSystem, Type: msgPing}
 	recv(t, secondary, chSystem, msgPong, time.Second)
@@ -1066,15 +996,12 @@ func TestServePrimaryDrivesSharedGridSecondaryFollows(t *testing.T) {
 		t.Fatalf("secondary resize calls under unchanged shared grid = %d, want %d", got, secondaryResizeCount)
 	}
 
-	// Primary leaves: the grid falls back to the secondary's own size.
 	primary.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
 	if r := recv(t, secondary, chTerminal, msgResize, 2*time.Second); r.Cols != 60 || r.Rows != 50 {
 		t.Fatalf("after primary left, grid = %dx%d, want the secondary's 60x50", r.Cols, r.Rows)
 	}
 }
 
-// Manager.Close must kill every live attach PTY: a PTY left open keeps its
-// attach process running and deadlocks daemon shutdown.
 func TestManagerCloseKillsLiveAttachments(t *testing.T) {
 	pty := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{pty}}
@@ -1098,8 +1025,6 @@ func TestManagerCloseKillsLiveAttachments(t *testing.T) {
 	}
 }
 
-// newFloodedConn returns a conn whose queue already holds more PTY output than
-// the watermark allows, so the next data frame must wait.
 func newFloodedConn(ctx context.Context, cancel context.CancelFunc) *connState {
 	c := &connState{
 		ctx:    ctx,
@@ -1111,8 +1036,6 @@ func newFloodedConn(ctx context.Context, cancel context.CancelFunc) *connState {
 	return c
 }
 
-// A flood must throttle its own PTY read loop, not tear the connection down:
-// cancelling here would kill every other pane on the same connection.
 func TestEnqueueDataBlocksUntilDrained(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1138,8 +1061,6 @@ func TestEnqueueDataBlocksUntilDrained(t *testing.T) {
 	}
 }
 
-// The CDC fan-out enqueues session frames on one goroutine shared by every
-// connection, so a flooded connection must never block or drop a control frame.
 func TestEnqueueControlFramesNeverWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1167,7 +1088,6 @@ func TestEnqueueControlFramesNeverWait(t *testing.T) {
 	}
 }
 
-// A blocked producer must not outlive its connection, or daemon shutdown hangs.
 func TestEnqueueDataUnblocksOnConnClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c := newFloodedConn(ctx, cancel)
@@ -1185,9 +1105,6 @@ func TestEnqueueDataUnblocksOnConnClose(t *testing.T) {
 	}
 }
 
-// A shell that starts on its first sized attach must still start when only a
-// secondary viewer (the phone) has reported a grid, including next to a primary
-// that attached without one (a desktop tab parked before it measured).
 func TestLargestGridFallsBackToSecondaryWhenNoPrimaryHasASize(t *testing.T) {
 	phone := &connState{}
 	parkedDesktop := &connState{}
@@ -1212,7 +1129,6 @@ func TestTerminalReportsAreNotInput(t *testing.T) {
 			t.Errorf("%q should be a terminal report", raw)
 		}
 	}
-	// Keys under the kitty keyboard protocol: Enter, and Ctrl+A.
 	for _, raw := range []string{"a", "\r", "\x1b[A", "hello\x1b[I", "\x03", "\x1b[13u", "\x1b[97;5u"} {
 		if terminalReports.MatchString(raw) {
 			t.Errorf("%q should count as input", raw)
@@ -1236,10 +1152,6 @@ func hasLastInput(mgr *Manager, id string) bool {
 	return ok
 }
 
-// Closing the last view of a live terminal keeps its input timestamp: Session
-// Manager's draft and idle proofs read it when nobody is viewing. An operator
-// who types a draft and switches tabs must not make an idle report that
-// predates the draft look like proof the composer is empty (#5691).
 func TestServeKeepsLastInputAtWhenTheLastViewerCloses(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -1270,8 +1182,6 @@ func TestServeKeepsLastInputAtWhenTheLastViewerCloses(t *testing.T) {
 	}
 }
 
-// Session Manager drops a terminal's input timestamp once it has destroyed the
-// runtime behind it, so the map does not grow for the daemon's lifetime (#5691).
 func TestForgetTerminalInputDropsTheTimestamp(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -1310,9 +1220,6 @@ func TestForgetTerminalInputIgnoresUnknownTerminals(t *testing.T) {
 	}
 }
 
-// ForgetTerminalInput takes the terminal's write fence first, so a keystroke
-// write already in flight finishes (and records its time) before the entry is
-// dropped, instead of re-adding it right after.
 func TestForgetTerminalInputWaitsForTheWriteFence(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -1340,7 +1247,6 @@ func TestForgetTerminalInputWaitsForTheWriteFence(t *testing.T) {
 	}
 }
 
-// Run with -race: forgetting must not race keystroke writes or readers.
 func TestForgetTerminalInputIsSafeAlongsideInputAndReaders(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -1378,8 +1284,6 @@ func forgetInput(t *testing.T, mgr *Manager, id string) {
 	}
 }
 
-// Session Manager tears a runtime down under a deadline, so forgetting its
-// input must give up when the context ends instead of waiting out a held fence.
 func TestForgetTerminalInputStopsWaitingForTheFenceWhenTheContextEnds(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -1412,8 +1316,6 @@ func TestForgetTerminalInputStopsWaitingForTheFenceWhenTheContextEnds(t *testing
 	}
 }
 
-// A view still open on a destroyed runtime must not bring its input timestamp
-// back: keystrokes written after the forget are dropped, not recorded (#5691).
 func TestForgetTerminalInputDropsLaterInputForTheDestroyedRuntime(t *testing.T) {
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
@@ -1426,8 +1328,6 @@ func TestForgetTerminalInputDropsLaterInputForTheDestroyedRuntime(t *testing.T) 
 	typeInto(t, mgr, conn, "t1")
 	forgetInput(t, mgr, "t1")
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("late"))}
-	// The close is queued behind the keystroke, so once the attachment is gone
-	// the writer has handled it.
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
 	eventually(t, time.Second, func() bool {
 		mgr.mu.Lock()
@@ -1442,8 +1342,6 @@ func TestForgetTerminalInputDropsLaterInputForTheDestroyedRuntime(t *testing.T) 
 	}
 }
 
-// A write that never reaches the pane (the attachment already exited) is not
-// input acceptance, so it must not record a timestamp.
 func TestWriteInputDoesNotRecordInputRefusedByAnExitedAttachment(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -1459,8 +1357,6 @@ func TestWriteInputDoesNotRecordInputRefusedByAnExitedAttachment(t *testing.T) {
 	}
 }
 
-// Keystrokes queued behind a held fence must not record a timestamp once a
-// forget wins the fence, whichever of them takes it first.
 func TestForgetTerminalInputInvalidatesInputQueuedBehindTheFence(t *testing.T) {
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
@@ -1495,9 +1391,6 @@ func TestForgetTerminalInputInvalidatesInputQueuedBehindTheFence(t *testing.T) {
 	}
 }
 
-// A forgotten view does not re-attach once its pane goes away, even if a
-// runtime with the same id is live again: it exits, and the client reopens a
-// fresh view whose input is recorded as usual.
 func TestForgottenViewExitsInsteadOfReattaching(t *testing.T) {
 	first, second := newFakePTY(), newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{first, second}}}, nil, testLogger(), WithHeartbeat(0))

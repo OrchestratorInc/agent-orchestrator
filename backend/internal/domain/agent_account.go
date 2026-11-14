@@ -5,21 +5,15 @@ import (
 	"time"
 )
 
-// AgentAccountProvider names a provider whose subscription accounts AO can
-// launch agents with. An account is a config folder of the provider's own CLI.
 type AgentAccountProvider string
 
-// Account providers and the harness each one launches.
 const (
 	AgentAccountProviderClaude AgentAccountProvider = "claude"
 	AgentAccountProviderCodex  AgentAccountProvider = "codex"
 )
 
-// AgentAccountProviders lists every provider in display order.
 var AgentAccountProviders = []AgentAccountProvider{AgentAccountProviderClaude, AgentAccountProviderCodex}
 
-// AgentAccountProviderFor reports the account provider behind a harness, or
-// false when the harness has no accounts.
 func AgentAccountProviderFor(h AgentHarness) (AgentAccountProvider, bool) {
 	switch h {
 	case HarnessClaudeCode:
@@ -30,13 +24,8 @@ func AgentAccountProviderFor(h AgentHarness) (AgentAccountProvider, bool) {
 	return "", false
 }
 
-// DeviceAgentAccountID is the id of a provider's "This computer" account: the
-// login the computer's own CLI uses, launched with its config folder untouched.
 func DeviceAgentAccountID(p AgentAccountProvider) string { return "device-" + string(p) }
 
-// AgentAccount is one subscription login AO can launch a provider's CLI with.
-// Home is the CLI config folder (CLAUDE_CONFIG_DIR or CODEX_HOME); it is empty
-// for the device account, whose folder is the CLI's own default.
 type AgentAccount struct {
 	ID        string
 	Provider  AgentAccountProvider
@@ -46,37 +35,23 @@ type AgentAccount struct {
 	CreatedAt time.Time
 }
 
-// Device reports the "This computer" account.
 func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
 
-// AgentAccountProblemKind says why an account's identity or limits could not
-// be read, so the app can say it plainly instead of showing the CLI's error.
 type AgentAccountProblemKind string
 
-// Problem kinds. Slow, rate limited and unavailable pass on their own; a
-// missing CLI and another login need the user.
 const (
-	// AgentAccountProblemSlow: the CLI did not answer in time.
-	AgentAccountProblemSlow AgentAccountProblemKind = "slow"
-	// AgentAccountProblemRateLimited: the provider refused the check for now.
+	AgentAccountProblemSlow        AgentAccountProblemKind = "slow"
 	AgentAccountProblemRateLimited AgentAccountProblemKind = "rate_limited"
-	// AgentAccountProblemUnavailable: any other failed check.
 	AgentAccountProblemUnavailable AgentAccountProblemKind = "unavailable"
-	// AgentAccountProblemCLIMissing: the provider's CLI is not installed.
-	AgentAccountProblemCLIMissing AgentAccountProblemKind = "cli_missing"
-	// AgentAccountProblemOtherLogin: the folder is signed in as another login.
-	AgentAccountProblemOtherLogin AgentAccountProblemKind = "other_login"
-	// AgentAccountProblemOtherOrg: the folder is signed in to another organization.
-	AgentAccountProblemOtherOrg AgentAccountProblemKind = "other_org"
+	AgentAccountProblemCLIMissing  AgentAccountProblemKind = "cli_missing"
+	AgentAccountProblemOtherLogin  AgentAccountProblemKind = "other_login"
+	AgentAccountProblemOtherOrg    AgentAccountProblemKind = "other_org"
 )
 
-// Transient reports a problem the next check may not have.
 func (k AgentAccountProblemKind) Transient() bool {
 	return k == AgentAccountProblemSlow || k == AgentAccountProblemRateLimited || k == AgentAccountProblemUnavailable
 }
 
-// AgentAccountLimitWindow is one usage meter of an account, such as the
-// five-hour session or the weekly limit.
 type AgentAccountLimitWindow struct {
 	ID              string     `json:"id"`
 	Label           string     `json:"label"`
@@ -86,7 +61,6 @@ type AgentAccountLimitWindow struct {
 	Scope           string     `json:"-"`
 }
 
-// AgentLimitReading is one limit window's value as read at one moment.
 type AgentLimitReading struct {
 	AccountID       string
 	Provider        AgentAccountProvider
@@ -100,26 +74,16 @@ type AgentLimitReading struct {
 	ReadAt          time.Time
 }
 
-// AgentAccountLimits is what the provider's CLI reports about an account's
-// subscription limits. AO never reads the account's token to get it.
 type AgentAccountLimits struct {
-	Windows []AgentAccountLimitWindow `json:"windows"`
-	// AutoResumeResetsAt is present only when native rolling limits identify an
-	// unambiguous future deadline. Nil does not establish available capacity.
-	AutoResumeResetsAt *time.Time `json:"-"`
-	// ReachedScopes are the meter scopes the provider reports as exhausted.
-	ReachedScopes []string `json:"-"`
-	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
-	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
-	// ResetCredits counts Codex usage-limit resets the account can spend.
-	ResetCredits *int64 `json:"resetCredits,omitempty" minimum:"0"`
-	// Activity is the provider's own count of the account's use everywhere,
-	// not only in AO. Codex reports it; Claude does not.
-	Activity  *AgentAccountActivity `json:"activity,omitempty"`
-	FetchedAt time.Time             `json:"fetchedAt"`
+	Windows            []AgentAccountLimitWindow `json:"windows"`
+	AutoResumeResetsAt *time.Time                `json:"-"`
+	ReachedScopes      []string                  `json:"-"`
+	ExtraUsage         *AgentAccountExtraUsage   `json:"extraUsage,omitempty"`
+	ResetCredits       *int64                    `json:"resetCredits,omitempty" minimum:"0"`
+	Activity           *AgentAccountActivity     `json:"activity,omitempty"`
+	FetchedAt          time.Time                 `json:"fetchedAt"`
 }
 
-// HandoffHeadroom reports the room left in the meters a request for model draws on.
 func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string) (float64, bool) {
 	model = normalizeLimitScope(model)
 	fullest, relevant := 0.0, false
@@ -149,7 +113,6 @@ func normalizeLimitScope(s string) string {
 	return strings.NewReplacer(" ", "-", "_", "-").Replace(strings.ToLower(strings.TrimSpace(s)))
 }
 
-// AgentAccountActivity is the provider's own record of an account's use.
 type AgentAccountActivity struct {
 	LatestDayTokens    *int64  `json:"latestDayTokens,omitempty"`
 	LatestDay          *string `json:"latestDay,omitempty"`
@@ -159,8 +122,6 @@ type AgentAccountActivity struct {
 	CurrentStreakDays  *int64  `json:"currentStreakDays,omitempty"`
 }
 
-// AgentAccountExtraUsage is spend beyond the plan's included usage, in major
-// units of Currency.
 type AgentAccountExtraUsage struct {
 	Enabled      bool     `json:"enabled"`
 	UsedCredits  *float64 `json:"usedCredits,omitempty"`
@@ -168,8 +129,6 @@ type AgentAccountExtraUsage struct {
 	Currency     string   `json:"currency,omitempty"`
 }
 
-// AgentAccountUsage is one account's model usage on one UTC day, from AO's own
-// reading of the session logs.
 type AgentAccountUsage struct {
 	AccountID         string
 	Day               string
@@ -180,12 +139,8 @@ type AgentAccountUsage struct {
 	CostNanos         int64
 }
 
-// AgentAccountIdentityCheck is who a config folder is signed in to, as the
-// provider's CLI reports it.
 type AgentAccountIdentityCheck struct {
-	// SignedIn is a subscription sign-in, the only kind an account can be.
 	SignedIn bool
-	// LoggedIn is any sign-in the CLI can launch with, an API key included.
 	LoggedIn bool
 	Email    string
 	Plan     string

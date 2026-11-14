@@ -18,8 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// claude-agent-acp 0.70 returns terminal quota failures as end_turn plus AIR metadata:
-// https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.70.0/docs/session-failure-extension.md
 const claudeTimedQuotaResponse = `{"stopReason":"end_turn","_meta":{"jetbrains":{"air":{"version":1,"sessionFailure":{"id":"native-prompt:error","revision":1,"category":"limit","severity":"error","title":"You've hit your session limit · resets 3:31pm (Asia/Calcutta)","actions":[]}}}}}`
 
 const claudeWeeklyQuotaResponse = `{"stopReason":"end_turn","_meta":{"jetbrains":{"air":{"version":1,"sessionFailure":{"id":"native-prompt:error","revision":1,"category":"limit","severity":"error","title":"You've hit your weekly limit · resets Nov 14, 5am (Asia/Calcutta)","actions":[]}}}}}`
@@ -84,7 +82,6 @@ func TestClaudeDriverNativeQuotaWireAndRecovery(t *testing.T) {
 			t.Setenv("AO_CLAUDE_ACP_COMMAND", executable)
 			t.Setenv("AO_TEST_CLAUDE_USAGE_LIMIT_RESPONSE", tc.response)
 			t.Setenv("AO_TEST_CLAUDE_USAGE_LIMIT_RATE_LIMIT", tc.rateLimit)
-			// Avoid model discovery or any call to the installed Claude executable.
 			t.Setenv("CLAUDE_MODEL_CONFIG", `{"availableModels":["fixture-model"]}`)
 			var authRejected atomic.Int32
 			driver := New(quotaFixtureClaudePlugin{binary: executable}, nil, func() { authRejected.Add(1) })
@@ -166,7 +163,6 @@ func TestClaudeDriverNativeQuotaWireAndRecovery(t *testing.T) {
 	}
 }
 
-// serveClaudeUsageLimitFixture is a child-process ACP peer; it never launches Claude.
 func serveClaudeUsageLimitFixture(firstResponse string) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)

@@ -39,19 +39,11 @@ import { CueRunMenu } from "./chat/CueRunMenu";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { SessionOwnerTag } from "./SessionOwnerTag";
 
-// The action cluster a session's tab strip hosts: open-in-editor, cues, and
-// the orchestrator / board / new-task launchers. The page frame itself is
-// SessionTabsTopbar (PageTopbar.tsx); this renders only the actions, so it has
-// no frame of its own. Orchestrators open the Kanban board and workers open
-// their orchestrator.
 type SessionTopbarRoute = { hostId?: string; projectId?: string; sessionId?: string };
 type SessionTopbarActionsProps = {
 	sessionAction?: ReactNode;
 	compactActions?: boolean;
 	startingOrchestrator?: boolean;
-	/** The session this cluster belongs to. A session view passes its own so a
-	 *  switch still rendering in the background never pairs the old view with
-	 *  the new route's actions. Defaults to the route. */
 	route?: SessionTopbarRoute;
 };
 
@@ -72,13 +64,10 @@ export function SessionTopbarActions({
 	const workspaceScope = workspaceQuery.data;
 	const session = startingOrchestrator ? undefined : workspaceScope?.session;
 	const isOrchestrator = startingOrchestrator || (session ? isOrchestratorSession(session) : false);
-	// The session's workspace wins over the route param so the cross-project
-	// /sessions/$sessionId route still resolves its project.
 	const projectId = session?.workspaceId ?? params.projectId;
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
 	const orchestrator = workspaceScope?.orchestrator;
-	// A scratchpad session, local or a Cloud standalone agent, has no orchestrator or board.
 	const supportsProjectActions = !isScratchpadWorkspace(project) && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
 		projectId: supportsProjectActions ? projectId : undefined,
@@ -95,10 +84,6 @@ export function SessionTopbarActions({
 		orchestrator: supportsProjectActions ? orchestrator : undefined,
 		viewing: isOrchestrator,
 	});
-	// ⌘⇧O / Ctrl+Shift+G does what the Orchestrator button does for the
-	// project in scope: open, resume, or spawn. The board registers the same
-	// shortcut, but a session page and the board are never mounted together,
-	// so it fires once. No-op without a project (root board).
 	useSessionShortcut("open-orchestrator", () => {
 		if (!supportsProjectActions || startingOrchestrator) return;
 		openOrchestrator();
@@ -115,11 +100,6 @@ export function SessionTopbarActions({
 	};
 	const archiveTarget = !isOrchestrator && session && canArchiveWorkerSession(session) ? session : undefined;
 
-	// Reading order, left to right. Workers: Orchestrator (quiet, labeled), then
-	// the editor and cue icons; no emphasized action, the session is the focus.
-	// Orchestrators: the utility icons, Board, then New task, the one emphasized
-	// action. Archive lives in the inspector's Summary and the sidebar menu;
-	// here only its ⌘⇧A shortcut stays.
 	return (
 		<PageTopbarActions
 			data-compact-actions={compactActions ? "true" : "false"}
@@ -127,7 +107,6 @@ export function SessionTopbarActions({
 		>
 			{session ? <SessionOwnerTag session={session} /> : null}
 			{isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
-			{/* A worker's way back to its orchestrator leads the row. */}
 			{!isOrchestrator && supportsProjectActions ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
@@ -155,10 +134,6 @@ export function SessionTopbarActions({
 					{sessionAction}
 				</div>
 			) : null}
-			{/* The session's own controls take their space while it starts, so the
-			    cluster keeps its width and nothing slides when the session lands.
-			    Each placeholder follows its real control's rule below: no editor on
-			    a remote host or cloud project, no cues on a remote host. */}
 			{startingOrchestrator && !hostId ? (
 				<>
 					{project?.kind !== CLOUD_PROJECT_KIND ? <div aria-hidden="true" className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md before:hidden`} style={noDragStyle}>
@@ -176,13 +151,7 @@ export function SessionTopbarActions({
 					</span>
 				</>
 			) : null}
-			{/* Cloud sessions have no local workspace to hand off to an editor: the
-			    local daemon has never heard of them, so querying it just surfaces
-			    its 404 as a confusing "Unknown session" error (see workspace.ts's
-			    `kind` doc). */}
 			{session && !hostId && project?.kind !== CLOUD_PROJECT_KIND ? (
-				// Keyed per session so a stale launch error does not carry over
-				// when switching sessions.
 				<TopbarOpenEditorButton
 					key={`open-workspace-${session.id}`}
 					sessionId={session.id}
@@ -193,8 +162,6 @@ export function SessionTopbarActions({
 					telemetryView={view}
 				/>
 			) : null}
-			{/* A bring-your-own Coder session names the workspace it runs in, so
-			    the customer can find it in their own Coder. */}
 			{session?.cloud?.coderWorkspaceUrl ? (
 				<CoderWorkspaceTopbarButton
 					key={`coder-workspace-${session.id}`}
@@ -202,7 +169,6 @@ export function SessionTopbarActions({
 					style={noDragStyle}
 				/>
 			) : null}
-			{/* Cues run from the topbar into the selected session. */}
 			{session && (supportsLocalCues || (!hostId && session.cloud)) ? (
 				<span className="inline-flex" style={noDragStyle}>
 					<CueRunMenu
@@ -275,19 +241,11 @@ export function SessionTopbarActions({
 					</Tooltip>
 				</>
 			) : null}
-			{/* Separates the session's actions from the inspector and global
-			    controls that follow in the same row. */}
 			{session || startingOrchestrator ? <span aria-hidden="true" className="topbar-divider" data-testid="session-actions-divider" /> : null}
 		</PageTopbarActions>
 	);
 }
 
-// The archive confirmation behind ⌘⇧A. The visible Archive controls live in the
-// inspector's Summary and the sidebar's session menu; the top bar keeps only
-// the shortcut. Confirming closes the dialog and returns to the project's
-// orchestrator while the daemon finishes, where ProjectTerminationFeedback
-// reports progress. Mutation-cache state is filtered by worker ID so rapid
-// route switches never carry another worker's error into the current topbar.
 export function SessionArchiveShortcut({
 	session,
 	orchestratorId,

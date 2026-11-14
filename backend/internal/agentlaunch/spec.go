@@ -1,4 +1,3 @@
-// Package agentlaunch persists the exact argv a runtime should execute.
 package agentlaunch
 
 import (
@@ -7,17 +6,14 @@ import (
 	"os"
 )
 
-// EnvSpecPath is the environment variable that holds the path to the launch spec file.
 const EnvSpecPath = "AO_LAUNCH_SPEC"
 
-// Spec describes the agent process the launcher trampoline should exec.
 type Spec struct {
 	WorkspacePath string   `json:"workspacePath"`
 	Argv          []string `json:"argv"`
 	FallbackArgv  []string `json:"fallbackArgv,omitempty"`
 }
 
-// WriteTemp serialises spec to a temporary JSON file and returns its path.
 func WriteTemp(spec Spec) (string, error) {
 	file, err := os.CreateTemp(os.TempDir(), "ao-launch-*.json")
 	if err != nil {
@@ -38,7 +34,6 @@ func WriteTemp(spec Spec) (string, error) {
 	return path, nil
 }
 
-// ReadAndRemove reads and deletes the spec file at path, returning its contents.
 func ReadAndRemove(path string) (Spec, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

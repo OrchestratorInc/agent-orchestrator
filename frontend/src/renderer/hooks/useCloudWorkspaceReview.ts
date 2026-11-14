@@ -14,11 +14,6 @@ import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 export const cloudWorkspaceReviewQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
 	["cloud-workspace-review", baseUrl, orgId, sessionId] as const;
 
-/**
- * The cache key prefix of one repository of a session: the session's own key
- * for the main repository, with the sibling's name added for a scoped client
- * (withWorkspaceRepository), so invalidating the session covers every repository.
- */
 function repositoryKey(client: CloudCpClient, baseUrl: string, orgId: string, sessionId: string) {
 	const repository = workspaceRepositoryOf(client);
 	const key = cloudWorkspaceReviewQueryKey(baseUrl, orgId, sessionId);

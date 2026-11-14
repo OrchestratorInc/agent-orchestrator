@@ -6,19 +6,6 @@ import { Checkbox } from "./ui/checkbox";
 
 export type SessionArchiveChoice = { deleteArtifacts: boolean };
 
-// Archiving is reversible — the session moves to the board's Archive section and
-// can be restored from there — so this reuses the shared confirm modal without
-// the destructive red fill rather than the old inline popover, which read like a
-// delete prompt. Callers keep driving `open` themselves: the trigger is rendered
-// as-is so repeated taps re-open the confirm instead of toggling it shut.
-//
-// Put a tooltip inside `trigger`, never around this component: a portal stays a
-// React child, so the confirm's focus would open the tooltip above it, and the
-// tooltip would take Escape.
-//
-// A session with artifact files also offers an unchecked "Delete N
-// artifacts" box. Checking it turns Confirm destructive, since the delete
-// cannot be undone and a restored session comes back without the files.
 export function SessionArchiveDialog({
 	onConfirm,
 	onOpenChange,
@@ -30,18 +17,14 @@ export function SessionArchiveDialog({
 	onOpenChange: (open: boolean) => void;
 	open: boolean;
 	session?: WorkspaceSession;
-	/** Omitted when a shortcut, not a visible control, opens the confirm. */
 	trigger?: ReactElement;
 }) {
 	const { t } = useTranslation();
 	const checkboxId = useId();
 	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
-	// Every open starts from keeping the artifacts.
 	useEffect(() => {
 		if (open) setDeleteArtifacts(false);
 	}, [open]);
-	// A cloud session's teardown is restorable too — the control plane keeps its
-	// conversation and work so it can be re-provisioned later.
 	const isCloud = session?.cloud !== undefined;
 	const body = isCloud ? t("archive.bodyCloud") : t("archive.body");
 	const artifactCount = session ? sessionArtifacts(session).length : 0;

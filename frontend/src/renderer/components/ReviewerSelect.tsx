@@ -87,9 +87,6 @@ export function ReviewerSelect({
 	const reviewerAriaLabel = ariaLabel ?? t("settings.project.defaultReviewer");
 	const queryClient = useQueryClient();
 	const [menuOpen, setMenuOpen] = useState(false);
-	// Until the daemon's catalog arrives these entries carry the whole menu, so
-	// label them the way the catalog would rather than printing bare ids: without
-	// this the same row reads "claude-code" now and "Claude Code" a moment later.
 	const fallbackAgents: AgentInfo[] = [...KNOWN_REVIEWER_HARNESS_IDS].map(
 		(id) => unknownAgentReadiness(id, agentLabel(id)),
 	);
@@ -127,7 +124,6 @@ export function ReviewerSelect({
 			void queryClient.prefetchQuery(agentModelsQueryOptions(harness, menuProjectID, hostId));
 		}
 	}, [defaultHarness, hostId, menuOpen, menuProjectID, queryClient, selectableOptions]);
-	// An unidentified model is left off the trigger rather than labelled.
 	const selectedModelLabel = modelOrModeLabel(triggerCatalog.data, model, mode, "");
 	const triggerLabel = [value ? agentLabel(value) : defaultHarnessLabel, harnessOnly ? null : selectedModelLabel]
 		.filter(Boolean)

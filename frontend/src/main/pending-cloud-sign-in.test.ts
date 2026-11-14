@@ -12,7 +12,6 @@ describe("the pending cloud sign-in", () => {
 	it("hands a sign-in's context over once, whenever it is taken", () => {
 		const pending = createPendingCloudSignIn();
 		pending.note(account("user_1"), { webDistinctId: "web-1" });
-		// No window was listening yet: a token refresh comes and goes first.
 		pending.note(account("user_1"));
 		expect(pending.take()).toEqual({ account: account("user_1"), signIn: { webDistinctId: "web-1" } });
 		expect(pending.take()).toBeNull();

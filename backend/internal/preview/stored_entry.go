@@ -12,26 +12,18 @@ import (
 
 const artifactEntryPrefix = "__ao_artifacts__"
 
-// StoredEntryScope identifies which session-owned root a stored preview target
-// is resolved against.
 type StoredEntryScope string
 
 const (
-	// StoredEntryScopeWorkspace resolves the entry under the session workspace.
 	StoredEntryScopeWorkspace StoredEntryScope = "workspace"
-	// StoredEntryScopeArtifact resolves the entry under the session artifact directory.
-	StoredEntryScopeArtifact StoredEntryScope = "artifact"
+	StoredEntryScopeArtifact  StoredEntryScope = "artifact"
 )
 
-// StoredEntry is a normalized persisted preview entry plus the root it belongs
-// to.
 type StoredEntry struct {
 	Scope StoredEntryScope
 	Path  string
 }
 
-// ArtifactEntryPath encodes an artifact-relative path as a stored preview
-// entry.
 func ArtifactEntryPath(rel string) (string, bool) {
 	clean, ok := CleanWorkspacePath(rel)
 	if !ok {
@@ -40,8 +32,6 @@ func ArtifactEntryPath(rel string) (string, bool) {
 	return path.Join(artifactEntryPrefix, clean), true
 }
 
-// ArtifactEntryRelative decodes an artifact-relative path from a stored preview
-// entry.
 func ArtifactEntryRelative(raw string) (string, bool) {
 	clean, ok := CleanWorkspacePath(raw)
 	if !ok || clean == artifactEntryPrefix {
@@ -54,10 +44,7 @@ func ArtifactEntryRelative(raw string) (string, bool) {
 	return strings.TrimPrefix(clean, prefix), true
 }
 
-// StoredEntryFromPreview extracts a stored preview entry and its source scope.
 func StoredEntryFromPreview(raw string, id domain.SessionID) (StoredEntry, bool) {
-	// Artifact origins carry scope in the host, not in the path. Resolve them
-	// before the legacy workspace/path-marker formats below.
 	if parsed, err := url.Parse(raw); err == nil {
 		if originID, artifact := SessionIDFromArtifactHost(parsed.Host); artifact {
 			if originID != id {
@@ -77,9 +64,6 @@ func StoredEntryFromPreview(raw string, id domain.SessionID) (StoredEntry, bool)
 	return StoredEntry{Scope: StoredEntryScopeWorkspace, Path: entry}, true
 }
 
-// StoredWorkspaceEntry extracts a workspace-relative entry from every preview
-// format persisted by released versions: isolated-origin URLs, legacy API
-// URLs, and plain relative paths.
 func StoredWorkspaceEntry(raw string, id domain.SessionID) (string, bool) {
 	entry, ok := StoredEntryFromPreview(raw, id)
 	if !ok || entry.Scope != StoredEntryScopeWorkspace {

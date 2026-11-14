@@ -11,9 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// GetDisplayPRFactsForSession returns the PR snapshot that should represent a
-// session in derived display status: active PRs first, otherwise the newest
-// historical PR. ok=false means the session has no associated PRs.
 func (s *Store) GetDisplayPRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, bool, error) {
 	r, err := s.qr.GetDisplayPRFactsBySession(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -25,9 +22,6 @@ func (s *Store) GetDisplayPRFactsForSession(ctx context.Context, id domain.Sessi
 	return prFactsFromGen(r), true, nil
 }
 
-// ListPRFactsForSession returns the PR snapshot for every PR a session owns
-// (open, merged, and closed), newest first. The status aggregator filters and
-// builds stacks from these; an empty slice means the session has no PRs.
 func (s *Store) ListPRFactsForSession(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error) {
 	rows, err := s.qr.ListPRFactsBySession(ctx, id)
 	if err != nil {
@@ -40,9 +34,6 @@ func (s *Store) ListPRFactsForSession(ctx context.Context, id domain.SessionID) 
 	return out, nil
 }
 
-// ListPRFactsForSessions batches ListPRFactsForSession for session-list reads.
-// It returns every requested session id in the map, using an empty slice when
-// a session owns no PRs.
 func (s *Store) ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
 	out := make(map[domain.SessionID][]domain.PRFacts, len(ids))
 	if len(ids) == 0 {

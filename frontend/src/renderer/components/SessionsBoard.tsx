@@ -67,7 +67,6 @@ import {
 } from "./SessionsBoardAdapters";
 
 type SessionsBoardProps = {
-	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
 	hostId?: string;
 };
@@ -82,9 +81,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const savedHost = hostId ? shell?.remoteHosts?.find((host) => host.hostId === hostId) : undefined;
 	const hostLabel = hostId ? labelForHost(hostId) ?? savedHost?.label ?? hostId : undefined;
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
-	// Lanes follow the daemon's delivery order: building -> validating ->
-	// in review -> ready. The middle two are one review-feedback loop, split by
-	// whose turn it is.
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
 	const localWorkspaceQuery = useWorkspaceQuery();
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
@@ -93,18 +89,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
 		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
-	// A Freestyle cloud project's orchestrator starts in place (see
-	// OrchestratorStartingChat); its session does not exist yet, so the
-	// project's provider decides, as the control plane's does.
-	// Only this machine's cloud projects start in place: a remote host's board
-	// never reads this machine's cloud settings (as useCloudCp below).
 	const localCloudBoard = !hostId && workspace?.kind === CLOUD_PROJECT_KIND;
 	const cloudProjects = useCloudProjectsQuery({ enabled: localCloudBoard });
 	const offering = useCloudOffering(localCloudBoard);
 	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
 	const startsInPlace = localCloudBoard && cloudProject !== undefined &&
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
-	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions)).filter((session) => !session.needsResume || isArchivedSession(session));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
@@ -120,9 +110,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		hostId,
 	});
 	const { isProjectRestarting, isProvisioning } = projectActions;
-	// A Freestyle cloud project just created starts its orchestrator on its own
-	// (only those are flagged, see CreateProjectFlow), so it opens on the
-	// orchestrator starting in place rather than on an empty board.
 	const autoStartFlagged = useUiStore((state) => !hostId && projectId !== undefined && state.autoStartOrchestratorProjectIds.has(projectId));
 	const autoStartPending = autoStartFlagged && !orchestrator;
 	const { openOrchestrator } = projectActions;
@@ -133,14 +120,11 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			return;
 		}
 		if (workspace?.kind !== CLOUD_PROJECT_KIND || !startsInPlace) return;
-		// Read the store, not this render: the flag is consumed exactly once.
 		const ui = useUiStore.getState();
 		if (!ui.autoStartOrchestratorProjectIds.has(projectId)) return;
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
-	// A Cloud standalone agent has no board: its one session is the agent.
-	// Arriving on its project (archiving it from Pinned) leaves for Home.
 	useEffect(() => {
 		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
 	}, [navigate, workspace?.standaloneAgent]);
@@ -156,20 +140,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
-	// Someone this project was shared with works through what was shared and
-	// the owner's orchestrator: they can't start tasks or an orchestrator
-	// here, so the board offers neither and doesn't ask them to.
 	const guest = Boolean(workspace?.shared);
-	// The archive itself is the shell's modal; the board only shows its count.
 	const archivedCount = sessions.filter(isArchivedSession).length;
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
-	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
 	const cloudBoard = !hostId && activeSessions.some((session) => Boolean(session.cloud));
 	const { userId: cloudUserId } = useCloudCp(cloudBoard);
-	// Share on a card, as the session header has it: only the session's own
-	// organization shares it, once WorkOS enables sharing for that organization,
-	// and a standalone agent shared with this person stays its owner's to share.
 	const shareOffering = useCloudOffering(cloudBoard);
 	const teams = useTeamsEnabled();
 	const sharingEnabled = cloudBoard && shareOffering.features?.includes(SHARE_FEATURE) === true;
@@ -179,7 +155,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		const owner = workspaces.find((candidate) => candidate.id === session.workspaceId);
 		return !(owner?.standaloneAgent && owner.shared);
 	};
-	// The card the share dialog is for, kept while it closes so its content stays put.
 	const [shareTarget, setShareTarget] = useState<WorkspaceSession | null>(null);
 	const [shareOpen, setShareOpen] = useState(false);
 	const shareTargetWorkspace = shareTarget ? workspaces.find((candidate) => candidate.id === shareTarget.workspaceId) : undefined;
@@ -201,15 +176,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const showProjectEmpty = hostId
 		? connected && remoteProjectQuery.isSuccess && Boolean(workspace) && liveSessions.length === 0
 		: presentation.showProjectEmpty;
-	// Memory and CPU monitoring is a developer tool: the light, the card chips
-	// and the window behind them only exist with Diagnostics on in Developer mode.
-	// They read this machine, so another machine's board shows none of them.
 	const diagnostics = useDiagnosticsEnabled();
-	// The light leads the board's actions, before the Task button, not in the archive bar.
 	const memoryLight = diagnostics && !hostId ? <AppMemoryIndicator /> : null;
-	// Per-session readings feed each card's resource chip. Chips are grey
-	// unless the machine is tight and the card is part of the fix (idle, or
-	// the single largest).
 	const sessionMemory = useSessionMemory(projectId, !hostId).data;
 	const memoryBySession = diagnostics ? sessionMemory : undefined;
 	const pressure = usePressureState(!hostId);
@@ -386,16 +354,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			</div>
 
 			{hasArchive ? (
-				// Even 4px gap to the divider and the panel's bottom and left edges; the
-				// 30px button puts its text on the same line as the sidebar's Sign in.
 				<div className="flex shrink-0 items-center border-t border-border p-1">
 					<Button
 						aria-haspopup="dialog"
 						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
-						// The shell's archive modal, the same one the sidebar and Cmd+K open.
 						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
-						// The xs button at 30px (no Button size is 30).
 						className="h-7.5 gap-1 px-2 text-xs"
 						size="none"
 						type="button"

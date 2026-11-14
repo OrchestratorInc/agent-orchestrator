@@ -171,8 +171,6 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 		t.Fatalf("response = %s, want the send's turn", rec.Body)
 	}
 
-	// Attachments go with the switch too, so no other switch can come between
-	// the two and take the message.
 	svc = &fakeConversationService{}
 	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
 	rec = route(svc, `{"targetHarness":"claude-code","message":{"text":"Inspect this image","clientMessageId":"image-1","attachments":[{"mimeType":"image/png","data":"`+png+`"}]}}`)
@@ -181,15 +179,12 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 		t.Fatalf("switch with an image = %d %s, sent %+v", rec.Code, rec.Body, svc.sent)
 	}
 
-	// A send that fails after the switch is flagged, so the client keeps the
-	// message as an unsent send rather than an unswitched one.
 	svc = &fakeConversationService{sendErr: ports.ErrSessionNotFound}
 	if rec = route(svc, withMessage); rec.Code != http.StatusNotFound || rec.Header().Get("X-AO-Provider-Switched") != "1" ||
 		rec.Header().Get("Access-Control-Expose-Headers") != "X-AO-Provider-Switched" {
 		t.Fatalf("failed send = %d header %q, want 404 marked switched", rec.Code, rec.Header().Get("X-AO-Provider-Switched"))
 	}
 
-	// A client that went away during the switch still gets its message sent.
 	svc = &fakeConversationService{}
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -198,13 +193,11 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 		t.Fatalf("after the client left: sent %+v with context error %v, want it sent", svc.sent, svc.sendCtxErr)
 	}
 
-	// A refused switch sends nothing and is not marked.
 	svc = &fakeConversationService{switchErr: &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "busy"}}
 	if rec = route(svc, withMessage); rec.Code != http.StatusConflict || rec.Header().Get("X-AO-Provider-Switched") != "" || svc.sent.Text != "" {
 		t.Fatalf("refused switch = %d, sent %+v", rec.Code, svc.sent)
 	}
 
-	// An empty message refuses the switch before it starts.
 	svc = &fakeConversationService{}
 	if rec = route(svc, `{"targetHarness":"codex","message":{"text":""}}`); rec.Code != http.StatusBadRequest || svc.switchRequest.TargetHarness != "" {
 		t.Fatalf("empty message = %d, switch request %+v", rec.Code, svc.switchRequest)

@@ -59,8 +59,6 @@ func readActiveManifest(t *testing.T, pointerPath string) reviewgateway.Manifest
 
 func TestExtensionRejectsCommandInjectionSurfaces(t *testing.T) {
 	text := string(extensionSource)
-	// The model never supplies a command line: the sole process helper receives
-	// only fixed executable names, and every subprocess receives an argv array.
 	runCall := regexp.MustCompile(`run\(pi,\s*([^,]+),`)
 	for _, match := range runCall.FindAllStringSubmatch(text, -1) {
 		if match[1] != `"git"` && match[1] != `"gh"` && match[1] != `"ao"` {

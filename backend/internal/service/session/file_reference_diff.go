@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Unchanged gaps occupy one segment regardless of how many rows the viewer expands.
 type capturedDiffSegment struct {
 	old, new, length, index int
 	kind                    byte
@@ -30,8 +29,6 @@ func capturedRevisionLines(revision WorkspaceFileRevision) []string {
 	return lines
 }
 
-// Complete Git patches describe every change, but omit unchanged gaps. Reconstruct
-// only their coordinates, not their row objects or another full-file diff.
 func capturedDiffSegments(patch string, oldCount, newCount int) ([]capturedDiffSegment, bool) {
 	var segments []capturedDiffSegment
 	oldNo, newNo, index := 1, 1, 0

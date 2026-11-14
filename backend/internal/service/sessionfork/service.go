@@ -1,8 +1,3 @@
-// Package sessionfork copies a session into a new session with its own
-// worktree, branch, files, and the agent's native memory of the conversation.
-//
-// A fork copies the session as one of its turns left it: the conversation up
-// to that turn, the files as they were then, and the agent's own memory.
 package sessionfork
 
 import (
@@ -21,7 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Refusal codes. The desktop shows Message as the disabled button's tooltip.
 const (
 	CodeOrchestrator     = "FORK_ORCHESTRATOR"
 	CodeWorkspaceProject = "FORK_WORKSPACE_PROJECT"
@@ -50,19 +44,14 @@ var refusalMessages = map[string]string{
 	CodeOlderTurn:        "This agent can fork only from its latest turn.",
 }
 
-// ErrDisabled means session forks are turned off for this service.
 var ErrDisabled = errors.New("session fork is not enabled")
 
-// ErrNotRepository is returned by Seeds when the workspace isn't in git.
 var ErrNotRepository = errors.New("workspace is not a git repository")
 
-// ErrSnapshotMissing means no file snapshot was saved for a turn.
 var ErrSnapshotMissing = errors.New("file snapshot missing")
 
-// ErrSessionNotFound means the source session doesn't exist.
 var ErrSessionNotFound = errors.New("session not found")
 
-// Refusal is a reason a session can't be forked right now.
 type Refusal struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -72,49 +61,30 @@ func (r *Refusal) Error() string { return r.Code + ": " + r.Message }
 
 func refuse(code string) *Refusal { return &Refusal{Code: code, Message: refusalMessages[code]} }
 
-// Source is what the agent layer knows about forking one session.
 type Source struct {
-	// LatestTurnID is the latest finished turn. Empty for terminal sessions.
-	LatestTurnID string
-	// Refusal is set when this agent can't fork this session.
-	Refusal     string
-	ContextMode domain.SessionForkContextMode
-	// AnyTurn is true when this agent can fork from any finished turn.
-	AnyTurn bool
-	// FilesSnapshotRef holds an older turn's files, saved for rollback.
+	LatestTurnID     string
+	Refusal          string
+	ContextMode      domain.SessionForkContextMode
+	AnyTurn          bool
 	FilesSnapshotRef string
-	// FilesAsOf is when that snapshot was taken; artifacts are copied as
-	// they were then.
-	FilesAsOf time.Time
-	// FilesTurnID is the turn that snapshot was taken for; its artifacts
-	// were kept under it as it started.
-	FilesTurnID string
-	// LimitAttachments, for an older turn, copies only AttachmentNames: the
-	// attachments the conversation had by that turn.
+	FilesAsOf        time.Time
+	FilesTurnID      string
 	LimitAttachments bool
 	AttachmentNames  []string
 	PrepareChat      func(ctx context.Context, target ports.ForkTarget) (string, error)
 	PrepareTerminal  func(ctx context.Context, target ports.ForkTarget) (ports.ForkTerminalLaunch, error)
-	// Handoff builds the text copy of the conversation a text-handoff fork's
-	// fresh agent starts with.
-	Handoff func(ctx context.Context, target ports.ForkTarget) (string, error)
-	// Freeze, when set, is called just before a fork captures the source's
-	// files, so what Handoff copies later matches them. Checking whether a
-	// session can be forked doesn't call it.
-	Freeze func(ctx context.Context)
+	Handoff          func(ctx context.Context, target ports.ForkTarget) (string, error)
+	Freeze           func(ctx context.Context)
 }
 
-// Sessions reads session records.
 type Sessions interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
-// Projects reads project records.
 type Projects interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
-// Lineage stores where forks came from.
 type Lineage interface {
 	RecordSessionFork(ctx context.Context, fork domain.SessionFork) error
 	GetSessionFork(ctx context.Context, forkID domain.SessionID) (domain.SessionFork, bool, error)
@@ -122,50 +92,35 @@ type Lineage interface {
 	ListSessionForks(ctx context.Context, sourceID domain.SessionID) ([]domain.SessionFork, error)
 }
 
-// PRs lists the pull requests a session owns.
 type PRs interface {
 	ListPRFactsForSession(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error)
 }
 
-// Requests finds the session an earlier request made.
 type Requests interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 }
 
-// Spawner creates sessions.
 type Spawner interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error)
 }
 
-// Sources asks the agent layer how a session can be forked.
 type Sources interface {
 	ForkSource(ctx context.Context, rec domain.SessionRecord, turnID string) (Source, error)
 }
 
-// Seeds captures the source's uncommitted and untracked files.
 type Seeds interface {
-	// Capture records the workspace's files under ref and returns HEAD.
 	Capture(ctx context.Context, workspace, ref string) (headSHA string, err error)
 	Delete(ctx context.Context, workspace, ref string) error
-	// SnapshotHead is the commit a saved file snapshot was taken on, or
-	// ErrSnapshotMissing.
 	SnapshotHead(ctx context.Context, workspace, ref string) (string, error)
 }
 
-// Accounts reads which provider account a session runs under.
 type Accounts interface {
 	SessionAccountID(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (string, error)
 }
 
-// Deps wires the service.
 type Deps struct {
-	// Accounts is optional. The fork runs under the source's account, whose
-	// store holds the agent's own copy of the conversation.
 	Accounts Accounts
-	// PRs is optional; it lists a fork's original's PRs, read-only.
-	PRs PRs
-	// Requests is optional; with it, a retried request returns the fork it
-	// made before the original is checked again.
+	PRs      PRs
 	Requests Requests
 	Enabled  bool
 	Sessions Sessions
@@ -177,17 +132,12 @@ type Deps struct {
 	Now      func() time.Time
 }
 
-// Service forks sessions.
 type Service struct {
-	deps Deps
-	// numbers holds the fork numbers taken by forks still being made, per
-	// root: a fork is recorded only once its spawn returns, so two forks
-	// started together would otherwise read the same next number.
+	deps      Deps
 	numbersMu sync.Mutex
 	numbers   map[domain.SessionID]map[int]bool
 }
 
-// New builds the service.
 func New(deps Deps) *Service {
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -195,35 +145,24 @@ func New(deps Deps) *Service {
 	return &Service{deps: deps, numbers: map[domain.SessionID]map[int]bool{}}
 }
 
-// Enabled reports whether session forks are on.
 func (s *Service) Enabled() bool { return s != nil && s.deps.Enabled }
 
-// Options says whether a session can be forked right now.
 type Options struct {
-	Allowed bool     `json:"allowed"`
-	Refusal *Refusal `json:"refusal,omitempty"`
-	// SuggestedName is what the fork will be called.
-	SuggestedName string `json:"suggestedName,omitempty"`
-	// AnyTurn is true when every finished turn can be forked, not just the
-	// latest.
-	AnyTurn bool `json:"anyTurn,omitempty"`
-	// ForkedFrom is set when this session is itself a fork.
-	ForkedFrom *Origin `json:"forkedFrom,omitempty"`
-	// Forks are the sessions forked from this one.
-	Forks []ForkSummary `json:"forks,omitempty"`
-	// SourcePRs are the original's pull requests, shown read-only in a fork.
-	SourcePRs []SourcePR `json:"sourcePRs,omitempty"`
+	Allowed       bool          `json:"allowed"`
+	Refusal       *Refusal      `json:"refusal,omitempty"`
+	SuggestedName string        `json:"suggestedName,omitempty"`
+	AnyTurn       bool          `json:"anyTurn,omitempty"`
+	ForkedFrom    *Origin       `json:"forkedFrom,omitempty"`
+	Forks         []ForkSummary `json:"forks,omitempty"`
+	SourcePRs     []SourcePR    `json:"sourcePRs,omitempty"`
 }
 
-// ForkSummary is one session forked from this one.
 type ForkSummary struct {
 	SessionID domain.SessionID `json:"sessionId"`
 	Title     string           `json:"title"`
-	// Exists is false once the fork has been deleted.
-	Exists bool `json:"exists"`
+	Exists    bool             `json:"exists"`
 }
 
-// SourcePR is one of a fork's original's pull requests.
 type SourcePR struct {
 	URL    string `json:"url"`
 	Number int    `json:"number"`
@@ -231,19 +170,14 @@ type SourcePR struct {
 	Closed bool   `json:"closed"`
 }
 
-// Origin is the session a fork was copied from.
 type Origin struct {
-	SessionID domain.SessionID `json:"sessionId"`
-	Title     string           `json:"title"`
-	TurnID    string           `json:"turnId,omitempty"`
-	// SourceExists is false once the original has been deleted.
-	SourceExists bool `json:"sourceExists"`
-	// TextHandoff is true when the fork's agent couldn't copy the original's
-	// conversation and was given it as text instead.
-	TextHandoff bool `json:"textHandoff,omitempty"`
+	SessionID    domain.SessionID `json:"sessionId"`
+	Title        string           `json:"title"`
+	TurnID       string           `json:"turnId,omitempty"`
+	SourceExists bool             `json:"sourceExists"`
+	TextHandoff  bool             `json:"textHandoff,omitempty"`
 }
 
-// Options reports whether the session can be forked, and why not.
 func (s *Service) Options(ctx context.Context, sourceID domain.SessionID) (Options, error) {
 	if !s.Enabled() {
 		return Options{}, ErrDisabled
@@ -265,7 +199,6 @@ func (s *Service) Options(ctx context.Context, sourceID domain.SessionID) (Optio
 	return links, nil
 }
 
-// links fills in where a session came from and what was forked from it.
 func (s *Service) links(ctx context.Context, id domain.SessionID) (Options, error) {
 	var out Options
 	origin, err := s.origin(ctx, id)
@@ -307,8 +240,6 @@ func (s *Service) origin(ctx context.Context, id domain.SessionID) (*Origin, err
 	if err != nil {
 		return nil, err
 	}
-	// The original's current name; the one stored at fork time is kept for
-	// when it has been deleted.
 	title := fork.SourceTitle
 	if exists {
 		title = Title(source)
@@ -319,20 +250,14 @@ func (s *Service) origin(ctx context.Context, id domain.SessionID) (*Origin, err
 	}, nil
 }
 
-// Fork forks the session at its latest finished turn. The same
-// clientRequestID returns the same session.
 func (s *Service) Fork(ctx context.Context, sourceID domain.SessionID, clientRequestID string) (domain.SessionRecord, error) {
 	return s.ForkTurn(ctx, sourceID, clientRequestID, "")
 }
 
-// ForkTurn forks the session as it was at turnID, or at its latest finished
-// turn when turnID is empty.
 func (s *Service) ForkTurn(ctx context.Context, sourceID domain.SessionID, clientRequestID, turnID string) (domain.SessionRecord, error) {
 	if !s.Enabled() {
 		return domain.SessionRecord{}, ErrDisabled
 	}
-	// A retry returns the fork the first request made, before the original
-	// is checked: by now it may be busy, archived, or gone.
 	if rec, found, err := s.replay(ctx, sourceID, clientRequestID); err != nil || found {
 		return rec, err
 	}
@@ -343,10 +268,8 @@ func (s *Service) ForkTurn(ctx context.Context, sourceID domain.SessionID, clien
 	release := s.takeNumber(&plan)
 	defer release()
 	cfg := ports.SpawnConfig{
-		ProjectID:       plan.source.ProjectID,
-		ClientRequestID: clientRequestID,
-		// Spawn replays a request id only with the same hash; a retry forks
-		// the same source.
+		ProjectID:         plan.source.ProjectID,
+		ClientRequestID:   clientRequestID,
 		ClientRequestHash: forkRequestHash(plan.source.ID),
 		Kind:              domain.KindWorker,
 		Harness:           plan.source.Harness,
@@ -376,12 +299,8 @@ func (s *Service) ForkTurn(ctx context.Context, sourceID domain.SessionID, clien
 	if _, found, err := s.deps.Lineage.GetSessionFork(ctx, rec.ID); err != nil {
 		return domain.SessionRecord{}, err
 	} else if found {
-		// A retried request returned the first fork; this snapshot is unused.
 		plan.dropSeed(ctx, s.deps.Seeds)
 	} else {
-		// The session exists now, so its lineage is written even if the
-		// request is cancelled. Should this write fail, retrying the same
-		// request returns the same session and records it then.
 		if err := s.deps.Lineage.RecordSessionFork(context.WithoutCancel(ctx), domain.SessionFork{
 			ForkSessionID: rec.ID, SourceSessionID: plan.source.ID, RootSessionID: plan.root,
 			SourceTurnID: plan.agent.LatestTurnID, SourceTitle: plan.title, ContextMode: plan.agent.ContextMode,
@@ -393,9 +312,6 @@ func (s *Service) ForkTurn(ctx context.Context, sourceID domain.SessionID, clien
 	return rec, nil
 }
 
-// replay finds the fork an earlier request with the same id made from the
-// same source. A request that is unfinished, made for something else, or
-// whose fork wasn't recorded yet goes through Spawn, which handles each.
 func (s *Service) replay(ctx context.Context, sourceID domain.SessionID, clientRequestID string) (domain.SessionRecord, bool, error) {
 	if clientRequestID == "" || s.deps.Requests == nil {
 		return domain.SessionRecord{}, false, nil
@@ -410,8 +326,6 @@ func (s *Service) replay(ctx context.Context, sourceID domain.SessionID, clientR
 	return rec, true, nil
 }
 
-// RetrySpawnFork rebuilds the fork step for a fork whose start failed: it
-// copies the original's files and native conversation again.
 func (s *Service) RetrySpawnFork(ctx context.Context, fork domain.SessionRecord) (*ports.SpawnFork, error) {
 	if !s.Enabled() {
 		return nil, ErrDisabled
@@ -434,19 +348,17 @@ func (s *Service) RetrySpawnFork(ctx context.Context, fork domain.SessionRecord)
 }
 
 type forkPlan struct {
-	source  domain.SessionRecord
-	agent   Source
-	title   string
-	root    domain.SessionID
-	number  int
-	name    string
-	head    string
-	seedRef string
-	// keepSeed marks a seed the fork borrowed and must not delete.
+	source   domain.SessionRecord
+	agent    Source
+	title    string
+	root     domain.SessionID
+	number   int
+	name     string
+	head     string
+	seedRef  string
 	keepSeed bool
 }
 
-// dropSeed deletes a seed the fork captured itself; a borrowed one is kept.
 func (p forkPlan) dropSeed(ctx context.Context, seeds Seeds) {
 	if p.keepSeed || p.seedRef == "" {
 		return
@@ -472,7 +384,6 @@ func (p forkPlan) spawnFork() *ports.SpawnFork {
 	}
 }
 
-// plan checks every rule. With capture set it also records the source's files.
 func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID string, capture bool) (forkPlan, error) {
 	rec, found, err := s.deps.Sessions.GetSession(ctx, sourceID)
 	if err != nil {
@@ -538,8 +449,6 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 		agent.Freeze(ctx)
 	}
 	if agent.FilesSnapshotRef != "" {
-		// An older turn: its files are the snapshot taken before the turn
-		// after it, saved for rollback. The fork reads it and never deletes it.
 		plan.head, err = s.deps.Seeds.SnapshotHead(ctx, rec.Metadata.WorkspacePath, agent.FilesSnapshotRef)
 		if errors.Is(err, ErrSnapshotMissing) {
 			return forkPlan{}, refuse(CodeTurnFilesMissing)
@@ -559,8 +468,6 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 		return forkPlan{}, fmt.Errorf("capture source files: %w", err)
 	}
 	if agent.Freeze != nil {
-		// What Freeze kept must match the files: a source that acted since
-		// could have changed them in a way its copied conversation misses.
 		if err := s.requireUnchanged(ctx, rec); err != nil {
 			plan.dropSeed(ctx, s.deps.Seeds)
 			return forkPlan{}, err
@@ -569,8 +476,6 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 	return plan, nil
 }
 
-// requireUnchanged refuses the fork if the source has become busy or done
-// anything since rec was read.
 func (s *Service) requireUnchanged(ctx context.Context, rec domain.SessionRecord) error {
 	now, found, err := s.deps.Sessions.GetSession(ctx, rec.ID)
 	if err != nil {
@@ -585,7 +490,6 @@ func (s *Service) requireUnchanged(ctx context.Context, rec domain.SessionRecord
 	return nil
 }
 
-// Title is the name a session shows in the sidebar.
 func Title(rec domain.SessionRecord) string {
 	if name := strings.TrimSpace(rec.DisplayName); name != "" {
 		return name
@@ -599,8 +503,6 @@ func Title(rec domain.SessionRecord) string {
 
 var forkPrefix = regexp.MustCompile(`^Fork (?:\d+ )?of (.+)$`)
 
-// RootTitle strips a "Fork of" or "Fork N of" prefix, so forks of forks never
-// read "Fork of Fork of".
 func RootTitle(title string) string {
 	if m := forkPrefix.FindStringSubmatch(strings.TrimSpace(title)); m != nil {
 		return m[1]
@@ -608,7 +510,6 @@ func RootTitle(title string) string {
 	return title
 }
 
-// ForkDisplayName names the nth fork of a session.
 func ForkDisplayName(number int, rootTitle string) string {
 	if number <= 1 {
 		return "Fork of " + rootTitle
@@ -627,8 +528,6 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
-// takeNumber holds plan's fork number, moving it past any held by forks of the
-// same root still being made, until the fork is recorded or fails.
 func (s *Service) takeNumber(plan *forkPlan) (release func()) {
 	s.numbersMu.Lock()
 	defer s.numbersMu.Unlock()
@@ -651,7 +550,6 @@ func (s *Service) takeNumber(plan *forkPlan) (release func()) {
 	}
 }
 
-// nextFreeNumber is the first number from n that no fork in progress holds.
 func nextFreeNumber(n int, held map[int]bool) int {
 	for held[n] {
 		n++

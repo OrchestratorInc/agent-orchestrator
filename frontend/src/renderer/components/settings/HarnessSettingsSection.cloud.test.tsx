@@ -10,7 +10,6 @@ import { cloudHarnessEntry, cloudHarnessVersions } from "../../test/cloud-harnes
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
-// AO Cloud's harness versions, as the hook would return them for the test.
 const cloud = vi.hoisted(() => ({ value: undefined as CloudHarnessVersions | undefined }));
 vi.mock("../../hooks/useCloudHarnessVersions", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudHarnessVersions")>();
@@ -18,7 +17,6 @@ vi.mock("../../hooks/useCloudHarnessVersions", async (importOriginal) => {
 });
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true, localEnabled: true, client: "", loading: false }) }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" }, isLoading: false, error: null, ready: true }) }));
-// The signed-in person's saved credentials (GET /me/providers), as the hook would return them.
 const providerConnections = vi.hoisted(() => ({ value: [] as Array<{ id: string; provider: string; label: string; validationState: string }> }));
 vi.mock("../../hooks/useProviderConnections", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useProviderConnections")>();
@@ -36,7 +34,6 @@ vi.mock("../../hooks/useCloudCp", async (importOriginal) => {
 	};
 });
 
-/** Codex and Claude Code installed here (Cursor is not), each with its local release status. */
 function mockLocal(status: { codex: "current" | "behind_latest"; claude?: "current" | "behind_latest" }) {
 	const readiness = { agents: ["claude-code", "codex", "cursor"].map((id) => ({
 		id, label: id,
@@ -109,7 +106,6 @@ describe("AO Cloud on the Harness page", () => {
 		mockLocal({ codex: "behind_latest" });
 		cloud.value = cloudHarnessVersions({ editable: true, agents: [cloudHarnessEntry("codex", { current: "0.165.0", latest: "0.167.0", editable: true })] });
 		renderSection();
-		// One row for the harness, whose one mark covers both places.
 		expect(document.querySelectorAll('button[data-agent="codex"]')).toHaveLength(1);
 		const listRow = document.querySelector<HTMLElement>('button[data-agent="codex"]')!;
 		expect(await within(listRow).findByRole("img", { name: "Updates available on this computer and Cloud" })).toBeInTheDocument();
@@ -119,12 +115,10 @@ describe("AO Cloud on the Harness page", () => {
 		expect(line).toHaveTextContent("Cloud");
 		expect(line).toHaveTextContent("v0.165.0");
 		expect(line).toHaveTextContent("v0.167.0 available");
-		// The line is part of the installation row, not a card of its own, and has no button of its own.
 		expect(within(line).queryByRole("button", { name: "Update" })).toBeNull();
 		expect(screen.getAllByRole("heading", { name: "Installation" })).toHaveLength(1);
 		const updates = within(page).getAllByRole("button", { name: "Update" });
 		expect(updates).toHaveLength(1);
-		// Which places it covers shows on hover.
 		await userEvent.hover(updates[0]!);
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Updates this computer and Cloud");
 
@@ -175,7 +169,7 @@ describe("AO Cloud on the Harness page", () => {
 		expect(line).toHaveTextContent("Cloudv0.165.0");
 		expect(line).not.toHaveTextContent("available");
 		expect(line).not.toHaveTextContent("failed");
-		expect(within(line).getAllByRole("button")).toHaveLength(1); // only the details toggle
+		expect(within(line).getAllByRole("button")).toHaveLength(1);
 		expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
 		expect(within(listRow).queryByRole("img")).toBeNull();
 	});
@@ -235,8 +229,6 @@ describe("Cloud harness tab", () => {
 	afterEach(() => cleanup());
 
 	it("still lets a person remove a GitHub token they saved before, and offers nothing to save one", async () => {
-		// A token saved before the GitHub App, still marked valid: the control plane keeps it
-		// and can use it, so it must stay removable even though nothing saves one now.
 		providerConnections.value = [{ id: "gh-1", provider: "github", label: "default", validationState: "valid" }];
 		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -265,13 +257,11 @@ describe("Cloud harness tab", () => {
 			return element;
 		});
 
-		// Removed from another device first: the control plane answers 404 not_found.
 		deleteGitHubPAT.mockRejectedValueOnce(new CloudCpError("not found", { status: 404, code: "not_found" }));
 		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
 		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
 		expect(within(row).queryByRole("alert")).toBeNull();
 
-		// A real failure still says so, and the row is refetched to match the control plane.
 		deleteGitHubPAT.mockRejectedValueOnce(new CloudCpError("unavailable", { status: 503, code: "unavailable" }));
 		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
 		expect(await within(row).findByRole("alert")).toHaveTextContent("Could not remove the GitHub token.");
@@ -282,7 +272,6 @@ describe("Cloud harness tab", () => {
 		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const view = render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
-		// The Cloud agents are listed as before.
 		expect(await screen.findByText("Codex")).toBeInTheDocument();
 		expect(screen.queryByText("GitHub private repositories")).toBeNull();
 		expect(screen.queryByText("GitHub token")).toBeNull();

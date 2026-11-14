@@ -21,7 +21,6 @@ func TestPrewarmChatProbesOnceAndCachesForPreflight(t *testing.T) {
 	}}
 	service := chatsvc.New(chatsvc.Options{Drivers: fakeRegistry{driver: driver}, NewID: func() string { return "id" }})
 
-	// Repeated picks while a check runs start no second one.
 	for range 3 {
 		service.PrewarmChat(domain.HarnessCursor)
 	}

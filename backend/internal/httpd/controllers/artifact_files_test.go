@@ -126,7 +126,6 @@ func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T)
 	}
 }
 
-// artifactFileServer serves session ao-1 with the given artifact files.
 func artifactFileServer(t *testing.T, files map[string]string) (*httptest.Server, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -187,8 +186,6 @@ func TestArtifactFileRouteServesAPageSandboxedWithTheBootstrap(t *testing.T) {
 		t.Fatalf("status=%d body=%.200q", resp.StatusCode, body)
 	}
 	wantSandboxHeaders(t, resp, "text/html; charset=utf-8")
-	// The ETag names the bootstrap and the file's size and modification time,
-	// all known before the file is read.
 	etag := resp.Header.Get("ETag")
 	if want := `"` + renderpage.Version + "-" + strconv.Itoa(len("<p>report</p>")) + "-"; !strings.HasPrefix(etag, want) {
 		t.Fatalf("ETag = %q, want %s<mtime>\"", etag, want)
@@ -211,8 +208,6 @@ func TestArtifactFileRouteServesTheFilesNextToAPage(t *testing.T) {
 		"report/notes.unknownxt": "x",
 	})
 
-	// A browser resolves the page's relative link with the space escaped and
-	// the parentheses as they are.
 	resp, body := getArtifactFile(t, srv, "report/chart%20(1).png", "")
 	if resp.StatusCode != http.StatusOK || body != "\x89PNG\r\n" {
 		t.Fatalf("status=%d body=%q", resp.StatusCode, body)
@@ -239,7 +234,6 @@ func TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory(t *testing.T)
 	if err := os.Symlink(outside, filepath.Join(dir, "escape.html")); err != nil {
 		t.Fatal(err)
 	}
-	// One byte past the cap; sparse, so cheap.
 	if err := os.WriteFile(filepath.Join(dir, "huge.html"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -266,9 +260,6 @@ func TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory(t *testing.T)
 	}
 }
 
-// An HTML artifact framed in the chat runs on its own origin, so its module
-// scripts, fetches and fonts load same-origin, yet that origin is refused
-// everywhere else: the page cannot call the daemon API.
 func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 	srv, _ := artifactFileServer(t, map[string]string{
 		"q3/report.html": `<script type="module" src="app.js"></script>`,
@@ -290,7 +281,6 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 	if got := header.Get("Content-Security-Policy"); got != "sandbox allow-scripts allow-forms allow-same-origin; worker-src 'none'" {
 		t.Fatalf("page CSP = %q, want the inline sandbox with allow-same-origin", got)
 	}
-	// Same-origin requests carry the page's own Origin and are served.
 	for path, want := range map[string]string{"/q3/app.js": "export const ok = true;", "/q3/data.json": `{"x":1}`} {
 		if body, status, _ := doPreviewOriginRequest(t, srv, inline, path); status != http.StatusOK || string(body) != want {
 			t.Fatalf("%s: status=%d body=%q", path, status, body)
@@ -303,7 +293,6 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 		t.Fatalf("POST: status=%d, want 405", status)
 	}
 
-	// The same origin calling the daemon API, on the daemon's own host, is refused.
 	u, _ := url.Parse(inline)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sessions", nil)
 	req.Header.Set("Origin", u.Scheme+"://"+u.Host)
@@ -317,8 +306,6 @@ func TestInlineArtifactOriginServesItsFilesButNotTheAPI(t *testing.T) {
 	}
 }
 
-// deleteArtifactFileServer serves session ao-1 with the given artifact files
-// on disk, of which listed are the ones its session read reports.
 func deleteArtifactFileServer(t *testing.T, files map[string]string, listed ...string) (*httptest.Server, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -405,8 +392,6 @@ func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
 	}
 }
 
-// artifactRegistrationServer serves a session listing plan.md and returns its
-// fake service, which the registration routes call.
 func artifactRegistrationServer(t *testing.T) (*httptest.Server, *fakeSessionService) {
 	t.Helper()
 	dir := t.TempDir()

@@ -18,8 +18,6 @@ import (
 
 const codexDeviceReconciliationAutomaticAttempts = 3
 
-// Account-store initialization covers AO-owned local state only. Device-global
-// discovery is deliberately a separate, repeatable operation below.
 func (m *codexAccountManager) waitAccountStore(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -63,8 +61,6 @@ func (m *codexAccountManager) runAccountStoreInitialization(call *accountReconci
 	m.accountStoreReady = err == nil
 	if err != nil {
 		m.accountStoreFailures++
-		// A bounded cooldown prevents repeated local callers from hammering a
-		// temporarily unavailable disk or database.
 		delay := time.Second << min(m.accountStoreFailures-1, 5)
 		m.accountStoreNextRetry = m.now().Add(delay)
 		var failure *codexAccountLocalFailure
@@ -79,8 +75,6 @@ func (m *codexAccountManager) runAccountStoreInitialization(call *accountReconci
 	m.publish()
 }
 
-// codexAccountLocalFailure contains only a safe category. The underlying
-// filesystem error is deliberately not retained because it can contain paths.
 type codexAccountLocalFailure struct {
 	reason    string
 	retryable bool
@@ -93,12 +87,6 @@ func accountStoreFailure(reason string, retryable bool) error {
 }
 
 func accountStoreStorageFailure(err error) error {
-	// Filesystem validation failures are plain errors, deliberately fail closed.
-	// Only recognizable I/O failures are eligible for another attempt. The
-	// secure-file helpers summarize their cause behind an opaque, path-free
-	// message but preserve the underlying os error through Unwrap, so a transient
-	// disk or I/O fault is not misclassified as unsafe storage and left blocked
-	// until AO restarts.
 	var pathErr *os.PathError
 	var linkErr *os.LinkError
 	isIOFault := errors.As(err, &pathErr) || errors.As(err, &linkErr)
@@ -113,8 +101,6 @@ func (m *codexAccountManager) initializeAccountStore() error {
 	if err := cleanupPendingCredentialHomes(m.pendingRoot); err != nil {
 		return accountStoreStorageFailure(err)
 	}
-	// Durable switches keep their private target snapshot here across a daemon
-	// restart. The switch coordinator removes terminal operation data.
 	if err := ensurePrivateDirectory(m.switchStagingRoot); err != nil {
 		return accountStoreStorageFailure(err)
 	}
@@ -161,11 +147,6 @@ func (m *codexAccountManager) reconcileGlobalWithPolicy(ctx context.Context, for
 		m.reconciliation.Retryable = false
 		m.reconciliation.AttemptedAt = timePointer(now)
 		m.reconciliation.NextRetryAt = nil
-		// Stop routing the last-known active slot through the global home until
-		// this attempt has matched the current credential. Otherwise an external
-		// A -> B login can write B's observations into A's saved slot. Keep the
-		// last matched device account only as a safety hint for mutation routing;
-		// the API/UI must not present it as active until this check verifies it.
 		m.deferredAccountID = m.deviceAccountID
 		m.deviceCredentialPresent = false
 		started = true
@@ -183,8 +164,6 @@ func (m *codexAccountManager) reconcileGlobalWithPolicy(ctx context.Context, for
 	}
 }
 
-// requestGlobalReconciliationIfNeeded schedules background device discovery
-// only when no fresh result or existing attempt can answer the request.
 func (m *codexAccountManager) requestGlobalReconciliationIfNeeded() {
 	m.mu.Lock()
 	if m.reconcile != nil || m.reconcileRequested || m.reconcileScheduled {
@@ -228,9 +207,6 @@ func (m *codexAccountManager) runGlobalReconciliation(call *accountReconcileCall
 		m.reconciliation.VerifiedAt = timePointer(now)
 	} else if !errors.Is(call.err, context.Canceled) || m.ctx.Err() == nil {
 		failure := classifyDeviceReconciliationFailure(call.err)
-		// The retained deviceAccountID is presentation-only while the local check
-		// is running. Once that check fails it is no longer safe to present the
-		// previous association as current.
 		m.deviceAccountID = ""
 		m.reconciliation.ActiveAccountVerified = false
 		m.reconciliation.ReasonCode = failure.reason
@@ -241,10 +217,6 @@ func (m *codexAccountManager) runGlobalReconciliation(call *accountReconcileCall
 			delay = time.Second << min(m.reconcileFailures-1, 5)
 			next := now.Add(delay)
 			m.reconciliation.NextRetryAt = timePointer(next)
-			// Make the first three local attempts automatic (immediate, +1s,
-			// +2s). After that the UI becomes actionable instead of retrying
-			// forever in the background. A manual retry remains available only
-			// for failures classified as transient.
 			schedule = m.reconcileFailures < codexDeviceReconciliationAutomaticAttempts && !m.reconcileScheduled
 			if schedule {
 				m.reconcileScheduled = true

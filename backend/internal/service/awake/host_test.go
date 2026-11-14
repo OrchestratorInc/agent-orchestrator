@@ -54,8 +54,6 @@ func TestBoundSessionTicksKeepFallbackAssertion(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	// A second launch now fails deterministically. Fresh policy deadlines must
-	// not reconfigure the still-fresh process, even though every tick differs.
 	if err := os.Remove(binary); err != nil {
 		t.Fatal(err)
 	}

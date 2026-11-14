@@ -33,9 +33,6 @@ describe("readRemotes", () => {
 		await expect(readRemotes(path)).rejects.toThrow(/chmod 600/);
 	});
 
-	// Node reports 0o666 for every writable file on Windows, so the mode check
-	// there refuses a perfectly good file and takes saved hosts down with it.
-	// The CLI exempts win32 for the same reason (cli/remote.go:154).
 	it("does not apply the mode check on windows", async () => {
 		const path = await tempFile('{"remotes":[]}', 0o644);
 		const platform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -102,8 +99,6 @@ async function savedRemotes(path: string): Promise<unknown[]> {
 }
 
 describe("updateRemote", () => {
-	// The reason this exists: re-enabling the LAN bridge rotates the connection
-	// password, and until now the saved entry just died.
 	it("changes the password and nothing else", async () => {
 		const path = await tempFile(TWO_HOSTS);
 		await expect(updateRemote(path, "http://192.0.2.1:1", { password: "rotated" })).resolves.toEqual({
@@ -123,8 +118,6 @@ describe("updateRemote", () => {
 		expect(await savedRemotes(path)).toContainEqual({ label: "the workbox", url: "http://192.0.2.1:1", password: "old" });
 	});
 
-	// An explicitly-undefined field survives Electron's structured clone, so
-	// "leave the password alone" arrives as a present key with no value.
 	it("treats an undefined field as absent rather than as a wipe", async () => {
 		const path = await tempFile(TWO_HOSTS);
 		await updateRemote(path, "http://192.0.2.1:1", { label: "renamed", password: undefined });
@@ -140,8 +133,6 @@ describe("updateRemote", () => {
 		]);
 	});
 
-	// Typing the address of a host you already saved must leave one host, not two
-	// rows racing to answer for the same machine.
 	it("absorbs another entry that already sits on the new url", async () => {
 		const path = await tempFile(TWO_HOSTS);
 		await updateRemote(path, "http://192.0.2.1:1", { url: "http://192.0.2.9:9" });
@@ -164,7 +155,6 @@ describe("updateRemote", () => {
 		await expect(updateRemote(path, "http://192.0.2.1:1", { password: "rotated" })).rejects.toBeInstanceOf(
 			RemotesFilePermissionError,
 		);
-		// And left the passwords exactly where they were.
 		expect(await readFile(path, "utf8")).toBe(TWO_HOSTS);
 	});
 });

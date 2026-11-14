@@ -1,13 +1,3 @@
-/**
- * Shared sidebar/inspector resize hit-strip.
- *
- * - On hover only, a thin line is drawn over the panel edge, fading out at the top and
- *   bottom, with a short opacity fade in/out; not painted on click/drag, not always-visible.
- * - The strip is centered on the sidebar/inspector boundary, and the line starts at that
- *   center and runs toward the center pane, so it covers the center surface's 1px border
- *   on both sides (the inspector's outer half is clipped by its `overflow-hidden`).
- * - useResizable is the ONLY width integrator; this strip just forwards pointer events.
- */
 import { cn } from "@/lib/utils";
 
 type ResizeHandleProps = React.HTMLAttributes<HTMLDivElement> & {

@@ -77,8 +77,6 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 	}
 	home, _ := os.UserHomeDir()
 	logLines := 0
-	// A daemon panic never reaches daemon.log: Go writes it to stderr and to the
-	// crash file the daemon keeps beside running.json (see lifecyclelog).
 	lifecycleRoot := data
 	if run != "" {
 		lifecycleRoot = filepath.Dir(run)
@@ -165,7 +163,6 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 		fmt.Fprintf(&b, "unavailable: %s\n", triageErrorReason(err))
 	}
 	github := <-githubCh
-	// Unconfirmed candidates stay in context.md for the agent; posted evidence never lists them.
 	duplicates := <-duplicatesCh
 	draft := fmt.Sprintf(`status: draft
 
@@ -205,7 +202,6 @@ func triageErrorReason(err error) string {
 	return err.Error()
 }
 
-// Discard excess bytes while continuing to drain the child's pipes.
 type triageOutput struct {
 	strings.Builder
 	remaining int
@@ -219,11 +215,6 @@ func (b *triageOutput) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// triageRecentCrashes keeps the crash file's sections from daemon runs started
-// within triageRetention of now. The file only grows (each start appends a
-// "=== daemon pid … started <RFC3339>" header), so an old panic would otherwise
-// read as current evidence. Lines whose header fell outside the tail cannot be
-// dated and are dropped. A kept panic names its run's start time.
 func triageRecentCrashes(tail string, now time.Time) string {
 	var kept []string
 	keep, started := false, ""
@@ -241,7 +232,6 @@ func triageRecentCrashes(tail string, now time.Time) string {
 			continue
 		}
 		if strings.HasPrefix(line, "panic: ") || strings.HasPrefix(line, "fatal error: ") {
-			// Bracketed, so triageNoise keeps it out of the duplicate-search words.
 			line += " [daemon started " + started + "]"
 		}
 		kept = append(kept, line)
@@ -277,7 +267,7 @@ func triageLogTail(ctx context.Context, path string) (string, error) {
 	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
 	if start > 0 {
 		lines = lines[1:]
-	} // Drop the partial first line.
+	}
 	if len(lines) > 200 {
 		lines = lines[len(lines)-200:]
 	}
@@ -328,8 +318,6 @@ func (c *commandContext) triageSessions(ctx context.Context, port int, out io.Wr
 		}
 		slices.SortFunc(recent, func(a, b sessionDTO) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
 		recent = recent[:min(20, len(recent))]
-		// Pinning sorts ahead of recency. After 20 unpinned rows, later pages
-		// cannot contain a row newer than the 20 already considered.
 		if result.NextCursor == "" || unpinned >= 20 {
 			break
 		}

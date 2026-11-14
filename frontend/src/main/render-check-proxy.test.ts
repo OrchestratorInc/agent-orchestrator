@@ -5,13 +5,11 @@ import * as net from "node:net";
 import * as os from "node:os";
 import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
 
-// The real resolver, which a test can override for one lookup.
 vi.mock("node:dns/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:dns/promises")>();
 	return { ...actual, lookup: vi.fn(actual.lookup) };
 });
 
-// A public IPv4 address this machine holds, which no private range covers.
 const OWN_PUBLIC_IPV4 = "198.51.100.7";
 vi.mock("node:os", async (importOriginal) => {
 	const actual = await importOriginal<typeof os>();
@@ -40,10 +38,6 @@ afterEach(async () => {
 	await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
 });
 
-/**
- * Sends a SOCKS5 greeting and CONNECT, and resolves with the reply code and
- * the open socket. `bytewise` sends them one byte at a time.
- */
 function connectThrough(proxyPort: number, target: Buffer, version = 5, bytewise = false): Promise<{ code: number; socket: net.Socket }> {
 	return new Promise((resolve) => {
 		const socket = net.connect(proxyPort, "127.0.0.1", async () => {
@@ -56,12 +50,10 @@ function connectThrough(proxyPort: number, target: Buffer, version = 5, bytewise
 			}
 		});
 		sockets.push(socket);
-		// The proxy may reset a refused connection.
 		socket.on("error", () => {});
 		let received = Buffer.alloc(0);
 		const onData = (chunk: Buffer) => {
 			received = Buffer.concat([received, chunk]);
-			// Method selection (2 bytes) then the 10-byte reply.
 			if (received.length >= 12) {
 				socket.off("data", onData);
 				resolve({ code: received[3]!, socket });
@@ -96,7 +88,6 @@ function ipv6Target(address: string, port: number): Buffer {
 	return target;
 }
 
-/** `a.b.c.d` as the two hex groups of an IPv4-mapped IPv6 address. */
 function toHexPair(address: string): string {
 	const [a = 0, b = 0, c = 0, d = 0] = address.split(".").map(Number);
 	return `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
@@ -112,7 +103,6 @@ function domainTarget(host: string, port: number): Buffer {
 	return target;
 }
 
-/** A loopback server that echoes what it reads, standing in for the daemon. */
 async function echoServer(): Promise<number> {
 	const server = net.createServer((socket) => socket.pipe(socket));
 	servers.push(server);
@@ -129,8 +119,6 @@ describe("render-check proxy address policy", () => {
 			ipv4Target("169.254.169.254", 80),
 			ipv4Target("198.18.0.1", 80),
 			domainTarget("localhost", 80),
-			// IPv6 forms that carry a local IPv4 address: NAT64, 6to4, Teredo,
-			// and IPv4-compatible.
 			ipv6Target("64:ff9b::7f00:1", 80),
 			ipv6Target("64:ff9b::a00:1", 80),
 			ipv6Target("2002:7f00:1::1", 80),
@@ -139,7 +127,6 @@ describe("render-check proxy address policy", () => {
 		]) {
 			expect(await replyCode(port, target)).toBe(2);
 		}
-		// Port 0 is not a connection target.
 		expect(await replyCode(port, ipv4Target("1.1.1.1", 0))).toBe(7);
 	});
 
@@ -149,7 +136,6 @@ describe("render-check proxy address policy", () => {
 			.flatMap((entries) => entries ?? [])
 			.filter((entry) => !entry.internal && !entry.address.startsWith("fe80"));
 		expect(own.map((entry) => entry.address)).toContain(OWN_PUBLIC_IPV4);
-		// IPv4 also as IPv4-mapped IPv6, which names the same host.
 		const targets = own.flatMap((entry) =>
 			entry.family === "IPv6"
 				? [ipv6Target(entry.address, 80)]
@@ -183,7 +169,6 @@ describe("render-check proxy render-page allowance", () => {
 		socket.write("ping");
 		expect(await echoed).toBe("ping");
 
-		// Another port on the same host, and the same port by another name.
 		const otherPort = pagePort === 65_535 ? pagePort - 1 : pagePort + 1;
 		expect(await replyCode(port, ipv4Target("127.0.0.1", otherPort))).toBe(2);
 		expect(await replyCode(port, domainTarget("localhost", pagePort))).toBe(2);
@@ -222,8 +207,6 @@ describe("render-check proxy render-page allowance", () => {
 		const echoed = new Promise<string>((resolve) => socket.once("data", (chunk) => resolve(chunk.toString())));
 		socket.write("ping");
 		expect(await echoed).toBe("ping");
-		// The page listens on 127.0.0.1 only. Had the proxy resolved the name
-		// again when it connected, it would have found 127.0.0.1 and reached it.
 		vi.mocked(lookup).mockResolvedValueOnce([{ address: "::1", family: 6 }] as never);
 		expect(await replyCode(port, domainTarget("localhost", pagePort))).toBe(-1);
 		release();
@@ -243,7 +226,6 @@ describe("render-check proxy with no network", () => {
 		const lookups = vi.mocked(lookup).mock.calls.length;
 		expect(await replyCode(port, domainTarget("example.com", 443))).toBe(2);
 		expect(await replyCode(port, ipv4Target("93.184.216.34", 443))).toBe(2);
-		// A name sent to a "none" proxy is never looked up, so DNS carries nothing out.
 		expect(vi.mocked(lookup).mock.calls.length).toBe(lookups);
 		expect(refused).toEqual(["example.com:443", "93.184.216.34:443"]);
 		release();

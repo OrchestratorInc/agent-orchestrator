@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// Qwen 0.26.4 publishes both a live-session registry and runtime sidecars.
-// Both must name this native id, a different workspace, and a live Qwen/node
-// process with a validated start identity. Stale files alone are not ownership.
 func qwenSessionLive(ctx context.Context, configDir, nativeID, ownWorkspace string) bool {
 	return qwenSessionLiveWithProbe(ctx, configDir, nativeID, ownWorkspace, qwenProcessLive)
 }
@@ -97,7 +94,6 @@ func qwenProcessLive(ctx context.Context, pid int, registeredAtMillis int64, tok
 	}
 	current := ""
 	if token != "" && runtime.GOOS == "linux" {
-		// Qwen's readProcStartToken: boot id + field 22 of /proc/<pid>/stat.
 		boot, bootErr := os.ReadFile("/proc/sys/kernel/random/boot_id")
 		stat, statErr := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 		if end := strings.LastIndexByte(string(stat), ')'); bootErr == nil && statErr == nil && end >= 0 {

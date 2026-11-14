@@ -16,8 +16,6 @@ import (
 const interfaceTransitionPath = "/api/v1/sessions/{sessionId}/interface-transition"
 const interfaceTransitionNoticeAcknowledgementPath = "/api/v1/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement"
 
-// sessionInterfaceTransitionService is optional so unrelated controller fakes
-// keep implementing the stable SessionService surface.
 type sessionInterfaceTransitionService interface {
 	InterfaceTransitionStatus(context.Context, domain.SessionID) (sessionsvc.InterfaceTransitionStatus, error)
 	StartInterfaceTransition(context.Context, domain.SessionID, domain.SessionMode, domain.SessionInterfaceTransitionPolicy, domain.SessionInterfaceTransitionHistoryPolicy) (domain.SessionInterfaceTransition, error)

@@ -23,10 +23,7 @@ type cliTelemetryReservoir struct {
 }
 
 type cliTelemetryState struct {
-	ActiveDay string `json:"active_day"`
-	// ActiveDone replaced ActiveSlots when the heartbeat moved from four
-	// six-hour slots to one report per UTC day. ActiveSlots is still written so
-	// a downgraded build reads the day as fully spent instead of emitting again.
+	ActiveDay   string   `json:"active_day"`
 	ActiveDone  bool     `json:"active_done"`
 	ActiveSlots []int    `json:"active_slots"`
 	InvokedDay  string   `json:"invoked_day"`
@@ -44,9 +41,6 @@ func newCLITelemetryReservoir(dataDir string) *cliTelemetryReservoir {
 	return r
 }
 
-// reserveActive hands out one ao.app.active report per UTC day. It was four per
-// day, one per six-hour slot, which cost four events per install for a number
-// that is a unique count and therefore never changed.
 func (r *cliTelemetryReservoir) reserveActive(now time.Time) bool {
 	day := telemetryUTCDate(now)
 	r.mu.Lock()
@@ -103,8 +97,6 @@ func (r *cliTelemetryReservoir) load() {
 		return
 	}
 	r.activeDay = st.ActiveDay
-	// A slot record written by an older build means that day already reported,
-	// so an upgrade mid-day cannot hand out a second reservation.
 	r.activeDone = st.ActiveDone || len(st.ActiveSlots) > 0 || st.ActiveDay != ""
 	r.invokedDay = st.InvokedDay
 	r.invokedSeen = make(map[string]struct{}, len(st.InvokedSeen))

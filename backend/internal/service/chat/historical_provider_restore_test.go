@@ -312,8 +312,6 @@ func TestHistoricalProjectProviderRestoreAppendsOwnershipEpochAtomically(t *test
 		t.Fatalf("first provider resume scopes = %v, want [%s]", got, wantBoundary)
 	}
 
-	// A restart after the atomic commit follows the ordinary path. The active
-	// branch now owns the target handle, so no second ownership epoch is needed.
 	if err := svc.Stop(ctx, fixture.target.ID); err != nil {
 		t.Fatalf("stop first restored controller: %v", err)
 	}
@@ -426,8 +424,6 @@ func (s *rollbackChatSpawnStore) CommitChatSpawn(
 	rec domain.SessionRecord,
 	branch domain.ConversationBranch,
 ) error {
-	// Fail the final session write after the branch insert and head move have run
-	// inside Store.CommitChatSpawn's transaction.
 	rec.Activity.State = domain.ActivityState("invalid-state")
 	return s.Store.CommitChatSpawn(ctx, rec, branch)
 }
@@ -439,8 +435,6 @@ func (s *rollbackChatSpawnStore) CommitChatSpawnPrepared(
 	handoff *domain.ChatProviderHandoff,
 	prepare func(context.Context) error,
 ) error {
-	// Exercise rollback after branch activation and native-history projection by
-	// invalidating only the final lifecycle record write.
 	rec.Activity.State = domain.ActivityState("invalid-state")
 	return s.Store.CommitChatSpawnPrepared(ctx, rec, branch, handoff, prepare)
 }
@@ -488,7 +482,6 @@ func TestHistoricalProjectProviderRestoreRejectsUnprovedMismatch(t *testing.T) {
 		Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex,
 		WorkspacePath:          fixture.target.Metadata.WorkspacePath,
 		ProviderConversationID: historicalTargetThread,
-		// No Session Manager proof => no reserved ProviderScopeID.
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not match session handle") {
 		t.Fatalf("unproved mismatch error = %v", err)

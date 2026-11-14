@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// A stand-in for caffeinate that just stays alive, so the test exercises the
-// process lifecycle without touching the machine's power state.
 func fakeCaffeinate(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "caffeinate")
@@ -41,7 +39,7 @@ func TestKeepAwakeStartStop(t *testing.T) {
 	if k.Active() {
 		t.Fatal("still active after Stop")
 	}
-	k.Stop() // idempotent
+	k.Stop()
 }
 
 func TestKeepAwakeStartFailsForMissingBinary(t *testing.T) {
@@ -103,8 +101,6 @@ func TestKeepAwakeRenewalOverlapsAndCapsRetiringAssertions(t *testing.T) {
 	if !unchanged {
 		t.Fatal("five-second policy tick restarted a fresh process")
 	}
-	// A tick just before the five-second-remaining boundary still renews;
-	// it must not defer replacement until the process is about to expire.
 	now = now.Add(4999 * time.Millisecond)
 	if err := k.ConfigureIdle(now.Add(15*time.Second), false); err != nil {
 		t.Fatal(err)
@@ -121,7 +117,6 @@ func TestKeepAwakeRenewalOverlapsAndCapsRetiringAssertions(t *testing.T) {
 		t.Fatal("old assertion ended before its replacement could acquire ownership")
 	default:
 	}
-	// A shorter policy during a handoff must cap every older process too.
 	deadline := now.Add(100 * time.Millisecond)
 	if err := k.ConfigureIdle(deadline, false); err != nil {
 		t.Fatal(err)

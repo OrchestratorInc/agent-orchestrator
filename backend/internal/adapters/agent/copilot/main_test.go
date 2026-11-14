@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// TestMain keeps every test's Copilot trust writes out of the real ~/.copilot.
 func TestMain(m *testing.M) {
 	home, err := os.MkdirTemp("", "copilot-home-")
 	if err != nil {

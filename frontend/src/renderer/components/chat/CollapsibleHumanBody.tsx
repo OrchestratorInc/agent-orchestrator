@@ -7,25 +7,13 @@ import { Button } from "../ui/button";
 import { CHAT_REVEAL_RANGE_EVENT, type ChatRevealRangeDetail } from "../../lib/chat-annotation-navigation";
 import { cn } from "../../lib/utils";
 
-/** A long message folds to this many lines of its own text. */
 const FOLD_LINES = 10;
-/** It only folds when that hides at least this many more lines, so opening it never reveals a single line. */
 const MIN_HIDDEN_LINES = 2;
-/** Matches the height transition in styles.css; ends the animation if `transitionend` never arrives. */
 const ANIMATION_FALLBACK_MS = 300;
-/** Matches --chat-human-fade in styles.css: text in the fade at the fold does not count as shown. */
 const FADE_PX = 40;
 
-/**
- * What each message looked like when it last rendered, keyed by its text. A bubble
- * remounts more often than it seems: the first message moves from the new chat page
- * to the session, its local echo gives way to the stored copy under a new id, and a
- * long chat virtualizes turns that scroll away. Starting from the remembered fold
- * keeps every remount from painting at full length or closing what the reader opened.
- */
 const foldHeights = new Map<string, number>();
 const openedMessages = new Set<string>();
-/** Bounds the memory above; the oldest entries go first. */
 const REMEMBERED_MESSAGES = 200;
 
 function remember<T>(store: Map<string, T> | Set<string>, key: string, value?: T) {
@@ -37,16 +25,8 @@ function remember<T>(store: Map<string, T> | Set<string>, key: string, value?: T
 
 type Animation = { height: number; collapsing: boolean };
 
-/**
- * The user's bubble body, folded when it is taller than about ten lines. The fold
- * is measured from the rendered content, so pasted text and code count by the room
- * they take. Attachments stay outside it: a normal screenshot is taller than the
- * fold, so inside it would always be cut off. Short messages render exactly as before.
- */
 export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, children }: {
-	/** Stays the same across the echo-to-stored handoff; the message's visible text. */
 	stateKey: string;
-	/** The message editor keeps the fold's height but scrolls, so every line stays reachable. */
 	scrollWhenFolded?: boolean;
 	children: ReactNode;
 }) {
@@ -55,20 +35,16 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 	const clipId = useId();
 	const clip = useRef<HTMLDivElement>(null);
 	const content = useRef<HTMLDivElement>(null);
-	// The folded height in px, or undefined while the whole message fits.
 	const [foldHeight, setFoldHeight] = useState(() => foldHeights.get(stateKey));
 	const [open, setOpen] = useState(() => openedMessages.has(stateKey));
-	// Set only while a reader's toggle is animating; measurement never animates.
 	const [animation, setAnimation] = useState<Animation>();
 	const fallbackTimer = useRef<number | undefined>(undefined);
 
-	// Measured before paint, so a long message never flashes at full length first.
 	useLayoutEffect(() => {
 		const clipNode = clip.current;
 		const contentNode = content.current;
 		if (!clipNode || !contentNode) return;
 		const measure = () => {
-			// Not laid out (a hidden surface): keep the remembered fold rather than guess.
 			if (contentNode.offsetHeight === 0) return;
 			const lineHeight = Number.parseFloat(getComputedStyle(clipNode).lineHeight) || 22;
 			const fold = Math.round(lineHeight * FOLD_LINES);
@@ -105,13 +81,10 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 		window.clearTimeout(fallbackTimer.current);
 		fallbackTimer.current = window.setTimeout(finishAnimation, ANIMATION_FALLBACK_MS);
 		if (next) {
-			// From the folded height (or wherever a collapse was) to the full content.
 			setAnimation({ height: contentNode.offsetHeight, collapsing: false });
 			setOpen(true);
 			return;
 		}
-		// An open body has height auto, which does not transition: pin its current
-		// height first, let layout see it, then head for the fold.
 		flushSync(() => {
 			setAnimation({ height: clipNode.offsetHeight, collapsing: true });
 			setOpen(false);
@@ -124,9 +97,6 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 	const folded = folds && !open;
 	const height = animation ? animation.height : folded ? foldHeight : undefined;
 
-	// Navigation that lands on text the fold hides (a search result, the session's
-	// find in chat, an annotation) opens the message, as pressing Show more would. Text
-	// above the fold is already readable, so the message stays as the reader left it.
 	useEffect(() => {
 		const clipNode = clip.current;
 		if (!folded || !clipNode) return;
@@ -151,15 +121,12 @@ export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, child
 				data-folded={folded ? "" : undefined}
 				data-scroll-folded={scrollWhenFolded ? "" : undefined}
 				data-animating={animation ? "" : undefined}
-				// While it shrinks, the browser anchors the view on what follows (the
-				// toggle) instead of the text inside, so "Show less" stays under the pointer.
 				data-collapsing={animation?.collapsing ? "" : undefined}
 				style={height === undefined ? undefined : { height }}
 				onTransitionEnd={(event) => {
 					if (event.target === event.currentTarget && event.propertyName === "height") finishAnimation();
 				}}
 			>
-				{/* flow-root keeps children's margins inside, so the measured height is the real one. */}
 				<div ref={content} className="flow-root">
 					{children}
 				</div>

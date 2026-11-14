@@ -1,12 +1,3 @@
-/**
- * How a favicon's pixels relate to the card behind it. Most favicons are drawn
- * for a light browser tab, and a one-colour glyph with no background (GitHub's
- * is near-black) vanishes on a dark card.
- *
- * - "dark" / "light": a one-colour glyph on transparency that can be inverted.
- * - "fixed": has its own colours or background, so it reads on any card.
- * - "unknown": the pixels cannot be read (the host sends no CORS headers).
- */
 export type FaviconTone = "dark" | "light" | "fixed" | "unknown";
 
 const OPAQUE_ALPHA = 128;
@@ -16,7 +7,6 @@ const DARK_LUMA = 0.35;
 const LIGHT_LUMA = 0.75;
 const SAMPLE_SIZE = 16;
 
-/** Classifies RGBA pixel data; pure so the thresholds can be tested directly. */
 export function classifyFaviconPixels(pixels: Uint8ClampedArray): FaviconTone {
 	const total = pixels.length / 4;
 	let opaque = 0;
@@ -39,7 +29,6 @@ export function classifyFaviconPixels(pixels: Uint8ClampedArray): FaviconTone {
 	return "fixed";
 }
 
-/** Reads a loaded image's tone. The image must have been loaded with CORS. */
 export function measureFaviconTone(image: HTMLImageElement): FaviconTone {
 	try {
 		const canvas = document.createElement("canvas");

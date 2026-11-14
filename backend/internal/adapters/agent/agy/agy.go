@@ -1,6 +1,3 @@
-// Package agy implements the Agy (Antigravity) agent adapter: launching new sessions,
-// resuming sessions by native ID, installing workspace-local hooks, and reading
-// hook-derived session info.
 package agy
 
 import (
@@ -20,7 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 
-	// Registers the "sqlite" driver used to read Antigravity conversation databases.
 	_ "modernc.org/sqlite"
 )
 
@@ -40,15 +36,12 @@ var agyBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// Plugin is the Agy agent adapter. It is safe for concurrent use; the binary
-// path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.RWMutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Agy adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -62,15 +55,10 @@ var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
 var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
 
-// EmitsSubmitActivity reports that PreInvocation proves submitted work has
-// reached AGY's execution loop.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
-// EmitsBlockedActivity is false because current AGY hooks do not expose a
-// permission-wait event that AO can safely correlate with a session.
 func (p *Plugin) EmitsBlockedActivity() bool { return false }
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -83,9 +71,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys the Agy (Antigravity)
-// CLI understands: a model override passed via --model. Confirmed via
-// `agy --help`: "--model  Model for the current CLI session".
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -101,10 +86,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// GetLaunchCommand builds the argv to start an interactive Agy session.
-// Shape:
-//
-//	agy --add-dir <WorkspacePath> [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] [--prompt-interactive <Prompt>]
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.agyBinary(ctx)
 	if err != nil {
@@ -125,7 +106,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	case ports.PermissionModeBypassPermissions:
 		cmd = append(cmd, "--dangerously-skip-permissions")
 	default:
-		// default emits no approval flag and lets Agy use its own config.
 	}
 
 	appendModelFlag(&cmd, cfg.Config)
@@ -137,8 +117,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Agy session:
-// `agy --add-dir <WorkspacePath> [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] --conversation <agentSessionId>`.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -168,7 +146,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	case ports.PermissionModeBypassPermissions:
 		cmd = append(cmd, "--dangerously-skip-permissions")
 	default:
-		// default emits no approval flag and lets Agy use its own config.
 	}
 
 	appendModelFlag(&cmd, cfg.Config)
@@ -177,8 +154,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// NativeConversationExists reports whether Antigravity has a persisted
-// conversation database in the source interface's storage root.
 func (p *Plugin) NativeConversationExists(
 	ctx context.Context,
 	session ports.SessionRef,
@@ -233,8 +208,6 @@ func (p *Plugin) NativeConversationExists(
 	return false, nil
 }
 
-// PrepareInterfaceHandoffStorage bridges a stopped native conversation into
-// the target interface's storage root.
 func (p *Plugin) PrepareInterfaceHandoffStorage(
 	ctx context.Context,
 	_ ports.SessionRef,
@@ -259,10 +232,6 @@ func (p *Plugin) PrepareInterfaceHandoffStorage(
 	}
 }
 
-// NativeConversationID returns Antigravity's shared native ID from the
-// identity reported by the interface currently owning the session. ACP and
-// the terminal CLI use the same UUID, though their separate storage
-// directories still require a bridge before the target can resume it.
 func (p *Plugin) NativeConversationID(
 	ctx context.Context,
 	session ports.SessionRef,
@@ -280,7 +249,6 @@ func (p *Plugin) NativeConversationID(
 	return id, id != "", nil
 }
 
-// SessionInfo surfaces Agy hook-derived metadata.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -289,15 +257,11 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// ResolveAgyBinary returns the path to the agy binary on this machine,
-// searching PATH then a handful of well-known install locations. It returns a
-// wrapped ports.ErrAgentBinaryNotFound when agy is absent.
 func ResolveAgyBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, agyBinarySpec)
 }
 
 func (p *Plugin) agyBinary(ctx context.Context) (string, error) {
-	// Fast path: a concurrent-safe read of the already-resolved binary.
 	p.binaryMu.RLock()
 	cached := p.resolvedBinary
 	p.binaryMu.RUnlock()
@@ -305,8 +269,6 @@ func (p *Plugin) agyBinary(ctx context.Context) (string, error) {
 		return cached, nil
 	}
 
-	// Populate path: take the write lock and re-check, since another goroutine
-	// may have resolved the binary between releasing RLock and acquiring Lock.
 	p.binaryMu.Lock()
 	defer p.binaryMu.Unlock()
 	if p.resolvedBinary != "" {
@@ -321,19 +283,12 @@ func (p *Plugin) agyBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// appendModelFlag appends `--model <trimmed>` when cfg.Model is set,
-// mirroring the Codex adapter's pattern (see #2869). A blank or
-// whitespace-only value is omitted so agy falls back to its own default
-// model resolution exactly as an unconfigured launch would. Confirmed via
-// `agy --help`: "--model  Model for the current CLI session".
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
 	}
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

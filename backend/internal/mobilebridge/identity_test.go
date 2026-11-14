@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// iface builds an interface fixture. The MAC is parsed here rather than via hw
-// so these tests read as hardware, not as plumbing.
 func iface(name, mac string) net.Interface {
 	a, err := net.ParseMAC(mac)
 	if err != nil {
@@ -28,9 +26,6 @@ func hw(t *testing.T, s string) net.HardwareAddr {
 }
 
 func TestMachineFingerprintIgnoresInterfaceOrder(t *testing.T) {
-	// net.Interfaces() makes no ordering guarantee across reboots. If the
-	// fingerprint depended on order, a reboot would look like a different
-	// machine and every paired phone would be told the host identity changed.
 	a := []net.Interface{
 		{Name: "en0", HardwareAddr: hw(t, "aa:bb:cc:dd:ee:01")},
 		{Name: "en1", HardwareAddr: hw(t, "aa:bb:cc:dd:ee:02")},
@@ -57,9 +52,6 @@ func TestMachineFingerprintDiffersBetweenMachines(t *testing.T) {
 }
 
 func TestMachineFingerprintIgnoresVirtualInterfaces(t *testing.T) {
-	// Docker, VM, and VPN interfaces come and go and get fresh MACs each time.
-	// Counting them would make the fingerprint change whenever Docker starts,
-	// which would look like the config had been copied to another machine.
 	physical := []net.Interface{{Name: "en0", HardwareAddr: hw(t, "aa:bb:cc:dd:ee:01")}}
 	withVirtual := []net.Interface{
 		{Name: "en0", HardwareAddr: hw(t, "aa:bb:cc:dd:ee:01")},
@@ -75,8 +67,6 @@ func TestMachineFingerprintIgnoresVirtualInterfaces(t *testing.T) {
 }
 
 func TestMachineFingerprintEmptyWhenNoHardwareAddresses(t *testing.T) {
-	// A container with only loopback. Callers must treat "" as "cannot bind an
-	// identity to this machine" rather than as a valid fingerprint.
 	got := MachineFingerprint([]net.Interface{{Name: "lo0", Flags: net.FlagLoopback}})
 	if got != "" {
 		t.Fatalf("got %q, want empty", got)
@@ -97,8 +87,6 @@ func TestEnsureIdentityCreatesAndPersistsAHostID(t *testing.T) {
 		t.Fatalf("host id %q lacks the h_ prefix", got.HostID)
 	}
 
-	// It must survive a daemon restart, or every restart would invalidate every
-	// paired phone's stored host identity.
 	again, err := EnsureIdentityFor(path, []net.Interface{iface("en0", "aa:bb:cc:dd:ee:01")})
 	if err != nil {
 		t.Fatalf("second EnsureIdentity: %v", err)
@@ -122,9 +110,6 @@ func TestEnsureIdentityWritesOwnerOnly(t *testing.T) {
 	}
 }
 
-// Identity belongs to the AO installation. Hardware fingerprints remain useful
-// diagnostics, but plugging in a dock must not reissue the host id and silently
-// unpair every phone.
 func TestEnsureIdentityKeepsTheHostIDWhenAnInterfaceIsAdded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile", "identity.json")
 	laptop := []net.Interface{iface("en0", "aa:bb:cc:dd:ee:01")}
@@ -134,7 +119,6 @@ func TestEnsureIdentityKeepsTheHostIDWhenAnInterfaceIsAdded(t *testing.T) {
 		t.Fatalf("EnsureIdentityFor: %v", err)
 	}
 
-	// Same laptop, now with a dock attached.
 	docked := append(laptop, iface("en5", "aa:bb:cc:dd:ee:99"))
 	got, err := EnsureIdentityFor(path, docked)
 	if err != nil {
@@ -168,8 +152,6 @@ func TestEnsureIdentityKeepsTheHostIDWhenAnInterfaceIsRemoved(t *testing.T) {
 	}
 }
 
-// Host identity belongs to the AO installation, not to today's network card.
-// Replacing the only NIC must not silently unpair every phone.
 func TestEnsureIdentityKeepsTheHostIDWhenTheOnlyInterfaceIsReplaced(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile", "identity.json")
 
@@ -188,8 +170,6 @@ func TestEnsureIdentityKeepsTheHostIDWhenTheOnlyInterfaceIsReplaced(t *testing.T
 	}
 }
 
-// An installation with no hardware addresses must not reissue its id on every
-// start.
 func TestEnsureIdentityIsStableWithoutHardwareAddresses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile", "identity.json")
 

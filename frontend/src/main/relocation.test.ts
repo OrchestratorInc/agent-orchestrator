@@ -18,8 +18,6 @@ const BASE: RelocationInputs = {
 };
 
 describe("decideRelocation", () => {
-	// The reported bug: a stale 0.10.3 download launching while /Applications
-	// holds a newer nightly. This MUST NOT relocate, or the nightly is trashed.
 	it("hands off when the install is newer", () => {
 		expect(decideRelocation(BASE)).toBe("handoff");
 	});
@@ -66,8 +64,6 @@ describe("decideRelocation", () => {
 		).toBe("stay");
 	});
 
-	// Never destroy an install we could not identify, and never hand the
-	// session to a bundle we could not identify.
 	it("stays put when the installed version is unreadable", () => {
 		expect(decideRelocation({ ...BASE, installedVersion: null })).toBe("stay");
 	});
@@ -111,7 +107,6 @@ describe("readBundleVersion", () => {
 		await writeFile(path.join(bundle, "Contents", "Info.plist"), body, "utf8");
 	}
 
-	// Shaped like a real Forge-written Info.plist: XML, other keys around it.
 	it("reads the short version string out of an XML plist", async () => {
 		await writePlist(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

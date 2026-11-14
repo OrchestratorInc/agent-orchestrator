@@ -4,10 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError, machoArchs, machoHasX86_64Slice } from "./macho-archs";
 
-// Fixtures are synthesized buffers with the exact byte layouts observed on
-// disk (thin arm64: cf fa ed fe | 0c 00 00 01; fat: ca fe ba be | 00 00 00 02
-// with 20-byte entries), so no binary fixtures are committed and the suite
-// runs on any platform.
 const CPU_TYPE_X86_64 = 0x01000007;
 const CPU_TYPE_ARM64 = 0x0100000c;
 
@@ -19,9 +15,6 @@ function writeFixture(name: string, contents: Buffer): string {
 	return filePath;
 }
 
-// Thin header: magic, cputype, cpusubtype, filetype — all 32-bit fields in the
-// writer's byte order. Endianness of the fixture is decided by `bigEndian`,
-// which is a property of the file, not of the host running the test.
 function thinMachO(cputype: number, options: { bigEndian?: boolean; subtype?: number } = {}): Buffer {
 	const buffer = Buffer.alloc(16);
 	if (options.bigEndian) {
@@ -36,8 +29,6 @@ function thinMachO(cputype: number, options: { bigEndian?: boolean; subtype?: nu
 	return buffer;
 }
 
-// Fat header: magic + nfat_arch big-endian, then 20-byte (FAT_MAGIC) or
-// 32-byte (FAT_MAGIC_64) fat_arch entries whose first field is the cputype.
 function fatMachO(
 	entries: number[],
 	options: { is64?: boolean; nfatArchOverride?: number } = {},
@@ -54,9 +45,6 @@ function fatMachO(
 	return buffer;
 }
 
-// process.arch is an own accessor on process; pin it per call and always
-// restore, so the "never consult the host architecture" contract is proven
-// by construction rather than by a comment.
 function withHostArch<T>(arch: string, run: () => T): T {
 	const descriptor = Object.getOwnPropertyDescriptor(process, "arch");
 	Object.defineProperty(process, "arch", { get: () => arch, configurable: true });
@@ -86,10 +74,6 @@ describe("machoArchs", () => {
 	});
 
 	it("classifies an arm64e slice as arm64 (cputype, not cpusubtype)", () => {
-		// lipo -archs prints "arm64e" for cpusubtype 0x80000002; the cputype is
-		// plain arm64. The policy only asks for x86_64 slices, so the names the
-		// two implementations print may differ — this pins the intentional
-		// divergence so nobody "fixes" it.
 		expect(
 			machoArchs(writeFixture("thin-arm64e", thinMachO(CPU_TYPE_ARM64, { subtype: 0x80000002 }))),
 		).toEqual(["arm64"]);

@@ -1,6 +1,3 @@
-// Package hermes supervises the official Hermes Agent classic interactive CLI.
-// It uses native invocation configuration and AO-titled native sessions, never
-// installs global plugins or changes native safety/approval implementations.
 package hermes
 
 import (
@@ -28,7 +25,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
-	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
+	_ "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -40,11 +37,8 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Plugin supervises the official native interactive terminal.
 type Plugin struct{ agentbase.Base }
 
-// Revalidate these chrome markers whenever qualifiedReleaseLines changes. AO
-// launches Hermes with HERMES_LANGUAGE=en so the busy placeholder is English.
 const (
 	nativePrompt         = "❯"
 	nativeNamedPrompt    = "☤ ❯"
@@ -56,35 +50,23 @@ const (
 )
 
 var (
-	// Source and Homebrew installs append a date, channel, or commit after a space.
-	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
-	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
-	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
-	// A tagless clean checkout; a ".dirty" suffix never matches.
-	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
-	// A Homebrew bottle is built from the release tarball, which has no git
-	// metadata, so Hermes's git-derived banner version reads "unknown".
+	nativeVersionLine        = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
+	titleUnsafe              = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+	nativeStyleSequence      = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+	nativeSourceVersionLine  = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
 	nativeUnknownVersionLine = regexp.MustCompile(`^Hermes Agent vunknown(?: .*)?$`)
-	// A Homebrew keg directory names the formula version, plus `_N` when the
-	// formula was revised without a new upstream release.
-	homebrewKegDir   = regexp.MustCompile(`^(\d+\.\d+\.\d+)(?:_\d+)?$`)
-	stableReleaseTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	homebrewKegDir           = regexp.MustCompile(`^(\d+\.\d+\.\d+)(?:_\d+)?$`)
+	stableReleaseTag         = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 )
 
-// systemLaunchers are the package-manager install locations ResolveBinary
-// probes before the per-user ones. Tests clear it so a host's own Hermes
-// install cannot take precedence over a fixture.
 var systemLaunchers = []string{"/opt/homebrew/bin/hermes", "/usr/local/bin/hermes", "/home/linuxbrew/.linuxbrew/bin/hermes", "/usr/bin/hermes"}
 
-// New creates the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
 
-// Manifest implements the scoped native adapter contract.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "hermes", Name: "Hermes Agent", Description: "Official Nous Research Hermes Agent interactive terminal; native approvals and exact session restore.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
-// ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	timedOut := false
 	var unconfirmed []string
@@ -92,7 +74,6 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		if identityConfirmed(ctx, path) {
 			return true
 		}
-		// Retry once: a probe can fail transiently on a loaded machine.
 		var reason string
 		for range 2 {
 			ok, why, timeout := probeNativeVersion(ctx, path)
@@ -109,12 +90,10 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 			}
 			reason = why
 		}
-		// A fresh rejection outranks an earlier confirmation of this launcher.
 		forgetIdentity(path)
 		unconfirmed = append(unconfirmed, path+": "+reason)
 		return false
 	}
-	// The official installers publish launchers under a custom HERMES_HOME.
 	for _, candidate := range customHomeCandidates() {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -123,8 +102,6 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 			return candidate, nil
 		}
 	}
-	// Probe only the official installers' locations. A PATH-first --version probe
-	// would execute an unrelated earlier binary during passive agent discovery.
 	path, err := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", UnixPaths: systemLaunchers, UnixHomePaths: [][]string{
 		{".local", "bin", "hermes"},
 		{".hermes", "hermes-agent", ".hermes", "bin", "hermes"},
@@ -134,21 +111,15 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "bin", "hermes.cmd"}},
 		{Base: binaryutil.WinLocalAppData, Parts: []string{"hermes", "hermes-agent", "venv", "Scripts", "hermes.exe"}},
 	}, ValidateIdentity: validate})
-	// A slow probe is not proof of absence: report the timeout so readiness
-	// retries instead of recording Hermes as not installed.
 	if err != nil && timedOut {
 		return "", fmt.Errorf("hermes: native identity check timed out: %w", context.DeadlineExceeded)
 	}
-	// An executable at an official install location that will not confirm its
-	// version is present but unverified, not absent.
 	if errors.Is(err, ports.ErrAgentBinaryNotFound) && len(unconfirmed) > 0 {
 		return "", fmt.Errorf("hermes: %s: %w", strings.Join(unconfirmed, "; "), ports.ErrAgentBinaryIdentityUnknown)
 	}
 	return path, err
 }
 
-// customHomeCandidates are the launchers the official installers publish when
-// HERMES_HOME is not the platform default.
 func customHomeCandidates() []string {
 	home, err := ResolveHome(nil)
 	if err != nil {
@@ -166,15 +137,8 @@ func customHomeCandidates() []string {
 	return []string{filepath.Join(home, "hermes-agent", ".hermes", "bin", "hermes")}
 }
 
-// confirmedIdentities remembers launchers whose --version banner passed, so a
-// spawn or restore right after readiness's launch check reuses that probe
-// instead of waiting on another Python start. A launcher can forward to code
-// that changes without touching the launcher file, so an entry is also keyed
-// on the installation's revision and expires after confirmedIdentityTTL.
 var confirmedIdentities sync.Map
 
-// confirmedIdentityTTL is long enough to span AO's launch readiness check and
-// the spawn that follows it, and short enough that later launches re-probe.
 const confirmedIdentityTTL = time.Minute
 
 type binaryIdentity struct {
@@ -201,9 +165,6 @@ func currentIdentity(path string) (binaryIdentity, bool) {
 	return binaryIdentity{target: target, size: st.Size(), modTime: st.ModTime(), revision: installRevision(path)}, true
 }
 
-// installRevision names the commit of the source checkout a launcher runs,
-// falling back to the official installation under HERMES_HOME. Homebrew
-// installs are already distinguished by their versioned Cellar target.
 func installRevision(launcher string) string {
 	if root := launcherSourceRoot(launcher); root != "" {
 		return gitHead(root)
@@ -215,11 +176,6 @@ func installRevision(launcher string) string {
 	return gitHead(filepath.Join(home, "hermes-agent"))
 }
 
-// launcherSourceRoot follows the official source launchers to the checkout
-// they run: the public wrapper is `exec <root>/.hermes/bin/hermes "$@"`, and
-// a venv console script lives in <root>/venv/bin or <root>/.venv/bin. Hermes
-// takes its project .env from that checkout. It returns "" when the launcher
-// is not one of these, such as a Homebrew bottle.
 func launcherSourceRoot(launcher string) string {
 	path := launcher
 	for range 4 {
@@ -243,7 +199,6 @@ func launcherSourceRoot(launcher string) string {
 	return ""
 }
 
-// wrapperTarget reads the program a published `#!/bin/sh` wrapper execs.
 func wrapperTarget(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -264,9 +219,6 @@ func wrapperTarget(path string) string {
 	return ""
 }
 
-// firstShellWord reads the first POSIX shell word, joining adjacent quoted
-// and unquoted segments as the shell does. shlex.join writes an apostrophe
-// as '"'"', so /a/Owner's Hermes becomes '/a/Owner'"'"'s Hermes'.
 func firstShellWord(text string) string {
 	var word strings.Builder
 	for i := 0; i < len(text); i++ {
@@ -286,7 +238,7 @@ func firstShellWord(text string) string {
 				if text[i] == '\\' && i+1 < len(text) && strings.IndexByte("$`\"\\\n", text[i+1]) >= 0 {
 					i++
 				} else if text[i] == '$' || text[i] == '`' {
-					return "" // expansion: not a literal path
+					return ""
 				}
 				word.WriteByte(text[i])
 			}
@@ -307,9 +259,6 @@ func firstShellWord(text string) string {
 	return word.String()
 }
 
-// sourceRoots are the checkouts whose project .env Hermes may load: those
-// the installed launchers run, plus the official installer's checkout under
-// both the effective and the default home.
 func sourceRoots(home string, env map[string]string) []string {
 	roots := []string{filepath.Join(home, "hermes-agent")}
 	defaultEnv := maps.Clone(env)
@@ -333,7 +282,6 @@ func sourceRoots(home string, env map[string]string) []string {
 	return slices.Compact(roots)
 }
 
-// installedLaunchers are the launcher locations ResolveBinary considers.
 func installedLaunchers() []string {
 	launchers := customHomeCandidates()
 	if runtime.GOOS == "windows" {
@@ -352,9 +300,6 @@ func installedLaunchers() []string {
 	return launchers
 }
 
-// gitHead reads a checkout's HEAD commit without running git: a detached SHA,
-// or the branch ref from its loose file or packed-refs. A linked worktree keeps
-// HEAD in its own git directory and branch refs in the one named by commondir.
 func gitHead(checkout string) string {
 	gitDir, refsDir := gitDirs(checkout)
 	head, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
@@ -383,8 +328,6 @@ func gitHead(checkout string) string {
 	return ref
 }
 
-// gitDirs locates a checkout's git directory and the directory holding its
-// shared refs and objects (the same, except in a linked worktree).
 func gitDirs(checkout string) (gitDir, commonDir string) {
 	gitDir = filepath.Join(checkout, ".git")
 	if b, err := os.ReadFile(gitDir); err == nil {
@@ -409,9 +352,6 @@ func identityConfirmed(ctx context.Context, path string) bool {
 	if !ok {
 		return false
 	}
-	// A shell wrapper whose source checkout AO cannot name could forward to
-	// changed code with no visible revision, so it is always re-probed.
-	// Homebrew's versioned Cellar target already names its release.
 	root := launcherSourceRoot(path)
 	if !inCellar(current.target) && isShellScript(current.target) && root == "" {
 		return false
@@ -421,8 +361,6 @@ func identityConfirmed(ctx context.Context, path string) bool {
 	if !found || !ok || entry.binaryIdentity != current || time.Since(entry.at) >= confirmedIdentityTTL {
 		return false
 	}
-	// A tracked edit changes neither the launcher nor HEAD; the probe's
-	// clean-source condition must still hold when its result is reused.
 	if root != "" && !sourceUnmodified(ctx, root) {
 		return false
 	}
@@ -452,11 +390,7 @@ func rememberIdentity(path string) {
 
 func forgetIdentity(path string) { confirmedIdentities.Delete(path) }
 
-// probeNativeVersion runs `hermes --version` and checks its banner. It reports
-// why a probe that ran was rejected, and whether it hit its own deadline.
 func probeNativeVersion(ctx context.Context, path string) (ok bool, reason string, timedOut bool) {
-	// A fresh install's first launch compiles Hermes's Python bytecode, which
-	// can take far longer than a warm run; the probe must outlast it.
 	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(probeCtx, path, "--version")
@@ -469,9 +403,6 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	firstLine, _, _ := strings.Cut(string(b), "\n")
 	firstLine = strings.TrimSuffix(firstLine, "\r")
 	if err == nil && supportedNativeVersion(firstLine) {
-		// Hermes's release banner carries no dirty marker, so a source
-		// checkout with edited tracked files (locales, chrome) still prints
-		// it. Refuse when git reports such edits.
 		if root := launcherSourceRoot(path); root != "" && !sourceUnmodified(ctx, root) {
 			return false, fmt.Sprintf("source checkout %s is modified or its state could not be verified with git; Orchestrator qualifies only unmodified releases", root), false
 		}
@@ -492,27 +423,13 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 	return false, fmt.Sprintf("version banner %q is not a Hermes release line Orchestrator has qualified", firstLine), false
 }
 
-// qualifiedReleaseLines are the major.minor release lines whose composer,
-// busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS). A newer line stays installed
-// but unverified until its markers are revalidated. Only major.minor is
-// compared: Hermes derives its banner from git tags, so the same build can
-// report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
 var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
 
-// qualifiedSourceCheckout accepts the banner Hermes prints when its own git
-// lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
-// checkout) if the launcher's source checkout is exactly a qualified release.
 func qualifiedSourceCheckout(ctx context.Context, launcher, line string) bool {
 	tag := SourceReleaseTag(ctx, launcher, line)
 	return tag != "" && supportedNativeVersion("Hermes Agent "+tag)
 }
 
-// qualifiedHomebrewKeg accepts the `vunknown` banner a Homebrew bottle prints
-// when the launcher resolves into a hermes-agent keg on a qualified line. The
-// banner names no release, so Homebrew's own record must: the keg directory
-// and its INSTALL_RECEIPT.json have to agree on it. installedVersionText in
-// systeminstall already takes a Homebrew install's version from the same keg.
 func qualifiedHomebrewKeg(launcher, banner string) bool {
 	if !nativeUnknownVersionLine.MatchString(banner) {
 		return false
@@ -521,17 +438,12 @@ func qualifiedHomebrewKeg(launcher, banner string) bool {
 	return version != "" && supportedNativeVersion("Hermes Agent v"+version)
 }
 
-// homebrewKegVersion returns the release of the hermes-agent keg a launcher
-// resolves into (…/Cellar/hermes-agent/<version>[_<revision>]/…). It returns
-// "" when the launcher is not inside such a keg or the keg's
-// INSTALL_RECEIPT.json records a different release.
 func homebrewKegVersion(launcher string) string {
 	target, err := filepath.EvalSymlinks(launcher)
 	if err != nil {
 		return ""
 	}
 	parts := strings.Split(filepath.ToSlash(target), "/")
-	// The executable lives below the keg directory, never as the keg itself.
 	for i := 0; i+3 < len(parts); i++ {
 		if parts[i] != "Cellar" || parts[i+1] != "hermes-agent" {
 			continue
@@ -560,13 +472,6 @@ func homebrewKegVersion(launcher string) string {
 	return ""
 }
 
-// SourceReleaseTag names the release a tagless `vgit.<sha>` banner was built
-// from. The banner alone proves neither: Hermes can print it from a stored
-// source stamp. So git itself must report that the launcher's source
-// checkout is at the banner's commit, has no tracked modifications, and
-// carries an effective vX.Y.Z tag on that commit (preferring a qualified
-// line). Asking git covers packed and loose refs, shadowing, annotated tags
-// in packs and alternates. It returns "" otherwise, including without git.
 func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 	firstLine, _, _ := strings.Cut(banner, "\n")
 	m := nativeSourceVersionLine.FindStringSubmatch(strings.TrimSuffix(firstLine, "\r"))
@@ -606,9 +511,6 @@ func SourceReleaseTag(ctx context.Context, launcher, banner string) string {
 	return ""
 }
 
-// sourceUnmodified reports whether a recognized source checkout can be
-// qualified: a git checkout must be verified clean, so an unknown answer
-// refuses. A tree without .git has no git state to compare.
 func sourceUnmodified(ctx context.Context, root string) bool {
 	if _, err := os.Lstat(filepath.Join(root, ".git")); errors.Is(err, os.ErrNotExist) {
 		return true
@@ -617,14 +519,7 @@ func sourceUnmodified(ctx context.Context, root string) bool {
 	return known && !modified
 }
 
-// sourceModified asks git whether a checkout has modified tracked files, or
-// an untracked (including ignored) English catalog in the bundled locales or
-// plugins directories Hermes reads from the checkout. known is false when
-// git cannot answer, including when the repository git finds is not rooted
-// at the checkout itself.
 func sourceModified(ctx context.Context, root string) (modified, known bool) {
-	// Only git's line terminator is dropped: a checkout path may end in
-	// whitespace, which TrimSpace would strip into a different directory.
 	top, ok := runGitOutput(ctx, root, "rev-parse", "--show-toplevel")
 	top = strings.TrimSuffix(strings.TrimSuffix(top, "\n"), "\r")
 	if !ok || !sameDir(top, root) {
@@ -637,7 +532,6 @@ func sourceModified(ctx context.Context, root string) (modified, known bool) {
 	if status != "" {
 		return true, true
 	}
-	// Without --exclude-standard, --others also lists ignored files.
 	untracked, ok := runGitOutput(ctx, root, "ls-files", "-z", "--others", "--", "locales", "plugins")
 	if !ok {
 		return false, false
@@ -650,8 +544,6 @@ func sourceModified(ctx context.Context, root string) (modified, known bool) {
 		if englishLocaleFile.MatchString(name) && filepath.Base(filepath.Clean(dir)) == "locales" {
 			return true, true
 		}
-		// Git lists an untracked symlink but never what it points to, while
-		// native plugin discovery follows it; the release ships none here.
 		if st, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path))); err != nil || st.Mode()&os.ModeSymlink != 0 {
 			return true, true
 		}
@@ -670,10 +562,6 @@ func runGit(ctx context.Context, root string, args ...string) (string, bool) {
 	return strings.TrimSpace(out), ok
 }
 
-// gitExecutable finds git when the daemon's PATH may be minimal, like
-// Hermes's _resolve_git_executable, plus the Git for Windows build the
-// official Windows installer pins under <HERMES_HOME>/tools (or
-// HERMES_RUNTIME_DIR) without adding it to PATH.
 func gitExecutable() string {
 	if found, err := exec.LookPath("git"); err == nil {
 		return found
@@ -710,11 +598,6 @@ func gitExecutable() string {
 	return ""
 }
 
-// runGitOutput preserves raw output, including filename whitespace and NULs.
-// It runs a read-only git query in a checkout without taking optional
-// locks, so it cannot strand an index.lock in the user's installation.
-// AO's own GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, ...)
-// would redirect the query to another repository, so none are inherited.
 func runGitOutput(ctx context.Context, root string, args ...string) (string, bool) {
 	gitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -732,8 +615,6 @@ func runGitOutput(ctx context.Context, root string, args ...string) (string, boo
 	return string(out), err == nil
 }
 
-// supportedNativeVersion accepts a Hermes --version first line from a
-// qualified release line.
 func supportedNativeVersion(line string) bool {
 	m := nativeVersionLine.FindStringSubmatch(line)
 	if m == nil {
@@ -752,7 +633,6 @@ func supportedNativeVersion(line string) bool {
 	return false
 }
 
-// GetConfigSpec implements the scoped native adapter contract.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelEffortConfigSpec(ctx,
 		"Native Hermes --model override; provider and credentials remain native configuration.",
@@ -765,9 +645,6 @@ func validate(cfg ports.LaunchConfig) error {
 	return nil
 }
 
-// permissionArgs maps AO approval modes onto native Hermes approvals. Hermes has
-// no accept-edits or auto tier, so those keep native prompts rather than
-// approving more than requested; only explicit bypass skips them.
 func permissionArgs(mode ports.PermissionMode) []string {
 	if ports.NormalizePermissionMode(mode) == ports.PermissionModeBypassPermissions {
 		return []string{"--yolo"}
@@ -775,7 +652,6 @@ func permissionArgs(mode ports.PermissionMode) []string {
 	return nil
 }
 
-// GetLaunchCommand implements the scoped native adapter contract.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -783,8 +659,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
-	// Every fresh launch mints a new title, so a relaunch never adopts an older
-	// conversation; restore reuses the stored one.
 	title, err := newSessionTitle(cfg.DataDir, cfg.SessionID)
 	if err != nil {
 		return nil, err
@@ -808,21 +682,12 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 func sessionDir(data, id string) string { return filepath.Join(data, "agents", "hermes", id) }
 
-// sessionCommand starts or resumes the native conversation AO titled for this
-// session. Hermes records the title as user-provided, so auto-titling never
-// renames it, and resolves it forward through context compression itself.
 func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, title string, create bool) ([]string, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return nil, err
 	}
 	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath, "--continue", title}
-	// Creation overrides ride only fresh launches. Hermes rejects them on
-	// resume — "Resume retains gateway session policy; creation overrides are
-	// unsupported on resume. -m/--model, --provider differ from this session's
-	// launch: resume without them and use /model after resuming to switch." —
-	// so a restore that carried a configured --model/--reasoning died at
-	// startup and the switch surfaced a dead terminal.
 	if create {
 		cmd = append(cmd, "--create-if-missing")
 		agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
@@ -831,9 +696,6 @@ func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, tit
 	return append(cmd, permissionArgs(cfg.Permissions)...), nil
 }
 
-// newSessionTitle records a fresh native title for an AO launch. The random
-// suffix keeps titles unique when several AO data directories share one
-// Hermes home and reuse session IDs.
 func newSessionTitle(data, id string) (string, error) {
 	suffix := make([]byte, 6)
 	if _, err := rand.Read(suffix); err != nil {
@@ -865,8 +727,6 @@ func sessionTitle(data, id string) (string, error) {
 	return "", fmt.Errorf("hermes: empty native session title")
 }
 
-// ResolveHome mirrors Hermes's own HERMES_HOME default: ~/.hermes on macOS and
-// Linux, %LOCALAPPDATA%\hermes on Windows. The launch env wins over the daemon's.
 func ResolveHome(env map[string]string) (string, error) {
 	lookup := childEnvLookup(env)
 	get := func(name string) string {
@@ -877,13 +737,9 @@ func ResolveHome(env map[string]string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Hermes resolves a relative home against its own working directory, the
-	// session workspace, so AO would inspect a different directory.
 	if !filepath.IsAbs(home) {
 		return "", fmt.Errorf("hermes: native home %q must be an absolute path; set HERMES_HOME or HOME to an absolute directory", home)
 	}
-	// Hermes follows a symlink before "..", where filepath.Clean folds it
-	// lexically and would name a different directory.
 	if slices.Contains(strings.FieldsFunc(home, func(r rune) bool { return r == '/' || r == filepath.Separator }), "..") {
 		return "", fmt.Errorf("hermes: native home %q contains a \"..\" component; set HERMES_HOME or HOME to a path without it", home)
 	}
@@ -894,9 +750,6 @@ func nativeHomeFrom(lookup envLookup, get func(string) string) (string, error) {
 	if dir := pyStrip(get("HERMES_HOME")); dir != "" {
 		return expandNativePath(dir, lookup)
 	}
-	// _get_platform_default_hermes_home: LOCALAPPDATA (or Path.home() /
-	// AppData/Local) on Windows, else Path.home(), with the unstripped
-	// HERMES_DATA_DIR_SUFFIX appended to the directory name.
 	suffix := get("HERMES_DATA_DIR_SUFFIX")
 	if runtime.GOOS == "windows" {
 		local := pyStrip(get("LOCALAPPDATA"))
@@ -913,14 +766,9 @@ func nativeHomeFrom(lookup envLookup, get func(string) string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Not filepath.Join: ResolveHome must see a ".." the suffix introduces.
 	return home + string(filepath.Separator) + ".hermes" + suffix, nil
 }
 
-// expandNativePath applies Hermes's HERMES_HOME expansion,
-// os.path.expanduser(os.path.expandvars(value)), against the child
-// environment, so AO reads and records the directory Hermes writes to.
-// Undefined variables stay literal, as in Python.
 func expandNativePath(value string, lookup envLookup) (string, error) {
 	if runtime.GOOS == "windows" {
 		return expandWindowsUser(expandWindowsVars(value, lookup), lookup)
@@ -930,8 +778,6 @@ func expandNativePath(value string, lookup envLookup) (string, error) {
 
 var posixVarReference = regexp.MustCompile(`\$(\w+|\{[^}]*\})`)
 
-// expandPOSIXVars mirrors posixpath.expandvars: $NAME and ${NAME}, with
-// unknown names left unchanged.
 func expandPOSIXVars(value string, lookup envLookup) string {
 	return posixVarReference.ReplaceAllStringFunc(value, func(ref string) string {
 		name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(ref, "$"), "{"), "}")
@@ -942,13 +788,10 @@ func expandPOSIXVars(value string, lookup envLookup) string {
 	})
 }
 
-// expandPOSIXUser mirrors posixpath.expanduser for the current user's ~.
 func expandPOSIXUser(value string, lookup envLookup) (string, error) {
 	if value != "~" && !strings.HasPrefix(value, "~/") {
 		return value, nil
 	}
-	// posixpath.expanduser uses HOME whenever it is defined, else the
-	// password database.
 	home, ok := lookup("HOME")
 	if !ok {
 		var err error
@@ -959,8 +802,6 @@ func expandPOSIXUser(value string, lookup envLookup) (string, error) {
 	return strings.TrimSuffix(home, "/") + value[1:], nil
 }
 
-// expandWindowsVars mirrors ntpath.expandvars: %NAME%, $NAME and ${NAME},
-// '%%' and '$$' escapes, and single-quoted literal runs; unknown names stay.
 func expandWindowsVars(value string, lookup envLookup) string {
 	var b strings.Builder
 	for i := 0; i < len(value); {
@@ -1029,8 +870,6 @@ func expandWindowsVars(value string, lookup envLookup) string {
 	return b.String()
 }
 
-// expandWindowsUser mirrors ntpath.expanduser for the current user's ~:
-// USERPROFILE, then HOMEDRIVE+HOMEPATH. HOME is not consulted.
 func expandWindowsUser(value string, lookup envLookup) (string, error) {
 	if value != "~" && !strings.HasPrefix(value, "~/") && !strings.HasPrefix(value, `~\`) {
 		return value, nil
@@ -1039,7 +878,7 @@ func expandWindowsUser(value string, lookup envLookup) (string, error) {
 	if !ok {
 		path, ok := lookup("HOMEPATH")
 		if !ok {
-			return value, nil // ntpath.expanduser leaves ~ when neither is defined
+			return value, nil
 		}
 		drive, _ := lookup("HOMEDRIVE")
 		home = drive + path
@@ -1047,12 +886,8 @@ func expandWindowsUser(value string, lookup envLookup) (string, error) {
 	return home + value[1:], nil
 }
 
-// envLookup reports a variable's value and whether it is defined, so an
-// explicitly empty variable expands to empty, as in Python.
 type envLookup func(name string) (string, bool)
 
-// childEnvLookup reads the launch environment, then the daemon's. Windows
-// variable names are case-insensitive.
 func childEnvLookup(env map[string]string) envLookup {
 	return func(name string) (string, bool) {
 		if value, ok := env[name]; ok {
@@ -1069,8 +904,6 @@ func childEnvLookup(env map[string]string) envLookup {
 	}
 }
 
-// GetAgentHooks only supplies process-local additive native configuration. The
-// name is AO's existing launch-environment boundary; no native hooks are added.
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1082,11 +915,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err != nil {
 		return err
 	}
-	// AO pins the home it checks as an explicit HERMES_HOME, which Hermes strips
-	// and expands, unlike the default home's literal data-dir suffix. Refuse a
-	// home that pinning would move. A remaining variable reference would expand
-	// against the final child environment, including variables AO sets below
-	// (HERMES_LANGUAGE), so it is refused outright.
 	pinned := maps.Clone(cfg.Env)
 	pinned["HERMES_HOME"] = home
 	reference := "$"
@@ -1099,18 +927,13 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if filepath.Base(filepath.Dir(home)) == "profiles" {
 		return fmt.Errorf("hermes: named native profiles are not supported by this initial rendered-composer integration")
 	}
-	// Native sticky profiles can redirect a root even when HERMES_HOME is set.
 	if b, e := os.ReadFile(filepath.Join(home, "active_profile")); e == nil && pyStrip(string(b)) != "" && pyStrip(string(b)) != "default" {
 		return fmt.Errorf("hermes: sticky native profiles are not supported; clear active_profile or select the default native profile")
 	}
-	// Hermes resolves HERMES_MANAGED_DIR against its working directory, the
-	// session workspace.
 	for _, managed := range []string{os.Getenv("HERMES_MANAGED_DIR"), cfg.Env["HERMES_MANAGED_DIR"], "/etc/hermes"} {
 		if managed = pyStrip(managed); managed == "" {
 			continue
 		}
-		// Not filepath.Join: lexical cleaning would fold "link/.." where the
-		// filesystem follows the symlink first.
 		if !filepath.IsAbs(managed) && cfg.WorkspacePath != "" {
 			managed = cfg.WorkspacePath + string(filepath.Separator) + managed
 		}
@@ -1118,17 +941,9 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 			return fmt.Errorf("hermes: managed native configuration is not supported by the additive instruction adapter")
 		}
 	}
-	// Hermes reads its English chrome through locale layers above the bundled
-	// catalog; any of them could reword the markers AO detects.
 	if err := refuseEnglishLocaleOverrides(home, cfg); err != nil {
 		return err
 	}
-	// Hermes loads <HERMES_HOME>/.env with override, and a source install's
-	// project .env too (with override when the home file is absent), so a value
-	// there would silently replace AO's instructions or chrome language, or
-	// move Hermes to a home or managed scope AO has not checked.
-	// The project root follows the installed checkout, not HERMES_HOME, and
-	// .op.env bootstraps the environment before the managed scope is read.
 	envFiles := []string{filepath.Join(home, ".env"), filepath.Join(home, ".op.env")}
 	for _, root := range sourceRoots(home, cfg.Env) {
 		envFiles = append(envFiles, filepath.Join(root, ".env"))
@@ -1152,11 +967,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	cfg.Env["HERMES_HOME"] = home
-	// AO reads Hermes's English composer and busy chrome; HERMES_LANGUAGE
-	// outranks display.language for this process only.
 	cfg.Env["HERMES_LANGUAGE"] = "en"
-	// Pin the scope and locale redirects AO checked as unset, so a secret
-	// source's gap-fill cannot introduce them after these checks.
 	for _, name := range []string{"HERMES_MANAGED_DIR", "HERMES_BUNDLED_LOCALES", "HERMES_BUNDLED_PLUGINS"} {
 		if _, ok := childEnvLookup(cfg.Env)(name); !ok {
 			cfg.Env[name] = ""
@@ -1167,8 +978,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		original = cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]
 	}
 	if original == "" {
-		// Only parsed values the overlay renders matter: the installer's
-		// generated config shows ${VAR} examples in comments.
 		var envRef, untyped bool
 		original, envRef, untyped = nativeOverlay(config)
 		if envRef {
@@ -1190,7 +999,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if _, err := ComposeEphemeralPrompt(original, instructions); err != nil {
 		return err
 	}
-	// The AO original-prompt entry carries a second copy of the native text.
 	if len("AO_HERMES_ORIGINAL_EPHEMERAL=")+len(original)+1 > maxEnvString() {
 		return fmt.Errorf("hermes: standing instructions exceed process environment limit")
 	}
@@ -1207,13 +1015,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
 }
 
-// refuseEnglishLocaleOverrides refuses the catalog layers that can reword
-// Hermes's English chrome (agent/i18n.py, i18n_layers.py): a sealed bundle
-// named by HERMES_BUNDLED_LOCALES, the profile overlay
-// <HERMES_HOME>/locales/en[.<surface>].yaml, and declarative plugin language
-// packs under the user, project or HERMES_BUNDLED_PLUGINS plugin directories.
-// Relative overrides resolve against Hermes's working directory, the session
-// workspace, as they do natively.
 func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) error {
 	childPath := func(path string) (string, bool) {
 		if filepath.IsAbs(path) {
@@ -1222,8 +1023,6 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		if cfg.WorkspacePath == "" {
 			return "", false
 		}
-		// Not filepath.Join: lexical cleaning would fold "link/.." where the
-		// filesystem follows the symlink first.
 		return cfg.WorkspacePath + string(filepath.Separator) + path, true
 	}
 	for _, bundled := range []string{os.Getenv("HERMES_BUNDLED_LOCALES"), cfg.Env["HERMES_BUNDLED_LOCALES"]} {
@@ -1239,7 +1038,6 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 	if cfg.WorkspacePath != "" {
 		pluginRoots = append(pluginRoots, filepath.Join(cfg.WorkspacePath, ".hermes", "plugins"))
 	}
-	// get_bundled_plugins_dir uses the raw value whenever it is non-empty.
 	for _, bundled := range []string{os.Getenv("HERMES_BUNDLED_PLUGINS"), cfg.Env["HERMES_BUNDLED_PLUGINS"]} {
 		if bundled == "" {
 			continue
@@ -1251,7 +1049,6 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 		pluginRoots = append(pluginRoots, path)
 	}
 	for _, root := range pluginRoots {
-		// A plugin tree AO cannot read could hold a pack it never saw.
 		found, err := localeDirs(root, 0)
 		if err != nil {
 			return fmt.Errorf("hermes: cannot inspect plugin language packs under %s: %w", root, err)
@@ -1269,9 +1066,6 @@ func refuseEnglishLocaleOverrides(home string, cfg ports.WorkspaceHookConfig) er
 	return nil
 }
 
-// localeDirs lists the locales directories in a plugin tree. Like Hermes's
-// plugin discovery (Path.is_dir), it follows directory symlinks; the depth
-// bound covers flat and category layouts and stops symlink cycles.
 func localeDirs(dir string, depth int) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -1282,8 +1076,6 @@ func localeDirs(dir string, depth int) ([]string, error) {
 	}
 	var dirs []string
 	for _, entry := range entries {
-		// Not filepath.Join: lexical cleaning would fold a "link/.." in the
-		// root where the filesystem follows the symlink first.
 		path := dir + string(filepath.Separator) + entry.Name()
 		if st, err := os.Stat(path); err != nil || !st.IsDir() {
 			continue
@@ -1302,16 +1094,8 @@ func localeDirs(dir string, depth int) ([]string, error) {
 	return dirs, nil
 }
 
-// englishLocaleFile is an i18n_layers locale file for language "en".
 var englishLocaleFile = regexp.MustCompile(`^en(?:\.(?:core|tui|desktop))?\.ya?ml$`)
 
-// refuseSecretSources refuses enabled external secret sources (config.yaml
-// secrets:, applied after the dotenv layers) that may override variables AO
-// sets. Bitwarden and 1Password override by default; a source configured
-// with override_existing: false only fills unset names, which AO pins.
-// Startup applies sources only when one has enabled exactly true
-// (env_loader.py), then fetches every source whose enabled is truthy
-// (SecretSource.is_enabled).
 func refuseSecretSources(config map[string]any) error {
 	secrets, _ := config["secrets"].(map[string]any)
 	if !slices.ContainsFunc(slices.Collect(maps.Values(secrets)), func(v any) bool {
@@ -1340,7 +1124,7 @@ func refuseDotenvOverrides(envFile string) error {
 	}
 	for _, binding := range bindings {
 		if !binding.assigned {
-			continue // a bare name without "=" sets nothing
+			continue
 		}
 		switch key := guardedEnvName(binding.key); key {
 		case "HERMES_EPHEMERAL_SYSTEM_PROMPT":
@@ -1356,8 +1140,6 @@ func refuseDotenvOverrides(envFile string) error {
 	return nil
 }
 
-// referencesEnv reports whether a parsed YAML value holds a ${VAR} reference.
-// Hermes expands string values only, so mapping keys are not inspected.
 func referencesEnv(value any) bool {
 	switch v := value.(type) {
 	case string:
@@ -1374,9 +1156,6 @@ func referencesEnv(value any) bool {
 	return false
 }
 
-// maxEnvString bounds one NAME=value environment entry: Linux MAX_ARG_STRLEN
-// counts NAME= and the trailing NUL, and Windows caps a variable at 32,767
-// characters.
 func maxEnvString() int {
 	if runtime.GOOS == "windows" {
 		return 32767
@@ -1384,13 +1163,6 @@ func maxEnvString() int {
 	return 128 * 1024
 }
 
-// ComposeEphemeralPrompt folds AO's standing instructions into the native
-// persona text, separated the way the TUI path renders both, and rejects the
-// result when the HERMES_EPHEMERAL_SYSTEM_PROMPT entry would exceed the
-// process environment limit both launch paths share. Hermes reads that
-// variable first and only falls back to the native configuration when it is
-// empty, so composing it from AO's instructions alone would replace the
-// user's persona.
 func ComposeEphemeralPrompt(original, instructions string) (string, error) {
 	combined := original + instructions
 	if original != "" && instructions != "" {
@@ -1402,15 +1174,6 @@ func ComposeEphemeralPrompt(original, instructions string) (string, error) {
 	return combined, nil
 }
 
-// OriginalEphemeralPrompt resolves the persona text Hermes would apply before
-// AO's instructions: an explicit ephemeral prompt — preserved through
-// AO_HERMES_ORIGINAL_EPHEMERAL by the hook-config path, or set as an explicit
-// session-env HERMES_EPHEMERAL_SYSTEM_PROMPT, both of which Hermes reads ahead
-// of its configuration — and only when neither exists the config.yaml overlay
-// that NativeEphemeralOverlay renders. A value merely inherited from the
-// daemon's own process environment is deliberately ignored: standing
-// instructions must not leak from the shell/CI environment into every session
-// (the #6536 boundary, TestStandingInstructionsIgnoreDaemonEphemeralPrompt).
 func OriginalEphemeralPrompt(env map[string]string) (string, error) {
 	if original, ok := env["AO_HERMES_ORIGINAL_EPHEMERAL"]; ok && original != "" {
 		return original, nil
@@ -1421,10 +1184,6 @@ func OriginalEphemeralPrompt(env map[string]string) (string, error) {
 	return NativeEphemeralOverlay(env)
 }
 
-// NativeEphemeralOverlay reads the persona Hermes would apply natively from
-// <HERMES_HOME>/config.yaml, the same overlay the TUI path renders
-// (nativeOverlay). It returns "" when the native configuration carries no
-// persona.
 func NativeEphemeralOverlay(env map[string]string) (string, error) {
 	home, err := ResolveHome(env)
 	if err != nil {
@@ -1450,13 +1209,6 @@ func NativeEphemeralOverlay(env map[string]string) (string, error) {
 	return overlay, nil
 }
 
-// nativeOverlay rebuilds the overlay Hermes renders (personality.py): the
-// selected personality's prompt (system_prompt, tone and style for a
-// structured one), or agent.system_prompt without one. envRef reports a
-// ${VAR} reference in any value that rendering consumes; UI-only fields such
-// as a personality's description are ignored. untyped reports a consumed
-// value that is not text under Hermes's YAML 1.1 reading, whose Python str()
-// rendering AO does not reproduce.
 func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool) {
 	agent, _ := config["agent"].(map[string]any)
 	display, _ := config["display"].(map[string]any)
@@ -1475,8 +1227,6 @@ func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool)
 		for _, src := range []any{config["personalities"], agent["personalities"]} {
 			if m, ok := src.(map[string]any); ok {
 				for k, v := range m {
-					// Hermes expands values, never keys, so a ${VAR} name stays
-					// literal; a name that retypes could select another definition.
 					untyped = untyped || strings.HasPrefix(k, yaml11Sentinel)
 					definitions[pyLower(pyStrip(k))] = v
 				}
@@ -1484,10 +1234,6 @@ func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool)
 		}
 		if v, ok := definitions[name]; ok {
 			if m, ok := v.(map[string]any); ok {
-				// render_personality_prompt: str() of each part, stripped,
-				// non-empty parts joined. An explicit null prompt renders as
-				// "None"; tone and style appear only when truthy. AO
-				// reproduces str() only for text, not for lists or maps.
 				consumeStr := func(v any) string {
 					consume(v)
 					s, isString := v.(string)
@@ -1523,8 +1269,6 @@ func nativeOverlay(config map[string]any) (overlay string, envRef, untyped bool)
 	return promptText(agent["system_prompt"]), envRef, untyped
 }
 
-// isText accepts an absent value, a string, or a list of strings: the
-// shapes whose Python str() AO reproduces exactly.
 func isText(v any) bool {
 	switch v := v.(type) {
 	case nil:
@@ -1542,7 +1286,6 @@ func isText(v any) bool {
 	return false
 }
 
-// pyLower is Python's str.lower(), with full Unicode case mapping.
 func pyLower(s string) string {
 	return cases.Lower(language.Und).String(s)
 }
@@ -1567,7 +1310,6 @@ func nativeHome(data, id string) (string, error) {
 	return string(b), err
 }
 
-// GetRestoreCommand implements the scoped native adapter contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -1583,8 +1325,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if _, err := p.titledSessionID(ctx, cfg.DataDir, cfg.Session.ID, title); err != nil {
 		return nil, false, err
 	}
-	// Without --create-if-missing, a conversation renamed or deleted after this
-	// check fails loudly instead of silently starting a fresh one.
 	cmd, err := p.sessionCommand(ctx, launch, title, false)
 	if err != nil {
 		return nil, false, err
@@ -1592,9 +1332,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// titledSessionID reads the native conversation AO titled for a session.
-// Compression continuations keep the root's lineage, which Hermes resolves on
-// resume; the root ID is the stable identity AO reports.
 func (*Plugin) titledSessionID(ctx context.Context, data, id, title string) (string, error) {
 	home, err := nativeHome(data, id)
 	if err != nil {
@@ -1620,7 +1357,6 @@ func (*Plugin) titledSessionID(ctx context.Context, data, id, title string) (str
 	return nativeID, nil
 }
 
-// SessionInfo implements the scoped native adapter contract.
 func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.SessionInfo, bool, error) {
 	id, ok, err := p.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: ref.DataDir, SessionID: domain.SessionID(ref.ID)})
 	return ports.SessionInfo{AgentSessionID: id}, ok, err
@@ -1631,20 +1367,15 @@ func nativeStateDSN(home string) string {
 	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(1000)"
 }
 
-// ContinuouslyDetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// EmptyComposerProvesWaitingInputReady implements the scoped native adapter contract.
 func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 
-// DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	// Native placeholders use italic; typed composer text has normal styling.
 	composerOutput := nativeStyleSequence.ReplaceAllStringFunc(output, func(sequence string) string {
 		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
 		for i := 0; i < len(params); i++ {
 			code, _, colon := strings.Cut(params[i], ":")
-			// Color payloads contain numbers that are not SGR attributes.
 			if code == "38" || code == "48" || code == "58" {
 				if !colon && i+1 < len(params) {
 					switch params[i+1] {
@@ -1656,7 +1387,6 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 				}
 				continue
 			}
-			// Insert beside the real attribute so later resets retain their order.
 			switch code {
 			case "3":
 				params[i] += ";2"
@@ -1671,8 +1401,6 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
 		last--
 	}
-	// The running composer also has borders and an italic placeholder. Inspect
-	// the newest prompt first so that chrome cannot satisfy the idle check.
 	for i := last; i >= 0 && i >= last-7; i-- {
 		line := strings.TrimSpace(lines[i])
 		if strings.HasPrefix(line, nativeWarningPrompt) || strings.HasPrefix(line, nativeQuestionPrompt) {
@@ -1685,10 +1413,6 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 			break
 		}
 	}
-	// Below 64 columns Hermes hides the bottom input rule and draws only the
-	// state icon, without ❯ (`☤ ` busy; `⚠ `, `? `, `✎ ` and the credential icons
-	// for decisions). Read that row only as the last line directly under the top
-	// rule, where the compact composer sits.
 	if last >= 1 {
 		row, upper := strings.TrimSpace(lines[last]), strings.TrimSpace(lines[last-1])
 		if len([]rune(upper)) >= 16 && strings.Trim(upper, "─") == "" && !strings.HasPrefix(row, nativeNamedPrompt) {
@@ -1710,9 +1434,6 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 			return domain.ActivityIdle, true
 		}
 	}
-	// Below 64 columns Hermes hides the bottom input rule. Accept that compact
-	// composer only when the prompt row is the last line, directly under the top
-	// rule, and classify it as if the hidden rule were drawn.
 	if last >= 1 {
 		prompt, upper := strings.TrimSpace(lines[last]), strings.TrimSpace(lines[last-1])
 		if (strings.HasPrefix(prompt, nativePrompt) || strings.HasPrefix(prompt, nativeNamedPrompt)) &&
@@ -1733,10 +1454,8 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	return "", false
 }
 
-// RequiresRenderedActivity implements the scoped native adapter contract.
 func (*Plugin) RequiresRenderedActivity() bool { return true }
 
-// ResolveNativeSessionID implements the scoped native adapter contract.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -1755,12 +1474,10 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 	return id, true, nil
 }
 
-// ExitDetectionMode implements the scoped native adapter contract.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
 
-// ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
 func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
@@ -1769,9 +1486,6 @@ func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
 	return nil
 }
 
-// TerminalMessageObserved accepts a running footer or a newly committed native
-// transcript echo above an empty composer. A changed idle frame alone is not
-// evidence of submission: it may be an unrelated redraw before Enter is handled.
 func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
 	before, ready := p.DetectTerminalActivity(baseline)
 	after, known := p.DetectTerminalActivity(screen)
@@ -1787,10 +1501,6 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 	return committedMessageEchoes(message, screen) > committedMessageEchoes(message, baseline)
 }
 
-// Count complete matching native echoes outside the current composer. Comparing
-// counts prevents old identical text from acknowledging a new send after a redraw.
-// Ignore whitespace inserted by terminal line wrapping, but require the entire
-// message between native transcript rules. Truncated previews remain unconfirmed.
 func committedMessageEchoes(message, screen string) int {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -1836,22 +1546,17 @@ func committedMessageEchoes(message, screen string) int {
 	return count
 }
 
-// yaml11Sentinel marks a plain scalar that Hermes's YAML 1.1 loader
-// (hermes_yaml, ruamel at version 1.1) would not read as a string, such as
-// yes, on, y, ~ or 0755. yaml.v3 follows YAML 1.2 and reads them as text.
 const yaml11Sentinel = "\x00yaml1.1:"
 
 var yaml11NonString = regexp.MustCompile(`^(?:` +
-	`[yY]|[yY]es|YES|[nN]|[nN]o|NO|true|True|TRUE|false|False|FALSE|[oO]n|ON|[oO]ff|OFF` + // bool
-	`|~|[nN]ull|NULL` + // null
-	`|[-+]?0b[01_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+` + // int
-	`|[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*(?:[eE][-+]?[0-9]+)?|[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` + // float
-	`|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?` + // timestamp
-	`|=` + // value
+	`[yY]|[yY]es|YES|[nN]|[nN]o|NO|true|True|TRUE|false|False|FALSE|[oO]n|ON|[oO]ff|OFF` +
+	`|~|[nN]ull|NULL` +
+	`|[-+]?0b[01_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+|[-+]?[1-9][0-9_]*(?::[0-5]?[0-9])+` +
+	`|[-+]?(?:[0-9][0-9_]*)?\.[0-9_]*(?:[eE][-+]?[0-9]+)?|[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)` +
+	`|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?` +
+	`|=` +
 	`)$`)
 
-// yaml11Bool reads a value decoded by unmarshalYAML11 as Hermes's YAML 1.1
-// loader would: true/false, or a marked yes/no/on/off/y/n word.
 func yaml11Bool(v any) (value, ok bool) {
 	switch v := v.(type) {
 	case bool:
@@ -1871,8 +1576,6 @@ func yaml11Bool(v any) (value, ok bool) {
 	return false, false
 }
 
-// pyTruthy is Python's bool() of a value decoded by unmarshalYAML11 as
-// Hermes's YAML 1.1 loader would type it.
 func pyTruthy(v any) bool {
 	switch v := v.(type) {
 	case nil:
@@ -1895,7 +1598,6 @@ func pyTruthy(v any) bool {
 		case "~", "null", "Null", "NULL":
 			return false
 		}
-		// A number is false only when every digit is zero.
 		if yaml11Number.MatchString(word) {
 			digits := strings.TrimLeft(word, "+-")
 			digits = strings.TrimPrefix(strings.TrimPrefix(digits, "0x"), "0b")
@@ -1913,9 +1615,6 @@ func pyTruthy(v any) bool {
 
 var yaml11Number = regexp.MustCompile(`^[-+]?(?:0b[01_]+|0x[0-9a-fA-F_]+|[0-9][0-9_:]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|\.[0-9_]+(?:[eE][-+]?[0-9]+)?)$`)
 
-// unmarshalYAML11 decodes YAML like yaml.Unmarshal, but marks every plain
-// scalar that YAML 1.1 types as non-string with yaml11Sentinel, so callers
-// can tell where Hermes would see a bool, null, number or date.
 func unmarshalYAML11(b []byte, out any) error {
 	var root yaml.Node
 	if err := yaml.Unmarshal(b, &root); err != nil {
@@ -1928,8 +1627,6 @@ func unmarshalYAML11(b []byte, out any) error {
 			return
 		}
 		seen[n] = true
-		// yaml.v3 decodes an explicit !!binary (or unknown) tag as a Go string,
-		// where Hermes sees bytes and renders str() as b'...'.
 		if n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle != 0 && !slices.Contains([]string{"!!str", "!!int", "!!float", "!!bool", "!!null"}, n.ShortTag()) {
 			n.Tag, n.Style, n.Value = "!!str", yaml.DoubleQuotedStyle, yaml11Sentinel+n.Tag+" "+n.Value
 		}
@@ -1938,7 +1635,6 @@ func unmarshalYAML11(b []byte, out any) error {
 			case tag == "!!str" && nonString:
 				n.Tag, n.Value = "!!str", yaml11Sentinel+n.Value
 			case (tag == "!!int" || tag == "!!float") && !nonString:
-				// YAML 1.2-only forms such as 0o755 are strings to YAML 1.1.
 				n.Tag = "!!str"
 			}
 		}

@@ -201,7 +201,6 @@ describe("QueuedMessageDock order and steering", () => {
 
 		rerender(<QueuedMessageDock {...props} messages={[...confirmed, pending]} sending />);
 
-		// Every row, the unconfirmed one included, keeps the same controls.
 		expect(grips()).toHaveLength(3);
 		expect(deletes()).toHaveLength(3);
 		expect(steers()).toHaveLength(3);
@@ -312,7 +311,6 @@ describe("ChatWorkspace queue reorder", () => {
 
 describe("QueuedMessageDock action errors", () => {
 	it("shows the daemon's reason when steering a queued message is refused", async () => {
-		// The typed client throws the API error envelope, not an Error instance.
 		const onPromoteQueuedTurn = vi.fn().mockRejectedValue({
 			error: {
 				code: "CHAT_TURN_NOT_STEERABLE",

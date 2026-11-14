@@ -17,17 +17,11 @@ import (
 )
 
 const (
-	// Chrome rejects host-to-extension messages over 1 MiB.
-	maxToExtensionBytes = 1 << 20
-	// Results (screenshots) travel extension-to-host; cap them at the
-	// daemon's runtime frame limit.
+	maxToExtensionBytes   = 1 << 20
 	maxFromExtensionBytes = 8 << 20
 	extensionHelloTimeout = 10 * time.Second
 )
 
-// hostFrame is a frame between the extension and the host. Command, cancel
-// and result frames pass through unchanged; hello, ready and error frames are
-// the host's own handshake.
 type hostFrame struct {
 	Type             string `json:"type"`
 	Protocol         int    `json:"protocol,omitempty"`
@@ -36,17 +30,13 @@ type hostFrame struct {
 	Message          string `json:"message,omitempty"`
 }
 
-// Dialer connects to the daemon's Chrome runtime address.
 type Dialer func(ctx context.Context, address string) (net.Conn, error)
 
-// HostOptions configures RunHost.
 type HostOptions struct {
 	EndpointPath string
 	Dial         Dialer
 }
 
-// RunHost relays frames between the extension (Chrome native messaging on in
-// and out) and the daemon until either side closes.
 func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions) error {
 	writer := &nativeWriter{out: out}
 	helloCh := make(chan hostFrame, 1)
@@ -109,8 +99,6 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 	}
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 64*1024), maxFromExtensionBytes)
-	// The daemon answers every hello: hello-ok, or hello-rejected with a reason
-	// (bad token, protocol mismatch, another Chrome profile already connected).
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if !scanner.Scan() {
 		_ = writer.write(hostFrame{Type: "error", Code: "DAEMON_UNAVAILABLE", Message: "Orchestrator closed the connection"})
@@ -137,7 +125,6 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 	}
 
 	done := make(chan error, 2)
-	// Daemon → extension.
 	go func() {
 		for scanner.Scan() {
 			line := bytes.TrimSpace(scanner.Bytes())
@@ -174,7 +161,6 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 		}
 		done <- scanner.Err()
 	}()
-	// Extension → daemon.
 	go func() {
 		for {
 			raw, err := readNative(in, maxFromExtensionBytes)
@@ -216,8 +202,6 @@ func writeDaemonError(conn net.Conn, requestID, code, message string) {
 	}
 }
 
-// readNative reads one Chrome native-messaging frame: a 4-byte length in
-// native (little-endian on every Chrome platform) order, then UTF-8 JSON.
 func readNative(in io.Reader, limit int) ([]byte, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(in, header[:]); err != nil {

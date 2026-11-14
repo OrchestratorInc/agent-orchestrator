@@ -3,24 +3,9 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
 import { isCloudAttachmentReference } from "./cloud-attachment-reference";
 
-/**
- * Renderer-owned, session-scoped Chat drafts.
- *
- * Electron pins this origin's storage beneath AO's userData directory, so a
- * synchronous localStorage write survives Chat surface teardown, renderer
- * reload, and a supported app restart without putting daemon state in the UI.
- * Attachment bytes are deliberately absent: a descriptor is written only after
- * the daemon has durably staged those bytes in the session worktree.
- */
-
 export const CHAT_DRAFT_SCHEMA_VERSION = 3 as const;
 const CHAT_DRAFT_SCOPE_SCHEMA_VERSION = 1 as const;
 
-/**
- * One immutable AO session incarnation. Session ids are human-stable handles and
- * may be reused after authoritative deletion; createdAt (or another daemon-owned
- * UUID) is what prevents an old renderer draft from entering the replacement.
- */
 export interface ChatDraftScope {
 	sessionId: string;
 	incarnation: string;
@@ -28,7 +13,6 @@ export interface ChatDraftScope {
 
 type ChatDraftScopeInput = string | ChatDraftScope;
 
-/** The new chat page's composer draft; one per host, shared by every project on it. */
 export function newChatDraftScope(hostId?: string): ChatDraftScope {
 	const id = `new-chat:${hostId ?? "local"}`;
 	return { sessionId: id, incarnation: id };
@@ -55,7 +39,6 @@ export interface ChatDraftAttachment {
 }
 
 export interface ChatDraftInlineEdit {
-	/** Changes whenever the inline edit changes. Used for accepted-edit CAS. */
 	revision: string;
 	turnId: string;
 	text: string;
@@ -63,24 +46,18 @@ export interface ChatDraftInlineEdit {
 }
 
 export interface ChatDraftQueuedEdit {
-	/** Original request mode, independent of current controller capabilities. */
 	nativeImages?: boolean;
-	/** Stable daemon receipt key for the exact pending save. */
 	clientMessageId?: string;
-	/** Stable for one editing attempt, including remounts and staged reads. */
 	ownerId?: string;
 	revision: string;
 	turnId: string;
 	text: string;
-	/** Daemon message revision, held fixed across retries of this edit. */
 	expectedRevision?: number;
 	attachments?: ChatDraftRetainedAttachment[];
 	stagedAttachments?: ChatDraftAttachment[];
-	/** The daemon may have saved this exact edit before the response was lost. */
 	saving?: boolean;
 }
 
-/** Server-owned content selected for retention; never stores attachment bytes. */
 export interface ChatDraftRetainedAttachment {
 	id: string;
 	name: string;
@@ -92,21 +69,14 @@ export interface ChatDraftRetainedAttachment {
 export type ChatDraftDeliveryState = "dispatching" | "accepted";
 
 export interface ChatComposerDelivery {
-	/** Absent on legacy frozen receipts, which must keep their original prompt. */
 	fileReferenceFormat?: "quoted-v1";
-	/** Original request mode, kept across capability changes during recovery. */
 	nativeImages?: boolean;
 	kind: "send" | "steer";
 	state: ChatDraftDeliveryState;
-	/** Exact composer revision this delivery was created from. */
 	revision: number;
-	/** Stable daemon idempotency key. Reused for every recovery attempt. */
 	clientMessageId: string;
-	/** Exact API text, including durable attachment path references. */
 	requestText: string;
-	/** Sent draft, separate from the editable next draft during optimistic delivery. */
 	draft?: { text: string; attachments: ChatDraftAttachment[] };
-	/** Exact verified transcript excerpts attached to this delivery. */
 	excerpts?: ChatDraftExcerptReference[];
 	fileReferences?: ChatFileReference[];
 }
@@ -138,7 +108,6 @@ export function chatDraftAnnotations(composer: ChatSessionDraft["composer"]): Ch
 export interface ChatInlineEditDelivery {
 	kind: "inline-edit";
 	state: ChatDraftDeliveryState;
-	/** Exact inline-edit revision this delivery was created from. */
 	revision: string;
 	clientMessageId: string;
 	turnId: string;
@@ -152,25 +121,16 @@ export interface ChatSessionDraft {
 	sessionId: string;
 	incarnation: string;
 	composer: {
-		/** Changes whenever text or attachments change. Used for accepted-send CAS. */
 		revision: number;
 		text: string;
 		attachments: ChatDraftAttachment[];
 		excerpts?: ChatDraftExcerptReference[];
 	fileReferences?: ChatFileReference[];
-		/** Durable delivery journal. Present until acceptance is durably cleared. */
 		delivery?: ChatComposerDelivery;
 	};
-	/**
-	 * A send whose outcome is unknown and that nothing is sending now (an app
-	 * restart or a lost answer). It sits beside the composer, always with its own
-	 * `draft`, so the person can type while they retry it with the same id or
-	 * discard it.
-	 */
 	unsent?: ChatComposerDelivery;
 	queuedEdit?: ChatDraftQueuedEdit;
 	inlineEdit?: ChatDraftInlineEdit;
-	/** Durable delivery journal for an inline branch edit. */
 	inlineEditDelivery?: ChatInlineEditDelivery;
 }
 
@@ -319,9 +279,6 @@ function emitDraftRuntime(runtime: ChatDraftRuntime): void {
 
 function emitComposerDraftChange(scope: ChatDraftScopeInput): void {
 	const runtime = draftRuntime(scope);
-	// useSyncExternalStore compares snapshots by identity. Excerpt changes can be
-	// initiated from the transcript rather than the composer, so publish a fresh
-	// snapshot even when no delivery mutation is pending.
 	runtime.composer = { ...runtime.composer };
 	emitDraftRuntime(runtime);
 }
@@ -345,7 +302,6 @@ export function getChatComposerMutation(
 	return runtime.composer;
 }
 
-/** Async preparation may outlive authoritative replacement of this session. */
 export function isChatComposerMutationCurrent(
 	scope: ChatDraftScopeInput,
 	token: ChatDraftMutationToken,
@@ -483,13 +439,6 @@ function acknowledgeDraftMutation(
 	evictSettledDraftRuntime(key, runtime);
 }
 
-/**
- * Release a settled composer receipt only after a committed subscriber applied
- * it. No task duration or global pressure decides this lifetime. Each exact
- * session incarnation owns at most one composer and one inline-edit receipt;
- * acknowledgement, a superseding durable edit, or authoritative incarnation
- * cleanup retires them.
- */
 export function acknowledgeChatComposerMutation(
 	scope: ChatDraftScopeInput,
 	sequence: number,
@@ -497,7 +446,6 @@ export function acknowledgeChatComposerMutation(
 	acknowledgeDraftMutation(scope, "composer", sequence);
 }
 
-/** See acknowledgeChatComposerMutation. */
 export function acknowledgeChatInlineEditMutation(
 	scope: ChatDraftScopeInput,
 	sequence: number,
@@ -521,8 +469,6 @@ function invalidateAcceptedDraftMutation(scope: ChatDraftScopeInput, kind: Draft
 }
 
 function storageKey(sessionId: string): string {
-	// The key remains stable across schema versions so a future decoder can find
-	// and migrate the prior record rather than orphaning it under a v1-only key.
 	return `ao.chat.draft:${encodeURIComponent(sessionId)}`;
 }
 
@@ -589,9 +535,6 @@ function isStrictlyNewerIncarnation(
 	current: string,
 ): boolean {
 	if (candidate === current) return false;
-	// The production incarnation is the daemon's createdAt. A legacy renderer used
-	// the logical session id itself; an authoritative createdAt may replace that
-	// sentinel, but the sentinel may never replace an already-dated incarnation.
 	if (current === sessionId) return candidate !== sessionId;
 	if (candidate === sessionId) return false;
 	const candidateTime = Date.parse(candidate);
@@ -643,12 +586,6 @@ function finishScopeActivation(
 	};
 }
 
-/**
- * Establish the one daemon-authoritative incarnation allowed to own a logical
- * session's renderer draft. Replacement is a monotonic, recoverable transition:
- * the successor blocks every predecessor first, then proves the old record is
- * gone, and only then becomes writable.
- */
 export function activateChatDraftScope(
 	scopeInput: ChatDraftScopeInput,
 	storage: DraftStorage | undefined = rendererStorage(),
@@ -908,7 +845,6 @@ export function loadChatSessionDraft(
 	try {
 		parsed = JSON.parse(raw);
 	} catch {
-		// Corrupt renderer data is recoverable; the next proven write replaces it.
 		return { ok: true, draft: empty };
 	}
 	if (
@@ -990,11 +926,6 @@ function persistDraft(draft: ChatSessionDraft, storage: DraftStorage | undefined
 	}
 }
 
-/**
- * Persist and immediately read back the exact record. Dispatch callers use this
- * stronger boundary so a silent/no-op storage adapter cannot be mistaken for a
- * durable draft or idempotency key.
- */
 function persistDraftProven(
 	draft: ChatSessionDraft,
 	storage: DraftStorage | undefined,
@@ -1037,10 +968,6 @@ function attachmentsEqual(
 	);
 }
 
-/**
- * Atomically proves the exact composer snapshot and its stable delivery id
- * before the renderer is allowed to call the daemon.
- */
 export function prepareChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	input: PrepareChatComposerDeliveryInput,
@@ -1064,7 +991,6 @@ export function prepareChatComposerDelivery(
 	const revision = exact
 		? loaded.draft.composer.revision
 		: loaded.draft.composer.revision + 1;
-	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
 	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0 && fileReferences.length === 0;
 	const mutation: ChatComposerDelivery = {
 		fileReferenceFormat: "quoted-v1",
@@ -1095,7 +1021,6 @@ export function prepareChatComposerDelivery(
 		: { ok: false, recovered: false, draft: loaded.draft };
 }
 
-/** Persist the daemon's acceptance before attempting to remove the draft. */
 export function markChatComposerDeliveryAccepted(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1126,10 +1051,6 @@ export function markChatComposerDeliveryAccepted(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/**
- * Restore a definitively refused draft, or keep its delivery beside newer input
- * for retry. Legacy sends and steers only lose their delivery journal.
- */
 export function clearRejectedChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1164,12 +1085,6 @@ export function clearRejectedChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/**
- * Explicitly abandon a steer whose acceptance is unknowable. This is deliberately
- * separate from definitive refusal: the provider may already have received it.
- * Only the renderer journal is removed; text and staged descriptors remain so the
- * person can decide whether a later submit is worth the duplicate-delivery risk.
- */
 export function clearUncertainChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1202,15 +1117,6 @@ export function clearUncertainChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/**
- * Move a send that nothing is sending (no live mutation) out of the composer into
- * `unsent`, so the composer is free again. A send prepared without its own copy of
- * the text takes the composer's text, attachments and references with it.
- */
-/**
- * Whether an unanswered delivery can wait in the unsent slot.
- * ponytail: excerpt and file-reference sends keep the locked retry, as they do for optimistic sends; park them once the strip can show those chips.
- */
 export function isParkableChatComposerDelivery(delivery: ChatComposerDelivery | undefined): delivery is ChatComposerDelivery {
 	return delivery?.kind === "send" && delivery.state === "dispatching" &&
 		!delivery.excerpts?.length && !delivery.fileReferences?.length;
@@ -1228,7 +1134,6 @@ export function parkChatComposerDelivery(
 		getChatComposerMutation(scope).pending ||
 		!isParkableChatComposerDelivery(delivery) ||
 		delivery.clientMessageId !== clientMessageId ||
-		// ponytail: one unsent slot; a second unanswered send stays in the composer until the first is resolved.
 		loaded.draft.unsent
 	) {
 		return { ok: false, draft: loaded.draft };
@@ -1251,7 +1156,6 @@ export function parkChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Put the unsent message back in the composer's delivery slot for a retry with the same id. */
 export function reviveUnsentChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1274,7 +1178,6 @@ export function reviveUnsentChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Drop the unsent message. If it did arrive, the chat already shows it. */
 export function discardUnsentChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1290,7 +1193,6 @@ export function discardUnsentChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Undo a discard, unless another unsent message has taken the slot since. */
 export function restoreUnsentChatComposerDelivery(
 	scope: ChatDraftScopeInput,
 	delivery: ChatComposerDelivery,
@@ -1310,10 +1212,6 @@ export function restoreUnsentChatComposerDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/**
- * Atomically proves an inline edit and its stable branch-mutation id before
- * dispatch. A restored journal is returned unchanged for explicit safe retry.
- */
 export function prepareChatInlineEditDelivery(
 	scope: ChatDraftScopeInput,
 	input: PrepareChatInlineEditDeliveryInput,
@@ -1391,7 +1289,6 @@ export function markChatInlineEditDeliveryAccepted(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Remove only the journal for an edit the daemon durably proved it rejected. */
 export function clearRejectedChatInlineEditDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1415,7 +1312,6 @@ export function clearRejectedChatInlineEditDelivery(
 	return result.ok ? result : { ok: false, draft: loaded.draft };
 }
 
-/** Explicitly abandon an inline edit whose provider acceptance is unknowable. */
 export function clearUncertainChatInlineEditDelivery(
 	scope: ChatDraftScopeInput,
 	clientMessageId: string,
@@ -1448,7 +1344,6 @@ export function writeChatComposerText(
 	expectedRevision?: number,
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
-	// A delayed retry of a failed save must not overwrite a newer surface's draft.
 	if (loaded.ok && expectedRevision !== undefined && loaded.draft.composer.revision !== expectedRevision) {
 		return { ok: true, draft: loaded.draft };
 	}
@@ -1534,8 +1429,6 @@ export function writeChatFileReferences(
 	storage: DraftStorage | undefined = rendererStorage(),
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
-	// Preparation owns an exact snapshot before asynchronous attachment reads.
-	// Refuse a new selection rather than letting that snapshot overwrite it.
 	if (getChatComposerMutation(scope).pending) return { ok: false, draft: loaded.draft };
 	if (loaded.ok && JSON.stringify(loaded.draft.composer.fileReferences ?? []) === JSON.stringify(fileReferences)) {
 		return { ok: true, draft: loaded.draft };
@@ -1560,7 +1453,6 @@ export function writeChatFileReferences(
 	return result;
 }
 
-/** Queue edits are independent from both the ordinary prompt and history edits. */
 export function writeChatQueuedEdit(
 	scope: ChatDraftScopeInput,
 	edit: Omit<ChatDraftQueuedEdit, "revision"> | undefined,
@@ -1577,9 +1469,6 @@ export function writeChatQueuedEdit(
 	if (edit) next.queuedEdit = { ...edit, revision: draftEditRevision() };
 	else delete next.queuedEdit;
 	const result = persistDraftProven(next, storage);
-	// A write can commit before its readback fails. Permit a later attempt to
-	// recognize only the loaded or attempted revision, never another editor's
-	// changes. Retain both in case the write itself failed before changing storage.
 	return { ...result, attempted: { revisions: [loaded.draft.queuedEdit?.revision, next.queuedEdit?.revision] } };
 }
 
@@ -1606,10 +1495,6 @@ export function writeChatInlineEdit(
 	return result;
 }
 
-/**
- * Clear an edit accepted by the daemon only if no later renderer has changed it.
- * This protects a remounted editor from a stale request completing afterward.
- */
 export function clearAcceptedChatInlineEdit(
 	scope: ChatDraftScopeInput,
 	acceptedRevision: string,
@@ -1638,12 +1523,6 @@ export function clearAcceptedChatInlineEdit(
 		: { ok: false, cleared: false, draft: current };
 }
 
-/**
- * Clear the composer accepted by the daemon only if it is still the same
- * revision. A keystroke or attachment change that happened while send awaited
- * acceptance must remain both on screen and in durable storage.
- * Sent attachments belong to the accepted message, even if the next text is newer.
- */
 export function clearAcceptedChatComposer(
 	scope: ChatDraftScopeInput,
 	acceptedRevision: number,

@@ -1,10 +1,3 @@
-// Package crush implements the Crush agent adapter: launching new sessions,
-// resuming sessions by native ID, and reading session info.
-//
-// Crush differs from hook-driven agents in that it doesn't yet expose
-// AO-compatible activity hooks. GetAgentHooks only injects AO's standing system
-// prompt through project-local context configuration; activity is reconciled
-// from conservative terminal UI markers.
 package crush
 
 import (
@@ -20,20 +13,15 @@ import (
 )
 
 const (
-	// adapterID is the registry id and the value users pass to
-	// `ao spawn --agent`. It matches domain.HarnessCrush.
 	adapterID = "crush"
 )
 
-// Plugin is the Crush agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Crush adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -43,7 +31,6 @@ var _ ports.Agent = (*Plugin)(nil)
 var _ ports.ContinuousTerminalActivityDetector = (*Plugin)(nil)
 var _ ports.WaitingTerminalActivityDetector = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -56,13 +43,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Crush understands:
-// a model override. Unlike Claude/Codex (a bare --model flag) or Kiro (a
-// single model key), Crush's .crush.json requires both a provider id and a
-// model id per selection (see mergeCrushModel in hooks.go), so AO's plain
-// Model string must carry the provider too. This declares the expected
-// "<provider>/<model-id>" shape so it is discoverable/validated through the
-// config-spec surface, matching claude-code, codex, and kiro.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -78,22 +58,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// GetLaunchCommand builds the argv to start an interactive Crush session.
-// Shape:
-//
-//	crush [--cwd <WorkspacePath>] [--yolo]
-//
-// The session runs in the worktree (cwd is set by the runtime). Crush doesn't
-// have a launch-time system-prompt flag, so GetAgentHooks installs AO's system
-// prompt as a workspace-local context file before launch. Worker task prompts
-// are delivered after startup so AO keeps the interactive TUI; Crush's
-// documented `run` command is intentionally not used here because it is
-// non-interactive. The --yolo flag corresponds to bypass-permissions mode.
-//
-// We intentionally do not pass --session on launch: cfg.SessionID is the
-// AO-internal id, not a Crush-native session id. Letting Crush mint its own
-// native session id (captured by hooks into session metadata) keeps launch
-// consistent with GetRestoreCommand, which resumes using that native id.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.crushBinary(ctx)
 	if err != nil {
@@ -102,12 +66,10 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 
 	cmd = []string{binary}
 
-	// Crush uses --cwd to set working directory
 	if cfg.WorkspacePath != "" {
 		cmd = append(cmd, "--cwd", cfg.WorkspacePath)
 	}
 
-	// Handle permission modes
 	if cfg.Permissions == ports.PermissionModeBypassPermissions {
 		cmd = append(cmd, "--yolo")
 	}
@@ -115,8 +77,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy reports that prompted sessions receive their task
-// after the interactive Crush UI starts.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -127,8 +87,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.Launch
 	return ports.PromptDeliveryInCommand, nil
 }
 
-// PromptReadinessHints waits for Crush's ready prompt before AO injects the
-// worker's first task.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -142,10 +100,6 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Crush session:
-// `crush [--cwd <WorkspacePath>] [--yolo] --session <agentSessionId>`.
-// It re-applies the permission flag but not the prompt, which the session
-// already carries. ok is false when the native session id is not available.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -188,9 +142,6 @@ var crushBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveCrushBinary returns the path to the crush binary on this machine,
-// searching PATH then a handful of well-known install locations. It returns a
-// wrapped ports.ErrAgentBinaryNotFound when crush is absent.
 func ResolveCrushBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, crushBinarySpec)
 }
@@ -211,8 +162,6 @@ func (p *Plugin) crushBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

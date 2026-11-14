@@ -17,11 +17,6 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 
-// MigrationPopup is the first-run legacy-AO import offer. It shows only when the
-// app marker is non-terminal (pending/failed) AND the daemon reports legacy data
-// available. Proceed runs the idempotent import through the daemon; Skip dismisses
-// for this launch (re-prompts next launch); {t("migration.dontMigrate")} declines permanently
-// (re-runnable later once the Settings entry point lands, issue #2205).
 export function MigrationPopup() {
 	const { t } = useTranslation();
 	const offer = useMigrationOffer();

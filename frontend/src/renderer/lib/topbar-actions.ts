@@ -1,4 +1,3 @@
-/** Every control in a session's top bar, so usage can decide what stays there. */
 export const TOPBAR_ACTIONS = [
 	"new_task",
 	"open_board",

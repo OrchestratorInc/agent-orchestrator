@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// RunBackgroundTask executes a short provider turn without publishing a Chat
-// controller or conversation into AO's durable session history.
 func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (_ string, err error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", errors.New("background task prompt is empty")
@@ -43,8 +41,6 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 		}
 	}()
 
-	// Send the generation request as the turn itself. The input can describe
-	// arbitrary work, and some providers act on it when it is sent unqualified.
 	if instructions := strings.TrimSpace(cfg.SystemPrompt); instructions != "" {
 		input, _ := json.Marshal(prompt)
 		prompt = instructions + "\n\nInput data (JSON string):\n" + string(input)
@@ -108,8 +104,6 @@ func runBackgroundTurn(ctx context.Context, harness domain.AgentHarness, convers
 	}
 }
 
-// The provider's live catalog keeps this text-only call from inheriting an
-// expensive reasoning setting or choosing a level its model cannot use.
 func backgroundTaskSettings(ctx context.Context, conversation ports.ChatConversation) (ports.ChatTurnSettings, error) {
 	switch provider := conversation.(type) {
 	case ports.ChatConfigOptionController:

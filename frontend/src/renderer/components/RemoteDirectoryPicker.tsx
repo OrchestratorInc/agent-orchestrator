@@ -11,7 +11,6 @@ import { Pressable } from "./ui/pressable";
 import { Input } from "./ui/input";
 import { Skeleton } from "./ui/skeleton";
 
-/** The only host-specific part of the shared create-project flow: browse the daemon's filesystem. */
 export function RemoteDirectoryPicker({ hostId, hostLabel, connected, initialPath = "", onChoose, onClose }: {
 	hostId: string;
 	hostLabel: string;

@@ -40,8 +40,6 @@ func TestRootHelpDoesNotShowDaemon(t *testing.T) {
 	}
 }
 
-// A daemon refused because another AO process owns its data dir exits 75
-// (EX_TEMPFAIL), so supervisors can tell it apart from a crash (1).
 func TestExitCodeDataDirLocked(t *testing.T) {
 	if got := ExitCode(fmt.Errorf("acquire: %w", datadirlock.ErrLocked)); got != 75 {
 		t.Fatalf("ExitCode = %d, want 75", got)
@@ -139,11 +137,8 @@ func TestShouldEmitCLIInvocationSkipsNonUsageAndRoutineInternalCommands(t *testi
 		byName[cmd.Name()] = cmd
 	}
 	for name, want := range map[string]bool{
-		"daemon": false, // supervisor-driven bootstrapping, not human usage
-		"start":  false,
-		// hooks/status are routine internal polling paths; pty-host is only an
-		// internal Windows runtime process. Successful executions should not
-		// count as CLI usage.
+		"daemon":   false,
+		"start":    false,
 		"hooks":    false,
 		"pty-host": false,
 		"status":   false,
@@ -457,8 +452,6 @@ func setConfigEnv(t *testing.T) testConfig {
 	t.Setenv("AO_PROJECT_ID", "")
 	t.Setenv("AO_REQUEST_TIMEOUT", "")
 	t.Setenv("AO_SHUTDOWN_TIMEOUT", "")
-	// Claude hooks forward this ambient marker; a suite run from inside Claude
-	// Code must not leak it into exact hook-body assertions.
 	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
 	t.Setenv("CLAUDE_PID", "")
 	return cfg

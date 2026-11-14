@@ -32,7 +32,6 @@ describe("cloud project repositories", () => {
 	it("reads config.repos, falling back to the legacy coder extraRepos", () => {
 		expect(projectAdditionalRepos({ repos: [{ url: "https://github.com/acme/11x" }, { url: " " }] })).toEqual([{ url: "https://github.com/acme/11x" }]);
 		expect(projectAdditionalRepos({ coder: { extraRepos: [{ url: "https://github.com/acme/old", branch: "dev" }] } })).toEqual([{ url: "https://github.com/acme/old", branch: "dev" }]);
-		// An explicit empty list wins over the legacy one.
 		expect(projectAdditionalRepos({ repos: [], coder: { extraRepos: [{ url: "https://github.com/acme/old" }] } })).toEqual([]);
 		expect(projectAdditionalRepos(undefined)).toEqual([]);
 	});
@@ -63,7 +62,6 @@ describe("cloud project repositories", () => {
 			{ command: "make db", folder: "voice-calling-ai" },
 		]);
 		expect(serializeScriptSteps(steps ?? [])).toEqual(["npm ci", wrapped, "(\ncd -- '../voice-calling-ai' || exit 1\nmake db\n)"]);
-		// A multi-line command survives the round trip, and the main repository's own folder is the main repository.
 		expect(parseRepoScriptCommand(repoScriptCommand("11x", "a\n\nb)\n"))).toEqual({ folder: "11x", command: "a\n\nb)\n" });
 		expect(parseScriptSteps([repoScriptCommand("alice", "ls")], main)).toEqual([{ command: "ls", folder: "" }]);
 		expect(scriptStepFolders({ postCreate: [wrapped], preRemove: ["ls"] }, main)).toEqual(new Set(["11x"]));
@@ -78,7 +76,6 @@ describe("cloud project repositories", () => {
 			{ command: "make db", folder: "", timeout: "90" },
 			{ command: "# a comment\nls", folder: "" },
 		]);
-		// A step without a limit is stored as the plain command; every limit a step sets is kept.
 		expect(serializeScriptSteps(steps ?? [])).toEqual(["# ao-timeout: 10m\nnpm ci", timed, "# ao-timeout: 90m\nmake db", "# a comment\nls"]);
 		expect(serializeScriptSteps([{ command: "npm ci", folder: "", timeout: "" }])).toEqual(["npm ci"]);
 		expect(timedScriptCommand(undefined, "x")).toBe("x");
@@ -91,7 +88,6 @@ describe("cloud project repositories", () => {
 	it("keeps a typed limit equal to a default, as Setup and Cleanup defaults differ", () => {
 		expect(serializeLocalScriptStep({ command: "make down", folder: "", timeout: "10" })).toBe("# ao-timeout: 10m\nmake down");
 		expect(parseLocalScriptStep("# ao-timeout: 10m\nmake down")).toEqual({ command: "make down", folder: "", timeout: "10" });
-		// Setup's 30-minute default typed into a Cloud step stays the step's own limit.
 		expect(timedScriptCommand(DEFAULT_SETUP_STEP_TIMEOUT_MINUTES, "npm ci")).toBe("# ao-timeout: 30m\nnpm ci");
 		expect(timedScriptCommand(DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES, "make down")).toBe("# ao-timeout: 10m\nmake down");
 		expect(parseScriptSteps(["# ao-timeout: 30m\nnpm ci"])).toEqual([{ command: "npm ci", folder: "", timeout: "30" }]);
@@ -150,7 +146,6 @@ describe("cloud workspaces", () => {
 		expect(gitHubRepositoryNameFromFolder("café & co")).toBe("caf-co");
 		expect(gitHubRepositoryNameFromFolder("...")).toBe("repo");
 		expect(gitHubRepositoryNameFromFolder("a".repeat(120))).toHaveLength(100);
-		// The control plane refuses a name ending in ".git".
 		expect(gitHubRepositoryNameFromFolder("site.git")).toBe("site");
 		expect(gitHubRepositoryNameFromFolder("site.GIT.git")).toBe("site");
 		expect(gitHubRepositoryNameFromFolder("site-.git")).toBe("site");

@@ -29,8 +29,6 @@ func stubDeviceEnvironment(t *testing.T) (published, withdrawn map[string]string
 	return published, withdrawn
 }
 
-// allowDeviceEnvironment lets tests whose OS environment calls are stubbed
-// share keys on platforms where AO does not publish them.
 func allowDeviceEnvironment(t *testing.T) {
 	t.Helper()
 	previous := deviceSupported
@@ -76,7 +74,6 @@ func TestSaveProviderKeyPublishesOnlyWhenChosen(t *testing.T) {
 	if len(published) != 0 || len(withdrawn) != 0 {
 		t.Fatalf("touched device environment: published %v, withdrawn %v", published, withdrawn)
 	}
-	// An empty secret keeps the saved key and only changes the device setting.
 	key, err := svc.SaveProviderKey(t.Context(), "OPENAI_API_KEY", "", true)
 	if err != nil || !key.Device || published["OPENAI_API_KEY"] != "openai-secret" {
 		t.Fatalf("publish = %+v, %v, %v", key, published, err)
@@ -172,7 +169,6 @@ func TestFailedSaveNeverLeavesAnUntrackedDeviceKey(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
 	dir := t.TempDir()
 	svc := NewWithAgentResolver(nil, nil, nil, dir)
-	// Make AO's key store unwritable after the device marker exists.
 	if err := os.WriteFile(filepath.Join(dir, "provider-api-keys.json"), []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +213,6 @@ func TestSaveProviderKeyReplacesOnlyAOsOwnDeviceCopy(t *testing.T) {
 	if _, err := svc.SaveProviderKey(t.Context(), "OPENAI_API_KEY", "first-secret", false); err != nil {
 		t.Fatal(err)
 	}
-	// A key saved without sharing was never AO's copy in the OS environment.
 	if _, err := svc.SaveProviderKey(t.Context(), "OPENAI_API_KEY", "second-secret", true); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +242,6 @@ func TestDeviceWithdrawalNeverBlocksRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("turning sharing off failed: %v", err)
 	}
-	// The user hears that apps outside AO may still see it.
 	if !off.WithdrawFailed {
 		t.Fatal("turning sharing off did not report the failed withdrawal")
 	}
@@ -281,7 +275,6 @@ func TestFailedSaveRestoresTheEarlierSharedValue(t *testing.T) {
 	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-old", true); err != nil {
 		t.Fatal(err)
 	}
-	// The device marker is already set, so only the key store write fails.
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +297,6 @@ func TestFailedPublishNeverUnsetsAValueAONeverPublished(t *testing.T) {
 	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-secret", true); err == nil {
 		t.Fatal("reported success without publishing")
 	}
-	// The user may already hold this exact value; AO put nothing there.
 	if _, ok := withdrawn["GROQ_API_KEY"]; ok {
 		t.Fatal("withdrew a value AO never published")
 	}
@@ -322,7 +314,6 @@ func TestPublishUndoRunsAfterTheRequestEnds(t *testing.T) {
 		cleanupErr = cleanupCtx.Err()
 		return nil
 	}
-	// The request ends right after publishing, so the store write fails.
 	publishProviderKey = func(context.Context, string, string, string) error {
 		cancel()
 		return nil
@@ -339,7 +330,6 @@ func TestPublishUndoRunsAfterTheRequestEnds(t *testing.T) {
 
 func TestSharingNeverRemovesTheUsersIdenticalValue(t *testing.T) {
 	_, withdrawn := stubDeviceEnvironment(t)
-	// The user's environment already holds exactly this key.
 	publishProviderKey = func(context.Context, string, string, string) error { return providerkeys.ErrAlreadySet }
 	t.Setenv("GROQ_API_KEY", "")
 	dir := t.TempDir()
@@ -361,7 +351,6 @@ func TestSharingNeverRemovesTheUsersIdenticalValue(t *testing.T) {
 	}
 }
 
-// A withdrawal that worked, or had nothing to withdraw, reports nothing.
 func TestSuccessfulWithdrawalReportsNoFailure(t *testing.T) {
 	stubDeviceEnvironment(t)
 	t.Setenv("GROQ_API_KEY", "")
@@ -386,18 +375,15 @@ func TestSuccessfulWithdrawalReportsNoFailure(t *testing.T) {
 	}
 }
 
-// A value that was the user's stops being theirs once they clear it and AO
-// publishes a replacement, so turning sharing off or removing the key takes
-// AO's copy back out.
 func TestPublishingAReplacementTakesOverTheUsersName(t *testing.T) {
 	stubDeviceEnvironment(t)
 	calls := 0
 	publishProviderKey = func(context.Context, string, string, string) error {
 		calls++
 		if calls == 1 {
-			return providerkeys.ErrAlreadySet // the user already had this exact value
+			return providerkeys.ErrAlreadySet
 		}
-		return nil // they cleared it since; AO's replacement goes in
+		return nil
 	}
 	var unpublished []string
 	unpublishProviderKey = func(_ context.Context, _, value string) error {
@@ -427,8 +413,6 @@ func TestPublishingAReplacementTakesOverTheUsersName(t *testing.T) {
 	}
 }
 
-// A replacement save that fails after AO published leaves the name as it was:
-// AO's copy is taken back out and the name is the user's again.
 func TestFailedReplacementSaveGivesTheNameBackToTheUser(t *testing.T) {
 	stubDeviceEnvironment(t)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -439,7 +423,7 @@ func TestFailedReplacementSaveGivesTheNameBackToTheUser(t *testing.T) {
 		if calls == 1 {
 			return providerkeys.ErrAlreadySet
 		}
-		cancel() // the request ends right after publishing, so the save fails
+		cancel()
 		return nil
 	}
 	var unpublished []string
@@ -467,8 +451,6 @@ func TestFailedReplacementSaveGivesTheNameBackToTheUser(t *testing.T) {
 	}
 }
 
-// The login panel is where keys are set, so it hears when turning sharing
-// off left AO's copy in the user environment.
 func TestKeyLoginReportsAWithdrawalThatFailed(t *testing.T) {
 	stubDeviceEnvironment(t)
 	unpublishProviderKey = func(context.Context, string, string) error { return errors.New("no user bus") }

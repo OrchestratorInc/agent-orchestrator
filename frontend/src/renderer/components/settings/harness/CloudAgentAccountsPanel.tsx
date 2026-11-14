@@ -10,14 +10,10 @@ import { formatPlanName } from "../AgentAccountsSection";
 import { CloudHarnessLoginPanel, type CloudHarness } from "../CloudHarnessLoginPanel";
 import { HarnessDetailGroup } from "./harness-ui";
 
-/** One harness's Cloud accounts, as the local Account tab lists a CLI's: each
- * login or key, the default one new tasks run on, signing one in again, and
- * adding or removing one. A session moves between them in its Summary. */
 export function CloudAgentAccountsPanel({ agent, addFirst = false }: { agent: CloudHarness; addFirst?: boolean }) {
 	const { t } = useTranslation();
 	const accounts = useCloudAgentAccounts();
 	const actions = useCloudAgentAccountActions();
-	// "new" adds an account; an account id signs that account in again.
 	const [login, setLogin] = useState<string | null>(addFirst ? "new" : null);
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
@@ -83,7 +79,6 @@ function CloudAccountRow({ account, busy, onMakeDefault, onSignInAgain, onRemove
 	const invalid = account.validationState === "invalid";
 	const meta = [
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
-		// A name the user gave hides the login's email; keep it findable.
 		account.name && account.email ? account.email : null,
 		invalid ? t("settings.agentAccounts.signedOut") : isCloudSubscriptionAccount(account) ? null : t("settings.agentAccounts.noSubscription"),
 	].filter(Boolean).join(" · ");

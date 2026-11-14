@@ -26,7 +26,6 @@ func copilotEvent(t *testing.T, kind, id string, data map[string]any) string {
 	return string(body) + "\n"
 }
 
-// subagentEvent is a child-agent event marked only by the top-level agentId.
 func subagentEvent(t *testing.T, kind, id, agentID string, data map[string]any) string {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
@@ -98,7 +97,6 @@ func TestCopilotResumeContextAndWorkspaceTitle(t *testing.T) {
 	if err != nil || got.cwd != latest || got.title != "Fix <native> parsing" {
 		t.Fatalf("latest context/fallback title = %+v, %v", got, err)
 	}
-	// A malformed sidecar must not hide the conversation in events.jsonl.
 	writeFile(t, filepath.Join(filepath.Dir(path), "workspace.yaml"), "name: [broken\n")
 	if _, err := readTranscript(context.Background(), domain.HarnessCopilot, root, path); err != nil {
 		t.Fatal(err)

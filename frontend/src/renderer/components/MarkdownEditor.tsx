@@ -68,8 +68,6 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 			view.destroy();
 			viewRef.current = null;
 		};
-		// The editor is intentionally created once per file. React state changes
-		// must not reset the user's selection or undo history.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [filePath]);
 

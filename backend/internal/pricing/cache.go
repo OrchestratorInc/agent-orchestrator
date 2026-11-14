@@ -11,30 +11,23 @@ import (
 )
 
 const (
-	// ManifestMaxBytes bounds a cached manifest read.
 	ManifestMaxBytes int64 = 1 << 20
-	// ProviderMaxBytes bounds a cached provider blob read.
 	ProviderMaxBytes int64 = 8 << 20
 )
 
-// ErrNoCachedCatalog indicates that no last-known-good manifest is installed.
 var ErrNoCachedCatalog = errors.New("no cached pricing catalog")
 
-// Cache stores the runtime last-known-good catalog below AO_DATA_DIR.
 type Cache struct {
 	root   string
 	rename func(string, string) error
 }
 
-// NewCache returns a private v1 pricing cache rooted below dataDir.
 func NewCache(dataDir string) *Cache {
 	return &Cache{root: filepath.Join(dataDir, "pricing", "catalog", "v1"), rename: os.Rename}
 }
 
-// Root returns the resolved cache directory.
 func (c *Cache) Root() string { return c.root }
 
-// Load reads and validates the complete last-known-good catalog synchronously.
 func (c *Cache) Load(ctx context.Context) (*Catalog, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -68,8 +61,6 @@ func (c *Cache) Load(ctx context.Context) (*Catalog, error) {
 	return ParseCatalog(manifestBytes, providers)
 }
 
-// Install commits a complete validated candidate with immutable blobs first
-// and an atomic manifest replacement last.
 func (c *Cache) Install(ctx context.Context, catalog *Catalog) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -116,14 +107,6 @@ func ensurePrivateDir(directory string) error {
 	return nil
 }
 
-// installImmutableFile writes one content-addressed provider blob.
-//
-// A path whose contents already match is left untouched. A mismatch can only
-// mean the local copy is corrupt: the path is the digest of the contents, so
-// two different byte strings cannot legitimately share one. Install has already
-// revalidated the candidate bytes against that digest, so overwriting is the
-// only way a corrupt blob recovers — refusing would wedge every future refresh
-// that references the same hash until the user deleted AO state by hand.
 func installImmutableFile(target string, contents []byte, rename func(string, string) error) error {
 	existing, err := os.ReadFile(target)
 	switch {

@@ -27,7 +27,6 @@ var _ ports.ChatIsolatedForker = (*Driver)(nil)
 var _ ports.ChatForker = (*conversation)(nil)
 var _ ports.ChatForkDeleter = (*conversation)(nil)
 
-// ForkIntoHost starts an independent provider at the selected request boundary.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories); err != nil {
 		return nil, err
@@ -116,8 +115,6 @@ func forkNativeSession(ctx context.Context, dataDir, sourceID, anchor string) (s
 	return id, nil
 }
 
-// Read only input/turn identifiers; the SDK validates and decodes the full log
-// once when writing the fork, including compaction and tool history.
 func nativeForkTurn(ctx context.Context, dataDir, sourceID, anchor string) (session.TurnID, error) {
 	if sourceID == "." || sourceID == ".." || strings.ContainsAny(sourceID, "/\\") {
 		return "", errors.New("invalid source session id")
@@ -128,8 +125,6 @@ func nativeForkTurn(ctx context.Context, dataDir, sourceID, anchor string) (sess
 	}
 	defer func() { _ = file.Close() }()
 	reader := bufio.NewReader(file)
-	// AO identifies a request by its external input ID. One request can span
-	// several native turns (tools or compaction); copy through its final turn.
 	var nativeTurn session.TurnID
 	found := anchor == ""
 	for {
@@ -139,7 +134,7 @@ func nativeForkTurn(ctx context.Context, dataDir, sourceID, anchor string) (sess
 		line, err := reader.ReadBytes('\n')
 		if errors.Is(err, io.EOF) {
 			break
-		} // Ignore uncommitted trailing records, as the SDK does.
+		}
 		if err != nil {
 			return "", err
 		}
@@ -187,7 +182,6 @@ func deleteNativeFork(ctx context.Context, dataDir, parentID, id string) error {
 	if _, err := uuid.Parse(id); err != nil {
 		return fmt.Errorf("invalid Unreal Agent fork id: %w", err)
 	}
-	// The pinned SDK has no delete API. Only AO-registered child IDs reach here.
 	err := os.Remove(filepath.Join(nativeSessionDirectory(dataDir), id+".session.jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

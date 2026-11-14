@@ -6,18 +6,11 @@ import { sessionScmSummaryQueryKey, type SessionPRSummary } from "./useSessionSc
 
 export const prDetailsLoadQueryKey = (url: string, hostId?: string) => ["pr-details-load", hostId ?? "local", url] as const;
 
-/**
- * Asks the daemon, once, to read a PR's details when none are stored. The SCM
- * observer reads them only for the open PRs it follows, so a PR that merged or
- * closed before then would otherwise show them loading for good. Returns true
- * when that read failed, so the view can say so instead of waiting.
- */
 export function usePRDetailsLoad(pr: SessionPRSummary | undefined, sessionId: string, hostId?: string, enabled = true): boolean {
 	const queryClient = useQueryClient();
 	const query = useQuery({
 		queryKey: prDetailsLoadQueryKey(pr?.url ?? "", hostId),
 		enabled: enabled && !usePreviewData && Boolean(pr?.url) && !pr?.detailsObservedAt,
-		// One read per PR: the observer keeps an open PR's details current after it.
 		staleTime: Infinity,
 		retry: false,
 		queryFn: async () => {
@@ -26,8 +19,6 @@ export function usePRDetailsLoad(pr: SessionPRSummary | undefined, sessionId: st
 				body: { prUrl: pr!.url },
 			});
 			if (error) throw apiErrorException(error);
-			// The details are stored apart from the PR's row, so no change event
-			// follows: refresh every session on this host that shows the PR.
 			const [scope, host] = sessionScmSummaryQueryKey(sessionId, hostId);
 			await queryClient.invalidateQueries({
 				predicate: ({ queryKey, state }) => queryKey[0] === scope && queryKey[1] === host && (queryKey[2] === sessionId || showsPR(state.data, pr!.url)),

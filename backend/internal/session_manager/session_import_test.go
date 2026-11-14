@@ -64,13 +64,11 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			write("binary", []byte{0, 3, 4, 255})
 			write(".env", []byte("ignored local data\n"))
 			write("new\nfile", []byte("untracked\n"))
-			// A nested repository, such as Claude's agent worktree, is not part of this checkout.
 			nested := filepath.Join(source, ".claude", "worktrees", "agent")
 			if err := os.MkdirAll(nested, 0700); err != nil {
 				t.Fatal(err)
 			}
 			git(nested, "init", "-b", "main")
-			// A tracked submodule keeps its folder.
 			git(source, "update-index", "--add", "--cacheinfo", "160000,"+strings.TrimSpace(string(git(source, "rev-parse", "HEAD")))+",sub")
 			if err := os.MkdirAll(filepath.Join(source, "sub"), 0700); err != nil {
 				t.Fatal(err)
@@ -91,7 +89,6 @@ func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
 			staged := git(source, "diff", "--cached", "--binary", "--full-index")
 			local := git(source, "diff", "--binary", "--full-index")
 			git(source, "worktree", "add", "-b", "ao-test", destination, "HEAD")
-			// Workspace setup may add ignored folders to the AO worktree before the copy.
 			if err := os.MkdirAll(filepath.Join(destination, ".setup"), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -234,15 +231,12 @@ func TestImportPreservesNestedWorktreePointers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(externalChild, "unregistered", ".git"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	// A retry starts again from the source state, over whatever an earlier attempt left.
 	if err := copyImportedWorkspace(context.Background(), source, destination, map[string]string{"child": externalChild}, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(filepath.Join(destination, "child", "unregistered")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("copied an unregistered nested repository")
 	}
-	// A source that committed since the AO worktree was created is followed to
-	// its new commit; the files are never copied onto the old base.
 	git(source, "-c", "user.name=AO test", "-c", "user.email=test@example.invalid", "commit", "-m", "advance")
 	if err := copyImportedWorkspace(context.Background(), source, destination, nil, filepath.Join(t.TempDir(), "marker")); err != nil {
 		t.Fatal(err)
@@ -493,8 +487,6 @@ func (providerHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) {
 	return providerHomeAgent{}, true
 }
 
-// Claude Code keys its keychain login by CLAUDE_CONFIG_DIR: setting even the
-// default path makes a keychain user look signed out on the first follow-up.
 func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -507,8 +499,6 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	if value, set := env["CLAUDE_CONFIG_DIR"]; set {
 		t.Fatalf("default provider home was forced: %q", value)
 	}
-	// An AO account folder links the computer's history, so the conversation is
-	// reachable there and the account's login stays.
 	source := filepath.Join(home, "source-home")
 	transcript := filepath.Join(source, "projects", "-work", "native.jsonl")
 	account := filepath.Join(home, "account-home")
@@ -531,7 +521,6 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	if env["CLAUDE_CONFIG_DIR"] != account {
 		t.Fatalf("account folder replaced: %v", env)
 	}
-	// Codex compresses an inactive rollout in place; the account keeps it.
 	if err := os.Rename(transcript, transcript+".zst"); err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +528,6 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	if env["CLAUDE_CONFIG_DIR"] != account {
 		t.Fatalf("account folder replaced after compression: %v", env)
 	}
-	// A home that cannot reach the conversation is pointed at its source.
 	rec.Metadata.ImportSource.ConfigDir = "/other-provider-home"
 	rec.Metadata.NativeTranscriptPath = "/other-provider-home/projects/-elsewhere/native.jsonl"
 	m.applyImportedConfigEnv(context.Background(), rec, env)
@@ -571,8 +559,6 @@ func TestImportedClaudeChatKeepsAOModel(t *testing.T) {
 	}
 }
 
-// Startup health treats a ready row without a workspace as an interrupted
-// spawn and rolls it back; an idle import must survive every daemon restart.
 func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
@@ -586,8 +572,6 @@ func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
 	}
 }
 
-// Provider worktrees are often deleted once their branch merges; the imported
-// conversation still continues natively from the project checkout.
 func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T) {
 	m, st, _, root := newGitTaskPreparationManager(t)
 	project := st.projects["mer"]
@@ -608,9 +592,6 @@ func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T)
 	}
 }
 
-// The changes view shows what this session adds: a chat that continued a
-// feature branch does not list that branch's earlier commits as its own, and a
-// chat on the default branch keeps following it.
 func TestImportedWorkspaceComparesWithTheCommitTheChatContinued(t *testing.T) {
 	m, st, _, root := newGitTaskPreparationManager(t)
 	project := st.projects["mer"]
@@ -640,8 +621,6 @@ func TestImportedWorkspaceComparesWithTheCommitTheChatContinued(t *testing.T) {
 	}
 }
 
-// As for a single repository, a workspace chat whose folder was deleted
-// continues from the registered checkouts with nothing copied.
 func TestImportedWorkspaceWhoseFolderIsGoneStartsFromRegisteredCheckouts(t *testing.T) {
 	m, st, _, root := newGitTaskPreparationManager(t)
 	child := filepath.Join(root, "child")
@@ -673,8 +652,6 @@ func TestImportedWorkspaceWhoseFolderIsGoneStartsFromRegisteredCheckouts(t *test
 	}
 }
 
-// A provider that holds the native conversation after adoption still gets the
-// open-elsewhere explanation, not a generic resume failure.
 func TestAdoptedResumeReportsOwnershipRefusal(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("thread 019a already has an active writer")}
 	m, st, _ := newChatManager(launcher)
@@ -686,14 +663,11 @@ func TestAdoptedResumeReportsOwnershipRefusal(t *testing.T) {
 	}
 }
 
-// A conversation from a second clone lends its commit and files; the AO
-// worktree and branch still belong to the registered repository.
 func TestImportedCloneLeavesSourceRepositoryUntouched(t *testing.T) {
 	m, st, _, root := newGitTaskPreparationManager(t)
 	project := st.projects["mer"]
 	clone := filepath.Join(t.TempDir(), "clone")
 	runManagerGit(t, root, "clone", "--no-local", root, clone)
-	// Clones of one repository share its origin; that is how a scan matched this one.
 	runManagerGit(t, root, "remote", "add", "origin", "https://github.com/example/mer.git")
 	runManagerGit(t, clone, "remote", "set-url", "origin", "git@github.com:example/mer.git")
 	if err := os.WriteFile(filepath.Join(clone, "new-commit"), []byte("unpublished"), 0600); err != nil {
@@ -729,8 +703,6 @@ func TestImportedCloneLeavesSourceRepositoryUntouched(t *testing.T) {
 	}
 }
 
-// The replay boundary is recorded once, at adoption. A controller rebuild reuses
-// the launch callback and must not move it over later AO turns.
 func TestImportReplayBoundaryIsFixedAtAdoption(t *testing.T) {
 	const sessionID = domain.SessionID("mer-1")
 	st := &historicalChatRestoreStore{transitionStore: newTransitionStore(), conversation: domain.ConversationRecord{
@@ -752,7 +724,7 @@ func TestImportReplayBoundaryIsFixedAtAdoption(t *testing.T) {
 	if got := st.sessions[sessionID].Metadata.ImportSource; got == nil || !got.Adopted || got.HistoryThrough != 7 {
 		t.Fatalf("adopted import = %+v, want boundary 7", got)
 	}
-	st.conversation.LatestSequence = 12 // AO turns after adoption
+	st.conversation.LatestSequence = 12
 	if _, err := launcher.started[0].ControllerReady(ChatStarted{ProviderConversationID: "thread-1", ControllerGeneration: "gen-2"}); err != nil {
 		t.Fatal(err)
 	}
@@ -761,8 +733,6 @@ func TestImportReplayBoundaryIsFixedAtAdoption(t *testing.T) {
 	}
 }
 
-// A repository nested inside the project folder, such as an ignored clone, is not
-// the project's repository: its commit and files never enter an AO worktree.
 func TestImportedChatInUnrelatedNestedRepositoryIsRefused(t *testing.T) {
 	m, st, _, root := newGitTaskPreparationManager(t)
 	nested := filepath.Join(root, "third_party", "foo")
@@ -783,8 +753,6 @@ func TestImportedChatInUnrelatedNestedRepositoryIsRefused(t *testing.T) {
 	}
 }
 
-// A chat that ran in a separate clone of a workspace's root repository: the
-// clone holds no child checkouts, so children start from the registered ones.
 func TestImportedWorkspaceFromRootCloneStartsChildrenFromRegisteredCheckouts(t *testing.T) {
 	m, st, _, root := newGitTaskPreparationManager(t)
 	runManagerGit(t, root, "remote", "add", "origin", "https://github.com/example/workspace-root.git")
@@ -823,8 +791,6 @@ func TestImportedWorkspaceFromRootCloneStartsChildrenFromRegisteredCheckouts(t *
 	}
 }
 
-// A retry starts from the source as it is now: an untracked file an earlier
-// attempt copied, and the source has since deleted, does not stay behind.
 func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
 	root := t.TempDir()
 	source, destination := filepath.Join(root, "source"), filepath.Join(root, "ao")
@@ -933,7 +899,6 @@ func TestRelocateImportedSessionFailureIsAUserNotice(t *testing.T) {
 	}
 }
 
-// Providers that find a session by id from any directory need no copy and no pin.
 func TestRelocateImportedSessionSkipsProvidersThatFindSessionsByID(t *testing.T) {
 	st := newFakeStore()
 	m := &Manager{agents: fakeAgents{}, store: st, clock: time.Now}
@@ -946,8 +911,6 @@ func TestRelocateImportedSessionSkipsProvidersThatFindSessionsByID(t *testing.T)
 	}
 }
 
-// A later launch uses the folder the copy was prepared for, even after the
-// working subfolder it came from was removed.
 func TestPinnedImportLaunchPathKeepsTheRelocatedFolder(t *testing.T) {
 	workspace := t.TempDir()
 	pinned := filepath.Join(workspace, "child")

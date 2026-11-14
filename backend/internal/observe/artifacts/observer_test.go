@@ -53,9 +53,9 @@ func TestPoll_CapturesVersionsForLiveSessionsEvenWhenReconcileFails(t *testing.T
 func TestPoll_SkipsTerminatedButRescansArtifactSessionsForRemovals(t *testing.T) {
 	sessions := fakeSessions{rows: []domain.SessionRecord{
 		{ID: "live"},
-		{ID: "pr-only", OutputType: domain.SessionOutputPR}, // still polled: may later gain artifact output too.
+		{ID: "pr-only", OutputType: domain.SessionOutputPR},
 		{ID: "terminated", IsTerminated: true},
-		{ID: "already-artifact", OutputType: domain.SessionOutputArtifact}, // rescanned: its last file may have been deleted.
+		{ID: "already-artifact", OutputType: domain.SessionOutputArtifact},
 		{ID: "already-pr-and-artifact", OutputType: domain.SessionOutputPRAndArtifact},
 	}}
 	sink := &fakeSink{}

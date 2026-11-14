@@ -12,10 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// writePRDetails stores a PR's details in the transaction that wrote its row,
-// with the provider updatedAt of the observation they came from. An
-// observation without details leaves the stored ones, and their updatedAt, as
-// they are.
 func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, providerUpdatedAt time.Time, details *domain.PullRequestDetails) error {
 	if details == nil {
 		return nil
@@ -53,17 +49,12 @@ func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, providerU
 	return nil
 }
 
-// SavePRDetails stores details read for a PR outside an observation, as for a
-// PR that merged or closed before the observer read them. The PR's row is left
-// as it is, so nothing else about the PR changes.
 func (s *Store) SavePRDetails(ctx context.Context, prURL string, providerUpdatedAt time.Time, details domain.PullRequestDetails) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return writePRDetails(ctx, s.qw, prURL, providerUpdatedAt, &details)
 }
 
-// GetPRDetails returns a PR's stored details. ok is false until an
-// observation has carried them, which is not the same as a PR with none.
 func (s *Store) GetPRDetails(ctx context.Context, prURL string) (domain.PullRequestDetails, bool, error) {
 	row, err := s.qr.GetPRDetails(ctx, prURL)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -78,8 +69,6 @@ func (s *Store) GetPRDetails(ctx context.Context, prURL string) (domain.PullRequ
 		CommitCount:          int(row.CommitCount),
 		ObservedAt:           row.ObservedAt,
 	}
-	// A malformed stored list reads as empty, never as a failed PR read: the
-	// details are view-only and the next observation rewrites them.
 	_ = json.Unmarshal([]byte(row.Labels), &details.Labels)
 	_ = json.Unmarshal([]byte(row.RequestedReviewers), &details.RequestedReviewers)
 	_ = json.Unmarshal([]byte(row.Commits), &details.Commits)
@@ -87,11 +76,6 @@ func (s *Store) GetPRDetails(ctx context.Context, prURL string) (domain.PullRequ
 	return details, true, nil
 }
 
-// PRDetailsUpdatedAt returns the provider updatedAt of the PR state a PR's
-// stored details were read from, so the observer can skip re-reading details
-// that cannot have changed. ok is false when the PR has no stored details, or
-// has details stored before the updatedAt was recorded: either way they are
-// due a read.
 func (s *Store) PRDetailsUpdatedAt(ctx context.Context, prURL string) (time.Time, bool, error) {
 	updatedAt, err := s.qr.GetPRDetailsProviderUpdatedAt(ctx, prURL)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -106,11 +90,6 @@ func (s *Store) PRDetailsUpdatedAt(ctx context.Context, prURL string) (time.Time
 	return updatedAt.Time, true, nil
 }
 
-// AppendPRConversationComment adds one just-posted conversation comment to a
-// PR's stored details so the view shows it before the next observation, which
-// rewrites the list from the provider. ok is false when the PR has no stored
-// details yet: the comment then waits for that observation instead of
-// fabricating a details row.
 func (s *Store) AppendPRConversationComment(ctx context.Context, prURL string, comment domain.PullRequestConversationComment) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -148,7 +127,6 @@ func (s *Store) AppendPRConversationComment(ctx context.Context, prURL string, c
 	return appended, err
 }
 
-// nonNilSlice keeps an empty list encoding as [] and not null.
 func nonNilSlice[T any](items []T) []T {
 	if items == nil {
 		return []T{}

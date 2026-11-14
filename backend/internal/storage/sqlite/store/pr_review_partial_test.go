@@ -9,11 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The pr.review_observed_at / review_partial pair travels together: a writer
-// that did not fetch review threads passes a zero ReviewObservedAt (NULL) and
-// must keep the stored pair, while a writer that fetched passes both. This is
-// what keeps a failed review fetch (observer preserve mode, claim fallback)
-// from manufacturing certainty it does not have.
 func TestPRReviewCompletenessPairContract(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -28,7 +23,6 @@ func TestPRReviewCompletenessPairContract(t *testing.T) {
 		Review: domain.ReviewRequired, UpdatedAt: now, StateChangedAt: now,
 	}
 
-	// A partial review observation stores (timestamp, partial=true).
 	partial := base
 	partial.ReviewObservedAt = now.Add(time.Minute)
 	partial.ReviewPartial = true
@@ -36,8 +30,6 @@ func TestPRReviewCompletenessPairContract(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A metadata-only pass in preserve mode has no review observation to offer
-	// (zero pair in the domain row); it must keep the stored certainty.
 	preserve := partial
 	preserve.Title = "renamed"
 	preserve.UpdatedAt = now.Add(2 * time.Minute)
@@ -58,7 +50,6 @@ func TestPRReviewCompletenessPairContract(t *testing.T) {
 			got.ReviewObservedAt, got.ReviewPartial, partial.ReviewObservedAt)
 	}
 
-	// A full review observation replaces the pair.
 	full := preserve
 	full.ReviewObservedAt = now.Add(3 * time.Minute)
 	full.ReviewPartial = false
@@ -74,8 +65,6 @@ func TestPRReviewCompletenessPairContract(t *testing.T) {
 			got.ReviewObservedAt, got.ReviewPartial, full.ReviewObservedAt)
 	}
 
-	// The legacy writer keeps the same contract on insert: no review
-	// observation means the zero pair, not the column's conservative default.
 	legacy := base
 	legacy.URL = "https://gh/pr/10"
 	legacy.Number = 10

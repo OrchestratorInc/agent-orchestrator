@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// T1. FolderMissing false when directory exists (happy path).
 func TestFolderMissing_FalseWhenDirectoryExists(t *testing.T) {
 	ctx := context.Background()
 	configureCommitter(t)
@@ -46,7 +45,6 @@ func TestFolderMissing_FalseWhenDirectoryExists(t *testing.T) {
 	}
 }
 
-// T2. FolderMissing true after directory deleted + recovery.
 func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	configureCommitter(t)
@@ -56,17 +54,14 @@ func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	// Initially present.
 	if got, err := m.List(ctx); err != nil || len(got) != 1 || got[0].FolderMissing {
 		t.Fatalf("pre-delete List = %#v, %v", got, err)
 	}
 
-	// Delete the directory.
 	if err := os.RemoveAll(repo); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
 
-	// Assert FolderMissing true via List.
 	list, err := m.List(ctx)
 	if err != nil {
 		t.Fatalf("List after delete: %v", err)
@@ -75,7 +70,6 @@ func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 		t.Fatalf("List after delete = %#v, want FolderMissing=true", list)
 	}
 
-	// Assert FolderMissing true via Get.
 	res, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get after delete: %v", err)
@@ -83,12 +77,10 @@ func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 	if !res.Project.FolderMissing {
 		t.Fatal("Get FolderMissing = false after delete, want true")
 	}
-	// Default branch falls back to "auto" when folder is missing.
 	if res.Project.DefaultBranch != domain.DefaultBranchAuto {
 		t.Fatalf("Get DefaultBranch = %q, want %q (missing folder falls back to auto)", res.Project.DefaultBranch, domain.DefaultBranchAuto)
 	}
 
-	// Recovery: recreate the directory as a valid git repo at the same path.
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatalf("MkdirAll for recovery: %v", err)
 	}
@@ -97,7 +89,6 @@ func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 	}
 	commitEmpty(t, repo)
 
-	// Assert FolderMissing false again via List.
 	list2, err := m.List(ctx)
 	if err != nil {
 		t.Fatalf("List after recovery: %v", err)
@@ -106,7 +97,6 @@ func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 		t.Fatalf("List after recovery = %#v, want FolderMissing=false", list2)
 	}
 
-	// Assert FolderMissing false again via Get.
 	res2, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get after recovery: %v", err)
@@ -116,7 +106,6 @@ func TestFolderMissing_LifecycleDeleteAndRecovery(t *testing.T) {
 	}
 }
 
-// T3. Non-directory file at the path is treated as missing.
 func TestFolderMissing_NonDirectoryFileCountsAsMissing(t *testing.T) {
 	ctx := context.Background()
 	configureCommitter(t)
@@ -127,7 +116,6 @@ func TestFolderMissing_NonDirectoryFileCountsAsMissing(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Remove the directory and place a regular file at the same path.
 	if err := os.RemoveAll(repo); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
@@ -152,7 +140,6 @@ func TestFolderMissing_NonDirectoryFileCountsAsMissing(t *testing.T) {
 	}
 }
 
-// T4. Missing folder yields FolderMissing=true and falls back to DefaultBranchAuto.
 func TestFolderMissing_MissingFolderFallsBackToAutoBranch(t *testing.T) {
 	ctx := context.Background()
 	configureCommitter(t)
@@ -167,7 +154,6 @@ func TestFolderMissing_MissingFolderFallsBackToAutoBranch(t *testing.T) {
 		t.Fatalf("initial DefaultBranch = %q, want %q", proj.DefaultBranch, domain.DefaultBranchAuto)
 	}
 
-	// Delete the directory to trigger the missing path.
 	if err := os.RemoveAll(repo); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
@@ -184,7 +170,6 @@ func TestFolderMissing_MissingFolderFallsBackToAutoBranch(t *testing.T) {
 	}
 }
 
-// T7. Remove after external deletion proves Remove works when folder is gone.
 func TestFolderMissing_RemoveAfterExternalDeletion(t *testing.T) {
 	ctx := context.Background()
 	configureCommitter(t)
@@ -201,17 +186,14 @@ func TestFolderMissing_RemoveAfterExternalDeletion(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// Delete the directory externally.
 	if err := os.RemoveAll(repo); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
 
-	// Confirm FolderMissing.
 	if got, err := m.List(ctx); err != nil || len(got) != 1 || !got[0].FolderMissing {
 		t.Fatalf("List after delete = %#v, %v", got, err)
 	}
 
-	// Remove must succeed even though the folder is gone.
 	rm, err := m.Remove(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Remove: %v", err)
@@ -220,17 +202,14 @@ func TestFolderMissing_RemoveAfterExternalDeletion(t *testing.T) {
 		t.Fatalf("Remove ProjectID = %q, want ao", rm.ProjectID)
 	}
 
-	// Teardowner was invoked.
 	if len(teardown.projects) != 1 || teardown.projects[0] != "ao" {
 		t.Fatalf("teardown projects = %#v, want [ao]", teardown.projects)
 	}
 
-	// Project is gone from List.
 	if list, _ := m.List(ctx); len(list) != 0 {
 		t.Fatalf("List after remove = %d, want 0", len(list))
 	}
 
-	// Get returns PROJECT_NOT_FOUND.
 	_, err = m.Get(ctx, "ao")
 	wantCode(t, err, "PROJECT_NOT_FOUND")
 }

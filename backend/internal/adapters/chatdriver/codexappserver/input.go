@@ -166,7 +166,6 @@ func (c *conversation) requestUserInput(ctx context.Context, req serverRequest) 
 	return nil, err
 }
 
-// ResolveInput validates and answers one pending Codex question form.
 func (c *conversation) ResolveInput(ctx context.Context, requestID string, response ports.ChatInputResponse) error {
 	if err := ctx.Err(); err != nil {
 		return err

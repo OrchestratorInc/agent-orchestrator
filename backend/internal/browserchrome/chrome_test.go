@@ -11,8 +11,6 @@ import (
 )
 
 func TestExtensionIDMatchesManifestKey(t *testing.T) {
-	// Chrome's ID for ExtensionPublicKey, computed independently with
-	// openssl + shasum when the key was generated.
 	if ExtensionID != "eefgahhblbmjpccfcnpkhkadgcccnibg" {
 		t.Fatalf("ExtensionID = %q", ExtensionID)
 	}
@@ -226,7 +224,7 @@ func TestRemoveKeepsAnotherInstallsRegistryEntry(t *testing.T) {
 	reg := &fakeRegistry{values: map[string]string{}}
 	first, _, _ := testInstaller(t)
 	first.registry = reg
-	second, _, _ := testInstaller(t) // another AO data directory
+	second, _, _ := testInstaller(t)
 	second.registry = reg
 	if _, err := first.Setup(); err != nil {
 		t.Fatal(err)

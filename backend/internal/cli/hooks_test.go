@@ -71,7 +71,6 @@ func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
 		{"claude-code", "sdk-cli", "sdk-cli"},
 		{"claude-code", "cli", "cli"},
 		{"claude-code", "", ""},
-		// Only Claude defines this marker; other harnesses never forward it.
 		{"codex", "sdk-cli", ""},
 	} {
 		t.Setenv("CLAUDE_CODE_ENTRYPOINT", tc.env)
@@ -109,7 +108,6 @@ func TestClaudeHookReportsItsProcess(t *testing.T) {
 		{"claude-code", "", 0},
 		{"claude-code", "not-a-pid", 0},
 		{"claude-code", "1", 0},
-		// Only Claude names the process running a hook.
 		{"codex", "4242", 0},
 	} {
 		t.Setenv("CLAUDE_PID", tc.env)
@@ -197,8 +195,6 @@ func TestHookConversationFactsNativeTurnIdentity(t *testing.T) {
 	}
 }
 
-// activityServer accepts POST /api/v1/sessions/{id}/activity and records what
-// the CLI sent. It mirrors sendServer in send_test.go.
 func activityServer(t *testing.T, status int, respBody string) (*httptest.Server, *activityCapture) {
 	t.Helper()
 	capture := &activityCapture{}
@@ -227,9 +223,7 @@ func assertActivityRequest(t *testing.T, got, want setActivityAPIRequest) {
 	if got.ObservedAt.IsZero() {
 		t.Fatal("hook omitted its observation time")
 	}
-	// The exact timestamp has a separate deterministic wire-contract test.
 	got.ObservedAt = time.Time{}
-	// Every hook names the agent that sent it; the value has its own test.
 	if got.Harness == "" {
 		t.Fatal("hook omitted the agent that sent it")
 	}
@@ -305,10 +299,6 @@ func TestClaudeHookUsageProviderHintUsesTrustedProcessRouting(t *testing.T) {
 		{name: "official zai api", baseURL: "https://api.z.ai/api/anthropic", want: "zai"},
 		{name: "bedrock precedence", baseURL: "https://custom.invalid", bedrock: "1", want: "bedrock"},
 		{name: "vertex precedence", baseURL: "https://api.z.ai", vertex: "true", want: "vertex_ai"},
-		// A route AO cannot name is still a route. Reporting silence would make
-		// it indistinguishable from "no hook has run", which is what lets the
-		// legacy repairer fall back to the model that answered — and that
-		// fallback would bill a proxied session at Anthropic list rates.
 		{name: "conflicting flags", bedrock: "1", vertex: "1", want: pricing.UnidentifiedBillingRoute},
 		{name: "unknown custom route", baseURL: "https://token:secret@custom.invalid/v1",
 			want: pricing.UnidentifiedBillingRoute},
@@ -687,10 +677,6 @@ func TestHooks_StopReportsIdle(t *testing.T) {
 	}
 }
 
-// Claude fires StopFailure instead of Stop when an API error (usage limit,
-// unknown model, expired login) ends the turn. It must report idle, tagged so
-// lifecycle treats it as a turn boundary, and must not certify the error text
-// as the turn's assistant answer.
 func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
@@ -972,8 +958,6 @@ func TestHooks_UserPromptSubmitReportsOnlyMainUserCheckpoint(t *testing.T) {
 }
 
 func TestHookConversationFactsCorrelatesAcceptedReportDelivery(t *testing.T) {
-	// Claude transcript lines 1538, 687, 659, and 1303 from the replay
-	// investigation. Keep the paste boundaries; shorten unrelated report text.
 	tests := []struct {
 		name, prompt, deliveryID string
 	}{
@@ -1399,7 +1383,6 @@ func TestHookAgentSessionIDReadsClineTaskID(t *testing.T) {
 	if got := hookAgentSessionID([]byte(`{"task_id":"cline-task-snake"}`)); got != "cline-task-snake" {
 		t.Fatalf("hookAgentSessionID(task_id) = %q, want cline-task-snake", got)
 	}
-	// Existing aliases keep precedence over the Cline task handle.
 	if got := hookAgentSessionID([]byte(`{"session_id":"sess-1","taskId":"cline-task-abc123"}`)); got != "sess-1" {
 		t.Fatalf("hookAgentSessionID precedence = %q, want sess-1", got)
 	}
@@ -1487,9 +1470,6 @@ func TestHooks_UnknownAgentCannotReportNativeSessionID(t *testing.T) {
 }
 
 func TestHooks_ClaudeCodePermissionRequestReportsBlocked(t *testing.T) {
-	// claude-code installs the pre/post-tool-use trio, so a permission-request
-	// blocked state can be correlated and cleared — it is the one harness that
-	// reports blocked.
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1508,8 +1488,6 @@ func TestHooks_ClaudeCodePermissionRequestReportsBlocked(t *testing.T) {
 }
 
 func TestHooks_PostToolUseCarriesCorrelationFields(t *testing.T) {
-	// Tool-use signals must carry the event and the native tool identity so
-	// lifecycle can clear a stale blocked only on the approved tool's post.
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1583,9 +1561,6 @@ func TestHooks_ClineTaskStartCarriesAgentSessionID(t *testing.T) {
 }
 
 func TestHooks_EventWithoutToolIdentityOmitsIt(t *testing.T) {
-	// Adapters whose payloads carry no tool fields (codex permission-request
-	// payload here has tool_name only) still tag the event; missing identity
-	// fields stay empty rather than inventing values.
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1905,10 +1880,6 @@ func TestKimiApprovalIncompleteIdentityUsesCompatibilityPath(t *testing.T) {
 }
 
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {
-	// Command Code is the one harness here whose SessionStart carries metadata
-	// only: it also fires on resume and clear, and a native restore delivers no
-	// prompt, so reporting it as active would strand a restored session at an
-	// empty prompt reading as working. It must still report the native id.
 	sessionStartState := map[string]string{
 		"opencode": "active", "qwen": "active", "gemini": "active",
 		"kimi": "active", "kilocode": "active", "goose": "active",
@@ -1973,10 +1944,6 @@ func TestHooks_GeminiBeforeAgentReturnsStandingInstructions(t *testing.T) {
 	}
 }
 
-// Command Code's SessionStart hook reports activity and the native session id,
-// but no longer carries AO's standing instructions. Memory is the delivery
-// channel now, so emitting context here would duplicate the role prompt in the
-// Terminal surface while Chat never received it at all.
 func TestHooks_CommandCodeSessionStartReportsActivityWithoutSystemPromptContext(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
@@ -2069,9 +2036,6 @@ func TestHooks_AgySessionStartReportsConversationID(t *testing.T) {
 	assertActivityRequest(t, req, want)
 }
 
-// OpenHands' hook payload (openhands.sdk.hooks.types.HookEvent) carries the
-// conversation id as session_id, and its executor reads additionalContext from
-// the top level of stdout; hookSpecificOutput is ignored.
 func TestHooks_OpenHandsUserPromptSubmitInjectsInstructions(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
@@ -2117,8 +2081,6 @@ func TestHooks_OpenHandsSessionStartAndStopEmitNoOutput(t *testing.T) {
 		state string
 	}{
 		{"session-start", "active"},
-		// Any stdout on Stop is parsed as a decision; OpenHands must be left
-		// free to stop.
 		{"stop", "idle"},
 	} {
 		t.Run(tc.event, func(t *testing.T) {
@@ -2350,7 +2312,7 @@ func TestHooks_UntrackedEventIsNoOp(t *testing.T) {
 
 func TestHooks_DaemonDownIsBestEffort(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
-	setConfigEnv(t) // no run-file written: daemon is "not running"
+	setConfigEnv(t)
 
 	_, _, err := executeCLI(t, Deps{
 		In: strings.NewReader(`{"reason":"logout"}`),
@@ -2414,9 +2376,6 @@ func TestHooks_RetryOnlyUncommittedActivityProjection(t *testing.T) {
 	}
 }
 
-// TestHooks_DeliveryFailureGoesToHooksLog covers the durable failure sink:
-// agents swallow hook stderr, so a delivery failure must also land in
-// $AO_DATA_DIR/hooks.log — and a delivered hook must not write the file at all.
 func TestHooks_DeliveryFailureGoesToHooksLog(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -2473,12 +2432,9 @@ func TestHooks_DeliveryFailureGoesToHooksLog(t *testing.T) {
 	}
 }
 
-// TestHooks_HooksLogTruncatesPastCap asserts the size guard: an append against
-// a hooks.log already past the cap truncates it first, so a persistently
-// failing hook cannot grow the file without bound.
 func TestHooks_HooksLogTruncatesPastCap(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
-	cfg := setConfigEnv(t) // no run file written: every delivery fails
+	cfg := setConfigEnv(t)
 	logPath := filepath.Join(cfg.dataDir, "hooks.log")
 	if err := os.MkdirAll(cfg.dataDir, 0o750); err != nil {
 		t.Fatal(err)
@@ -2768,12 +2724,6 @@ func TestHooks_DaemonNotRunningStaysOutOfStderr(t *testing.T) {
 }
 
 func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
-	// Claude Code ≥ 2.1.257 prompts on Bash commands its analyzer cannot verify
-	// even when an allow rule matches (#4810). A headless reviewer has nobody to
-	// answer, so the hook decides: the exact submit shapes are allowed, anything
-	// else is denied, and no blocked activity is reported either way.
-	// The shell literal, JSON-escaped for the hook payload; `it'\''s` is the
-	// prompt's shell-escaped single quote.
 	const submitJSON = `'{ \"reviews\": [ { \"runId\": \"run-1\", \"verdict\": \"approved\", \"body\": \"it'\\''s fine\" } ] }'`
 	cases := []struct {
 		name    string
@@ -2903,7 +2853,6 @@ func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "qa-1")
 	setConfigEnv(t)
 	t.Setenv("AO_DATA_DIR", "")
-	// No daemon run file and no data dir: the hook must still exit cleanly with no decision.
 	stdout, _, err := executeCLI(t, Deps{
 		In:           strings.NewReader(`{"tool_name":"Artifact"}`),
 		ProcessAlive: func(int) bool { return true },

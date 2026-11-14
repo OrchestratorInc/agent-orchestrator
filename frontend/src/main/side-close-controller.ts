@@ -21,7 +21,6 @@ function bounded<T>(promise: Promise<T>, ms: number, signal: AbortSignal): Promi
 	});
 }
 
-/** One launch-owned close operation. IPC replies and renderer lifetime own no shutdown facts. */
 export class SideCloseController {
 	private epoch = "unavailable";
 	private revision = 0;
@@ -53,8 +52,6 @@ export class SideCloseController {
 					tracked.uncertain ||= tracked.active.dispatched;
 					tracked.active.abort.abort();
 				}
-				// Positive OPEN evidence is attachment-specific, even after the
-				// operation has settled and no request remains to abort.
 				if (tracked.active || tracked.entry.status === "rejected_open") this.update(tracked, "unconfirmed", false);
 			}
 		}
@@ -125,7 +122,7 @@ export class SideCloseController {
 		if (content === this.published) return;
 		this.published = content;
 		this.revision++;
-		try { this.options.onChange(this.summary()); } catch { /* notification failure cannot revoke an owned outcome */ }
+		try { this.options.onChange(this.summary()); } catch { }
 	}
 	private update(tracked: Tracked, status: SideCloseStatus, publish = true): void {
 		if (tracked.entry.status === "closed" && status !== "closed") return;
@@ -139,11 +136,10 @@ export class SideCloseController {
 	}
 	private ownershipChanged(): void { this.options.onOwnershipChange(); }
 	private closed(tracked: Tracked): void {
-		// Commit proof BEFORE any fallible bookkeeping, notification, body disposal, or IPC reply.
 		this.update(tracked, "closed", false);
 		tracked.uncertain = false;
-		try { this.options.ledger.confirm(tracked.entry.id); } catch { /* confirmed HTTP proof belongs to this controller too */ }
-		try { this.ownershipChanged(); } catch { /* proof remains owned */ }
+		try { this.options.ledger.confirm(tracked.entry.id); } catch { }
+		try { this.ownershipChanged(); } catch { }
 		this.publish();
 	}
 	private async run(tracked: Tracked, active: Active): Promise<void> {
@@ -154,7 +150,7 @@ export class SideCloseController {
 		const total = setTimeout(() => active.abort.abort(), SIDE_CLOSE_OPERATION_TIMEOUT_MS);
 		let deleteTimer: ReturnType<typeof setTimeout> | undefined;
 		let response: Response | undefined;
-		const discard = (value: Response | undefined) => { try { void value?.body?.cancel().catch(() => undefined); } catch { /* a consumed/locked response has no ownership significance */ } };
+		const discard = (value: Response | undefined) => { try { void value?.body?.cancel().catch(() => undefined); } catch { } };
 		try {
 			if (!attachment) throw new Error("Side chat daemon is unavailable");
 			if (this.record(tracked.entry.id)) { this.options.ledger.begin(tracked.entry.id); this.ownershipChanged(); }
@@ -178,8 +174,6 @@ export class SideCloseController {
 			deleteTimer = setTimeout(() => active.abort.abort(), DELETE_MS);
 			const request = (this.options.fetch ?? fetch)(`http://127.0.0.1:${attachment.port}/api/v1/sessions/${encodeURIComponent(tracked.entry.sessionId)}/conversation/side-chats/${encodeURIComponent(tracked.entry.id)}`, { method: "DELETE", redirect: "error", signal: active.abort.signal });
 			void request.then(value => {
-				// A late positive result is still proof for this exact attachment,
-				// even if a renderer/watchdog already settled the caller.
 				if (value.status === 204) { if (sameAttachment()) this.closed(tracked); discard(value); }
 				else if (!current() || active.abort.signal.aborted) discard(value);
 			}, () => undefined);
@@ -191,7 +185,7 @@ export class SideCloseController {
 				const body = await bounded(response.json(), READ_MS, active.abort.signal) as { code?: unknown; requestId?: unknown };
 				if (typeof body.code === "string") code = body.code;
 				tracked.entry.error = { code, requestId: typeof body.requestId === "string" ? body.requestId : undefined };
-			} catch { /* malformed response is not rejection evidence */ }
+			} catch { }
 			clearTimeout(deleteTimer);
 			deleteTimer = undefined;
 			const captured = await bounded(this.options.capture(), READ_MS, active.abort.signal);
@@ -211,7 +205,7 @@ export class SideCloseController {
 				if (current() && open && record && this.options.ledger.cancel(tracked.entry.id, record)) {
 					tracked.uncertain = false;
 					this.update(tracked, "rejected_open");
-					try { this.ownershipChanged(); } catch { /* verified cancellation stays usable */ }
+					try { this.ownershipChanged(); } catch { }
 					return;
 				}
 			}

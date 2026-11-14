@@ -28,7 +28,6 @@ func TestAmpSignedInEmail(t *testing.T) {
 	}
 }
 
-// One stored login asks Amp for its account once; a new login asks again.
 func TestAmpActiveAccountEmailIsReusedUntilTheLoginChanges(t *testing.T) {
 	secrets := filepath.Join(t.TempDir(), "secrets.json")
 	if err := os.WriteFile(secrets, []byte(`{"apiKey":"a"}`), 0o600); err != nil {

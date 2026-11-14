@@ -8,12 +8,10 @@ import {
 
 describe("inspectorMaxWidthPx", () => {
 	it("caps by percent, chat floor, and available width", () => {
-		// available 1000: min(1000, 550, max(300, 440)) = 440
 		expect(inspectorMaxWidthPx(1000, 55, 560)).toBe(440);
 	});
 
 	it("uses browser-mode percent and chat floor", () => {
-		// available 1000: min(1000, 680, max(300, 560)) = 560
 		expect(inspectorMaxWidthPx(1000, 68, 440)).toBe(560);
 	});
 

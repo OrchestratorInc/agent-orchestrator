@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestMigration0202AllowsMemcodeAndReversesBothHistoricalSchemas mirrors the
-// fx and DeepSeek coverage: the new harness must be insertable on a current and a
-// legacy-qm schema, an unknown harness must still be rejected, and the down
-// migration must restore the exact prior constraint.
 func TestMigration0202AllowsMemcodeAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
@@ -18,9 +14,6 @@ func TestMigration0202AllowsMemcodeAndReversesBothHistoricalSchemas(t *testing.T
 		t.Run(name, func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, 194)
 			if legacyQM {
-				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 0202 rewrites, so anchor
-				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -47,7 +40,6 @@ func TestMigration0202AllowsMemcodeAndReversesBothHistoricalSchemas(t *testing.T
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
-			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'memcode'`)
 			downTo(t, db, 194)
 			var after string

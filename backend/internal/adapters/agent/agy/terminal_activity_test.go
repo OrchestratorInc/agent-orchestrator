@@ -7,7 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Frames captured from Antigravity CLI 1.3.4 (rule width shortened).
 var (
 	agyTestRule   = strings.Repeat("─", 60)
 	agyIdleFrame  = strings.Join([]string{" ┃ Verbosity now defaults to medium", " ┃ esc to dismiss", agyTestRule, ">", agyTestRule, "? for shortcuts                       Gemini 3.8 Flash · medium"}, "\n")
@@ -41,8 +40,6 @@ func TestInspectTerminalSurface(t *testing.T) {
 	}
 }
 
-// Message delivery feeds TerminalActivityDetector the raw output stream, which
-// never shows Antigravity's composer. Declaring it would stall delivery.
 func TestPluginDoesNotDeclareTheRawOutputDetector(t *testing.T) {
 	var plugin any = New()
 	if _, ok := plugin.(ports.TerminalActivityDetector); ok {

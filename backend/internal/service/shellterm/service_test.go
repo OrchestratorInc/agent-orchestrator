@@ -27,27 +27,24 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeShellRuntime records every runtime call so tests can assert on what was
-// spawned and what was torn down.
 type fakeShellRuntime struct {
 	created     []ports.RuntimeConfig
 	destroyed   []string
 	interrupted []string
 	sentCh      chan sentInput
 
-	createErr    error
-	onCreate     func(ports.RuntimeConfig)
-	createCtxErr bool
-	destroyErr   error
-	sendErr      error
-	output       string
-	outputMu     sync.RWMutex
-	outputErr    error
-	outputReady  <-chan struct{}
-	onGetOutput  func(context.Context) (string, error)
-	styledOutput string
-	styledErr    error
-	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
+	createErr       error
+	onCreate        func(ports.RuntimeConfig)
+	createCtxErr    bool
+	destroyErr      error
+	sendErr         error
+	output          string
+	outputMu        sync.RWMutex
+	outputErr       error
+	outputReady     <-chan struct{}
+	onGetOutput     func(context.Context) (string, error)
+	styledOutput    string
+	styledErr       error
 	aliveByHandle   map[string]bool
 	aliveErr        error
 	handlePrefix    string
@@ -100,10 +97,6 @@ func (f *fakeShellRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) 
 
 func (f *fakeShellRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle) error {
 	f.destroyed = append(f.destroyed, handle.ID)
-	// Only a successful destroy is modeled as actually killing the runtime — a
-	// failed one leaves aliveByHandle as the caller set it up, so tests can
-	// distinguish "destroy errored but it was already dead" (aliveByHandle has
-	// no entry) from "destroy errored and it is still alive" (pre-seeded true).
 	if f.destroyErr == nil {
 		delete(f.aliveByHandle, handle.ID)
 	}
@@ -198,7 +191,6 @@ func (f *fakeShellRuntime) IsChildAlive(ctx context.Context, handle ports.Runtim
 	return f.IsAlive(ctx, handle)
 }
 
-// fakeShellTerminalStore is an in-memory Store keyed by handle id.
 type fakeShellTerminalStore struct {
 	records           []ShellTerminalRecord
 	insertErr         error
@@ -309,9 +301,6 @@ func (f *fakeProjectRootLocator) ProjectEnv(_ context.Context, id domain.Project
 	return f.envs[id], nil
 }
 
-// fakeSessionWorkspace is one entry in fakeSessionWorkspaceLocator: a session's
-// workspace path (possibly empty, standing in for a session with no worktree
-// of its own yet) and the project it belongs to.
 type fakeSessionWorkspace struct {
 	workspacePath string
 	projectID     domain.ProjectID
@@ -346,10 +335,6 @@ func (f *fakeSessionWorkspaceLocator) CueCommandSessionTarget(_ context.Context,
 	return CueCommandSessionTarget{ProjectID: ws.projectID, WorkspacePath: ws.workspacePath, Activity: ws.activity, IsTerminated: ws.terminated}, nil
 }
 
-// newTestService wires a service with deterministic ids so assertions can name
-// exact handles instead of matching on a prefix. Session resolution is not
-// under test here, so it is wired with an empty locator; tests that need it
-// use newTestServiceWithSessions.
 func newTestService(rt *fakeShellRuntime, st *fakeShellTerminalStore, projects ProjectRootLocator) *Service {
 	return newTestServiceWithSessions(rt, st, projects, &fakeSessionWorkspaceLocator{})
 }
@@ -365,8 +350,6 @@ func newTestServiceWithSessions(rt *fakeShellRuntime, st *fakeShellTerminalStore
 	return svc
 }
 
-// Only agent terminals are probed for their rendered screen; shell and command
-// terminals let the runtime skip rendering every byte until something asks.
 func TestShellAndCommandTerminalsAskForLazyStyledOutput(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.output = "pi v0.80.2"
@@ -416,7 +399,6 @@ func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *test
 	if len(rt.created) != 1 {
 		t.Fatalf("runtime creates = %d, want 1", len(rt.created))
 	}
-	// A scripted command must run whether or not anyone attaches to view it.
 	if rt.created[0].StartOnAttach {
 		t.Error("command terminal deferred its start until a viewer attaches")
 	}
@@ -573,8 +555,6 @@ func TestOpenCommandTerminalSkipsReadyTimeoutFallbackForExitedTerminal(t *testin
 
 func TestOpenCommandTerminalFindsReadinessMarkerInRenderedTerminalSurface(t *testing.T) {
 	rt := newFakeShellRuntime()
-	// Full-screen TUIs can keep their current footer out of the raw line ring,
-	// and rendered styling may split a visible marker with SGR sequences.
 	rt.output = "startup bytes without the current footer"
 	rt.styledOutput = "Interactive · Manual Approval · \x1b[1m/\x1b[m commands · ? help"
 	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
@@ -686,7 +666,6 @@ func TestOpenCommandTerminalGivesCompletionItsOwnTimeout(t *testing.T) {
 		}
 		if readyDeadline.IsZero() {
 			readyDeadline = deadline
-			// Consume part of the startup budget before the editor renders.
 			select {
 			case <-time.After(2 * initialInputPollInterval):
 				return "Type your message or @path/to/file", nil
@@ -984,7 +963,6 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	if got := rt.created[0].Env["PROJECT_TOKEN"]; got != "shell-value" {
 		t.Fatalf("project shell env = %q, want shell-value", got)
 	}
-	// Without a sized client asking for it, the shell starts immediately.
 	if rt.created[0].StartOnAttach {
 		t.Error("shell deferred its start without a client that will report a grid")
 	}
@@ -1030,9 +1008,6 @@ func TestOpenShellTerminalDoesNotTrustProjectAOMarkers(t *testing.T) {
 	}
 }
 
-// A client that already shows the tab names it, so the tab keeps that name
-// when the shell arrives even if the daemon still has shells the client has
-// already closed.
 func TestOpenShellTerminalKeepsTheTitleTheClientShows(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
@@ -1170,8 +1145,6 @@ func TestOpenShellTerminalPinsPATHToDaemonBinary(t *testing.T) {
 			if got := rt.created[0].Env["PATH"]; got != tc.want {
 				t.Fatalf("PATH = %q, want %q", got, tc.want)
 			}
-			// A terminal is a login shell: its startup files run after the pin,
-			// so it re-pins afterwards, and only when there is a pin.
 			pinned := tc.want != "" && runtime.GOOS != "windows"
 			if env := rt.created[0].Env; (env["AO_PATH_PIN"] == filepath.Dir(daemonExe) &&
 				env["ZDOTDIR"] == filepath.Join(svc.dataDir, "runtime", "login-shell") &&
@@ -1346,7 +1319,7 @@ func TestShellPreviewCapabilityIsScopedDurableAndRevoked(t *testing.T) {
 	if err != nil || !valid {
 		t.Fatalf("capability after daemon replacement = %v, %v", valid, err)
 	}
-	rt.childExited = true // Detached host retains its row and scrollback.
+	rt.childExited = true
 	valid, err = restarted.ValidPreviewCapability(ctx, "portfolio-3", token)
 	if err != nil || valid {
 		t.Fatalf("exited shell still authorized preview: %v, %v", valid, err)
@@ -1402,9 +1375,6 @@ func TestFailedShellLaunchRevokesPendingPreviewCapability(t *testing.T) {
 	}
 }
 
-// This is the regression the bug covered: opening a shell from a session view
-// must land in that session's worktree, not the registered project root, even
-// though both are supplied on the request.
 func TestOpenShellTerminalStartsInSessionWorkspaceOverProjectRoot(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -1426,9 +1396,6 @@ func TestOpenShellTerminalStartsInSessionWorkspaceOverProjectRoot(t *testing.T) 
 	}
 }
 
-// A standalone session has no project row. Its session identity must clear any
-// UI-only project sentinel supplied by a caller; otherwise the shell row's
-// project foreign key rejects the insert after the PTY has briefly opened.
 func TestOpenShellTerminalStandaloneSessionClearsRequestedProject(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -1455,9 +1422,6 @@ func TestOpenShellTerminalStandaloneSessionClearsRequestedProject(t *testing.T) 
 	}
 }
 
-// A session that has no workspace of its own yet (or an orchestrator that
-// simply runs at the project root) falls back to the project root rather than
-// failing the open.
 func TestOpenShellTerminalFallsBackToProjectRootWhenSessionHasNoWorkspace(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -1492,12 +1456,6 @@ func TestOpenShellTerminalReturnsNotFoundForUnknownSession(t *testing.T) {
 	}
 }
 
-// TestOpenShellTerminalDoesNotAllocateGateForUnknownSession is the regression
-// for the unbounded-growth bug: a stream of requests naming made-up session
-// ids used to allocate a permanent gate map entry each time, before the
-// session id was ever validated. The session must now be confirmed to exist
-// before any gate state is touched, so an invalid id leaves the gate map
-// untouched.
 func TestOpenShellTerminalDoesNotAllocateGateForUnknownSession(t *testing.T) {
 	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{}}
 	svc := newTestServiceWithSessions(newFakeShellRuntime(), &fakeShellTerminalStore{}, &fakeProjectRootLocator{}, sessions)
@@ -1513,10 +1471,6 @@ func TestOpenShellTerminalDoesNotAllocateGateForUnknownSession(t *testing.T) {
 	}
 }
 
-// BeginSessionTeardown is what Session Manager calls before releasing a
-// session's worktree (Kill, Cleanup, RetireForReplacement, save-and-teardown),
-// so a shell terminal scoped to that session never survives pointed at a
-// directory that is about to be removed.
 func TestBeginSessionTeardownDestroysRuntimeAndDeletesRows(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
@@ -1543,9 +1497,6 @@ func TestBeginSessionTeardownDestroysRuntimeAndDeletesRows(t *testing.T) {
 	}
 }
 
-// A destroy error alone is not proof the shell survived — some runtimes error
-// on an already-gone handle. When IsAlive confirms it is in fact dead, the row
-// must still be cleaned up rather than left stranded.
 func TestBeginSessionTeardownContinuesPastDestroyFailureWhenConfirmedDead(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.destroyErr = errors.New("tmux: no such session")
@@ -1554,8 +1505,6 @@ func TestBeginSessionTeardownContinuesPastDestroyFailureWhenConfirmedDead(t *tes
 		{HandleID: "shellterm-2", SessionID: "portfolio-3"},
 	}}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
-	// rt.aliveByHandle has no entry for either handle, so IsAlive answers false:
-	// confirmed dead despite the destroy error.
 
 	release, err := svc.BeginSessionTeardown(context.Background(), "portfolio-3")
 	if err != nil {
@@ -1567,18 +1516,13 @@ func TestBeginSessionTeardownContinuesPastDestroyFailureWhenConfirmedDead(t *tes
 	}
 }
 
-// TestBeginSessionTeardownReturnsErrorAndKeepsRowWhenRuntimeStaysAlive is the
-// regression for the bug where a Destroy error was logged and the row deleted
-// anyway: a live PTY that survives Destroy must keep its row (still
-// tracked/re-attachable) and must fail BeginSessionTeardown, so the caller
-// knows not to remove the worktree out from under it.
 func TestBeginSessionTeardownReturnsErrorAndKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.destroyErr = errors.New("tmux: kill-session refused")
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
 		{HandleID: "shellterm-1", SessionID: "portfolio-3"},
 	}}
-	rt.aliveByHandle["shellterm-1"] = true // still alive despite the destroy error
+	rt.aliveByHandle["shellterm-1"] = true
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 
 	release, err := svc.BeginSessionTeardown(context.Background(), "portfolio-3")
@@ -1614,12 +1558,6 @@ func TestBeginSessionTeardownNoopWhenSessionHasNoShells(t *testing.T) {
 	}
 }
 
-// TestBeginSessionTeardownReleaseIsAcquisitionSpecific is the regression for
-// the bug where releasing a session's gate was keyed by session id alone: a
-// stray or duplicate release call for session X could unlock a DIFFERENT,
-// still in-flight Begin for that same X. The release function Begin returns
-// is now tied to that one acquisition — a stray call to an old release must
-// not touch a newer acquisition's lock, even for the same session id.
 func TestBeginSessionTeardownReleaseIsAcquisitionSpecific(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -1636,8 +1574,6 @@ func TestBeginSessionTeardownReleaseIsAcquisitionSpecific(t *testing.T) {
 		t.Fatalf("Begin 2: %v", err)
 	}
 
-	// A stray repeat of the FIRST acquisition's release must not touch the
-	// second, still in-flight acquisition's hold.
 	release1()
 
 	gate := svc.sessionGateFor("portfolio-3")
@@ -1651,8 +1587,6 @@ func TestBeginSessionTeardownReleaseIsAcquisitionSpecific(t *testing.T) {
 	}
 }
 
-// gateIsFree reports whether the gate can be taken right now, leaving it as it
-// found it.
 func gateIsFree(g *sessionGate) bool {
 	select {
 	case g.ch <- struct{}{}:
@@ -1663,8 +1597,6 @@ func gateIsFree(g *sessionGate) bool {
 	}
 }
 
-// shrinkSessionGateWait makes a contended acquire give up quickly so tests
-// need not wait out the production budget.
 func shrinkSessionGateWait(t *testing.T, d time.Duration) {
 	t.Helper()
 	orig := sessionGateWaitTimeout
@@ -1672,13 +1604,8 @@ func shrinkSessionGateWait(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { sessionGateWaitTimeout = orig })
 }
 
-// TestOpenShellTerminalAbortsWhenContextCancelledWaitingForGate: sync.Mutex.Lock
-// is uninterruptible, so a teardown whose workspace.Destroy stalls used to park
-// every waiter forever — an HTTP handler blocked there could not notice its
-// client disconnecting or its deadline passing. A waiter must now abort on
-// context cancellation instead of hanging.
 func TestOpenShellTerminalAbortsWhenContextCancelledWaitingForGate(t *testing.T) {
-	shrinkSessionGateWait(t, 10*time.Second) // long: cancellation must win, not the budget
+	shrinkSessionGateWait(t, 10*time.Second)
 	rt := newFakeShellRuntime()
 	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
 	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
@@ -1719,8 +1646,6 @@ func TestOpenShellTerminalAbortsWhenContextCancelledWaitingForGate(t *testing.T)
 	}
 }
 
-// A gate held by a wedged teardown must eventually surface a retryable error
-// rather than blocking the request forever.
 func TestOpenShellTerminalGivesUpWaitingForAWedgedGate(t *testing.T) {
 	shrinkSessionGateWait(t, 30*time.Millisecond)
 	rt := newFakeShellRuntime()
@@ -1734,7 +1659,7 @@ func TestOpenShellTerminalGivesUpWaitingForAWedgedGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginSessionTeardown: %v", err)
 	}
-	defer release() // never released before the open below gives up
+	defer release()
 
 	_, err = svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio", SessionID: "portfolio-3"})
 
@@ -1781,11 +1706,6 @@ func TestCloseShellTerminalAbortsWhenContextCancelledWaitingForGate(t *testing.T
 	}
 }
 
-// TestOpenShellTerminalPersistsSessionProjectWhenRequestOmitsIt: a
-// session-scoped open that names no project still belongs to that session's
-// project. Persisting the request's empty ProjectID verbatim would leave the
-// row unattributable even though the working dir resolved through that very
-// project.
 func TestOpenShellTerminalPersistsSessionProjectWhenRequestOmitsIt(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -1807,19 +1727,6 @@ func TestOpenShellTerminalPersistsSessionProjectWhenRequestOmitsIt(t *testing.T)
 	}
 }
 
-// TestBeginSessionTeardownBlocksConcurrentOpenUntilEnd is the deterministic
-// interleaving proof for the race the bug shipped with: a snapshot SELECT
-// could miss a shell OpenShellTerminal inserted a moment later, right before
-// the worktree was destroyed. BeginSessionTeardown now holds the session's
-// gate across the whole teardown window, so a concurrent Open cannot
-// interleave — it blocks until the release function unlocks the gate.
-//
-// The onSessionGateWait hook is what makes this deterministic rather than
-// timing-based: without it, "openDone hasn't fired after 50ms" is equally
-// consistent with "correctly blocked" and "goroutine never got scheduled yet"
-// — a broken gate that didn't block at all could still pass by accident on a
-// slow machine. Waiting on the hook first proves the goroutine actually
-// reached gate.mu.Lock() before asserting it's stuck there.
 func TestBeginSessionTeardownBlocksConcurrentOpenUntilEnd(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -1849,7 +1756,6 @@ func TestBeginSessionTeardownBlocksConcurrentOpenUntilEnd(t *testing.T) {
 
 	select {
 	case <-reachedGate:
-		// The goroutine is now blocked on (or about to call) gate.mu.Lock().
 	case <-time.After(2 * time.Second):
 		t.Fatal("OpenShellTerminal never reached the gate acquisition point")
 	}
@@ -1858,8 +1764,6 @@ func TestBeginSessionTeardownBlocksConcurrentOpenUntilEnd(t *testing.T) {
 	case <-openDone:
 		t.Fatal("OpenShellTerminal returned while the teardown gate was still held")
 	case <-time.After(50 * time.Millisecond):
-		// Having proven it reached the gate, "still not done" now means
-		// "genuinely blocked" rather than "not scheduled yet".
 	}
 
 	release()
@@ -1918,8 +1822,6 @@ func TestRenameShellTerminalReturnsNotFoundForUnknownHandle(t *testing.T) {
 	}
 }
 
-// A row that names a PTY nobody spawned would be re-attached forever after a
-// restart, so a failed insert must take the runtime down with it.
 func TestOpenShellTerminalDestroysRuntimeWhenPersistFails(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{insertErr: errors.New("disk full")}
@@ -1977,7 +1879,7 @@ func TestGuidedAuthTerminalStaysOutOfNormalTerminalList(t *testing.T) {
 	if len(listed) != 1 || listed[0].HandleID != visible.HandleID {
 		t.Fatalf("listed=%+v, hidden=%s", listed, hidden.HandleID)
 	}
-	delete(rt.aliveByHandle, hidden.HandleID) // Native login command exited.
+	delete(rt.aliveByHandle, hidden.HandleID)
 	listed, err = svc.ListShellTerminalsForCurrentAppRun(t.Context())
 	if err != nil || len(listed) != 1 || listed[0].HandleID != visible.HandleID {
 		t.Fatalf("list after native exit=%+v err=%v", listed, err)
@@ -2050,13 +1952,6 @@ func TestCloseShellTerminalReturnsNotFoundForUnknownHandle(t *testing.T) {
 	}
 }
 
-// TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive is the regression for
-// the bug where CloseShellTerminal deleted the row BEFORE attempting Destroy,
-// so a shell that survived (destroy failed and IsAlive confirms it) would
-// vanish from tracking while still running. A later session teardown that
-// scans for this session's shells would then find nothing and remove the
-// worktree out from under it. The row must now be kept, and the caller told
-// the close didn't actually take.
 func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2067,8 +1962,6 @@ func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 		t.Fatalf("OpenShellTerminal: %v", err)
 	}
 	rt.destroyErr = errors.New("tmux: kill-session refused")
-	// aliveByHandle already has term.HandleID from the open above: still alive
-	// despite the destroy error.
 
 	err = svc.CloseShellTerminal(context.Background(), term.HandleID)
 
@@ -2081,8 +1974,6 @@ func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 	}
 }
 
-// fakeTerminalInputForgetter records which terminals the service told the
-// terminal mux to forget.
 type fakeTerminalInputForgetter struct {
 	forgotten []string
 	err       error
@@ -2093,10 +1984,6 @@ func (f *fakeTerminalInputForgetter) ForgetTerminalInput(_ context.Context, term
 	return f.err
 }
 
-// TestCloseShellTerminalForgetsInputTimestampOnceDestroyed pins #5691 for
-// shell tabs: shellterm destroys its own runtimes, so Session Manager's
-// forgetter never runs for them, and every tab gets a fresh random id. Without
-// a forget here each closed tab leaves one terminal-mux input entry forever.
 func TestCloseShellTerminalForgetsInputTimestampOnceDestroyed(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2117,8 +2004,6 @@ func TestCloseShellTerminalForgetsInputTimestampOnceDestroyed(t *testing.T) {
 	}
 }
 
-// A destroy that errors but leaves the runtime confirmed dead is still a
-// confirmed destroy, so the entry goes.
 func TestCloseShellTerminalForgetsInputTimestampWhenDestroyErrorsButRuntimeIsGone(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2141,8 +2026,6 @@ func TestCloseShellTerminalForgetsInputTimestampWhenDestroyErrorsButRuntimeIsGon
 	}
 }
 
-// A forget that gives up (its context ended on the write fence) only leaves a
-// stale timestamp behind: the shell is confirmed dead, so its row still goes.
 func TestCloseShellTerminalDeletesRowWhenForgettingInputFails(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2165,8 +2048,6 @@ func TestCloseShellTerminalDeletesRowWhenForgettingInputFails(t *testing.T) {
 	}
 }
 
-// A shell that survives Destroy keeps its row, and so keeps its input
-// timestamp: the runtime (and any draft typed into it) is still live.
 func TestCloseShellTerminalKeepsInputTimestampWhenRuntimeStaysAlive(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2188,8 +2069,6 @@ func TestCloseShellTerminalKeepsInputTimestampWhenRuntimeStaysAlive(t *testing.T
 	}
 }
 
-// Session teardown drains scoped shells through the same confirmed-destroy
-// path, so their entries go too.
 func TestBeginSessionTeardownForgetsDestroyedShellInputTimestamps(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime()
@@ -2217,28 +2096,16 @@ func TestBeginSessionTeardownForgetsDestroyedShellInputTimestamps(t *testing.T) 
 	}
 }
 
-// TestCloseShellTerminalBlocksUntilSessionTeardownReleases is the regression
-// for the bug where CloseShellTerminal never took the session gate at all: it
-// deleted a session-scoped shell's row directly, so a BeginSessionTeardown
-// racing the same close could run its SELECT before the delete landed, see
-// nothing to drain, and let Session Manager remove the worktree while the
-// close's own Destroy call was still in flight or had failed. Close must now
-// serialize against a teardown for the same session exactly like Open does.
 func TestCloseShellTerminalBlocksUntilSessionTeardownReleases(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 
-	// Nothing scoped to the session yet, so Begin's own drain finds nothing and
-	// succeeds trivially — it still holds the gate via the returned release.
 	release, err := svc.BeginSessionTeardown(context.Background(), "portfolio-3")
 	if err != nil {
 		t.Fatalf("BeginSessionTeardown: %v", err)
 	}
 
-	// The row Close will target appears only now — standing in for a shell
-	// that showed up while the session's gate was already held, which is
-	// exactly the interleaving the gate exists to serialize against.
 	st.records = append(st.records, ShellTerminalRecord{HandleID: "shellterm-1", SessionID: "portfolio-3"})
 	rt.aliveByHandle["shellterm-1"] = true
 
@@ -2278,8 +2145,6 @@ func TestCloseShellTerminalBlocksUntilSessionTeardownReleases(t *testing.T) {
 	}
 }
 
-// A shell with no session (opened from the topbar or /terminals) has no
-// worktree teardown to race, so closing it must never touch the gate at all.
 func TestCloseShellTerminalDoesNotGateStandaloneShells(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2297,8 +2162,6 @@ func TestCloseShellTerminalDoesNotGateStandaloneShells(t *testing.T) {
 	}
 }
 
-// The daemon may restart under a live app; the shells it left behind are still
-// running and must come back as attachable tabs.
 func TestListShellTerminalsForCurrentAppRunReturnsSurvivingTerminals(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2308,8 +2171,6 @@ func TestListShellTerminalsForCurrentAppRunReturnsSurvivingTerminals(t *testing.
 		t.Fatalf("OpenShellTerminal: %v", err)
 	}
 
-	// A fresh Service over the SAME store and runtime stands in for the daemon
-	// coming back up within one app run.
 	restarted := NewService(rt, st, &fakeProjectRootLocator{}, &fakeSessionWorkspaceLocator{}, "/data/dir", testAppRunID, testLogger())
 	got, err := restarted.ListShellTerminalsForCurrentAppRun(context.Background())
 	if err != nil {
@@ -2328,7 +2189,7 @@ func TestListShellTerminalsForCurrentAppRunPrunesTerminalsWhoseShellExited(t *te
 	if err != nil {
 		t.Fatalf("OpenShellTerminal: %v", err)
 	}
-	delete(rt.aliveByHandle, term.HandleID) // the user typed `exit`
+	delete(rt.aliveByHandle, term.HandleID)
 
 	got, err := svc.ListShellTerminalsForCurrentAppRun(context.Background())
 	if err != nil {
@@ -2362,8 +2223,6 @@ func TestListShellTerminalsPrunesWrappedCommandTerminalWorkspace(t *testing.T) {
 	}
 }
 
-// A probe ERROR is not proof of death — the same rule internal/terminal applies
-// on attach. A transient runtime hiccup must not delete a working terminal.
 func TestListShellTerminalsForCurrentAppRunKeepsTerminalWhenLivenessProbeErrors(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
@@ -2385,8 +2244,6 @@ func TestListShellTerminalsForCurrentAppRunKeepsTerminalWhenLivenessProbeErrors(
 	}
 }
 
-// Abandoned transient commands are swept on the next launch, while current
-// launch terminals are left alone. Durable user shells are covered below.
 func TestReapShellTerminalsFromPreviousAppRunsDestroysOrphansOnly(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
@@ -2411,8 +2268,6 @@ func TestReapShellTerminalsFromPreviousAppRunsDestroysOrphansOnly(t *testing.T) 
 	}
 }
 
-// One un-destroyable PTY must not wedge the sweep: the rows are cleared anyway,
-// or every future boot would retry the same failure forever.
 func TestReapShellTerminalsFromPreviousAppRunsClearsRowsWhenDestroyFails(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.destroyErr = errors.New("tmux: no such session")
@@ -2433,19 +2288,10 @@ func TestReapShellTerminalsFromPreviousAppRunsClearsRowsWhenDestroyFails(t *test
 	}
 }
 
-// TestReapShellTerminalsFromPreviousAppRunsKeepsRowForConfirmedLiveOrphan is
-// the boot-order regression: the old Reap bulk-deleted every orphan row after
-// best-effort destroys, regardless of whether each one actually died. A shell
-// that survived a crash independently of the daemon (its OS-level tmux/conpty
-// session outlives the process) would then have its row wiped anyway —
-// invisible to a later BeginSessionTeardown for the session it's scoped to,
-// which would find nothing to drain and let that session's worktree be
-// removed while the orphaned shell is still attached to it. Reap must keep
-// that row instead, so the later teardown still sees it.
 func TestReapShellTerminalsFromPreviousAppRunsKeepsRowForConfirmedLiveOrphan(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.destroyErr = errors.New("tmux: kill-session refused")
-	rt.aliveByHandle["shellterm-orphan-alive"] = true // survives the crash, still alive
+	rt.aliveByHandle["shellterm-orphan-alive"] = true
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
 		{HandleID: "shellterm-orphan-alive", SessionID: "mer-1", AppRunID: "app-run-crashed", Transient: true, WorkingDir: "/a"},
 		{HandleID: "shellterm-orphan-dead", AppRunID: "app-run-crashed", Transient: true, WorkingDir: "/b"},
@@ -2463,9 +2309,6 @@ func TestReapShellTerminalsFromPreviousAppRunsKeepsRowForConfirmedLiveOrphan(t *
 		t.Fatalf("records = %+v, want the still-alive orphan's row kept", st.records)
 	}
 
-	// The row must still be there for a later teardown scan of its session to
-	// find — proving Reap didn't just keep it by accident but that it stays
-	// visible to exactly the query that matters.
 	remaining, err := st.SelectShellTerminalsBySessionID(context.Background(), "mer-1")
 	if err != nil {
 		t.Fatalf("SelectShellTerminalsBySessionID: %v", err)
@@ -2515,19 +2358,14 @@ func TestDesktopRelaunchPreservesUserShells(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// A daemon restart within the same launch keeps every shell. A new
-			// launch reaps the session-less one: clients show shells only in a
-			// session's tab strip, so nothing could show or close it.
 			newLaunch := tc.nextRun != testAppRunID
 			want, wantReaped, wantNext := []ShellTerminal{side, standalone}, int64(0), "Terminal 3"
 			if newLaunch {
 				want, wantReaped, wantNext = []ShellTerminal{side}, 1, "Terminal 1"
 			}
 
-			// Recreate the service just as boot does. The runtime and durable rows
-			// belong to the shells, not to this service or desktop launch.
 			svc = NewService(rt, st, projects, sessions, "/data/dir", tc.nextRun, testLogger())
-			rt.aliveErr = tc.probeErr // The fake returns false alongside probe errors.
+			rt.aliveErr = tc.probeErr
 			if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != wantReaped {
 				t.Fatalf("reap = %d, %v; want %d", n, err, wantReaped)
 			}
@@ -2668,8 +2506,6 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			if tc.childProbeErr != nil && len(rt.destroyed) != 0 {
 				t.Fatalf("inconclusive child probe destroyed runtime: %v", rt.destroyed)
 			}
-			// A later conclusive retry must finish cleanup without losing the
-			// handle needed to stop the host retained by the failed attempt.
 			rt.childProbeErr, rt.destroyErr, rt.aliveErr = nil, nil, nil
 			listed, err = svc.ListShellTerminalsForCurrentAppRun(context.Background())
 			if err != nil || len(listed) != 0 || len(st.records) != 0 || rt.aliveByHandle[handleID] {
@@ -2730,8 +2566,6 @@ func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.
 	}
 }
 
-// A restarted daemon in the same app launch must still see the trusted command
-// terminals its predecessor opened, so agent auth can keep excluding logins.
 func TestListCommandTerminalsForCurrentAppRunReturnsOnlyThisLaunchesTrustedTerminals(t *testing.T) {
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
 		{HandleID: "user-shell", AppRunID: testAppRunID, Title: "Shell 1"},

@@ -21,7 +21,6 @@ const (
 	reviewSubmitRetryInterval = 250 * time.Millisecond
 )
 
-// reviewRun mirrors the daemon's domain.ReviewRun for the CLI client.
 type reviewRun struct {
 	ID             string     `json:"id"`
 	ReviewID       string     `json:"reviewId"`
@@ -53,9 +52,6 @@ type listReviewsResponse struct {
 	Reviews          []reviewState `json:"reviews"`
 }
 
-// triggerReviewResponse mirrors controllers.TriggerReviewResponse: Created
-// reports whether a new pass started, and the runs name which reviewer and
-// commit it covers.
 type triggerReviewResponse struct {
 	Created           bool          `json:"created"`
 	AutoInjectEnabled bool          `json:"autoInjectEnabled"`
@@ -63,7 +59,6 @@ type triggerReviewResponse struct {
 	Reviews           []reviewState `json:"reviews"`
 }
 
-// triggerReviewRequest mirrors controllers.TriggerReviewRequest.
 type triggerReviewRequest struct {
 	Harness            string             `json:"harness,omitempty"`
 	AgentConfig        *reviewAgentConfig `json:"agentConfig,omitempty"`
@@ -74,21 +69,17 @@ type triggerReviewRequest struct {
 	EnableAutoInject   bool               `json:"enableAutoInject,omitempty"`
 }
 
-// reviewAgentConfig mirrors the model/effort subset of domain.AgentConfig a
-// reviewer pass may override.
 type reviewAgentConfig struct {
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
 }
 
-// reviewRunResponse mirrors controllers.ReviewRunResponse.
 type reviewRunResponse struct {
 	Review           reviewRun   `json:"review"`
 	Reviews          []reviewRun `json:"reviews"`
 	ReviewerHandleID string      `json:"reviewerHandleId"`
 }
 
-// submitReviewItem mirrors controllers.SubmitReviewItem.
 type submitReviewItem struct {
 	RunID          string `json:"runId"`
 	Verdict        string `json:"verdict"`
@@ -96,7 +87,6 @@ type submitReviewItem struct {
 	GithubReviewID string `json:"githubReviewId,omitempty"`
 }
 
-// submitReviewRequest mirrors controllers.SubmitReviewInput.
 type submitReviewRequest struct {
 	RunID          string             `json:"runId,omitempty"`
 	Verdict        string             `json:"verdict,omitempty"`
@@ -128,12 +118,8 @@ type reviewTriggerOptions struct {
 	noInject bool
 }
 
-// envReviewSessionID is set only inside reviewer panes (see
-// review.agentLauncher.runtimeEnv). Reviewers review; they never start reviews.
 const envReviewSessionID = "AO_REVIEW_SESSION_ID"
 
-// reviewTargetSession resolves the worker session a review command acts on:
-// the explicit argument or --session, otherwise the calling AO session.
 func reviewTargetSession(args []string, flag string) string {
 	if len(args) == 1 {
 		return strings.TrimSpace(args[0])
@@ -197,8 +183,6 @@ func newReviewSubmitCommand(ctx *commandContext) *cobra.Command {
 			return ctx.submitReview(cmd, args, opts)
 		},
 	}
-	// Reviewer agents routinely spell flags with underscores (--review_id) rather
-	// than hyphens (--review-id); normalize so both resolve to the same flag.
 	cmd.Flags().SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 		return pflag.NormalizedName(strings.ReplaceAll(name, "_", "-"))
 	})
@@ -235,8 +219,6 @@ func (c *commandContext) submitReview(cmd *cobra.Command, args []string, opts re
 		var raw []byte
 		var err error
 		if path == "-" {
-			// Read the review from stdin so the reviewer never has to write a file
-			// into its checkout (where it could be committed onto the worker branch).
 			raw, err = io.ReadAll(cmd.InOrStdin())
 		} else {
 			raw, err = os.ReadFile(path)
@@ -252,9 +234,6 @@ func (c *commandContext) submitReview(cmd *cobra.Command, args []string, opts re
 	if err := c.postReviewJSON(cmd.Context(), path, submitReviewRequest{RunID: runID, Verdict: verdict, Body: body, GithubReviewID: reviewID}, &res); err != nil {
 		return err
 	}
-	// A submit response always carries the recorded run's ID and verdict; a
-	// structurally valid but half-populated result is a broken contract, not
-	// a success to print.
 	if strings.TrimSpace(res.Review.ID) == "" || strings.TrimSpace(res.Review.Verdict) == "" {
 		return fmt.Errorf("daemon returned empty review result for %s", session)
 	}
@@ -275,10 +254,6 @@ func (c *commandContext) submitReviewBatch(cmd *cobra.Command, session string, o
 	if err := c.postReviewJSON(cmd.Context(), path, submitReviewRequest{Reviews: reviews}, &res); err != nil {
 		return err
 	}
-	// Batch success is the recorded runs array: every returned entry must
-	// carry its run ID and verdict. An empty array falls back to requiring
-	// a fully-populated single review. Anything less is a broken contract,
-	// not a success to print.
 	if len(res.Reviews) > 0 {
 		for _, run := range res.Reviews {
 			if strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.Verdict) == "" {
@@ -296,10 +271,6 @@ func (c *commandContext) submitReviewBatch(cmd *cobra.Command, session string, o
 	return err
 }
 
-// postReviewJSON retries only transport-level daemon unavailability. The
-// service accepts an identical completed result idempotently, so replay is safe
-// even when a connection drops after the daemon committed the first request.
-// Validation/API errors still return immediately and are never retried.
 func (c *commandContext) postReviewJSON(ctx context.Context, path string, body submitReviewRequest, out *reviewRunResponse) error {
 	retryCtx, cancel := context.WithTimeout(ctx, reviewSubmitRetryWindow)
 	defer cancel()
@@ -321,8 +292,6 @@ func (c *commandContext) postReviewJSON(ctx context.Context, path string, body s
 			return fmt.Errorf("%w; could not confirm the review result after retrying for %s. It may already be recorded; retry with the same review results", lastErr, reviewSubmitRetryWindow)
 		}
 
-		// Deps.Sleep keeps this loop deterministic in unit tests. The short
-		// interval bounds cancellation latency without adding a retry goroutine.
 		c.deps.Sleep(reviewSubmitRetryInterval)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -413,8 +382,6 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	if model, effort := strings.TrimSpace(opts.model), strings.TrimSpace(opts.effort); model != "" || effort != "" {
 		req.AgentConfig = &reviewAgentConfig{Model: model, Effort: effort}
 	}
-	// A request from inside an AO session (a worker reviewing its own PR, or an
-	// orchestrator) is labelled as such, so it is never mistaken for a person.
 	if strings.TrimSpace(os.Getenv("AO_SESSION_ID")) != "" {
 		req.Source = "agent"
 	}
@@ -425,8 +392,6 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	out := cmd.OutOrStdout()
 	if !res.Created {
-		// Only reachable from an older daemon that ignores the same-commit
-		// policy; a current daemon answers 409 instead.
 		_, err := fmt.Fprintf(out, "reused the existing review for %s\n", session)
 		return err
 	}
@@ -449,7 +414,6 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	return nil
 }
 
-// startedRuns returns the running passes on the PR heads the trigger covered.
 func startedRuns(res triggerReviewResponse) []reviewRun {
 	var out []reviewRun
 	for _, review := range res.Reviews {

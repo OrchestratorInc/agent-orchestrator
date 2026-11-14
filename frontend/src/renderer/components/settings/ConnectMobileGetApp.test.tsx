@@ -21,8 +21,6 @@ test("iOS button opens the App Store listing through the app bridge", async () =
 	expect(IOS_APP_STORE_URL).toBe("https://apps.apple.com/app/ao-mobile/id6792552173");
 });
 
-// A storefront-pinned link ("/us/") 404s for every visitor outside that
-// country; the bare /app/ form redirects to the viewer's own storefront.
 test("App Store link is not pinned to a storefront", () => {
 	expect(IOS_APP_STORE_URL).not.toContain("/us/");
 });
@@ -35,8 +33,6 @@ test("Android button opens the Google Play listing", async () => {
 	expect(ANDROID_PLAY_STORE_URL).toBe("https://play.google.com/store/apps/details?id=aoagents.dev&pcampaignid=web_share");
 });
 
-// Both stores are a public one-tap listing now, so the iOS row says the same
-// thing the Android row does rather than explaining a prerequisite install.
 test("iOS row points straight at the App Store", () => {
 	render(<ConnectMobileGetApp />);
 	expect(screen.getByText(/Get Orchestrator on the App Store/i)).toBeInTheDocument();

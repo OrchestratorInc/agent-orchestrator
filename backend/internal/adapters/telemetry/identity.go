@@ -15,18 +15,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// OptOutFile is the marker the desktop app writes when the user turns off
-// telemetry in Settings. It lives in the data dir so the daemon, the desktop
-// app and (via the identity route) the phone all read one switch.
 const OptOutFile = "telemetry_opt_out"
 
 const (
 	installIDFile      = "telemetry_install_id"
 	anonymousIDFile    = "telemetry_anonymous_id"
 	installedEventFile = "telemetry_installed_emitted"
-	// boundUserFile remembers which AO Cloud user the anonymous distinct ID may
-	// be linked to. A sign-out or account switch retires that ID.
-	boundUserFile = "telemetry_bound_user"
+	boundUserFile      = "telemetry_bound_user"
 )
 
 var (
@@ -34,14 +29,11 @@ var (
 	githubLoginPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 )
 
-// Identity is the daemon's live telemetry identity: the install ID plus the
-// two optional person-level attributes. Safe for concurrent use.
 type Identity struct {
 	dataDir    string
 	optOutPath string
 	fresh      bool
 
-	// File operations are fields so tests can fail them.
 	writeFile  func(path string, data []byte) error
 	removeFile func(path string) error
 
@@ -51,12 +43,10 @@ type Identity struct {
 	onRetired      func()
 	cloudUserID    string
 	cloudUserKnown bool
-	// persistFailed is set while the last SetCloudUserID could not persist.
-	persistFailed bool
-	githubLogin   string
+	persistFailed  bool
+	githubLogin    string
 }
 
-// NewIdentity loads (or creates) the install ID under dataDir.
 func NewIdentity(dataDir string) (*Identity, error) {
 	id, err := loadOrCreateInstallID(dataDir)
 	if err != nil {
@@ -80,22 +70,14 @@ func NewIdentity(dataDir string) (*Identity, error) {
 		}
 	}
 	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}
-	// The bound user is the last sign-in the desktop handed off and the daemon
-	// recorded; a sign-out removes it. Restoring it lets a restarted or
-	// CLI-started daemon report under the signed-in Cloud ID without waiting
-	// for the desktop to push it again. Signed out, nothing is restored.
 	if cloudUserIDPattern.MatchString(bound) {
 		ident.cloudUserID, ident.cloudUserKnown = bound, true
 	}
 	return ident, nil
 }
 
-// FreshInstall reports whether this process is the first run of a brand new
-// install, the one moment ao.app.installed is emitted.
 func (i *Identity) FreshInstall() bool { return i.fresh }
 
-// OnInstallRetired runs after the anonymous ID is replaced. The CLI usage
-// summary uses it to drop in-memory counts for the retired install.
 func (i *Identity) OnInstallRetired(fn func()) {
 	if i == nil {
 		return
@@ -105,8 +87,6 @@ func (i *Identity) OnInstallRetired(fn func()) {
 	i.mu.Unlock()
 }
 
-// MarkInstalledEvent reserves the one install event before it enters the
-// best-effort queue. A restart cannot emit it again if the queued send is lost.
 func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -131,10 +111,6 @@ func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// freshInstall is true when the install event has not been reserved, no event
-// has been exported, and the install ID was created in the last day. The age
-// check keeps an upgrade from a build that predates tenure from counting as a
-// new install.
 func freshInstall(dataDir string) bool {
 	if _, err := os.Stat(filepath.Join(dataDir, installedEventFile)); !os.IsNotExist(err) {
 		return false
@@ -146,22 +122,17 @@ func freshInstall(dataDir string) bool {
 	return err == nil && time.Since(info.ModTime()) < 24*time.Hour
 }
 
-// OptedOut reports whether the user switched telemetry off. Queue admission
-// and each send attempt read the marker so an opt-out stops export without a
-// cache delay.
 func (i *Identity) OptedOut() bool {
 	_, err := os.Stat(i.optOutPath)
 	return err == nil
 }
 
-// InstallID is the durable installation attribution key.
 func (i *Identity) InstallID() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.installID
 }
 
-// DaysSinceInstall uses the durable install ID file modification timestamp.
 func (i *Identity) DaysSinceInstall(now time.Time) (int, bool) {
 	info, err := os.Stat(filepath.Join(i.dataDir, installIDFile))
 	if err != nil || info.ModTime().After(now) {
@@ -170,20 +141,12 @@ func (i *Identity) DaysSinceInstall(now time.Time) (int, bool) {
 	return int(now.UTC().Sub(info.ModTime().UTC()).Hours() / 24), true
 }
 
-// AnonymousID is the distinct ID used when no Cloud user is bound.
 func (i *Identity) AnonymousID() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.anonymousID
 }
 
-// SetCloudUserID implements ports.TelemetryIdentityStore. The anonymous
-// distinct ID may be merged into a Cloud person. A sign-out or account switch
-// retires it, while the installation attribution ID remains fixed.
-//
-// The binding must be durable before any event is exported under it, so a failed
-// write leaves the previous binding in place, returns the error, and suppresses
-// remote export until a later call completes cleanly.
 func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -202,8 +165,6 @@ func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
 }
 
 func (i *Identity) bindLocked(id string) error {
-	// The desktop retires a binding itself on sign-out (so it holds while the
-	// daemon is down); pick up the anonymous ID it wrote.
 	if anon, err := readTrimmed(filepath.Join(i.dataDir, anonymousIDFile)); err == nil && anon != "" {
 		i.anonymousID = anon
 	}
@@ -247,9 +208,6 @@ func readTrimmed(path string) (string, error) {
 	return strings.TrimSpace(string(b)), err
 }
 
-// ExportSuppressed reports whether remote export must stop: the user opted out,
-// or the identity state could not be persisted and an event could be attributed
-// to an account the install ID is no longer allowed to represent.
 func (i *Identity) ExportSuppressed() bool {
 	if i.OptedOut() {
 		return true
@@ -259,8 +217,6 @@ func (i *Identity) ExportSuppressed() bool {
 	return i.persistFailed
 }
 
-// SetGitHubLogin implements ports.TelemetryIdentityStore. A login that does not
-// look like one is dropped rather than exported.
 func (i *Identity) SetGitHubLogin(login string) {
 	login = strings.TrimSpace(login)
 	if login != "" && !githubLoginPattern.MatchString(login) {
@@ -271,11 +227,6 @@ func (i *Identity) SetGitHubLogin(login string) {
 	i.mu.Unlock()
 }
 
-// Snapshot implements ports.TelemetryIdentityStore. Opted-out installs report
-// no user attributes at all. An identity that could not be persisted reports the
-// same way, so a paired phone resets and stops capturing until a later
-// SetCloudUserID succeeds, instead of adopting an install ID that is still
-// linked to the previous account.
 func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	optedOut := i.OptedOut()
 	i.mu.RLock()
@@ -288,8 +239,6 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	return snap
 }
 
-// eventAttributes avoids another marker read while constructing an export.
-// The sender checks ExportSuppressed immediately before each HTTP attempt.
 func (i *Identity) eventAttributes() (cloudUserID, githubLogin string) {
 	i.mu.RLock()
 	defer i.mu.RUnlock()

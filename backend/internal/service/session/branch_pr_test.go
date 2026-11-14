@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// signedIn answers AuthenticatedIdentityForProvider with one account, so a
-// branch lookup can tell the session's own PRs from another author's.
 type signedIn struct {
 	identity ports.SCMIdentity
 	err      error
@@ -39,9 +37,6 @@ func (f *branchListSCM) ListOpenPRsByBranch(_ context.Context, repo ports.SCMRep
 	return f.pulls, nil
 }
 
-// A PR opened moments ago is found by the session's branch in the project's
-// canonical repository; other branches, forks, and closed PRs are not, even
-// if a provider returns them.
 func TestFindBranchPRsMatchesOpenPRsFromTheSessionBranch(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	st := newFakeStore()
@@ -67,9 +62,6 @@ func TestFindBranchPRsMatchesOpenPRsFromTheSessionBranch(t *testing.T) {
 	}
 }
 
-// A PR another developer opened on a branch of the same name is returned
-// apart from the session's own, the same authorship rule the SCM observer
-// applies, so the caller never attaches it on its own.
 func TestFindBranchPRsSeparatesAnotherAuthorsPR(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["demo-1"] = domain.SessionRecord{ID: "demo-1", ProjectID: "demo", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{Branch: "fix"}}
@@ -94,8 +86,6 @@ func TestFindBranchPRsSeparatesAnotherAuthorsPR(t *testing.T) {
 	}
 }
 
-// Without a person's account AO cannot tell whose PR it found, so the lookup
-// fails instead of attaching it; with no candidate, no identity is needed.
 func TestFindBranchPRsFailsWhenTheAuthorCannotBeChecked(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["demo-1"] = domain.SessionRecord{ID: "demo-1", ProjectID: "demo", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{Branch: "fix"}}
@@ -132,8 +122,6 @@ func TestFindBranchPRsWithoutBranchOrListingFindsNothing(t *testing.T) {
 	}
 }
 
-// repoBranchSCM answers ListOpenPRsByBranch per repository, so a test can
-// place PRs in a workspace project's child repositories.
 type repoBranchSCM struct {
 	fakeSCM
 	*signedIn
@@ -147,10 +135,6 @@ func (f *repoBranchSCM) ListOpenPRsByBranch(_ context.Context, repo ports.SCMRep
 	return f.pulls[repo.Repo], f.errs[repo.Repo]
 }
 
-// A worker in a workspace project may open its PR in any registered child
-// repository, the same ones ClaimPR accepts, so each is looked up. A child
-// whose provider cannot list by branch is skipped, and another author's PR in
-// a child repository is kept apart from the session's own.
 func TestFindBranchPRsLooksInWorkspaceChildRepositories(t *testing.T) {
 	st := &workspaceClaimStore{fakeStore: newFakeStore(), repos: []domain.WorkspaceRepoRecord{
 		{RepoOriginURL: ""}, {RepoOriginURL: "/local/repo"},
@@ -183,8 +167,6 @@ func TestFindBranchPRsLooksInWorkspaceChildRepositories(t *testing.T) {
 		t.Fatalf("listed %v, want the root once and each child with a parseable origin", scm.listed)
 	}
 
-	// Any other listing failure is reported, so the caller does not claim the
-	// branch has no PR.
 	scm.listed, scm.errs = nil, map[string]error{"acme/api": errors.New("provider down")}
 	if _, err := NewWithDeps(Deps{Store: st, SCM: scm}).FindBranchPRs(context.Background(), "ws-1"); err == nil || !strings.Contains(err.Error(), "acme/api") {
 		t.Fatalf("err = %v, want the failed child repository named", err)

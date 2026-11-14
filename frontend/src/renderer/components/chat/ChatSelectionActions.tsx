@@ -24,7 +24,6 @@ const EDITABLE_TARGET = 'input, textarea, select, [contenteditable], [role="text
 
 type HighlightApi = { Highlight?: new (...ranges: Range[]) => unknown; CSS?: { highlights?: Map<string, unknown> } };
 
-/** Geometry state stays here: scrolling must not render the conversation. */
 export function ChatSelectionActions({
 	selection,
 	viewportRef,

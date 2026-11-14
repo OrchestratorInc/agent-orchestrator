@@ -36,7 +36,6 @@ async function pickSetup(
 	return change;
 }
 
-// The options a favorite restores after its model are the ones that model offers.
 it("sets Fast that only the favorite's model offers", async () => {
 	const change = await pickSetup("claude-code", [model], opusOptions, { harness: "claude-code", row: "opus", model: "opus", label: "Opus", effort: "high", fast: true });
 	expect(change).toHaveBeenCalledWith("fast", { enabled: true });
@@ -71,9 +70,6 @@ it.each([true, false])("restores a Cursor favorite's saved Thinking %s", async (
 	expect(change).toHaveBeenCalledWith("thinking", { value: thinking ? "on" : "off" });
 });
 
-// Claude's catalog names its default after a model ("Opus 5.5"); while another model
-// runs, the picker shows that row instead of "opus". A favourite saved on Opus must
-// still find its model, or it is greyed out.
 it("keeps a model folded into the agent's default row offered to its favourites", () => {
 	const claude: ChatConfigOption = {
 		id: "model", name: "Model", category: "model", type: "select", currentValue: "haiku",

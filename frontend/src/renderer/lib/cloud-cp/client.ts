@@ -1,12 +1,3 @@
-// Typed client for the cloud control plane's renderer-facing v0 surface
-// (`/api/cloud/v1/*`). The transport is injected — `getToken` supplies the
-// WorkOS bearer token and `fetchImpl` can be `window.fetch` today or an
-// Electron-main-proxied fetch later — so this module never imports Electron
-// APIs. Every call attaches `Authorization: Bearer <token>`; a 401 (or a
-// missing token) surfaces as `CloudCpAuthError`, any other non-2xx as
-// `CloudCpError` carrying the status and the control plane's envelope fields.
-// No retries in v0: callers own retry policy.
-
 import { CloudCpAuthError, CloudCpError } from "./errors";
 import { createSseFrameParser } from "./sse";
 import type {
@@ -139,21 +130,10 @@ import type {
 const API_PREFIX = "/api/cloud/v1";
 
 export interface CloudCpClientOptions {
-	/** Control-plane origin, e.g. "https://cloud.example.com". A trailing slash is tolerated. */
 	baseUrl: string;
-	/** Returns the current bearer token, or null when signed out. Called per request. */
 	getToken: () => Promise<string | null>;
-	/** Transport override; defaults to the global fetch. */
 	fetchImpl?: typeof fetch;
-	/**
-	 * Called whenever a request is rejected with 403. A 403 from the control
-	 * plane means the caller is not a member of the org the request was scoped
-	 * to ("You do not have access to this organization") — i.e. the app's
-	 * selected org is stale (membership changed). The renderer wires this to
-	 * re-resolve the current org so callers stop hammering a dead org.
-	 */
 	onForbidden?: () => void;
-	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
 	onPlanRefused?: (code: string) => void;
 }
 
@@ -161,33 +141,18 @@ export interface CloudCpRequestOptions {
 	signal?: AbortSignal;
 }
 
-/**
- * Options for a session workspace call (/sessions/{id}/workspace/*). In a
- * multi-repository session, `repository` is the folder name of one of the
- * session's additional repositories (from the review summary's
- * `repositories`); absent means the main repository.
- */
 export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
 	repository?: string;
 }
 
-/**
- * Options for calls the control plane requires an `Idempotency-Key` header on
- * (create project, create session, send message). A random UUID is generated
- * when the caller does not pin one; pin it to make client-side retries safe.
- */
 export interface CloudCpMutationOptions extends CloudCpRequestOptions {
 	idempotencyKey?: string;
 }
 
 export interface CloudCpSessionEventsOptions {
-	/** Invoked once per parsed event, in stream order. */
 	onEvent: (event: CloudCpClientEvent) => void;
-	/** Invoked on setup or mid-stream failure. Aborts via `signal` are silent. */
 	onError?: (error: CloudCpError) => void;
-	/** Aborting closes the stream and resolves the subscription promise. */
 	signal?: AbortSignal;
-	/** Resume strictly after this sequence; omit to replay from the beginning. */
 	after?: number;
 }
 
@@ -205,7 +170,6 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCreateOrganizationResponse>;
 	listMyInvitations(options?: CloudCpRequestOptions): Promise<CloudCpInvitationsResponse>;
-	/** The organization's active members; any member may read them. */
 	listOrgMembers(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgMembersResponse>;
 
 	listProjects(
@@ -220,16 +184,13 @@ export interface CloudCpClient {
 	): Promise<CloudCpProjectResponse>;
 	getProject(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
 	updateProjectSettings(orgId: string, projectId: string, body: CloudCpProjectSettingsRequest, options?: CloudCpRequestOptions): Promise<CloudCpProjectResponse>;
-	/** GET /orgs/{orgId}/projects/{projectId}/environment: values only for an owner or admin. */
 	getProjectEnvironment(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectEnvironment>;
-	/** PUT /orgs/{orgId}/projects/{projectId}/environment: replaces them as a whole; owners and admins only. */
 	putProjectEnvironment(orgId: string, projectId: string, variables: Record<string, string>, options?: CloudCpRequestOptions): Promise<CloudCpProjectEnvironment>;
 	getProjectIntakeStatus(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<CloudCpProjectIntakeStatus>;
 	listProjectCues(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ cues: CloudCpCue[] }>;
 	createProjectCue(orgId: string, projectId: string, body: CloudCpCueDefinition, options?: CloudCpRequestOptions): Promise<{ cue: CloudCpCue }>;
 	updateProjectCue(orgId: string, cueId: string, body: CloudCpCueDefinition, options?: CloudCpRequestOptions): Promise<{ cue: CloudCpCue }>;
 	deleteProjectCue(orgId: string, cueId: string, options?: CloudCpRequestOptions): Promise<void>;
-	/** Runs a cue into a session: an agent cue is sent there; a command cue comes back to run in a new shell. */
 	invokeProjectCue(orgId: string, cueId: string, sessionId: string, options?: CloudCpMutationOptions): Promise<CloudCpInvokeCueResult>;
 	updateProject(
 		orgId: string,
@@ -254,9 +215,7 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
-	/** Rename a session for everyone who sees it. */
 	renameSession(orgId: string, sessionId: string, displayName: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
-	/** Pin or unpin a session in the caller's own sidebar. */
 	setSessionPinned(orgId: string, sessionId: string, pinned: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionPinResponse>;
 	createSessionArtifactAccess(
 		orgId: string,
@@ -268,18 +227,12 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<{ artifacts: CloudCpSessionArtifact[] }>;
-	/** Saves an edit of one artifact file made in the app; 409 artifact_changed when the file changed since it was read. */
 	saveSessionArtifact(orgId: string, sessionId: string, body: CloudCpSaveArtifactRequest, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
-	/** The kept versions of one artifact file, newest (the committed file) first. */
 	listSessionArtifactVersions(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<{ versions: CloudCpArtifactVersionSummary[] }>;
 	getSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<CloudCpArtifactVersion>;
-	/** Makes a kept version the committed file again, as a new version. */
 	restoreSessionArtifactVersion(orgId: string, sessionId: string, path: string, version: number, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSessionArtifact }>;
-	/** Starts the agent again in a live session whose terminal agent exited. */
 	restartSessionAgent(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
-	/** Chat messages across the organization's sessions the caller can see that contain query. */
 	searchChats(orgId: string, query: { query: string; limit?: number }, options?: CloudCpRequestOptions): Promise<CloudCpChatSearchResponse>;
-	/** Deletes one artifact file from cloud storage and the session's worker. */
 	deleteSessionArtifact(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<void>;
 	updateSessionPreferences(
 		orgId: string,
@@ -298,15 +251,8 @@ export interface CloudCpClient {
 		harness: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpHarnessStatus>;
-	/**
-	 * The release of each harness CLI the org's new sessions run, the newest
-	 * release, and the last install of a chosen one (any member). `refresh`
-	 * looks the newest releases up again. An older control plane answers 404.
-	 */
 	listOrgHarnessVersions(orgId: string, query?: { refresh?: boolean }, options?: CloudCpRequestOptions): Promise<CloudCpHarnessVersionsResponse>;
-	/** Have the org's new sessions run `expectedVersion` of a harness (org admins). */
 	installOrgHarnessVersion(orgId: string, agent: string, expectedVersion: string, options?: CloudCpRequestOptions): Promise<CloudCpHarnessVersion>;
-	/** Have the org's new sessions run the AO-tested release of a harness again (org admins). */
 	resetOrgHarnessVersion(orgId: string, agent: string, options?: CloudCpRequestOptions): Promise<CloudCpHarnessVersion>;
 	getInterfaceTransition(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpInterfaceTransitionStatusResponse>;
 	startInterfaceTransition(
@@ -329,57 +275,31 @@ export interface CloudCpClient {
 	setSessionAutoInjectCI(orgId: string, sessionId: string, autoInjectCI: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	setSessionAutoInjectReview(orgId: string, sessionId: string, autoInjectReview: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
-	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
 	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
-	/**
-	 * Lists the rich parameters of a Coder template's active version. An older
-	 * control plane without the route answers 404.
-	 */
 	getCoderTemplateParameters(
 		orgId: string,
 		templateId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCoderTemplateParametersResponse>;
-	/**
-	 * A Coder template's parameters with draft values applied, so a parameter
-	 * the template declares only for some value of another appears once it
-	 * applies. An older control plane without the route answers 404 or 405.
-	 */
 	evaluateCoderTemplateParameters(
 		orgId: string,
 		templateId: string,
 		values: Readonly<Record<string, string>>,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCoderTemplateParametersResponse>;
-	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
-	/** The org's plan, its limits, and usage against them. */
 	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
-	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
 	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
-	/**
-	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
-	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
-	 */
 	createBillingPortal(orgId: string, flow?: "cancel", options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
-	/** Spend one of the plan's manual resets of the weekly usage limit. Admins only. */
 	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
-	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
 	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
-	/**
-	 * Set the org's default sandbox provider (org admins; only an org offered
-	 * more than one provider). "" clears it. Returns the org's updated offering.
-	 */
 	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
-	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
 		body: CloudCpPutOrgCoderConfigRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpOrgCoderConfigResponse>;
-	/** Removes the org's bring-your-own-Coder connection. */
 	deleteOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<void>;
-	/** Lists the sessions an orchestrator spawned, with each child's pull requests. */
 	listSessionChildren(
 		orgId: string,
 		sessionId: string,
@@ -407,14 +327,10 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionReviewState>;
 	mergePullRequest(orgId: string, sessionId: string, number: number, prUrl: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ status: string }>;
-	/** Ask a shared project's owner to merge a pull request this person may not merge. */
 	requestPullRequestMerge(orgId: string, sessionId: string, number: number, prUrl: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
-	/** A project's merge requests: all for its owner, a guest's own for them. */
 	listProjectMergeRequests(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequests: CloudCpMergeRequest[] }>;
-	/** Merge a requested pull request as its owner. */
 	approveMergeRequest(orgId: string, requestId: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
 	rejectMergeRequest(orgId: string, requestId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
-	/** Archive a session; `deleteArtifacts` also deletes its artifact files. */
 	deleteSession(
 		orgId: string,
 		sessionId: string,
@@ -426,9 +342,7 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpResumeSessionResponse>;
 	requestWorkspaceCheckout(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<{ requested: boolean }>;
-	/** Docker-only changed-file summary for a cloud session. */
 	getWorkspaceDiff(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceDiff>;
-	/** Docker-only selected-file review details for a cloud session. */
 	readWorkspaceDiffFile(
 		orgId: string,
 		sessionId: string,
@@ -442,17 +356,11 @@ export interface CloudCpClient {
 	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
 	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
 	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
-	/** Re-provision a deleted session, keeping its conversation and work intact. */
 	restoreSession(
 		orgId: string,
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpRestoreSessionResponse>;
-	/**
-	 * Re-arm startup for a session whose worker never started: resets the
-	 * startup window and retries bootstrap on the existing workspace. 409
-	 * `startup_retry_unavailable` when the session is not retryable.
-	 */
 	retrySessionStartup(
 		orgId: string,
 		sessionId: string,
@@ -472,11 +380,8 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSendMessageResponse>;
 	listChatModels(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
-	/** The next message the person could send after a settled turn; a worker that cannot suggest fails. */
 	suggestChatPrompt(orgId: string, sessionId: string, body: CloudCpPromptSuggestionRequest, options?: CloudCpRequestOptions): Promise<CloudCpPromptSuggestionResponse>;
-	/** One review conversation's events (a review whose run has interfaceMode chat). */
 	listReviewChatEvents(orgId: string, sessionId: string, reviewRunId: string, query?: CloudCpChatEventsQuery, options?: CloudCpRequestOptions): Promise<CloudCpChatEventsResponse>;
-	/** Queues a message to the reviewer; a conversation that stopped after its verdict starts again. */
 	sendReviewChatMessage(orgId: string, sessionId: string, reviewRunId: string, text: string, options?: CloudCpMutationOptions): Promise<CloudCpSendMessageResponse>;
 	interruptReviewChat(orgId: string, sessionId: string, reviewRunId: string, options?: CloudCpRequestOptions): Promise<void>;
 	cancelTurn(
@@ -492,7 +397,6 @@ export interface CloudCpClient {
 		body: CloudCpSendMessageRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
-	/** Replace a queued message's text and files before the agent starts on it; 409 TURN_NOT_QUEUED once it has. */
 	editQueuedMessage(
 		orgId: string,
 		sessionId: string,
@@ -500,10 +404,6 @@ export interface CloudCpClient {
 		body: CloudCpEditQueuedMessageRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpEditQueuedMessageResponse>;
-	/**
-	 * Steer a message still queued into the running turn (offering queued-steer). Answers the
-	 * steer request; chat.turn_steered or chat.turn_steer_failed naming the turn follows.
-	 */
 	steerQueuedMessage(
 		orgId: string,
 		sessionId: string,
@@ -511,50 +411,31 @@ export interface CloudCpClient {
 		body: { composerEpoch?: number },
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
-	/** Take back a message still queued, never stopping a turn that left the queue; 409 TURN_NOT_QUEUED once it has (offering queued-delete). */
 	deleteQueuedMessage(
 		orgId: string,
 		sessionId: string,
 		turnId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCancelTurnResponse & {
-		/** The agent is taking the message as a steer: its answer decides (deleted, or delivered). */
 		pending?: boolean;
 	}>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
-	/** Takes a shared session's composer lease, or renews it when already held. */
 	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
-	/** Extends a held grant; `typing` reports a keystroke since the last renewal. */
 	renewComposer(orgId: string, sessionId: string, epoch: number, typing: boolean, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	releaseComposer(orgId: string, sessionId: string, epoch: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
-	/** Gets in line for the composer lease. */
 	requestComposerTurn(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	leaveComposerQueue(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
-	/** Takes the lease from its holder (session creator, org owners and admins). */
 	takeOverComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
-	/** Sets the model and settings the session's turns run with (its owner only). */
 	setSessionChatSettings(orgId: string, sessionId: string, settings: CloudCpSessionChatSettings, options?: CloudCpRequestOptions): Promise<{ chatSettings: CloudCpSessionChatSettings }>;
-	/** Who is in each of these sessions that someone has shared; the rest are left out. */
 	listSessionParticipants(orgId: string, sessionIds: readonly string[], options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSharedSessionParticipants[] }>;
-	/** Shares the holder's draft and caret live with the session; counts as a keystroke. */
 	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
 	listShareLinks(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ links: CloudCpShareLink[] }>;
-	/**
-	 * Turns a link off. With removeJoined, the people who joined by it lose
-	 * that access too (a control plane that reports joinedCount honours it),
-	 * and the answer says how many grants that changed. A plain revoke, or an
-	 * older control plane, answers 204 with no body: removedGrants is absent.
-	 */
 	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions & { removeJoined?: boolean }): Promise<{ removedGrants?: number }>;
-	/** Turns a share link's token into the caller's own access grant. */
 	redeemShareLink(orgId: string, token: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
-	/** Redeems a link by its short code, which names no organization. */
 	redeemShareLinkCode(code: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
 	listSharedProjects(options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject[] }>;
-	/** The sessions of a project shared with the caller that their grant reaches. */
 	listSharedProjectSessions(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSession[] }>;
-	/** The workspace's teams. */
 	listTeams(orgId: string, options?: CloudCpRequestOptions): Promise<{ teams: CloudCpTeam[] }>;
 	createTeam(orgId: string, body: { name: string; members?: CloudCpTeamMemberInput[] }, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
 	getTeam(orgId: string, teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
@@ -565,21 +446,15 @@ export interface CloudCpClient {
 	updateTeamMember(orgId: string, teamId: string, memberId: string, role: "owner" | "member", options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
 	removeTeamMember(orgId: string, teamId: string, memberId: string, options?: CloudCpRequestOptions): Promise<void>;
 	teamMemberImpact(orgId: string, teamId: string, memberId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamImpact>;
-	/** The teams the caller is in, in every workspace. */
 	listMyTeams(options?: CloudCpRequestOptions): Promise<{ teams: CloudCpTeam[] }>;
 	getMyTeam(teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
 	leaveTeam(teamId: string, options?: CloudCpRequestOptions): Promise<void>;
 	leaveTeamImpact(teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamImpact>;
-	/** Teams and known people for the share dialog's people field. */
 	listShareCandidates(orgId: string, query: string, options?: CloudCpRequestOptions): Promise<{ candidates: CloudCpShareCandidate[] }>;
-	/** Shares a session or a whole project directly with teams and people. */
 	createShareGrants(orgId: string, projectId: string, body: CloudCpCreateShareGrantsRequest, options?: CloudCpRequestOptions): Promise<{ entries: CloudCpShareEntry[] }>;
-	/** Everyone with access to a session (sessionId) or a whole project. */
 	getShareAccess(orgId: string, projectId: string, sessionId: string | undefined, options?: CloudCpRequestOptions): Promise<CloudCpShareAccess>;
-	/** A team's members and what each can do in the session or project. */
 	getTeamShareAccess(orgId: string, projectId: string, sessionId: string | undefined, teamId: string, options?: CloudCpRequestOptions): Promise<{ members: CloudCpTeamMemberAccess[] }>;
 	updateShareEntry(orgId: string, projectId: string, grantId: string, body: { role: CloudCpShareRole; modeCap?: "read-only" | "standard" | "trusted" }, options?: CloudCpRequestOptions): Promise<{ entry: CloudCpShareEntry }>;
-	/** Stops a grant of any kind: a link redemption, a person, an email or a team. */
 	revokeShareGrant(orgId: string, projectId: string, grantId: string, options?: CloudCpRequestOptions): Promise<void>;
 	listChatEvents(
 		orgId: string,
@@ -587,11 +462,6 @@ export interface CloudCpClient {
 		query?: CloudCpChatEventsQuery,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpChatEventsResponse>;
-	/**
-	 * Subscribe to the session's live SSE stream. Resolves when the stream ends
-	 * (server close or abort); failures are reported through `onError`, never as
-	 * a rejection, so fire-and-forget callers cannot leak unhandled rejections.
-	 */
 	subscribeSessionEvents(orgId: string, sessionId: string, options: CloudCpSessionEventsOptions): Promise<void>;
 	listNotifications(orgId: string, query?: CloudCpNotificationListQuery, options?: CloudCpRequestOptions): Promise<CloudCpNotificationListResponse>;
 	listNotificationEvents(orgId: string, after?: number, options?: CloudCpRequestOptions): Promise<CloudCpNotificationEventsResponse>;
@@ -606,36 +476,28 @@ export interface CloudCpClient {
 	): Promise<CloudCpTerminalTicketResponse>;
 
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
-	/** The models a new task for this agent runs with in this organization. 409 MODEL_CATALOG_UNAVAILABLE: none for this agent. */
 	listUserAgentModels(orgId: string, agent: CloudCpAgentProvider, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
 	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpProviderConnectionResponse>;
-	/** The caller's accounts for every coding agent (when /me reports agentAccounts). */
 	listAgentAccounts(options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountsResponse>;
-	/** Saves a login or key as another account; the agent's first account becomes its default. 409 AGENT_ACCOUNT_DUPLICATE: already saved. */
 	addAgentAccount(body: CloudCpAddAgentAccountRequest, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
 	renameAgentAccount(accountId: string, name: string, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
-	/** 409 AGENT_ACCOUNT_IN_USE: a live session runs on it. */
 	removeAgentAccount(accountId: string, options?: CloudCpRequestOptions): Promise<void>;
 	makeAgentAccountDefault(accountId: string, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
-	/** Signs an account in again: the login must be the same one, of the same kind. */
 	replaceAgentAccountCredential(accountId: string, body: CloudCpPutAgentConnectionRequest, options?: CloudCpRequestOptions): Promise<CloudCpAgentAccountResponse>;
 	getSessionAgentAccount(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionAgentAccount>;
-	/** Moves the session's agent to another of its creator's accounts: an interface transition in the session's current interface. */
 	switchSessionAgentAccount(
 		orgId: string,
 		sessionId: string,
 		body: CloudCpSwitchSessionAgentAccountRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpStartInterfaceTransitionResponse>;
-	/** Removes a GitHub token saved before Cloud reached GitHub through the App (DELETE /me/github-pat). */
 	deleteGitHubPAT(options?: CloudCpRequestOptions): Promise<void>;
 	listGitHubRepos(options?: CloudCpRequestOptions): Promise<CloudCpGitHubReposResponse>;
 
-	// GitHub App connect flow. See the type comments in ./types for the flow.
 	startGitHubInstallation(
 		orgId: string,
 		options?: CloudCpRequestOptions,
@@ -660,23 +522,16 @@ export interface CloudCpClient {
 		body: CloudCpCreateGitHubProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
-	/**
-	 * An empty private GitHub repository for a local folder, granted to the org
-	 * (POST /orgs/{orgId}/github/repositories). Answers 200 with created false
-	 * for an empty repository of that name that already existed.
-	 */
 	createGitHubRepository(
 		orgId: string,
 		body: CloudCpCreateGitHubRepositoryRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCreateGitHubRepositoryResponse>;
-	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
 	createStandaloneProject(
 		orgId: string,
 		body: CloudCpCreateStandaloneProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
-	/** A standalone agent: its own project and its one worker session (POST /orgs/{orgId}/standalone-agents). */
 	createStandaloneAgent(
 		orgId: string,
 		body: CloudCpCreateStandaloneAgentRequest,
@@ -684,7 +539,6 @@ export interface CloudCpClient {
 	): Promise<CloudCpStandaloneAgentResponse>;
 }
 
-/** A value per key; an array repeats the key once per item. */
 type QueryParams = Record<string, string | number | readonly string[] | undefined>;
 
 interface SendOptions {
@@ -712,18 +566,15 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 	return url;
 }
 
-/** The `repository` query parameter of a workspace call; undefined for the main repository. */
 function repositoryQuery(options: CloudCpWorkspaceRequestOptions | undefined): QueryParams | undefined {
 	const repository = options?.repository?.trim();
 	return repository ? { repository } : undefined;
 }
 
-/** Build one path segment from a caller-supplied identifier. */
 function seg(value: string): string {
 	return encodeURIComponent(value);
 }
 
-/** Error codes the control plane uses when a plan does not allow the request. */
 export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	"PLAN_REQUIRED",
 	"ORCHESTRATOR_SLOTS_FULL",
@@ -733,7 +584,6 @@ export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
-/** A Retry-After header (seconds, or an HTTP date) as milliseconds from `now`. */
 export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
 	const header = value?.trim();
 	if (!header) return undefined;
@@ -756,7 +606,6 @@ async function errorFromResponse(response: Response): Promise<CloudCpError> {
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
 	} catch {
-		// Non-JSON or empty body: keep the status-derived message.
 	}
 	const options = { status: response.status, code, requestId, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) };
 	return response.status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
@@ -776,14 +625,8 @@ function newIdempotencyKey(): string {
 	return crypto.randomUUID();
 }
 
-/** The longest description the control plane takes for a new GitHub repository, in characters. */
 export const MAX_GITHUB_REPOSITORY_DESCRIPTION = 350;
 
-/**
- * A settings write without config.layout: a project is created a workspace or
- * not, and the control plane refuses any settings write that names a layout,
- * even the one the project already has.
- */
 function withoutProjectLayout(body: CloudCpProjectSettingsRequest): CloudCpProjectSettingsRequest {
 	if (!body.config || !("layout" in body.config)) return body;
 	const { layout: _layout, ...config } = body.config as Record<string, unknown>;
@@ -792,8 +635,6 @@ function withoutProjectLayout(body: CloudCpProjectSettingsRequest): CloudCpProje
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
 	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
-	// Wrap the default so the global fetch is never invoked detached from its
-	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
 
 	async function send(method: string, path: string, init: SendOptions = {}): Promise<Response> {
@@ -817,9 +658,6 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			signal: init.signal,
 		});
 		if (!response.ok) {
-			// A 403 means the selected org is stale (membership changed) — notify so
-			// the renderer re-resolves the current org instead of stranding every
-			// org-scoped call. Fire before throwing so callers still see the error.
 			if (response.status === 403) onForbidden?.();
 			const error = await errorFromResponse(response);
 			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
@@ -1371,7 +1209,6 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		createGitHubRepository: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/repositories`, {
-				// The control plane refuses a description over its limit.
 				body: body.description === undefined ? body : { ...body, description: [...body.description].slice(0, MAX_GITHUB_REPOSITORY_DESCRIPTION).join("") },
 				signal: o?.signal,
 			}),

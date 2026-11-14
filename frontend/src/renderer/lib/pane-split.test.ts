@@ -36,7 +36,6 @@ describe("group tab order", () => {
 
 describe("insertBeside", () => {
 	it("splits only the pane the tab was dropped on", () => {
-		// A third tab dropped on the bottom of the left column halves that column.
 		const root = insertBeside(twoColumns, "chat", "file", "bottom");
 		expect(root).toEqual({
 			type: "split",

@@ -1,7 +1,3 @@
-// Package workspacewatch turns operating-system filesystem notifications for a
-// session worktree into a small invalidation stream. The actual Git status and
-// diff remain owned by the session service; consumers only use these events to
-// know when to read that model again.
 package workspacewatch
 
 import (
@@ -22,24 +18,8 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// maxWatchedDirectories bounds how many directories one workspace stream has
-// concurrently registered. fsnotify consumes one descriptor per watched
-// directory (a kqueue descriptor on macOS, an inotify watch slot on Linux), so
-// watching every directory of an unbounded tree eventually exhausts
-// RLIMIT_NOFILE or max_user_watches and every subsequent Add fails.
-// Directories beyond the cap stay unwatched; the model refresh they guard
-// remains reachable through the other invalidation paths instead of the whole
-// SSE subscription failing.
 var maxWatchedDirectories = 4096
 
-// dirWatchLimiter keeps the number of concurrently registered directory
-// watches at or below maxWatchedDirectories for the lifetime of one workspace
-// stream: both the initial walk and directories created later go through add,
-// while directories that disappear reclaim their budget through release, so a
-// session with directory churn (build outputs, node_modules, branch switches)
-// keeps reusing freed budget instead of exhausting it. Failed Adds are
-// counted as skipped and surfaced by warn as a single aggregated log line
-// instead of one WARN per directory.
 type dirWatchLimiter struct {
 	watcher   *fsnotify.Watcher
 	limit     int
@@ -54,15 +34,10 @@ func newDirWatchLimiter(watcher *fsnotify.Watcher, limit int) *dirWatchLimiter {
 	return &dirWatchLimiter{watcher: watcher, limit: limit, watched: make(map[string]struct{})}
 }
 
-// add registers dir if budget remains. It returns ctx.Err() when the context
-// was cancelled; every other failure is counted as skipped and does not abort
-// the caller.
 func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, ok := l.watched[dir]; ok {
-		// Already watched: fsnotify.Add is a no-op for an existing watch, so
-		// do not consume budget or re-count the slot.
 		return nil
 	}
 	if l.used >= l.limit {
@@ -82,11 +57,6 @@ func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 	return nil
 }
 
-// release drops the watch on dir and returns its budget so it can be reused.
-// It is a no-op for paths this limiter never watched (regular files, ignored
-// directories, already-released paths) and safe to call on a nil limiter.
-// Best-effort: fsnotify may have already dropped the watch implicitly (for
-// example on Rename); reclaiming the accounting slot is what matters.
 func (l *dirWatchLimiter) release(dir string) {
 	if l == nil {
 		return
@@ -101,8 +71,6 @@ func (l *dirWatchLimiter) release(dir string) {
 	l.used--
 }
 
-// warn emits at most one aggregated WARN per call describing how many
-// directories could not be watched and why.
 func (l *dirWatchLimiter) warn(ctx context.Context, stage string) {
 	l.mu.Lock()
 	skipped, lastError, limit := l.skipped, l.lastError, l.limit
@@ -113,10 +81,6 @@ func (l *dirWatchLimiter) warn(ctx context.Context, stage string) {
 	slog.WarnContext(ctx, "workspace watch skipped directories", "stage", stage, "skipped", skipped, "watch_limit", limit, "last_error", lastError)
 }
 
-// Watch subscribes to relevant changes below the workspace roots until ctx is cancelled. The
-// returned channel is intentionally edge-triggered and buffered by one: a burst
-// of editor writes only needs to tell the caller that its Git read model is
-// stale, not reproduce every low-level filesystem operation.
 func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 	if len(roots) == 0 {
 		return nil, fmt.Errorf("at least one workspace path is required")
@@ -171,12 +135,6 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, error) {
 	return changes, nil
 }
 
-// WatchSkipping is Watch for one root, leaving out the entries skip names:
-// their directories are not watched and their changes are not reported. skip
-// gets a slash-separated path relative to root, and must also match everything
-// below a skipped directory. The kqueue backend keeps a descriptor for every
-// file in a watched directory and maxWatchedDirectories counts directories, so
-// a directory of generated files must be skipped, not merely ignored.
 func WatchSkipping(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, error) {
 	return watchRoot(ctx, root, skip)
 }
@@ -217,11 +175,9 @@ type gitWorkspace struct {
 	available     bool
 	files         []string
 	metadataFiles map[string]struct{}
-	// skip names the entries a WatchSkipping caller leaves out. Nil skips none.
-	skip func(rel string) bool
+	skip          func(rel string) bool
 }
 
-// skips reports whether target, inside root, is left out of this watch.
 func (g gitWorkspace) skips(root, target string) bool {
 	if g.skip == nil {
 		return false
@@ -231,22 +187,10 @@ func (g gitWorkspace) skips(root, target string) bool {
 }
 
 func discoverGitWorkspace(ctx context.Context, root string) gitWorkspace {
-	// Git searches upward for a repository, so rev-parse can resolve a parent
-	// repo (or a stray .git above the workspace) instead of one that belongs
-	// to this workspace. Trusting that answer watches almost nothing: the git
-	// file list is empty for the workspace, so only the root directory is
-	// registered and the non-recursive fsnotify backends never see changes in
-	// subdirectories. Only use the git-derived watch set when the repository
-	// actually has this workspace as its toplevel.
 	topRaw, err := aoprocess.CommandContext(ctx, "git", "-C", root, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return gitWorkspace{}
 	}
-	// Git prints forward slashes on Windows and canonicalizes the toplevel
-	// through symlinks, so the reported path may differ textually from root
-	// while naming the same directory. Compare the strings first (folding
-	// case on Windows, where the filesystem is case-insensitive), then fall
-	// back to filesystem identity for symlinked roots.
 	toplevel := filepath.Clean(filepath.FromSlash(strings.TrimSpace(string(topRaw))))
 	samePath := toplevel == root || (runtime.GOOS == "windows" && strings.EqualFold(toplevel, root))
 	if !samePath {
@@ -283,8 +227,6 @@ func discoverGitWorkspace(ctx context.Context, root string) gitWorkspace {
 		}
 	}
 	metadataFiles[filepath.Join(commonDir, "packed-refs")] = struct{}{}
-	// config changes when a first push sets the upstream; the origin
-	// remote-tracking ref changes on every later push.
 	metadataFiles[filepath.Join(commonDir, "config")] = struct{}{}
 	if raw, refErr := aoprocess.CommandContext(ctx, "git", "-C", root, "symbolic-ref", "-q", "HEAD").Output(); refErr == nil {
 		ref := strings.TrimSpace(string(raw))
@@ -331,16 +273,12 @@ func addInitialDirectories(ctx context.Context, limiter *dirWatchLimiter, root s
 	}); err != nil {
 		return fmt.Errorf("walk workspace directories: %w", err)
 	}
-	// A repository can list a skipped directory's files.
 	for dir := range dirs {
 		if git.skips(root, dir) {
 			delete(dirs, dir)
 		}
 	}
 
-	// Register watches shallowest-first so that when the platform refuses
-	// further watches (fd or inotify limits) the remaining coverage degrades
-	// toward the leaves, which matter least for workspace-level invalidation.
 	ordered := make([]string, 0, len(dirs))
 	for dir := range dirs {
 		ordered = append(ordered, dir)
@@ -392,8 +330,6 @@ func run(ctx context.Context, watcher *fsnotify.Watcher, root string, git gitWor
 			if !ok {
 				return
 			}
-			// The precise event may have been dropped. Force one model refresh;
-			// subsequent filesystem notifications can still keep the stream live.
 			notify()
 		case event, ok := <-watcher.Events:
 			if !ok {
@@ -407,9 +343,6 @@ func run(ctx context.Context, watcher *fsnotify.Watcher, root string, git gitWor
 }
 
 func handleEvent(ctx context.Context, limiter *dirWatchLimiter, root string, git gitWorkspace, event fsnotify.Event) bool {
-	// On macOS, kqueue can report CHMOD while Git is only reading files to
-	// build the diff model. Treating those metadata-only notifications as
-	// content changes creates a read -> event -> read feedback loop.
 	if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove|fsnotify.Rename) == 0 {
 		return false
 	}
@@ -427,10 +360,6 @@ func handleEvent(ctx context.Context, limiter *dirWatchLimiter, root string, git
 		return false
 	}
 	if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
-		// A watched directory that goes away frees its descriptor and its
-		// budget slot, so later directory creation can still be watched even
-		// in workspaces with heavy directory churn. Paths the limiter never
-		// watched (regular files, ignored directories) are no-ops.
 		limiter.release(name)
 	}
 	if event.Has(fsnotify.Create) {
@@ -452,9 +381,6 @@ func addCreatedTree(ctx context.Context, limiter *dirWatchLimiter, root string, 
 		if hasGitMetadataComponent(root, path) || git.skips(root, path) || (git.available && gitIgnored(ctx, root, path)) {
 			return filepath.SkipDir
 		}
-		// Created directories draw from the same budget as the initial
-		// walk, so a workspace that grows during the session cannot push
-		// concurrent watches past the cap and back into fd exhaustion.
 		return limiter.add(ctx, path)
 	})
 }

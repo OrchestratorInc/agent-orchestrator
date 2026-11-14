@@ -41,45 +41,30 @@ const PROMPT_GUTTER = 14;
 const PROMPT_GAP = 10;
 const COMMENT_WIDTH = 320;
 const ADJUSTMENT_WIDTH = 320;
-/** Smallest the card may shrink to before it starts scrolling its panel. */
 const ADJUSTMENT_MIN_HEIGHT = 180;
-/**
- * Composer expand/collapse curve. A decelerating ease keeps the edge the card
- * shares with the element glued in place while the panel settles; the previous
- * symmetric ease-in-out spent its first third barely moving and then lurched.
- */
 const COMPOSER_TRANSITION_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const COMPOSER_OPEN_MS = 0.3;
 const COMPOSER_CLOSE_MS = 0.22;
 const SPACING_SECTION_MS = 0.22;
 let adjustmentPanelAnimation: { stop: () => void } | null = null;
-/** While true the panel animation owns the card's edge, so a scroll, resize or
- *  input event mid-flight must not re-anchor the composer underneath it. */
 let composerPanelAnimating = false;
 const spacingSectionAnimations = new WeakMap<HTMLElement, { stop: () => void }>();
 const COMMENT_TEXTAREA_MIN_HEIGHT = 20;
 const COMMENT_MAX_HEIGHT = 360;
-/** Keep in sync with overlayStyles --pad / --gap / --control / --radius. */
 const COMPOSER_PAD = 8;
 const COMPOSER_GAP = 8;
-/** Match browser tab bar icon buttons (--size-control-md / --radius-md). */
 const COMPOSER_CONTROL = 28;
 const COMPOSER_CONTROL_RADIUS = 8;
 const COMPOSER_RADIUS = COMPOSER_CONTROL_RADIUS;
-/** Concentric outer radius: inner control radius + container padding. */
 const COMPOSER_OUTER_RADIUS = COMPOSER_CONTROL_RADIUS + COMPOSER_PAD;
 const COMMENT_CHROME_VERTICAL = COMPOSER_PAD * 2;
-/** Icon for the adjust/options control: palette | sliders | sliders-horizontal | sparkles | settings */
 const ADJUST_ICON = "palette" as const;
 const MARKDOWN_TARGETS =
 	"h1, h2, h3, h4, h5, h6, p, ul, ol, li, blockquote, pre, table, th, td, figure, figcaption, img, hr, details, summary";
 
 type AdjustmentDefinition = {
 	property: BrowserAdjustmentProperty;
-	/** Full name: the accessible name and the reset's title. */
 	label: string;
-	/** Compact name shown inside the field. Kept a substring of `label` so the
-	 *  visible label stays part of the accessible name (WCAG 2.5.3). */
 	short: string;
 	group: "Content" | "Appearance" | "Size" | "Spacing" | "Layout";
 	options?: string[];
@@ -96,8 +81,6 @@ const ADJUSTMENTS: AdjustmentDefinition[] = [
 	{ property: "borderRadius", label: "Border radius", short: "Radius", group: "Appearance" },
 	{ property: "borderColor", label: "Border color", short: "Color", group: "Appearance" },
 	{ property: "borderWidth", label: "Border width", short: "Width", group: "Appearance" },
-	// The size pair reads W/H (the pattern every inspector uses), which also keeps
-	// its visible label distinct from the border's "Width" field.
 	{ property: "width", label: "Width", short: "W", group: "Size" },
 	{ property: "height", label: "Height", short: "H", group: "Size" },
 	{ property: "paddingTop", label: "Padding top", short: "Top", group: "Spacing" },
@@ -128,8 +111,6 @@ const SUPPORTED_ADJUSTMENT_PROPERTIES = new Set(ADJUSTMENTS.map((item) => item.p
 ipcRenderer.on("browser:annotation:setMode", (_event, input: BrowserAnnotationPageMode) => {
 	if (input?.theme) theme = input.theme;
 	const nextEnabled = Boolean(input?.enabled);
-	// Clear any in-progress composer before applying the stored session when
-	// leaving mode, so a stale draft from main cannot reopen the input.
 	if (!nextEnabled) clearOpenDraft();
 	if (input?.session && samePage(input.session.page.url, window.location.href)) session = input.session;
 	else if (!samePage(session.page.url, window.location.href)) session = createBrowserAnnotationSession(window.location.href, document.title || undefined);
@@ -165,9 +146,6 @@ function setEnabled(next: boolean, reason: BrowserAnnotationCancelReason): void 
 		if (next) renderAll();
 		return;
 	}
-	// Leaving mode drops any open composer/selection. Saved batch annotations
-	// stay on the session. Main also strips draft on disable so re-entry does
-	// not restore a selection; reload-while-enabled can still rehydrate draft.
 	if (!next) clearOpenDraft();
 	enabled = next;
 	hoveredElement = null;
@@ -188,7 +166,6 @@ function setEnabled(next: boolean, reason: BrowserAnnotationCancelReason): void 
 	}
 }
 
-/** Close an in-progress composer without removing saved batch annotations. */
 function clearOpenDraft(): void {
 	const draft = session.draft;
 	if (!draft) return;
@@ -385,16 +362,10 @@ function showScreenshotNotice(): void {
 }
 
 function emitState(): void {
-	// Every draft mutation funnels through here, so the trailing add control
-	// never drifts from what Enter would do with the same draft.
 	syncComposerAddButton();
 	ipcRenderer.send("browser:annotation:state", session);
 }
 
-/**
- * The add control is Enter's twin: it saves the draft, and stays inert while the
- * draft is empty so a stray click cannot dismiss the composer.
- */
 function syncComposerAddButton(): void {
 	const button = shadow?.querySelector<HTMLButtonElement>('[data-action="add"]');
 	if (!button) return;
@@ -457,9 +428,6 @@ function renderComposer(): void {
 	const draft = session.draft;
 	if (!draft) { mount.innerHTML = ""; return; }
 	const target = selectedElement ?? resolveTarget(draft.target);
-	// Always built in its comment shape, with the input row first: the adjustment
-	// panel is added and removed in place so the row (and the caret) survives the
-	// transition instead of being rebuilt from scratch behind the animation.
 	mount.innerHTML = `
 		<form class="composer chrome composer--comment" aria-label="Annotate selection">
 			<div class="composer-input-row">
@@ -500,8 +468,6 @@ function renderComposer(): void {
 	addButton?.addEventListener("click", () => saveDraft());
 	syncComposerAddButton();
 	resize();
-	// A re-opened saved adjustment arrives already expanded; the composer itself
-	// appeared instantly, so there is nothing to open *from*.
 	if (ADJUST_MODE_ENABLED && draft.kind === "adjustment" && target) {
 		promoteAdjustmentPanel(form, target, resize, { instant: true });
 	}
@@ -525,7 +491,6 @@ function applyComposerMode(form: HTMLFormElement, kind: BrowserAnnotationKind): 
 function bindAdjustmentPanel(form: HTMLFormElement, target: Element, resize: () => void): void {
 	const panel = form.querySelector<HTMLElement>("[data-adjustment-panel]");
 	if (!panel) return;
-	// The panel scrolls without a scrollbar: keep the cue on its overflowed edge.
 	panel.querySelector<HTMLElement>(".adjustment-scroll")
 		?.addEventListener("scroll", () => syncPanelScrollCue(panel), { passive: true });
 	form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("[data-property]").forEach((input) => {
@@ -575,7 +540,6 @@ function promoteAdjustmentPanel(
 	void animateAdjustmentPanel(panel, form, "open", resize, transition);
 }
 
-/** Put the composer back to its single-row shape without rebuilding it. */
 function demoteComposer(form: HTMLFormElement): void {
 	form.querySelector("[data-adjustment-panel]")?.remove();
 	form.classList.remove("composer--above");
@@ -644,14 +608,10 @@ function adjustmentPanel(element: Element): string {
 		return definition ? adjustmentField(element, definition, draft.adjustments, options) : "";
 	};
 	const linkButton = (lock: AdjustmentLockName, label: string) => `<button type="button" class="link-button${adjustmentLocks[lock] ? " link-button--active" : ""}" data-lock="${lock}" aria-label="${label}" title="${label}" aria-pressed="${adjustmentLocks[lock]}">${icon("link")}</button>`;
-	// Every row is the same three-cell grid: two field boxes and one trailing
-	// action cell, so fields, values and link buttons share the same edges.
 	const row = (fields: string[], options: { link?: string } = {}) =>
 		`<div class="panel-row">${fields.join("")}${options.link ?? ""}</div>`;
 	const display = getComputedStyle(element).display;
 	const hasEditableText = Boolean(editableTextNode(element));
-	// Sections are ordered by what people reach for first: the text itself, then
-	// its type, then the box it sits in, then geometry, then space around it.
 	const content = hasEditableText
 		? `<div class="adjustment-group">${row([field("textContent", { wide: true })])}</div>`
 		: "";
@@ -689,13 +649,6 @@ function adjustmentPanel(element: Element): string {
 	</div></div></div>`;
 }
 
-/**
- * Tallest the card may get: the room the element leaves on the side the card
- * opens towards. There is no fixed ceiling on top of that — a panel only grows
- * this far when its property list actually needs the space, so a long inspector
- * is readable in one go instead of hiding its last rows behind a scroll, and a
- * short one stays the compact card it always was.
- */
 function composerMaxHeight(): number {
 	const viewport = viewportSize();
 	const rect = composerAnchorRect;
@@ -708,8 +661,6 @@ function composerMaxHeight(): number {
 
 function adjustmentPanelHeightCap(form: HTMLFormElement): number {
 	const formMax = composerMaxHeight();
-	// Everything the card spends on itself — the input row, the padding and the
-	// hairline — so a capped panel can fill the card without its edge clipping.
 	const panel = form.querySelector<HTMLElement>("[data-adjustment-panel]");
 	const overhead = panel
 		? Math.max(0, form.getBoundingClientRect().height - panel.getBoundingClientRect().height)
@@ -718,11 +669,6 @@ function adjustmentPanelHeightCap(form: HTMLFormElement): number {
 }
 
 function measureAdjustmentPanelHeight(inner: HTMLElement, form: HTMLFormElement): number {
-	// How tall the panel has to be for the inner to sit in it whole: its content,
-	// plus the divider gap and the hairline the inner is offset by. Measuring the
-	// content alone left that much of the first or last row outside the panel.
-	// The header and the scroll area are measured separately so this still holds
-	// when the inner is already size-constrained by a capped panel.
 	const header = inner.querySelector<HTMLElement>(".element-header");
 	const scroll = inner.querySelector<HTMLElement>(".adjustment-scroll");
 	const content = header && scroll ? header.offsetHeight + scroll.scrollHeight : inner.scrollHeight;
@@ -757,18 +703,6 @@ function composerWidth(adjusting: boolean): number {
 	return Math.max(0, Math.min(adjusting ? ADJUSTMENT_WIDTH : COMMENT_WIDTH, viewportSize().width - PROMPT_GUTTER * 2));
 }
 
-/**
- * Where the composer card lands for a given height.
- *
- * Callers pass the height the card will *end* at, so which side of the element
- * it opens on is decided once: re-deriving the flip from a mid-animation height
- * is what used to make the card jump to the other side of the element partway
- * through, and what made its contents slide under a fixed edge.
- *
- * The edge the card is glued to does not depend on that height — the top when it
- * opens downwards, the bottom when it opens upwards — so the row of controls
- * keeps its place while the panel grows or shrinks away from it.
- */
 function composerPlacement(
 	rect: AnnotationRectLike,
 	width: number,
@@ -803,14 +737,6 @@ function bindSpacingSections(form: HTMLFormElement, panel: HTMLElement, resize: 
 	});
 }
 
-/**
- * Expand or collapse a spacing group.
- *
- * The panel's height travels with the group in the same motion. Growing the
- * panel *after* the group has closed leaves the rows sliding down inside a card
- * that has not shrunk yet — an empty band at the far edge, then a snap — which
- * is the accordion version of the jerk the composer itself used to have.
- */
 async function toggleSpacingSection(
 	details: HTMLDetailsElement,
 	body: HTMLElement,
@@ -826,15 +752,9 @@ async function toggleSpacingSection(
 	const startBodyHeight = body.getBoundingClientRect().height;
 	const startPanelHeight = panelInlineHeight(panel);
 	body.style.overflow = "hidden";
-	// Measure the panel with the group already in its new size, then animate the
-	// group to it. Both ends of the panel's travel are therefore known exactly and
-	// the card lands on the measured height instead of being reconciled afterwards
-	// (a reconcile is what made the card look like it changed size on its own).
 	let endBodyHeight: number;
 	let endPanelHeight: number;
 	if (opening) {
-		// Let the group take its natural height again: a previous collapse left it
-		// pinned at 0 and the measurement below has to see the real content.
 		body.style.height = "";
 		body.style.overflow = "";
 		details.open = true;
@@ -848,9 +768,6 @@ async function toggleSpacingSection(
 		endPanelHeight = measureAdjustmentPanelHeight(inner, form);
 		body.style.height = `${startBodyHeight}px`;
 	}
-	// Size the inner for the panel's *current* height first: a capped panel needs
-	// its scroll range to exist while the group animates, otherwise the rows the
-	// group is adding sit below the clip until the motion is over.
 	applyAdjustmentPanelLayout(inner, form, startPanelHeight);
 	const progressOf = (bodyHeight: number): number => {
 		const span = endBodyHeight - startBodyHeight;
@@ -874,8 +791,6 @@ async function toggleSpacingSection(
 		onUpdate: (bodyHeight: number) => {
 			body.style.height = `${bodyHeight}px`;
 			panel.style.height = `${panelHeightFor(bodyHeight)}px`;
-			// A capped panel cannot grow with the group, so keep the rows nearest
-			// the input row in view instead of pushing them out of the panel.
 			const scroll = form.querySelector<HTMLElement>(".adjustment-scroll");
 			if (scroll && form.classList.contains("composer--above")
 				&& panelHeightFor(bodyHeight) >= adjustmentPanelHeightCap(form) - 1) {
@@ -895,11 +810,6 @@ async function toggleSpacingSection(
 	resize();
 }
 
-/**
- * The panel scrolls without a scrollbar, so the edge the content runs past gets
- * a fade. Which edge depends on which way the card grows: a card that opens
- * downwards overflows below, one that opens upwards overflows above it.
- */
 function syncPanelScrollCue(panel: HTMLElement): void {
 	const scroll = panel.querySelector<HTMLElement>(".adjustment-scroll");
 	if (!scroll) return;
@@ -919,16 +829,10 @@ function syncPanelScrollCue(panel: HTMLElement): void {
 
 function applyAdjustmentPanelLayout(inner: HTMLElement, form: HTMLFormElement, panelHeight: number): void {
 	const capped = panelHeight >= adjustmentPanelHeightCap(form) - 1;
-	// A plain 100% ignores the divider gap the inner is offset by, which pushes its
-	// last row past the panel's edge — the scroll end then clips it instead of
-	// showing it with the panel's own padding.
 	inner.style.height = capped ? "calc(100% - var(--panel-chrome))" : "";
 	const panel = inner.parentElement;
 	if (panel) syncPanelScrollCue(panel);
 	if (!capped) return;
-	// Opened upwards, the rows nearest the input row are the ones the grow-in
-	// animation leaves on screen, so a scrollable panel keeps that view rather
-	// than jumping to the top of the list the moment it fills.
 	const scroll = form.querySelector<HTMLElement>(".adjustment-scroll");
 	if (scroll && form.classList.contains("composer--above")) scroll.scrollTop = scroll.scrollHeight;
 }
@@ -949,16 +853,12 @@ async function animateAdjustmentPanel(
 	const startPanelHeight = open ? 0 : panelInlineHeight(panel);
 	const endPanelHeight = open ? targetPanelHeight : 0;
 	const formRect = form.getBoundingClientRect();
-	// Where the card sat before the panel was inserted, so opening continues from
-	// the row the user is already looking at instead of re-deriving it.
 	const startRect = transition.startRect ?? formRect;
 	const chromeHeight = Math.max(0, formRect.height - panel.getBoundingClientRect().height);
 	const width = formRect.width > 0 ? formRect.width : composerWidth(true);
 	const endPlacement = composerAnchorRect
 		? composerPlacement(composerAnchorRect, width, chromeHeight + endPanelHeight)
 		: null;
-	// Collapsing stays on the side the card is already on; opening picks the side
-	// it will end on. Either way the decision is frozen for the whole transition.
 	const above = endPlacement ? (open ? endPlacement.above : form.classList.contains("composer--above")) : false;
 	const startEdge = above ? startRect.bottom : startRect.top;
 	const endEdge = endPlacement ? (above ? endPlacement.bottom : endPlacement.top) : startEdge;
@@ -977,8 +877,6 @@ async function animateAdjustmentPanel(
 	};
 	panel.style.overflow = "hidden";
 	form.classList.toggle("composer--above", above);
-	// The card only ever moves when it has to change sides: the row stays put and
-	// the far edge sweeps open, so nothing shifts under the element mid-flight.
 	if (transition.instant || prefersReducedMotion() || Math.abs(endPanelHeight - startPanelHeight) < 1) {
 		composerPanelAnimating = false;
 		settle();
@@ -987,9 +885,6 @@ async function animateAdjustmentPanel(
 	if (open) panel.style.height = "0px";
 	applyTop(startPanelHeight);
 	composerPanelAnimating = true;
-	// The panel's height and the card's top come from the same frame value, so the
-	// anchored edge cannot shear: driving the top from the element's own height
-	// (which motion writes after it reports the frame) lagged it by a frame.
 	const controls = animate(startPanelHeight, endPanelHeight, {
 		duration: open ? COMPOSER_OPEN_MS : COMPOSER_CLOSE_MS,
 		ease: COMPOSER_TRANSITION_EASE,
@@ -1010,14 +905,6 @@ async function animateAdjustmentPanel(
 	settle();
 }
 
-/**
- * One field: a filled box holding a compact label, the control and — trailing —
- * its unit or colour swatch. The box, not the input, carries the surface, so all
- * three line up on the same grid.
- *
- * A modified field offers its reset in the label's slot: the label fades out and
- * the reset fades in, in place, so nothing else in the row moves.
- */
 function adjustmentField(
 	element: Element,
 	definition: AdjustmentDefinition,
@@ -1038,8 +925,6 @@ function adjustmentField(
 		const choices = Array.from(new Set([value, ...definition.options])).filter(Boolean);
 		control = `<select data-property="${property}" aria-label="${escapedName}">${choices.map((option) => `<option value="${escapeAttribute(option)}" ${option === value ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`;
 	} else if (PIXEL_PROPERTIES.has(property)) {
-		// The unit lives in the field's label context rather than in the box: a
-		// trailing "px" costs the value column ~20px, which long measurements need.
 		control = `<input data-property="${property}" data-unit="px" placeholder="px" value="${escapeAttribute(pixelControlValue(value))}" inputmode="decimal" spellcheck="false" aria-label="${escapedName}">`;
 	} else {
 		control = `<input data-property="${property}" value="${escapeAttribute(value)}" spellcheck="false" aria-label="${escapedName}">`;
@@ -1050,7 +935,6 @@ function adjustmentField(
 		property === "textContent" ? "field--content" : "",
 		options.wide ? "field--wide" : "",
 	].filter(Boolean).join(" ");
-	// Only a changed property can be reset, so the rest stay out of the tab order.
 	const reset = `<button type="button" class="field-reset${adjustment ? " field-reset--on" : ""}" data-reset="${property}" title="Reset ${escapedName}" aria-label="Reset ${escapedName}"${adjustment ? "" : " tabindex=\"-1\" aria-hidden=\"true\""}>${icon("reset")}</button>`;
 	return `<div class="${classes}" data-field="${property}">
 		<span class="field-leading"><span class="field-label" title="${escapedName}">${escapeHtml(definition.short)}</span>${reset}</span>
@@ -1139,8 +1023,6 @@ function resetAdjustment(element: Element, property: BrowserAdjustmentProperty):
 	const existing = draft.adjustments.find((item) => item.property === property);
 	if (existing) setElementValue(element, property, existing.previousValue);
 	draft.adjustments = draft.adjustments.filter((item) => item.property !== property);
-	// Reflect the revert in the field itself. Rebuilding the composer would also
-	// throw away the panel's scroll position and which sections were open.
 	const control = shadow?.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(`[data-property="${property}"]`);
 	if (control) setControlValue(control, property, baselineValue(element, property));
 	syncAdjustmentFieldState(property);
@@ -1148,7 +1030,6 @@ function resetAdjustment(element: Element, property: BrowserAdjustmentProperty):
 	renderMarkers();
 }
 
-/** Write a raw CSS value back into its control, in that field's own notation. */
 function setControlValue(
 	control: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement,
 	property: BrowserAdjustmentProperty,
@@ -1168,7 +1049,6 @@ function setControlValue(
 	control.value = PIXEL_PROPERTIES.has(property) ? pixelControlValue(value) : value;
 }
 
-/** A field offers its reset only while the draft carries an adjustment for it. */
 function syncAdjustmentFieldState(property: BrowserAdjustmentProperty): void {
 	const reset = shadow?.querySelector<HTMLButtonElement>(`[data-field="${property}"] .field-reset`);
 	if (!reset) return;
@@ -1349,7 +1229,6 @@ function refreshPositions(): void {
 	if (form && textarea && composerAnchorRect) resizeAndPositionComposer(form, textarea, composerAnchorRect, true);
 }
 
-// A transformed page makes position:fixed follow the document. Offset from the overlay host.
 function hostOrigin(): { left: number; top: number } {
 	const rect = host?.getBoundingClientRect();
 	return { left: rect?.left ?? 0, top: rect?.top ?? 0 };
@@ -1394,16 +1273,11 @@ function resizeAndPositionComposer(
 		textarea.style.height = `${Math.min(maxTextareaHeight, naturalHeight)}px`;
 		textarea.style.overflowY = naturalHeight > maxTextareaHeight ? "auto" : "hidden";
 	}
-	// The card's own height decides where it lands, so the placement matches what
-	// the panel animation settled on instead of drifting from a rounded-up guess.
 	const measured = form.getBoundingClientRect().height;
 	const height = Math.min(viewport.height - PROMPT_GUTTER * 2, measured > 1 ? measured : 44);
 	const placement = composerPlacement(rect, width, height);
 	const origin = hostOrigin();
 	if (!composerPanelAnimating) {
-		// Which side the card opens on is decided when it grows, not from every
-		// intermediate height — otherwise collapsing a section could hop the card
-		// to the other side of the element. A closed composer decides for itself.
 		if (!adjusting) form.classList.toggle("composer--above", placement.above);
 		const above = form.classList.contains("composer--above");
 		const rawTop = above ? rect.top - PROMPT_GAP - height : rect.bottom + PROMPT_GAP;
@@ -1451,8 +1325,6 @@ function overlayStyles(): string {
 		accentForeground: theme.accentForeground ?? "oklch(0.210 0.002 250)",
 		destructive: theme.destructive ?? "oklch(0.704 0.191 22.216)",
 	};
-	// Mirror renderer Button/Input chrome: 8px radius, 28px controls, equal 8px padding,
-	// Geist sans everywhere except code-like CSS values (px / hex).
 	return `
 		:host{
 			all:initial;

@@ -65,7 +65,6 @@ export function applyCloseSummary(state: SideCloseProjection, summary: SideClose
 	for (const entry of summary.sides) {
 		if (entry.sessionId !== state.sessionId) continue;
 		const previous = entries[entry.id];
-		// Confirmed shutdown is terminal for an identity, including after recovery.
 		if (previous?.status === "closed" && entry.status !== "closed") continue;
 		if (previous && entry.version < previous.version) continue;
 		if (previous && entry.version === previous.version && (entry.status !== previous.status || entry.operationId !== previous.operationId)) continue;
@@ -73,11 +72,9 @@ export function applyCloseSummary(state: SideCloseProjection, summary: SideClose
 		const local = attempts[entry.id];
 		if (local && entry.status !== "closing" && (entry.operationId === local.requestId || entry.version > local.expectedVersion)) delete attempts[entry.id];
 	}
-	// Missing entries do not revoke a local attempt or previously known close.
 	return { ...state, epoch: summary.epoch, revision: summary.revision, hydrated: true, recovery: summary.recovery, entries, attempts };
 }
 
-/** Used for every row transition, not only successful HTTP list reads. */
 export function selectedSideAfterUpdate<T extends { id: string }>(selected: string | undefined, previous: T[], next: T[]): string | undefined {
 	if (selected && next.some(side => side.id === selected)) return selected;
 	if (!next.length) return undefined;

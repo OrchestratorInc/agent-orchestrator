@@ -30,7 +30,6 @@ describe("isTeamsEnabled", () => {
 		expect(isTeamsEnabled(STABLE, false, "")).toBe(false);
 		expect(isTeamsEnabled(STABLE, true, "")).toBe(true);
 		expect(isTeamsEnabled(undefined, true, undefined)).toBe(true);
-		// Before the version is known a packaged build has no Teams yet.
 		expect(isTeamsEnabled(undefined, false, "")).toBe(false);
 	});
 
@@ -56,9 +55,6 @@ describe("parseNightlyVersion", () => {
 	it("splits a nightly stamp into base version and UTC build instant", () => {
 		const parsed = parseNightlyVersion("0.12.11-nightly.202609021713");
 		expect(parsed?.base).toBe("0.12.11");
-		// The stamp encodes the build time in UTC. Assert the absolute instant,
-		// not local getters: the value must not depend on the timezone of the
-		// machine running the tests.
 		expect(parsed?.builtAt.toISOString()).toBe("2026-09-02T17:13:00.000Z");
 		expect(parsed?.builtAt.getTime()).toBe(Date.UTC(2026, 8, 2, 17, 13));
 	});
@@ -87,9 +83,6 @@ describe("parseNightlyVersion", () => {
 	});
 
 	it("lands on the correct local calendar day across the UTC day boundary", () => {
-		// 03:00 UTC is already the next calendar day in Kolkata but still the
-		// previous evening in Los Angeles; date-only surfaces must show Sep 6
-		// to a user in Los Angeles.
 		const parsed = parseNightlyVersion("0.12.11-nightly.202609070300");
 		if (!parsed) throw new Error("expected a valid nightly stamp to parse");
 		expect(parsed.builtAt.toISOString()).toBe("2026-09-07T03:00:00.000Z");

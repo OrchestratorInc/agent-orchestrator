@@ -23,48 +23,29 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// clientName identifies AO to the provider. It shows up in the app-server's
-// reported user agent, which makes a stray process attributable.
 const (
-	clientName    = "agent-orchestrator"
-	clientTitle   = "Agent Orchestrator"
-	clientVersion = "0.1.0"
-	// This is the oldest Codex build whose complete Chat surface AO exercised:
-	// thread start/resume, turn start/interrupt, approvals, and every advertised
-	// extension. initialize plus model/list alone cannot prove those mutating
-	// methods without creating provider state during preflight.
+	clientName          = "agent-orchestrator"
+	clientTitle         = "Agent Orchestrator"
+	clientVersion       = "0.1.0"
 	minimumCodexVersion = "0.146.0"
 )
 
-// handshakeTimeout bounds initialize and thread open. These are local IPC calls
-// that normally settle in well under a second.
 const handshakeTimeout = 60 * time.Second
 
-// codexPlugin is the subset of AO's existing Codex agent plugin that the Chat
-// driver reuses. Binary resolution and local auth probing already live there and
-// must not be reimplemented: a second copy would drift from what TUI sessions do.
 type codexPlugin interface {
 	ResolveBinary(ctx context.Context) (string, error)
 	AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error)
 }
 
-// process is a running app-server, abstracted so tests can substitute pipes for
-// a child process.
 type process struct {
-	stdin  io.WriteCloser
-	stdout io.Reader
-	// reconnected means the provider process and initialized protocol connection
-	// survived a prior daemon. The replacement must not initialize/resume it a
-	// second time.
+	stdin         io.WriteCloser
+	stdout        io.Reader
 	reconnected   bool
 	nextRequestID int64
-	// stop releases the process. It must be safe to call more than once.
-	stop func() error
-	// terminate destroys a persistent host for explicit session shutdown.
-	terminate func() error
+	stop          func() error
+	terminate     func() error
 }
 
-// spawnFunc launches an app-server. Injected so tests never exec anything.
 type spawnFunc func(ctx context.Context, bin, workdir string, env []string) (*process, error)
 
 type versionProbeFunc func(context.Context, string) (string, error)
@@ -77,7 +58,6 @@ func (fixedCodexPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, erro
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// Driver opens Codex conversations over `codex app-server`.
 type Driver struct {
 	plugin       codexPlugin
 	log          *slog.Logger
@@ -87,7 +67,6 @@ type Driver struct {
 	connectHost  persistentConnectFunc
 }
 
-// New builds a Chat driver over the existing Codex agent plugin.
 func New(plugin codexPlugin, log *slog.Logger) *Driver {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -98,8 +77,6 @@ func New(plugin codexPlugin, log *slog.Logger) *Driver {
 	}
 }
 
-// DiscoverModels performs the same bounded app-server model/list read as a live
-// conversation without creating a provider thread.
 func DiscoverModels(ctx context.Context, binary, workdir string, env map[string]string) ([]ports.ChatModel, error) {
 	driver := New(fixedCodexPlugin(binary), slog.New(slog.DiscardHandler))
 	conv, err := driver.connect(ctx, workdir, env, "")
@@ -112,10 +89,8 @@ func DiscoverModels(ctx context.Context, binary, workdir string, env map[string]
 
 var _ ports.ChatDriver = (*Driver)(nil)
 
-// Harness reports which agent this driver serves.
 func (d *Driver) Harness() domain.AgentHarness { return domain.HarnessCodex }
 
-// capabilities is what a Codex app-server of a supported version provides.
 func capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{
 		ports.ChatCapabilityStreaming:   true,
@@ -131,47 +106,23 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityInteractive: true,
 		ports.ChatCapabilityElicitation: true,
 		ports.ChatCapabilityModels:      true,
-		// The account's quota position is both pushed (account/rateLimits/updated)
-		// and readable on demand (account/rateLimits/read), verified against a live
-		// account.
-		ports.ChatCapabilityRateLimits: true,
-		// Without this a long conversation eventually cannot accept another turn at
-		// all: every turn re-sends the history, so context fills on its own and the
-		// only way back is to summarize what is already there.
-		ports.ChatCapabilityCompaction: true,
-		// History operations, all three exercised against a live app-server. Rollback
-		// is advertised despite thread/rollback carrying a DEPRECATED annotation:
-		// what the installed provider does is the only honest answer, and gating the
-		// feature off while the call still works would take undo away for no reason.
-		ports.ChatCapabilityRollback: true,
-		ports.ChatCapabilityFork:     true,
-		ports.ChatCapabilityRename:   true,
-		ports.ChatCapabilitySkills:   true,
-		// config/mcpServer/reload plus the status inventory read after it, both
-		// exercised against a live app-server.
-		ports.ChatCapabilityMCPReload: true,
-		// Guidance into a turn already in flight, over turn/steer. Advertised only
-		// after being driven against a live app-server (TestLiveSteerKeepsTheTurnAndItsWork
-		// on codex-cli 0.146.0): the steered turn kept its id, emitted one
-		// turn/started and one turn/completed, settled `completed` rather than
-		// interrupted, and followed the correction. Strictly better than
-		// interrupt-and-resend, which throws the turn's context and in-flight work
-		// away.
-		ports.ChatCapabilitySteer: true,
+		ports.ChatCapabilityRateLimits:  true,
+		ports.ChatCapabilityCompaction:  true,
+		ports.ChatCapabilityRollback:    true,
+		ports.ChatCapabilityFork:        true,
+		ports.ChatCapabilityRename:      true,
+		ports.ChatCapabilitySkills:      true,
+		ports.ChatCapabilityMCPReload:   true,
+		ports.ChatCapabilitySteer:       true,
 	}
 }
 
-// Probe reports what this install can do without creating a conversation, so an
-// unsupported request can be refused before AO commits a session or worktree.
 func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	bin, err := d.plugin.ResolveBinary(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
 
-	// Authentication is owned by the daemon's active-account readiness check.
-	// Probing the ambient device home here would reject a valid AO account (or
-	// admit a different device account) before the managed runtime is launched.
 	versionProbe := d.versionProbe
 	if versionProbe == nil {
 		versionProbe = installedCodexVersion
@@ -193,10 +144,6 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 			ports.ErrChatDriverIncompatible, installed, minimumCodexVersion)
 	}
 
-	// Binary presence is not protocol compatibility. Complete the same initialize
-	// handshake a real controller uses, then exercise model/list: it is part of
-	// the surface AO advertises and a harmless read that catches older app-server
-	// builds before a session row or worktree exists.
 	workdir, err := os.Getwd()
 	if err != nil || !filepath.IsAbs(workdir) {
 		workdir = os.TempDir()
@@ -218,9 +165,6 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	return capabilities(), nil
 }
 
-// DiscoverModels reads the account's current provider catalog without opening
-// a Codex thread. The caller supplies the same project directory and environment
-// overlay used for a normal launch so project-scoped Codex configuration applies.
 func (d *Driver) DiscoverModels(ctx context.Context, workdir string, env map[string]string) ([]ports.ChatModel, error) {
 	if !filepath.IsAbs(workdir) {
 		var err error
@@ -280,14 +224,11 @@ func installedCodexVersion(ctx context.Context, bin string) (string, error) {
 	return string(output), nil
 }
 
-// Start opens a new Codex thread in the session worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
 	if !filepath.IsAbs(cfg.WorkspacePath) {
-		// app-server resolves a relative cwd against its own process directory,
-		// which would silently put the agent in the wrong tree.
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
 	}
 
@@ -298,8 +239,6 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		return nil, err
 	}
 	if reconnected {
-		// A fresh-start request colliding with a surviving host is a durable-state
-		// mismatch, not permission to destroy a provider that may still be working.
 		_ = conv.Close()
 		return nil, errors.New("persistent chat host already owns a provider conversation for a fresh session")
 	}
@@ -320,9 +259,6 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
-	// thread/start has no top-level effort field either; carry the durable AO
-	// choice as a config override like thread/resume does, so a fresh thread
-	// does not silently fall back to the provider default.
 	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
 		params["config"] = config
 	}
@@ -352,14 +288,11 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
-// Reconnect attaches to a surviving provider without launching a replacement.
 func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	cfg.ReconnectOnly = true
 	return d.Resume(ctx, cfg)
 }
 
-// Resume reattaches to a stored Codex thread after a daemon or app-server
-// restart. A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
@@ -378,13 +311,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return nil, err
 	}
 	if reconnected {
-		// The host preserved the already-initialized app-server connection and its
-		// loaded thread. Host replay bridges output and unresolved server requests
-		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
 		conv.launchMode = cfg.Permissions
-		// Neither the tier nor the collaboration mode the thread was left on is
-		// known; the next turn states both.
 		conv.tierUnknown, conv.planUnknown = true, true
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
@@ -403,15 +331,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
-	// thread/resume has no top-level effort field. Codex exposes persistent
-	// reasoning effort as a config override, so carry the durable AO choice into
-	// the resumed thread instead of silently falling back to the provider default.
 	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
 		params["config"] = config
 	}
-	// Developer instructions are launch context, not durable conversation
-	// history. Reapply AO's current standing role when app-server reconstructs a
-	// native thread, just as the TUI adapter does with its resume command.
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt
 	}
@@ -424,8 +346,6 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
 	if err != nil && cfg.FreshIfMissing && codexThreadMissing(err) {
-		// The caller proved the thread never had a turn (a switch target that
-		// had not answered), so Codex never saved it: a new thread loses nothing.
 		delete(params, "threadId")
 		var started struct {
 			Thread struct {
@@ -446,24 +366,15 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 	if err != nil {
 		_ = conv.Terminate()
-		// Otherwise not falling back to thread/start: silently opening a new
-		// conversation would present unrelated history as continuous.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
-	// A tier sticks to the thread. One AO left it on is undone by the first turn
-	// here; one the user configured is theirs, as on a new thread.
 	conv.fastTier = resp.ServiceTier != nil && conv.configuredServiceTier(ctx) == ""
-	// thread/resume does not report the collaboration mode, and Plan sticks to
-	// the thread across a restart, so the next turn states it.
 	conv.planUnknown = true
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
 
-// codexThreadMissing reports a thread/resume refused because Codex has no
-// saved thread under that id: none at all, or the empty rollout a thread that
-// never had a turn leaves behind ("rollout at … is empty").
 func codexThreadMissing(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "no rollout found") ||
@@ -471,22 +382,8 @@ func codexThreadMissing(err error) bool {
 		(strings.Contains(message, "rollout") && strings.Contains(message, "is empty"))
 }
 
-// aoToolTimeoutSec is past the daemon's two-minute computer-use call budget,
-// so the daemon's own answer reaches the agent first.
 const aoToolTimeoutSec = 150
 
-// threadConfig is the config override sent with thread/start and
-// thread/resume. Codex layers it above config.toml for this thread only.
-//
-// AO's own "ao" server (html_preview, html_render) is pre-approved. AO answers
-// no mcpServer/elicitation/request, so a prompt could only fail the call.
-// Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
-// request under on-request and was refused under never/read-only, and
-// default_tools_approval_mode "approve" removed both.
-//
-// Codex gives an MCP tool call 60 s by default, under a computer-use
-// run_steps batch, which may run the driver's full 60 s before its report and
-// closing read; the daemon allows that call two minutes.
 func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
 	config := map[string]any{}
 	if effort != "" {
@@ -522,7 +419,6 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 	return config
 }
 
-// connect spawns app-server and completes the initialize handshake.
 func (d *Driver) connect(ctx context.Context, workdir string, env map[string]string, providerScopeID string) (*conversation, error) {
 	bin, err := d.plugin.ResolveBinary(ctx)
 	if err != nil {
@@ -551,8 +447,6 @@ func (d *Driver) connectSession(
 	providerScopeID string,
 	reconnectOnly bool,
 ) (*conversation, bool, error) {
-	// Injected driver tests intentionally retain the direct pipe launcher. The
-	// shipped driver uses spawnAppServer and therefore the persistent host.
 	if !d.persistent {
 		if reconnectOnly {
 			return nil, false, ports.ErrChatHostNotRunning
@@ -615,7 +509,6 @@ func (d *Driver) connectSession(
 		stop:          transport.Stdin.Close,
 		terminate: func() error {
 			_ = transport.Stdin.Close()
-			// As for ACP hosts: the host's own shutdown can take about 6 s.
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			return persistenthost.Shutdown(shutdownCtx, dataDir, string(sessionID))
@@ -623,9 +516,6 @@ func (d *Driver) connectSession(
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
-		// A daemon stopped mid-initialize leaves a host whose app-server never
-		// was, failing every call "Not initialized". An initialized one refuses
-		// a second initialize and keeps its state.
 		fresh, err := initializeIfNeeded(ctx, conv.conn)
 		if err != nil {
 			_ = conv.Close()
@@ -648,8 +538,6 @@ func (d *Driver) initialize(ctx context.Context, conv *conversation) error {
 	return initializeConnection(ctx, conv.conn)
 }
 
-// initializeIfNeeded initializes an app-server reached through a live host. It
-// reports whether the app-server had not been initialized before.
 func initializeIfNeeded(ctx context.Context, connection *conn) (bool, error) {
 	err := initializeConnection(ctx, connection)
 	var refused *rpcError
@@ -674,27 +562,15 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 	return nil
 }
 
-// approvalSettings maps AO's existing per-session permission mode onto Codex's
-// approval policy and sandbox.
-//
-// The default matches what AO already passes a Codex TUI session
-// (--dangerously-bypass-approvals-and-sandbox): AO sessions run in isolated
-// worktrees and are expected to work without prompting. Chat does not quietly
-// become stricter than the terminal path for the same setting.
 func approvalSettings(mode ports.PermissionMode) (policy, sandbox string) {
 	switch ports.NormalizePermissionMode(mode) {
 	case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
-		// on-request lets the provider decide when to ask; workspace-write keeps
-		// edits inside the worktree.
 		return "on-request", "workspace-write"
 	default:
 		return "never", "danger-full-access"
 	}
 }
 
-// approvalReviewer selects whether Codex asks the user directly or first lets
-// its built-in reviewer approve routine safe actions. Explicitly sending "user"
-// also resets a thread that previously used auto review.
 func approvalReviewer(mode ports.PermissionMode) string {
 	if ports.NormalizePermissionMode(mode) == ports.PermissionModeAuto {
 		return "auto_review"
@@ -702,10 +578,6 @@ func approvalReviewer(mode ports.PermissionMode) string {
 	return "user"
 }
 
-// SandboxAllowsNetwork reports whether this thread's agent can reach the
-// network. Codex's workspace-write sandbox, used for accept-edits and auto, has
-// no network (AO never grants it), while full access and the read-only
-// reviewer sandbox do.
 func (c *conversation) SandboxAllowsNetwork(turnMode ports.PermissionMode) bool {
 	if c.disableNetwork {
 		return false
@@ -728,7 +600,6 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 	return policy, sandbox, approvalReviewer(mode)
 }
 
-// spawnAppServer is the real launcher.
 func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*process, error) {
 	args := []string{"app-server"}
 	cmd := aoprocess.Command(bin, args...)
@@ -753,8 +624,6 @@ func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*pr
 		return nil, fmt.Errorf("start %s app-server: %w", bin, err)
 	}
 
-	// Drain stderr so a chatty provider cannot fill the pipe buffer and wedge
-	// its own process.
 	go func() { _, _ = io.Copy(io.Discard, stderr) }()
 
 	var stopped bool
@@ -766,7 +635,6 @@ func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*pr
 				return nil
 			}
 			stopped = true
-			// Closing stdin is the graceful shutdown; kill only if it lingers.
 			_ = stdin.Close()
 			done := make(chan struct{})
 			go func() { _, _ = cmd.Process.Wait(); close(done) }()
@@ -780,29 +648,10 @@ func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*pr
 	}, nil
 }
 
-// envSlice merges AO's session env OVER the daemon's own, in the KEY=VALUE form
-// exec wants. Sorted so a relaunch is byte-identical, which makes process diffs
-// readable.
-//
-// The merge is the point. AO's map is an OVERLAY -- session id, project id, the
-// HookPATH-pinned PATH -- not a whole environment; the terminal path gets away
-// with treating it as one only because tmux inherits the daemon's env underneath.
-// Using it as a replacement launched the provider with eight variables and no
-// HOME, USER, TMPDIR, LANG or SSH_AUTH_SOCK. The provider itself survived that
-// (its home-directory lookup falls back to the passwd database), which is why it
-// went unnoticed, but every shell command the agent runs inherits this env too:
-// no SSH agent means `git push` over SSH fails, no HOME means global git config
-// and every toolchain cache is missing. Found while writing the Claude driver,
-// where the same shape failed outright with "Not logged in".
 func envSlice(env map[string]string) []string {
 	return processenv.Merge(env)
 }
 
-// codexProcessEnv applies the same executable-aware PATH augmentation as the
-// TUI runtime before either the compatibility probe or app-server starts. The
-// resolved npm launcher can be absolute and still depend on `#!/usr/bin/env
-// node`; Finder-launched daemons commonly resolve the launcher from inventory
-// while omitting the Node version manager from PATH.
 func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []string {
 	overlay := make(map[string]string, len(env)+1)
 	for key, value := range env {
@@ -815,7 +664,6 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	return envSlice(overlay)
 }
 
-// ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
 		return nil, errors.New("source thread and exact turn anchor are required")
@@ -843,13 +691,10 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 		"sandbox":           sandbox,
 	}
 	params["lastTurnId"] = conv.nativeID(lastProviderTurnID)
-	// The child retains native context; copied turns are not needed in this response.
 	params["excludeTurns"] = true
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
-	// Same overrides as thread/start and thread/resume: without the MCP servers
-	// a fresh fork has no AO tools until a restart resumes it.
 	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
 		params["config"] = config
 	}

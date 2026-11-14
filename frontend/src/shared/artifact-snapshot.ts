@@ -1,24 +1,8 @@
-/**
- * Cached artifact previews.
- *
- * A card's preview is rendered once in a hidden window, encoded as a small
- * WebP and kept on disk; every later card shows that image, so nothing is
- * rendered again until the file changes. The job names the artifact and the
- * theme it was rendered in, and its key is the cache's file name. Cards load
- * the image as a plain <img> from the snapshot scheme, which main serves
- * straight from the cache.
- */
-
-/** The snapshot's size in pixels: medium resolution, 16:9 like a gallery card, sharp at 2x. */
 export const ARTIFACT_SNAPSHOT_WIDTH = 640;
 export const ARTIFACT_SNAPSHOT_HEIGHT = 360;
-/** WebP quality: text stays crisp and a card's image is about 15-40 KB. */
 export const ARTIFACT_SNAPSHOT_QUALITY = 0.8;
-/** Bump when the rendering or encoding changes, so older snapshots are not reused. */
 export const ARTIFACT_SNAPSHOT_VERSION = 1;
-/** The host id of this computer's own sessions. */
 export const LOCAL_SNAPSHOT_HOST = "local";
-/** The scheme main serves cached snapshots on: `ao-artifact-preview://cache/?…`. */
 export const ARTIFACT_SNAPSHOT_SCHEME = "ao-artifact-preview";
 const SNAPSHOT_URL_HOST = "cache";
 
@@ -33,22 +17,17 @@ export type ArtifactSnapshotJob = {
 	previewUrl?: string;
 	sessionTitle: string;
 	cloud?: { orgId: string };
-	/** The host the session runs on; absent or "local" for this computer. Another host's artifacts are never snapshotted. */
 	hostId?: string;
-	/** The resolved light or dark theme the card is shown in. */
 	theme: "light" | "dark";
-	/** The named color theme, empty for the default. */
 	styleTheme: string;
 };
 
-/** What names a snapshot: the file, its version and the theme. Its URLs are not part of it. */
 export type ArtifactSnapshotIdentity = Pick<ArtifactSnapshotJob, "hostId" | "cloud" | "sessionId" | "path" | "updatedAt" | "theme" | "styleTheme">;
 
 const MAX_FIELD = 4_096;
 const FIELDS = ["sessionId", "path", "name", "kind", "updatedAt", "sessionTitle", "styleTheme"] as const;
 const URL_FIELDS = ["inlineUrl", "rawUrl", "previewUrl"] as const;
 
-/** The job `value` describes, or undefined when it is not a well-formed one. */
 export function parseArtifactSnapshotJob(value: unknown): ArtifactSnapshotJob | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const input = value as Record<string, unknown>;
@@ -81,7 +60,6 @@ export function parseArtifactSnapshotJob(value: unknown): ArtifactSnapshotJob | 
 	};
 }
 
-/** The URL a card loads the job's cached image from. Main answers 404 when it is not cached yet. */
 export function artifactSnapshotUrl(identity: ArtifactSnapshotIdentity): string {
 	const params = new URLSearchParams({ s: identity.sessionId, p: identity.path, u: identity.updatedAt, t: identity.theme, y: identity.styleTheme });
 	if (identity.hostId) params.set("h", identity.hostId);
@@ -89,7 +67,6 @@ export function artifactSnapshotUrl(identity: ArtifactSnapshotIdentity): string 
 	return `${ARTIFACT_SNAPSHOT_SCHEME}://${SNAPSHOT_URL_HOST}/?${params}`;
 }
 
-/** The snapshot a URL from `artifactSnapshotUrl` names, or undefined for any other URL. Another host's is refused, as for jobs. */
 export function parseArtifactSnapshotUrl(value: string): ArtifactSnapshotIdentity | undefined {
 	if (!URL.canParse(value)) return undefined;
 	const url = new URL(value);

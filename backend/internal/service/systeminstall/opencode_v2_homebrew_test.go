@@ -26,9 +26,6 @@ func openCodeV2HomebrewPlan() Plan {
 	}
 }
 
-// An OpenCode 1 launch or restore while OpenCode 2's Homebrew install has
-// OpenCode 1 unlinked waits until its link is back, and OpenCode 1's own
-// install is refused meanwhile.
 func TestOpenCodeV1LaunchWaitsWhileV2HomebrewInstallHasItUnlinked(t *testing.T) {
 	s := newTestService("darwin")
 	var mu sync.Mutex
@@ -96,14 +93,12 @@ func TestOpenCodeV1LaunchWaitsWhileV2HomebrewInstallHasItUnlinked(t *testing.T) 
 	}
 }
 
-// An OpenCode 1 install request and an OpenCode 2 run reserving OpenCode 1
-// that arrive together: exactly one is admitted, never both, whichever wins.
 func TestOpenCodeV1InstallAndV2HoldAreMutuallyExclusive(t *testing.T) {
 	for iteration := 0; iteration < 50; iteration++ {
 		s := newTestService("darwin", "brew")
 		unblock := make(chan struct{})
 		s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error {
-			<-unblock // keep an admitted OpenCode 1 install active
+			<-unblock
 			return nil
 		})
 		start := make(chan struct{})
@@ -138,8 +133,6 @@ func TestOpenCodeV1InstallAndV2HoldAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
-// A cleanup step that runs until its deadline must not leave the next one,
-// which restores OpenCode 1, without time.
 func TestPlanCleanupStepsHaveIndependentDeadlines(t *testing.T) {
 	s := newTestService("darwin")
 	s.cleanupStepLimit = 100 * time.Millisecond
@@ -166,7 +159,6 @@ func TestPlanCleanupStepsHaveIndependentDeadlines(t *testing.T) {
 	}
 }
 
-// The OpenCode 2 run fails, changing nothing, when OpenCode 1 cannot be held.
 func TestOpenCodeV2HomebrewRunFailsWhenOpenCode1IsBusy(t *testing.T) {
 	s := newTestService("darwin")
 	s.jobs[TargetOpencode] = &Job{Target: TargetOpencode, Status: StatusInstalling}
@@ -185,8 +177,6 @@ func TestOpenCodeV2HomebrewRunFailsWhenOpenCode1IsBusy(t *testing.T) {
 	}
 }
 
-// Planning during Homebrew's temporary removal of v1's marker must still
-// reserve v1, and a marker restored before execution must be inspected anew.
 func TestOpenCodeV2HomebrewReservesV1WithoutLinkedMarker(t *testing.T) {
 	for _, operation := range []AgentOperation{AgentOperationInstall, AgentOperationReinstall, AgentOperationUpdate} {
 		t.Run(string(operation), func(t *testing.T) {
@@ -211,14 +201,12 @@ func TestOpenCodeV2HomebrewReservesV1WithoutLinkedMarker(t *testing.T) {
 				ran = append(ran, strings.Join(command.Argv, " "))
 				return nil
 			})
-			// Model v1's reinstall after Homebrew has removed the marker.
 			s.jobs[TargetOpencode] = &Job{Target: TargetOpencode, Status: StatusInstalling}
 			job := &Job{Target: TargetOpencodeV2, Status: StatusInstalling}
 			s.runAgentOperation(context.Background(), plan, operation, job, nil)
 			if len(ran) != 0 || job.Status != StatusFailed {
 				t.Fatalf("ran=%v job=%+v; v2 must not bypass the active v1 job", ran, job)
 			}
-			// The same plan can execute later, after v1 restored the marker.
 			delete(s.jobs, TargetOpencode)
 			marker := filepath.Join(prefix, "var", "homebrew", "linked", "opencode")
 			if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {

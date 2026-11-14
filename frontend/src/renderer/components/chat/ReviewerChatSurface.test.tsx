@@ -54,7 +54,6 @@ describe("ReviewerChatSurface", () => {
 		expect(mocks.resumeAgent).toHaveBeenCalledWith("worker-1");
 	});
 
-	// #6064: the stopped banner promises a shell, so the reviewer pane must offer one.
 	it("forwards the worker's Open shell lever to the stopped reviewer banner", () => {
 		const openShell = vi.fn();
 		const { rerender } = render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" onOpenShell={openShell} openingShell shellError="no shell" />);
@@ -64,7 +63,6 @@ describe("ReviewerChatSurface", () => {
 		expect(button).toHaveAttribute("data-error", "no shell");
 		fireEvent.click(button);
 		expect(openShell).toHaveBeenCalledOnce();
-		// An unreachable host cannot open a shell either.
 		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" hostUnreachable onOpenShell={openShell} />);
 		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
 	});
@@ -89,12 +87,10 @@ describe("ReviewerChatSurface", () => {
 		act(() => useUiStore.getState().requestChatMessageFocus("worker-1", "m1", "flaky login", "review-1"));
 		const request = () => screen.getByRole("button", { name: "Navigation request" });
 		expect(request()).toHaveAttribute("data-message-id", "m1");
-		// Another review's chat in the same surface must not get review 1's target.
 		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-2" />);
 		expect(request()).not.toHaveAttribute("data-message-id");
 		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
 		expect(request()).toHaveAttribute("data-message-id", "m1");
-		// Once the chat applied it, a later mount never replays it.
 		fireEvent.click(request());
 		expect(request()).not.toHaveAttribute("data-message-id");
 	});

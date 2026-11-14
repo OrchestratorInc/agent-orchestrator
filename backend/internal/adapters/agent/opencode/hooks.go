@@ -17,77 +17,29 @@ import (
 )
 
 const (
-	// opencode scans both `.opencode/plugin/` and `.opencode/plugins/` for
-	// `*.js`/`*.ts` files (see opencode's ConfigPlugin glob
-	// "{plugin,plugins}/*.{ts,js}"). AO writes the plural `plugins/`, matching
-	// the directory the upstream opencode tooling (and the entire-cli reference
-	// integration) uses.
 	opencodePluginDirName = ".opencode"
 	opencodePluginSubDir  = "plugins"
 
-	// opencodePluginFileName is the AO-owned plugin file. AO fully owns this
-	// filename: install overwrites it and uninstall deletes it (guarded by the
-	// sentinel), so user-authored plugins in other files are never touched.
-	// It is TypeScript (opencode runs on Bun); the file's only import is a
-	// type-only import, which Bun erases at runtime.
-	opencodePluginFileName = "ao-activity.ts"
-	// OpenCode 1 and 2 discover the same plugin directory. The v1 installer
-	// removes this v2 file only when its v2 ownership sentinel is present.
+	opencodePluginFileName   = "ao-activity.ts"
 	opencodeV2PluginFileName = "ao-activity-v2.ts"
 	opencodeV2PluginSentinel = "agent-orchestrator: managed opencode-v2 activity plugin"
 
-	// opencodePluginSentinel marks the file as AO-managed. AreHooksInstalled and
-	// UninstallHooks key off it so AO never deletes a user file that happens to
-	// share the name. It must appear verbatim in the embedded plugin source.
 	opencodePluginSentinel = "agent-orchestrator: managed opencode activity plugin"
 
-	// opencodeHookCommandPrefix identifies the hook commands AO owns. The
-	// embedded plugin shells `ao hooks opencode <event>`; this prefix is the
-	// shared contract with the (forthcoming) `ao hooks` CLI and is asserted by
-	// tests so the plugin can't silently drift away from it.
 	opencodeHookCommandPrefix = "ao hooks opencode "
 
-	// opencodeSkillSubDir is where opencode discovers project skills
-	// (`.opencode/skills/<name>/SKILL.md`). AO materializes the using-ao skill
-	// here so opencode's native `skill` tool can see it — the data-dir install
-	// alone is invisible to that discovery path.
 	opencodeSkillSubDir = "skills"
 
-	// opencodeSkillMarkerFile lives beside the skill directory (not inside it) so
-	// Materialize's RemoveAll of using-ao/ cannot erase ownership mid-install.
-	// Install overwrites and uninstall deletes only when this marker is present.
 	opencodeSkillMarkerFile = ".using-ao.ao-managed"
 
-	// opencodeSkillSentinel is written into the marker file. Keep it distinct
-	// from the plugin sentinel so ownership checks stay file-specific.
 	opencodeSkillSentinel = "agent-orchestrator: managed opencode using-ao skill"
 )
 
-// opencodePluginSource is the AO-managed opencode plugin, embedded so it ships
-// inside the binary and is written verbatim into a session's worktree on hook
-// install. It is a real, lintable source file under assets/ rather than a Go
-// string literal because it is opencode plugin source code, not a data
-// structure AO assembles (the way it builds Codex/Claude hook JSON).
-//
 //go:embed assets/ao-activity.ts
 var opencodePluginSource string
 
-// opencodeManagedEvents are the normalized activity events the embedded plugin
-// reports. They are defined here (not parsed from the file) so tests can
-// assert the plugin wires every one via the `ao hooks opencode <event>` command.
 var opencodeManagedEvents = []string{"session-start", "user-prompt-submit", "active", "stop", "permission-blocked", "permission-resolved"}
 
-// GetAgentHooks installs AO's opencode activity plugin into the worktree-local
-// .opencode/plugins/ directory, and materializes the using-ao skill into
-// .opencode/skills/using-ao/ so opencode's native `skill` tool can discover it.
-// Unlike Claude Code and Codex, opencode has no native command-hook config to
-// merge into; its only lifecycle-extensibility surface is a JS/TS plugin. AO
-// therefore writes a dedicated, AO-owned plugin file. The write is atomic and
-// idempotent: re-installing overwrites AO's own file with identical content. It
-// refuses to overwrite a file that is NOT AO-managed (no sentinel), so a user
-// plugin that happens to occupy our path is never silently destroyed — install
-// fails loudly instead. The skill install uses the same ownership guard via a
-// marker file beside the skill directory (written before Materialize runs).
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -97,9 +49,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	}
 
 	pluginPath := opencodePluginPath(cfg.WorkspacePath)
-	// Guard against clobbering a user file at our path: overwrite only when the
-	// target is absent or already AO-managed. A foreign file is a loud error,
-	// not silent data loss (uninstall is sentinel-guarded the same way).
 	if _, err := os.Stat(pluginPath); err == nil {
 		managed, err := isAOManagedPlugin(pluginPath)
 		if err != nil {
@@ -136,16 +85,8 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// opencodePluginDependency is the package opencode npm-installs into every
-// `.opencode` directory it loads (config.ts).
 const opencodePluginDependency = "@opencode-ai/plugin"
 
-// seedPluginDependencyStub stops opencode's 4-7s npm install of its plugin
-// package on a worktree's first launch. AO's plugin imports it only for types,
-// which Bun erases; opencode skips the install when node_modules exists and
-// package-lock.json names the package (core/src/npm.ts). Only a `.opencode`
-// holding nothing but AO's files is seeded: a repository's own plugins may
-// import the package at runtime.
 func seedPluginDependencyStub(workspacePath string) error {
 	dir := filepath.Join(workspacePath, opencodePluginDirName)
 	entries, err := os.ReadDir(dir)
@@ -158,7 +99,6 @@ func seedPluginDependencyStub(workspacePath string) error {
 		switch entry.Name() {
 		case opencodeSkillSubDir, ".gitignore":
 		case "node_modules", "package-lock.json":
-			// AO's own stub from an earlier launch, or a real install.
 			foreign = foreign || !stub
 		case opencodePluginSubDir:
 			plugins, err := os.ReadDir(filepath.Join(dir, opencodePluginSubDir))
@@ -175,7 +115,6 @@ func seedPluginDependencyStub(workspacePath string) error {
 		}
 	}
 	if foreign {
-		// Left to opencode; a stub AO seeded before would block its install.
 		if stub {
 			_ = os.Remove(filepath.Join(dir, "package-lock.json"))
 			_ = os.Remove(filepath.Join(dir, "node_modules"))
@@ -188,8 +127,6 @@ func seedPluginDependencyStub(workspacePath string) error {
 	if err := hookutil.AtomicWriteFile(filepath.Join(dir, "package-lock.json"), []byte(dependencyStubLock+"\n"), 0o600); err != nil {
 		return fmt.Errorf("seed opencode package-lock.json: %w", err)
 	}
-	// Ignored like every hook file (with what opencode ignores itself), so the
-	// worktree can still be removed.
 	if err := hookutil.EnsureWorkspaceGitignore(dir, "node_modules", "package.json", "package-lock.json", "bun.lock"); err != nil {
 		return fmt.Errorf("seed opencode .gitignore: %w", err)
 	}
@@ -198,8 +135,6 @@ func seedPluginDependencyStub(workspacePath string) error {
 
 var dependencyStubLock = fmt.Sprintf(`{"name":"ao-opencode","lockfileVersion":3,"requires":true,"packages":{"":{"dependencies":{%q:"*"}}}}`, opencodePluginDependency)
 
-// hasDependencyStub reports AO's stub: its exact lock file and an empty
-// node_modules, which a real install never leaves.
 func hasDependencyStub(dir string) bool {
 	lock, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
 	if err != nil || strings.TrimSpace(string(lock)) != dependencyStubLock {
@@ -209,11 +144,6 @@ func hasDependencyStub(dir string) bool {
 	return err == nil && len(modules) == 0
 }
 
-// UninstallHooks removes AO's opencode plugin and the AO-managed using-ao skill
-// from the workspace-local .opencode/ tree. It deletes the plugin only when it
-// carries the AO sentinel, and the skill directory only when the AO marker is
-// present, so user files that happen to share those paths are left in place. A
-// missing file is a no-op.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -241,9 +171,6 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	return nil
 }
 
-// AreHooksInstalled reports whether AO's opencode plugin is present in the
-// workspace-local plugin dir. A missing file, or a same-named file without the
-// AO sentinel, means none are installed.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -266,7 +193,6 @@ func opencodeSkillDir(workspacePath string) string {
 	return filepath.Join(workspacePath, opencodePluginDirName, opencodeSkillSubDir, skillassets.SkillName)
 }
 
-// SkillsDir returns the workspace folder opencode discovers skills in.
 func SkillsDir(workspacePath string) string {
 	return filepath.Join(workspacePath, opencodePluginDirName, opencodeSkillSubDir)
 }
@@ -275,9 +201,6 @@ func opencodeSkillMarkerPath(workspacePath string) string {
 	return filepath.Join(SkillsDir(workspacePath), opencodeSkillMarkerFile)
 }
 
-// InstallUsingAOSkill materializes the embedded shared using-ao skill into
-// .opencode/skills/using-ao/. It refuses to overwrite a same-named directory
-// that is not AO-managed.
 func InstallUsingAOSkill(workspacePath string) error {
 	skillDir := opencodeSkillDir(workspacePath)
 	if info, err := os.Stat(skillDir); err == nil {
@@ -299,8 +222,6 @@ func InstallUsingAOSkill(workspacePath string) error {
 	if err := os.MkdirAll(skillsParent, 0o750); err != nil {
 		return fmt.Errorf("create skills dir: %w", err)
 	}
-	// Write ownership before Materialize clobbers using-ao/, so a crash mid-tree
-	// write leaves a marker that allows the next install attempt to recover.
 	if err := hookutil.AtomicWriteFile(opencodeSkillMarkerPath(workspacePath), []byte(opencodeSkillSentinel+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write skill marker: %w", err)
 	}
@@ -316,9 +237,6 @@ func InstallUsingAOSkill(workspacePath string) error {
 	return nil
 }
 
-// ensureSkillTreeGitignored writes AO-managed .gitignore files beside every
-// file in the skill tree so registry's hook-footprint contract holds: each
-// installed path must be ignorable for git worktree teardown.
 func ensureSkillTreeGitignored(skillRoot string) error {
 	byDir := map[string][]string{}
 	err := filepath.WalkDir(skillRoot, func(path string, d fs.DirEntry, err error) error {
@@ -343,8 +261,6 @@ func ensureSkillTreeGitignored(skillRoot string) error {
 	return nil
 }
 
-// UninstallUsingAOSkill removes the shared skill only when its AO marker owns
-// it. A missing directory or marker is a no-op.
 func UninstallUsingAOSkill(workspacePath string) error {
 	managed, err := isAOManagedSkill(workspacePath)
 	if err != nil {
@@ -363,8 +279,6 @@ func UninstallUsingAOSkill(workspacePath string) error {
 	return nil
 }
 
-// isAOManagedPlugin reports whether the file at path exists and carries the AO
-// sentinel. A missing file yields (false, nil).
 func isAOManagedPlugin(path string) (bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path built from caller-owned workspace dir
 	if errors.Is(err, os.ErrNotExist) {
@@ -393,8 +307,6 @@ func removeManagedPlugin(path, sentinel string) error {
 	return nil
 }
 
-// isAOManagedSkill reports whether the AO ownership marker beside the skill
-// directory exists. A missing marker yields (false, nil).
 func isAOManagedSkill(workspacePath string) (bool, error) {
 	data, err := os.ReadFile(opencodeSkillMarkerPath(workspacePath)) //nolint:gosec // path built from caller-owned workspace dir
 	if errors.Is(err, os.ErrNotExist) {

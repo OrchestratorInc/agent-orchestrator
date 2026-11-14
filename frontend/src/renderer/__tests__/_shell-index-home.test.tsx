@@ -61,7 +61,6 @@ vi.mock("../hooks/useSystemRequirementsGate", () => ({
 	useStartGitHubAuthTerminal: () => ({ mutate: routeMocks.startGitHubAuth, isPending: false, isError: false }),
 }));
 
-// No agent is signed in here, so Home shows no chat-import card.
 vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	useAgentReadinessQuery: () => ({ data: undefined }),
 }));
@@ -272,7 +271,6 @@ describe("shell index route", () => {
 		expect(routeMocks.createProjectFlowProps?.sourceSignal?.source).toBe("clone");
 	});
 
-	// Cloud is on for everyone: Developer Mode does not decide it.
 	it.each([{ developerMode: false }, { developerMode: true }])("swaps standalone for cloud project creation whenever Cloud is on: %j", ({ developerMode }) => {
 		useUiStore.setState({ developerMode });
 		routeMocks.cloudEnabled = true;

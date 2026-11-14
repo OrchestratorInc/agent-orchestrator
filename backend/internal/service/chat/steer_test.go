@@ -16,16 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Steering scenarios.
-//
-// The promise under test is not "the provider was called". It is that guidance goes
-// to the turn the user is actually watching, that it shows up on the timeline so
-// they can see it landed, and that every refusal is a typed answer rather than a
-// failure — because the moment someone steers is the moment a turn is ending
-// underneath them.
-
-/* ---- a provider double that can be steered ----------------------------- */
-
 type steerCall struct {
 	turnID string
 	msg    ports.ChatUserMessage
@@ -93,8 +83,6 @@ func (s *steerRecorder) failWith(err error) {
 	s.err = err
 }
 
-// steerHarness starts a session whose provider can be steered, and puts a turn in
-// flight — the only state steering is meaningful in.
 func steerHarness(t *testing.T) (*harness, *steerRecorder) {
 	t.Helper()
 	return steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store { return st })
@@ -115,8 +103,6 @@ func steerHarnessWithStore(
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	// The provider's own acknowledgement. Steering is refused for a turn the provider
-	// has not announced, so nothing can be steered before this arrives.
 	provider.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1",
 	})
@@ -173,9 +159,6 @@ func (s *failSteerCompletionStore) CompleteSteerDelivery(
 	return errors.New("injected steer completion failure")
 }
 
-// steerMarkers reads the steer entries out of a timeline the way a renderer must: by
-// the discriminator in the detail payload. `system` is a general bucket, so the
-// activity kind alone does not identify one.
 func steerMarkers(s store.ConversationSnapshot) []struct {
 	activity domain.ConversationActivity
 	detail   struct {
@@ -212,9 +195,6 @@ func steerMarkers(s store.ConversationSnapshot) []struct {
 	return found
 }
 
-/* ---- tests ------------------------------------------------------------- */
-
-// The whole feature: guidance reaches the running turn and the timeline says so.
 func TestSteerReachesTheRunningTurnAndLandsOnTheTimeline(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -238,8 +218,6 @@ func TestSteerReachesTheRunningTurnAndLandsOnTheTimeline(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("provider saw %d steers, want 1", len(calls))
 	}
-	// The turn is named as a precondition rather than left to the provider to guess,
-	// which is what stops a correction landing on work the user was not watching.
 	if calls[0].turnID != "provider-turn-1" {
 		t.Errorf("steered turn id = %q, want provider-turn-1", calls[0].turnID)
 	}
@@ -267,8 +245,6 @@ func TestSteerReachesTheRunningTurnAndLandsOnTheTimeline(t *testing.T) {
 		t.Error("the row has no summary; a collapsed timeline would show an empty entry")
 	}
 
-	// Bound to the turn it steered, not floating: an unattached row would leave the
-	// guidance rendering outside the conversation it changed.
 	var running string
 	for _, turn := range snapshot.Turns {
 		if turn.ProviderTurnID == "provider-turn-1" {
@@ -283,8 +259,6 @@ func TestSteerReachesTheRunningTurnAndLandsOnTheTimeline(t *testing.T) {
 			markers[0].activity.TurnID, running)
 	}
 
-	// And it must not have opened a turn of its own. A second turn row would be
-	// dispatched by the drain loop later, sending the correction twice.
 	if len(snapshot.Turns) != 1 {
 		t.Errorf("steering produced %d turns, want 1:\n%+v", len(snapshot.Turns), snapshot.Turns)
 	}
@@ -388,7 +362,6 @@ func TestSteerOrSendFallsBackWithoutLeavingAQueuedTurn(t *testing.T) {
 	}
 }
 
-// A retry with the same handle is the same guidance, not a second piece of it.
 func TestSteerIsIdempotentOnTheClientHandle(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -402,7 +375,6 @@ func TestSteerIsIdempotentOnTheClientHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retried Steer: %v", err)
 	}
-	// Usage counting relies on the flag: only the accepted original is new.
 	if first.Replayed || !replayed.Replayed {
 		t.Fatalf("Replayed = %v then %v, want false then true", first.Replayed, replayed.Replayed)
 	}
@@ -440,7 +412,6 @@ func TestAcceptedSteerReplaysAfterControllerRestartWithoutProviderRedispatch(t *
 	if err != nil {
 		t.Fatalf("Steer after restart: %v", err)
 	}
-	// A retry after a daemon restart is still the original steer.
 	if !replayed.Replayed || withoutReplay(replayed) != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
@@ -498,9 +469,6 @@ func TestSteerClientHandleCannotBeReusedForDifferentGuidance(t *testing.T) {
 	}
 }
 
-// A handoff refusal belongs to the original delivery handle. If the 409 response
-// is lost, retrying after the source controller reopens or a new controller starts
-// must replay that refusal rather than steering whichever turn happens to be live.
 func TestSteerDuringInterfaceTransitionDurablyReplaysWithoutProviderDispatch(t *testing.T) {
 	h, provider := steerHarness(t)
 	msg := ports.ChatUserMessage{
@@ -520,8 +488,6 @@ func TestSteerDuringInterfaceTransitionDurablyReplaysWithoutProviderDispatch(t *
 		t.Fatalf("provider received %d steers during handoff, want none", len(calls))
 	}
 
-	// Model a lost 409: the caller did not observe it and retries only after the
-	// transition was abandoned. The durable result still wins over current state.
 	h.svc.AbortChatHandoff(testSession)
 	_, err = h.svc.Steer(context.Background(), testSession, msg)
 	if !errors.Is(err, chatsvc.ErrControllerHandoff) {
@@ -542,8 +508,6 @@ func TestSteerDuringInterfaceTransitionDurablyReplaysWithoutProviderDispatch(t *
 	}
 }
 
-// Nothing in flight is an ordinary outcome — the turn finished while the user was
-// typing — and the provider must not be asked.
 func TestSteerWithNothingInFlightIsTypedAndNeverReachesTheProvider(t *testing.T) {
 	provider := newSteerRecorder()
 	h := newHarnessWithConversation(t, provider)
@@ -557,8 +521,6 @@ func TestSteerWithNothingInFlightIsTypedAndNeverReachesTheProvider(t *testing.T)
 		t.Error("asked the provider to steer with no turn in flight")
 	}
 
-	// Even if a different turn starts before recovery, the original handle owns the
-	// durable refusal. A lost 409 must not turn into guidance for later work.
 	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
 		Text: "later work", ClientMessageID: "later-turn",
 	}); err != nil {
@@ -608,8 +570,6 @@ func TestSteerOrSendIdleCrossSessionUsesAutomationOrigin(t *testing.T) {
 	}
 }
 
-// The provider is the authority on whether its turn is still steerable, and losing
-// that race must read as "nothing to steer", not as a failure.
 func TestSteerRaceLostToTheProviderIsReportedAsNoActiveTurn(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.failWith(ports.ErrChatNoSteerableTurn)
@@ -627,8 +587,6 @@ func TestSteerRaceLostToTheProviderIsReportedAsNoActiveTurn(t *testing.T) {
 		t.Fatalf("provider received %d refused steer attempts, want one", len(calls))
 	}
 
-	// Nothing recorded: a timeline claiming guidance the agent never received would
-	// have the user waiting for an answer to something it never heard.
 	snapshot, loadErr := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
 	if loadErr != nil {
 		t.Fatalf("load snapshot: %v", loadErr)
@@ -648,8 +606,6 @@ func TestSteerRaceLostToTheProviderIsReportedAsNoActiveTurn(t *testing.T) {
 	}
 }
 
-// A turn that is running but cannot take guidance (a compaction, a review) is a
-// different answer: retryable once it ends, so it keeps its own sentinel.
 func TestSteerOfAnUnsteerableTurnKeepsItsOwnOutcome(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.failWith(ports.ErrChatTurnNotSteerable)
@@ -664,9 +620,6 @@ func TestSteerOfAnUnsteerableTurnKeepsItsOwnOutcome(t *testing.T) {
 	}
 }
 
-// A definitive provider refusal (for example ACP JSON-RPC method-not-found for
-// an optional steering extension) must settle the reserved delivery handle. Retry
-// and recover-only must replay that refusal without another provider call.
 func TestSteerProviderRefusalSettlesAndRecoversWithoutRedispatch(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.failWith(refusedError{msg: `"Method not found": _session/steering`})
@@ -706,9 +659,6 @@ func TestSteerProviderRefusalSettlesAndRecoversWithoutRedispatch(t *testing.T) {
 	}
 }
 
-// Ambiguous transport failures must leave the reserved handle uncertain so AO
-// neither claims delivery nor automatically resends guidance that may already
-// have reached the provider.
 func TestSteerTransportFailureStaysUncertain(t *testing.T) {
 	h, provider := steerHarness(t)
 	transportErr := errors.New("connection reset while waiting for steer reply")
@@ -739,8 +689,6 @@ func TestSteerTransportFailureStaysUncertain(t *testing.T) {
 	}
 }
 
-// A provider with no steering at all: a permanent answer, so a client hides the
-// control instead of retrying.
 func TestSteerIsRefusedWhenTheDriverCannotDoIt(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -769,10 +717,6 @@ func TestSteerIsRefusedWhenTheDriverCannotDoIt(t *testing.T) {
 	}
 }
 
-// The ACP driver implements Steer for every agent, but only an agent that
-// advertised the extension can take it. Without the capability AO refuses before
-// reserving a delivery, so the agent is never called and the answer is not
-// "uncertain".
 func TestSteerIsRefusedWhenTheProviderDidNotAdvertiseIt(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.setCapabilities(productionCaps())
@@ -812,10 +756,6 @@ func TestSteerRejectsEmptyText(t *testing.T) {
 	}
 }
 
-// The trap this waits for is real: the provider refuses a steer for a turn it has
-// accepted but not yet announced, and steering is most useful in exactly that
-// window. So a steer that arrives between dispatch and acknowledgement must WAIT for
-// the acknowledgement rather than being refused or fired early.
 func TestSteerWaitsForTheProviderToAcknowledgeTheTurn(t *testing.T) {
 	provider := newSteerRecorder()
 	h := newHarnessWithConversation(t, provider)
@@ -826,7 +766,6 @@ func TestSteerWaitsForTheProviderToAcknowledgeTheTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	// Dispatched but NOT acknowledged: no turn/started has arrived.
 
 	done := make(chan error, 1)
 	go func() {
@@ -858,9 +797,6 @@ func TestSteerWaitsForTheProviderToAcknowledgeTheTurn(t *testing.T) {
 	}
 }
 
-// The provider names the turn its guidance joined, and AO attributes the row to
-// that turn rather than to the one it asked about. Same id in practice; asserted so
-// a provider that answered differently could not be silently misfiled.
 func TestSteerRecordsTheTurnTheProviderNames(t *testing.T) {
 	h, provider := steerHarness(t)
 	provider.mu.Lock()
@@ -877,10 +813,6 @@ func TestSteerRecordsTheTurnTheProviderNames(t *testing.T) {
 	}
 }
 
-// Promoting a selected queued turn must use AO's durable content, attach it to
-// the running provider turn, and remove only that source turn from the visible
-// queue. If this regresses to queue-head-only behavior, the second message below
-// is never the one the provider receives.
 func TestPromoteSelectedQueuedTurnIntoTheRunningTurn(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -934,8 +866,6 @@ func TestPromoteSelectedQueuedTurnIntoTheRunningTurn(t *testing.T) {
 	}
 }
 
-// A provider refusal has not delivered anything, so the exact selected message
-// must return to its original queue position instead of being lost or failed.
 func TestPromoteQueuedTurnRefusalRestoresItsQueuePosition(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -957,9 +887,6 @@ func TestPromoteQueuedTurnRefusalRestoresItsQueuePosition(t *testing.T) {
 	}
 }
 
-// Only human-originated queue items are eligible for mid-turn guidance. The
-// service must enforce that boundary even when a caller bypasses the frontend,
-// without consuming or reordering the automation item.
 func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -986,8 +913,6 @@ func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *test
 	}
 }
 
-// Browser annotations are the user's own words relayed as automation. Their
-// queued turn keeps its attribution but can be steered like a typed message.
 func TestPromoteQueuedUserAuthoredAutomationTurnIntoTheRunningTurn(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
@@ -1022,8 +947,6 @@ func TestPromoteQueuedUserAuthoredAutomationTurnIntoTheRunningTurn(t *testing.T)
 	}
 }
 
-// The annotation text is generated from the Browser panel, so it is not
-// editable even though the user may steer or cancel it.
 func TestQueuedUserAuthoredAutomationTurnCanBeCancelledButNotEdited(t *testing.T) {
 	h, _ := steerHarness(t)
 	ctx := context.Background()
@@ -1045,9 +968,6 @@ func TestQueuedUserAuthoredAutomationTurnCanBeCancelledButNotEdited(t *testing.T
 	}
 }
 
-// A transport failure after the request leaves delivery unknowable. Returning the
-// source to the queue would let drain send guidance the provider may already have
-// accepted, so it must settle failed and require an explicit user decision.
 func TestPromoteQueuedTurnAmbiguousProviderFailureSettlesUncertainWithoutRedelivery(t *testing.T) {
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
 	t.Cleanup(cancelRequest)
@@ -1150,8 +1070,6 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 	}
 }
 
-// withoutReplay compares a replayed steer receipt with the original: they
-// differ only in Replayed, which marks the retry.
 func withoutReplay(r chatsvc.SteerResult) chatsvc.SteerResult {
 	r.Replayed = false
 	return r

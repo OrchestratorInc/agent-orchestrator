@@ -43,7 +43,6 @@ describe("useCloudHarnessVersions", () => {
 		expect(install).toHaveBeenCalledWith("org-1", "claude-code", "2.1.322");
 		await waitFor(() => expect(result.current.data?.agents[0]?.selectedVersion).toBe("2.1.322"));
 
-		// A member's click finds nothing to do.
 		const member = { editable: false, agents: [cloudHarnessEntry("claude-code", { current: "2.1.287", latest: "2.1.322", editable: false })] };
 		scope.client = { listOrgHarnessVersions: vi.fn(async () => member), installOrgHarnessVersion: vi.fn() };
 		const read = renderHook(() => useCloudHarnessVersions(), { wrapper });

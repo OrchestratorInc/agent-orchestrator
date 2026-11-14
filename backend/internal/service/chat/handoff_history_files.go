@@ -13,13 +13,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// handoffHistoryFileLimit caps how many of one agent's files the note names.
 const handoffHistoryFileLimit = 3
 
-// handoffHistoryFiles points the next agent at the own history of each agent
-// whose answers AO did not record in this session. These agents report no
-// turns through hooks, or report the request only. Every one files its history
-// by workspace except agy, which is found only for the outgoing session.
 func (s *Service) handoffHistoryFiles(record domain.SessionRecord, turns []domain.HandoffTurn) []domain.HandoffHistoryFile {
 	workspace := strings.TrimSpace(record.Metadata.WorkspacePath)
 	home, _ := os.UserHomeDir()
@@ -54,7 +49,6 @@ func (s *Service) handoffHistoryFiles(record domain.SessionRecord, turns []domai
 			continue
 		}
 		for _, path := range source.paths {
-			// A chat untouched since the session began is another session's.
 			if info, err := os.Stat(path); err != nil || info.ModTime().Before(record.CreatedAt) {
 				continue
 			}
@@ -64,8 +58,6 @@ func (s *Service) handoffHistoryFiles(record domain.SessionRecord, turns []domai
 	return files
 }
 
-// kimiSessionWires reads Kimi Code's session index, which maps each working
-// directory to its session folders and marks deleted sessions.
 func kimiSessionWires(kimiHome, workspace string) []string {
 	index, err := os.Open(filepath.Join(kimiHome, "session_index.jsonl")) //nolint:gosec // AO's own Kimi home.
 	if err != nil {
@@ -104,7 +96,6 @@ func kimiSessionWires(kimiHome, workspace string) []string {
 	return paths
 }
 
-// agyConversation is the outgoing agy session's conversation store.
 func agyConversation(home string, record domain.SessionRecord) []string {
 	id := strings.TrimSpace(record.Metadata.AgentSessionID)
 	if record.Harness != domain.HarnessAgy || id == "" || strings.ContainsAny(id, `/\`) {
@@ -120,7 +111,6 @@ func agyConversation(home string, record domain.SessionRecord) []string {
 	return nil
 }
 
-// newestFiles returns the newest files matching pattern, up to the limit.
 func newestFiles(pattern string) []string {
 	matches, _ := filepath.Glob(pattern)
 	modified := map[string]int64{}

@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// failureStorePragmas opens a second connection the way the store does.
 const failureStorePragmas = "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
 
 func TestBindSessionAgentAccountCancelsOnlyChangedProviderAutoResume(t *testing.T) {
@@ -29,7 +28,6 @@ func TestBindSessionAgentAccountCancelsOnlyChangedProviderAutoResume(t *testing.
 			if provider == other {
 				other = domain.AgentAccountProviderCodex
 			}
-			// Initial, repeated and backdated bindings do not change the active login.
 			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-a", testNow.Add(-time.Minute)))
 			assertAccountAutoResume(t, s, session.ID, true, "")
 			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-a", testNow.Add(10*time.Minute)))
@@ -67,7 +65,6 @@ func TestSetTurnAutoResumeRejectsChangedSourceAccount(t *testing.T) {
 			provider, _ := domain.AgentAccountProviderFor(harness)
 			turnID := "turn-" + string(session.ID)
 			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-a", testNow.Add(-time.Minute)))
-			// The switch precedes completion; the turn belongs to its requested account.
 			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-b", testNow.Add(30*time.Second)))
 			reset := testNow.Add(2 * time.Hour)
 			if err := s.SetTurnAutoResume(ctx, conversation.ID, turnID, &reset, true, ""); !errors.Is(err, ports.ErrAgentAccountChanged) {
@@ -77,7 +74,6 @@ func TestSetTurnAutoResumeRejectsChangedSourceAccount(t *testing.T) {
 			if err := s.SetTurnAutoResume(ctx, "other-conversation", turnID, &reset, true, ""); !errors.Is(err, domain.ErrNoConversationTurn) {
 				t.Fatalf("re-arm wrong conversation = %v", err)
 			}
-			// Returning to the source account makes its known deadline usable again.
 			mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, provider, "account-a", testNow.Add(2*time.Minute)))
 			reset = testNow.Add(time.Hour)
 			mustNoError(t, s.SetTurnAutoResume(ctx, conversation.ID, turnID, &reset, true, ""))

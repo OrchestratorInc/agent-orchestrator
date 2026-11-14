@@ -1,7 +1,3 @@
-// Package binaryutil centralizes the "find an agent's CLI binary" search that
-// every adapter otherwise reimplements. Adapters differ only in the binary
-// name(s) and the well-known install locations to probe, so they describe those
-// with a BinarySpec and share the identical PATH-then-candidates iteration.
 package binaryutil
 
 import (
@@ -19,70 +15,35 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// BinarySpec describes where one agent's CLI binary can live. ResolveBinary
-// searches PATH (via the platform's name list) first, then the platform's
-// candidate install paths in order, returning the first hit.
-//
-// Path components are given as string slices joined onto their base directory,
-// so a spec stays OS-agnostic and never hard-codes a separator. env-derived
-// bases (APPDATA, LOCALAPPDATA, home) that are unset simply skip their
-// candidates.
 type BinarySpec struct {
-	// Label prefixes the ErrAgentBinaryNotFound error, e.g. "claude".
 	Label string
 
-	// Names are the binary names looked up on PATH on non-Windows, in order.
-	Names []string
-	// WinNames are the binary names looked up on PATH on Windows, in order.
-	// Empty means the Windows branch does no PATH lookup.
+	Names    []string
 	WinNames []string
 
-	// UnixPaths are absolute candidate paths probed on non-Windows, in order.
-	UnixPaths []string
-	// UnixHomePaths are candidate paths under the user's home dir on
-	// non-Windows; each entry is the components to join onto $HOME.
+	UnixPaths     []string
 	UnixHomePaths [][]string
 
-	// WinPaths are candidate paths probed on Windows, in the exact order given.
-	// Each entry names the base directory (%APPDATA%, %LOCALAPPDATA%, or home) it
-	// is joined onto. Order is significant: a native installer location listed
-	// before an npm shim wins when both are present, so it is spelled out here
-	// rather than assumed. Entries whose base env is unset are skipped.
 	WinPaths []WinPath
 
-	// NodeManaged adds Unix fallbacks for Node-version-manager global bins such
-	// as nvm, Volta, and fnm. Keep this explicit so non-Node adapters don't pick
-	// up unrelated same-named npm CLIs.
 	NodeManaged bool
 
-	// ValidateIdentity optionally confirms that a resolved executable belongs to
-	// the adapter. It must be bounded and honor ctx; a false result rejects the
-	// candidate and lets ResolveBinary continue through the ordered candidates.
 	ValidateIdentity func(ctx context.Context, path string) bool
 }
 
-// WinBase names the base directory a Windows candidate path is joined onto.
 type WinBase int
 
-// The base directories a Windows candidate path can resolve against.
 const (
-	WinAppData      WinBase = iota // %APPDATA%
-	WinLocalAppData                // %LOCALAPPDATA%
-	WinHome                        // the user's home directory
+	WinAppData WinBase = iota
+	WinLocalAppData
+	WinHome
 )
 
-// WinPath is one Windows candidate: Parts joined onto Base's directory.
 type WinPath struct {
 	Base  WinBase
 	Parts []string
 }
 
-// ResolveBinary returns the path to spec's binary, searching PATH then the
-// platform's candidate install locations. Without identity validation it keeps
-// the immediate PATH fast path used by ordinary callers. When validation is
-// configured, each PATH hit is checked before the slower fallback enumeration
-// so a valid PATH binary still returns promptly and an invalid collision can
-// recover from every supported install location.
 func ResolveBinary(ctx context.Context, spec BinarySpec) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -145,11 +106,6 @@ func ResolveBinary(ctx context.Context, spec BinarySpec) (string, error) {
 	return "", fmt.Errorf("%s: %w", spec.Label, ports.ErrAgentBinaryNotFound)
 }
 
-// resolveBinaryCandidates returns every binary location in the resolver's
-// existing order: PATH hits first, followed by all configured platform and
-// package-manager candidates. Results are deduplicated but are not required to
-// exist; callers decide whether and how to validate each path. ctx cancellation
-// is honored while discovering candidates.
 func resolveBinaryCandidates(ctx context.Context, spec BinarySpec) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -252,8 +208,6 @@ func candidateKey(candidate string) string {
 	return key
 }
 
-// UnixPackageManagerBinCandidates returns cheap, deterministic user-level
-// package-manager shim paths that are commonly absent from GUI-launched PATHs.
 func UnixPackageManagerBinCandidates(home string, names ...string) []string {
 	if home == "" {
 		return nil
@@ -273,8 +227,6 @@ func UnixPackageManagerBinCandidates(home string, names ...string) []string {
 	return out
 }
 
-// WindowsPackageManagerBinCandidates returns cheap, deterministic user/system
-// package-manager shim paths that are commonly absent from service PATHs.
 func WindowsPackageManagerBinCandidates(names ...string) []string {
 	home, _ := os.UserHomeDir()
 	appData := os.Getenv("APPDATA")
@@ -364,7 +316,6 @@ func executableNames(spec BinarySpec) []string {
 	return out
 }
 
-// joinAll joins each component slice onto base into an absolute candidate path.
 func joinAll(base string, entries [][]string) []string {
 	out := make([]string, 0, len(entries))
 	for _, parts := range entries {
@@ -373,8 +324,6 @@ func joinAll(base string, entries [][]string) []string {
 	return out
 }
 
-// NodeManagedUnixHomePaths returns the canonical Unix home fallback paths for
-// npm-distributed Node CLIs, followed by any adapter-specific extras.
 func NodeManagedUnixHomePaths(binary string, extras ...[]string) [][]string {
 	paths := make([][]string, 0, 3+len(extras))
 	paths = append(paths,
@@ -386,9 +335,6 @@ func NodeManagedUnixHomePaths(binary string, extras ...[]string) [][]string {
 	return paths
 }
 
-// UnixNodeManagerBinCandidates returns Node-version-manager global binary paths
-// under home. It covers the managers whose shims are commonly absent from GUI
-// launcher PATHs: Volta, nvm, and fnm.
 func UnixNodeManagerBinCandidates(ctx context.Context, home string, names ...string) ([]string, error) {
 	out := make([]string, 0, len(names)*3)
 	for _, name := range names {

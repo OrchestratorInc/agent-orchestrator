@@ -54,7 +54,6 @@ describe("UsageView", () => {
 		await user.click(within(views).getByRole("button", { name: "Limits" }));
 		expect(within(views).getByRole("button", { name: "Limits" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("Limits content")).toBeInTheDocument();
-		// Project and period only apply to spend; refresh stays for every view.
 		expect(screen.queryByRole("button", { name: "Filter" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Previous period" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();

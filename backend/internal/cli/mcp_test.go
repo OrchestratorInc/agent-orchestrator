@@ -31,7 +31,6 @@ type mcpReply struct {
 	Error *mcpError `json:"error"`
 }
 
-// runMCP feeds lines to `ao mcp` on stdin and returns its replies.
 func runMCP(t *testing.T, lines ...string) []mcpReply {
 	t.Helper()
 	stdout, stderr, err := executeCLI(t, Deps{
@@ -68,7 +67,6 @@ func TestMCPInitializeNegotiatesTheProtocolVersion(t *testing.T) {
 			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+client+`","capabilities":{},"clientInfo":{"name":"codex"}}}`,
 			`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 			`{"jsonrpc":"2.0","id":2,"method":"ping"}`)
-		// The notification gets no reply.
 		if len(replies) != 2 || string(replies[0].ID) != "1" || string(replies[1].ID) != "2" || replies[1].Error != nil {
 			t.Fatalf("client %s: replies = %+v", client, replies)
 		}
@@ -85,7 +83,6 @@ func TestMCPListsBothTools(t *testing.T) {
 		t.Fatalf("tools = %+v", tools)
 	}
 	for _, tool := range tools {
-		// html_render can write an artifact file, so only html_preview is read-only.
 		preview := tool.Name == "html_preview"
 		want := map[string]any{"readOnlyHint": preview, "destructiveHint": false, "openWorldHint": true,
 			"idempotentHint": preview}
@@ -131,8 +128,6 @@ func TestMCPHTMLRenderPublishesThePageWithItsImages(t *testing.T) {
 	}
 }
 
-// A harness may start the server with exactly the env AO hands it (session,
-// run file, data dir) and no $HOME; a tool call must still reach the daemon.
 func TestMCPToolCallNeedsNoHome(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	cfg := setConfigEnv(t)
@@ -191,7 +186,6 @@ func TestMCPHTMLPreviewReturnsTheScreenshotAndReport(t *testing.T) {
 		got.Content[0].Data != "iVBORw0KGgo=" {
 		t.Fatalf("result = %+v", got)
 	}
-	// JSON-encoded, so a Windows path's backslashes are escaped as in the report.
 	goneJSON, _ := json.Marshal(gone)
 	want := `{"width":390,"contentHeight":412,"consoleMessages":[{"level":"error","text":"d3 is not defined"}],"missingImages":[` + string(goneJSON) + `]}`
 	if got.Content[1].Type != "text" || got.Content[1].Text != want {
@@ -199,8 +193,6 @@ func TestMCPHTMLPreviewReturnsTheScreenshotAndReport(t *testing.T) {
 	}
 }
 
-// A check that ran without network says so, so the agent knows why remote
-// resources did not load.
 func TestMCPHTMLPreviewSaysWhenTheCheckRanWithoutNetwork(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	cfg := setConfigEnv(t)

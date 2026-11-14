@@ -11,12 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ErrNotProvisioning refuses intake when no controller is starting.
 var ErrNotProvisioning = domain.ErrSessionNotProvisioning
 
-// QueueUserMessage records a turn for a session whose controller does not exist
-// yet. It is the opening prompt's delivery path for an asynchronous spawn, and
-// the fallback for anything the user types before the agent finishes starting.
 func (s *Service) QueueUserMessage(
 	ctx context.Context,
 	id domain.SessionID,
@@ -66,15 +62,11 @@ func (s *Service) queueWithoutController(
 		deliveryContent = string(encoded)
 	}
 	if len(msg.Excerpts) > 0 {
-		// The transcript is verified when the controller drains this turn; bound
-		// the stored references now so the queue cannot hold oversized payloads.
 		if err := validateExcerptReferences(msg.Excerpts, conversation.ID); err != nil {
 			return domain.ConversationTurn{}, err
 		}
 		queuedContent := append([]ports.ChatContent(nil), msg.Content...)
 		for _, excerpt := range msg.Excerpts {
-			// SelectedText keeps the timeline chip and a later retry meaningful;
-			// the paired turn is only resolved at drain time.
 			queuedContent = append(queuedContent, ports.ChatContent{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{
 				Reference: excerpt, SelectedText: strings.TrimSpace(excerpt.Text),
 			}})
@@ -85,8 +77,6 @@ func (s *Service) queueWithoutController(
 		}
 		deliveryContent = string(encoded)
 	}
-	// The generation is empty on purpose: no controller has claimed this turn.
-	// Drain selects by conversation, so the controller that starts next owns it.
 	message := domain.ConversationMessage{
 		ID:                  s.newID(),
 		Text:                msg.Text,
@@ -104,9 +94,6 @@ func (s *Service) queueWithoutController(
 	}
 	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", message, turnID, now)
 	if errors.Is(err, domain.ErrConversationRebound) {
-		// An orchestrator's first controller moved its queue to the project
-		// conversation after ensureConversation returned the provisioning row
-		// (#6523). Queue there, after the prompts it moved.
 		conversation, err = s.ensureConversation(ctx, record)
 		if err == nil {
 			err = validateExcerptReferences(msg.Excerpts, conversation.ID)
@@ -119,7 +106,6 @@ func (s *Service) queueWithoutController(
 		return domain.ConversationTurn{}, fmt.Errorf("queue message for %s: %w", record.ID, err)
 	}
 	if !created {
-		// Same client message id as an earlier delivery: already queued.
 		return domain.ConversationTurn{}, nil
 	}
 	turn := domain.ConversationTurn{
@@ -129,23 +115,12 @@ func (s *Service) queueWithoutController(
 		State:              domain.TurnStateQueued,
 		RequestedAt:        now,
 	}
-	// The controller may have appeared after Send read the provisioning row, or
-	// after a prior drain found the queue empty. Kicking the same serialized drain
-	// here closes both races; NextQueuedTurn still owns ordering.
 	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil && controller.State() != ports.ChatControllerStopped {
-		_ = controller.drainOne(ctx) // The message is already accepted; drain logs failures.
+		_ = controller.drainOne(ctx)
 	}
 	return turn, nil
 }
 
-// ensureConversation opens the session's conversation before its controller
-// exists. CreateConversation returns the existing row for a session that
-// already has one, so this stays correct when Start opens the same
-// conversation later. An orchestrator queues in a session-scoped row too, even
-// though its controller uses the project conversation: binding that narrative
-// here would let a retiring orchestrator's controller drain these prompts and
-// would file them before the context boundary Start records. Its first controller
-// moves them instead (CreateProjectConversationAdoptingQueue).
 func (s *Service) ensureConversation(
 	ctx context.Context,
 	record domain.SessionRecord,
@@ -165,7 +140,6 @@ func (s *Service) ensureConversation(
 	return conversation, nil
 }
 
-// DrainQueued dispatches messages saved before the controller started.
 func (s *Service) DrainQueued(ctx context.Context, id domain.SessionID) error {
 	controller, err := s.Controller(id)
 	if err != nil {

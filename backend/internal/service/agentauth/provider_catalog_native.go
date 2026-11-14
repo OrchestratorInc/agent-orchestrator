@@ -16,8 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Pi guards auth.json with proper-lockfile: a "<file>.lock" directory that a
-// live holder refreshes, treated as stale after 30 seconds.
 const (
 	piLockStale = 30 * time.Second
 	piLockWait  = 5 * time.Second
@@ -25,7 +23,6 @@ const (
 
 func piAgentDir() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); dir != "" {
-		// Pi expands a leading ~ to the home directory, as a shell would.
 		if dir == "~" || strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~\`) {
 			home, err := os.UserHomeDir()
 			if err != nil || home == "" {
@@ -33,8 +30,6 @@ func piAgentDir() (string, error) {
 			}
 			dir = filepath.Join(home, dir[1:])
 		}
-		// A relative directory would resolve against each process's own
-		// working directory, which differs between AO and Pi's sessions.
 		if !filepath.IsAbs(dir) {
 			return "", apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "PI_CODING_AGENT_DIR must be an absolute path.", nil)
 		}
@@ -47,8 +42,6 @@ func piAgentDir() (string, error) {
 	return filepath.Join(home, ".pi", "agent"), nil
 }
 
-// piKeyValue escapes a literal key for Pi's config-value templates, where $
-// interpolates the environment and a leading ! runs a shell command.
 func piKeyValue(key string) string {
 	value := strings.ReplaceAll(key, "$", "$$")
 	if strings.HasPrefix(value, "!") {
@@ -57,8 +50,6 @@ func piKeyValue(key string) string {
 	return value
 }
 
-// savePiProviderKey stores key under providerID in Pi's auth.json, the same
-// record Pi's /login writes for an API key, keeping every other entry.
 func savePiProviderKey(ctx context.Context, providerID, key string) error {
 	dir, err := piAgentDir()
 	if err != nil {
@@ -108,15 +99,10 @@ func lockPiAuth(ctx context.Context, path string) (func(), error) {
 		if err == nil {
 			return func() { _ = os.Remove(lock) }, nil
 		}
-		// Windows can refuse a lock directory that was just removed while its
-		// deletion is still pending; Pi retries that too.
 		if !errors.Is(err, os.ErrExist) && (runtime.GOOS != "windows" || !errors.Is(err, os.ErrPermission)) {
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Pi's credential file could not be locked.")
 		}
 		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > piLockStale {
-			// Take over a stale lock only once it is really gone. One that
-			// can't be removed (not empty, another owner, delete pending)
-			// waits like a live lock, bounded by the deadline.
 			if removeErr := os.Remove(lock); removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
 				continue
 			}
@@ -132,8 +118,6 @@ func lockPiAuth(ctx context.Context, path string) (func(), error) {
 	}
 }
 
-// replaceCredentialFile atomically replaces path with a 0600 file. Harnesses
-// that watch their credential file see the new inode.
 func replaceCredentialFile(ctx context.Context, dir, path string, data []byte, harness string) error {
 	tmp, err := os.CreateTemp(dir, ".ao-auth-*")
 	if err != nil {
@@ -157,7 +141,6 @@ func replaceCredentialFile(ctx context.Context, dir, path string, data []byte, h
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be replaced.")
 	}
-	// Make the rename itself durable. Windows can't open a directory to sync.
 	if runtime.GOOS != "windows" {
 		if parent, err := os.Open(dir); err == nil {
 			_ = parent.Sync()
@@ -167,10 +150,6 @@ func replaceCredentialFile(ctx context.Context, dir, path string, data []byte, h
 	return nil
 }
 
-// saveOMPProviderKey imports key through `omp auth import -`, OMP's supported
-// way to add a credential from outside. It replaces the provider's earlier
-// API keys, keeps its OAuth sign-ins, and marks the key as a login so it
-// outranks environment variables.
 func saveOMPProviderKey(ctx context.Context, harness catalogHarness, providerID, key string) error {
 	if strings.HasPrefix(key, "!") {
 		return apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "OMP runs a key that starts with ! as a shell command. Enter the key itself.", nil)

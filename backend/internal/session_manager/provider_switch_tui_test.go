@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// childProbeRuntime adds the child-process probe the production runtime has.
 type childProbeRuntime struct {
 	*fakeRuntime
 	childAlive bool
@@ -37,13 +36,11 @@ func TestSwitchTargetThatExitsAtOnceIsReportedWithItsLastLine(t *testing.T) {
 	if err := (&Manager{runtime: alive}).confirmTUISwitchTargetAlive(context.Background(), rec); err != nil {
 		t.Fatalf("a running target was reported as failed: %v", err)
 	}
-	// A runtime that cannot say whether the child is alive never fails a switch.
 	if err := (&Manager{runtime: &fakeRuntime{}}).confirmTUISwitchTargetAlive(context.Background(), rec); err != nil {
 		t.Fatalf("a runtime without the probe failed the switch: %v", err)
 	}
 }
 
-// launchOptionsFakeStore keeps a session's launch options, as the real store does.
 type launchOptionsFakeStore struct {
 	*fakeStore
 	options domain.AgentLaunchOptions
@@ -69,8 +66,6 @@ func (s *launchOptionsFakeStore) UpdateSessionWithLaunchOptions(ctx context.Cont
 func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
-	// The row as a switch leaves it before its target starts: the target owns the
-	// session with no native session yet, and its note is saved.
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Prompt: "ORIGINAL TASK"})
 	store := &launchOptionsFakeStore{fakeStore: st, options: domain.AgentLaunchOptions{HandoffNote: "HANDOFF NOTE"}}
 	agent := &recordingAgent{}
@@ -89,12 +84,9 @@ func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testi
 	if got := st.sessions["mer-1"].Metadata.Prompt; got != "ORIGINAL TASK" {
 		t.Fatalf("session prompt = %q, want the task kept", got)
 	}
-	// No native session has been reported yet, so a later restore would start
-	// fresh again: the note stays for it.
 	if store.options.HandoffNote != "HANDOFF NOTE" {
 		t.Fatalf("saved note = %q before a native session exists, want it kept", store.options.HandoffNote)
 	}
-	// Once the target has a native session, a restore resumes it and the note goes.
 	rec := st.sessions["mer-1"]
 	rec.Metadata.AgentSessionID = "target-native"
 	st.sessions["mer-1"] = rec
@@ -126,7 +118,6 @@ func TestSwitchTargetWithoutANativeSessionYetRestoresFromTheHandoff(t *testing.T
 	if err := m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessMuse, HandoffNote: handoff}); err != nil {
 		t.Fatal(err)
 	}
-	// The target stays alive but reports no native session before it exits.
 	target := st.sessions[rec.ID]
 	target.IsTerminated, target.Activity.State, target.Metadata.RuntimeHandleID = true, domain.ActivityExited, ""
 	st.sessions[rec.ID] = target
@@ -147,8 +138,6 @@ func TestSwitchTargetThatMissesItsPromptLeavesTheSessionToTheRollback(t *testing
 		savedNote string
 	}{
 		{"ordinary relaunch", nil, 1, ""},
-		// A restore that hands over a cut-short switch's saved note is not a switch:
-		// nothing rolls it back.
 		{"restore with a saved note", nil, 1, "SAVED NOTE"},
 		{"provider switch", ptr("HANDOFF NOTE"), 0, ""},
 	} {
@@ -178,8 +167,6 @@ func TestSwitchTargetThatMissesItsPromptLeavesTheSessionToTheRollback(t *testing
 
 func ptr(s string) *string { return &s }
 
-// runtimeAuthSwitchTarget is signed in only through a login AO saved itself,
-// like Claude Code with a setup-token login and no native login.
 type runtimeAuthSwitchTarget struct {
 	fakeAgent
 	dataDir string

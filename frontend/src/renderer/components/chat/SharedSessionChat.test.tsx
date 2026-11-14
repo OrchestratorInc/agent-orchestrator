@@ -97,7 +97,6 @@ describe("shared session chat", () => {
 			event(4, { text: "old message" }),
 		], "user-me").items;
 		expect(items.map((item) => (item as { authorName?: string }).authorName)).toEqual(["Alice", undefined, undefined, undefined]);
-		// Without a known viewer nothing is attributed.
 		expect((toSnapshot(session, [event(1, { text: "x", authorUserId: "user-alice", authorName: "Alice" })]).items[0] as { authorName?: string }).authorName).toBeUndefined();
 	});
 
@@ -127,8 +126,6 @@ describe("shared session chat", () => {
 	});
 
 	it("trusts the server's word on who this person is over the account the app remembers", async () => {
-		// The app remembers user-me, but the stream is signed in as Alice:
-		// Alice's own prompt is not labelled, and her lease does not lock her out.
 		mocks.listChatEvents.mockResolvedValue({
 			events: [
 				{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "mine", authorUserId: "user-alice", authorName: "Alice" }, createdAt: "2026-10-22T00:00:00Z" },

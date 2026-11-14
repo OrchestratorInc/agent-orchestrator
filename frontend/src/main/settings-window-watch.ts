@@ -7,21 +7,12 @@ export interface Rect {
 	height: number;
 }
 
-/** One reading of System Settings: whether it runs, its main window, and which app is in front. */
 export interface SettingsWindowSnapshot {
 	frontPid: number;
 	settingsPid: number;
 	bounds: Rect | null;
 }
 
-// A single long-lived JXA process prints a JSON snapshot per tick. Window
-// owners and bounds come from CGWindowList, which needs no permission (only
-// window titles do), in the same top-left point space as Electron's screen.
-// The process ends on its own when its stdout closes.
-//
-// Only while System Settings or AO is in front can the strip be shown, so only
-// then does a tick list windows, and quickly enough to follow a drag. Otherwise
-// it reads just the front app, once a second, until one of them comes back.
 export const FAST_TICK_SECONDS = 0.15;
 export const IDLE_TICK_SECONDS = 1;
 const WATCH_SCRIPT = `
@@ -64,7 +55,6 @@ export function parseSettingsWindowSnapshot(line: string): SettingsWindowSnapsho
 	}
 }
 
-/** Streams System Settings snapshots until the returned stop is called; onError fires if the watcher cannot run. */
 export function watchSettingsWindow(onSnapshot: (snapshot: SettingsWindowSnapshot) => void, onError: () => void, ownPid = process.pid): () => void {
 	const child = spawn("/usr/bin/osascript", ["-l", "JavaScript", "-e", WATCH_SCRIPT, String(ownPid)], { stdio: ["ignore", "pipe", "ignore"] });
 	let buffered = "";

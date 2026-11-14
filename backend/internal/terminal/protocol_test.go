@@ -41,7 +41,6 @@ func TestServerMsgSessionFrameWireShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	// Golden wire shape the client depends on.
 	want := `{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1","sessionId":"s1","eventType":"session_updated"}}`
 	if string(raw) != want {
 		t.Fatalf("wire shape:\n got %s\nwant %s", raw, want)

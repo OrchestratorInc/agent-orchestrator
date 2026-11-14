@@ -24,8 +24,6 @@ async function refreshWorkspaceState(queryClient: QueryClient) {
 	try {
 		await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	} catch {
-		// The restart outcome is more important than cache refresh bookkeeping:
-		// callers still need navigation/error state even if refetching fails.
 	}
 }
 
@@ -39,14 +37,8 @@ export async function restartProjectOrchestrator({
 	mode,
 	approvalMode,
 }: RestartProjectOrchestratorOptions) {
-	// Keep the initiating control focused while the restart is pending so
-	// keyboard users retain a focus target for the duration of the operation;
-	// blur it only once navigation to the replacement session is about to
-	// happen. On failure the control stays focused and the error dialog takes
-	// focus normally.
 	const activeElement = document.activeElement;
 	setProjectRestarting(projectId, true);
-	// Keep any replacement-error dialog mounted so Retry retains focus while pending.
 	try {
 		const sessionId = await spawnOrchestrator(projectId, "restart", true, mode, approvalMode);
 		await refreshWorkspaceState(queryClient);

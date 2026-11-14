@@ -3,30 +3,20 @@ import { sessionUiKey } from "../../lib/hosts";
 import type { ApprovalMode, ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 
-/**
- * What a new task was started with, exactly as the new chat page's settings bar
- * drew it: the agent's own options when a session of it has reported them, else
- * AO's model list.
- */
 export type LaunchSettings = {
 	harness: string;
-	/** Where the agent's model list is read, for the picker the session's bar uses. */
 	projectId: string;
 	hostId?: string;
 	models: ChatModel[];
 	settings: TurnSettings;
 	configOptions?: ChatConfigOption[];
 	showApprovalMode?: boolean;
-	/** What no chosen model means, as the bar names it (see TurnSettingsBar). */
 	unsetModelLabel?: string;
 	approvalModes?: ApprovalMode[];
 };
 
 const launchSettingsKey = (sessionId: string, hostId?: string) => ["session-launch-settings", sessionUiKey(sessionId, hostId)] as const;
 
-// Nothing observes these entries, so the default five minutes could drop them
-// mid-way through a long setup; two hours covers a slow start without keeping a
-// hand-off that nothing ever opened for the life of the app.
 const keep = (queryClient: QueryClient, key: readonly string[]) => queryClient.setQueryDefaults(key, { gcTime: 2 * 60 * 60 * 1000 });
 
 export function rememberLaunchSettings(queryClient: QueryClient, sessionId: string, hostId: string | undefined, settings: LaunchSettings): void {
@@ -40,7 +30,6 @@ export function forgetLaunchSettings(queryClient: QueryClient, sessionId: string
 
 const openingStartKey = (sessionId: string, hostId?: string) => ["session-opening-started", sessionUiKey(sessionId, hostId)] as const;
 
-/** When the brief that created this session was sent from the new chat page. */
 export function rememberOpeningStart(queryClient: QueryClient, sessionId: string, hostId: string | undefined, startedAt: string): void {
 	keep(queryClient, ["session-opening-started"]);
 	queryClient.setQueryData(openingStartKey(sessionId, hostId), startedAt);
@@ -61,8 +50,6 @@ export function launchSettingsFor(queryClient: QueryClient, sessionId: string, h
 const ignoreChange = () => undefined;
 const ignorePending = () => undefined;
 
-// The new chat page's settings bar, held still while the task starts. The
-// session's own bar replaces it, in the same place, once its agent is ready.
 export function LaunchSettingsBar({ harness, projectId, hostId, models, settings, configOptions, showApprovalMode, unsetModelLabel, approvalModes }: LaunchSettings) {
 	const providerMode = Boolean(configOptions?.length);
 	return (

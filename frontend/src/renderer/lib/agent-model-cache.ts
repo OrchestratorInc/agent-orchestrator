@@ -15,7 +15,6 @@ function cacheKey(agentId: string, scope: string, hostId?: string): string {
 	return cachePrefix(agentId, hostId) + JSON.stringify(scope);
 }
 
-/** Refresh catalog facts without dropping recency while history is pending. */
 export function withCachedModelUsage(catalog: AgentModelCatalog, cached: AgentModelCatalog | undefined): AgentModelCatalog {
 	if (!cached) return catalog;
 	const usage = new Map(cached.models.map((model) => [model.id, model.lastUsedAt]));
@@ -28,7 +27,6 @@ export function withCachedModelUsage(catalog: AgentModelCatalog, cached: AgentMo
 	};
 }
 
-/** A display snapshot only; the daemon DB remains the catalog authority. */
 export function readCachedAgentModels(agentId: string, scope: string, hostId?: string): AgentModelCatalog | undefined {
 	try {
 		const catalog = JSON.parse(window.localStorage.getItem(cacheKey(agentId, scope, hostId)) ?? "null") as (AgentModelCatalog & { snapshotWrittenAt?: number }) | null;
@@ -41,7 +39,6 @@ export function readCachedAgentModels(agentId: string, scope: string, hostId?: s
 			|| !["catalog", "text", "mode"].includes(catalog.selectionMode)
 			|| !["none", "direct", "configured"].includes(catalog.customModelEntry)) return undefined;
 		delete catalog.snapshotWrittenAt;
-		// Refresh state belongs to the running daemon, not a previous UI visit.
 		return { ...catalog, refreshRecommended: false, refreshState: "idle", refreshError: undefined, retryAt: undefined };
 	} catch {
 		return undefined;
@@ -56,11 +53,11 @@ export function cacheAgentModels(catalog: AgentModelCatalog, agentId: string, sc
 			const savedKey = window.localStorage.key(index);
 			if (!savedKey?.startsWith(SNAPSHOT_PREFIX) || savedKey === key) continue;
 			const value = window.localStorage.getItem(savedKey) ?? "";
-			let writtenAt = 0; // Legacy or corrupt snapshots are evicted first.
+			let writtenAt = 0;
 			try {
 				const timestamp = JSON.parse(value)?.snapshotWrittenAt;
 				if (typeof timestamp === "number" && Number.isFinite(timestamp)) writtenAt = timestamp;
-			} catch { /* A corrupt snapshot must not prevent pruning the cache. */ }
+			} catch { }
 			snapshots.push({ key: savedKey, bytes: (savedKey.length + value.length) * 2, writtenAt });
 		}
 		const snapshotWrittenAt = Math.max(Date.now(), ...snapshots.map((snapshot) => snapshot.writtenAt + 1));
@@ -79,7 +76,6 @@ export function cacheAgentModels(catalog: AgentModelCatalog, agentId: string, sc
 		}
 		window.localStorage.setItem(key, value);
 	} catch {
-		// Blocked or full browser storage must not interrupt the DB read.
 	}
 }
 
@@ -91,6 +87,5 @@ export function clearCachedAgentModels(agentId: string, hostId?: string): void {
 			if (key?.startsWith(prefix)) window.localStorage.removeItem(key);
 		}
 	} catch {
-		// The in-memory cache is invalidated independently of browser storage.
 	}
 }

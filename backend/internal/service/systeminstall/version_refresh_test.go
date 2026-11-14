@@ -122,8 +122,6 @@ func TestUpdateWithoutSessionsDefersNoCleanup(t *testing.T) {
 	}
 }
 
-// gatedObserverStub reports a session on the kept keg only when counted under
-// the harness gate: an update finished between an earlier read and the gate.
 type gatedObserverStub struct {
 	updateObserverStub
 	held func() bool

@@ -128,7 +128,6 @@ func TestLauncherSpawnEnvCannotOverrideWorkerContext(t *testing.T) {
 
 func TestLauncherSpawnWithholdsKeysTheReviewerHarnessNeverReceives(t *testing.T) {
 	dataDir := t.TempDir()
-	// The daemon exports AO's stored keys to itself; reviewers inherit that.
 	t.Setenv("ANTHROPIC_API_KEY", "ao-key")
 	if err := providerkeys.Save(context.Background(), dataDir, "ANTHROPIC_API_KEY", "ao-key"); err != nil {
 		t.Fatal(err)
@@ -142,8 +141,6 @@ func TestLauncherSpawnWithholdsKeysTheReviewerHarnessNeverReceives(t *testing.T)
 		}
 		return rt.createCfg.Env
 	}
-	// Saved from another harness's panel: a Claude Code reviewer must not
-	// bill the API account instead of the subscription.
 	if value, ok := spawn()["ANTHROPIC_API_KEY"]; !ok || value != "" {
 		t.Fatalf("reviewer ANTHROPIC_API_KEY = %q (set %v), want blanked", value, ok)
 	}
@@ -290,19 +287,12 @@ func TestLauncherSpawnPrependsNodeRuntimeForNodeShimReviewer(t *testing.T) {
 	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	// The daemon-dir pin stays at the head: the reviewer binary is invoked by
-	// absolute path, and `env node` skips the daemon dir (which holds `ao`, not
-	// `node`) to reach the node dir behind it.
 	parts := strings.Split(rt.createCfg.Env["PATH"], string(os.PathListSeparator))
 	if len(parts) < 3 || parts[0] != filepath.Dir(exe) || parts[1] != binDir || parts[2] != nodeDir {
 		t.Fatalf("runtime PATH = %q, want daemon dir, reviewer bin, then node dir", rt.createCfg.Env["PATH"])
 	}
 }
 
-// A foreign `ao` beside the reviewer binary must not win a bare `ao` typed into
-// a reviewer pane: the launch-binary prepend puts that directory in front of
-// the pin, and the pin has to be moved back. Same failure as #3562, one context
-// over.
 func TestLauncherSpawnKeepsDaemonAOAheadOfLaunchBinaryDir(t *testing.T) {
 	home := t.TempDir()
 	binDir := filepath.Join(home, "reviewer", "bin")
@@ -315,9 +305,6 @@ func TestLauncherSpawnKeepsDaemonAOAheadOfLaunchBinaryDir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// binDir is deliberately NOT on the inherited PATH, which is what makes the
-	// launch-binary prepend happen at all (a GUI-launched app does not see the
-	// npm global bin the agent CLI and the legacy `ao` share).
 	basePath := t.TempDir()
 	t.Setenv("PATH", basePath)
 
@@ -645,10 +632,6 @@ func TestLauncherUsesReviewerNeutralWorkingDirectory(t *testing.T) {
 	}
 }
 
-// Spawn must replace any stale pane on the stable per-worker handle before
-// creating the new one — otherwise a reviewer-harness switch either collides
-// with the old pane's tmux session name or leaves it serving under the old
-// harness's sandbox/permissions/env (which are applied only at Create).
 func TestLauncherSpawnReplacesStalePane(t *testing.T) {
 	reviewer := &fakeReviewer{}
 	rt := &fakeRuntime{}
@@ -1258,7 +1241,6 @@ func TestLauncherPreflightEnvPrefixWithMissingBinary(t *testing.T) {
 func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
 	t.Setenv("AO_DATA_DIR", t.TempDir())
 	t.Setenv("AO_RUN_FILE", filepath.Join(t.TempDir(), "running.json"))
-	// Resolve a harmless binary; no provider process is started by fakeRuntime.
 	bin := filepath.Join(t.TempDir(), "codex")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)

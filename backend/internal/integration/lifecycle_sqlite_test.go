@@ -30,11 +30,8 @@ import (
 )
 
 type stubRuntime struct {
-	created   int
-	destroyed int
-	// aliveByHandle scripts IsAlive per handle ID. If a handle ID is absent,
-	// IsAlive returns true (default: alive), matching the pre-existing behavior
-	// that all other tests relied on.
+	created          int
+	destroyed        int
 	aliveByHandle    map[string]bool
 	destroyedHandles []string
 }
@@ -70,7 +67,6 @@ func (s *stubRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int)
 	return "", nil
 }
 
-// wasDestroyed reports whether Destroy was called with the given handle ID.
 func (s *stubRuntime) wasDestroyed(handleID string) bool {
 	for _, id := range s.destroyedHandles {
 		if id == handleID {
@@ -102,7 +98,6 @@ func (stubAgent) SessionInfo(context.Context, ports.SessionRef) (ports.SessionIn
 	return ports.SessionInfo{}, false, nil
 }
 
-// stubAgents resolves every harness to the same stubAgent.
 type stubAgents struct{}
 
 func (stubAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return stubAgent{}, true }
@@ -407,20 +402,10 @@ func TestRestoreRoundTripPreservesMetadata(t *testing.T) {
 	}
 }
 
-// TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux exercises
-// Manager.Reconcile against a real sqlite.Store:
-//
-//   - Session A: is_terminated=0 but its runtime is GONE and it is a promptless
-//     KindWorker. Its blank relaunch is not resumable, so reconcileLive preserves
-//     the live record and worktree with exited activity. End state:
-//     is_terminated=false, runtime.Create count stays 0.
-//   - Session B: is_terminated=1 but its runtime is still ALIVE (leaked teardown)
-//     => Reconcile must call Destroy on its handle.
 func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 	ctx := context.Background()
 	st := newStack(t)
 
-	// Script liveness: handle "hdl-A" is dead; handle "hdl-B" is alive.
 	st.rt.aliveByHandle = map[string]bool{
 		"hdl-A": false,
 		"hdl-B": true,
@@ -428,9 +413,6 @@ func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// Seed session A: live in the DB (is_terminated=0) but runtime is gone.
-	// WorkspacePath and Branch must be non-empty so reconcileLive actually probes
-	// IsAlive (it short-circuits on missing path/branch).
 	recA := domain.SessionRecord{
 		ProjectID:    "mer",
 		Kind:         domain.KindWorker,
@@ -450,7 +432,6 @@ func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 		t.Fatalf("seed session A: %v", err)
 	}
 
-	// Seed session B: terminated in the DB (is_terminated=1) but runtime leaked.
 	recB := domain.SessionRecord{
 		ProjectID:    "mer",
 		Kind:         domain.KindWorker,
@@ -469,7 +450,6 @@ func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed session B: %v", err)
 	}
-	// recB is already built with IsTerminated=true, so CreateSession stores it terminated; the UpdateSession below is redundant but kept for clarity.
 	if err := st.store.UpdateSession(ctx, recB); err != nil {
 		t.Fatalf("patch session B terminated: %v", err)
 	}
@@ -478,9 +458,6 @@ func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	// Session A is a promptless KindWorker: reconcileLive cannot safely launch it
-	// blank, but must not treat that restart-time failure as a durable termination.
-	// It remains available for explicit recovery with its worktree intact.
 	gotA, ok, err := st.store.GetSession(ctx, recA.ID)
 	if err != nil {
 		t.Fatalf("get session A: %v", err)
@@ -497,12 +474,10 @@ func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 	if gotA.Metadata.WorkspacePath != recA.Metadata.WorkspacePath || gotA.Metadata.Branch != recA.Metadata.Branch {
 		t.Fatalf("session A: workspace identity changed: got %+v, want %+v", gotA.Metadata, recA.Metadata)
 	}
-	// No runtime.Create: a promptless worker must not be blank-relaunched.
 	if st.rt.created != 0 {
 		t.Fatalf("want 0 runtime Creates (promptless worker must not relaunch), got %d", st.rt.created)
 	}
 
-	// Session B's leaked runtime must have been destroyed.
 	if !st.rt.wasDestroyed("hdl-B") {
 		t.Fatalf("session B: want Destroy called for handle hdl-B; destroyed handles: %v", st.rt.destroyedHandles)
 	}

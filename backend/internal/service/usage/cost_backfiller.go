@@ -19,7 +19,6 @@ type costBackfillStore interface {
 	ApplyUsageCostUpdates(context.Context, []domain.UsageCostUpdate, time.Time) (int, error)
 }
 
-// CostBackfillerConfig supplies lifecycle callbacks and deterministic time.
 type CostBackfillerConfig struct {
 	Manager   *pricing.Manager
 	Clock     func() time.Time
@@ -27,7 +26,6 @@ type CostBackfillerConfig struct {
 	RetryWait func(context.Context, time.Duration) error
 }
 
-// CostBackfiller prices bounded pages after provider catalog activation.
 type CostBackfiller struct {
 	store   costBackfillStore
 	config  CostBackfillerConfig
@@ -63,7 +61,6 @@ const (
 	costBackfillRetryMaximum = time.Hour
 )
 
-// NewCostBackfiller constructs one provider cost worker.
 func NewCostBackfiller(store costBackfillStore, config CostBackfillerConfig) *CostBackfiller {
 	if config.Clock == nil {
 		config.Clock = time.Now
@@ -85,7 +82,6 @@ func NewCostBackfiller(store costBackfillStore, config CostBackfillerConfig) *Co
 	}
 }
 
-// Start launches the single backfill worker.
 func (b *CostBackfiller) Start(ctx context.Context) error {
 	if b.store == nil {
 		return errors.New("usage cost backfiller requires a store")
@@ -100,7 +96,6 @@ func (b *CostBackfiller) Start(ctx context.Context) error {
 	return nil
 }
 
-// Enqueue queues one pass per provider whose version the snapshot activated.
 func (b *CostBackfiller) Enqueue(
 	ctx context.Context,
 	snapshot *pricing.Snapshot,
@@ -109,7 +104,6 @@ func (b *CostBackfiller) Enqueue(
 	return b.enqueue(ctx, snapshot, activations, false)
 }
 
-// Rerun queues a pass for every provider at its active version, even one that already ran, because stored rows changed underneath it: a repair cleared their costs, or a price override moved.
 func (b *CostBackfiller) Rerun(ctx context.Context, snapshot *pricing.Snapshot) error {
 	if snapshot == nil {
 		return errors.New("usage cost backfill snapshot is nil")
@@ -152,7 +146,6 @@ func (b *CostBackfiller) enqueue(
 	return nil
 }
 
-// RepriceModels queues a pass over each model's events after its price override changed: rows AO priced, or could not, take the new price.
 func (b *CostBackfiller) RepriceModels(ctx context.Context, modelIDs []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -183,7 +176,6 @@ func (b *CostBackfiller) queue(jobs []costBackfillJob) {
 	}
 }
 
-// Wait joins the worker after its context is canceled.
 func (b *CostBackfiller) Wait() {
 	if !b.started.Load() {
 		return

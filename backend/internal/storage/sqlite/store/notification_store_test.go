@@ -83,9 +83,6 @@ func TestNotificationStore_SourceKeyDedupesTerminalReviewResult(t *testing.T) {
 	}
 }
 
-// Seeing a notification is not the same as fixing what it reported. Dedupe is
-// keyed on the issue being open, so the same session cannot be re-notified
-// about a pause it is still sitting in — only resolving it reopens dedupe.
 func TestNotificationStore_ResolutionNotReadReopensDedupe(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -141,8 +138,6 @@ func TestNotificationStore_ResolutionNotReadReopensDedupe(t *testing.T) {
 	}
 }
 
-// The unresolved list is independent of the seen state and excludes terminal
-// facts: a merged PR is worth seeing once, never worth resolving.
 func TestNotificationStore_ListUnresolvedIgnoresSeenAndTerminalTypes(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -185,7 +180,6 @@ func TestNotificationStore_ListUnresolvedIgnoresSeenAndTerminalTypes(t *testing.
 		t.Fatalf("CountUnresolvedNotifications = %d err=%v, want 2", count, err)
 	}
 
-	// Resolving by PR follows the PR, not the session.
 	resolved, err := s.ResolvePRNotifications(ctx, "https://github.com/o/r/pull/1", domain.NotificationReadyToMerge, now)
 	if err != nil || len(resolved) != 1 || resolved[0].ID != "ntf_ready" {
 		t.Fatalf("ResolvePRNotifications = %+v err=%v", resolved, err)
@@ -266,9 +260,6 @@ func TestNotificationStore_ClearAll(t *testing.T) {
 	}
 }
 
-// A repeated ready SCM observation is not a new transition. Clear-all must
-// retain the open dedupe fact until the PR stops being ready, then allow a
-// later ready transition to create a fresh notification.
 func TestNotificationStore_ClearAllRetainsDedupeUntilResolution(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -356,9 +347,6 @@ func TestNotificationStore_Delete(t *testing.T) {
 	}
 }
 
-// A repeated ready SCM observation is not a new transition. Per-item delete
-// must retain the open dedupe fact until the PR stops being ready, then allow a
-// later ready transition to create a fresh notification.
 func TestNotificationStore_DeleteRetainsDedupeUntilResolution(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -491,10 +479,6 @@ func TestNotificationStore_CheckConstraintRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
-// Readiness is more than open/closed. The SCM observer persists PR facts before
-// it asks lifecycle to resolve, so a crash in that window leaves an open PR
-// whose CI (or review, or mergeability) already moved against it. Startup
-// reconciliation has to apply the same rule the live path does.
 func TestNotificationStore_ReconcileAppliesFullReadyToMergePredicate(t *testing.T) {
 	ready := domain.PullRequest{
 		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
@@ -650,7 +634,6 @@ func TestNotificationStore_ReconcileTreatsAnchoredBotCommentsAsActionable(t *tes
 	}
 }
 
-// Acknowledging must be scoped to the rows a client actually rendered.
 func TestNotificationStore_MarkNotificationsReadOnlyTouchesGivenIDs(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -64,13 +64,6 @@ func TestReconcileSessionOutputType_PRAndArtifactFilesCombine(t *testing.T) {
 	}
 }
 
-// TestReconcileSessionOutputType_BackfillsEmptyArtifactDir covers the
-// critical-risk gap flagged in review: a session row created before
-// artifact_dir existed carries it as ” (migration 0155's default), even
-// though session_manager always prompts the agent to write into the
-// deterministic dataDir/artifacts/<id> path regardless of what is stored.
-// The very first reconcile after upgrade must derive and persist that path
-// so the session stops silently under-reporting artifacts it actually has.
 func TestReconcileSessionOutputType_BackfillsEmptyArtifactDir(t *testing.T) {
 	dataDir := t.TempDir()
 	m, st, _ := newManager(WithDataDir(dataDir))
@@ -98,10 +91,6 @@ func TestReconcileSessionOutputType_BackfillsEmptyArtifactDir(t *testing.T) {
 	}
 }
 
-// TestReconcileSessionOutputType_NoOpWithoutDataDirConfigured covers a nil
-// WithDataDir wiring (e.g. a test manager built without it): the backfill
-// must not panic or write a bogus empty-dataDir path, it must simply leave
-// ArtifactDir empty and behave as before.
 func TestReconcileSessionOutputType_NoOpWithoutDataDirConfigured(t *testing.T) {
 	m, st, _ := newManager()
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -140,14 +129,6 @@ func TestReconcileSessionOutputType_UnknownSessionIsNoOp(t *testing.T) {
 	}
 }
 
-// staleReadStore simulates a read-then-write race deterministically, without
-// goroutines: GetSession always hands back a fixed pre-termination snapshot
-// (what ReconcileSessionOutputType's read captured), while the underlying
-// fakeStore's session row has already moved on to a post-termination state
-// (what a concurrent MarkTerminated + activity/runtime/preview write
-// committed in between). This lets a single-threaded test assert that
-// ReconcileSessionOutputType's write cannot replay the stale snapshot over
-// that newer commit.
 type staleReadStore struct {
 	*fakeStore
 	staleRead domain.SessionRecord
@@ -157,13 +138,6 @@ func (s *staleReadStore) GetSession(context.Context, domain.SessionID) (domain.S
 	return s.staleRead, true, nil
 }
 
-// TestReconcileSessionOutputType_DoesNotResurrectSessionTerminatedDuringRead
-// is the critical-risk regression from review: a read-modify-write
-// UpdateSession(rec) with a stale in-memory rec would replay is_terminated,
-// activity, runtime identity, and preview state backwards over whatever
-// committed after the read — in particular, resurrecting a session that
-// terminated in between. UpdateSessionArtifactOutput must leave all of that
-// untouched; only artifact_dir/OutputType may move.
 func TestReconcileSessionOutputType_DoesNotResurrectSessionTerminatedDuringRead(t *testing.T) {
 	dataDir := t.TempDir()
 	artifactDir := filepath.Join(dataDir, "artifacts", "mer-1")
@@ -185,8 +159,6 @@ func TestReconcileSessionOutputType_DoesNotResurrectSessionTerminatedDuringRead(
 		},
 	}
 
-	// The commit a concurrent termination (plus its activity/runtime/preview
-	// writes) would have left behind by the time reconcile's write runs.
 	terminated := preTermination
 	terminated.IsTerminated = true
 	terminated.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
@@ -244,9 +216,6 @@ func TestReconcileSessionOutputType_DeletingLastArtifactDropsBackToNone(t *testi
 	}
 }
 
-// gatedListStore blocks the first ListPRsBySession call until released, so a
-// test can force an older reconcile to sit between its read and its write
-// while a newer one runs.
 type gatedListStore struct {
 	*fakeStore
 	calls   int32
@@ -275,7 +244,7 @@ func TestReconcileSessionOutputType_OverlappingReconcilesCannotPersistStaleScan(
 
 	older := make(chan error, 1)
 	go func() { older <- m.ReconcileSessionOutputType(ctx, "mer-1") }()
-	<-gated.entered // the older reconcile has read "no PR" and is paused before writing.
+	<-gated.entered
 
 	st.prs["mer-1"] = []domain.PullRequest{{URL: "https://github.com/acme/repo/pull/1", Number: 1}}
 	newer := make(chan error, 1)

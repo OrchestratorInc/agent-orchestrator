@@ -16,7 +16,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -30,8 +29,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// grokLocalAuthStatus checks Grok's own config.toml and auth.json first;
-// XAI_API_KEY is the fallback when they hold no usable credential.
 func grokLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -94,7 +91,6 @@ func grokStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		}
 		if json.Unmarshal(value, &session) == nil &&
 			(strings.TrimSpace(session.AccessToken) != "" || strings.TrimSpace(session.RefreshToken) != "") {
-			// The xAI login records who signed in next to its tokens.
 			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
 			evidence.Email = session.Email
 			evidence.Name = strings.TrimSpace(session.FirstName + " " + session.LastName)
@@ -105,7 +101,6 @@ func grokStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// grokConfigDir follows Grok Build's GROK_HOME override for all local state.
 func grokConfigDir() (string, error) {
 	if home := strings.TrimSpace(os.Getenv("GROK_HOME")); home != "" {
 		return home, nil
@@ -120,9 +115,6 @@ func grokConfigDir() (string, error) {
 	return filepath.Join(home, ".grok"), nil
 }
 
-// grokConfigAuthStatus recognizes the documented per-model api_key and
-// env_key settings. Other config values (model IDs, base URLs, etc.) are not
-// evidence of authentication.
 func grokConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

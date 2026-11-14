@@ -2,12 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// Focus hand-off between a closing Radix menu and the surface its item opened.
-// A menu traps focus for the commit in which it closes and restores focus to
-// its trigger a tick after it unmounts. Both of those used to land on top of
-// the surface a menu item opened, leaving the New task composer with no caret
-// until the user clicked it (#focus regression, reported 2026-09-03).
-
 const projectId = "task-focus";
 const sessionA = "focus-session-a";
 const sessionB = "focus-session-b";
@@ -46,8 +40,6 @@ function conversation(sessionId: string) {
 }
 
 async function setup(page: Page, { animated = false } = {}) {
-	// The menu's exit animation decides whether Radix's deferred focus restore
-	// lands before or after the dialog mounts, so both paths are worth covering.
 	await page.emulateMedia({ reducedMotion: animated ? "no-preference" : "reduce" });
 	await installFakeAgent(page, {
 		projectId,
@@ -117,7 +109,6 @@ function openProjectMenu(page: Page) {
 		.click({ force: true });
 }
 
-// New task opens the new chat page for the project; its composer takes typing.
 async function expectPromptTakesTyping(page: Page) {
 	await expect(page).toHaveURL(new RegExp(`#/new\\?project=${projectId}`));
 	const prompt = page.getByRole("combobox", { name: "Message the agent" });
@@ -167,7 +158,6 @@ test("renderer: New task from the command palette focuses the composer prompt @T
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
 	await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
 	await page.keyboard.press("ControlOrMeta+k");
-	// On a session page the project's actions wait for a search.
 	await page.keyboard.type("new task");
 	await page.getByRole("option", { name: /New task/ }).first().click();
 	await expectPromptTakesTyping(page);
@@ -181,7 +171,6 @@ test("renderer: switching project with a draft never flashes the sample requests
 	await prompt.click();
 	await page.keyboard.type("keep this");
 	await expect(page.getByRole("list", { name: "Sample requests" })).toHaveCount(0);
-	// Any frame that draws them counts, so watch the DOM rather than poll.
 	await page.evaluate(() => {
 		const seen = { flashed: false };
 		(window as unknown as { __samples: typeof seen }).__samples = seen;
@@ -229,8 +218,6 @@ test("renderer: hovering a Chat session fetches its conversation once, and openi
 		response.request().method() === "POST" && response.url().endsWith(`/sessions/${sessionB}/chat-view`));
 	await row.click();
 	await expect(page.getByText(`Existing conversation in ${sessionB}`)).toBeVisible();
-	// A ready chat changes only through events, so neither mounting it nor
-	// registering its Chat view downloads the prefetched history again.
 	await viewRegistered;
 	await page.waitForTimeout(500);
 	expect(requests).toBe(1);

@@ -31,9 +31,6 @@ function SettingsRowLabel({
 		<div className="flex min-w-0 flex-1 items-start gap-(--size-settings-row-icon-gap)">
 			{lead}
 			{Icon ? <Icon className="mt-0.5 size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
-			{/* flex-1: the column takes the width up to the control, so a full-width
-			    child (the Updates progress track) spans it instead of shrink-wrapping
-			    to the longest text line. */}
 			<div className="min-w-0 flex-1">
 				<div className="text-sm leading-5 text-settings-label">{label}</div>
 				<div className="mt-0.5 text-pretty text-control leading-4 text-settings-muted">{description}</div>
@@ -42,24 +39,6 @@ function SettingsRowLabel({
 	);
 }
 
-/**
- * The one settings row: label (14px) with an optional 13px muted description
- * directly under it, the control vertically centered at the trailing edge.
- * The text column is the flexible part: a label alone truncates, a
- * description wraps. The control slot does not shrink, so a control that
- * needs width (an Input) sets one, e.g. `w-80 max-w-full`.
- * Inside a `grouped` SettingsSection it is a card row that fits its content (10px vertical padding).
- *
- * `description` adds a sub-label under the row label for controls whose effect
- * is not obvious from the name alone — "Automatic updates" was read as "install
- * automatically" when it only governs downloading. It takes a node, so a live
- * status line can carry its own `role="status"` or an error tone
- * (`<span className="text-error">`).
- *
- * `icon` is a muted Lucide glyph; `leading` is any other leading visual, such
- * as an AgentAvatar (`size-7`). Other div attributes (id, data-*, tabIndex,
- * aria-labelledby) pass through to the row.
- */
 export function SettingsRow({
 	icon,
 	leading,
@@ -85,9 +64,6 @@ export function SettingsRow({
 			)}
 		>
 			<SettingsRowLabel icon={icon} leading={leading} label={label} description={description} />
-			{/* The text column takes the free space; the control keeps its own
-			    width (capped at 60% of the row) so it never spills over the text.
-			    Value/input caps resolve against the slot, so they are 100% here. */}
 			<div
 				className={cn(
 					"flex max-w-[60%] shrink-0 items-center justify-end [--size-settings-inline-input-max-percent:100%] [--size-settings-row-value-max-percent:100%]",
@@ -100,7 +76,6 @@ export function SettingsRow({
 	);
 }
 
-/** Idle value + pencil; the input bar appears only after click. */
 export function SettingsInlineInput({
 	id,
 	label,

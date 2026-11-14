@@ -361,7 +361,6 @@ func TestConfigureKeepsInheritedNodeOptions(t *testing.T) {
 	}
 	assertNetPreload(t, dataDir, got)
 
-	// A second launch reuses the same content-named file.
 	_, again, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: dataDir})
 	if err != nil {
 		t.Fatalf("configure again: %v", err)

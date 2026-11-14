@@ -37,10 +37,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// Run explicitly with AO_LIVE_OPENCODE_ACP=1. It uses the user's existing
-// OpenCode executable, configuration, providers, and credentials; CI never
-// depends on any of them. AO_LIVE_OPENCODE_ACP_MODEL can select an available
-// provider/model when the configured default cannot serve requests.
 func TestLiveOpenCodeACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_OPENCODE_ACP") != "1" {
 		t.Skip("set AO_LIVE_OPENCODE_ACP=1 to run against the local OpenCode account")

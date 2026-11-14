@@ -14,8 +14,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// steerPath is the one route this file owns, named once so the not-implemented
-// answer and the spec cannot drift apart.
 const steerPath = "/api/v1/sessions/{sessionId}/conversation/steer"
 const steerOrSendPath = "/api/v1/sessions/{sessionId}/conversation/steer-or-send"
 const queuedTurnSteerPath = "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer"
@@ -24,7 +22,6 @@ type steerOrSendService interface {
 	SteerOrSend(context.Context, domain.SessionID, ports.ChatUserMessage, bool) (chatsvc.SteerOrSendResult, error)
 }
 
-// PromoteQueuedTurnResponse reports where one durable queued turn landed.
 type PromoteQueuedTurnResponse struct {
 	SourceTurnID   string `json:"sourceTurnId"`
 	ProviderTurnID string `json:"providerTurnId"`
@@ -62,8 +59,6 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 		writeSteerError(w, r, err)
 		return
 	}
-	// A send that fell back to a new turn is a Chat message, counted where it is
-	// inserted; only a steer needs counting here.
 	if !req.RecoverOnly && !result.Duplicate && result.Steered {
 		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
 	}
@@ -81,17 +76,6 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 	envelope.WriteJSON(w, http.StatusAccepted, response)
 }
 
-// steer sends guidance into the in-flight turn.
-//
-// 202 rather than 200: the provider accepts the guidance and then acts on it at its
-// next model-request boundary — measured about five seconds later against
-// codex-cli 0.146.0. What changed by the time this returns is that the agent has the
-// correction, not that it has done anything with it, and 200 would claim otherwise.
-//
-// Strictly better than the interrupt-and-resend it replaces: the turn keeps its id,
-// its reasoning and its in-flight work, and settles `completed` rather than
-// `interrupted`. That is why it is a separate route instead of a flag on send — the
-// two do different things to work the user has already waited for.
 func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", steerPath)
@@ -133,7 +117,6 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 		writeSteerError(w, r, err)
 		return
 	}
-	// A replay of an accepted client message id is the same steer, not a new one.
 	if !result.Replayed {
 		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
 	}
@@ -177,15 +160,6 @@ func writeQueuedTurnSteerError(w http.ResponseWriter, r *http.Request, err error
 	}
 }
 
-// writeSteerError maps the refusals that are specific to steering, then falls
-// through to the shared Chat mapping for everything a steer shares with the other
-// conversation commands (unknown session, TUI session, no controller, provider
-// refusal).
-//
-// The steer-specific cases are handled here rather than added to the shared mapper
-// because two of them say something a generic message cannot. "There is no turn in
-// flight" needs to advise sending an ordinary message, which is the opposite of what
-// the same condition means to an interrupt.
 func writeSteerError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, chatsvc.ErrSteerTextRequired):
@@ -193,17 +167,11 @@ func writeSteerError(w http.ResponseWriter, r *http.Request, err error) {
 			"CHAT_STEER_TEXT_REQUIRED", "steer text is required", nil)
 
 	case errors.Is(err, chatsvc.ErrSteerUnsupported):
-		// Permanent for this harness and a conflict rather than a 500: nothing failed,
-		// the provider simply has no way to take guidance mid-turn. A client should
-		// hide the control instead of retrying.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_STEER_UNSUPPORTED",
 			"this agent cannot take guidance while it is working", nil)
 
 	case errors.Is(err, chatsvc.ErrTurnNotSteerable):
-		// Retryable: a compaction or review turn is running, and the same request
-		// works once it ends. The provider's own explanation is carried through
-		// because it names which kind of turn is in the way.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_TURN_NOT_STEERABLE", err.Error(), nil)
 
@@ -223,9 +191,6 @@ func writeSteerError(w http.ResponseWriter, r *http.Request, err error) {
 			"this delivery handle belongs to different guidance", nil)
 
 	case errors.Is(err, chatsvc.ErrNoActiveTurn):
-		// Ordinary: the turn finished while the user was typing. Steering has nothing
-		// to join, and the guidance belongs in a new message — which is a different
-		// instruction from the one the interrupt route gives for the same sentinel.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_NO_ACTIVE_TURN",
 			"there is no turn in flight to steer; send this as a message instead", nil)

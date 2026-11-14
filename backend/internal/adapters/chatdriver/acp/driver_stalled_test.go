@@ -14,7 +14,6 @@ import (
 func TestNormalizeACPErrorMarksWatchdogStalls(t *testing.T) {
 	const message = "provider stopped responding: no ACP output for 15m0s; failing the stalled prompt"
 	for name, data := range map[string]any{
-		// The relay wraps provider error data when it adds its own event id.
 		"wrapped by the relay": map[string]any{
 			"providerData":                   map[string]any{persistenthost.ACPPromptStalledDataKey: true},
 			persistenthost.ACPEventIDMetaKey: "acp-host:1",

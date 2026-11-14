@@ -33,7 +33,6 @@ func TestNativeRestoreCarriesAHandoffFromMainsAgentSwitching(t *testing.T) {
 	if got := m.withLegacySwitchHandoff(context.Background(), rec, "AO RULES"); got != "AO RULES\n\nEARLIER CONTEXT" {
 		t.Fatalf("system prompt = %q, want the old handoff added", got)
 	}
-	// A file outside AO's handoffs folder is not read.
 	outside := filepath.Join(t.TempDir(), "final.json")
 	if err := os.WriteFile(outside, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

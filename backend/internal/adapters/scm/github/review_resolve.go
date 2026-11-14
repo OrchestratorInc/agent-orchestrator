@@ -10,7 +10,6 @@ import (
 
 var _ ports.SCMReviewResolver = (*Provider)(nil)
 
-// ResolveReviewThread marks a GitHub pull-request review thread as resolved.
 func (p *Provider) ResolveReviewThread(ctx context.Context, request ports.SCMReviewResolveRequest) error {
 	if p == nil || p.client == nil {
 		return fmt.Errorf("github scm: review resolver is not configured")

@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestMigration0166AllowsDeepSeekAndReversesBothHistoricalSchemas mirrors the fx
-// coverage: the new harness must be insertable on a current and a legacy-qm
-// schema, an unknown harness must still be rejected, and the down migration must
-// restore the exact prior constraint.
 func TestMigration0165AllowsDeepSeekAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
@@ -22,8 +18,6 @@ func TestMigration0165AllowsDeepSeekAndReversesBothHistoricalSchemas(t *testing.
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''unreal-agent'', ''fake''', '''unreal-agent'', ''qm'', ''fake''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			// Land on the exact schema 0166 upgrades, so the down migration can be
-			// compared against the constraint it started from.
 			upTo(t, db, 165)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
@@ -46,7 +40,6 @@ func TestMigration0165AllowsDeepSeekAndReversesBothHistoricalSchemas(t *testing.
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
-			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'deepseek-harness'`)
 			downTo(t, db, 165)
 			var after string
@@ -64,11 +57,6 @@ func TestMigration0165AllowsDeepSeekAndReversesBothHistoricalSchemas(t *testing.
 	}
 }
 
-// TestDeepSeekRepairAnchorMatchesEveryHistoricalList guards the anchor the
-// schema repair relies on for this harness: whatever schema a database arrives
-// from, the sessions harness CHECK must end with the retained 'fake' fixture
-// harness, otherwise the repair would silently skip it and a database that
-// missed an earlier harness migration could never accept this harness.
 func TestMigration0165WidensEveryHistoricalHarnessList(t *testing.T) {
 	for _, version := range []int64{26, 53, 54, 82, 95, 155, 163, 164, 165} {
 		db := openMigratedDatabaseCopy(t, version)

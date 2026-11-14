@@ -17,7 +17,6 @@ var (
 	_ ports.AgentImportedSessionPreparer     = (*Plugin)(nil)
 )
 
-// NativeSessionConfigDir resolves the native Cursor profile without copying auth.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -25,7 +24,6 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return nativeconfig.Resolve(env, "CURSOR_DATA_DIR", ".cursor")
 }
 
-// LocateTranscript finds a complete native graph with the requested identity.
 func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if ref.ConfigDir == "" || ref.NativeSessionID == "" {
 		return "", false, nil
@@ -40,7 +38,6 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	return cursorstore.Find(ctx, ref.ConfigDir, ref.NativeSessionID)
 }
 
-// ProbeNativeSession refuses missing or incomplete native state.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if ref.ConfigDir == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
@@ -55,12 +52,6 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// PrepareImportedSession copies the chat to where the resume looks.
-// Cursor's direct --resume path uses process.cwd() for this lookup and creates
-// tools from the launch workspace, independently of the saved conversation graph.
-// ACP's session/load reads only acp-sessions/<id>, so a Chat import is copied
-// there under its own id (see Layout.SessionID); the terminal CLI's own chat
-// folder never holds the copy.
 func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	layout := cursorstore.LayoutTerminal
 	if r.Chat {
@@ -88,9 +79,6 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	return ports.NativeSessionRef{NativeSessionID: layout.SessionID(archive.ID, r.LaunchCWD, r.SourceFingerprint), ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 }
 
-// PrepareRuntimeLaunch verifies the exact imported cwd bucket before Cursor
-// can initialize a missing SQLite store and silently continue an empty chat.
-// Ordinary managed launches keep their existing behavior.
 func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

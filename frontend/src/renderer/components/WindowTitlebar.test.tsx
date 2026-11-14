@@ -191,9 +191,6 @@ describe("WindowTitlebar", () => {
       </TooltipProvider>,
     );
 
-    // The docked omnibox is portaled into the inspector header, outside the
-    // browser-panel div — focusing it must not clear the browser shortcut
-    // target or the next ⌘T/⌘W opens/closes a terminal instead of a tab.
     const addressBar = document.createElement("div");
     addressBar.setAttribute("data-testid", "browser-address-bar");
     const input = document.createElement("input");

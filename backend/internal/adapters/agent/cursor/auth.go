@@ -18,21 +18,16 @@ var (
 	_ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 )
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
 	return status, err
 }
 
-// AuthStatusWithDiagnostics also names the account: an API key, or the login
-// Cursor records in its CLI config once `cursor-agent status` confirms it. It
-// retains the evidence from the same auth check.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
-	// Native login decides first; the environment key is the fallback.
 	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, nil)
 	if err != nil && ctx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
@@ -46,8 +41,6 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return status, domain.AgentAccountIdentity{}, steps, err
 }
 
-// cursorConfigPath is where the Cursor CLI records its login; tests point it
-// at a temporary file.
 var cursorConfigPath = func() string {
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
@@ -56,8 +49,6 @@ var cursorConfigPath = func() string {
 	return filepath.Join(home, ".cursor", "cli-config.json")
 }
 
-// cursorLoginAccount reads the display identity from the CLI config's
-// authInfo. Ids are never read: they are provider identity, not display.
 func cursorLoginAccount(ctx context.Context, path string) domain.AgentAccountIdentity {
 	if path == "" || ctx.Err() != nil {
 		return domain.AgentAccountIdentity{}

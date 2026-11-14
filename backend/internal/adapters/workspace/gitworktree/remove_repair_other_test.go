@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// Regression for issue #3807: an renv sandbox leaves 0500 directories inside
-// the worktree with symlinks into the system R library. Unlinking the symlink
-// needs write on its 0500 parent, so os.RemoveAll fails and the worktree is
-// stranded. Cleanup must repair the parent, remove the worktree, and never
-// follow the symlink into the target.
 func TestRemoveAllWithRetryOwnerReadonlySymlink(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses directory permissions")
@@ -65,8 +60,6 @@ func TestRemoveAllWithRetryOwnerReadonlySymlink(t *testing.T) {
 	}
 }
 
-// A read-only directory with plain files inside (no symlinks) is the same
-// failure: the files' own modes are irrelevant, only the parent's write bit.
 func TestRemoveAllWithRetryOwnerReadonlyNestedFiles(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses directory permissions")
@@ -95,8 +88,6 @@ func TestRemoveAllWithRetryOwnerReadonlyNestedFiles(t *testing.T) {
 	}
 }
 
-// A directory with no permissions at all (0000) cannot even be listed. The
-// repair must chmod it before descending, or WalkDir never sees its children.
 func TestRemoveAllWithRetryOwnerNoPermsDirectory(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root bypasses directory permissions")

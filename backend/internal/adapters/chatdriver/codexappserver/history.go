@@ -12,37 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Conversation history operations: rollback, fork, and the thread title.
-//
-// Each wire shape below was measured against a live `codex app-server` 0.146.0
-// rather than read off the generated schema, because two of them do not do what
-// their names suggest:
-//
-//   - thread/rollback takes {threadId, numTurns} and drops numTurns turns from the
-//     END of the thread. It takes no turn id at all, which is why rolling back to a
-//     turn the user pointed at has to read the thread's own turn list and count
-//     backwards from it.
-//   - thread/fork takes {threadId, lastTurnId?} and answers with a NEW thread id.
-//     Omitting cwd makes the fork inherit the source thread's working directory,
-//     which is the only directory whose files match the history being copied.
-//
-// The provider's refusals are as load-bearing as its successes, so they are
-// recorded here too. All three arrive as code -32600:
-//
-//	rollback mid-turn      "Cannot rollback while a turn is in progress."
-//	rollback numTurns < 1  "numTurns must be >= 1"
-//	fork through live turn "lastTurnId '...' identifies an in-progress turn"
-//	blank title            "thread name must not be empty"
-//	unloaded thread        "thread not found: <id>"
-//
-// thread/rollback works on 0.146.0. Codex 0.162 replaces it with thread/revert,
-// taking {threadId, beforeTurnId} and retaining the prefix before that turn in
-// the same thread. Neither operation reverts workspace files. An unknown-method
-// refusal is safe to retry through revert; an ordinary refusal is not.
-
-// Asserted so a refactor cannot silently drop one of these: the service
-// feature-detects each interface, and a missing method would read as "the provider
-// cannot do this" with nothing anywhere to notice.
 var (
 	_ ports.ChatRollbacker       = (*conversation)(nil)
 	_ ports.ChatForker           = (*conversation)(nil)
@@ -51,40 +20,17 @@ var (
 	_ ports.ChatHistoryRefresher = (*conversation)(nil)
 )
 
-// providerRefusal marks a request the provider rejected on its own terms, as
-// opposed to one that never got through.
-//
-// The distinction has to survive the trip out of this package: a refusal is a
-// conflict the user can act on ("stop the turn first"), while a transport failure
-// is an internal error. Reporting the first as the second is how a perfectly
-// ordinary "not right now" reaches someone as "Internal server error".
-//
-// It travels as a behaviour rather than a sentinel because the layer that needs to
-// classify it — the Chat service — must not import an adapter, and this adapter
-// must not own service vocabulary. A one-method interface satisfied structurally
-// is what lets both stay put.
 type providerRefusal struct{ err error }
 
 func (e *providerRefusal) Error() string { return e.err.Error() }
 func (e *providerRefusal) Unwrap() error { return e.err }
 
-// ChatRefusal reports that the provider declined the request and the conversation
-// is otherwise healthy.
 func (e *providerRefusal) ChatRefusal() bool { return true }
 
-// refuse builds a refusal AO decided on itself, for the cases where the provider
-// would refuse anyway and saying so locally keeps the message about the caller's
-// input instead of about the protocol.
 func refuse(format string, args ...any) error {
 	return &providerRefusal{err: fmt.Errorf(format, args...)}
 }
 
-// asRefusal reclassifies a provider error when the provider itself said no.
-//
-// app-server answers -32600 for anything it considers invalid or not permitted at
-// this moment, and that is the only class where the connection is fine and the
-// request is the thing at fault. Everything else — a dead process, a decode
-// failure, a context deadline — stays an error.
 func asRefusal(err error) error {
 	var rpcErr *rpcError
 	if errors.As(err, &rpcErr) && rpcErr.Code == -32600 {
@@ -93,16 +39,11 @@ func asRefusal(err error) error {
 	return err
 }
 
-// providerTurn is the subset of a thread's turn list AO reads.
 type providerTurn struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 }
 
-// ReadHistory returns a settled, provider-neutral replay of the native Codex
-// thread. It is how a TUI -> Chat handoff makes the work already visible in the
-// terminal visible in AO's structured timeline as well; resuming the thread alone
-// preserves model context but does not make app-server re-emit old notifications.
 func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, error) {
 	var resp codexproto.ThreadReadResponse
 	includeTurns := true
@@ -128,8 +69,6 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 
 	events := make([]ports.ChatEvent, 0, len(resp.Thread.Turns)*4)
 	citations := newCitationFormatter()
-	// Native history is a snapshot: collect references before projecting any
-	// message, regardless of where search items appear within its turns.
 	for _, turn := range resp.Thread.Turns {
 		for _, item := range turn.Items {
 			citations.observeItem(c.threadID, turn.ID, item)
@@ -149,10 +88,6 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 			itemID := deref(item.ID)
 			eventItemID := itemID
 			if itemID == "" {
-				// Current persisted Codex history can omit item ids. The projection's
-				// provider-item key is conversation-wide, so an index alone would make
-				// item 1 in every turn overwrite item 1 from the first turn. Include the
-				// turn in that key while keeping the event identity position-based.
 				eventItemID = fmt.Sprintf("item-%d", itemIndex)
 				itemID = fmt.Sprintf("%s-%s", turn.ID, eventItemID)
 				item.ID = &itemID
@@ -211,15 +146,10 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 	return events, nil
 }
 
-// RefreshHistory performs another authoritative thread/read. Codex exposes a
-// repeatable native read rather than a replay captured during resume, so bounded
-// settle polling can observe provider progress here.
 func (c *conversation) RefreshHistory(ctx context.Context) ([]ports.ChatEvent, error) {
 	return c.ReadHistory(ctx)
 }
 
-// InheritedHistory only translates IDs after Codex proves the parent chain.
-// A missing/archived ancestor leaves the replay independent and fully visible.
 func (c *conversation) InheritedHistory(ctx context.Context, ancestor domain.ConversationBranch, events []ports.ChatEvent) ([]ports.ChatEvent, error) {
 	c.mu.Lock()
 	parent := c.historyParentID
@@ -258,9 +188,6 @@ func historyEventID(parts ...string) string {
 	return "codex-history:" + strings.Join(parts, ":")
 }
 
-// historicalUserText renders the provider's structured prompt blocks without
-// leaking Codex DTOs above the adapter. Text is preserved verbatim; non-text
-// blocks get a compact readable marker so an attachment-only prompt is not lost.
 func historicalUserText(item codexproto.ThreadItem) string {
 	var inputs []codexproto.UserInput
 	if len(item.Content) > 0 && json.Unmarshal(item.Content, &inputs) == nil {
@@ -297,24 +224,12 @@ func historicalUserText(item codexproto.ThreadItem) string {
 	return strings.TrimSpace(deref(item.Text))
 }
 
-// Rollback discards the named turn and every turn after it, provider-side.
-//
-// Inclusive of the named turn on purpose: this is undo, and the thing a person
-// wants back is the state from before they sent the message they are pointing at.
-// Keeping that turn would leave the exchange they are trying to take back in the
-// agent's memory, which is the one outcome that makes the button pointless.
-//
-// It changes what the agent remembers. AO's rows have to follow, and that is the
-// caller's job — see the Chat controller.
 func (c *conversation) Rollback(ctx context.Context, providerTurnID string) error {
 	providerTurnID = c.nativeID(providerTurnID)
 	if strings.TrimSpace(providerTurnID) == "" {
 		return errors.New("rollback needs a provider turn id")
 	}
 
-	// Serialized with turn dispatch: the count computed below is only valid for the
-	// turn list it was read from, and a turn starting in between would shift every
-	// position in it.
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
@@ -331,9 +246,6 @@ func (c *conversation) Rollback(ctx context.Context, providerTurnID string) erro
 		}
 	}
 	if discard == 0 {
-		// Either the turn was already discarded or it belongs to history this thread
-		// no longer holds. Refusing beats guessing: any count AO invented here would
-		// discard turns the user never named.
 		return refuse("turn %q is not in the provider's history", providerTurnID)
 	}
 
@@ -344,9 +256,6 @@ func (c *conversation) Rollback(ctx context.Context, providerTurnID string) erro
 		var rpcErr *rpcError
 		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 ||
 			(rpcErr.Code == -32600 && strings.Contains(rpcErr.Message, "unknown variant `thread/rollback`"))) {
-			// Codex 0.162 replaced the count-based operation with an exclusive
-			// turn anchor. Only an unknown-method refusal permits this fallback;
-			// busy/validation/transport failures must never try another mutation.
 			if err := c.conn.request(ctx, "thread/revert", map[string]any{
 				"threadId": c.threadID, "beforeTurnId": providerTurnID,
 			}, nil); err != nil {
@@ -359,12 +268,6 @@ func (c *conversation) Rollback(ctx context.Context, providerTurnID string) erro
 	return nil
 }
 
-// readTurns is the provider's own turn list for this thread, oldest first.
-//
-// Read from the provider rather than counted from AO's rows because the two sets
-// legitimately differ: AO records a turn whose dispatch the provider rejected, and
-// a turn from before a resume may be absent here. thread/rollback counts in the
-// provider's terms, so counting in AO's would discard the wrong number of turns.
 func (c *conversation) readTurns(ctx context.Context) ([]providerTurn, error) {
 	var resp struct {
 		Thread struct {
@@ -380,11 +283,6 @@ func (c *conversation) readTurns(ctx context.Context) ([]providerTurn, error) {
 	return resp.Thread.Turns, nil
 }
 
-// Fork branches this conversation into a second provider conversation, so an
-// alternative approach can be tried without destroying the original.
-//
-// A nil anchor copies the whole history; a provider turn id copies through that
-// turn inclusively. In both cases, the original thread remains unchanged.
 func (c *conversation) Fork(ctx context.Context, lastProviderTurnID *string) (string, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -397,9 +295,6 @@ func (c *conversation) Fork(ctx context.Context, lastProviderTurnID *string) (st
 		}
 		params.LastTurnID = &anchor
 	}
-	// cwd is deliberately absent so the fork inherits the source thread's working
-	// directory. A fork pointed at a different tree would remember editing files
-	// that are not there.
 	var resp codexproto.ThreadForkResponse
 	if err := c.conn.request(ctx, codexproto.MethodThreadFork, params, &resp); err != nil {
 		return "", asRefusal(fmt.Errorf("thread/fork: %w", err))
@@ -410,13 +305,6 @@ func (c *conversation) Fork(ctx context.Context, lastProviderTurnID *string) (st
 	return resp.Thread.ID, nil
 }
 
-// SetTitle names the thread provider-side.
-//
-// Nothing is written to AO's rows here. The provider answers a bare {} and then
-// emits thread/name/updated, and that notification is the single path by which a
-// title reaches AO — including when the name was set by some other client
-// entirely. Writing it optimistically as well would give AO two sources for one
-// fact and no way to tell which one lost.
 func (c *conversation) SetTitle(ctx context.Context, title string) error {
 	trimmed := strings.TrimSpace(title)
 	if trimmed == "" {
@@ -442,8 +330,6 @@ func (c *conversation) DeleteFork(ctx context.Context, providerConversationID st
 	}
 	err := c.conn.request(ctx, codexproto.MethodThreadDelete,
 		codexproto.ThreadDeleteParams{ThreadID: id}, nil)
-	// Cleanup runs after the child host stops and must tolerate an already
-	// deleted rollout, including a deletion whose acknowledgement was lost.
 	var refusal *rpcError
 	if errors.As(err, &refusal) && refusal.Code == -32600 && refusal.Message == "no rollout found for thread id "+id {
 		return nil

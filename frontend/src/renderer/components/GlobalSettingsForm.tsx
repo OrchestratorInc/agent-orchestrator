@@ -19,11 +19,8 @@ export function GlobalSettingsForm({
 	section = "all",
 }: {
 	cloudEnabled?: boolean;
-	/** The org's offering includes coder (SettingsDialog reads useCloudOffering). */
 	customCoder?: boolean;
-	/** The org is on self-serve billing. */
 	selfServeBilling?: boolean;
-	/** What the Teams page offers (SettingsDialog reads the offering and the person's teams). */
 	teams?: "manage" | "member" | "none";
 	focusAgentId?: string;
 	hostId?: string;
@@ -37,8 +34,6 @@ export function GlobalSettingsForm({
 	const all = section === "all";
 	const context = { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, focusAgentId, hostId, harnessView, startLogin, showDiagnostics, singlePage: !all };
 	const items = globalSettingsItemsFor(section, context);
-	// On a single page the pane's title names it; SettingsSection hides only a
-	// heading that would repeat that title, so other section headings show.
 	const pageTitle = all ? null : (items[0]?.label(t) ?? null);
 
 	return (

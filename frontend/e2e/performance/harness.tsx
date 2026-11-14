@@ -1,6 +1,4 @@
 /// <reference path="../../src/renderer/global.d.ts" />
-// Browser-only workload fixture: real AO rendering, deterministic synthetic data.
-// This entry is never imported by the application or included in its build.
 import { type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
@@ -130,8 +128,6 @@ export const performanceHarness = {
 		const unsubscribe = observer.subscribe(() => {});
 		const disconnect = createEventTransport(queryClient).connect();
 		try {
-			// The bridge delivers an initial daemon-status callback. Let its full
-			// lifecycle refresh finish before measuring conversation-only traffic.
 			await wait(500);
 			flushes.length = 0;
 			completions.length = 0;
@@ -214,8 +210,6 @@ export const performanceHarness = {
 	},
 
 	async highlighting() {
-		// Load the existing grammar chunk first so this isolates large-block work,
-		// not network/module fetch differences. The worker still starts lazily.
 		await highlight("const warmup = 1", "typescript");
 		const code = Array.from(
 			{ length: 10000 },

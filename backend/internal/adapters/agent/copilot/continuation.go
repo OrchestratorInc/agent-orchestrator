@@ -20,8 +20,6 @@ var (
 	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
 )
 
-// NativeSessionConfigDir follows Copilot's COPILOT_HOME override and default
-// ~/.copilot. A launch-specific value takes precedence over the daemon's.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -29,9 +27,6 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return nativeconfig.Resolve(env, "COPILOT_HOME", ".copilot")
 }
 
-// ProbeNativeSession checks the store session/load reads. Copilot addresses
-// CLI and ACP conversations by the same UUID regardless of the launch cwd;
-// imports do not relocate or copy their native event logs.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.NativeSessionAvailabilityUnknown, err
@@ -49,8 +44,6 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// LocateTranscript validates the UUID and confines the native lookup to the
-// selected provider home, including intermediate directory symlinks.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err

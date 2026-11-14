@@ -10,17 +10,8 @@ import { useUiStore, type ArchiveModalRequest } from "../stores/ui-store";
 import { workerSessions, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { SessionArchiveModal } from "./SessionArchiveModal";
 
-/**
- * The archive modal, mounted once by the shell so it opens over whatever page
- * is showing: a session, Artifacts, settings or the board. The board's Archive
- * button, a sidebar project's menu and Cmd+K open it through
- * `useUiStore().openArchive`; none of them navigates. Only opening or
- * restoring a session from inside it moves the user, and that closes it.
- */
 export function ArchiveModalHost() {
 	const request = useUiStore((state) => state.archiveModal);
-	// The last request outlives the close, so the closing animation keeps its
-	// cards. Nothing mounts until the first open.
 	const [shown, setShown] = useState(request);
 	if (request && request !== shown) setShown(request);
 	if (!shown) return null;
@@ -32,9 +23,6 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 	const { hostId, projectId } = request;
 	const connectedHosts = useConnectedHosts();
 	const connected = !hostId || connectedHosts.includes(hostId);
-	// Enabled and subscribed only while open. This stays mounted after the first
-	// open, and an enabled observer would keep the cloud lists' own poll timers
-	// (5 s, 15 s) running beside the shell's for the rest of the app's life.
 	const local = useWorkspaceQuery({ enabled: open && !hostId, subscribed: open && !hostId });
 	const remote = useRemoteHostWorkspacesQuery(hostId ?? "", { enabled: open && Boolean(hostId), subscribed: open && Boolean(hostId) });
 	const workspaces = hostId ? remote.data : local.data;
@@ -43,8 +31,6 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 		const scoped = projectId ? (workspaces ?? []).filter((workspace) => workspace.id === projectId) : workspaces ?? [];
 		return archivedNewestFirst(scoped);
 	}, [projectId, workspaces]);
-	// Closing keeps the last list on screen: disabled, the cloud part of the
-	// workspace list can drop out, and the exit animation would show it empty.
 	const shownSessionsRef = useRef(liveSessions);
 	if (open) shownSessionsRef.current = liveSessions;
 	const sessions = shownSessionsRef.current;
@@ -58,10 +44,6 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 		if (!next) useUiStore.getState().closeArchive();
 	}, []);
 
-	// Opened over a page, it belongs to that page: any move to another one (a
-	// shortcut, history, a notification) closes it, so a restore still running
-	// cannot take the user anywhere once they have left. Without a router (a
-	// component test), there is nothing to follow.
 	const router = useRouter({ warn: false });
 	useEffect(() => {
 		if (!open || !router) return;
@@ -72,10 +54,6 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 
 	const returnFocus = request.returnFocus;
 	const onCloseAutoFocus = useMemo(() => returnFocus ? (event: Event) => {
-		// Radix would focus the dialog's trigger, and the archive has none: it
-		// opens from a menu, a button on another surface or Cmd+K. Hand focus
-		// back to the opener instead, two frames later, so a page the modal
-		// navigated to (a session's composer) claims it first.
 		event.preventDefault();
 		requestAnimationFrame(() => requestAnimationFrame(() => {
 			const active = document.activeElement;

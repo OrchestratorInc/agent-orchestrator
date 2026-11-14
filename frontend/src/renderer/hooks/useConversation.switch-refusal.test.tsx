@@ -28,8 +28,6 @@ describe("a definite daemon refusal versus gateway uncertainty", () => {
 		function Compose() {
 			const commands = useConversationCommands("ao-1");
 			return <TooltipProvider><ChatComposer draftSessionId={scope} onSend={async (text, attachments, clientMessageId) => {
-				// The catch below is the SessionChatSurface send path: definitive switch
-				// failures acquire AGENT_SWITCH_FAILED, other failures retain their identity.
 				try {
 					return await commands.send({text,attachments,clientMessageId,providerSwitch:{targetHarness:"pi"}});
 				} catch (failure) {

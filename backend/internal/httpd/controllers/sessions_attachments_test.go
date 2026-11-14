@@ -99,7 +99,6 @@ func TestDecodeSpawnAttachments(t *testing.T) {
 		}
 	})
 
-	// SVG is XML that can carry active content; it is explicitly blocked.
 	t.Run("rejects svg", func(t *testing.T) {
 		_, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "image/svg+xml", Data: b64([]byte("<svg/>"))}})
 		if err == nil || err.code != "UNSUPPORTED_ATTACHMENT_TYPE" {
@@ -152,7 +151,6 @@ func TestDecodeSpawnAttachments(t *testing.T) {
 		if len(out) != 1 {
 			t.Fatalf("want 1 attachment got %d", len(out))
 		}
-		// Should have a fallback extension
 		if out[0].Ext == "" {
 			t.Errorf("want non-empty extension got %q", out[0].Ext)
 		}

@@ -22,7 +22,6 @@ func TestRefreshArchiveRetainsPreparedNativeSnapshotOnRetry(t *testing.T) {
 			service := New(store, "", chatSupported)
 			source := &domain.SessionImportSource{NativeID: id, ConfigDir: root, Prepared: true}
 			record := domain.SessionRecord{ID: "import-1", Harness: domain.HarnessClaudeCode, Metadata: domain.SessionMetadata{NativeTranscriptPath: path, ImportSource: source}}
-			// Workspace transfer alone must still allow the initial refresh.
 			if err := service.RefreshArchive(ctx, record); err != nil || len(store.messages) != 1 {
 				t.Fatalf("initial archive = %#v, %v", store.messages, err)
 			}
@@ -55,8 +54,6 @@ func TestRefreshArchiveRetainsPreparedNativeSnapshotOnRetry(t *testing.T) {
 			if writeErr != nil || closeErr != nil {
 				t.Fatalf("append synthetic source: %v, close: %v", writeErr, closeErr)
 			}
-			// A failed runtime start leaves the checkpoint pending. Retry
-			// must display the archive that belongs to its pinned native copy.
 			if err := service.RefreshArchive(ctx, record); err != nil {
 				t.Fatal(err)
 			}

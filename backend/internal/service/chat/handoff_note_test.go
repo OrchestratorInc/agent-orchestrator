@@ -26,7 +26,6 @@ func TestChatHandoffTurnsCreditEachProviderAndKeepRequestsSentThroughAO(t *testi
 		{ID: "t2", BranchID: "b-claude", State: domain.TurnStateCompleted},
 		{ID: "t3", BranchID: "b-claude", State: domain.TurnStateCompleted},
 		{ID: "t4", BranchID: "b-kimchi", State: domain.TurnStateCompleted},
-		// An edit's branch has no marker of its own.
 		{ID: "t5", BranchID: "b-edited", State: domain.TurnStateCompleted},
 	}
 	messages := []domain.ConversationMessage{
@@ -58,7 +57,6 @@ func TestChatHandoffTurnsCreditEachProviderAndKeepRequestsSentThroughAO(t *testi
 		t.Fatalf("chatHandoffTurns =\n%+v\nwant\n%+v", got, want)
 	}
 
-	// A conversation that never switched cannot say who answered.
 	unswitched := chatHandoffTurns(turns[:1], messages[:2], nil)
 	if len(unswitched) != 1 || unswitched[0].Harness != "" {
 		t.Fatalf("unswitched turns = %+v, want one uncredited turn", unswitched)

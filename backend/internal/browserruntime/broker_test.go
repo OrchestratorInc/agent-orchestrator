@@ -245,7 +245,6 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 			if _, err := io.WriteString(invalid, tc.hello+"\n"); err != nil {
 				t.Fatal(err)
 			}
-			// The runtime learns it was refused, and why, before the daemon closes.
 			_ = invalid.SetReadDeadline(time.Now().Add(browserRuntimeTestTimeout()))
 			dec := json.NewDecoder(invalid)
 			var reply wireMessage
@@ -255,8 +254,6 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 			if reply.Type != "hello-rejected" || reply.Error == nil || reply.Error.Code != tc.code {
 				t.Fatalf("reply = %#v, want hello-rejected with %s", reply, tc.code)
 			}
-			// Only EOF proves the daemon closed the connection; a deadline timeout
-			// would mean it stayed open.
 			if err := dec.Decode(&reply); !errors.Is(err, io.EOF) {
 				t.Fatalf("read after hello-rejected: err = %v, reply = %#v; want io.EOF from the daemon closing", err, reply)
 			}
@@ -373,7 +370,6 @@ func TestBrokerWriteObservesContext(t *testing.T) {
 	}
 }
 
-// handshake sends a hello and requires hello-ok as the daemon's first frame.
 func handshake(t *testing.T, enc *json.Encoder, dec *json.Decoder, token string) {
 	t.Helper()
 	if err := enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion, Token: token}); err != nil {

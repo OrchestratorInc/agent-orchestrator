@@ -11,10 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// RecordTerminalTurnRequest stores what the user asked a Terminal UI agent. A
-// request that arrives while the session's newest turn is still open on the
-// same thread was queued behind it, so it joins that turn instead of starting
-// another.
 func (s *Store) RecordTerminalTurnRequest(ctx context.Context, turn domain.TerminalTurn) error {
 	text := strings.TrimSpace(turn.UserRequest)
 	if text == "" {
@@ -42,8 +38,6 @@ func (s *Store) RecordTerminalTurnRequest(ctx context.Context, turn domain.Termi
 	})
 }
 
-// RecordTerminalTurnResponse closes the session's newest turn with the agent's
-// final message. A stop with no open turn has nothing to answer and is ignored.
 func (s *Store) RecordTerminalTurnResponse(ctx context.Context, id domain.SessionID, response string, at time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -55,7 +49,6 @@ func (s *Store) RecordTerminalTurnResponse(ctx context.Context, id domain.Sessio
 	return nil
 }
 
-// ListTerminalTurns returns a session's stored terminal turns, oldest first.
 func (s *Store) ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]domain.HandoffTurn, error) {
 	rows, err := s.qr.ListTerminalTurns(ctx, string(id))
 	if err != nil {
@@ -68,10 +61,6 @@ func (s *Store) ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]d
 	return turns, nil
 }
 
-// DeleteTerminalTurnsForThread removes the turns of one provider thread after
-// its history was imported into the conversation tables, so a turn never sits
-// in both stores. Rows recorded before the hook reported a thread id match on
-// the provider alone. Other providers' turns were not imported and stay.
 func (s *Store) DeleteTerminalTurnsForThread(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, nativeSessionID string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

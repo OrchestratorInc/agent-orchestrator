@@ -127,7 +127,6 @@ func TestNativeCheckpointTurnCompanionIsNotAUserBoundary(t *testing.T) {
 			parent:    "companion",
 		},
 		{
-			// getSessionMessages drops isMeta records, so replay never shows one.
 			name:      "meta only",
 			companion: `{"type":"user","sessionId":"native","uuid":"meta","parentUuid":"user","promptId":"prompt","isMeta":true,"message":{"content":"B"}}`,
 			parent:    "meta",
@@ -178,8 +177,6 @@ func TestNativeCheckpointTurnCompanionIsNotAUserBoundary(t *testing.T) {
 }
 
 func TestNativeCheckpointNotificationCycleBelongsToPreviousTurn(t *testing.T) {
-	// Claude answers a finished task's notification, or a peer message, on its
-	// own. Chat replay skips that note, so the boundary is the user turn before.
 	user := `{"type":"user","sessionId":"native","uuid":"user","promptId":"prompt","message":{"content":"A"}}`
 	answer := strings.Join([]string{
 		`{"type":"attachment","sessionId":"native","uuid":"attachment","parentUuid":"user","attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":["AO transcript correlation ID: submission."]}}`,
@@ -205,7 +202,6 @@ func TestNativeCheckpointNotificationCycleBelongsToPreviousTurn(t *testing.T) {
 			t.Fatalf("note %s: boundary=%+v error=%v", note, got, err)
 		}
 	}
-	// With no user turn before the note, replay has no boundary to match.
 	orphan := `{"type":"user","sessionId":"native","uuid":"note","promptId":"cycle","message":{"content":"<task-notification>done</task-notification>"}}`
 	evidence = checkpointEvidence(domain.NativeCheckpointObservation{PromptID: "cycle", Text: "still running"})
 	if _, err := verify(orphan, reply); !errors.Is(err, ports.ErrChatHistoryUnsettled) {
@@ -216,7 +212,6 @@ func TestNativeCheckpointNotificationCycleBelongsToPreviousTurn(t *testing.T) {
 		"[Request interrupted by user for tool use]": true,
 		"[Request interrupted by user] keep going":   false,
 		"what does <task-notification> mean?":        false,
-		// Both summary forms Claude Code 2.1 writes when it compacts.
 		"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request and Intent:": true,
 		"This session is being continued from a previous conversation that ran out of context. The summary of that conversation is not included here: it was withheld from Remote Control.":                   true,
 		`why did I get "This session is being continued from a previous conversation that ran out of context."?`:                                                                                              false,
@@ -285,9 +280,6 @@ func submissionHookRecord(id, parent string, n int) string {
 		id, parent, domain.NativeSubmissionContext(fmt.Sprintf("submission-%d", n))) + "\n"
 }
 
-// Issue #6870: input sent while Claude is mid-turn is written as a
-// queued_command attachment plus its submission hook inside the running turn,
-// not as a new user record. Its text must match the queued prompt.
 func TestNativeCheckpointQueuedCommandInsideTurn(t *testing.T) {
 	transcript := func(secondQueued string) string {
 		source := `{"type":"user","sessionId":"native","uuid":"user-0","parentUuid":"","promptId":"prompt-0","message":{"content":"Write the notes"}}` + "\n"
@@ -316,8 +308,6 @@ func TestNativeCheckpointQueuedCommandInsideTurn(t *testing.T) {
 	}
 }
 
-// A queued prompt belongs only to the submission hook whose parent is that
-// queued record. Text must never carry over to a hook elsewhere in the chain.
 func TestNativeCheckpointQueuedCommandBindsByAncestry(t *testing.T) {
 	const queued = "Also, make n8 about mango."
 	start := `{"type":"user","sessionId":"native","uuid":"user-0","parentUuid":"","promptId":"prompt-0","message":{"content":"Write the notes"}}` + "\n" +
@@ -353,11 +343,6 @@ func TestNativeCheckpointQueuedCommandBindsByAncestry(t *testing.T) {
 	}
 }
 
-// Records shaped as Claude Code 2.1.303 writes them when Esc interrupts a
-// terminal turn: no Stop fires, the turn never gets an end_turn reply, and a
-// user record in the prompt's own cycle holds only the marker. A tool use cut
-// short may or may not have a (rejected) result. When the conversation resumes,
-// Claude adds a synthetic "No response requested." reply after the marker.
 func TestNativeCheckpointSettlesEscInterruptedTurns(t *testing.T) {
 	record := func(fields string) string {
 		return `{"sessionId":"native",` + fields + `}`
@@ -395,9 +380,7 @@ func TestNativeCheckpointSettlesEscInterruptedTurns(t *testing.T) {
 	submitA := domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission-a", PromptID: "prompt-a", Text: "A"}
 	submitB := domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission-b", PromptID: "prompt-b", Text: "B"}
 	stopB := domain.NativeCheckpointObservation{PromptID: "prompt-b", Text: "hi"}
-	// The interrupted prompt A, up to (not including) its marker.
 	startA := []string{prompt("user-a", "prompt-a", "", "A"), attachment("attach-a", "user-a", "submission-a")}
-	// A normal turn B after the record parent.
 	thenB := func(parent string) []string {
 		return []string{
 			prompt("user-b", "prompt-b", parent, "B"), attachment("attach-b", "user-b", "submission-b"),
@@ -464,8 +447,6 @@ func TestNativeCheckpointSettlesEscInterruptedTurns(t *testing.T) {
 			wantUser: "user-a",
 		},
 		{
-			// The repro: the interrupted turn stays in the evidence journal, so
-			// every later switch must still settle it.
 			name: "interrupt, then a normal turn",
 			lines: join(startA, []string{
 				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
@@ -520,7 +501,6 @@ func TestNativeCheckpointSettlesEscInterruptedTurns(t *testing.T) {
 			wantError: "observed native turn not completed",
 		},
 		{
-			// A typed prompt is recorded as a string, however it reads.
 			name: "marker text as a plain string",
 			lines: join(startA, []string{
 				assistant("tool-a", "attach-a", `"tool_use"`, toolUse),
@@ -536,8 +516,7 @@ func TestNativeCheckpointSettlesEscInterruptedTurns(t *testing.T) {
 				record(`"type":"user","uuid":"marker-a","parentUuid":"tool-a","promptId":"prompt-a","message":{"role":"user","content":[{"type":"text","text":"` +
 					textInterrupt + `"},{"type":"text","text":"more"}]}`),
 			}),
-			events: []domain.NativeCheckpointObservation{submitA},
-			// Not a note at all: a second user message in the prompt's cycle.
+			events:    []domain.NativeCheckpointObservation{submitA},
 			wantError: "ambiguous native prompt ID",
 		},
 		{

@@ -47,7 +47,6 @@ describe("usePRDetailsLoad", () => {
 		const invalidated = (sessionId: string, hostId?: string) => client.getQueryState(sessionScmSummaryQueryKey(sessionId, hostId))?.isInvalidated;
 		await waitFor(() => expect(invalidated("sess-1")).toBe(true));
 		expect(invalidated("sess-2")).toBe(true);
-		// Another PR, or the same URL on another host, is not this read's.
 		expect(invalidated("sess-3")).toBe(false);
 		expect(invalidated("sess-4", "remote-host")).toBe(false);
 	});

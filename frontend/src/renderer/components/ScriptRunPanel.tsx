@@ -15,13 +15,8 @@ import { cn } from "../lib/utils";
 import { CopyButton } from "./chat/CopyButton";
 import { Pressable } from "./ui/pressable";
 
-/**
- * The header and step rows' right padding (px-2.5) plus whatever the panel
- * needs to keep its timers clear of the harness update notice in the corner.
- */
 const ROW_PAD_RIGHT = "pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]";
 
-/** Ticks once a second while `active`, for live step and run timers. */
 function useNow(active: boolean): number {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -39,10 +34,6 @@ function elapsedSince(startedAt: string | undefined, now: number): number | unde
 	return Number.isFinite(start) ? Math.max(0, now - start) : undefined;
 }
 
-/**
- * A step is shown as running only while its run is: an interrupted run's step
- * stopped, and a run that ended without reporting it has no known result.
- */
 function displayStatus(step: ScriptRunStep, run: ScriptRun): ScriptRunStep["status"] | "stopped" | "unknown" {
 	if (step.status !== "running") return step.status;
 	if (run.status === "interrupted") return "stopped";
@@ -57,10 +48,6 @@ function StepIcon({ status }: { status: ReturnType<typeof displayStatus> }) {
 	return <Circle aria-hidden="true" className="size-3 shrink-0 text-passive" />;
 }
 
-/**
- * The step's output tail: selectable monospace that follows the bottom while
- * the step runs, until the reader scrolls up to read something.
- */
 function StepOutput({ step, running, label }: { step: ScriptRunStep; running: boolean; label: string }) {
 	const { t } = useTranslation();
 	const pre = useRef<HTMLPreElement>(null);
@@ -84,8 +71,6 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 				data-testid="script-step-output"
 				onScroll={(event) => {
 					const node = event.currentTarget;
-					// Within a line of the bottom counts as following along; further up
-					// is a deliberate scroll and is left alone until the reader returns.
 					follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
 				}}
 				ref={pre}
@@ -105,12 +90,6 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 	);
 }
 
-/**
- * What changed in a run since its last render, for screen readers: a step
- * starting, succeeding or failing. The output itself is never announced; it
- * changes about once a second while a step runs. Nothing is said for the state
- * the panel first draws, only for transitions it sees happen.
- */
 function useStepAnnouncement(run: ScriptRun, title: string): string {
 	const { t } = useTranslation();
 	const previous = useRef<{ runId: string; statuses: Map<number, ScriptRunStep["status"]> }>(undefined);
@@ -146,8 +125,6 @@ function StepNotes({ step }: { step: ScriptRunStep }) {
 			: t("chat.projectSetup.ranAs", { user: step.user }));
 	}
 	if (failed && step.dir) lines.push(t("chat.projectSetup.ranIn", { dir: step.dir }));
-	// An old Cleanup hook marks steps it kept no output for as truncated: there
-	// is no tail to call the end of, only the run's full log.
 	const hasOutput = step.output.trim() !== "";
 	if (step.outputTruncated && hasOutput) lines.push(step.logPath ? t("scriptRun.outputTruncated", { path: step.logPath }) : t("scriptRun.outputTruncatedNoPath"));
 	else if (step.logPath && (failed || step.outputTruncated)) lines.push(t("chat.projectSetup.fullOutput", { path: step.logPath }));
@@ -160,14 +137,8 @@ function StepNotes({ step }: { step: ScriptRunStep }) {
 	);
 }
 
-/** How long a running step may print nothing before the panel says so. */
 export const QUIET_STEP_MS = 3 * 60_000;
 
-/**
- * How long a running step has printed nothing, once that reaches
- * QUIET_STEP_MS, else undefined. Server times only (outputAt): the worker's
- * own clock may be off, and the desktop's is moved onto the control plane's.
- */
 function quietStepSilence(step: ScriptRunStep, now: number): number | undefined {
 	const silentMs = elapsedSince(step.outputAt, now - desktopClockLeadMs());
 	return silentMs !== undefined && silentMs >= QUIET_STEP_MS ? silentMs : undefined;
@@ -180,13 +151,6 @@ function quietStepText(step: ScriptRunStep, silentMs: number, t: TFunction): str
 		: t("scriptRun.quietNoLimit", { minutes });
 }
 
-/**
- * A quiet note under a running step that has printed nothing new for
- * QUIET_STEP_MS: how long, and its time limit, so a long silent step reads as
- * still working rather than stuck. It updates with the panel's clock and goes
- * away once output arrives or the step ends. Screen readers hear it once, from
- * the panel (useQuietStepAnnouncement), not on every minute it counts.
- */
 function QuietStepNote({ step, now }: { step: ScriptRunStep; now: number }) {
 	const { t } = useTranslation();
 	const silentMs = quietStepSilence(step, now);
@@ -199,17 +163,9 @@ function QuietStepNote({ step, now }: { step: ScriptRunStep; now: number }) {
 	);
 }
 
-/**
- * Quiet notes already announced, by run, step and last output. A session can
- * show the same run in up to three panels at once (chat, inspector, startup
- * card); only the first to see a step go quiet announces it. Only the latest
- * QUIET_ANNOUNCEMENTS_KEPT are remembered, oldest forgotten first: a note
- * lasts only while its step stays quiet after the same output.
- */
 const announcedQuietSteps = new Set<string>();
 const QUIET_ANNOUNCEMENTS_KEPT = 200;
 
-/** Claims a quiet note's announcement; false when a panel already made it. */
 export function claimQuietStepAnnouncement(key: string): boolean {
 	if (announcedQuietSteps.has(key)) return false;
 	announcedQuietSteps.add(key);
@@ -220,12 +176,6 @@ export function claimQuietStepAnnouncement(key: string): boolean {
 	return true;
 }
 
-/**
- * The quiet note to announce, said once when a step's note appears: the
- * message stays as first worded while the note's minute count moves on, so the
- * live region does not speak again each minute. The message clears once the
- * note goes (the step writes output or ends, or the panel hides the run).
- */
 function useQuietStepAnnouncement(run: ScriptRun, now: number, shown: boolean): string {
 	const { t } = useTranslation();
 	const step = shown ? run.steps.find((item) => displayStatus(item, run) === "running") : undefined;
@@ -246,11 +196,6 @@ function useQuietStepAnnouncement(run: ScriptRun, now: number, shown: boolean): 
 	return message;
 }
 
-/**
- * Feeds the desktop clock's lead over the control plane's from this run's
- * events as they arrive live; the events the panel first draws may be old, so
- * they say nothing about the clock.
- */
 function useControlPlaneClock(run: ScriptRun): void {
 	const seen = useRef<number | undefined>(undefined);
 	useEffect(() => {
@@ -297,7 +242,6 @@ function StepRow({
 				<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
 					{formatScriptDuration(durationMs)}
 					{running && step.timeoutMinutes !== undefined ? (
-						// The running step's limit, quieter than its time so far.
 						<span className="text-passive">
 							<span aria-hidden="true">{" / " + formatScriptDuration(step.timeoutMinutes * 60_000)}</span>
 							<span className="sr-only">{t("scriptRun.limit", { limit: formatScriptDuration(step.timeoutMinutes * 60_000) })}</span>
@@ -337,12 +281,10 @@ function StepRow({
 	);
 }
 
-/** "Setup" or "Cleanup", in the reader's language. */
 export function scriptRunTitle(run: ScriptRun, t: TFunction): string {
 	return run.phase === "setup" ? t("scriptRun.setup") : t("scriptRun.cleanup");
 }
 
-/** The run's state as the panel header says it ("Running step 2 of 3", "Failed at step 2"). */
 export function scriptRunStatusText(run: ScriptRun, t: TFunction): string {
 	return run.status === "running"
 		? t("scriptRun.running", { step: run.runningStep ?? 1, total: run.total })
@@ -357,12 +299,6 @@ export function scriptRunStatusText(run: ScriptRun, t: TFunction): string {
 						: t("scriptRun.interrupted");
 }
 
-/**
- * One Setup or Cleanup run, drawn like a CI job's step log: a header with the
- * run's state and elapsed time, then one row per step that opens onto its
- * output. The running step and failed steps open on their own; a step the
- * reader opened or closed stays that way.
- */
 export function ScriptRunPanel({
 	run,
 	collapsible = false,
@@ -370,9 +306,7 @@ export function ScriptRunPanel({
 	className,
 }: {
 	run: ScriptRun;
-	/** The header toggles the step list (chat timeline); a finished, successful run starts closed. */
 	collapsible?: boolean;
-	/** Off where the surrounding section already names the phase (the inspector). */
 	showTitle?: boolean;
 	className?: string;
 }) {
@@ -382,7 +316,6 @@ export function ScriptRunPanel({
 	const now = useNow(live);
 	const [toggled, setToggled] = useState<Record<number, boolean>>({});
 	const [listToggled, setListToggled] = useState<boolean | undefined>(undefined);
-	// A new run (a retry) starts from the defaults again.
 	const [seenRunId, setSeenRunId] = useState(run.runId);
 	if (seenRunId !== run.runId) {
 		setSeenRunId(run.runId);

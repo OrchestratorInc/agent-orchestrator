@@ -25,8 +25,6 @@ func runGit(t *testing.T, git, dir string, args ...string) {
 	}
 }
 
-// seedOriginClone builds a clone with a resolvable default branch, which is
-// what the gitworktree adapter requires before it will create a worktree.
 func seedOriginClone(t *testing.T, git, tmp string) string {
 	t.Helper()
 	origin := filepath.Join(tmp, "origin.git")
@@ -51,15 +49,6 @@ func seedOriginClone(t *testing.T, git, tmp string) string {
 	return repo
 }
 
-// TestKillAndCleanupReachASessionGitWillNotRelease is the #5463 regression
-// against real git, which no fake workspace can stand in for: a worktree
-// directory that disappeared out of band while git still holds a lock on the
-// registration. `git worktree remove` refuses it, `git worktree prune` declines
-// to clear it, and the adapter reports a refusal AO has no typed name for.
-//
-// That used to fail the kill, which left `terminated` false — and since
-// `ao session cleanup` only walks terminated sessions, the row was reachable by
-// no path at all and stayed on the board forever.
 func TestKillAndCleanupReachASessionGitWillNotRelease(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -125,8 +114,6 @@ func TestKillAndCleanupReachASessionGitWillNotRelease(t *testing.T) {
 		t.Fatal("session must be terminated so it leaves the board and cleanup can see it")
 	}
 
-	// Cleanup now reaches the row and names the refusal instead of skipping it
-	// silently, so the operator has something to act on.
 	res, err := manager.Cleanup(ctx, "mer")
 	if err != nil {
 		t.Fatalf("Cleanup: %v", err)

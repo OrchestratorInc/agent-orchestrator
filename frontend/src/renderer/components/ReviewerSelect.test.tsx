@@ -177,7 +177,6 @@ describe("ReviewerSelect", () => {
 		/></QueryClientProvider>);
 
 		const trigger = screen.getByRole("button", { name: "Reviewer" });
-		// The unidentified model is left off the trigger.
 		expect(trigger).toHaveTextContent(/^Codex$/);
 		await userEvent.click(trigger);
 		await userEvent.click(screen.getByRole("menuitem", { name: /Codex/ }));

@@ -21,7 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// pairingHost serves remote requests through a real LAN listener and local ones on the router.
 type pairingHost struct {
 	t        *testing.T
 	bridge   *controllers.BridgeService
@@ -77,7 +76,6 @@ func (h *pairingHost) remote(method, path, bearer string, body any) (int, map[st
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	// A new connection per request, so a closed one is never reused.
 	resp, err := (&http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}).Do(req)
 	if err != nil {
 		h.t.Fatalf("%s %s: %v", method, path, err)
@@ -152,7 +150,6 @@ func TestPairingCodePairsOneDevice(t *testing.T) {
 	if got := h.sessions(token); got != http.StatusOK {
 		t.Fatalf("device token: %d", got)
 	}
-	// The answer says which credential paired, so a device knows a code is spent.
 	for bearer, want := range map[string]string{h.code(): "pairing-code", "secret12": "password"} {
 		if _, body := h.remote(http.MethodPost, devicePairPath, bearer, nil); body["credential"] != want {
 			t.Fatalf("credential = %v, want %s", body["credential"], want)
@@ -161,11 +158,9 @@ func TestPairingCodePairsOneDevice(t *testing.T) {
 	if status, body := h.remote(http.MethodPost, devicePairPath, code, nil); status != http.StatusUnauthorized {
 		t.Fatalf("a pairing code worked twice: status=%d body=%v", status, body)
 	}
-	// Without the remote listener's check there is no credential to pair with.
 	if status, _ := h.local(http.MethodPost, devicePairPath, nil); status != http.StatusForbidden {
 		t.Fatalf("pairing on the loopback listener: %d", status)
 	}
-	// The loopback-only routes are not served to a paired device.
 	for _, path := range []string{"/api/v1/mobile/pairing-code", "/api/v1/mobile/require-device-credentials", "/api/v1/mobile/devices"} {
 		if status, _ := h.remote(http.MethodPost, path, token, nil); status != http.StatusNotFound {
 			t.Fatalf("%s reachable by a paired device: %d", path, status)
@@ -179,7 +174,6 @@ func TestOnlyACodeOrThePasswordPairs(t *testing.T) {
 	if status, _ := h.remote(http.MethodPost, devicePairPath, token, nil); status != http.StatusForbidden {
 		t.Fatalf("a device token paired another device: %d", status)
 	}
-	// A device token is enough to link the host into an account.
 	status, issued := h.remote(http.MethodPost, "/api/v1/remote-host/account-token", token, nil)
 	account, _ := issued["token"].(string)
 	if status != http.StatusOK || len(account) != 64 {
@@ -208,7 +202,6 @@ func TestRequireDeviceCredentialsRefusesThePassword(t *testing.T) {
 	if status != http.StatusOK || body["requireDeviceCredentials"] != true {
 		t.Fatalf("turn on: status=%d body=%v", status, body)
 	}
-	// More attempts than the lockout allows: the device is never locked out.
 	for range 7 {
 		status, body := h.remote(http.MethodGet, "/api/v1/sessions", "secret12", nil)
 		if status != http.StatusUnauthorized || body["code"] != "DEVICE_CREDENTIAL_REQUIRED" {
@@ -223,7 +216,6 @@ func TestRequireDeviceCredentialsRefusesThePassword(t *testing.T) {
 	}
 	h.pair(h.code(), "Tablet")
 
-	// The setting survives a daemon restart.
 	state, err := mobilebridge.Load(h.bridge.ConfigPath)
 	if err != nil || !state.RequireDeviceCredentials {
 		t.Fatalf("saved state: %+v %v", state, err)
@@ -252,7 +244,6 @@ func TestRequireDeviceCredentialsRefusesThePassword(t *testing.T) {
 	}
 }
 
-// openConnection returns a connection authenticated with bearer and kept open.
 func (h *pairingHost) openConnection(bearer string) net.Conn {
 	h.t.Helper()
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", h.port))
@@ -314,7 +305,6 @@ func TestRemovingADeviceRevokesItAlone(t *testing.T) {
 	if status, _ := h.local(http.MethodDelete, "/api/v1/mobile/devices/"+phoneID, nil); status != http.StatusNoContent {
 		t.Fatalf("remove phone: %d", status)
 	}
-	// More attempts than the lockout allows: a removed device is never locked out.
 	for range 7 {
 		if status, body := h.remote(http.MethodGet, "/api/v1/sessions", phone, nil); status != http.StatusUnauthorized || body["code"] != "DEVICE_REVOKED" {
 			t.Fatalf("a removed device: status=%d body=%v", status, body)
@@ -335,7 +325,6 @@ func TestRemovingADeviceRevokesItAlone(t *testing.T) {
 		}
 	}
 
-	// The account row revokes the shared account token and nothing else.
 	if status, _ := h.local(http.MethodDelete, "/api/v1/mobile/devices/"+controllers.AccountDevicesID, nil); status != http.StatusNoContent {
 		t.Fatalf("remove account row: %d", status)
 	}
@@ -345,7 +334,6 @@ func TestRemovingADeviceRevokesItAlone(t *testing.T) {
 	if h.sessions(laptop) != http.StatusOK {
 		t.Fatal("unlinking the account cut off a device")
 	}
-	// A phone on the pairing password only loses its notifications.
 	if status, _ := h.local(http.MethodDelete, "/api/v1/mobile/devices/install-old", nil); status != http.StatusNoContent {
 		t.Fatalf("remove password phone: %d", status)
 	}
@@ -382,7 +370,6 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 			t.Fatalf("register %s: %d", installID, status)
 		}
 	}
-	// Both phones and the account.
 	if got := len(h.rows()); got != 3 {
 		t.Fatalf("rows before regenerate = %d", got)
 	}
@@ -414,7 +401,6 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 func TestAFailedRegenerateKeepsEveryDevice(t *testing.T) {
 	h := newPairingHost(t)
 	_, phone := h.pair(h.code(), "Phone")
-	// The listener is bound to loopback, so starting it for the LAN fails.
 	if err := mobilebridge.Save(h.bridge.ConfigPath, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
 		t.Fatal(err)
 	}

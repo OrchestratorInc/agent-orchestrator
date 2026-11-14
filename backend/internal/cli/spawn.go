@@ -16,8 +16,6 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// maxDisplayNameLen caps the sidebar label set by `--name`. Mirrored by the
-// daemon's spawn handler so a direct API call is held to the same limit.
 const maxDisplayNameLen = 100
 
 type spawnOptions struct {
@@ -42,8 +40,6 @@ type spawnOptions struct {
 	trackerProvider string
 }
 
-// spawnRequest mirrors the daemon's SpawnSessionRequest body for
-// POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
 	ProjectID           string `json:"projectId,omitempty"`
 	IssueID             string `json:"issueId,omitempty"`
@@ -61,10 +57,7 @@ type spawnRequest struct {
 	RequestedOutput     string `json:"requestedOutput,omitempty"`
 	DisplayName         string `json:"displayName"`
 	DisplayNameExplicit bool   `json:"displayNameExplicit,omitempty"`
-	// Async publishes a Chat session as starting, with its prompt queued, before
-	// the worktree and agent are up, as the desktop's new task does. The CLI
-	// then waits for the start to settle so failures still reach the caller.
-	Async bool `json:"async,omitempty"`
+	Async               bool   `json:"async,omitempty"`
 }
 
 type spawnedSession struct {
@@ -109,8 +102,6 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				return usageError{fmt.Errorf("--name must be %d characters or fewer", maxDisplayNameLen)}
 			}
 
-			// Rejected here rather than forwarded, so a typo exits 2 as a usage
-			// error instead of reaching the daemon as an unsupported mode.
 			if opts.mode != "" && opts.mode != "chat" && opts.mode != "tui" {
 				return usageError{fmt.Errorf(`--mode must be "chat" or "tui"`)}
 			}
@@ -263,8 +254,6 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	// --agent is an alias for --harness so the more intuitive `ao spawn --agent
-	// droid` works identically; both resolve to the same harness flag.
 	f.SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
 		if name == "agent" {
 			name = "harness"
@@ -293,12 +282,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-// spawnStartPollInterval paces the wait for a session started in the background.
 var spawnStartPollInterval = 500 * time.Millisecond
 
-// awaitSpawnStart waits until a session the daemon starts in the background is
-// running or has failed. A failed start stays in AO with its reason and a Retry
-// action, so the error names the session rather than removing it.
 func (c *commandContext) awaitSpawnStart(ctx context.Context, sess spawnedSession) (spawnedSession, error) {
 	for sess.ProvisionState == "provisioning" && !sess.IsTerminated {
 		select {
@@ -519,18 +504,11 @@ func (c *commandContext) ensureAgentReadiness(ctx context.Context, agentIDs []st
 	return result, nil
 }
 
-// rollbackSpawnedSession reverses a partial `spawn` whose out-of-band follow-up
-// (PR claim) failed. It calls the daemon's `/rollback` endpoint, which deletes
-// the seed-state row outright instead of marking it terminated — so the user
-// does not see an orphan terminated session under `--include-terminated`. If
-// spawn output has already landed (workspace + runtime), the daemon falls back
-// to a Kill on the server side so teardown still happens.
 func (c *commandContext) rollbackSpawnedSession(ctx context.Context, id string) error {
 	var res rollbackSessionResponse
 	return c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/rollback", struct{}{}, &res)
 }
 
-// rollbackSessionResponse mirrors the daemon's RollbackSessionResponse body.
 type rollbackSessionResponse struct {
 	OK        bool   `json:"ok"`
 	SessionID string `json:"sessionId"`

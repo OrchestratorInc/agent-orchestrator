@@ -10,9 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
-// TestCORS exercises the allowlist boundary on a real router: trusted origins
-// get per-origin CORS headers (REST reads and preflights), everything else —
-// including the opaque "null" origin and no-Origin CLI traffic — gets none.
 func TestCORS(t *testing.T) {
 	cfg := config.Config{AllowedOrigins: []string{"app://renderer"}}
 	router := newTestRouter(cfg, discardLogger(), nil)
@@ -34,7 +31,6 @@ func TestCORS(t *testing.T) {
 			wantACAO:   "app://renderer",
 		},
 		{
-			// A local web server is not an authenticated AO renderer.
 			name:       "loopback origin rejected without an allowlist entry",
 			method:     http.MethodGet,
 			headers:    map[string]string{"Origin": "http://localhost:5181"},
@@ -56,8 +52,6 @@ func TestCORS(t *testing.T) {
 			wantACAO:   "",
 		},
 		{
-			// localhost in the host position of a non-loopback origin must not
-			// fool the predicate.
 			name:       "lookalike origin rejected",
 			method:     http.MethodGet,
 			headers:    map[string]string{"Origin": "http://localhost.evil.example"},
@@ -65,9 +59,6 @@ func TestCORS(t *testing.T) {
 			wantACAO:   "",
 		},
 		{
-			// Rejected outright, not just denied CORS headers: a missing ACAO
-			// hides the response but a "simple" cross-origin POST would still
-			// execute the handler on this no-auth daemon.
 			name:       "unknown origin is rejected before handlers",
 			method:     http.MethodGet,
 			headers:    map[string]string{"Origin": "http://evil.example"},
@@ -212,9 +203,6 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 	}
 }
 
-// TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers keeps workspace
-// previews, which corsMiddleware admits as loopback content, from driving the
-// desktop through Cua Driver or turning on agent computer use.
 func TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) {
 	cfg := config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}
 	router := newTestRouter(cfg, discardLogger(), nil)
@@ -318,8 +306,6 @@ func TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) 
 	}
 }
 
-// TestCORSPreflightHeaders pins the preflight grant shape: methods, echoed
-// request headers, max-age, and the private-network opt-in.
 func TestCORSPreflightHeaders(t *testing.T) {
 	cfg := config.Config{AllowedOrigins: []string{"app://renderer"}}
 	router := newTestRouter(cfg, discardLogger(), nil)

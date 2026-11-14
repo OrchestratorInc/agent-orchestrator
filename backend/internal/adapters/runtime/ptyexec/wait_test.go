@@ -5,10 +5,6 @@ import (
 	"time"
 )
 
-// TestWaitForExitBoundsThePostKillWait guards the shutdown-hang escape hatch:
-// a process wedged in uninterruptible kernel state survives SIGKILL, and if
-// Close blocked on cmd.Wait it would stall daemon shutdown forever. waitForExit
-// is the bounded tail — it must return after grace even when done never closes.
 func TestWaitForExitBoundsThePostKillWait(t *testing.T) {
 	never := make(chan struct{})
 	start := time.Now()
@@ -22,8 +18,6 @@ func TestWaitForExitBoundsThePostKillWait(t *testing.T) {
 	}
 }
 
-// TestWaitForExitReturnsOnDone: when the process exits, done closes and
-// waitForExit returns without waiting out the grace.
 func TestWaitForExitReturnsOnDone(t *testing.T) {
 	done := make(chan struct{})
 	close(done)

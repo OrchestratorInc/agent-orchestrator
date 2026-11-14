@@ -30,15 +30,12 @@ var memcodeHooks = hooksjson.Manager{
 	LegacyCommandPrefixes: []string{"ao hooks memcode "}, Timeout: 30,
 	Path: func(workspace string) string { return filepath.Join(workspace, ".memcode", "hooks.json") },
 	Managed: func() []hooksjson.HookSpec {
-		// Memcode truncates each hook's stdout at 8 KiB. Stable slots preserve
-		// that bound without letting sessions sharing a workspace change each
-		// other's hook list. Unused slots emit nothing.
 		specs := []hooksjson.HookSpec{{Event: "session_start", Command: "ao hooks memcode session-start"}}
 		for i := 1; i < maxInstructionChunks; i++ {
 			specs = append(specs, hooksjson.HookSpec{Event: "session_start", Command: fmt.Sprintf("ao hooks memcode context-chunk-%d", i)})
 		}
 		return append(specs, hooksjson.HookSpec{Event: "pre_tool_use", Command: "ao hooks memcode pre-tool-use"},
-			hooksjson.HookSpec{Event: "post_tool_use"}) // remove the formerly installed no-op hook
+			hooksjson.HookSpec{Event: "post_tool_use"})
 	}(),
 }
 
@@ -72,16 +69,12 @@ func readWitness(data, session, generation string) (witness, error) {
 	return w, err
 }
 
-// AugmentRuntimeLaunchEnv implements the native TUI adapter contract.
 func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, data string, id domain.SessionID, generation string) {
 	env["AO_MEMCODE_DATA_DIR"] = data
 	env["AO_MEMCODE_GENERATION"] = generation
 	env["AO_MEMCODE_SESSION"] = string(id)
 }
 
-// EmitStartWitness runs before any daemon callback. Interactive restore hooks
-// return locally so PrepareLaunch cannot deadlock and a fresh ID cannot overwrite
-// the durable target. Native session_end is never reported as process exit.
 func EmitStartWitness(out io.Writer) (bool, error) {
 	data, session, generation := os.Getenv("AO_MEMCODE_DATA_DIR"), os.Getenv("AO_MEMCODE_SESSION"), os.Getenv("AO_MEMCODE_GENERATION")
 	path, err := witnessPath(data, session, generation)
@@ -117,7 +110,6 @@ func EmitStartWitness(out io.Writer) (bool, error) {
 	return restoreSequence > 0 && sequence > restoreSequence, nil
 }
 
-// GetAgentHooks implements the native TUI adapter contract.
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -150,7 +142,6 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := os.MkdirAll(private, 0o700); err != nil {
 		return err
 	}
-	// One atomic snapshot also prevents stale chunks after a shorter reprepare.
 	b, err := json.Marshal(chunks)
 	if err != nil {
 		return err
@@ -165,24 +156,19 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	if cfg.Env != nil {
-		// Pin this launch's count, never the last session to install shared hooks.
 		cfg.Env[instructionChunkCountEnv] = strconv.Itoa(len(chunks))
 	}
 	return nil
 }
 
-// UninstallHooks removes AO commands without affecting another session's private context.
 func (*Plugin) UninstallHooks(ctx context.Context, workspace string) error {
 	return memcodeHooks.Uninstall(ctx, workspace)
 }
 
-// AreHooksInstalled reports whether the workspace has AO-managed hooks.
 func (*Plugin) AreHooksInstalled(ctx context.Context, workspace string) (bool, error) {
 	return memcodeHooks.AreInstalled(ctx, workspace)
 }
 
-// CleanupWorkspace removes only the private launch artifacts owned by the
-// terminated AO session. The project-local Memcode hook configuration remains.
 func (*Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -197,7 +183,6 @@ func (*Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConf
 	return nil
 }
 
-// DeriveActivityState maps supported native tool activity hooks.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "pre-tool-use":
@@ -207,8 +192,6 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	}
 }
 
-// Native trims each hook output and joins outputs with two newlines. Only
-// paragraph boundaries that reproduce that exact combination may be split.
 func instructionChunks(data []byte) ([][]byte, error) {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
@@ -240,7 +223,6 @@ func instructionChunks(data []byte) ([][]byte, error) {
 	return chunks, nil
 }
 
-// EmitInstructionChunk emits one bounded private native context hook.
 func EmitInstructionChunk(out io.Writer, event string) error {
 	index, err := strconv.Atoi(strings.TrimPrefix(event, "context-chunk-"))
 	if err != nil || index < 0 || index >= maxInstructionChunks {
@@ -257,7 +239,7 @@ func EmitInstructionChunk(out io.Writer, event string) error {
 			return errors.New("invalid memcode launch instruction chunk count")
 		}
 		if index >= count {
-			return nil // unused slots need no file I/O or JSON decoding
+			return nil
 		}
 	}
 	file, err := os.Open(filepath.Join(data, "agent-launches", "memcode", session, "instructions.json"))

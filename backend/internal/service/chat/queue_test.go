@@ -117,7 +117,6 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 		RetainedContent: &[]int{0},
 		Content:         []ports.ChatContent{{Type: "image", MIMEType: "image/png", Data: "bmV3"}},
 	}
-	// The first request commits, but the caller never receives its success.
 	if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +135,6 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	if _, err := h.svc.Send(ctx, testSession, changedMessage); !errors.Is(err, domain.ErrClientMessageConflict) {
 		t.Fatalf("changed original send after queue edit = %v, want conflict", err)
 	}
-	// The renderer retries the identical request with its original revision.
 	if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
 		t.Fatalf("retry: %v", err)
 	}

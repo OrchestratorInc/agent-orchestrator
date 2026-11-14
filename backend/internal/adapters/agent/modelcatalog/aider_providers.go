@@ -10,12 +10,6 @@ import (
 
 func init() { browseProviderCredentials["aider"] = aiderConfiguredProviders }
 
-// aiderProviderKeys is the credential each LiteLLM provider in Aider's catalog
-// needs, from LiteLLM's validate_environment and, for providers it does not
-// list, the variable the provider's own LiteLLM client reads. Each inner list
-// must be fully set; any one list is enough. Providers whose credentials
-// LiteLLM does not name (GitHub Copilot's OAuth, Meta Llama, OCI and the
-// catalog's metadata-only providers) are never marked.
 var aiderProviderKeys = map[string][][]string{
 	"anthropic":         {{"ANTHROPIC_API_KEY"}},
 	"openai":            {{"OPENAI_API_KEY"}},
@@ -59,11 +53,8 @@ var aiderProviderKeys = map[string][][]string{
 	"snowflake":         {{"SNOWFLAKE_JWT", "SNOWFLAKE_ACCOUNT_ID"}},
 }
 
-// aiderVertexCatalogPrefix groups the catalog's per-publisher Vertex AI
-// providers (vertex_ai-language-models and so on) under Vertex's credential.
 const aiderVertexCatalogPrefix = "vertex_ai-"
 
-// aiderConfig holds the .aider.conf.yml options that supply credentials.
 type aiderConfig struct {
 	EnvFile         string
 	OpenAIAPIKey    string
@@ -72,19 +63,12 @@ type aiderConfig struct {
 	SetEnv          []string
 }
 
-// aiderConfiguredProviders reports the providers Aider has a credential for,
-// layered the way Aider applies them at launch: the environment, then its
-// dotenv files (~/.aider/oauth-keys.env, ~/.env, the workspace's .env and the
-// configured env-file, each overriding the last), then .aider.conf.yml's
-// set-env, api-key and openai/anthropic-api-key settings.
 func aiderConfiguredProviders(workingDir string, env map[string]string) []string {
 	home := credentialPresence(envValue(env, "HOME"))
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
 	var config aiderConfig
-	// Aider reads .aider.conf.yml from the workspace, then home; the first
-	// file setting a key wins.
 	var configPaths []string
 	if workingDir != "" {
 		configPaths = append(configPaths, filepath.Join(workingDir, ".aider.conf.yml"))
@@ -111,8 +95,6 @@ func aiderConfiguredProviders(workingDir string, env map[string]string) []string
 			config.SetEnv = file.SetEnv
 		}
 	}
-	// AIDER_-prefixed variables set the same options as the config file and
-	// take precedence over it.
 	if value := envValue(env, "AIDER_ENV_FILE"); value != "" {
 		config.EnvFile = value
 	}
@@ -202,8 +184,6 @@ func aiderConfiguredProviders(workingDir string, env map[string]string) []string
 	return providers
 }
 
-// aiderUnmarshalConfig accepts api-key and set-env as a single string or a
-// list, as Aider's config file does.
 func aiderUnmarshalConfig(raw []byte, config *aiderConfig) error {
 	var values map[string]any
 	if err := yaml.Unmarshal(raw, &values); err != nil {

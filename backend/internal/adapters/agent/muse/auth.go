@@ -14,9 +14,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus reports whether the official Meta provider has a local API key or
-// OAuth login. Credential values are only tested for non-emptiness and are
-// never returned or logged.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -29,8 +26,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 const museAPIKeyEnvVar = "META_API_KEY" //nolint:gosec // environment variable name, not a credential
 
-// museLocalAuthStatus checks Muse's own auth.json first; META_API_KEY in the
-// environment is the fallback when it holds no usable credential.
 func museLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -57,8 +52,6 @@ func museStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	return status, ok, err
 }
 
-// museAuthPath mirrors the official launcher: MUSE_AUTH_PATH wins, then the
-// XDG config root, then ~/.config/muse/auth.json.
 func museAuthPath() (string, bool) {
 	if path := strings.TrimSpace(os.Getenv("MUSE_AUTH_PATH")); path != "" {
 		return path, true
@@ -78,8 +71,6 @@ func museAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return status, ok, err
 }
 
-// museAuthJSON also reports how the stored credential signs in and, for a
-// login, who signed in.
 func museAuthJSON(path string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // user-selected Muse config path
 	if os.IsNotExist(err) {

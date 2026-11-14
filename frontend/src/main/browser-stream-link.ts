@@ -60,8 +60,6 @@ export function connectBrowserStream(
 	let buffered: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 	const controlChains = new Map<string, Promise<void>>();
 	const lastReadOnlyError = new Map<number, number>();
-	// At most one unsent frame per stream. Socket backpressure replaces stale
-	// frames rather than growing an image queue without bound.
 	const pendingFrames = new Map<number, Buffer>();
 	let flushing = false;
 	let writeBlocked = false;
@@ -170,9 +168,6 @@ export function connectBrowserStream(
 			const readOnly = code === "BROWSER_REMOTE_READ_ONLY" && streamId !== undefined;
 			const now = performance.now();
 			if (readOnly) {
-				// A drag can reject input at 120 Hz while the agent owns the page.
-				// Keep one immediate rejection, then coalesce the burst so a slow
-				// frame write cannot fill the broker's ordered control queue.
 				const last = lastReadOnlyError.get(streamId);
 				if (last !== undefined && now - last < READ_ONLY_ERROR_INTERVAL_MS) return;
 			}
@@ -209,8 +204,6 @@ export function connectBrowserStream(
 			try {
 				dispatchControl(JSON.parse(packet.subarray(1).toString("utf8")) as BrowserStreamControl);
 			} catch {
-				// A malformed private-host command tears down the link rather than
-				// allowing the parser to drift onto attacker-controlled boundaries.
 				disconnectAndRetry();
 				return;
 			}

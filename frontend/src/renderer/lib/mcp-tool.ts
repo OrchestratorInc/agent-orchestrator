@@ -1,16 +1,5 @@
 import type { ConversationActivity } from "../types/conversation";
 
-/**
- * Reading an MCP tool call the same way whichever harness made it.
- *
- * Each harness records the call in its own shape. Claude Code (ACP) titles the row
- * with its internal name, `mcp__<server>__<tool>`, and keeps the arguments under
- * `input`. Codex titles it `Called <server>/<tool>`, sends `server` and `toolName`
- * separately, and keeps the arguments under `arguments`. ACP also files built-in
- * tools such as Read or ToolSearch under `mcp_tool`; those carry no server and keep
- * their own name.
- */
-
 export interface McpToolName {
 	tool: string;
 	server?: string;
@@ -32,16 +21,10 @@ export function mcpToolName(activity: ConversationActivity): McpToolName {
 	return { tool: detail?.toolName ?? activity.summary, server };
 }
 
-/** The arguments the agent passed: Codex sends `arguments`, ACP `input`. */
 export function mcpToolArguments(activity: ConversationActivity): unknown {
 	return activity.detail?.arguments ?? activity.detail?.input;
 }
 
-/**
- * The text blocks a tool answered with. Codex keeps the MCP result under `result`,
- * ACP wraps each block in a `content` item. Images are skipped: AO strips their data
- * before storing, and a Codex screenshot's base64 is not text.
- */
 export function mcpResultTexts(activity: ConversationActivity): string[] {
 	const detail = activity.detail;
 	const texts: string[] = [];
@@ -58,19 +41,13 @@ export function mcpResultTexts(activity: ConversationActivity): string[] {
 	if (texts.length === 0 && detail?.output) texts.push(detail.output);
 	return texts
 		.map((text) => stripCodeFence(text).trim())
-		// Claude Code adds a line naming the temp file it saved a returned image to.
 		.filter((text) => text && !/^\[Image: source: [^\]]*\]$/.test(text));
 }
 
-/** Claude Code fences a tool error as a code block. */
 function stripCodeFence(text: string): string {
 	const match = /^```[^\n]*\n([\s\S]*?)\n?```\s*$/.exec(text.trim());
 	return match ? match[1] : text;
 }
-
-/* -------------------------------------------------------------------------- */
-/* AO's own tools                                                              */
-/* -------------------------------------------------------------------------- */
 
 export type AOToolState = "running" | "completed" | "failed" | "unknown";
 
@@ -79,23 +56,12 @@ export interface AOToolLine {
 	text: string;
 }
 
-/**
- * A call to AO's own MCP server, in the words the user would use for it.
- *
- * The tools answer the agent, not the user: a page check reports sizes for the
- * agent to pick a frame height, a render tells the agent not to describe the page.
- * None of that is shown. The row says what was done and, when something went wrong,
- * what.
- */
 export interface AOToolView {
 	label: string;
-	/** A short addition after the label, such as "1 console error". */
 	note?: string;
 	state: AOToolState;
-	/** The call needs no row: a shown page is already on screen as a render row. */
 	hidden?: boolean;
 	error?: string;
-	/** What expanding the row shows. */
 	lines?: AOToolLine[];
 	text?: string;
 }
@@ -126,9 +92,6 @@ export function aoToolView(activity: ConversationActivity): AOToolView | undefin
 
 	const copy = computerUseCopy(tool, args);
 	if (!copy) return undefined;
-	// Computer-use answers are written for the agent (accessibility trees, snapshot
-	// ids, JSON), so the row opens only onto what the user can read: why it failed,
-	// the whole of a long typed text, and the steps of a batch.
 	if (tool === "run_steps") return runStepsView(copy, state, args, texts, error);
 	const view: AOToolView = { label: labelFor(copy, state), state };
 	if (state === "failed") view.error = error;
@@ -136,11 +99,6 @@ export function aoToolView(activity: ConversationActivity): AOToolView | undefin
 	return view;
 }
 
-/**
- * run_steps stops at the first step that fails and still answers as a completed
- * call, so where it stopped is read from the first line of its answer
- * ("run_steps: 1/3 steps ok").
- */
 function runStepsView(
 	copy: Copy,
 	state: AOToolState,
@@ -173,7 +131,6 @@ const STEP_VERBS: Record<string, string> = {
 	move_cursor: "Moved the pointer",
 };
 
-/** One run_steps step, `{tool, args}` or `{<tool>: args}`, in plain words. */
 function stepLabel(value: unknown): string {
 	const step = asRecord(value);
 	let tool = text(step.tool);
@@ -210,11 +167,6 @@ function stepLabel(value: unknown): string {
 	}
 }
 
-/**
- * An AO tool error without what is only there for the agent or for a bug report:
- * the error code and the daemon's request id, as in
- * "invalid render: the page is empty (RENDER_INVALID) [request host/abc-0001]".
- */
 function readableError(value: string | undefined): string | undefined {
 	const text = value
 		?.trim()
@@ -222,7 +174,6 @@ function readableError(value: string | undefined): string | undefined {
 		.replace(/\s*\([A-Z][A-Z0-9_]*\)\s*$/, "")
 		.trim();
 	if (!text) return undefined;
-	// "invalid render: …" reads as a sentence; "type_text needs …" names a tool.
 	return /^[a-z]+[\s:,]/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
@@ -232,10 +183,6 @@ function labelFor(copy: Copy, state: AOToolState): string {
 	return copy.done;
 }
 
-/**
- * html_preview. Codex records a tool error as a completed call, so a check that
- * came back without its report failed whatever the status says.
- */
 function pageCheckView(state: AOToolState, texts: string[], error: string | undefined): AOToolView {
 	const copy = { running: "Previewing the page", done: "Previewed the page", failed: "Couldn't preview the page" };
 	if (state !== "completed") {
@@ -264,11 +211,6 @@ function pageCheckView(state: AOToolState, texts: string[], error: string | unde
 	};
 }
 
-/**
- * html_render. A shown page needs no row: AO records the page itself right after,
- * and the tool's answer is a note to the agent. A render that did not say where it
- * was shown failed, whatever the status says.
- */
 function pageShowView(state: AOToolState, texts: string[], error: string | undefined): AOToolView {
 	const copy = { running: "Showing the page", done: "Showed the page", failed: "Couldn't show the page" };
 	if (state === "completed" && texts.length > 0 && !texts.some((text) => /\(render [^)\s]+\)/.test(text))) {
@@ -282,7 +224,6 @@ function pageShowView(state: AOToolState, texts: string[], error: string | undef
 	};
 }
 
-/** Whether a call is a page AO already shows as its own row. */
 export function isShownAORender(activity: ConversationActivity): boolean {
 	return aoToolView(activity)?.hidden === true;
 }

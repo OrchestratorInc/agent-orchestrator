@@ -1,11 +1,5 @@
 import type { IpcMain, WebContents } from "electron";
 
-// Inline sign-in must not wait behind the renderer's HTTP/1.1 socket pool.
-// Chromium allows six connections per origin, and the daemon's long-lived event
-// streams plus slow readiness probes can hold all of them for many seconds.
-// Node's fetch in the main process has its own pool, so these fixed
-// auth-operation routes reach the local daemon immediately.
-
 export type AgentLoginRequest =
 	| { action: "start"; agentId: string; method: string; secret?: string; model?: string; device?: boolean; provider?: string }
 	| { action: "get" | "cancel"; agentId: string; operationId: string }
@@ -47,7 +41,6 @@ export function parseAgentLoginRequest(input: unknown): AgentLoginRequest {
 		if (value.model !== undefined && (typeof value.model !== "string" || !MODEL_ID.test(value.model))) throw new Error("Invalid model.");
 		if (value.device !== undefined && typeof value.device !== "boolean") throw new Error("Invalid device setting.");
 		if (value.provider !== undefined && (typeof value.provider !== "string" || !CATALOG_PROVIDER_ID.test(value.provider))) throw new Error("Invalid provider.");
-		// An omitted device setting keeps the key's current one; false withdraws it.
 		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}), ...(typeof value.device === "boolean" ? { device: value.device } : {}), ...(value.provider ? { provider: value.provider } : {}) };
 	}
 	if (typeof value.operationId !== "string" || !OPERATION_ID.test(value.operationId)) throw new Error("Invalid sign-in operation.");
@@ -88,7 +81,6 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 	}
 	let response: Response;
 	try {
-		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
 		response = await fetchImpl(url, {
 			method,
 			headers: body === undefined ? undefined : { "Content-Type": "application/json" },

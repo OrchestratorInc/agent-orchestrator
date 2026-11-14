@@ -12,7 +12,6 @@ import (
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
-// FileReferenceResolution is derived on demand. Captured code is never rewritten.
 type FileReferenceResolution struct {
 	State         string `json:"state" enum:"unchanged,changed,unavailable,moved"`
 	Reason        string `json:"reason,omitempty"`
@@ -24,7 +23,6 @@ type FileReferenceResolution struct {
 	NewLineOffset int    `json:"newLineOffset,omitempty"`
 }
 
-// ResolveFileReference checks source availability without modifying captured context.
 func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID, ref ports.ChatFileReference) (FileReferenceResolution, error) {
 	if err := ports.ValidateChatFileReference(ref); err != nil {
 		return FileReferenceResolution{}, apierr.Invalid("CHAT_FILE_REFERENCE_INVALID", err.Error(), nil)
@@ -35,7 +33,6 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 	if ref.Truncated {
 		return FileReferenceResolution{State: "unavailable", Reason: "truncated"}, nil
 	}
-	// An explicitly identified PR snapshot must still be the associated comparison.
 	if ref.Source.Kind == "pull_request" && ref.Source.Snapshot != "" {
 		prs, err := s.store.ListPRsBySession(ctx, id)
 		if err != nil {
@@ -44,7 +41,6 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 		found := false
 		for _, pr := range prs {
 			if pr.Number == ref.Source.Number && (ref.Source.URL == "" || strings.EqualFold(ref.Source.URL, pr.URL)) {
-				// The viewer records its head SHA. Accept the older qualified form too.
 				found = ref.Source.Snapshot == pr.HeadSHA || ref.Source.Snapshot == pr.BaseSHA+":"+pr.HeadSHA
 				break
 			}
@@ -84,7 +80,6 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 	}
 	read := memoizeFileReferenceRead(func() string { return ref.Path }, readSource)
 	result := resolveCapturedFileRows(ref, read)
-	// Follow only the exact previous-path identity reported by Git, never a filename guess.
 	if ref.Source.Kind == "workspace" && ref.CommitSHA == "" {
 		current, currentErr := read(WorkspaceBlobAfter)
 		if currentErr == nil && current.Exists {
@@ -105,8 +100,6 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 			if candidate != "" {
 				ref.Path = candidate
 				relocated := resolveCapturedFileRows(ref, read)
-				// A historical before revision may match even when its current
-				// path disappeared. Check the destination through the viewer service.
 				if _, openErr := s.GetWorkspaceFile(ctx, id, candidate, WorkspaceFileSection(ref.Scope)); openErr != nil {
 					return FileReferenceResolution{State: "unavailable"}, nil //nolint:nilerr // Source access errors become advisory states; captured context remains usable.
 				}
@@ -116,8 +109,6 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 					return s.verifyFileReferenceDiff(ctx, id, ref, relocated, read), nil
 				}
 				if relocated.State == "changed" {
-					// Git established the new identity even though the selection no
-					// longer has a verified range. Open this path without highlighting.
 					relocated.Path = candidate
 					return relocated, nil
 				}
@@ -132,7 +123,6 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 	return s.verifyFileReferenceDiff(ctx, id, ref, result, read), nil
 }
 
-// Revision reads are bounded and shared only within this resolution request.
 func memoizeFileReferenceRead(path func() string, readSource func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
 	type sourceKey struct {
 		path string
@@ -154,9 +144,6 @@ func memoizeFileReferenceRead(path func() string, readSource func(WorkspaceFileB
 	}
 }
 
-// A File-view capture is verified against one revision's text, not a diff. Its
-// top-level side may still be "old" to name the historical revision, so the rows
-// carry the capture mode.
 func isFileViewCapture(ref ports.ChatFileReference) bool {
 	if ref.Side == "file" {
 		return true
@@ -169,8 +156,6 @@ func isFileViewCapture(ref ports.ChatFileReference) bool {
 	return len(ref.Lines) > 0
 }
 
-// A range is navigable only when its complete row sequence is still one
-// continuous diff interval. Independent exact matches on each side are not enough.
 func (s *Service) verifyFileReferenceDiff(ctx context.Context, id domain.SessionID, ref ports.ChatFileReference, result FileReferenceResolution, read func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) FileReferenceResolution {
 	if isFileViewCapture(ref) || (result.State != "unchanged" && result.State != "moved") || ref.Source.Kind == "artifact" {
 		return result
@@ -211,13 +196,10 @@ func (s *Service) verifyFileReferenceDiff(ctx context.Context, id domain.Session
 	return changed
 }
 
-// Each side keeps its own line numbering. A recorded match wins before relocation.
 func resolveCapturedFileRows(ref ports.ChatFileReference, read func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) FileReferenceResolution {
 	if ref.Truncated {
 		return FileReferenceResolution{State: "unavailable", Reason: "truncated"}
 	}
-	// Earlier snapshots did not distinguish a unified context row from a split
-	// old-side context row. Keep their captured preview when that distinction matters.
 	if ref.Side == "old" && ref.EndSide == "" {
 		for _, row := range ref.Lines {
 			if row.Kind == "context" && row.Side == "" && row.OldNo != nil && row.NewNo != nil && *row.OldNo != *row.NewNo {
@@ -263,7 +245,6 @@ func resolveCapturedFileRows(ref ports.ChatFileReference, read func(WorkspaceFil
 		if matches(0) {
 			continue
 		}
-		// Anchor at the rarest captured row, avoiding repeated scans of common blank lines.
 		occurrences := map[string][]int{}
 		for _, row := range rows {
 			occurrences[row.text] = nil

@@ -2,36 +2,16 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-/**
- * The live browser page renders as a native WebContentsView *behind* the
- * transparent shell. Opening any overlay (the tabs-rail flyout, a menu) raises
- * the shell above that native view (see window-composition.ts's setOverlayOpen),
- * so every shell layer stacked over the page must be transparent for the
- * duration — otherwise the page blanks out for as long as the overlay is open.
- *
- * That contract lives entirely in CSS and cannot be exercised in jsdom, which
- * applies no stylesheet. It has silently regressed repeatedly, each time via an
- * ordinary-looking edit that added or moved an opaque ancestor. These tests pin
- * the contract at the source level: every element that wraps the browser panel
- * and paints its own background must be cleared by the native-composition
- * cascade.
- */
-
 const css = readFileSync(resolve(process.cwd(), "src/renderer/styles.css"), "utf8");
 
 const NATIVE_COMPOSITION = 'html[data-native-browser-composition="true"]';
 const LIVE_PAGE = '.browser-panel[data-browser-native-page="live"]';
-// Published on <html> by BrowserPanel / SessionBrowserPopOut (useElementFlag)
-// instead of container-level :has() checks, which restyled the whole app on
-// every DOM change.
 const DOCKED_LIVE = "[data-browser-native-live]";
 const POPOUT_OPEN = "[data-browser-popout-open]";
 
 type Rule = { selector: string; body: string };
 
 function rules(): Rule[] {
-	// Flat top-level parse is enough: the native-composition cascade is written
-	// as plain top-level rules, not nested inside media/layer blocks.
 	return css
 		.split("}")
 		.map((chunk) => {
@@ -56,9 +36,6 @@ function clearsBackgroundFor(match: (selector: string) => boolean): boolean {
 
 describe("native-composition transparency cascade", () => {
 	it("clears the docked inspector container that wraps the browser panel", () => {
-		// SessionView.tsx's inspector container carries an opaque `bg-background`
-		// utility and is an ancestor of the browser panel, so it paints over the
-		// live page whenever the shell is raised for the tabs flyout.
 		expect(
 			clearsBackgroundFor(
 				(selector) => selector.includes('[data-slot="inspector-container"]') && selector.includes(LIVE_PAGE),
@@ -67,10 +44,6 @@ describe("native-composition transparency cascade", () => {
 	});
 
 	it("clears the app shell root on every platform, not just Windows/Linux", () => {
-		// _shell.tsx's shell wrapper carries an opaque `bg-sidebar`. It was only
-		// ever reachable through the `.platform-windows` / `.platform-linux`
-		// classes, which macOS never applies — so the shell blanked the live page
-		// on macOS alone. Match it by its platform-independent class instead.
 		expect(
 			clearsBackgroundFor((selector) => selector.includes(".app-shell-root") && selector.includes(DOCKED_LIVE)),
 		).toBe(true);
@@ -81,22 +54,10 @@ describe("native-composition transparency cascade", () => {
 	});
 
 	it("clears the browser panel body wrapper around the native slot", () => {
-		// `.browser-panel__body` paints an opaque plate over the full viewport
-		// whenever the shell is raised for a toolbar tooltip or dropdown. Leaving
-		// it opaque blanks the live page even when the viewport div is transparent.
 		expect(clearsBackgroundFor((selector) => selector.includes(".browser-panel__body"))).toBe(true);
 	});
 
 	it("clears the app shell root while the browser panel is popped out", () => {
-		// The maximized panel is portaled straight to <body> (SessionView.tsx), so
-		// it is NOT a descendant of `.app-shell-root` and the docked `:has(LIVE_PAGE)`
-		// rule above can never match it. The popped-out block clears `#root`,
-		// `.platform-windows`, `.platform-linux`, the center/session surfaces … but
-		// omitted `.app-shell-root` — the same platform-independent hook the docked
-		// rule needed, since macOS applies no `.platform-*` class. So on macOS the
-		// shell wrapper kept painting its opaque `bg-sidebar` over the full window
-		// and blanked the live page for as long as any overlay (e.g. the
-		// device-preset dropdown) held the shell raised.
 		expect(
 			clearsBackgroundFor(
 				(selector) => selector.includes(".app-shell-root") && selector.includes(POPOUT_OPEN),
@@ -109,12 +70,6 @@ describe("native-composition transparency cascade", () => {
 	});
 
 	it("clears the popped-out frame that directly wraps the maximized browser panel", () => {
-		// SessionView.tsx portals the maximized browser into a `.browser-popout-frame`
-		// wrapper that paints an opaque `background: var(--bg)` plate. The popped-out
-		// shell clears above target #root ancestors via `:has(.browser-popout-overlay)`
-		// and never match this element, so it must be cleared explicitly — otherwise
-		// raising the transparent shell for a tooltip/menu paints the frame's opaque
-		// background over the native page and blanks it to black (Windows, maximized).
 		expect(clearsBackgroundFor((selector) => selector.includes(".browser-popout-frame"))).toBe(true);
 	});
 
@@ -134,12 +89,10 @@ describe("native-composition transparency cascade", () => {
 
 	it("centers the browser address bar between the inspector tabs and actions", () => {
 		const topbarRule = rules().find((rule) => rule.selector.endsWith(".session-inspector__topbar--browser"));
-		// Intrinsic side tracks: the field centers in the gap left by however many tabs there are.
 		expect(topbarRule?.body).toMatch(/grid-template-columns:\s*max-content minmax\(0, 1fr\) max-content/);
 		const hostRule = rules().find((rule) => rule.selector === ".session-inspector__topbar > .browser-panel__topbar-host");
 		expect(hostRule?.body).toMatch(/justify-self:\s*center/);
 		expect(hostRule?.body).toMatch(/width:\s*min\(100%, 240px\)/);
-		// Centered: no offset is applied to the field in any layout.
 		const addressBarRule = rules().find(
 			(rule) => rule.selector.endsWith(".browser-panel__topbar-host > .browser-panel__address-bar"),
 		);

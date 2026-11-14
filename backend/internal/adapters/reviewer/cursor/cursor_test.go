@@ -412,10 +412,6 @@ func TestPreLaunchRejectsMalformedMCPConfig(t *testing.T) {
 
 func TestPreLaunchRejectsOptionShapedMCPServerID(t *testing.T) {
 	home := isolateUserHome(t)
-	// `-x` in the host config covers the host read path; `--help` in the
-	// workspace config is the silent-bypass regression: `cursor-agent mcp
-	// disable --help` exits 0 having disabled nothing, so without rejection
-	// the server would stay enabled and stall the unattended review.
 	writeMCPJson(t, filepath.Join(home, ".cursor", "mcp.json"), "-x")
 	workspace := t.TempDir()
 	writeMCPJson(t, filepath.Join(workspace, ".cursor", "mcp.json"), "--help")
@@ -436,9 +432,6 @@ func TestPreLaunchRejectsOptionShapedMCPServerID(t *testing.T) {
 
 func TestExecMCPServerDisableRejectsAmbiguousIDs(t *testing.T) {
 	for _, id := range []string{"--help", "-h", "-x", "-", "", "   "} {
-		// An empty DataDir would fail profile validation and a missing
-		// binary would fail resolution; the refusal must win over both to
-		// prove rejection happens before anything is spawned or resolved.
 		err := execMCPServerDisable(context.Background(), ports.ReviewInvocation{
 			ReviewerID: "review-w1",
 		}, []string{"good-server", id})
@@ -448,10 +441,6 @@ func TestExecMCPServerDisableRejectsAmbiguousIDs(t *testing.T) {
 	}
 }
 
-// TestReviewerMCPConfigIDsEdgeCases covers the id shapes collection must pass
-// through intact: whitespace-padded and Unicode ids are legitimate server
-// names, duplicates across host and workspace collapse to one disable, and
-// large declarations are all collected in stable order.
 func TestReviewerMCPConfigIDsEdgeCases(t *testing.T) {
 	home := isolateUserHome(t)
 	writeMCPJson(t, filepath.Join(home, ".cursor", "mcp.json"), "host-b", "shared")
@@ -462,8 +451,6 @@ func TestReviewerMCPConfigIDsEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reviewerMCPConfigIDs: %v", err)
 	}
-	// Workspace ids first in byte-sorted order (space sorts before letters,
-	// non-ASCII bytes sort last), then unseen host ids.
 	want := []string{"  padded  ", "shared", "ws-a", "サーバ-☃", "host-b"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ids = %#v, want %#v", got, want)

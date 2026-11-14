@@ -16,7 +16,6 @@ import (
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 )
 
-// fakeImportService is a test double for controllers.ImportService.
 type fakeImportService struct {
 	statusResult importsvc.Status
 	statusErr    error

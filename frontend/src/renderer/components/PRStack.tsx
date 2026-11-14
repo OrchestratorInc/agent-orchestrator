@@ -21,14 +21,11 @@ import { Button } from "./ui/button";
 export type PRStackSectionData = {
 	info: PRStackInfo;
 	label: string;
-	/** A new task can start on top of this PR. */
 	canStartTask: boolean;
 };
 
-/** What the side column shows of a PR's stack; nothing when there's nothing to do with one. */
 export function usePRStackSection(pr: SessionPRSummary, session: WorkspaceSession, info: PRStackInfo | undefined): PRStackSectionData | undefined {
 	const { t } = useTranslation();
-	// Not read yet is not the same as no stack: a mid-stack PR can't take a new task.
 	if (session.cloud || pr.provider !== "github" || !info) return undefined;
 	const canStartTask = (pr.state === "open" || pr.state === "draft") && Boolean(pr.sourceBranch) && canStackOn(info.stack, pr.number);
 	if (!info.stack && !info.parent && !canStartTask) return undefined;
@@ -52,10 +49,6 @@ function LayerName({ layer }: { layer: PRStackLayer }) {
 	);
 }
 
-/**
- * One layer of the stack. This PR is plain text, a layer with an AO session opens
- * as a tab in that session, and the rest open on GitHub.
- */
 function LayerRow({ current, hostId, layer, session }: { current: boolean; hostId?: string; layer: PRStackLayer; session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const navigateToSession = useNavigateToSession();
@@ -84,7 +77,6 @@ function LayerRow({ current, hostId, layer, session }: { current: boolean; hostI
 	);
 }
 
-/** Describes the task to stack on this PR. Its worker starts from this PR's branch. */
 function StackTaskDialog({ hostId, onOpenChange, open, pr, session }: {
 	hostId?: string;
 	onOpenChange: (open: boolean) => void;
@@ -96,7 +88,6 @@ function StackTaskDialog({ hostId, onOpenChange, open, pr, session }: {
 	const navigateToSession = useNavigateToSession();
 	const [brief, setBrief] = useState("");
 	const textRef = useRef<HTMLTextAreaElement>(null);
-	// One key per dialog, so a retry after a dropped response can't start two tasks.
 	const requestId = useRef(crypto.randomUUID());
 	const start = useMutation({
 		mutationFn: async () => {
@@ -149,11 +140,6 @@ function StackTaskDialog({ hostId, onOpenChange, open, pr, session }: {
 	);
 }
 
-/**
- * A PR's stack: its layers top first, as they sit on the base branch, this one
- * marked. A PR based on another open PR but not stacked on it can join; the top
- * of a stack, or a PR with none, can take a new task.
- */
 export function PRStackSection({ hostId, pr, section, session }: {
 	hostId?: string;
 	pr: SessionPRSummary;

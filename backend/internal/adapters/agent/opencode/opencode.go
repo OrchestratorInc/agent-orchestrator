@@ -1,21 +1,3 @@
-// Package opencode implements the opencode (sst/opencode) agent adapter:
-// launching new TUI sessions, resuming sessions by native id, installing a
-// workspace-local activity plugin plus the using-ao skill, and reading
-// plugin-derived session info.
-//
-// opencode differs from Claude Code and Codex in two ways AO has to bridge:
-//   - It has no native command-hook config (no settings.local.json / hooks.json
-//     equivalent). Its only lifecycle-extensibility surface is a JS/TS plugin
-//     loaded from .opencode/plugins/, so GetAgentHooks installs an AO-owned
-//     plugin file (see hooks.go) instead of merging JSON. The same install also
-//     materializes using-ao under .opencode/skills/ so opencode's skill tool
-//     can discover it (the data-dir skill path alone is invisible to opencode).
-//   - Its CLI exposes only one approval flag (--dangerously-skip-permissions)
-//     and no system-prompt flag, so AO injects standing instructions by writing
-//     an AO-owned per-session config and selecting the generated agent.
-//
-// AO-managed sessions derive native session identity and display metadata from
-// the opencode plugin's reported events, mirroring the Codex adapter.
 package opencode
 
 import (
@@ -39,19 +21,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 
-	_ "modernc.org/sqlite" // register sqlite driver for opencode session metadata probes
+	_ "modernc.org/sqlite"
 )
 
 const (
-	// adapterID is the registry id and the value users pass to
-	// `ao spawn --agent`. It matches domain.HarnessOpenCode.
 	adapterID = "opencode"
 
-	// opencodeAgentSessionIDMetadataKey is the session-metadata key the opencode
-	// plugin persists the native session id under. GetRestoreCommand reads it back
-	// to resume an existing session. SessionInfo delegates to
-	// agentbase.StandardSessionInfo which reads ports.MetadataKeyAgentSessionID
-	// (same value), but GetRestoreCommand reads it directly, so the const stays.
 	opencodeAgentSessionIDMetadataKey = "agentSessionId"
 )
 
@@ -60,23 +35,17 @@ var opencodeUnixPaths = []string{
 	"/opt/homebrew/bin/opencode",
 }
 
-// Plugin is the opencode agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
-	// importBinary replaces the OpenCode 1 lookup in import tests.
-	importBinary string
+	importBinary   string
 }
 
-// New returns a ready-to-register opencode adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSemanticMessageAcceptance reports that the OpenCode activity plugin
-// includes the accepted prompt text in its user-prompt-submit callback.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -84,7 +53,6 @@ var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -97,21 +65,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports opencode's optional provider/model override.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `opencode --model`.")
 }
 
-// GetLaunchCommand builds the argv to start a new interactive opencode session.
-// Shape:
-//
-//	[env OPENCODE_CONFIG=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] [--prompt <prompt>]
-//
-// The session runs in the worktree (cwd is set by the runtime, as for Claude
-// Code and Codex). opencode has no CLI flag to set a system prompt, so AO writes
-// an opencode config into the AO prompt artifact directory, points OPENCODE_CONFIG
-// at it, and selects the generated agent with --agent. The initial task prompt
-// is delivered via --prompt (its argument, so a leading "-" is not read as a flag).
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := ResolveBinaryForMajor(ctx, 1)
 	if err != nil {
@@ -135,15 +92,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing opencode
-// session: `[env OPENCODE_CONFIG=<ao-config>] opencode [--dangerously-skip-permissions] [--agent <ao-agent>] --session <agentSessionId> [--prompt <prompt>]`.
-// It re-applies the permission flag and the generated AO agent config (resume
-// otherwise reverts to configured defaults). ok is false when the plugin-derived
-// native session id has not landed yet, so callers fall back to fresh launch
-// behavior — mirroring the Codex adapter. The optional resume-time prompt is
-// applied the same way GetLaunchCommand does, so a review task submitted
-// alongside a resume starts atomically with the process instead of racing a
-// post-launch terminal injection.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -176,9 +124,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces opencode plugin-derived metadata. Metadata is
-// intentionally nil for opencode: callers get the normalized fields directly,
-// matching the Codex adapter.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -187,11 +132,6 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// AuthStatus checks whether opencode has a configured provider credential.
-// Missing credentials remain unknown because opencode can still run its public
-// free models without a provider login. opencode's own stored credentials
-// decide first, then `opencode auth list`, and only then a key in the
-// environment.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.opencodeBinary(ctx)
 	if err != nil {
@@ -277,7 +217,6 @@ func opencodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
 	return ports.AgentAuthStatusUnknown, false
 }
 
-// opencodeStoredAuthStatus reads opencode's auth.json, then its database.
 func opencodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -324,8 +263,6 @@ func opencodeDataDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "opencode"), true
 }
 
-// opencodeAuthJSONStatus also returns the file's contents, so callers parse
-// it without reading it again.
 func opencodeAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, []byte, error) {
 	data, err := authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
@@ -425,11 +362,6 @@ func opencodeDBCount(ctx context.Context, db *sql.DB, query string) (int, error)
 	return count, nil
 }
 
-// appendPermissionFlags uses OpenCode's own approval flags where it has them.
-// --auto approves whatever is not explicitly denied, which is exactly AO's auto
-// mode, so the Terminal UI runs the provider's implementation rather than an
-// emulation of it. Bypass keeps the established alias and carries its
-// full-access rule on the AO agent, which outranks every config layer.
 func appendPermissionFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeAuto:
@@ -448,27 +380,11 @@ type opencodeInlineConfig struct {
 }
 
 type opencodeAgentSettings struct {
-	Mode   string `json:"mode,omitempty"`
-	Prompt string `json:"prompt,omitempty"`
-	// Either a ruleset or OpenCode's scalar form, and it outranks every config
-	// layer — which is what makes bypass a true bypass.
-	Permission any `json:"permission,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	Permission any    `json:"permission,omitempty"`
 }
 
-// opencodePermissionConfig maps AO's approval vocabulary onto what OpenCode
-// itself does, so a mode behaves the way the same session would outside AO.
-//
-//   - default: no rule. OpenCode's own configuration decides, unchanged.
-//   - accept-edits: allow edits. OpenCode has no such mode, so this is the one
-//     grant AO adds; everything else stays as OpenCode would have it.
-//   - auto: OpenCode's --auto, which approves whatever is not explicitly denied.
-//     Permissions that merely ask, including its external_directory and
-//     doom_loop guards, are approved; explicit deny rules still apply.
-//   - bypass-permissions: `permission: "allow"`, OpenCode's own full-access
-//     setting, which is the one mode that also passes explicit denies.
-//
-// `read` is never named, so OpenCode's default `.env` deny survives every mode
-// but bypass.
 func opencodePermissionConfig(mode ports.PermissionMode) map[string]string {
 	if ports.NormalizePermissionMode(mode) == ports.PermissionModeAcceptEdits {
 		return map[string]string{"edit": "allow"}
@@ -478,21 +394,10 @@ func opencodePermissionConfig(mode ports.PermissionMode) map[string]string {
 
 func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, promptFile, sessionID string) ([]string, string, error) {
 	permission := opencodePermissionConfig(permissions)
-	// Bypass goes on the agent, not in the config body. OpenCode's native flag
-	// is an alias of --auto, which still enforces explicit deny rules, and a
-	// config-level rule here would lose to a project policy — either way the
-	// mode would stop short of the full access it promises, and of what Chat
-	// does. Agent rules outrank every config layer, so this matches Chat.
 	var agentPermission any
 	if ports.NormalizePermissionMode(permissions) == ports.PermissionModeBypassPermissions {
 		agentPermission, permission = "allow", nil
 	}
-	// Both overlays ride on the AO-owned config file, never on
-	// OPENCODE_CONFIG_CONTENT. That variable is the highest-precedence config
-	// source and callers own it — the reviewer harness passes its own read-only
-	// policy there, and a launch prefix setting the same variable would replace
-	// it at exec time. Writing to OPENCODE_CONFIG instead also keeps a single
-	// answer for precedence: a worktree opencode.json always overrides AO.
 	if promptFile == "" {
 		if inlinePrompt != "" {
 			return nil, "", fmt.Errorf("opencode: system prompt file required to build agent config")
@@ -527,14 +432,6 @@ func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, pro
 	return []string{"env", opencodeConfigEnvVar + "=" + configPath}, agentName, nil
 }
 
-// ACP permission tiers. OpenCode's session modes are agents, and an agent
-// carries its own permission ruleset, so AO injects one agent per approval mode
-// and lets OpenCode enforce the choice. Selecting a mode is then an ordinary
-// session/set_config_option on "mode", which applies in both directions while a
-// session runs — a global `permission` rule could only be written at launch and
-// never taken back, so tightening a mode mid-session would change the label and
-// nothing else.
-// acpAgentForPermissions is the agent a session starts on.
 func acpAgentForPermissions(permissions ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeAcceptEdits:
@@ -548,10 +445,6 @@ func acpAgentForPermissions(permissions ports.PermissionMode) string {
 	}
 }
 
-// PrepareACPConfigContent merges AO's standing instructions and its approval
-// tiers into OpenCode's inline runtime overlay. The user's OPENCODE_CONFIG path
-// remains untouched, preserving its normal global, custom, project, provider,
-// and credential configuration.
 func PrepareACPConfigContent(
 	existing, systemPrompt string,
 	permissions ports.PermissionMode,
@@ -577,8 +470,6 @@ func PrepareACPConfigContent(
 		ports.PermissionModeAuto, ports.PermissionModeBypassPermissions,
 	} {
 		agent := opencodeAgentSettings{Mode: "primary", Prompt: systemPrompt}
-		// Only bypass writes a rule. Accept edits and auto answer requests,
-		// like OpenCode's --auto, so explicit provider denies stay denied.
 		if mode == ports.PermissionModeBypassPermissions {
 			agent.Permission = "allow"
 		}
@@ -619,9 +510,6 @@ func opencodeAOAgentName(sessionID string) string {
 	return "ao-" + name
 }
 
-// ResolveOpenCodeBinary returns the first opencode binary on this machine,
-// searching PATH then a handful of well-known install locations (the install
-// script's ~/.opencode/bin, Homebrew, npm global).
 func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
 	candidates, err := BinaryCandidates(ctx)
 	if err != nil {
@@ -633,10 +521,6 @@ func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
 	return candidates[0], nil
 }
 
-// BinaryCandidates returns every distinct opencode executable in
-// resolution order: the LookPath winner, other PATH entries, then well-known
-// install locations. OpenCode 1 and 2 share an executable name, so a machine can
-// carry both and a harness must be able to pick the one matching its major.
 func BinaryCandidates(ctx context.Context) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -658,7 +542,6 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 		found = append(found, path)
 	}
 
-	// AO's managed copy, when there is one, is tried first.
 	for _, name := range []string{"opencode", "opencode-v2"} {
 		if managed, ok := binaryutil.ManagedBinary(name); ok {
 			add(managed)
@@ -757,17 +640,12 @@ func (p *Plugin) opencodeBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
 
-// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
-// The restore command re-applies session options and explicitly selects the
-// captured native conversation rather than selecting the latest session.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 
 var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

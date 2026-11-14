@@ -323,10 +323,6 @@ func TestCheck_GHPresent(t *testing.T) {
 	}
 }
 
-// TestCheck_GHMissing confirms gh being absent neither fails the requirement's
-// sibling checks nor flips Ready — this is the whole point of gh being
-// Required: false. Since git/tmux/harness are all satisfied here, this is
-// also the "Ready stays true when ONLY gh is unsatisfied" case.
 func TestCheck_GHMissing(t *testing.T) {
 	catalog := &fakeHarnessCatalog{inventory: agentsvc.Inventory{
 		Installed: []agentsvc.Info{{ID: "claude-code", Label: "Claude Code"}},
@@ -506,8 +502,6 @@ func requirementByID(t *testing.T, report Report, id string) Requirement {
 	return Requirement{}
 }
 
-// The first subprocess consumes its entire budget; fallback must still be able
-// to read credentials, without extending a caller's own cancellation deadline.
 func TestCheckGitHubAuth_FallbackHasFreshDeadline(t *testing.T) {
 	calls := 0
 	runner := &fakeCommandRunner{run: func(ctx context.Context) error {

@@ -14,12 +14,6 @@ vi.mock("../lib/api-client", () => ({
 	},
 }));
 
-/**
- * @tanstack/react-virtual falls back to a 150ms scroll-end debounce when the
- * environment has no `scrollend` event (jsdom). That timer is not cancelled on
- * unmount, so it can fire after vitest tears down jsdom — drain past it while
- * `window` still exists.
- */
 async function drainVirtualizerScrollDebounce() {
 	cleanup();
 	await act(async () => {
@@ -27,17 +21,11 @@ async function drainVirtualizerScrollDebounce() {
 	});
 }
 
-// A diff line's content lives in a span with a `whitespace-pre*` class. Intra-line
-// word highlighting splits that span into child spans, so match on the wrapper's
-// full text content rather than a single text node.
 function diffLine(text: string) {
 	return (_content: string, element: Element | null): boolean =>
 		element != null && /whitespace-pre/.test(element.className) && element.textContent === text;
 }
 
-// Intra-line word highlights nest the row's code text a level or two deeper
-// than a plain row, so a selection Range needs to walk down to a real text
-// node rather than assuming firstChild is one.
 function findTextNode(node: Node): Text | null {
 	if (node.nodeType === Node.TEXT_NODE) return node as Text;
 	for (const child of Array.from(node.childNodes)) {
@@ -242,7 +230,6 @@ describe("ReviewDiffBody", () => {
 		expect(screen.getByText("⌘/Ctrl + Enter to send")).toBeInTheDocument();
 		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		fireEvent.change(textarea, { target: { value: "Rename this" } });
-		// The model hears that the box now has text, then nothing per keystroke.
 		expect(model.setDraft).toHaveBeenCalledTimes(1);
 		fireEvent.change(textarea, { target: { value: "Rename this prop" } });
 		expect(model.setDraft).toHaveBeenCalledTimes(1);
@@ -251,7 +238,6 @@ describe("ReviewDiffBody", () => {
 		fireEvent.keyDown(textarea, { key: "Enter" });
 		expect(model.setDraft).toHaveBeenCalledTimes(draftCalls);
 		expect(model.submit).not.toHaveBeenCalled();
-		// The shortcut hands over this box's text, then sends every written comment.
 		fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 		expect(model.setDraft).toHaveBeenLastCalledWith(model.targets[0], "Rename this");
 		expect(model.submit).toHaveBeenCalledWith();
@@ -286,7 +272,6 @@ describe("ReviewDiffBody", () => {
 		expect(model.cancel).toHaveBeenCalledTimes(1);
 		expect(model.cancel).toHaveBeenCalledWith(model.targets[0]);
 		const cancel = screen.getByRole("button", { name: "Cancel" });
-		// A labelled text button under the field, not an icon beside it.
 		expect(cancel).toHaveTextContent("Cancel");
 		expect(textarea.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		fireEvent.click(cancel);
@@ -308,10 +293,8 @@ describe("ReviewDiffBody", () => {
 		expect(secondBox).toHaveValue("");
 
 		fireEvent.change(secondBox, { target: { value: "Keep this guard" } });
-		// Leaving a box hands its text to the model, so the bar's send includes it.
 		fireEvent.blur(secondBox);
 		expect(model.setDraft).toHaveBeenCalledWith(second, "Keep this guard");
-		// With several comments written, the hint says the shortcut sends them all.
 		expect(screen.getByText("⌘/Ctrl + Enter to send all")).toBeInTheDocument();
 		const [, secondSend] = screen.getAllByRole("button", { name: "Send feedback" });
 		fireEvent.click(secondSend);
@@ -350,11 +333,9 @@ describe("ReviewDiffBody", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Discard all" }));
 		expect(model.cancel).toHaveBeenCalledWith();
 
-		// A pane with no written comment of its own stays clear of the bar.
 		rerender(<FileAnnotationSendBar annotation={model} surface="focused" />);
 		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();
 
-		// One comment needs no bar: its own box sends it.
 		model.targets = [first];
 		rerender(<FileAnnotationSendBar annotation={{ ...model }} surface="review" />);
 		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();

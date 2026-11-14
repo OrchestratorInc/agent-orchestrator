@@ -39,9 +39,6 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 	}
 }
 
-// The worker hears about a review only through the reviewer's inline GitHub
-// comments, each forwarded as a required change. Required findings must be
-// inline, and optional suggestions must not be.
 func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 	prompt, system := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
 	if !strings.Contains(prompt, "implementation pull request(s) owned by worker session mer-1") || !strings.Contains(system, "implementation PRs owned by a worker") {

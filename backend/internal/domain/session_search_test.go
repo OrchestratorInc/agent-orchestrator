@@ -9,12 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// TestParseSessionSearchQuery covers the one parser the palette, the Search
-// page, and `ao search` all use. Each case names the syntax a person types.
-// The exact tier's expression holds each ranked word as typed, so a document
-// with the word itself can outrank one that matches only its stem or a longer
-// word. It is empty for an explicit OR, where it would only cost a second
-// full-text pass.
 func TestParseSessionSearchQueryExactTier(t *testing.T) {
 	cases := []struct {
 		name, input string
@@ -47,9 +41,6 @@ func TestParseSessionSearchQuery(t *testing.T) {
 		check func(t *testing.T, query domain.SessionSearchParsedQuery)
 	}{
 		{
-			// Plain words are ranked, not required: bm25 orders the documents
-			// that contain any of them. Each matches as a prefix of its stem, so
-			// "flaky" also finds "flake" and "flakiness".
 			name:  "plain words are OR-ed stems ranked by bm25",
 			input: "flaky login",
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
@@ -59,8 +50,6 @@ func TestParseSessionSearchQuery(t *testing.T) {
 			},
 		},
 		{
-			// A natural-language question: its stopwords would match nearly every
-			// message, so only its content words are ranked.
 			name:  "a question ranks its content words",
 			input: "how did we fix the failing login tests?",
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
@@ -70,8 +59,6 @@ func TestParseSessionSearchQuery(t *testing.T) {
 			},
 		},
 		{
-			// Only the last word is a prefix (it is the one still being typed),
-			// unless stemming makes a word a prefix of its root.
 			name:  "only the last plain word is prefix-matched",
 			input: "login bu",
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
@@ -81,7 +68,6 @@ func TestParseSessionSearchQuery(t *testing.T) {
 			},
 		},
 		{
-			// A query of nothing but stopwords still searches for them.
 			name:  "a query of only stopwords keeps them",
 			input: "the",
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
@@ -244,8 +230,6 @@ func TestParseSessionSearchQuery(t *testing.T) {
 			},
 		},
 		{
-			// Nothing in it is a letter or digit, so nothing can match: no
-			// expression at all, rather than one FTS5 could reject.
 			name:  "a lone quote matches nothing and is not FTS syntax",
 			input: `"`,
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
@@ -264,8 +248,6 @@ func TestParseSessionSearchQuery(t *testing.T) {
 			},
 		},
 		{
-			// "C++" tokenizes to the single letter c; as a prefix it expanded
-			// to every term starting with c and took seconds on a real archive.
 			name:  "a one-character word never becomes a prefix",
 			input: "C++",
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
@@ -353,9 +335,7 @@ func TestParseSessionSearchQuery(t *testing.T) {
 			},
 		},
 		{
-			name: "an unreadable date, status or sort is reported, not ignored",
-			// status:any would read as clearing a status filter, which the query
-			// cannot express, so it is rejected rather than silently ignored.
+			name:  "an unreadable date, status or sort is reported, not ignored",
 			input: "reaper before:2026-99-01 after:soon status:sleepy sort:best status:any",
 			check: func(t *testing.T, query domain.SessionSearchParsedQuery) {
 				want := []string{"before:2026-99-01", "after:soon", "status:sleepy", "sort:best", "status:any"}
@@ -422,7 +402,6 @@ func TestParseSessionSearchQueryRejectsInvertedRange(t *testing.T) {
 	}
 }
 
-// An identifier is findable by its parts, and the original is always kept.
 func TestSessionSearchSplitIdentifiers(t *testing.T) {
 	body := "handleSubmit src/auth/login_test.ts"
 	expanded := domain.SessionSearchSplitIdentifiers(body, 10)
@@ -436,10 +415,6 @@ func TestSessionSearchSplitIdentifiers(t *testing.T) {
 	}
 }
 
-// TestSessionSearchSplitIdentifiersCamelAndAcronymBoundaries is the tokenization
-// contract for code identifiers: a person searches for a word they can see in
-// the source, which means camelCase, PascalCase, acronym runs, snake_case, and
-// dotted/slashed paths all have to expose their parts.
 func TestSessionSearchSplitIdentifiersCamelAndAcronymBoundaries(t *testing.T) {
 	cases := []struct {
 		identifier string
@@ -449,8 +424,6 @@ func TestSessionSearchSplitIdentifiersCamelAndAcronymBoundaries(t *testing.T) {
 		{"snake_case_name", []string{"snake", "case", "name"}},
 		{"src/auth/login_test.ts", []string{"src", "auth", "login", "test", "ts"}},
 		{"MAX_RETRY_COUNT", []string{"max", "retry", "count"}},
-		// The acronym run is the case a naive camel-case split loses: without it
-		// "http" and "response" are invisible inside this identifier.
 		{"parseHTTPResponse", []string{"parse", "http", "response"}},
 		{"HTTPServer", []string{"http", "server"}},
 		{"getHTTPStatusCode", []string{"get", "http", "status", "code"}},
@@ -465,8 +438,6 @@ func TestSessionSearchSplitIdentifiersCamelAndAcronymBoundaries(t *testing.T) {
 					t.Fatalf("%q expanded to %q, missing %q", testCase.identifier, expanded, want)
 				}
 			}
-			// The original identifier must survive, so searching it whole still
-			// matches without relying on the split.
 			if !strings.Contains(expanded, testCase.identifier) {
 				t.Fatalf("%q lost its original form: %q", testCase.identifier, expanded)
 			}
@@ -474,9 +445,6 @@ func TestSessionSearchSplitIdentifiersCamelAndAcronymBoundaries(t *testing.T) {
 	}
 }
 
-// A token with no internal boundary must not gain spurious parts, or every
-// lowercase word would be indexed twice and bm25 would be skewed by pure
-// duplication. snake_case is a real boundary, so it is not in this list.
 func TestSessionSearchSplitIdentifiersLeavesSimpleTokensAlone(t *testing.T) {
 	for _, body := range []string{"id", "login", "response"} {
 		expanded := domain.SessionSearchSplitIdentifiers(body, 10)
@@ -501,7 +469,6 @@ func TestSessionSearchResumeCommand(t *testing.T) {
 	if got := domain.SessionSearchResumeCommand("proj-1", "hibernated"); got != "ao session resume-agent proj-1" {
 		t.Fatalf("resume command = %q", got)
 	}
-	// resume-agent refuses a terminated session; restore brings it back.
 	if got := domain.SessionSearchResumeCommand("proj-1", "terminated"); got != "ao session restore proj-1" {
 		t.Fatalf("terminated resume command = %q", got)
 	}

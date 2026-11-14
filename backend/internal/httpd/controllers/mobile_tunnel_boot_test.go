@@ -6,10 +6,6 @@ import (
 	"time"
 )
 
-// The boot-time cloudflared lookup runs after the daemon starts listening. A
-// status read in that gap must wait for the answer, not report remote access
-// as unavailable: Connect Mobile stops polling once it has a status, so a wrong
-// early answer would stick until the user reopened it.
 func TestStatusWaitsForTheBootTunnelLookup(t *testing.T) {
 	release := make(chan struct{})
 	b := &BridgeService{ConfigPath: filepath.Join(t.TempDir(), "mobile.json"), LAN: &fakeLAN{}}
@@ -37,8 +33,6 @@ func TestStatusWaitsForTheBootTunnelLookup(t *testing.T) {
 	}
 }
 
-// Enabling during the boot lookup must use its connector rather than looking
-// up and keeping a second one.
 func TestEnableDuringBootLookupUsesItsConnector(t *testing.T) {
 	release := make(chan struct{})
 	boot := &fakeTunnel{}
@@ -72,8 +66,6 @@ func TestEnableDuringBootLookupUsesItsConnector(t *testing.T) {
 	}
 }
 
-// A boot lookup that finds nothing must not leave remote access off for good:
-// enabling later looks again, which picks up a cloudflared installed since.
 func TestEnableAfterAnEmptyBootLookupLooksAgain(t *testing.T) {
 	tun := &fakeTunnel{}
 	b := &BridgeService{

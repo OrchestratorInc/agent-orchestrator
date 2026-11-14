@@ -17,25 +17,10 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// credentialsPathEnv, when set, points AO at a DeepSeek Harness credential store
-// other than the default location.
 const credentialsPathEnv = "DSH_CREDENTIALS_PATH"
 
-// deepseekCredentialKey is the credential DeepSeek Harness stores for the
-// first-party "deepseek-official" model route, and the one a prompt needs. Other
-// entries in the same store (an OpenCode Go key, for example) authorize a
-// different provider and must not be read as DeepSeek Harness being ready.
-//
-// It names an environment variable and a store entry, and carries no secret of
-// its own.
 const deepseekCredentialKey = "DEEPSEEK_API_KEY" //nolint:gosec // a credential's name, not a credential value
 
-// AuthStatus reports whether DeepSeek Harness has a DeepSeek credential. The
-// Harness ACP server advertises no authentication surface (its initialize
-// response carries no auth methods and authenticate always succeeds), so the
-// only local evidence is the credential store, then the environment. Absent
-// evidence stays unknown: Harness may be routed through a provider configured in
-// its profile, which AO cannot see from here.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -48,8 +33,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// deepseekLocalAuthStatus checks the Harness credential store first;
-// DEEPSEEK_API_KEY in the environment is the fallback.
 func deepseekLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -76,9 +59,6 @@ func deepseekStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 	return status, ok, err
 }
 
-// deepseekCredentialsPath resolves the Harness credential store. DSH_HOME moves
-// the whole Harness home, so honour it the same way AO's other adapters honour
-// their CLI's home overrides.
 func deepseekCredentialsPath() (string, error) {
 	if override := strings.TrimSpace(os.Getenv(credentialsPathEnv)); override != "" {
 		return override, nil
@@ -94,17 +74,6 @@ func deepseekCredentialsPath() (string, error) {
 	return filepath.Join(home, ".credentials.yaml"), nil
 }
 
-// deepseekCredentialsStatus reads the store without exposing its contents. The
-// file is YAML: a current Harness writes `version: 1` with credentials under
-// `refs:`, mapping each addressable name straight to its secret, so a
-// DEEPSEEK_API_KEY ref with a non-empty value is the evidence AO looks for. The
-// walk stays shape-tolerant on purpose — it also accepts the pre-release flat
-// layout and a nested secret — because AO only decides whether to show the
-// setup action, and Harness owns the document's real validation.
-//
-// A scoped record (`records: <scope>/<id>`) carries no such ref, so a store
-// holding only those stays unknown rather than claiming a route AO cannot
-// attribute to DeepSeek.
 func deepseekCredentialsStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the Harness credential store, resolved above
 	if os.IsNotExist(err) {
@@ -126,12 +95,6 @@ func deepseekCredentialsStatus(path string) (ports.AgentAuthStatus, bool, error)
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// supportedStoreLayout reports whether the document is one a current DeepSeek
-// Harness can load. Anything without `version: 1` — notably the pre-release
-// flat layout of bare name/secret pairs — is refused outright by Harness
-// ("uses the pre-release flat layout"), taking its whole credentials service
-// down with it. Reading such a file as authorization would badge the harness
-// ready for a session that cannot start, so it is not evidence.
 func supportedStoreLayout(store any) bool {
 	root, ok := store.(map[string]any)
 	if !ok {
@@ -149,10 +112,6 @@ func supportedStoreLayout(store any) bool {
 	}
 }
 
-// credentialEntryHasSecret walks the store for the entry named key and reports
-// whether that entry, and only that entry, holds a non-empty secret. Scoping to
-// the entry matters: a populated OpenCode Go key in the same store says nothing
-// about DeepSeek credentials.
 func credentialEntryHasSecret(value any, key string) bool {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -174,9 +133,6 @@ func credentialEntryHasSecret(value any, key string) bool {
 	return false
 }
 
-// secretValuePresent reports whether a credential entry holds a usable secret,
-// accepting the scalar form and the nested {payload: {secret: …}} form the
-// Harness store uses.
 func secretValuePresent(value any) bool {
 	switch typed := value.(type) {
 	case string:
@@ -203,8 +159,6 @@ func secretValuePresent(value any) bool {
 	}
 }
 
-// CredentialsPath is the Harness credential store AO reads for sign-in and
-// writes when the user saves a DeepSeek key from AO.
 func CredentialsPath() (string, error) {
 	path, err := deepseekCredentialsPath()
 	if err == nil && path == "" {

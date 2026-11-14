@@ -6,14 +6,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// live builds an idle, non-terminated session that has already signaled, so the
-// derived status is governed purely by its PRs.
 func live() domain.SessionRecord {
 	return statusRec(domain.ActivityIdle, false)
 }
 
 func TestBuildStacksMarksBlockedChildren(t *testing.T) {
-	// #142 (root → main), #143 stacked on #142, #144 stacked on #143.
 	prs := []domain.PRFacts{
 		{URL: "p142", SourceBranch: "ao/abc", TargetBranch: "main"},
 		{URL: "p143", SourceBranch: "ao/abc/auth", TargetBranch: "ao/abc"},
@@ -43,8 +40,6 @@ func TestBuildStacksMergedParentUnblocksChild(t *testing.T) {
 }
 
 func TestDeriveStatusWorstWinsAcrossIndependentPRs(t *testing.T) {
-	// Two independent open PRs (both target main): mergeable vs ci_failed.
-	// CI failure is more urgent, so the session reports ci_failed.
 	prs := []domain.PRFacts{
 		{URL: "a", SourceBranch: "ao/a", TargetBranch: "main", Mergeability: domain.MergeMergeable},
 		{URL: "b", SourceBranch: "ao/b", TargetBranch: "main", CI: domain.CIFailing},
@@ -65,8 +60,6 @@ func TestDeriveStatusAllMergeableReportsMergeable(t *testing.T) {
 }
 
 func TestDeriveStatusStackedChildExemptFromAggregation(t *testing.T) {
-	// Root mergeable; blocked child is pr_open. Child is exempt, so the session
-	// reports mergeable rather than being dragged down to pr_open.
 	prs := []domain.PRFacts{
 		{URL: "root", SourceBranch: "ao/abc", TargetBranch: "main", Mergeability: domain.MergeMergeable},
 		{URL: "child", SourceBranch: "ao/abc/x", TargetBranch: "ao/abc"},
@@ -77,8 +70,6 @@ func TestDeriveStatusStackedChildExemptFromAggregation(t *testing.T) {
 }
 
 func TestDeriveStatusMergedParentOpenChildStaysOnChild(t *testing.T) {
-	// Parent merged, child now unblocked and review_pending: still alive, status
-	// follows the open child.
 	prs := []domain.PRFacts{
 		{URL: "root", SourceBranch: "ao/abc", TargetBranch: "main", Merged: true},
 		{URL: "child", SourceBranch: "ao/abc/x", TargetBranch: "main", Review: domain.ReviewRequired},
@@ -115,8 +106,6 @@ func TestDeriveStatusEmptyPRsUsesActivity(t *testing.T) {
 }
 
 func TestDeriveStatusDegenerateAllBlockedStillAggregates(t *testing.T) {
-	// Two PRs each targeting the other's source branch (no visible root). The
-	// fallback aggregates across all so the session never goes dark.
 	prs := []domain.PRFacts{
 		{URL: "a", SourceBranch: "x", TargetBranch: "y", CI: domain.CIFailing},
 		{URL: "b", SourceBranch: "y", TargetBranch: "x", Mergeability: domain.MergeMergeable},

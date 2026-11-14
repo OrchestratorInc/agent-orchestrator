@@ -41,8 +41,6 @@ beforeEach(() => {
 	mocks.get.mockReset();
 	mocks.patch.mockReset();
 	mocks.localGet.mockReset();
-	// Cloud's list for the account names the same models these tests pick, so
-	// they exercise the field through the list a Cloud project's settings use.
 	mocks.models.mockReset();
 	mocks.models.mockImplementation(async (_orgId: string, agent: string) => {
 		const local = await mocks.localGet("/api/v1/agents/{agent}/models", { params: { path: { agent } } });
@@ -58,7 +56,6 @@ beforeEach(() => {
 	mocks.cues.mockReset();
 	mocks.cues.mockResolvedValue({ cues: [] });
 	mocks.me.mockReset();
-	// A B2B org by default: its projects run on Coder.
 	mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["coder"], defaultProvider: "coder", billingMode: "contract", kind: "b2b", features: [] } });
 	mocks.localGet.mockImplementation(async (_path: string, options: { params: { path: { agent: string } } }) => ({ data: {
 		agent: options.params.path.agent, selectionMode: "catalog", allowCustom: true,
@@ -114,7 +111,6 @@ describe("Cloud project settings", () => {
 		const effort = role === "orchestrator" ? "Orchestrator agent Effort" : `${label} Effort`;
 		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeEnabled();
 		const model = await screen.findByRole("button", { name: `${label} model` });
-		// An unset model names the agent's real default instead of a placeholder.
 		await waitFor(() => expect(model).toHaveTextContent("Local default"));
 		expect(model).not.toHaveTextContent("Agent default");
 		expect(model).not.toHaveTextContent("High");
@@ -145,8 +141,6 @@ describe("Cloud project settings", () => {
 		mount();
 		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("OpenCode");
 		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Cursor");
-		// Without a project reviewer, the worker agent's default reviewer runs:
-		// OpenCode's is not one Cloud runs, so Claude Code reviews.
 		expect(screen.getByRole("button", { name: "Reviewer agent" })).toHaveTextContent("Claude Code");
 		for (const role of ["Worker", "Orchestrator", "Reviewer"]) {
 			expect(screen.getByRole("button", { name: `${role} agent` })).toBeEnabled();
@@ -176,7 +170,6 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByRole("menuitem", { name: /^Opus 5/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Opus 5/ }));
-		// Effort has its own picker beside the model, so picking a model just closes the menu.
 		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: expect.objectContaining({ worker: { agent: "claude-code", agentConfig: expect.objectContaining({ model: "claude-opus-5" }) } }),
@@ -187,10 +180,8 @@ describe("Cloud project settings", () => {
 		project.config = { worker: { agent: "claude-code", agentConfig: { model: "claude-opus-5-5" } }, orchestrator: { agent: "claude-code" } };
 		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
 		mount();
-		// The worker's role, and the reviewer's, which runs the worker's model.
 		const warnings = await screen.findAllByText("claude-opus-5-5 isn't available to your Claude Code account on Cloud, so tasks use the default. Pick another model.");
 		expect(warnings.length).toBeGreaterThan(0);
-		// It takes its own line under the agent and model pickers, which stay side by side.
 		for (const warning of warnings) expect(warning).toHaveClass("basis-full");
 	});
 
@@ -217,13 +208,11 @@ describe("Cloud project settings", () => {
 		mount();
 		const warnings = await screen.findAllByText("Couldn't load Orchestrator Cloud's model list for Claude Code.");
 		expect(warnings.length).toBeGreaterThan(0);
-		// A model ID can still be entered by hand.
 		const model = screen.getByRole("button", { name: "Worker model" });
 		await userEvent.click(model);
 		await userEvent.type(screen.getByRole("searchbox"), "claude-typed-1");
 		expect(screen.getByRole("menuitem", { name: /claude-typed-1/ })).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		// Retry reads Cloud's list again, not this computer's.
 		const calls = mocks.models.mock.calls.length;
 		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
 		await userEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]);
@@ -300,7 +289,6 @@ describe("Cloud project settings", () => {
 		await userEvent.clear(name);
 		await userEvent.type(name, "New name");
 		await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("org", "project", { displayName: "New name" }));
-		// The control plane runs issue intake, so its rule shows as on local projects.
 		expect(screen.getByRole("switch", { name: "Enable issue intake" })).toBeChecked();
 		expect(screen.getByText("legacy")).toBeInTheDocument();
 	});
@@ -420,14 +408,12 @@ describe("Cloud project settings", () => {
 		mount("general");
 		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
 		expect(toggle).toBeChecked();
-		// The page is read by admins too, for every session's commits: it promises nothing about who "you" are.
 		expect(screen.getByText("When enabled, commits the agents make in this project list the Orchestrator GitHub App as a co-author. The commit author does not change.")).toBeInTheDocument();
 		await userEvent.click(toggle);
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coAuthorCommits: false } }));
 	});
 
 	it("puts the co-author switch back on when the control plane does not support it yet", async () => {
-		// A control plane from before the setting rejects it as unknown.
 		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "validation_error" }));
 		useUiStore.setState({ globalToast: null, globalToasts: [] });
 		mount("general");
@@ -437,15 +423,11 @@ describe("Cloud project settings", () => {
 			title: "This Cloud control plane does not support the co-author setting yet, so it stays on.", tone: "error",
 		}));
 		await waitFor(() => expect(toggle).toBeChecked());
-		// Nothing else changed, so nothing else is sent, and the next edit does not resend the setting.
 		expect(mocks.patch).toHaveBeenCalledTimes(1);
 		await userEvent.click(screen.getByRole("switch", { name: "Workers request a built-in review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
 	});
 
-	// Only an older control plane's exact rejection of the unknown setting puts
-	// the switch back; any other failure, even one naming the setting, is a
-	// failure to save.
 	it.each([
 		["an outage", new CloudCpError("Cloud is unavailable", { status: 503, code: "unavailable" })],
 		["an outage that names the setting", new CloudCpError("Failed to persist coAuthorCommits", { status: 503, code: "unavailable" })],
@@ -473,7 +455,6 @@ describe("Cloud project Coder template", () => {
 	it("shows the project's Coder template and size", () => {
 		renderCoder({ coder: { templateId: "tpl-1", size: "medium" } });
 		expect(screen.getByText("Azure Linux")).toBeInTheDocument();
-		// The id stays available, secondary to the name.
 		expect(screen.getByTestId("coder-template-id")).toHaveTextContent("tpl-1");
 		expect(screen.getByText("Azure Linux").parentElement).toHaveAttribute("title", "tpl-1");
 		expect(screen.getByText("medium")).toBeInTheDocument();
@@ -608,7 +589,6 @@ describe("Cloud project Coder template options", () => {
 		{ name: "region", displayName: "Region", type: "string", mutable: true, required: false, defaultValue: "eu" },
 		{ name: "docker", displayName: "Docker", type: "bool", mutable: true, required: false, defaultValue: "false" },
 	];
-	// The shared cloud-client schema predates `coder.parameters`.
 	const withSavedParameters = { templateId: "tpl-1", parameters: { region: "us" } } as CloudCpProject["config"]["coder"];
 
 	it("edits saved template options, sending the whole map so saved values survive", async () => {
@@ -618,12 +598,10 @@ describe("Cloud project Coder template options", () => {
 		expect(await screen.findByText("Template options")).toBeInTheDocument();
 		expect(mocks.templateParameters).toHaveBeenCalledWith("org", "tpl-1", expect.anything());
 		expect(screen.getByText("Changes apply to new sessions.")).toBeInTheDocument();
-		// The saved override wins over the template default.
 		expect(screen.getByRole("textbox", { name: "Region" })).toHaveValue("us");
 		expect(mocks.patch).not.toHaveBeenCalled();
 
 		await userEvent.click(screen.getByRole("switch", { name: "Docker" }));
-		// The endpoint replaces coder.parameters, so the saved region goes too.
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { parameters: { region: "us", docker: "true" } } } }));
 		expect(mocks.patch).toHaveBeenCalledTimes(1);
 	});
@@ -635,7 +613,6 @@ describe("Cloud project Coder template options", () => {
 		const region = await screen.findByRole("textbox", { name: "Region" });
 		await userEvent.clear(region);
 		await userEvent.type(region, "eu");
-		// Back at the default, region is simply left out of the map.
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { parameters: {} } } }));
 	});
 

@@ -28,8 +28,6 @@ func (s *modelUpdateBarrierStore) pause() {
 func (s *modelUpdateBarrierStore) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	rec, ok, err := s.Store.GetSession(ctx, id)
 	if err == nil && ok {
-		// The former read/modify/write implementation paused here with a stale
-		// snapshot; retaining the hook makes the regression reproduce on it.
 		s.pause()
 	}
 	return rec, ok, err

@@ -44,10 +44,6 @@ func isWindowsBatchFile(path string) bool {
 	return strings.EqualFold(extension, ".cmd") || strings.EqualFold(extension, ".bat")
 }
 
-// cmd.exe uses different quoting rules from native Windows executables. The
-// outer quotes are consumed by /s /c; each token remains quoted for paths and
-// arguments containing spaces. Doubling embedded quotes preserves them for the
-// batch shim instead of allowing them to terminate the command early.
 func windowsBatchCommandLine(executable string, args []string) string {
 	parts := make([]string, 0, len(args)+1)
 	parts = append(parts, quoteWindowsBatchArg(executable))
@@ -61,16 +57,8 @@ func quoteWindowsBatchArg(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
-// errStalePreviewPID reports that a recorded preview PID could not be
-// re-verified as the process AO launched, so nothing was killed.
 var errStalePreviewPID = errors.New("preview pid is stale or recycled; refusing to signal")
 
-// previewProcessStartTime returns pid's kernel creation time as an opaque
-// decimal string, or "" when the process does not exist or cannot be queried.
-// It is captured at launch and compared verbatim before any tree kill: a bare
-// PID stops identifying anything once the child is reaped, and Windows
-// recycles PIDs the same way, so `taskkill /T` on a recycled number would
-// kill an unrelated process tree (issue #3475).
 func previewProcessStartTime(pid int) string {
 	if pid <= 0 {
 		return ""
@@ -87,10 +75,6 @@ func previewProcessStartTime(pid int) string {
 	return strconv.FormatUint(uint64(creation.HighDateTime)<<32|uint64(creation.LowDateTime), 10)
 }
 
-// killPreviewTree taskkills pid's tree only after re-verifying that the
-// number still identifies the process AO launched. A missing root is a no-op:
-// /T walks the tree from the root, so with the root gone there is nothing
-// left that the daemon can still attribute to itself.
 func killPreviewTree(pid int, recordedStart string, force bool) error {
 	if pid <= 0 {
 		return nil
@@ -112,10 +96,6 @@ func killPreviewTree(pid int, recordedStart string, force bool) error {
 	return aoprocess.Command("taskkill", args...).Run()
 }
 
-// killPreviewRoot terminates only the direct child through os.Process, which
-// refuses to act on an already-reaped child, so it can never hit a recycled
-// PID. It is the fallback for runs whose launch identity could not be
-// captured: descendants may leak, innocents never die.
 func killPreviewRoot(cmd *exec.Cmd) error {
 	err := cmd.Process.Kill()
 	if err == nil || errors.Is(err, os.ErrProcessDone) {

@@ -436,14 +436,12 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 			await expect(cleared).resolves.toMatchObject({ sessionId });
 			expect(methods()).toEqual(["Runtime.enable", "Runtime.disable", "Runtime.enable"]);
 
-			// Nested commands keep Runtime on until the last one ends.
 			await bridge.beginCommand();
 			await bridge.endCommand();
 			expect(methods().at(-1)).toBe("Runtime.enable");
 			await bridge.endCommand();
 			expect(methods().at(-1)).toBe("Runtime.disable");
 
-			// A client command that arrives while quiet wakes Runtime first.
 			await expectRPCResult(socket, 3, "Runtime.evaluate", { expression: "1" }, sessionId);
 			expect(methods().slice(-2)).toEqual(["Runtime.enable", "Runtime.evaluate"]);
 		} finally {
@@ -475,17 +473,14 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 			await expectRPCResult(socket, 2, "Runtime.enable", {}, sessionId);
 			await bridge.endCommand();
 
-			// A background command wakes Runtime, which must not stay on.
 			await expectRPCResult(socket, 3, "Runtime.evaluate", { expression: "1" }, sessionId);
 			await waitFor(() => expect(methods().at(-1)).toBe("Runtime.disable"));
 
-			// A client enabling Runtime while idle, as for a new popup, goes quiet too.
 			await expectRPCResult(socket, 4, "Runtime.disable", {}, sessionId);
 			await expectRPCResult(socket, 5, "Runtime.enable", {}, sessionId);
 			expect(methods().at(-1)).toBe("Runtime.enable");
 			await waitFor(() => expect(methods().at(-1)).toBe("Runtime.disable"));
 
-			// A running command is never interrupted by the idle timer.
 			await bridge.beginCommand();
 			await expectRPCResult(socket, 6, "Runtime.evaluate", { expression: "2" }, sessionId);
 			await new Promise((resolve) => setTimeout(resolve, 400));

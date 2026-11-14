@@ -12,12 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeScopedIdentityResolver implements ports.ScopedIdentityResolver for tests.
-// It returns a per-provider identity or error.
 type fakeScopedIdentityResolver struct {
-	// identities is keyed by identityKey(provider, host) so tests can
-	// return different identities for the same provider on different hosts
-	// (e.g. gitlab.com vs a self-managed GitLab).
 	identities map[string]ports.SCMIdentity
 	errs       map[string]error
 	calls      []string
@@ -32,9 +27,6 @@ func (r *fakeScopedIdentityResolver) AuthenticatedIdentityForProvider(_ context.
 	return r.identities[key], nil
 }
 
-// hostAwareProvider wraps fakeProvider and overrides ParseRepository to
-// route gitlab.com URLs to the gitlab provider key, so multi-provider observer
-// tests can exercise per-provider identity resolution.
 type hostAwareProvider struct {
 	*fakeProvider
 }
@@ -49,16 +41,11 @@ func (p *hostAwareProvider) ParseRepository(remote string) (ports.SCMRepo, bool)
 	return p.fakeProvider.ParseRepository(remote)
 }
 
-// --- Test helpers for multi-provider observer tests ---
-
 var (
 	glRepo     = ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "o", Name: "r", Repo: "o/r"}
 	glSelfRepo = ports.SCMRepo{Provider: "gitlab", Host: "gitlab.internal", Owner: "o", Name: "r", Repo: "o/r"}
 )
 
-// testStoreWithTwoGitLabSessions sets up a store with two sessions — one for
-// gitlab.com and one for a self-managed gitlab.internal — both using the "feat"
-// branch.
 func testStoreWithTwoGitLabSessions() *fakeStore {
 	return &fakeStore{
 		sessions: []domain.SessionRecord{
@@ -74,8 +61,6 @@ func testStoreWithTwoGitLabSessions() *fakeStore {
 	}
 }
 
-// testStoreWithTwoSessions sets up a store with two sessions — one for a GitHub
-// repo and one for a GitLab repo — both using the "feat" branch.
 func testStoreWithTwoSessions() *fakeStore {
 	return &fakeStore{
 		sessions: []domain.SessionRecord{
@@ -91,11 +76,6 @@ func testStoreWithTwoSessions() *fakeStore {
 	}
 }
 
-// TestPoll_TwoGitLabHostsIdentityResolution verifies that when a
-// ScopedIdentityResolver is wired, MRs from gitlab.com and a self-managed
-// gitlab.internal host are checked against their own per-host identity.
-// A self-managed MR authored by a different account than gitlab.com must not
-// be silently dropped (ticket 06).
 func TestPoll_TwoGitLabHostsIdentityResolution(t *testing.T) {
 	store := testStoreWithTwoGitLabSessions()
 	provider := &hostAwareProvider{fakeProvider: &fakeProvider{
@@ -137,17 +117,14 @@ func TestPoll_TwoGitLabHostsIdentityResolution(t *testing.T) {
 
 	fetched := fetchedNumbers(provider.fetchBatches)
 
-	// gitlab.com: only MR #2 (author "comuser") should be fetched, not MR #1.
 	if !fetched[2] || fetched[1] {
 		t.Fatalf("gitlab.com fetched = %v, want only MR #2 (comuser's MR)", fetched)
 	}
 
-	// gitlab.internal: only MR #4 (author "internaluser") should be fetched, not MR #3.
 	if !fetched[4] || fetched[3] {
 		t.Fatalf("gitlab.internal fetched = %v, want only MR #4 (internaluser's MR)", fetched)
 	}
 
-	// Foreign-author MRs must not be persisted.
 	for _, w := range store.writes {
 		if w.pr.Number == 1 || w.pr.Number == 3 {
 			t.Fatalf("foreign author's MR %d was persisted", w.pr.Number)
@@ -155,9 +132,6 @@ func TestPoll_TwoGitLabHostsIdentityResolution(t *testing.T) {
 	}
 }
 
-// TestPoll_PerProviderIdentityResolution verifies that when a
-// ScopedIdentityResolver is wired, GitHub PRs are checked against the GitHub
-// identity and GitLab PRs against the GitLab identity (finding #7).
 func TestPoll_PerProviderIdentityResolution(t *testing.T) {
 	store := testStoreWithTwoSessions()
 	provider := &hostAwareProvider{fakeProvider: &fakeProvider{
@@ -197,23 +171,19 @@ func TestPoll_PerProviderIdentityResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Both providers should have been queried for identity.
 	if len(scoped.calls) != 2 {
 		t.Fatalf("identity resolver calls = %v, want both [github gitlab]", scoped.calls)
 	}
 
-	// Verify GitHub: only PR #2 (author "octocat") was fetched, not PR #1 (author "other").
 	fetched := fetchedNumbers(provider.fetchBatches)
 	if !fetched[2] || fetched[1] {
 		t.Fatalf("github fetched = %v, want only PR #2 (octocat's PR)", fetched)
 	}
 
-	// Verify GitLab: only PR #4 (author "gitlabuser") was fetched, not PR #3 (author "other").
 	if !fetched[4] || fetched[3] {
 		t.Fatalf("gitlab fetched = %v, want only PR #4 (gitlabuser's PR)", fetched)
 	}
 
-	// Verify foreign PRs were not persisted.
 	for _, w := range store.writes {
 		if w.pr.Number == 1 || w.pr.Number == 3 {
 			t.Fatalf("foreign author's PR %d was persisted", w.pr.Number)
@@ -221,9 +191,6 @@ func TestPoll_PerProviderIdentityResolution(t *testing.T) {
 	}
 }
 
-// TestPoll_ScopedIdentityPartialFailure verifies that when identity resolution
-// fails for one provider, PRs from the other provider are still discovered
-// against their matching identity (finding #7).
 func TestPoll_ScopedIdentityPartialFailure(t *testing.T) {
 	store := testStoreWithTwoSessions()
 	provider := &hostAwareProvider{fakeProvider: &fakeProvider{
@@ -244,7 +211,6 @@ func TestPoll_ScopedIdentityPartialFailure(t *testing.T) {
 			prKey(glRepo, 3):   testObsGitLab(3),
 		},
 	}}
-	// GitHub identity resolves fine; GitLab identity fails.
 	scoped := &fakeScopedIdentityResolver{
 		identities: map[string]ports.SCMIdentity{
 			identityKey("github", "github.com"): {Login: "octocat", Human: true},
@@ -264,14 +230,11 @@ func TestPoll_ScopedIdentityPartialFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// GitHub PR #1 (author "octocat") should be fetched — identity resolved.
 	fetched := fetchedNumbers(provider.fetchBatches)
 	if !fetched[1] {
 		t.Fatalf("github PR #1 should be fetched (identity resolved), got fetched=%v", fetched)
 	}
 
-	// An unavailable identity must not borrow the other provider's identity
-	// or fall back to namespace matching.
 	if fetched[3] {
 		t.Fatalf("gitlab PR #3 must not be attached without its identity, got fetched=%v", fetched)
 	}
@@ -281,13 +244,10 @@ func TestPoll_ScopedIdentityPartialFailure(t *testing.T) {
 		}
 	}
 
-	// Both providers should have been queried.
 	if len(scoped.calls) != 2 {
 		t.Fatalf("identity resolver calls = %v, want both [github gitlab]", scoped.calls)
 	}
 }
-
-// --- helpers ---
 
 func testObsGitLabHost(num int) ports.SCMObservation {
 	o := testObs(num)

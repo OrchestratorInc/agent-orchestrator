@@ -19,21 +19,15 @@ import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
 
 const providerNames = agentAccountProviderNames;
 
-// One sign-in per host and provider, kept outside the page so leaving Settings
-// does not lose a browser sign-in in progress.
 let pendingLogins: Partial<Record<string, AgentAccountLogin>> = {};
 
-/** The CLI's own login signs in and out through the harness's login terminal. */
 export type CliLoginControls = {
-	/** A login or logout terminal is open, or the harness is busy. */
 	disabled: boolean;
 	canLogout: boolean;
 	onSignIn: () => void;
 	onLogout: () => void;
 };
 
-/** One CLI's subscription accounts on its Harness Account tab: the CLI's own
- * login and the accounts added in AO, with their limits, default and sign-in. */
 export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string }) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts(true, hostId);
@@ -68,18 +62,14 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 		pendingLogins = { ...pendingLogins, [loginKey]: next };
 		setLogins(pendingLogins);
 	};
-	// accountId signs that saved account in again, in its own folder.
 	const startLogin = (accountId?: string) => run(`login:${provider}`, async () => {
 		if (login) await actions.cancelLogin(login.operationId).catch(() => undefined);
 		setLogin(undefined);
 		setLoginNote("");
 		setLogin(await (accountId ? actions.signInAgain(accountId) : actions.startLogin(provider)));
 	});
-	// One check at a time: the CLI exiting checks on its own, and a second check
-	// racing a click would find the sign-in already finished and report an error.
 	const verifying = useRef(false);
 	const checkLogin = (current: AgentAccountLogin) => {
-		// A closed sign-in's terminal still reports its exit; there is nothing left to check.
 		if (pendingLogins[loginKey]?.operationId !== current.operationId || verifying.current) return;
 		void verifyLogin(current);
 	};
@@ -93,7 +83,6 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
 			if (result.status === "complete") {
-				// A chat turn that sent the user here to log in gets them back.
 				const ui = useUiStore.getState();
 				const waiting = ui.loginReturn;
 				if (waiting && agentAccountProviderFor(waiting.agentId) === provider) {
@@ -128,7 +117,6 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
-			{/* The CLI login does not wait on the list: a cold read can take a while, and a failed one has no row. */}
 			{cliLogin && !providerAccounts.some((account) => account.device) ? <div className="flex items-center justify-between gap-3 px-3 py-2.5">
 				<p className="truncate text-sm font-medium text-foreground">{t("settings.agentAccounts.cliLoginOf", { provider: providerNames[provider] })}</p>
 				<Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.harness.login")}</Button>
@@ -164,7 +152,6 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	name: string;
 	aoTokens: number | undefined;
 	busy: string | null;
-	/** Only on the CLI's own login, which has no folder of its own to remove. */
 	cliLogin?: CliLoginControls;
 	onMakeDefault: () => void;
 	onUseReset: () => void;
@@ -176,8 +163,6 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	const resets = account.limits?.resetCredits ?? 0;
 	const meta = [
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
-		// An API key (or a cloud provider login) launches the CLI but is not a
-		// subscription: no limits, and no account to move a session to.
 		account.signedIn ? null : account.loggedIn ? t("settings.agentAccounts.noSubscription") : t("settings.agentAccounts.signedOut"),
 		aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null,
 	].filter(Boolean).join(" · ");
@@ -207,9 +192,6 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	</div>;
 }
 
-/** Why the account's last check failed, in plain words. A failure that clears
- * on its own reads as a muted note beside the age of the numbers still shown;
- * one that needs the user is a warning. The CLI's own error is under Details. */
 export function AccountProblemNote({ account }: { account: AgentAccount }) {
 	const { t, i18n } = useTranslation();
 	const problem = describeAccountProblem(account, t);
@@ -252,14 +234,11 @@ function AccountHandoffRow() {
 	</>;
 }
 
-/** The account's limit meters, shared by the Harness Account tab and the session summary. */
 export function AccountLimits({ account }: { account: AgentAccount }) {
 	const { t, i18n } = useTranslation();
 	const windows = account.limits?.windows ?? [];
 	const extra = account.limits?.extraUsage;
 	if (windows.length === 0 && !extra?.enabled) return null;
-	// One grid for every row, so bars and figures line up. The label keeps its
-	// width; the reset time gives way first, and the bar stays short.
 	return <div className="mt-3 space-y-2 text-xs">
 		{windows.length ? <div className="grid grid-cols-[auto_minmax(0,1fr)_3rem_auto] items-center gap-x-2 gap-y-2">
 			{windows.map((window) => <LimitRow key={window.id} window={window} locale={i18n.language} />)}
@@ -286,7 +265,6 @@ function formatCompactNumber(value: number, locale: string): string {
 	return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
-/** A reset time: the hour today, or day and hour later; `full` is the tooltip. */
 function formatResetTime(value: string | null | undefined, locale: string): { visible: string; full: string } | null {
 	if (!value) return null;
 	const date = new Date(value);
@@ -299,8 +277,6 @@ function formatResetTime(value: string | null | undefined, locale: string): { vi
 	};
 }
 
-/** Formats an amount in the server's currency. A code Intl does not know
- * throws, so it falls back to the bare number and the code. */
 function formatMoney(value: number, currency: string | undefined, locale: string): string {
 	try {
 		return new Intl.NumberFormat(locale, { style: "currency", currency: currency || "USD" }).format(value);
@@ -311,7 +287,6 @@ function formatMoney(value: number, currency: string | undefined, locale: string
 
 function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale: string }) {
 	const { t } = useTranslation();
-	// The provider reports consumed capacity; the meter fills as usage grows.
 	const used = Math.max(0, Math.min(100, window.usedPercent));
 	const value = formatPercentage(used, locale);
 	const reset = formatResetTime(window.resetsAt, locale);
@@ -343,7 +318,6 @@ function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
 	}, [hostId]);
 	const checkRef = useRef(onCheck);
 	checkRef.current = onCheck;
-	// The CLI exits when its sign-in finishes, so check once without a click.
 	const handleState = useCallback((next: TerminalSessionState) => {
 		setState(next);
 		if (next === "exited") checkRef.current(login);

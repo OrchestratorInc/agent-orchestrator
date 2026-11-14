@@ -8,11 +8,6 @@ import (
 	"testing"
 )
 
-// TestSnapshotFindsTheRunningTestProcess is the one thing that can only be
-// checked on real Windows: that CreateToolhelp32Snapshot plus the per-process
-// calls actually produce a usable table, not just that the package compiles.
-// It asserts against this very test binary rather than a fixture, since
-// there is no text format here to fake the way ps output is faked elsewhere.
 func TestSnapshotFindsTheRunningTestProcess(t *testing.T) {
 	table, err := Snapshot(context.Background(), nil)
 	if err != nil {
@@ -32,8 +27,6 @@ func TestSnapshotFindsTheRunningTestProcess(t *testing.T) {
 	if _, parentOK := table.byPID[self.PPID]; !parentOK {
 		t.Fatalf("parent pid %d is not itself in the snapshot", self.PPID)
 	}
-	// The tree walk that every session reading depends on must also work
-	// against a live table, not just the Parse fixtures the Unix path tests.
 	tree := table.Tree(pid)
 	if tree.RSSBytes == 0 || len(tree.Processes) == 0 {
 		t.Fatalf("tree for self = %+v", tree)

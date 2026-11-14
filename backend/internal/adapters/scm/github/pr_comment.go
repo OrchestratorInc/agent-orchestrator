@@ -13,10 +13,6 @@ import (
 
 var _ ports.SCMCommenter = (*Provider)(nil)
 
-// PostComment posts a top-level conversation comment through the REST issue
-// comments endpoint, or replies in a review thread through GraphQL when
-// request.ThreadID is set. The returned ID is the GraphQL node id in both
-// cases, matching the ids the observer stores.
 func (p *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequest) (ports.SCMCommentResult, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMCommentResult{}, fmt.Errorf("github scm: comment provider is not configured")

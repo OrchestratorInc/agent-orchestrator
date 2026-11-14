@@ -8,8 +8,6 @@ import { useUiStore } from "../stores/ui-store";
 import { MemoryDiagnostics } from "./SessionMemoryPanel";
 import { TooltipProvider } from "./ui/tooltip";
 
-// The real memory hooks, unlike SessionMemoryPanel.test.tsx: the loop this
-// guards against lived in their `select`, which those mocks replace.
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
 vi.mock("../lib/api-client", () => ({
@@ -94,10 +92,6 @@ describe("MemoryDiagnostics", () => {
 		);
 		expect(await screen.findByText("s1")).toBeInTheDocument();
 		await new Promise((resolve) => setTimeout(resolve, 50));
-		// No new data arrives in this window (the next sample is two seconds
-		// away), so nothing should render. A fresh `select` result per render
-		// fed SessionsTable's onRows effect, which re-rendered the parent,
-		// which ran `select` again: "Maximum update depth exceeded".
 		commits = 0;
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		expect(commits).toBe(0);

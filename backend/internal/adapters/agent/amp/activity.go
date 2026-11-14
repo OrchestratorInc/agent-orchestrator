@@ -6,9 +6,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// DeriveActivityState maps the AO sub-command emitted by the managed Amp
-// plugin onto AO's normalized activity state. session-start is metadata-only:
-// opening an existing thread is not proof that its agent is currently running.
 func DeriveActivityState(event string, payload []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "user-prompt-submit":

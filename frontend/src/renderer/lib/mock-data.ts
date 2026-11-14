@@ -28,9 +28,6 @@ const demoPr = (
 	updatedAt: now,
 });
 
-// Standalone shell terminals for the browser-preview build. The real ones need
-// a daemon to spawn a PTY, so the preview shows representative tabs instead —
-// enough to exercise the tab strip's layout, selection, and close control.
 export const mockShellTerminals: ShellTerminal[] = [
 	{
 		handleId: "shellterm-demo-1",
@@ -317,8 +314,6 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 			},
 		}),
 	],
-	// Carries human + bot PR reviews and an unresolved thread, so the Reviews
-	// tab's Pull request pane has something to show in the browser preview.
 	"demo-needs-input": [
 		prSummary("demo-needs-input", 318, {
 			authorAvatarUrl: undefined,
@@ -360,7 +355,6 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 						reviewerId: "prateek",
 						count: 2,
 						reviewUrl: "https://github.com/Untrivial-ai/agent-orchestrator/pull/318#pullrequestreview-3101",
-						// Two comments, two separate threads — resolving addresses threads.
 						links: [
 							{ reviewId: "31801", file: "frontend/src/renderer/components/TerminalPane.tsx", line: 84, body: "The reviewer terminal header wraps awkwardly at this width. Please keep the role label and controls on one line.", autoInjectReview: true },
 							{ file: "frontend/src/renderer/styles.css", line: 219, body: "This spacing token makes the review controls look larger than the rest of the inspector controls.", autoInjectReview: true },
@@ -600,9 +594,6 @@ export const mockSessionScmSummaries: Record<string, SessionPRSummary[]> = {
 	],
 };
 
-// Children the demo orchestrator "spawned", for the inspector's Workers
-// section in browser preview mode (no control plane available there). Keyed by
-// orchestrator session id.
 const demoChild = (
 	id: string,
 	displayName: string,

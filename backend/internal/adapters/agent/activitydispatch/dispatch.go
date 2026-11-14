@@ -1,11 +1,3 @@
-// Package activitydispatch is the single source of truth mapping the agent
-// token in `ao hooks <agent> <event>` onto the function that interprets that
-// agent's hook callbacks as an AO activity state.
-//
-// The hidden `ao hooks` CLI command dispatches a live callback through it. Every
-// adapter that installs `ao hooks <tok>` callbacks must have a deriver
-// registered here — otherwise the adapter writes callbacks that nothing on the
-// receiving side understands, so its activity is silently never reported.
 package activitydispatch
 
 import (
@@ -38,15 +30,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// DeriveFunc maps a native agent hook event and its raw stdin payload onto an AO
-// activity state. ok=false means the event carries no activity signal.
 type DeriveFunc func(event string, payload []byte) (domain.ActivityState, bool)
 
-// Derivers maps the agent token in `ao hooks <agent> <event>` to its deriver.
-// Per-adapter PRs add their tokens here as they land.
 var Derivers = map[string]DeriveFunc{
-	// Adapters that parse hook payloads for finer-grained state keep their own
-	// deriver; the rest share the name-only StandardDeriveActivityState.
 	"claude-code":  claudecode.DeriveActivityState,
 	"command-code": commandcode.DeriveActivityState,
 	"grok":         claudecode.DeriveActivityState,
@@ -83,9 +69,6 @@ var Derivers = map[string]DeriveFunc{
 	"fake":         fake.DeriveActivityState,
 }
 
-// AgentSessionID extracts a native resumable-session identifier from an
-// adapter's hook payload. Most adapters obtain this metadata through other
-// mechanisms; Cline exposes its root session id in lifecycle hook payloads.
 func AgentSessionID(agent string, payload []byte) (string, bool) {
 	if agent != "cline" {
 		return "", false
@@ -93,30 +76,14 @@ func AgentSessionID(agent string, payload []byte) (string, bool) {
 	return cline.SessionIDFromHook(payload)
 }
 
-// SignalCoverage describes how much of a harness lifecycle AO can observe.
-// Partial coverage can report useful transitions but cannot prove that silence
-// means a broken pipeline. Complete coverage is eligible for the no_signal
-// watchdog because the harness is expected to report promptly after launch or
-// prompt submission.
 type SignalCoverage uint8
 
 const (
-	// SignalCoverageNone means the harness has no activity callback pipeline.
 	SignalCoverageNone SignalCoverage = iota
-	// SignalCoveragePartial means the harness emits only a subset of lifecycle
-	// transitions, such as Aider's response-ready notification.
 	SignalCoveragePartial
-	// SignalCoverageComplete means the harness emits enough lifecycle callbacks
-	// for prolonged initial silence to indicate a broken pipeline.
 	SignalCoverageComplete
 )
 
-// signalCoverageOverrides records harnesses whose callback coverage cannot be
-// inferred from a same-named Derivers entry. Aider has only a completion
-// callback. Continue's Claude-compatible hooks vary by installed CLI version,
-// so its terminal fallback is useful without treating hook silence as broken.
-// Command Code exposes no permission-request hook, so hook silence cannot
-// prove an idle pipeline either.
 var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessAider:       SignalCoveragePartial,
 	domain.HarnessCommandCode: SignalCoveragePartial,
@@ -124,9 +91,6 @@ var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessMemcode:     SignalCoveragePartial,
 }
 
-// CoverageForHarness returns the activity-signal coverage for a selectable
-// harness. Same-named callback pipelines are complete by default; exceptional
-// aliases and partial pipelines are declared above.
 func CoverageForHarness(h domain.AgentHarness) SignalCoverage {
 	if coverage, ok := signalCoverageOverrides[h]; ok {
 		return coverage
@@ -137,9 +101,6 @@ func CoverageForHarness(h domain.AgentHarness) SignalCoverage {
 	return SignalCoverageNone
 }
 
-// Derive looks up the deriver for an agent token and applies it. ok=false when
-// the token has no registered deriver or the event carries no activity signal —
-// the caller reports nothing in either case.
 func Derive(agent, event string, payload []byte) (domain.ActivityState, bool) {
 	derive, found := Derivers[agent]
 	if !found {
@@ -148,15 +109,10 @@ func Derive(agent, event string, payload []byte) (domain.ActivityState, bool) {
 	return derive(event, payload)
 }
 
-// SupportsHarness reports whether a harness has any activity callback pipeline,
-// including partial coverage and compatibility aliases.
 func SupportsHarness(h domain.AgentHarness) bool {
 	return CoverageForHarness(h) != SignalCoverageNone
 }
 
-// FullySupportsHarness reports whether a harness has complete activity signal
-// coverage. Status derivation uses this narrower predicate for the no_signal
-// watchdog so a partial pipeline is not penalized for callbacks it cannot emit.
 func FullySupportsHarness(h domain.AgentHarness) bool {
 	return CoverageForHarness(h) == SignalCoverageComplete
 }

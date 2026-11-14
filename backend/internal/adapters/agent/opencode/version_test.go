@@ -33,7 +33,6 @@ func versionBinary(t *testing.T, script string) string {
 	return path
 }
 
-// Keep system Homebrew binaries out of tests that require only their fixture.
 func isolateVersionResolver(t *testing.T) {
 	t.Helper()
 	oldPaths, oldPrefixes := opencodeUnixPaths, homebrewDefaultPrefixes
@@ -394,8 +393,6 @@ func TestReplacedOpenCode1MessageExcludesManagedV2Launchers(t *testing.T) {
 			if got := mismatch.ReplacedOpenCode1Message(); got != "" {
 				t.Fatalf("managed v2 launcher reported a replacement: %s", got)
 			}
-			// A v2 binary using v1's name in the same directory is not v2's
-			// separate launcher and must retain the repair message.
 			mismatch.Path = filepath.Join(bin, "opencode")
 			if got := mismatch.ReplacedOpenCode1Message(); got == "" {
 				t.Fatal("v1 launcher containing v2 should still report replacement")

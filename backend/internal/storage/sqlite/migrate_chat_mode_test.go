@@ -6,11 +6,7 @@ import (
 	"time"
 )
 
-// The whole backward-compatibility promise of the Chat feature: a database that
-// already has sessions must come out of the migration with every one of them in
-// TUI mode, so an upgrade changes nobody's workflow.
 func TestMigration0066BackfillsExistingSessionsToTUI(t *testing.T) {
-	// Stop before the Chat migration: sessions exist, session_mode does not.
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 42)
 
 	now := time.Now().UTC()
@@ -43,8 +39,6 @@ func TestMigration0066BackfillsExistingSessionsToTUI(t *testing.T) {
 		if mode != "tui" {
 			t.Errorf("session %s migrated to mode %q, want tui", id, mode)
 		}
-		// A pre-existing session has no structured controller, so these must be
-		// empty rather than carrying a placeholder that looks like a real handle.
 		if providerConv != "" || generation != "" {
 			t.Errorf("session %s: provider_conversation_id=%q controller_generation=%q, want both empty",
 				id, providerConv, generation)
@@ -58,8 +52,6 @@ func TestMigration0066BackfillsExistingSessionsToTUI(t *testing.T) {
 	}
 }
 
-// A fresh install must also default to TUI: the mode is only ever Chat because
-// something explicitly asked for it.
 func TestMigration0066FreshDatabaseDefaultsToTUI(t *testing.T) {
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 66)
 
@@ -98,16 +90,10 @@ func TestReconcileSchemaRepairsMissingConversationCurrentSessionID(t *testing.T)
 		created_at TIMESTAMP NOT NULL,
 		updated_at TIMESTAMP NOT NULL
 	)`)
-	// reconcileSchema runs after Goose in production, where the chat migration has
-	// also created conversation_turns with its foundational conversation binding.
-	// Keep retry_of_turn_id absent so the later repair still exercises its column
-	// and index replay against a production-shaped prerequisite.
 	mustExec(t, db, `CREATE TABLE conversation_turns (
 		id TEXT PRIMARY KEY,
 		conversation_id TEXT NOT NULL
 	)`)
-	// Production has conversation_messages too; leave continuation absent so its
-	// repair also replays.
 	mustExec(t, db, `CREATE TABLE conversation_messages (
 		id TEXT PRIMARY KEY,
 		conversation_id TEXT NOT NULL
@@ -216,7 +202,6 @@ func TestMigration0066ConversationSchemaConstraints(t *testing.T) {
 		if err == nil {
 			t.Fatal("a duplicate provider_event_id was accepted")
 		}
-		// Events with no provider id are common and must all be retained.
 		for range 2 {
 			mustExec(t, db, `INSERT INTO conversation_provider_events (conversation_id, session_id, method, payload_json, received_at)
 				VALUES ('conv-1','ao-1','turn/started','{}',?)`, now)
@@ -224,11 +209,7 @@ func TestMigration0066ConversationSchemaConstraints(t *testing.T) {
 	})
 }
 
-// Chat changes must reach clients through the existing trigger-backed CDC rather
-// than a parallel emission path in store code.
 func TestChatMigrationsEmitConversationCDC(t *testing.T) {
-	// Exercise the final schema: later activity-kind migrations rebuild the table
-	// and must preserve the trigger introduced with Chat mode.
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 79)
 
 	now := time.Now().UTC()
@@ -255,15 +236,12 @@ func TestChatMigrationsEmitConversationCDC(t *testing.T) {
 		t.Fatalf("streamed-row invalidations = %d, want %d", got, before+4)
 	}
 
-	// A turn reaching a terminal state changes derived session activity even
-	// though no timeline row was added, so it must invalidate too.
 	turnsBefore := countChangeLog(t, db, "session_updated")
 	mustExec(t, db, `UPDATE conversation_turns SET state='completed', completed_at=? WHERE id='turn-1'`, now)
 	if got := countChangeLog(t, db, "session_updated"); got != turnsBefore+1 {
 		t.Fatalf("turn-state invalidations = %d, want %d", got, turnsBefore+1)
 	}
 
-	// A no-op update must not emit: clients would refetch for nothing.
 	mustExec(t, db, `UPDATE conversation_turns SET state='completed' WHERE id='turn-1'`)
 	if got := countChangeLog(t, db, "session_updated"); got != turnsBefore+1 {
 		t.Fatalf("an unchanged turn state emitted a CDC event (%d)", got)

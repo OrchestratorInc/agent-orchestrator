@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// wakeCountingRefresher starts a provider in the background on each switch,
-// as Chat does, and counts how many are starting at once.
 type wakeCountingRefresher struct {
 	*recordingLauncher
 	starting, peak atomic.Int32
@@ -49,7 +47,6 @@ func TestVersionMovesHoldTheirPermitUntilTheProviderStarted(t *testing.T) {
 		ids[i] = rec.ID
 	}
 	mgr.store = &staleBinaryFakeStore{fakeStore: store, candidates: ids}
-	// A turn-end move holds one permit: sweeps share the same four.
 	release, err := mgr.versionMoves.acquire(context.Background())
 	if err != nil {
 		t.Fatal(err)

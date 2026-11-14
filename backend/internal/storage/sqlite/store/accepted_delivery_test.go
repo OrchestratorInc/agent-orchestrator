@@ -74,8 +74,6 @@ func TestAcceptedDeliveriesSurviveHumanPromptsAndLaterDeliveries(t *testing.T) {
 	if accepted("launch-2", "report-batch:first") || accepted("launch-1", "report-batch:other") || accepted("launch-1", "batch:first") {
 		t.Fatal("accepted delivery matched another launch or delivery")
 	}
-	// A delivery accepted just before another one must still be found when its
-	// sender checks again, or that sender pastes it a second time.
 	project("report-batch:second", "next report")
 	if !accepted("launch-1", "report-batch:second") || !accepted("launch-1", "report-batch:first") {
 		t.Fatal("next accepted delivery erased the first")

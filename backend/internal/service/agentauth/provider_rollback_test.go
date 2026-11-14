@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
-// A Continue save whose provider-key step fails must leave the earlier .env
-// and config.yaml in place.
 func TestContinueProviderUndoRestoresBothNativeFiles(t *testing.T) {
 	global := t.TempDir()
 	t.Setenv("CONTINUE_GLOBAL_DIR", global)
@@ -39,8 +37,6 @@ func TestContinueProviderUndoRestoresBothNativeFiles(t *testing.T) {
 	}
 }
 
-// The startup republication must not publish a key removed after startup
-// recorded it.
 func TestStartupRepublicationSkipsKeysRemovedMeanwhile(t *testing.T) {
 	previousSupported := deviceSupported
 	deviceSupported = true
@@ -74,8 +70,6 @@ func TestStartupRepublicationSkipsKeysRemovedMeanwhile(t *testing.T) {
 	}
 }
 
-// An OpenHands save whose key step fails after the model was stored must put
-// the earlier model back, or later sessions pair the new model with the old key.
 func TestOpenHandsModelRollsBackWhenTheKeySaveFails(t *testing.T) {
 	stubDeviceEnvironment(t)
 	publishProviderKey = func(context.Context, string, string, string) error { return providerkeys.ErrUserValue }
@@ -102,7 +96,6 @@ func TestOpenHandsModelRollsBackWhenTheKeySaveFails(t *testing.T) {
 	}
 }
 
-// A Qwen save whose key step fails must leave Qwen's earlier settings.json.
 func TestQwenSettingsRollBackWhenTheKeySaveFails(t *testing.T) {
 	stubDeviceEnvironment(t)
 	publishProviderKey = func(context.Context, string, string, string) error { return providerkeys.ErrUserValue }

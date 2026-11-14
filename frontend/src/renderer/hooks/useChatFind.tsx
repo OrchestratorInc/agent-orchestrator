@@ -14,7 +14,6 @@ type FindPage = { conversationId: string; transcriptRevision: string; occurrence
 type SearchState = { phase: "idle" | "searching" | "ready" | "error"; hits: FindOccurrence[]; total: number; error?: string; page?: FindPage; updating?: boolean };
 const initial: SearchState = { phase: "idle", hits: [], total: 0 };
 const MODAL = "[role='dialog'], [role='alertdialog'], [role='menu'], [aria-modal='true'], [data-keybinding-recording]";
-/** A streaming reply changes the transcript constantly; re-search it at this pace. */
 const STREAM_REFRESH_MS = 2000;
 const OTHER_SURFACE = ".xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview";
 
@@ -50,9 +49,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const input = useRef<HTMLInputElement>(null), previousFocus = useRef<HTMLElement | null>(null);
 	const sourceRef = useRef(source), activeRef = useRef(active), revealRef = useRef(reveal), pauseRef = useRef(pauseFollow);
 	const queryRef = useRef(query), hostRef = useRef(hostId);
-	// Where openWith asked the first search to start, instead of the first match
-	// on screen: a session search opens its result's message, and find must
-	// start at that match rather than wherever the transcript was.
 	const pendingAnchor = useRef<string | undefined>(undefined);
 	queryRef.current = query; hostRef.current = hostId;
 	const writtenRef = useRef(onScrollWritten);
@@ -75,7 +71,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		dirty.current = true;
 	}, [finishRefresh]);
 	const cancelWork = useCallback(() => {
-		// Cancel synchronously on blur; React's effect cleanup can run later.
 		generation.current++; navigation.current++; lifetime.current++; pagingGeneration.current++;
 		searchAbort.current?.abort(); pagingAbort.current?.abort(); windowAbort.current?.abort();
 		paging.current = false; moveQueue.current = Promise.resolve(); requestedScroll.current = undefined;
@@ -132,7 +127,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		const focusedChat = focused instanceof Element ? focused.closest("[data-chat-find-scope], [data-chat-find-surface]") : null;
 		if (focusedChat) return focusedChat === element || focusedChat === element.closest("[data-chat-find-scope]");
 		if (focused instanceof Element && focused.closest("input, textarea, [contenteditable='true'], [role='textbox']")) return false;
-		// Prefer the primary selected transcript when chrome holds focus.
 		return Array.from(document.querySelectorAll<HTMLElement>("[data-chat-find-surface]")).find((candidate) => candidate.getClientRects().length > 0) === element;
 	}, [root]);
 	const show = useCallback(() => {
@@ -144,12 +138,8 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
 	}, [open, root, activate]);
 	useAppShortcut("find-in-chat", show, true, canHandle);
-	// Opens find already searching for value, its first match at or after
-	// anchorMessageId (a session search result opening its session).
 	const openWith = useCallback((value: string, anchorMessageId?: string) => {
 		cancelWork(); prepareRefresh();
-		// A new search from the anchor even when value is the current query:
-		// otherwise the search would keep its active match instead.
 		pendingAnchor.current = anchorMessageId; activeRef.current = undefined; lastQuery.current = "";
 		setQuery(value); setAnnouncement(""); setActive(undefined);
 		setState({ ...initial, phase: isEmptyFindQuery(value) ? "idle" : "searching" });
@@ -191,8 +181,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		if (engagedRef.current && scroll && token === navigation.current) revealRef.current(hit);
 	}, [hostId, t]);
 
-	// Load only the occurrence page around the reader or active hit. A common
-	// query can match millions of times; counts must not imply downloading them.
 	useEffect(() => {
 		if (source.items.some((item) => item.kind === "message" && item.streaming)) streamDirty.current = true;
 		else dirty.current = true;
@@ -359,7 +347,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 					if (match.left < bounds.left || match.right > bounds.right) code.scrollLeft += match.left + match.width / 2 - bounds.left - bounds.width / 2;
 				}
 				const rect = selected[0].getBoundingClientRect(), scroll = viewport.current;
-				// A long user prompt folds to ten lines; open it when the match is under the fold.
 				const fold = selected[0].startContainer.parentElement?.closest<HTMLElement>(".chat-human-fold[data-folded]");
 				if (fold?.id && rect.bottom > fold.getBoundingClientRect().bottom) surface.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(fold.id)}"]`)?.click();
 				if (scroll) { const bounds = scroll.getBoundingClientRect(); scroll.scrollTo({ top: scroll.scrollTop + rect.top + rect.height / 2 - bounds.top - bounds.height / 2, behavior: "auto" }); writtenRef.current?.(scroll.scrollTop); }
@@ -376,18 +363,13 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 				setState((current) => ({ ...current, phase: "error", error: t("chat.find.notRevealed") }));
 			}
 		}, 3000);
-		// Pausing retains the existing browser ranges, without rescanning or copying text.
 		const disconnect = () => { observer.disconnect(); resize.disconnect(); window.clearTimeout(timer); window.clearTimeout(timeout); };
 		stopHighlights.current = disconnect;
 		return disconnect;
 	}, [open, engaged, query, active, state.page, windowPage, root, viewport, t]);
 	useEffect(() => () => { engagedRef.current = false; cancelWork(); clearHighlights(); }, [cancelWork, clearHighlights]);
 
-	// Closing find leaves the reader in place; the jumped-to page goes when they return to the latest.
 	const dropWindow = useCallback(() => setWindowPage(undefined), []);
-	// Shows the history around one sequence without opening find: a search match
-	// deep in a long chat loads its page in one request rather than paging back
-	// through everything newer. Resolves once the page is shown or could not be.
 	const showWindowAt = useCallback(async (sequence: number) => {
 		windowAbort.current?.abort();
 		const controller = new AbortController(); windowAbort.current = controller;
@@ -400,7 +382,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 			const page = toSnapshot(data);
 			if (page.conversationId === snapshot.conversationId && page.activeBranchId === snapshot.activeBranchId) setWindowPage(page);
 		} catch {
-			// The caller falls back to the turn the match belongs to.
 		}
 	}, [hostId]);
 	let snapshot = windowPage && windowPage.conversationId === source.conversationId && windowPage.activeBranchId === source.activeBranchId
@@ -413,7 +394,6 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		}) };
 	}
 	const activeIndex = useMemo(() => active ? (state.page?.offset ?? 0) + state.hits.findIndex((hit) => occurrenceKey(hit) === occurrenceKey(active)) + 1 : 0, [active, state.page, state.hits]);
-	// The update notice shares the top-right corner; step left of it, as the session switch does.
 	const noticeClearance = useHarnessUpdateNoticeClearance(open ? root.current : null);
 	const newestWindowSequence = windowPage?.items.at(-1)?.sequence, firstSourceSequence = source.items[0]?.sequence;
 	const gapBeforeSequence = !sideChat && source.hasMoreBefore && newestWindowSequence !== undefined && firstSourceSequence !== undefined && newestWindowSequence < firstSourceSequence ? firstSourceSequence : undefined;

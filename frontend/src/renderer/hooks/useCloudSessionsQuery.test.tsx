@@ -40,13 +40,11 @@ describe("useCloudSessionsQuery artifact files", () => {
 		expect(result.current.data?.[2]?.artifactFiles).toBeUndefined();
 		expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(1);
 
-		// Activity changes updatedAt but not the files: no new read.
 		cloud.listSessions.mockResolvedValue({ items: [session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:00:00Z", updatedAt: "2026-10-16T10:09:00Z" })] });
 		await result.current.refetch();
 		await waitFor(() => expect(result.current.data?.[0]?.updatedAt).toBe("2026-10-16T10:09:00Z"));
 		expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(1);
 
-		// A commit moves artifactsUpdatedAt: read again.
 		cloud.listSessions.mockResolvedValue({ items: [session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:10:00Z" })] });
 		await result.current.refetch();
 		await waitFor(() => expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(2));

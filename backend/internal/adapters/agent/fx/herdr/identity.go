@@ -1,4 +1,3 @@
-// Package herdr receives fx's native lifecycle reports over AO's local socket.
 package herdr
 
 import (
@@ -10,12 +9,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// SocketPath keeps the daemon's socket inside its configured data directory.
 func SocketPath(dataDir string) string {
 	return filepath.Join(dataDir, "run", "fx-herdr.sock")
 }
 
-// PaneID binds fx's native pane identity to one AO session and runtime launch.
 func PaneID(sessionID domain.SessionID, launchID string) string {
 	return "ao:1:" + base64.RawURLEncoding.EncodeToString([]byte(sessionID)) + ":" + base64.RawURLEncoding.EncodeToString([]byte(launchID))
 }

@@ -9,8 +9,6 @@ const { navigateMock, route, dialog, cloudLists } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	route: { onNewChat: false },
 	dialog: { props: undefined as { open: boolean; projectId?: string } | undefined },
-	// The Cloud lists: answered, on their first read, or not started yet (as
-	// right after start-up); and whether the person is signed in to Cloud.
 	cloudLists: { state: "answered" as "answered" | "loading" | "notStarted", session: "authenticated" as "loading" | "authenticated" | "unauthenticated" },
 }));
 
@@ -32,7 +30,6 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => cloudList([
 		{ id: "cloud-1", config: { sandboxProvider: "freestyle" } },
 		{ id: "coder-1", config: { sandboxProvider: "coder" } },
-		// A standalone agent's project on an organization that defaults to Coder.
 		{ id: "agent-1", config: {}, standaloneAgent: true },
 	]),
 	useSharedCloudWorkspacesQuery: () => cloudList([
@@ -123,7 +120,6 @@ describe("NewTaskNavigator", () => {
 		const view = renderNavigator();
 		act(() => useUiStore.getState().requestNewTask("agent-shared"));
 		expect(navigateMock).not.toHaveBeenCalled();
-		// The Scratchpad needs no Cloud list.
 		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID));
 		expect(navigateMock).toHaveBeenCalledTimes(1);
 		act(() => useUiStore.getState().requestNewTask("agent-shared"));

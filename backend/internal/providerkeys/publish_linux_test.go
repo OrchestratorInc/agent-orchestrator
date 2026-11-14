@@ -3,7 +3,6 @@ package providerkeys
 import "testing"
 
 func TestEnvironmentValueReadsSystemdQuoting(t *testing.T) {
-	// systemctl show-environment prints values needing quotes in ANSI-C form.
 	out := "HOME=/home/u\nOPENAI_API_KEY=plain-key\n" + `GROQ_API_KEY=$'a b\'c\\d\x24e'` + "\nXAI_API_KEY_OTHER=x\n"
 	for name, want := range map[string]string{
 		"OPENAI_API_KEY": "plain-key",

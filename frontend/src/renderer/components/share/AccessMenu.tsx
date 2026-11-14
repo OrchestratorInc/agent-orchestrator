@@ -15,11 +15,6 @@ import { Button } from "../ui/button";
 
 const ALL_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "trusted"];
 
-/**
- * One row's access, as a borderless trigger like the Settings selects: the
- * level, and for writing the agent's permissions. The menu holds the two
- * levels, the agent's permissions while writing, and removing access.
- */
 export function AccessMenu({
 	role,
 	modeCap,
@@ -41,19 +36,15 @@ export function AccessMenu({
 	onStop?: () => void;
 	stopLabel?: string;
 	disabled?: boolean;
-	/** Shows the limit in the trigger while writing. */
 	showCap?: boolean;
 	triggerLabel?: string;
 	align?: "start" | "end";
-	/** The agent permissions offered while writing; a link never offers Trusted. */
 	caps?: readonly ShareModeCap[];
-	/** The id of text that explains this access, read with the trigger. */
 	describedBy?: string;
 }) {
 	const { t } = useTranslation();
 	const level = roleLabel(t, role, scope);
 	const label = triggerLabel ?? level;
-	// Picking what is already set changes nothing, so it asks for nothing.
 	const choose = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => {
 		if (next.role === role && next.modeCap === modeCap) return;
 		onChange(next);
@@ -71,7 +62,6 @@ export function AccessMenu({
 					data-access-menu=""
 				>
 					<span className="truncate">{label}</span>
-					{/* Standard is what writing means by default; only another cap is worth naming. */}
 					{showCap && role === "editor" && modeCap !== "standard" ? <span className="text-passive">· {capLabel(t, modeCap)}</span> : null}
 					<ChevronDown className="size-3 shrink-0" aria-hidden="true" />
 				</Button>
@@ -136,7 +126,6 @@ function AccessOption({ icon, label, description, selected, onSelect }: {
 	);
 }
 
-/** Just the limit while writing, for the share dialog's confirm step. */
 export function CapMenu({ value, onChange }: { value: ShareModeCap; onChange: (cap: ShareModeCap) => void }) {
 	const { t } = useTranslation();
 	return (

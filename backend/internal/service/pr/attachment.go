@@ -18,29 +18,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// MaxAttachmentBytes caps one decoded comment attachment.
 const MaxAttachmentBytes = 10 << 20
 
-// maxAttachmentNameBytes bounds the sanitized file name so the stored path
-// stays readable; the extension is always kept.
 const maxAttachmentNameBytes = 100
 
-// attachmentType is one allowed attachment media type: the file extensions
-// that may carry it and how its bytes are recognized.
 type attachmentType struct {
 	extensions []string
 	image      bool
-	// sniff reports whether the file content is this type.
-	sniff func(data []byte, sniffed string) bool
+	sniff      func(data []byte, sniffed string) bool
 }
 
 func sniffedAs(want string) func([]byte, string) bool {
 	return func(_ []byte, sniffed string) bool { return sniffed == want }
 }
 
-// sniffISOMedia accepts content http.DetectContentType reports as MP4, plus
-// ISO base media / QuickTime files it does not (a .mov with only "qt  "
-// brands, or an older QuickTime file that starts with a moov/mdat atom).
 func sniffISOMedia(data []byte, sniffed string) bool {
 	if sniffed == "video/mp4" {
 		return true
@@ -56,8 +47,6 @@ func sniffISOMedia(data []byte, sniffed string) bool {
 	}
 }
 
-// sniffText accepts plain text that does not open like markup a browser
-// could render.
 func sniffText(data []byte, sniffed string) bool {
 	if sniffed != "text/plain" {
 		return false
@@ -72,8 +61,6 @@ func sniffText(data []byte, sniffed string) bool {
 	return true
 }
 
-// attachmentTypes is the allowlist. SVG and HTML are deliberately absent: both
-// can carry script.
 var attachmentTypes = map[string]attachmentType{
 	"image/png":        {extensions: []string{".png"}, image: true, sniff: sniffedAs("image/png")},
 	"image/jpeg":       {extensions: []string{".jpg", ".jpeg"}, image: true, sniff: sniffedAs("image/jpeg")},
@@ -89,7 +76,6 @@ var attachmentTypes = map[string]attachmentType{
 	"application/zip":  {extensions: []string{".zip"}, sniff: sniffedAs("application/zip")},
 }
 
-// attachmentTypeAliases maps other names clients use for an allowed type.
 var attachmentTypeAliases = map[string]string{
 	"image/jpg":                    "image/jpeg",
 	"image/pjpeg":                  "image/jpeg",
@@ -104,19 +90,12 @@ var attachmentTypeAliases = map[string]string{
 	"application/x-zip":            "application/zip",
 }
 
-// validatedAttachment is an attachment that passed every check.
 type validatedAttachment struct {
 	name        string
 	contentType string
 	image       bool
 }
 
-// validateAttachment sanitizes the name and checks size and type. The
-// declared type must be allowed and the sniffed content must match it, and an
-// extension that belongs to a different allowed type is refused, so a renamed
-// file cannot pass as something else. A name without the type's extension
-// gets it appended. An empty or generic declared type is taken from the
-// extension.
 func validateAttachment(name, declared string, data []byte) (validatedAttachment, error) {
 	if strings.TrimSpace(name) == "" {
 		return validatedAttachment{}, fmt.Errorf("%w: name is required", ErrInvalidAttachment)
@@ -144,9 +123,6 @@ func validateAttachment(name, declared string, data []byte) (validatedAttachment
 		return validatedAttachment{}, fmt.Errorf("%w: %s", ErrAttachmentTypeNotAllowed, contentType)
 	}
 	if !containsString(allowed.extensions, ext) {
-		// An extension that belongs to another allowed type means the file was
-		// renamed or mislabeled. Any other suffix ("notes.v2", "page.html") is
-		// kept but followed by the type's own extension.
 		if other := attachmentTypeForExtension(ext); other != "" {
 			return validatedAttachment{}, fmt.Errorf("%w: extension %s does not match %s", ErrAttachmentTypeNotAllowed, ext, contentType)
 		}
@@ -159,8 +135,6 @@ func validateAttachment(name, declared string, data []byte) (validatedAttachment
 	return validatedAttachment{name: safe, contentType: contentType, image: allowed.image}, nil
 }
 
-// canonicalAttachmentType normalizes a declared media type. It returns "" for
-// an absent or generic type so the caller falls back to the extension.
 func canonicalAttachmentType(declared string) (string, error) {
 	declared = strings.TrimSpace(declared)
 	if declared == "" {
@@ -192,11 +166,6 @@ func attachmentTypeForExtension(ext string) string {
 	return ""
 }
 
-// sanitizeAttachmentName reduces a client-supplied file name to a safe one:
-// only the last path segment is kept, control characters are dropped, and
-// anything but letters, digits, '.', '-', and '_' becomes '-'. Leading dots
-// and dashes are trimmed so the result is never hidden or "..". The extension
-// survives truncation, and an empty stem becomes "attachment".
 func sanitizeAttachmentName(name string) string {
 	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
 		name = name[i+1:]
@@ -233,8 +202,6 @@ func sanitizeAttachmentName(name string) string {
 	return stem + ext
 }
 
-// appendExtension adds ext to a sanitized name, trimming the name so the
-// result stays within maxAttachmentNameBytes.
 func appendExtension(name, ext string) string {
 	if limit := maxAttachmentNameBytes - len(ext); len(name) > limit {
 		name = strings.TrimRight(truncateUTF8(name, limit), ".-")
@@ -251,18 +218,12 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// maxCommentAttachments caps the files of one comment.
 const maxCommentAttachments = 10
 
-// MaxCommentAttachmentsBytes caps the decoded files of one comment together.
 const MaxCommentAttachmentsBytes = 25 << 20
 
-// attachmentLink is a comment body's link to one of its files, by index:
-// "![shot.png](attachment:0)" or "[log.txt](attachment:1)".
 var attachmentLink = regexp.MustCompile(`\]\(attachment:(\d+)\)`)
 
-// attachmentLinks finds the body's attachment links outside code (see
-// markdownCodeRanges), as [start, end, indexStart, indexEnd] offsets.
 func attachmentLinks(body string) [][]int {
 	code := markdownCodeRanges(body)
 	var links [][]int
@@ -281,11 +242,7 @@ func attachmentLinks(body string) [][]int {
 	return links
 }
 
-// commentAttachments validates a comment's files against its body: each file
-// passes validateAttachment, together they stay under the cap, and the body
-// links every file and no file it doesn't have.
 func commentAttachments(body string, inputs []CommentAttachment) ([]ports.SCMAttachmentFile, error) {
-	// A comment with no files is posted as written, attachment-like text included.
 	if len(inputs) == 0 {
 		return nil, nil
 	}
@@ -321,8 +278,6 @@ func commentAttachments(body string, inputs []CommentAttachment) ([]ports.SCMAtt
 	return files, nil
 }
 
-// linkAttachments points the body's attachment links, outside code, at the
-// stored files.
 func linkAttachments(body string, urls []string) string {
 	var out strings.Builder
 	last := 0
@@ -336,10 +291,6 @@ func linkAttachments(body string, urls []string) string {
 	return out.String()
 }
 
-// AttachmentAccess says whether files can be attached to this PR's comments
-// and where they would be stored, so the composer can explain both before
-// anything is uploaded. A provider that can't store attachments reads as not
-// allowed, with reason "unsupported".
 func (s *ActionService) AttachmentAccess(ctx context.Context, prID, prURL string) (AttachmentAccessResult, error) {
 	prNumber, err := parsePRNumber(prID)
 	if err != nil || strings.TrimSpace(prURL) == "" {
@@ -372,14 +323,8 @@ func (s *ActionService) AttachmentAccess(ctx context.Context, prID, prURL string
 	return AttachmentAccessResult{Allowed: access.Allowed, Location: access.Location, Reason: access.Reason}, nil
 }
 
-// attachmentsUnsupported is the access reason when the PR's provider can't
-// store attachments.
 const attachmentsUnsupported = "unsupported"
 
-// storeCommentAttachments stores a comment's files and returns its body with
-// every attachment link pointing at its file, plus the handle that removes
-// them again. It checks write access first, so a read-only repository fails
-// with a clear reason before anything is written.
 func (s *ActionService) storeCommentAttachments(ctx context.Context, ref ports.SCMPRRef, body string, files []ports.SCMAttachmentFile) (string, string, error) {
 	if s.attachments == nil {
 		return "", "", fmt.Errorf("%w: attachments", ErrUnsupported)
@@ -407,9 +352,6 @@ func (s *ActionService) storeCommentAttachments(ctx context.Context, ref ports.S
 	return linked, stored.Handle, nil
 }
 
-// discardAttachments removes a stored batch whose comment never posted. It
-// outlives the request, which may already be cancelled, and only logs a
-// failure: the comment's own error is what the person needs to see.
 func (s *ActionService) discardAttachments(ctx context.Context, ref ports.SCMPRRef, handle string) {
 	if handle == "" || s.attachments == nil {
 		return
@@ -421,8 +363,6 @@ func (s *ActionService) discardAttachments(ctx context.Context, ref ports.SCMPRR
 	}
 }
 
-// mapAttachmentError reads a provider's "forbidden" as no write access for
-// attachments, and maps the rest as any other PR mutation.
 func mapAttachmentError(op string, err error) error {
 	if errors.Is(err, ports.ErrSCMForbidden) {
 		return fmt.Errorf("%w: %w", ErrAttachmentsForbidden, err)

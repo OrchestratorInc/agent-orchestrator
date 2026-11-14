@@ -17,8 +17,6 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 vi.mock("./TaskComposer", () => ({ TaskComposer: () => <div data-testid="composer" /> }));
 
 describe("NewTaskDialog", () => {
-	// A Cloud standalone agent runs one session of its own: the Coder New Task
-	// dialog offers Cloud projects, never an agent's project.
 	it("offers Cloud projects but no Cloud standalone agent", async () => {
 		const user = userEvent.setup();
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -10,8 +10,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// Adapter wire tests cover each provider's native error normalization. These
-// cases cover the shared durable recovery boundary for both session harnesses.
 func TestUsageLimitRecoveryAcrossProviders(t *testing.T) {
 	for _, provider := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
 		t.Run(string(provider), func(t *testing.T) {

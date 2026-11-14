@@ -40,7 +40,6 @@ describe("BrowserChromeSection", () => {
 		expect(screen.queryByText("Agents in your Chrome")).not.toBeInTheDocument();
 		unmount();
 
-		// Once set up, it stays reachable so the user can remove it.
 		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: connected } as never);
 		renderSection();
 		expect(await screen.findByText("Connected · extension 0.1.0")).toBeInTheDocument();
@@ -77,8 +76,6 @@ describe("BrowserChromeSection", () => {
 		expect(writeText).toHaveBeenCalledWith(base.extensionPath);
 		expect(await screen.findByText("Set up · extension not connected")).toBeInTheDocument();
 		expect(screen.getByText("Google Chrome")).toBeInTheDocument();
-		// The folder is a selectable field; the extension ID and the agent's
-		// command are implementation details the user has no use for.
 		const folder = screen.getByRole("textbox", { name: "Extension folder" }) as HTMLInputElement;
 		expect(folder).toHaveValue(base.extensionPath);
 		expect(folder).toHaveAttribute("readonly");

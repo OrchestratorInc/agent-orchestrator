@@ -4,13 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TurnPlan } from "./TurnPlan";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
 
-// The plan is the one panel that changes while the reader is looking at it, so the
-// things worth pinning are: every step's state is available to assistive tech rather
-// than only as a colour, and the panel is absent rather than empty when the agent
-// made no plan.
-
-// The body folds away over 200ms; a loaded machine can stretch that past
-// waitFor's 1s default.
 const FOLD_WAIT = { timeout: 5000 };
 
 const plan: ConversationPlan = {
@@ -47,8 +40,6 @@ describe("TurnPlan", () => {
 		expect(screen.getByRole("region", { name: "Agent plan" })).toHaveAttribute("aria-busy", "true");
 	});
 
-	// The step in progress spins only while the agent can still be working on it. A
-	// settled turn's unfinished step keeps its faint ring, with no arc.
 	it("shows the spinning arc only while the turn runs", () => {
 		const { container, rerender } = render(<TurnPlan plan={plan} live />);
 		expect(container.querySelector(".animate-spin")).not.toHaveClass("opacity-0");
@@ -57,7 +48,6 @@ describe("TurnPlan", () => {
 		expect(container.querySelector(".animate-spin")).toHaveClass("opacity-0");
 	});
 
-	// A finished plan is not still planning, even on a turn that is technically live.
 	it("stops claiming to be planning once every step is done", () => {
 		render(
 			<TurnPlan
@@ -92,7 +82,6 @@ describe("TurnPlan", () => {
 
 		expect(screen.getByRole("list")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Collapse plan" }));
-		// The body folds away rather than vanishing, so it leaves once the fold ends.
 		await waitFor(() => expect(screen.queryByRole("list")).not.toBeInTheDocument(), FOLD_WAIT);
 		expect(screen.queryByText(/Land the store first/)).not.toBeInTheDocument();
 		expect(screen.getByText("1/3")).toBeInTheDocument();
@@ -141,7 +130,6 @@ describe("TurnPlan scroll window", () => {
 		delete (Element.prototype as Partial<Element>).scrollTo;
 	});
 
-	/** jsdom has no layout: give each step a 24px row and the window 192px. */
 	function stubLayout(rows: number) {
 		const scrollTo = vi.fn();
 		Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, writable: true, value: scrollTo });
@@ -171,14 +159,12 @@ describe("TurnPlan scroll window", () => {
 		const scrollTo = stubLayout(12);
 		const { rerender, container } = render(<TurnPlan plan={longPlan(7)} live />);
 
-		// Step 8 starts at 4 + 7 × 24 = 172px; centring it in a 192px window puts it 84px down.
 		expect(scrollTo).toHaveBeenLastCalledWith({ top: 88, behavior: "auto" });
 		const viewport = container.querySelector(".edge-fade")!;
 		expect(viewport).toHaveAttribute("data-fade-end");
 		expect(viewport).not.toHaveAttribute("data-fade-start");
 
 		rerender(<TurnPlan plan={longPlan(8)} live />);
-		// Clamped to the most the window can scroll: 12 × 24 + 8 − 192 = 104px.
 		expect(scrollTo).toHaveBeenLastCalledWith({ top: 104, behavior: "smooth" });
 	});
 

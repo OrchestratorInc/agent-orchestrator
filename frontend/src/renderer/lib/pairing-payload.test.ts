@@ -20,8 +20,6 @@ function decodeFragment(url: string) {
 }
 
 describe("buildPairingOffer", () => {
-	// Every reachable address goes into the code, because the phone races them.
-	// A code naming a single address goes stale as soon as the machine moves.
 	it("carries every advertised endpoint", () => {
 		const offer = buildPairingOffer(base);
 
@@ -37,9 +35,6 @@ describe("buildPairingOffer", () => {
 });
 
 describe("pairingCodeUrl", () => {
-	// The payload rides in the fragment so it is never sent to a server: a
-	// scanned https link must not put the connection token into web logs or a
-	// referrer header.
 	it("puts the payload in the fragment, not the query", () => {
 		const url = pairingCodeUrl(buildPairingOffer(base), "https://aoagents.dev/pair");
 
@@ -52,7 +47,6 @@ describe("pairingCodeUrl", () => {
 		expect(decodeFragment(pairingCodeUrl(offer, "aomobile://pair"))).toEqual(offer);
 	});
 
-	// Padding is stripped to keep the QR small; the phone restores it.
 	it("emits unpadded base64url so the QR stays small", () => {
 		const code = pairingCodeUrl(buildPairingOffer(base), "aomobile://pair").split("#")[1];
 

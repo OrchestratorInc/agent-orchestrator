@@ -42,8 +42,6 @@ func TestCreateReviewConversationClaimsChatMode(t *testing.T) {
 		t.Fatalf("interface mode = %q, want chat", got.InterfaceMode)
 	}
 
-	// Engine refreshes omit the mode; they must not demote an established Chat
-	// reviewer back to the legacy TUI surface.
 	review.UpdatedAt = now.Add(time.Second)
 	if err := s.UpsertReview(ctx, review); err != nil {
 		t.Fatalf("refresh review: %v", err)
@@ -264,9 +262,6 @@ func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 		t.Fatalf("first insert: %v", err)
 	}
 
-	// A second run for the same (session_id, pr_url, target_sha, harness) hits the
-	// partial unique index (migration 0041) and must surface as the sentinel so
-	// the engine can fall back to the existing run.
 	dup := run
 	dup.ID = "run-2"
 	if err := s.InsertReviewRun(ctx, dup); !errors.Is(err, domain.ErrDuplicateReviewRun) {
@@ -289,7 +284,6 @@ func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 		t.Fatalf("retry after failed insert: %v", err)
 	}
 
-	// An empty target_sha is excluded from the index, so two are allowed.
 	for _, id := range []string{"run-empty-1", "run-empty-2"} {
 		r := run
 		r.ID, r.TargetSHA = id, ""
@@ -299,9 +293,6 @@ func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 	}
 }
 
-// Harness is part of the idempotency key, so a different reviewer on the same
-// commit is a second opinion rather than a duplicate. Without this the reviewer
-// picker is inert on an already-reviewed commit.
 func TestInsertReviewRunAllowsADifferentHarnessForTheSameCommit(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -332,7 +323,6 @@ func TestInsertReviewRunAllowsADifferentHarnessForTheSameCommit(t *testing.T) {
 		t.Fatalf("a different harness on the same commit should insert: %v", err)
 	}
 
-	// ...but the same harness twice is still a duplicate.
 	same := first
 	same.ID = "run-same-harness"
 	if err := s.InsertReviewRun(ctx, same); !errors.Is(err, domain.ErrDuplicateReviewRun) {
@@ -418,7 +408,6 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 
-	// First upsert creates the review row.
 	if err := s.UpsertReview(ctx, domain.Review{
 		ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID,
 		Harness: domain.ReviewerClaudeCode, PRURL: "https://example/pr/1",
@@ -427,7 +416,6 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("upsert review: %v", err)
 	}
-	// A different harness gets its own row for the same worker session.
 	if err := s.UpsertReview(ctx, domain.Review{
 		ID: "rev-2", SessionID: rec.ID, ProjectID: rec.ProjectID,
 		Harness: domain.ReviewerHarness("greptile"), PRURL: "https://example/pr/2",
@@ -454,7 +442,6 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	if got.Harness != domain.ReviewerHarness("greptile") || got.PRURL != "https://example/pr/2" || got.ReviewerHandleID != "review-mer-1b" {
 		t.Fatalf("second harness fields: %+v", got)
 	}
-	// A same-harness upsert reuses that row and records the native session id.
 	if err := s.UpsertReview(ctx, domain.Review{
 		ID: "rev-3", SessionID: rec.ID, ProjectID: rec.ProjectID,
 		Harness: domain.ReviewerHarness("greptile"), PRURL: "https://example/pr/2",
@@ -548,7 +535,6 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 		t.Fatalf("reviewer handle after clear = %q, want empty", got.ReviewerHandleID)
 	}
 
-	// A run inserts running and updates to complete/changes_requested.
 	if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "run-1", ReviewID: got.ID, SessionID: rec.ID, BatchID: "batch-1", Harness: domain.ReviewerHarness("greptile"),
 		PRURL: got.PRURL, TargetSHA: "sha1", Status: domain.ReviewRunRunning, Verdict: domain.VerdictNone,

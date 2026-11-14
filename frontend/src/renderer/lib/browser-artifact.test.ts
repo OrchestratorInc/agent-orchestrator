@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { fileMediaKind } from "./file-media";
 
-// The Open in browser action and the main process share one rule; it must
-// cover every media format the viewer previews, so the action never fails.
 const media = [
 	"a.apng", "a.avif", "a.bmp", "a.gif", "a.ico", "a.jpg", "a.jpeg", "a.png", "a.webp",
 	"a.m4v", "a.mov", "a.mp4", "a.ogv", "a.webm",

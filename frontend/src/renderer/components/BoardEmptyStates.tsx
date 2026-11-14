@@ -7,14 +7,10 @@ import { WelcomePanel } from "./WelcomePanel";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
-// Board empty states: first-launch welcome (`BoardWelcome`) and project board
-// with no worker sessions yet (`ProjectBoardEmpty`).
 export function BoardWelcome() {
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const completeWelcome = useOnboardingStep("welcome", true);
-	// Adding the first project ends the welcome screen, which unmounts this
-	// component, so completion is reported from the handlers rather than an effect.
 	const done = <A extends unknown[]>(fn: (...args: A) => Promise<void>) => async (...args: A) => {
 		await fn(...args);
 		completeWelcome();
@@ -43,7 +39,6 @@ export function BoardWelcome() {
 	);
 }
 
-// The center owns the prominent actions while the header keeps quiet copies.
 export function ProjectBoardEmpty({ actions, offer }: { actions: ReactNode; offer?: ReactNode }) {
 	const { t } = useTranslation();
 	return (

@@ -1,5 +1,3 @@
-// Package ompacp binds the user's own OMP installation to AO's reusable ACP
-// Chat transport.
 package ompacp
 
 import (
@@ -14,10 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches `omp acp` from the exact binary resolved by the existing OMP
-// agent plugin. OMP keeps filesystem and terminal execution in its own process;
-// AO advertises neither ACP client capability and receives only typed session
-// updates and permission requests.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return newDriver(plugin, versionProbe, log)
 }

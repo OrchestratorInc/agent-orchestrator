@@ -11,12 +11,6 @@ import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { resolveSessionWorkspacePath } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
-/**
- * Open a supported link in the active session's AO Browser panel.
- *
- * `onUnownedFile` receives an absolute file reference the daemon places outside
- * the session workspace, so the caller can say so instead of showing nothing.
- */
 export function useSessionBrowserLink(
 	session?: WorkspaceSession,
 	openInBrowser?: (uri: string) => Promise<void>,
@@ -35,18 +29,11 @@ export function useSessionBrowserLink(
 			if (!session?.id || !active) return;
 			const sessionId = session.id;
 			const webLink = isWebLink(uri);
-			// A cloud session's files live in its sandbox, which the local daemon
-			// does not serve: only a web link opens, in this computer's Browser tab.
 			if (cloud && !(webLink && openInBrowser)) return;
-			// `target` is what the daemon preview resolves; `workspacePath` is set
-			// only when the target is known to be that workspace-relative file.
 			const openPreview = (target: string, workspacePath: string | undefined) => {
 				const uiKey = sessionUiKey(sessionId, hostId);
 				setInspectorView(uiKey, "browser");
 				setInspectorOpen(uiKey, true);
-				// Local workspace paths must go through the daemon preview resolver first.
-				// Passing an absolute worktree path directly to BrowserView opens an empty
-				// tab because Chromium cannot navigate to the filesystem path.
 				if (!hostId && openInBrowser && webLink) {
 					void openInBrowser(target).catch((error) => {
 						console.warn("Unable to open link in Browser tab", error);
@@ -77,16 +64,10 @@ export function useSessionBrowserLink(
 			};
 			const reference = webLink || uri.trim().startsWith("//") ? "" : normalizeWorkspaceFileReference(uri);
 			if (isAbsoluteFileReference(reference)) {
-				// An absolute path whose tail matches a workspace file is not
-				// necessarily that file, so the daemon says which root owns it
-				// before anything is previewed.
 				void (async () => {
 					const resolved = await resolveSessionWorkspacePath(sessionId, reference, hostId);
 					if (resolved?.kind === "workspace") openPreview(resolved.path, resolved.path);
 					else if (resolved?.kind) onUnownedFile?.(reference);
-					// The daemon could not classify the path (an older build). Its
-					// preview endpoint still confines the path to the workspace
-					// itself, so ask it rather than guess from the file list.
 					else openPreview(uri, undefined);
 				})();
 				return;

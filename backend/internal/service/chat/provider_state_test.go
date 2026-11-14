@@ -15,18 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Projection of the provider signal AO used to drop: reasoning streams, plans,
-// terminal input, auto-approval reviews, model reroutes, account state, thread
-// state and MCP server health.
-//
-// Against the real store, like the rest of this package: the claim is that these
-// land as durable rows a snapshot can serve, which a mock store cannot show.
-
-/* ---- reasoning --------------------------------------------------------- */
-
-// Reasoning streams into the activity's own text and is then replaced by the
-// provider's settled summary. Replacing rather than appending is what makes a
-// dropped delta cosmetic.
 func TestReasoningStreamsThenSettles(t *testing.T) {
 	h := newHarness(t)
 
@@ -48,8 +36,6 @@ func TestReasoningStreamsThenSettles(t *testing.T) {
 	if activity.Kind != domain.ActivityKindReasoning {
 		t.Fatalf("kind = %q", activity.Kind)
 	}
-	// Reasoning is not command output. A reader must be able to tell "the agent
-	// thought this" from "the program printed this".
 	if activity.CommandOutput != "" {
 		t.Errorf("reasoning landed in command output: %q", activity.CommandOutput)
 	}
@@ -66,16 +52,11 @@ func TestReasoningStreamsThenSettles(t *testing.T) {
 	if got := activityByItem(settled, "rs_1").Status; got != domain.ActivityStatusCompleted {
 		t.Fatalf("status = %q", got)
 	}
-	// One row, not one per delta.
 	if n := countActivities(settled, domain.ActivityKindReasoning); n != 1 {
 		t.Fatalf("reasoning activities = %d, want 1", n)
 	}
 }
 
-// A completion carrying no settled text must not wipe what streamed. A reasoning
-// item with an empty summary array is the normal shape on a provider that streams
-// no summaries, and erasing the accumulation on it would delete reasoning the user
-// watched arrive.
 func TestEmptySettleKeepsStreamedReasoning(t *testing.T) {
 	h := newHarness(t)
 
@@ -101,11 +82,6 @@ func TestEmptySettleKeepsStreamedReasoning(t *testing.T) {
 	}
 }
 
-/* ---- terminal input ---------------------------------------------------- */
-
-// The keystrokes the agent sent into a PTY are kept apart from the program's
-// output. The PTY echoes what is typed, so one shared stream would show every
-// typed line twice.
 func TestTerminalInputStaysOutOfCommandOutput(t *testing.T) {
 	h := newHarness(t)
 
@@ -132,11 +108,6 @@ func TestTerminalInputStaysOutOfCommandOutput(t *testing.T) {
 	}
 }
 
-/* ---- plan -------------------------------------------------------------- */
-
-// The plan lands as turn state AND as one timeline row that mutates in place. The
-// column answers "what is the plan now" without walking the timeline; the row
-// answers "where in the conversation did the agent plan", which the column cannot.
 func TestPlanUpdatesOverwriteTurnStateAndOneRow(t *testing.T) {
 	h := newHarness(t)
 
@@ -172,8 +143,6 @@ func TestPlanUpdatesOverwriteTurnStateAndOneRow(t *testing.T) {
 		return false
 	})
 
-	// Two updates, one row: the provider re-sends the whole plan, so a row per
-	// update would read as though the agent had planned twice.
 	if n := countActivities(snapshot, domain.ActivityKindPlan); n != 1 {
 		t.Fatalf("plan activities = %d, want 1", n)
 	}
@@ -198,15 +167,11 @@ func TestPlanUpdatesOverwriteTurnStateAndOneRow(t *testing.T) {
 	if detail.Event != "plan" {
 		t.Errorf("detail event = %q", detail.Event)
 	}
-	// Structure, not prose: a client that wants checkboxes needs the per-step status,
-	// and joining steps into text is not reversible.
 	if len(detail.Steps) != 2 || detail.Steps[0].Status != string(domain.PlanStepCompleted) {
 		t.Fatalf("detail steps = %+v", detail.Steps)
 	}
 }
 
-// A plan with work left is not a completed thing. Reporting it as one would tick
-// off steps the agent is still on.
 func TestPlanInProgressStaysRunning(t *testing.T) {
 	h := newHarness(t)
 	plan := domain.ConversationPlan{Steps: []domain.ConversationPlanStep{
@@ -225,10 +190,6 @@ func TestPlanInProgressStaysRunning(t *testing.T) {
 	}
 }
 
-// A provider is allowed to omit a final plan notification. Successful turn
-// completion is AO's durable proof that the remaining plan work finished, so
-// both copies of the plan must settle with the turn instead of leaving a
-// completed answer beside a permanent "0 / N" plan.
 func TestSuccessfulCompletionFinalizesPlanWhenProviderOmitsTerminalPlan(t *testing.T) {
 	h := newHarness(t)
 
@@ -285,9 +246,6 @@ func TestSuccessfulCompletionFinalizesPlanWhenProviderOmitsTerminalPlan(t *testi
 	}
 }
 
-// A list the agent keeps across turns (Claude's task list) is not this turn's
-// plan, so the turn ending is no proof its open tasks finished. The stored copy
-// keeps the provider's statuses rather than reading "4/4" with work still open.
 func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 	h := newHarness(t)
 
@@ -340,16 +298,11 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
 		}
 	}
-	// A plan row no turn holds is the only copy a client gets, so every row of a
-	// cross-turn list must say the list spans turns as the turn's copy does.
 	if !detail.SpansTurns {
 		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
 	}
 }
 
-// Claude can keep working on its own after a turn has ended. Those plan updates
-// carry no turn. One run of them rewrites one row, even when the user sends a turn
-// before the agent picks it up, and work after a later turn gets a row of its own.
 func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
 	h := newHarness(t)
 
@@ -361,7 +314,6 @@ func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
 		return len(plans) == 1 && plans[0].Summary == "Plan 1/3"
 	})
 
-	// The user sends B while the run goes on; the agent has not started B yet.
 	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
 		Text: "B", Origin: domain.MessageOriginHuman,
 	}); err != nil {
@@ -399,9 +351,6 @@ func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
 	}
 }
 
-// Every turn and run holds a copy of a list that spans turns. The daemon marks the
-// copy written last as the current one, wherever it is, so no client has to date
-// the copies itself.
 func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
 	h := newHarness(t)
 	turnPlan := func(providerTurn string, done int) ports.ChatEvent {
@@ -422,8 +371,6 @@ func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
 			TurnState: domain.TurnStateCompleted},
 		turnlessPlan(2),
 	)
-	// A snapshot reads turns and activities separately, so wait for both halves of
-	// the one projection rather than only the row that appears.
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return len(turnlessPlanRows(s)) == 1 && len(s.Turns) == 1 && s.Turns[0].Plan != nil && s.Turns[0].Plan.Superseded
 	})
@@ -434,7 +381,6 @@ func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
 		t.Errorf("run's plan row superseded, want it current")
 	}
 
-	// A later turn's copy supersedes the run's row in turn.
 	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
 		Text: "B", Origin: domain.MessageOriginHuman,
 	}); err != nil {
@@ -459,8 +405,6 @@ func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
 	}
 }
 
-// turnlessPlan is a revision of a three-step list that spans turns, with done
-// steps finished, sent with no turn.
 func turnlessPlan(done int) ports.ChatEvent {
 	plan := domain.ConversationPlan{SpansTurns: true}
 	for i := range 3 {
@@ -500,10 +444,6 @@ func planRowDetail(t *testing.T, activity domain.ConversationActivity) planRowFl
 	return detail
 }
 
-/* ---- model reroute ----------------------------------------------------- */
-
-// A reroute becomes conversation state AND a timeline row. The state says what is
-// answering now; the row says where the line falls, which state alone cannot.
 func TestModelRerouteIsRecordedAndPlacedInTheTimeline(t *testing.T) {
 	h := newHarness(t)
 
@@ -519,8 +459,6 @@ func TestModelRerouteIsRecordedAndPlacedInTheTimeline(t *testing.T) {
 		},
 	)
 
-	// Both halves, because the state and the timeline row are two writes: waiting only
-	// on the state would race the row this test then reads.
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return s.Conversation.ModelReroute != nil &&
 			countActivities(s, domain.ActivityKindSystem) == 1
@@ -545,11 +483,6 @@ func TestModelRerouteIsRecordedAndPlacedInTheTimeline(t *testing.T) {
 	}
 }
 
-/* ---- account ----------------------------------------------------------- */
-
-// Account reports arrive in pieces, so they merge. Writing each straight through
-// would mean a session whose tokens expired lost its plan label, and one that
-// changed plan looked like its credentials were fine again.
 func TestAccountReportsMergeRatherThanReplace(t *testing.T) {
 	h := newHarness(t)
 
@@ -578,9 +511,6 @@ func TestAccountReportsMergeRatherThanReplace(t *testing.T) {
 		t.Errorf("reason = %q", account.ReauthReason)
 	}
 
-	// The one account fact the user has to act on gets a row: a turn that failed
-	// because the provider wanted a login it could not get is otherwise
-	// indistinguishable from any other failed turn.
 	row := firstActivityOfKind(snapshot, domain.ActivityKindSystem)
 	if row.Summary != "The provider needs you to sign in again" {
 		t.Fatalf("summary = %q", row.Summary)
@@ -589,7 +519,6 @@ func TestAccountReportsMergeRatherThanReplace(t *testing.T) {
 		t.Errorf("status = %q", row.Status)
 	}
 
-	// A repeated demand updates the notice rather than filling the timeline with it.
 	h.conv.emit(ports.ChatEvent{
 		Kind:    ports.ChatEventAccountChanged,
 		Account: &ports.ChatAccount{ReauthRequired: true, ReauthReason: "unauthorized"},
@@ -629,9 +558,6 @@ func TestAccountRecoveryClearsPersistentReauthenticationState(t *testing.T) {
 	}
 }
 
-// A repeated auth mode is an account refresh, not a credential change. Its
-// timestamp must not fence off a completed recovery when a persisted demand is
-// reconciled later on the read path.
 func TestAccountRefreshPreservesAuthenticationRecoveryEvidence(t *testing.T) {
 	h := newHarness(t)
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{
@@ -664,8 +590,6 @@ func TestAccountRefreshPreservesAuthenticationRecoveryEvidence(t *testing.T) {
 	if refreshed.AuthVerifiedAt == nil || !refreshed.AuthVerifiedAt.Equal(*recovered.AuthVerifiedAt) || refreshed.AuthenticationState != "authenticated" {
 		t.Fatalf("account refresh lost verified authentication: %+v", refreshed)
 	}
-	// Model the outstanding demand in a persisted projection awaiting lazy
-	// reconciliation, retaining the later account refresh's cutoff and plan.
 	refreshed.ReauthRequiredAt = failed.ReauthRequiredAt
 	refreshed.ReauthReason = failed.ReauthReason
 	refreshed.AuthenticationState = "required"
@@ -681,8 +605,6 @@ func TestAccountRefreshPreservesAuthenticationRecoveryEvidence(t *testing.T) {
 	if account.ReauthRequiredAt != nil || account.AuthenticationState != "authenticated" || account.PlanLabel != "team" || account.LastAuthFailureReason != "expired" {
 		t.Fatalf("late account refresh prevented persisted recovery: %+v", account)
 	}
-	// A real mode change still invalidates earlier verification and establishes
-	// a new barrier that excludes that recovery turn.
 	h.advance(time.Second)
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{
 		AuthMode: "apikey", PlanLabel: "api",
@@ -746,10 +668,6 @@ func TestNewAuthenticationFailureAfterRecoveryHasNewIdentity(t *testing.T) {
 	}
 }
 
-/* ---- thread state ----------------------------------------------------- */
-
-// Each report updates only what it spoke about. An ordinary idle report must not
-// un-archive a thread, and an archive report must not blank the status.
 func TestThreadStateReportsAreTriState(t *testing.T) {
 	h := newHarness(t)
 
@@ -775,8 +693,6 @@ func TestThreadStateReportsAreTriState(t *testing.T) {
 		t.Errorf("waiting on = %+v", state.WaitingOn)
 	}
 
-	// A later active report with no flags clears them: a thread no longer blocked
-	// must not keep looking blocked.
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventThreadState,
 		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}})
 
@@ -791,9 +707,6 @@ func TestThreadStateReportsAreTriState(t *testing.T) {
 	}
 }
 
-// A closed thread is recorded, not acted on. Tearing a controller down on a
-// notification no probe has ever seen would turn a provider quirk into a lost
-// session.
 func TestClosedThreadDoesNotStopTheController(t *testing.T) {
 	h := newHarness(t)
 
@@ -811,8 +724,6 @@ func TestClosedThreadDoesNotStopTheController(t *testing.T) {
 	}
 }
 
-/* ---- provider state ---------------------------------------------------- */
-
 func awaitActivityEvent(t *testing.T, activity *recordingActivity, event string, state domain.ActivityState) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -827,10 +738,6 @@ func awaitActivityEvent(t *testing.T, activity *recordingActivity, event string,
 	t.Fatalf("no %s %q signal: %+v", state, event, activity.snapshot())
 }
 
-// Claude Code runs cycles on its own after a turn, for example to answer a
-// finished background task. AO has no turn for them, so the provider's own
-// running and idle reports are what keep the session from reading idle while
-// the agent works.
 func TestProviderStateReportsWorkOutsideAOTurns(t *testing.T) {
 	h := newHarness(t)
 
@@ -843,8 +750,6 @@ func TestProviderStateReportsWorkOutsideAOTurns(t *testing.T) {
 	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
 }
 
-// While AO's own turn runs, its turn events own the activity. A provider idle
-// can lag behind the next turn's start, so it must not end that turn early.
 func TestProviderStateLeavesAOTurnsToTurnEvents(t *testing.T) {
 	h := newHarness(t)
 
@@ -864,11 +769,6 @@ func TestProviderStateLeavesAOTurnsToTurnEvents(t *testing.T) {
 	}
 }
 
-/* ---- MCP servers ------------------------------------------------------- */
-
-// Servers are announced one at a time and re-announced every turn, so reports
-// merge by name and keep first-seen order. A list that reshuffles between polls is
-// unreadable.
 func TestMCPServerReportsMergeByName(t *testing.T) {
 	h := newHarness(t)
 
@@ -890,7 +790,6 @@ func TestMCPServerReportsMergeByName(t *testing.T) {
 	if servers[0].Name != "probe" || servers[1].Name != "github" {
 		t.Fatalf("order = %+v, want first-seen", servers)
 	}
-	// The classification is what makes a failure actionable.
 	if servers[1].FailureReason != "reauthenticationRequired" {
 		t.Errorf("failure reason = %q", servers[1].FailureReason)
 	}
@@ -899,8 +798,6 @@ func TestMCPServerReportsMergeByName(t *testing.T) {
 	}
 }
 
-// A driver whose provider cannot reload gets a permanent answer, so a client stops
-// offering the control rather than retrying something that will never work.
 func TestReloadMCPServersUnsupportedIsPermanent(t *testing.T) {
 	h := newHarness(t)
 	_, err := h.svc.ReloadMCPServers(context.Background(), testSession)
@@ -909,8 +806,6 @@ func TestReloadMCPServersUnsupportedIsPermanent(t *testing.T) {
 	}
 }
 
-// A reload tears down and re-establishes every tool the agent has, so it is
-// refused mid-turn rather than pulling tools out from under work in flight.
 func TestReloadMCPServersRefusedWhileBusy(t *testing.T) {
 	reloader := &mcpReloadRecorder{fakeConversation: newFakeConversation()}
 	h := newHarnessWithConversation(t, reloader)
@@ -929,8 +824,6 @@ func TestReloadMCPServersRefusedWhileBusy(t *testing.T) {
 	}
 }
 
-// The servers a reload reports are merged into conversation state, so the outcome
-// is durable rather than only being returned to whoever asked.
 func TestReloadMCPServersRecordsWhatCameBack(t *testing.T) {
 	reloader := &mcpReloadRecorder{
 		fakeConversation: newFakeConversation(),
@@ -955,9 +848,6 @@ func TestReloadMCPServersRecordsWhatCameBack(t *testing.T) {
 	})
 }
 
-// A complete inventory is a replacement, not another startup delta. Servers no
-// longer present in configuration must not survive merely because they failed in
-// an earlier provider generation.
 func TestReloadMCPServersRemovesServersMissingFromAuthoritativeInventory(t *testing.T) {
 	reloader := &mcpReloadRecorder{
 		fakeConversation: newFakeConversation(),
@@ -1042,8 +932,6 @@ func TestReloadMCPServersKeepsStartupNotificationsFromCurrentReload(t *testing.T
 	reloader.onReload = func() {
 		reloader.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers,
 			MCPServers: []ports.ChatMCPServer{{Name: "still-enabled", Status: "failed"}}})
-		// Make the race deterministic: the current reload's notification has been
-		// applied before its authoritative inventory is reconciled.
 		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 			servers := s.Conversation.MCPServers
 			return len(servers) == 2 && servers[1].Name == "still-enabled"
@@ -1064,11 +952,6 @@ func TestReloadMCPServersKeepsStartupNotificationsFromCurrentReload(t *testing.T
 	})
 }
 
-/* ---- auto-approval review ---------------------------------------------- */
-
-// An auto-review is its own kind, not an approval. An approval is a question
-// waiting on a person; this is a decision already made for them, and the two must
-// not render as the same thing.
 func TestAutoReviewIsItsOwnActivityKind(t *testing.T) {
 	h := newHarness(t)
 
@@ -1098,8 +981,6 @@ func TestAutoReviewIsItsOwnActivityKind(t *testing.T) {
 	if row.Kind != domain.ActivityKindAutoReview {
 		t.Fatalf("kind = %q, want %q", row.Kind, domain.ActivityKindAutoReview)
 	}
-	// One row: started and completed name the same synthetic key, so the review
-	// mutates rather than appearing twice.
 	if n := countActivities(snapshot, domain.ActivityKindAutoReview); n != 1 {
 		t.Fatalf("auto review rows = %d, want 1", n)
 	}
@@ -1108,9 +989,6 @@ func TestAutoReviewIsItsOwnActivityKind(t *testing.T) {
 	}
 }
 
-/* ---- helpers ----------------------------------------------------------- */
-
-// mcpReloadRecorder is a provider double that can reload its tool servers.
 type mcpReloadRecorder struct {
 	*fakeConversation
 	result   ports.ChatMCPReloadResult
@@ -1183,9 +1061,7 @@ func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
 	})
-	countsAfter(1, 0) // the refusal is an account change; the first turn had no demand
-	// The user signed in again, maybe with the CLI outside AO, and sent a message.
-	// That is a recheck, not another refusal: it must not invalidate readiness.
+	countsAfter(1, 0)
 	h.advance(time.Second)
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "second"})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 2 })

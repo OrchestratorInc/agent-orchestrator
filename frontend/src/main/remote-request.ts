@@ -1,13 +1,6 @@
 import { parseDaemonProbe } from "../shared/daemon-attach";
 import { DEVICE_TOKEN_PREFIX, type RemoteEntry } from "./remotes-store";
 
-// Remote HTTP lives in the main process for two reasons: the renderer's origin
-// is app://renderer and a remote daemon has no reason to allow it through CORS,
-// and saved connection passwords must not be sent back to renderer memory.
-// The Add Host form necessarily holds a newly typed password until IPC saves it.
-// "not-a-daemon" is its own answer because the honest sentence differs: the
-// address replied, so telling someone it is unreachable sends them to debug a
-// network that is working.
 export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon" | "incompatible";
 
 export class IncompatibleRemoteVersionError extends Error {
@@ -19,7 +12,6 @@ export class IncompatibleRemoteVersionError extends Error {
 
 type FetchImpl = typeof fetch;
 
-/** Cache only the identity of the daemon attachment confirmed by the supervisor. */
 export function createLocalHostIdentity(
 	attachment: () => { port: number; pid?: number; generation: number } | null,
 	identity = readRemoteIdentity,
@@ -42,7 +34,6 @@ export function createLocalHostIdentity(
 	};
 }
 
-/** This is the only remote probe allowed before a saved password is sent. */
 export async function readRemoteIdentity(
 	entry: Pick<RemoteEntry, "url">,
 	fetchImpl: FetchImpl = fetch,
@@ -82,18 +73,12 @@ export async function probeRemote(
 		});
 		if (response.status === 401 || response.status === 403) return "unauthorized";
 		if (!response.ok) return "offline";
-		// A status code proves something replied, not that it is a daemon. An SPA
-		// catch-all (an Expo dev server on a mistyped port, say) answers every path
-		// with 200 and an HTML page; accepting that as the api base hands the whole
-		// renderer bodies it will read fields off and crash on.
 		const text = await response.text();
 		let body: unknown;
 		try { body = JSON.parse(text); }
 		catch { return "not-a-daemon"; }
 		return parseDaemonProbe("healthz", body) === null ? "not-a-daemon" : "online";
 	} catch {
-		// A transport failure is indistinguishable from a wrong port here, and
-		// both mean the same thing to the user: it is not reachable.
 		return "offline";
 	}
 }
@@ -112,8 +97,6 @@ export type PairDeviceResult =
 	| { kind: "unauthorized" }
 	| { kind: "offline" };
 
-/** Exchanges a pairing code or password for this device's own token. Confirm the
- * host's identity first: this sends the secret. */
 export async function pairDevice(
 	entry: Pick<RemoteEntry, "url" | "hostId">,
 	secret: string,
@@ -134,8 +117,6 @@ export async function pairDevice(
 			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (response.status === 401) return { kind: "unauthorized" };
-		// 404 and 405: a release without device tokens. 403 and 409: this
-		// credential cannot pair, or the host's device list is full.
 		if ([403, 404, 405, 409, 501].includes(response.status)) return { kind: "unsupported" };
 		if (!response.ok) return { kind: "offline" };
 		const body = (await response.json()) as { hostId?: unknown; token?: unknown; credential?: unknown };

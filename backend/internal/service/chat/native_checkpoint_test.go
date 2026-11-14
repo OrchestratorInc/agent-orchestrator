@@ -36,9 +36,6 @@ func TestNativeCheckpointRequiresExactUserBoundaryAndAnswer(t *testing.T) {
 	}
 }
 
-// An Esc-interrupted boundary turn has no answer. What the replay shows for it
-// (a partial reply, nothing, or Claude's "No response requested." filler once
-// the conversation resumes) depends on timing, so only its identity is matched.
 func TestNativeCheckpointInterruptedBoundaryMatchesWithoutAnswer(t *testing.T) {
 	checkpoint := nativeHistoryCheckpoint{nativeBoundary: &ports.NativeCheckpointBoundary{
 		UserMessageID: "native-A", UserText: "run it", Interrupted: true,
@@ -75,10 +72,6 @@ func TestNativeCheckpointInterruptedBoundaryMatchesWithoutAnswer(t *testing.T) {
 	}
 }
 
-// Codex records an Esc-interrupted terminal turn as an interrupted turn in its
-// thread, and AO's checkpoint keeps that turn's prompt (no Stop fires). The
-// replayed interrupted turn settles the checkpoint, before and after a later
-// completed turn, so Codex has no Claude-style unsettled interrupt.
 func TestNativeCheckpointCodexInterruptedTurnSettles(t *testing.T) {
 	turn := func(id, user, answer string, state domain.TurnState) []ports.ChatEvent {
 		events := []ports.ChatEvent{
@@ -104,7 +97,6 @@ func TestNativeCheckpointCodexInterruptedTurnSettles(t *testing.T) {
 	if got := later.mismatches(replay, nil, nil, nil); len(got) != 0 {
 		t.Fatalf("interrupt, then a completed turn: mismatches=%v", got)
 	}
-	// A replay missing the interrupted turn still fails its checkpoint.
 	if got := interruptedPrompt.mismatches(turn("turn-0", "earlier", "done", domain.TurnStateCompleted), nil, nil, nil); len(got) == 0 {
 		t.Fatal("admitted a replay without the checkpoint's turn")
 	}

@@ -1,5 +1,3 @@
-// Package opencodev2acp binds the user's OpenCode 2 installation to AO's
-// reusable ACP Chat transport.
 package opencodev2acp
 
 import (
@@ -18,9 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches `opencode acp` from the exact major-two binary resolved by the
-// OpenCode 2 agent plugin. The shared ACP driver owns the detached host and
-// transport lifecycle.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessOpenCodeV2,
@@ -52,9 +47,6 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	return []string{"acp"}, env, nil
 }
 
-// OpenCode 2's ACP bridge advertises the built-in modes before custom agents
-// have necessarily loaded. Keep the provider mode stable and implement AO's
-// approval postures through permissionPolicy.
 func sessionMode(ports.PermissionMode) string {
 	return "build"
 }
@@ -64,8 +56,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model != "" {
 		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model})
 	}
-	// Selecting a model may reset its variant, so effort is deliberately applied
-	// after the provider's model option.
 	if settings.Effort != "" {
 		options = append(options, acpdriver.SessionOption{ID: "effort", Value: settings.Effort})
 	}
@@ -87,9 +77,6 @@ func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSetting
 	return nil
 }
 
-// Default leaves the request for a person. Accept-edits answers only edit-like
-// requests, while auto answers every request that offers an allow-once choice.
-// Bypass is enforced by the selected v2 agent, so it raises no request here.
 func permissionPolicy(
 	mode ports.PermissionMode,
 	params acpsdk.RequestPermissionRequest,

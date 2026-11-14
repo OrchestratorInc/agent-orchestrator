@@ -281,78 +281,36 @@ import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
 import { captureMainError, reportDaemonFailure, ExpectedIpcError, installIpcErrorCapture, setMainErrorSink } from "./main/main-error-capture";
 
-// Every ipcMain.handle registered from here on reports unexpected throws.
 installIpcErrorCapture(ipcMain);
 
-// Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 const execFileAsync = promisify(execFile);
 
-// Windows GUI launches (e.g. from a Start-menu/desktop shortcut) have no attached
-// console, so process.stdout and process.stderr are dead pipes. The daemon-output
-// console.log/console.error calls
-// below then fail with EPIPE, and with no "error" listener that surfaces as an
-// uncaught exception that crashes the main process. Swallow broken-pipe write
-// errors on the std streams: a dropped log line is harmless, the crash is not.
 const ignoreStdStreamError = (err: NodeJS.ErrnoException): void => {
 	if (err.code === "EPIPE") return;
 };
 process.stdout.on("error", ignoreStdStreamError);
 process.stderr.on("error", ignoreStdStreamError);
 
-// The name shown in window titles, the menu bar, the dock, and the About panel.
-// Packaged bundle and installer filenames are unchanged.
 const APP_DISPLAY_NAME = "Orchestrator.inc";
 
-// Must run before app ready so the About panel and default-menu role labels use it.
-// Unpackaged runs get a distinct name so the dev window, dock menu, and About
-// panel never impersonate the installed app (#3642).
 app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
 
-// An unsigned dev Electron is a new app to macOS whenever its binary changes, so Chromium's
-// keychain-held cookie key prompted on start. Dev runs use the stand-in key; packaged keep the keychain.
 if (!app.isPackaged && process.platform === "darwin") {
 	app.commandLine.appendSwitch("use-mock-keychain");
 }
 
-// Windows shows native toasts only when the app declares an AppUserModelID that
-// matches its installer shortcut (the NSIS maker's appId). Without it,
-// Notification.isSupported() still returns true but show() silently drops the
-// toast, so notifications never appear. No-op on macOS/Linux.
 if (process.platform === "win32") {
 	app.setAppUserModelId("dev.agent-orchestrator.desktop");
 }
 
-// Escape hatch for hosts whose GPU driver stack crashes Chromium on startup
-// (Linux/Wayland in practice, #3961). Chromium still runs a GPU process; what
-// this drops is the vendor driver, falling the process back to Electron's
-// bundled SwiftShader. There is no window yet when the crashes happen, so an
-// in-app setting is unreachable and an env var is the only knob that works.
-// Truthy allowlist mirrors keepDaemonAlive() so "off"/"no" cannot accidentally
-// turn the GPU off. Must run before app ready — the call throws after that.
 const disableGpu = process.env.AO_DISABLE_GPU?.trim().toLowerCase();
 if (disableGpu === "1" || disableGpu === "true" || disableGpu === "yes" || disableGpu === "on") {
 	app.disableHardwareAcceleration();
 }
 
-// Pin ALL Electron-owned state (Chromium cache, cookies, local/session storage,
-// crash dumps) under the canonical AO home at ~/.ao instead of Electron's macOS
-// default ~/Library/Application Support/<name>. Keeps the app's entire footprint
-// inside ~/.ao alongside the daemon's data dir and running.json. sessionData and
-// crashDumps derive from userData, so this one override reparents them all.
-// Must run before app ready.
-// Dev runs get their own profile under the same ~/.ao root: the packaged app
-// keeps this directory open, and two Chromium instances sharing one profile
-// corrupt its LevelDB stores. Mirrors how dev already isolates running.json and
-// the daemon data dir into ~/.ao/dev.
-// AO_DEV_ELECTRON_DIR overrides the dev profile location. The default dev path
-// is shared by every checkout, and Chromium puts a singleton lock in a profile,
-// so a second worktree's `npm run dev` loses requestSingleInstanceLock() and
-// exits immediately. That is a real constraint for a tool built around parallel
-// worktree sessions: two sessions could not both run the app. Packaged builds
-// are deliberately NOT overridable — their profile is part of the install.
 app.setPath(
 	"userData",
 	app.isPackaged
@@ -360,20 +318,15 @@ app.setPath(
 		: (process.env.AO_DEV_ELECTRON_DIR ?? path.join(os.homedir(), ".ao", "dev", "electron")),
 );
 
-// Resolve once against the launch cwd, before the daemon can chdir. The exact
-// absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
 const launchTiming = createLaunchTiming(process.getCreationTime() ?? performance.timeOrigin);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
-// PostHog identity: the user-facing analytics opt-out (marker file shared with the
-// daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
 const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
 const telemetryIdentity = new TelemetryIdentityController(
 	desktopDataDir,
 	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
-	// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
 	(url, init) => fetch(url, init),
 	(optedOut) => {
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
@@ -424,27 +377,15 @@ const trayLifecycle = createTrayLifecycle({
 	getTrayController: () => trayController,
 	focusWindow: () => focusMainWindow(),
 });
-// Icon/taskbar-shortcut folder drop, mirroring VS Code: relayed to the
-// renderer's global drop handling so it opens the same create-project flow.
 const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
-// Folder path from a cold-start launch (icon/shortcut drop while not running)
-// whose renderer isn't mounted yet. Flushed once the shell signals readiness
-// via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
-// Session deep link (ao-app://sessions/…) that arrived before the shell was
-// mounted (cold-start argv or early open-url). Flushed on the same
-// TRAY_RENDERER_READY_CHANNEL handshake as pendingFolderPath.
 let pendingSessionDeepLink: string | null = null;
-// Billing return (ao-app://billing) that arrived with no shell to take it —
-// flushed on the TRAY_RENDERER_READY handshake like pendingSessionDeepLink.
 let pendingBillingSection: string | null = null;
 let daemonProcess: ChildProcess | null = null;
-// Set once this instance owns the single-instance lock; a no-op before that.
 let lifecycleLog: LifecycleRecord = () => undefined;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
 type DaemonAutoRestartIntent = { generation: number; crashedPid: number; runFilePresent: boolean; keepAlive: boolean };
-// Why a daemon start was requested; recorded in the lifecycle log before any spawn.
 type DaemonStartTrigger = "startup" | "renderer_status" | "manual_start" | "manual_restart" | "browser_runtime_recovery" | "auto_restart" | "scope_fallback";
 let daemonAutoRestartExits: number[] = [];
 let daemonAutoRestartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -456,7 +397,6 @@ let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
 const awakeDownloads = createAwakeDownloadBridge({
  baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
- // Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
  request: (url, init) => fetch(url, init),
 });
 app.once("will-quit", () => awakeDownloads.dispose());
@@ -487,7 +427,6 @@ const desktopQuit = createDesktopQuitController({
 			void createWindowPromise
 				.catch((error) => console.error("failed to close pending main window:", error))
 				.then(() => {
-					// No window came of it: nothing will emit "closed", so settle now.
 					if (mainWindow) mainWindow.close();
 					else desktopQuit.windowClosed();
 				});
@@ -496,8 +435,6 @@ const desktopQuit = createDesktopQuitController({
 	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
 });
-// macOS app menu Quit. ⌘Q asks the shell to confirm; with no visible window
-// there is nowhere to show the dialog, so the shortcut quits directly.
 const quitConfirm = createQuitConfirmController({
 	canConfirm: () => {
 		const shell = getShellWebContents();
@@ -506,8 +443,6 @@ const quitConfirm = createQuitConfirmController({
 	requestConfirm: () => {
 		const shell = getShellWebContents();
 		shell?.focus();
-		// Mirrors desktopQuit.handleBeforeQuit: with the tray up, quitting only
-		// closes the window, and the dialog says so.
 		const request: QuitConfirmRequest = {
 			keepsRunning: trayController !== null && !browserQuitRequested && !isUpdateRestartRequested(),
 		};
@@ -517,10 +452,7 @@ const quitConfirm = createQuitConfirmController({
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
-// One adopted-daemon replacement per launch; see handleBrowserRuntimeRejection.
 let browserRuntimeRecoveryAttempted = false;
-// Set when a recovery asks for a replacement and cleared once we own the daemon,
-// so an ordinary later startup is not forced to retire it. See startDaemon.
 let forceReplaceAdoptedRequested = false;
 let browserStreamLink: BrowserStreamLinkHandle | null = null;
 let browserStreamLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -530,30 +462,16 @@ let appMenuAvailability: AppMenuAvailability = {};
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
 let terminalFontSizeFocused = false;
-// An artifact viewer that can zoom is under the pointer or holds focus.
 let artifactZoomEngaged = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
 let chatDraftWindowCloseConfirmed = false;
-// Held for the app lifetime. Dropping it (on any exit) triggers daemon self-stop.
 let supervisorLink: SupervisorLinkHandle | null = null;
-// Guard: prevents stacking multiple flashFrame(true) calls when notifications arrive rapidly.
 let isFlashing = false;
-// macOS: the in-flight dock bounce, cancelled once the window regains focus
-// so a "critical" bounce stops as soon as the user looks at the app. Held as
-// one object so the id and its criticality can never drift apart; a pending
-// critical bounce is not replaced by a later informational notification.
 let pendingBounce: { id: number; critical: boolean } | null = null;
-// Live mirror of the persisted `soundNotificationsEnabled` UI setting, kept in sync by the
-// uiSettings:set handler so a toggle flip takes effect without an app restart.
 let soundNotificationsEnabled = DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
 
-// Plays the bundled notification sound through the renderer (main has no
-// audio output). `shell.beep()` is only the fallback for when no shell is
-// alive to play it: on Linux it is a silent no-op for desktop-launched apps
-// (Electron writes `\a` to /dev/console or /dev/tty, neither of which such an
-// app can open), which is why the renderer owns playback (#5514).
 function playNotificationSound(): void {
 	const shellContents = getShellWebContents();
 	if (shellContents && !shellContents.isDestroyed()) {
@@ -565,12 +483,8 @@ function playNotificationSound(): void {
 
 const isDev = !app.isPackaged;
 
-// Dev mode uses a separate port and state subdirectory so it never collides with
-// a concurrently running installed-app daemon. The subdir also isolates supervise.sock
-// on Unix (backend derives it as dir(RunFilePath)/supervise.sock) and the named pipe
-// on Windows (supervisorPipeFromRunFile derives it from the same dir basename).
 const DEV_DAEMON_PORT = 3002;
-const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
+const DEV_STATE_SUBDIR = "dev";
 
 const RENDERER_SCHEME = "app";
 const RENDERER_HOST = "renderer";
@@ -582,23 +496,10 @@ function getShellWebContents(): WebContents | null {
 	return windowComposition?.shellWebContents ?? null;
 }
 
-// Renderer-resolved sidebar colour. The shell root is transparent while a live
-// browser page shows, so the native window background must match it or the
-// gutters around the panels render in the fallback colour.
 let rendererWindowBackground: string | null = null;
-// macOS window transparency: the shell paints translucent surfaces and the
-// native vibrancy material underneath blurs the desktop.
 let windowTranslucent = false;
-// What each window last received, so theme changes and resizes skip identical
-// native calls. A new window (a Dock reopen) starts with no entry.
 const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | null; color: string }>();
 
-/**
- * Keep vibrancy and the native background in sync after window/renderer
- * lifecycle changes, as well as theme updates. `force` re-applies both even
- * when unchanged: lifecycle events and each new shell document's translucency
- * request use it to recover native state that drifted.
- */
 function syncNativeWindowBackground(force = false): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
 	const vibrancy = process.platform === "darwin" && windowTranslucent ? "under-window" : null;
@@ -621,9 +522,6 @@ function resolvedDaemonDataDir(): string {
 	return path.join(os.homedir(), ".ao", "data");
 }
 
-// Cursor Agent reads TERM_THEME at process start. The daemon applies it from
-// this file when spawning a PTY. The renderer writes the resolved light/dark
-// scheme here so it matches the xterm palette (not Electron nativeTheme alone).
 function persistTerminalThemeHint(scheme: "light" | "dark"): void {
 	const dir = resolvedDaemonDataDir();
 	try {
@@ -639,30 +537,14 @@ function persistTerminalThemeHint(scheme: "light" | "dark"): void {
 
 nativeTheme.on("updated", () => syncNativeWindowBackground());
 
-// The packaged renderer is served from a custom standard scheme, not file://.
-// A file:// page has the opaque "null" origin, which the daemon must never
-// trust (every sandboxed iframe on any website also presents "null"), so its
-// fetch/EventSource calls to the loopback API would be CORS-blocked.
-// app://renderer is an origin only this app can present, so the daemon's CORS
-// allowlist can name it. A standard scheme also makes the build's absolute
-// asset URLs (/assets/…) and history-API routing resolve, which file:// breaks.
-// codeCache lets V8 keep compiled bytecode for app:// scripts across launches;
-// Chromium only does that for http(s) by default, so without it every launch
-// recompiles the whole renderer bundle. Must run before app ready.
 protocol.registerSchemesAsPrivileged([
 	{
 		scheme: RENDERER_SCHEME,
 		privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true },
 	},
-	// Cached artifact previews, loaded by the cards' <img>s (main/artifact-snapshots.ts). Secure, so
-	// the app:// renderer may show them.
 	{ scheme: ARTIFACT_SNAPSHOT_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
-// Only the app's single instance claims (or, for a loopback dev build,
-// releases) the ao-app:// deep-link protocol used by WorkOS auth callbacks and
-// billing returns: a second launch that is about to exit must not change it.
-// See registerCloudProtocol. Must run before app.whenReady().
 if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
 } else {
@@ -670,12 +552,7 @@ if (!app.requestSingleInstanceLock()) {
 	installLifecycleLog();
 }
 
-// Persistent record of main-process and daemon lifecycle (start, exit codes,
-// signals, crashed child processes, respawn decisions) under the AO data dir.
-// Installed only by the instance that holds the single-instance lock, so a
-// second launch that is about to exit never claims the run marker.
 function installLifecycleLog(): void {
-	// Beside updater.jsonl (normally ~/.ao/logs), where users already look.
 	const runFile = runFilePath();
 	const directory = path.join(runFile ? path.dirname(runFile) : desktopDataDir, "logs");
 	const record = createLifecycleLog({ directory, version: app.getVersion(), homeDir: os.homedir() });
@@ -715,8 +592,6 @@ function installLifecycleLog(): void {
 	});
 }
 
-// Maps app://renderer/<path> to the built renderer in dist/. Paths without a
-// file extension are client-side routes and fall back to index.html (SPA).
 function registerRendererProtocol(): void {
 	const distRoot = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`);
 	protocol.handle(RENDERER_SCHEME, async (request) => {
@@ -757,10 +632,6 @@ function privacyGuidePreloadPath(): string {
 	return path.join(__dirname, "privacy-guide-preload.js");
 }
 
-// Runtime window/taskbar icon for Linux and Windows, and the unpackaged macOS
-// dock icon. Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
-// the orange "DEV" variant so they are recognisable and never impersonate the
-// installed app's taskbar/dock icon (#3642).
 function windowIconPath(): string | undefined {
 	if (!app.isPackaged) return path.join(__dirname, "../../assets/icon-dev.png");
 	const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
@@ -770,17 +641,12 @@ function windowIconPath(): string | undefined {
 	return existsSync(fallback) ? fallback : undefined;
 }
 
-// Electron 44 removed clipboard.writeImage in favour of the W3C-style
-// ClipboardItem API; the browser host and chat images share this adapter.
 function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
 	return clipboard.write([
 		new ClipboardItem({ "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }) }),
 	]);
 }
 
-// Unpackaged runs only: the Dock shows the DEV icon. A packaged app keeps its
-// bundle icon, which macOS 26+ renders as Liquid Glass from Assets.car and
-// adapts to light, dark, tinted and clear; a runtime PNG would flatten it.
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin" || app.isPackaged) return;
 	const iconPath = windowIconPath();
@@ -791,10 +657,6 @@ function applyRuntimeAppIcon(): void {
 	}
 }
 
-// BaseWindow has no ready-to-show event, so show the hidden window when the
-// shell's document has loaded (or failed to), with a fallback so a renderer that
-// never finishes cannot leave the app invisible. Anything that needs the window
-// sooner (focusMainWindow, deep links, the dock) can still show it directly.
 const WINDOW_SHOW_FALLBACK_MS = 2_500;
 
 function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void {
@@ -809,7 +671,6 @@ function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void
 	const fallback = setTimeout(show, WINDOW_SHOW_FALLBACK_MS);
 	contents.once("did-finish-load", show);
 	contents.once("did-fail-load", show);
-	// -3 (ERR_ABORTED) is a navigation replaced by another, not a failure.
 	contents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
 		if (isMainFrame && errorCode !== -3) captureMainError({ category: "window", reason: "did_fail_load", detail: `code:${errorCode}` });
 	});
@@ -859,7 +720,7 @@ const sideLaunchRecovery = new SideLaunchRecovery({
 	onError: error => console.warn("AO: side chat recovery or capture failed", error),
 	onClaimed: () => { sideCloseController.setRecovery("restoring"); armSideStateBackstop(); },
 	onReady: () => {
-		sideCloseController.setRecovery("ready"); // gated until a post-ready capture is applied
+		sideCloseController.setRecovery("ready");
 		sideLaunchRecovery.captureCloseInBackground();
 		armSideStateBackstop();
 	},
@@ -896,7 +757,6 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
 	}
-	// The daemon status/URL event above precedes the new close epoch/projection.
 	sideCloseController.setAttachment(sideLaunchRecovery.attachment, sideLaunchRecovery.status);
 }
 
@@ -908,7 +768,6 @@ function appendDaemonOutput(text: string): void {
 	if (nextStatus !== daemonStatus) setDaemonStatus(nextStatus);
 }
 
-// Native menu actions share the same release guards as keyboard and titlebar actions.
 function appMenuOptions() {
 	return {
 		allowShellDebugging: isDev,
@@ -916,9 +775,6 @@ function appMenuOptions() {
 	};
 }
 
-// A chord normally never reaches the menu: before-input-event consumes it and
-// sends the same message. It falls through while a binding is being recorded,
-// and when the Browser owns the chord; running the item then would double-handle it.
 function menuAcceleratorMayRun(id: AppShortcutId): boolean {
 	if (keybindingRecordingActive) return false;
 	if (!browserViewHost?.isLastUsedBrowser()) return true;
@@ -1011,7 +867,6 @@ function browserProfileStateDir(): string {
 	return path.dirname(runFile ?? path.join(os.homedir(), ".ao", "running.json"));
 }
 
-// The person's own browser, for pages that refuse AO's Browser panel.
 const userBrowser = createUserBrowser({
 	platform: process.platform,
 	openExternal: (url) => shell.openExternal(url),
@@ -1020,7 +875,6 @@ const userBrowser = createUserBrowser({
 
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
 	const browserSession = session.fromPartition(partition);
-	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
 	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
 }
 
@@ -1037,9 +891,6 @@ async function createWindowInternal(): Promise<void> {
 	await disposeAllBrowserViewHosts();
 	const agentBrowserRuntime = new AgentBrowserRuntime({
 		binaryPath: resolveAgentBrowserBinaryPath(),
-		// Agent Browser creates Unix sockets below each run root. Keep this base
-		// deliberately short so the namespace/session suffix stays below macOS's
-		// 103-byte sockaddr_un limit; all AO state remains under ~/.ao.
 		dataDir: path.join(os.homedir(), ".ao", ...(app.isPackaged ? ["br"] : ["dev", "br"])),
 		log: (message) => console.log(`AO: ${message}`),
 	});
@@ -1049,7 +900,6 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
-	// In the background: this must never hold up the window.
 	void repairBrowserProfileCookies({
 		stateDir: browserProfileStateDir(),
 		profileIds: browserProfileStore.profiles.map((profile) => profile.id),
@@ -1074,35 +924,20 @@ async function createWindowInternal(): Promise<void> {
 		title: app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`,
 		icon: windowIconPath(),
 		backgroundColor: NATIVE_WINDOW_BACKGROUND_DARK,
-		// Shown once the renderer has loaded (showWhenRendererLoaded below), so the
-		// first thing on screen is the app instead of an empty native frame.
 		show: false,
-		// Windows goes frameless and the renderer paints the whole titlebar,
-		// including custom min/max/close controls. macOS keeps the inset
-		// traffic-light chrome, and Linux uses standard frame decorations.
 		...(process.platform === "win32"
 			? {
 					titleBarStyle: "hidden" as const,
-					// Hide the native menu bar. A role-based menu is still installed (for
-					// accelerators) below; the visible menu is painted by WindowTitlebar.
 					autoHideMenuBar: true,
 				}
 			: process.platform === "linux"
 				? {
-						// Auto-hide the native menu bar strip. Accelerators stay active
-						// via the application menu; pressing Alt reveals the menu bar.
 						autoHideMenuBar: true,
 					}
 				: {
 						titleBarStyle: "hiddenInset" as const,
-						// Window transparency: an opaque window keeps Chromium's compositor
-						// opaque, hiding the vibrancy view. Transparent windows still paint
-						// the theme colour via setBackgroundColor unless window transparency
-						// is enabled in Appearance.
 						transparent: true,
-						// Keep the window-transparency blur vivid when the window loses focus.
 						visualEffectState: "active" as const,
-						// Center on the shared header; zoom/resize synchronization follows below.
 						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TRAFFIC_LIGHT_ROW_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
 					}),
 	};
@@ -1126,19 +961,9 @@ async function createWindowInternal(): Promise<void> {
 		quitConfirm.reset();
 		applyAppMenuAvailability({});
 	});
-	// A reload drops any open quit dialog, so the next ⌘Q should ask again.
 	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
-	// did-navigate is main-frame only, so an artifact iframe loading cannot clear this.
-	// The reloaded renderer reports availability again.
 	shellWebContents.on("did-navigate", () => applyAppMenuAvailability({}));
 
-	// On Windows the app paints its own title bar (WindowTitlebar), so the native
-	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
-	// installed so its accelerators keep working and act on the focused pane;
-	// setMenuBarVisibility(false) keeps the strip itself out of view. macOS gets
-	// an explicit menu so DevTools avoids Electron's unsafe built-in role; Linux
-	// installs the role-based menu so accelerators and guarded DevTools work,
-	// while autoHideMenuBar and setMenuBarVisibility(false) hide the menu strip.
 	if (process.platform === "win32") {
 		Menu.setApplicationMenu(buildWindowsAppMenu());
 		mainWindow.setMenuBarVisibility(false);
@@ -1149,9 +974,6 @@ async function createWindowInternal(): Promise<void> {
 		mainWindow.setMenuBarVisibility(false);
 	}
 
-	// Harden navigation: never let renderer/terminal content open in-app windows or
-	// navigate the privileged window away from the app origin. External links go to
-	// the OS browser. Keep this in place before exposing any daemon output to the renderer.
 	shellWebContents.setWindowOpenHandler(({ url }) => {
 		if (isAllowedAppExternalURL(url)) {
 			void shell.openExternal(url);
@@ -1167,15 +989,11 @@ async function createWindowInternal(): Promise<void> {
 
 	shellWebContents.on("will-frame-navigate", (event) => {
 		if (event.isMainFrame || !event.frame) return;
-		// The app moving its own frame (to the daemon's new port, or to an
-		// artifact's inline origin) is not the page navigating away.
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
 	});
 
-	// A cloud artifact frame's page can open another file of its session; the
-	// renderer follows it (the file's name, a refused link) by its URL.
 	shellWebContents.on("did-frame-navigate", (_event, url, httpResponseCode, _statusText, isMainFrame) => {
 		if (isMainFrame) return;
 		try {
@@ -1186,16 +1004,8 @@ async function createWindowInternal(): Promise<void> {
 		shellWebContents.send("cloudArtifact:frameNavigated", { url, status: httpResponseCode });
 	});
 
-	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
-	// computer and its network, as the render check's window does: they may
-	// load public addresses and their own files. A request is judged by the
-	// nearest agent page around its frame; the app's own pass untouched. Pages
-	// cannot start workers (their CSP has worker-src 'none'), whose requests
-	// carry no frame.
 	const blockedPageHosts = new Set<string>();
 	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
-		// Loading an agent page into a frame is always allowed: the page's own
-		// CSP sandboxes it, and it is judged by its own rule from then on.
 		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
 		let pageUrl: string | undefined;
 		try {
@@ -1203,7 +1013,6 @@ async function createWindowInternal(): Promise<void> {
 				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
 			}
 		} catch {
-			// The frame went away mid-request; nothing of its page is left to load.
 		}
 		if (!pageUrl) return callback({});
 		void agentPageRequestAllowed(details.url, pageUrl).then(
@@ -1228,13 +1037,9 @@ async function createWindowInternal(): Promise<void> {
 				chatDraftWindowCloseConfirmed ||
 				confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog))
 		) {
-			// Electron uses preventDefault here to ignore beforeunload and continue
-			// leaving.
 			event.preventDefault();
 			return;
 		}
-		// Doing nothing honors the renderer's request to stay, so a quit's close
-		// did not happen and AO keeps its Dock icon.
 		desktopQuit.windowCloseCanceled();
 	});
 
@@ -1253,9 +1058,6 @@ async function createWindowInternal(): Promise<void> {
 		if (chatDraftRisks.length > 0) chatDraftWindowCloseConfirmed = true;
 	});
 
-	// Application shortcuts are handled here so they fire no matter which web
-	// contents holds focus — the shell renderer, xterm's helper textarea, or a
-	// browser-preview view (wired per-view in the browser host).
 	const isMac = process.platform === "darwin";
 	if (!isDev) {
 		attachShellReloadGuard(
@@ -1286,8 +1088,6 @@ async function createWindowInternal(): Promise<void> {
 
 	browserViewHost = createBrowserViewHost({
 		onTabCloseFailure: createBrowserCloseDiagnostics(browserProfileStateDir(), app.getVersion()),
-		// Agent tabs: only a connected host's or a cloud session's own
-		// agent-browser viewer may report the remote page a Browser tab shows.
 		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
 		mainWindow,
 		shellWebContents,
@@ -1369,23 +1169,18 @@ async function createWindowInternal(): Promise<void> {
 		});
 	}
 
-	// Resizes fire per frame, so they only push what changed; show, restore,
-	// reload and zoom re-apply the native background in full.
 	const syncWindowChrome = (force = true) => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
 		syncNativeWindowBackground(force);
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
-	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
 	mainWindow.on("resize", () => syncWindowChrome(false));
 	mainWindow.on("show", () => syncWindowChrome());
 	mainWindow.on("restore", () => syncWindowChrome());
 	shellWebContents.on("did-finish-load", () => syncWindowChrome());
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
-	// Native fullscreen removes the traffic-light horizontal reserve, while
-	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
 		syncNativeWindowBackground(true);
@@ -1404,7 +1199,6 @@ async function createWindowInternal(): Promise<void> {
 	mainWindow.on("unmaximize", pushMaximized);
 	mainWindow.on("blur", () => {
 		keybindingRecordingActive = false;
-		// Leaving the app (switching apps, hiding, minimizing) finishes dictation.
 		dictation.stop();
 	});
 	shellWebContents.on("render-process-gone", () => {
@@ -1423,8 +1217,6 @@ async function createWindowInternal(): Promise<void> {
 
 	mainWindow.on("closed", () => {
 		lifecycleLog("main_window_closed");
-		// The snapshot window is a BaseWindow too: left open it would count as the app's last window,
-		// and the requests still queued must not open another one.
 		artifactSnapshotStore.cancel();
 		artifactSnapshotRenderer.close();
 		chatDraftRisks = [];
@@ -1442,9 +1234,6 @@ async function createWindowInternal(): Promise<void> {
 				console.error("AO: window teardown failed:", error);
 			});
 		mainWindow = null;
-		// Drop any pending dock bounce with the window it was attached to: its
-		// focus listener died with the window, so leaving the id set would make
-		// the next bounce skip attaching one to the replacement window.
 		cancelDockBounce();
 		trayLifecycle.clearPendingTarget();
 		desktopQuit.windowClosed();
@@ -1453,7 +1242,6 @@ async function createWindowInternal(): Promise<void> {
 
 function createWindow(): Promise<void> {
 	if (createWindowPromise) return createWindowPromise;
-	// A background quit hid the Dock icon; bring it back with the window.
 	void app.dock?.show();
 	const pending = createWindowInternal();
 	createWindowPromise = pending;
@@ -1477,15 +1265,9 @@ function resolveAgentBrowserBinaryPath(): string {
 		: path.join(app.getAppPath(), "agent-browser", binary);
 }
 
-// How long the supervisor waits for the daemon to confirm its bound port (via
-// the listen log line or running.json). A daemon that cannot confirm startup in
-// this window is reported with its captured output instead of being treated as
-// ready on an assumed port.
 const PORT_DISCOVERY_TIMEOUT_MS = 30_000;
 const DAEMON_RESTART_STOP_TIMEOUT_MS = 5_000;
 const RUN_FILE_POLL_MS = 300;
-// Accept run-files stamped slightly before our spawn timestamp: the daemon's
-// clock reading and ours race within normal scheduling jitter.
 const RUN_FILE_FRESHNESS_SKEW_MS = 2_000;
 const DAEMON_PROBE_TIMEOUT_MS = 2_000;
 
@@ -1501,11 +1283,9 @@ function editorStateDir(): string {
 	return path.dirname(runFile);
 }
 
-// Tagged so the renderer reads these as "couldn't check" rather than "the worktree is gone".
 const workspaceCheckUnavailable = (message: string) =>
 	Object.assign(new Error(message), { code: "SERVICE_UNAVAILABLE" });
 
-// Reads one absolute session path from the loopback-only desktop routes.
 async function fetchDesktopSessionPath(
 	sessionId: string,
 	route: "workspace" | "artifacts",
@@ -1518,7 +1298,6 @@ async function fetchDesktopSessionPath(
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
-		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
 		const response = await fetch(
 			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/${route}`,
 			{ signal: controller.signal },
@@ -1553,16 +1332,10 @@ function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
 	return fetchDesktopSessionPath(sessionId, "workspace", "workspacePath", "Session workspace is not available.");
 }
 
-// The daemon owns each session's artifact directory, which can live outside
-// this app's data dir when the daemon runs with its own AO_DATA_DIR.
 function resolveSessionArtifactDirForDesktop(sessionId: string): Promise<string> {
 	return fetchDesktopSessionPath(sessionId, "artifacts", "artifactDir", "This session has no artifacts folder yet.");
 }
 
-// A file's own OS handler may not be a browser (a PNG opens in Preview), so on
-// macOS and Windows the default https handler opens it; elsewhere, or when that
-// handler is unknown or fails to launch (a moved app, a stale handler), the
-// file's handler does.
 async function openFileInDefaultBrowser(filePath: string): Promise<void> {
 	if (process.platform === "darwin" || process.platform === "win32") {
 		const browser = await app.getApplicationInfoForProtocol("https://").catch(() => undefined);
@@ -1613,52 +1386,27 @@ const editorHandoff = createEditorHandoff({
 	logError: (message, error) => console.error(message, error),
 });
 
-// How long to wait for the login shell to print its env before giving up. A
-// misconfigured rc that blocks (or a slow nvm/pyenv chain) must not hang startup;
-// the daemon then falls back to the static PATH floor.
 const SHELL_ENV_TIMEOUT_MS = 3_000;
 
-// The login-shell env resolved once at startup (see docs/daemon-environment.md),
-// or null when the probe failed/timed out. Read synchronously by daemonEnv().
 let cachedShellEnv: Record<string, string> | null = null;
-// Memoize the in-flight resolution so concurrent/repeat awaits are cheap.
 let shellEnvPromise: Promise<void> | null = null;
 let terminalShellPreference: TerminalShellPreference = { ...DEFAULT_TERMINAL_SHELL };
 const configuredLoginShell = process.platform === "darwin" ? (os.userInfo().shell ?? undefined) : undefined;
 
-// Telemetry defaults stamped on the daemon env on every platform; explicit env
-// always wins.
-//
-// Unpackaged builds keep local event recording but never export to PostHog: a
-// dev loop or a CI job driving the real app would otherwise bill production
-// events and inflate install/DAU counts. Set AO_TELEMETRY_REMOTE explicitly to
-// exercise the export path from a dev build.
 function telemetryOverrides(): Record<string, string> {
 	return {
 		AO_TELEMETRY_EVENTS: process.env.AO_TELEMETRY_EVENTS ?? "on",
 		AO_TELEMETRY_REMOTE: process.env.AO_TELEMETRY_REMOTE ?? (isDev ? "off" : "posthog"),
 		AO_TELEMETRY_POSTHOG_KEY: process.env.AO_TELEMETRY_POSTHOG_KEY ?? DEFAULT_POSTHOG_PROJECT_KEY,
 		AO_TELEMETRY_POSTHOG_HOST: process.env.AO_TELEMETRY_POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST,
-		// Daemon-side Sentry (5xx + panics with Go stacks). Stamped on the daemon
-		// env so the spawned daemon inherits the DSN; off in dev and in any copy
-		// that is not a published stable or nightly build, and an explicit env
-		// always wins. A blank value leaves the daemon's Sentry a no-op.
 		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(), isDev),
-		// The daemon binary has no version of its own that release tooling sets,
-		// so without this every daemon event lands unattributable to a release.
 		AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
-		// Kill switch: forwarded so a noisy stream can be silenced by env on an
-		// install that already exists, without shipping a new build.
 		...(process.env.AO_TELEMETRY_DISABLED_EVENTS
 			? { AO_TELEMETRY_DISABLED_EVENTS: process.env.AO_TELEMETRY_DISABLED_EVENTS }
 			: {}),
 	};
 }
 
-// Run the user's login shell to dump its env. stdin is ignored so an rc that
-// reads input hits EOF instead of hanging; stderr is ignored to drop banner
-// noise. Never rejects: resolves null on spawn error, non-zero exit, or timeout
-// (SIGKILLed), so the caller degrades to the static PATH floor.
 const loginShellRunner = (timeoutMs: number): ShellRunner => (shellPath, args) =>
 	new Promise((resolve) => {
 		let settled = false;
@@ -1679,7 +1427,6 @@ const loginShellRunner = (timeoutMs: number): ShellRunner => (shellPath, args) =
 			finish(null);
 		}, timeoutMs);
 		let stdout = "";
-		// stdout may be typed Readable | null under this stdio config; guard it.
 		child.stdout?.on("data", (chunk: Buffer) => {
 			stdout += chunk.toString("utf8");
 		});
@@ -1711,9 +1458,6 @@ function lookupWindowsExecutable(candidate: string): string | null {
 	return null;
 }
 
-// Resolve the login-shell env once and cache it. On Windows the selected
-// terminal shell is used for the probe too, so shell profiles and PATH exports
-// stay consistent between standalone terminals and daemon startup.
 function ensureShellEnv(): Promise<void> {
 	if (!shellEnvPromise) {
 		if (process.platform === "win32") {
@@ -1743,9 +1487,6 @@ function ensureShellEnv(): Promise<void> {
 	return shellEnvPromise;
 }
 
-// The early probe runs while Electron itself is starting, the busiest moment
-// of launch. If it failed there, probe once more before settling for a bare
-// PATH. Every caller resolves after that one retry, whichever of them starts it.
 function retryFailedEarlyShellEnvProbe(): Promise<void> {
 	if (!cachedShellEnv && earlyShellEnvProbe && shellEnvPromise === earlyShellEnvProbe) {
 		earlyShellEnvProbe = null;
@@ -1754,27 +1495,13 @@ function retryFailedEarlyShellEnvProbe(): Promise<void> {
 	return ensureShellEnv();
 }
 
-// The daemon spawn waits on this probe (0.2-2s), so start it with the process
-// rather than after the window opens. Windows probes the shell chosen in UI
-// settings, which are not loaded yet, so it still starts with the daemon.
 let earlyShellEnvProbe: Promise<void> | null = null;
 if (process.platform !== "win32") {
 	earlyShellEnvProbe = ensureShellEnv();
 	earlyShellEnvProbe.catch(() => undefined);
 }
 
-// One id per app launch, minted eagerly so every daemon spawn in this process
-// (including supervisor restarts) reports the same run. An explicit
-// AO_APP_RUN_ID in the environment wins, which lets a test or a wrapper pin it.
 const appRunId = process.env.AO_APP_RUN_ID ?? `apprun-${randomUUID()}`;
-// The browser runtime token identifies this app to the daemon's runtime broker.
-// It is derived from an owner-only key in the data dir so it survives an app
-// restart: a daemon kept alive by AO_KEEP_DAEMON (or adopted under a pinned
-// AO_APP_RUN_ID) outlives the launch that spawned it, and a per-launch token left
-// that daemon permanently unable to authenticate this app. Falls back to a
-// per-launch token when the key cannot be persisted, which restores the old
-// behavior — the daemon is replaced instead of adopted — rather than failing to
-// start.
 const browserRuntimeToken = (() => {
 	try {
 		return resolveBrowserRuntimeToken(desktopDataDir);
@@ -1815,15 +1542,6 @@ async function ensureBundledTmuxStaged(): Promise<void> {
 }
 
 function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv {
-	// AO_OWNER is the daemon's durable spawn-mode record: the daemon writes it
-	// into running.json and the attach path reads it to decide the supervisor
-	// link from the daemon's own state (not this Electron process's env, which
-	// differs across launches). A keep-alive daemon is "persistent" (never
-	// re-linked, survives app quit); a normal app-owned daemon is "app";
-	// headless `ao start` sets none (stays unlinked, persistent by default).
-	//
-	// AO_APP_RUN_ID scopes temporary command/auth terminals to this app launch.
-	// User-opened shells remain attachable across launches while their PTYs live.
 	const AO_OWNER = forceKeep ? "persistent" : "app";
 	const bundledTmuxBinary = stagedBundledTmuxBinary;
 	const ownerTag = {
@@ -1833,35 +1551,19 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
         ...(process.platform === "darwin" ? { AO_WAKE_HELPER: app.isPackaged
             ? path.join(process.resourcesPath, "wake-helper", "ao-wake")
             : path.join(app.getAppPath(), "wake-helper", "ao-wake") } : {}),
-		// The browser runtime token is handed over through the child's private
-		// stdin pipe below. Never put it in the daemon environment, where a
-		// same-UID worker could inspect the parent process, and never in argv.
-		// It is derived from an owner-only key in the data dir so an app restart
-		// can still authenticate a kept-alive daemon it adopts.
 		AO_BROWSER_RUNTIME_TOKEN: "",
 		AO_BROWSER_RUNTIME_TOKEN_STDIN: "1",
-		// Under AppImage, APPIMAGE is the stable outer .AppImage file path (the
-		// FUSE mount in executablePath is random per launch). The daemon echoes
-		// it as appImagePath in /healthz|/readyz so the identity check can
-		// recognise its own daemon across a relaunch-to-update.
 		...(process.env.APPIMAGE ? { AO_APPIMAGE: process.env.APPIMAGE } : {}),
-		// Claude Code Chat uses AO's packaged ACP adapter + Node runtime. The
-		// provider executable itself is resolved by the daemon from the user's PATH
-		// and passed through CLAUDE_CODE_EXECUTABLE; it is not part of this resource.
 		AO_ACP_RUNTIME_DIR:
 			process.env.AO_ACP_RUNTIME_DIR ??
 			(app.isPackaged
 				? path.join(process.resourcesPath, "acp-runtime")
 				: path.join(app.getAppPath(), "resources", "acp-runtime")),
 		...(bundledTmuxBinary ? { AO_TMUX_BINARY: bundledTmuxBinary, AO_TMUX_SOCKET_NAME: "ao" } : {}),
-		// The packaged macOS app ships cloudflared, so turning on remote access
-		// never waits for an install. An explicit AO_CLOUDFLARED_PATH still wins.
 		...(app.isPackaged && process.platform === "darwin"
 			? { AO_CLOUDFLARED_PATH: process.env.AO_CLOUDFLARED_PATH ?? path.join(process.resourcesPath, "cloudflared", "cloudflared") }
 			: {}),
 	};
-	// In dev mode, inject isolation defaults so the dev daemon never collides with
-	// the installed app. User-set env vars take priority (checked first).
 	const devExtras: Record<string, string> = {};
 	if (isDev) {
 		if (!process.env.AO_PORT) devExtras.AO_PORT = String(DEV_DAEMON_PORT);
@@ -1872,8 +1574,6 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 			rendererUrl(),
 		);
 	}
-	// Windows keeps its native environment semantics while overlaying values
-	// exported by the selected login-shell probe.
 	if (process.platform === "win32") {
 		return { ...process.env, ...(cachedShellEnv ?? {}), ...devExtras, ...telemetryOverrides(), ...ownerTag };
 	}
@@ -1899,7 +1599,6 @@ async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Pr
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
-		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
 		const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, { signal: controller.signal });
 		if (!response.ok) return null;
 		return parseDaemonProbe(endpoint, await response.json());
@@ -1934,17 +1633,6 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 	return null;
 }
 
-/**
- * Establish (or re-establish) the OS-native liveness link to the daemon's
- * supervisor socket. Holding this connection keeps the daemon alive: when
- * Electron exits completely (tray quit, crash, SIGKILL), the OS closes the fd
- * and the daemon detects EOF, then self-stops after its ~5s grace period.
- *
- * Called unconditionally on the spawn path (we always own that daemon).
- * Called on the attach path only when the daemon is app-owned (owner === "app");
- * headless `ao start` daemons stay unlinked so they remain persistent after
- * app quit.
- */
 function supervisorPipeFromRunFile(rfp: string | null): string {
 	if (!rfp) return "\\\\.\\pipe\\ao-supervise";
 	const dir = path.basename(path.dirname(rfp));
@@ -1968,8 +1656,6 @@ function publishBrowserRuntimeState(state: BrowserRuntimeState): void {
 	getShellWebContents()?.send("browser:runtimeState", state);
 }
 
-// A replacement link reports "connecting" itself, so dropping the old one first
-// does not flash a disconnect in the Browser panel.
 function reconnectBrowserRuntimeLink(): void {
 	dropBrowserRuntimeLink();
 	establishBrowserRuntimeLink();
@@ -1987,7 +1673,6 @@ function establishBrowserRuntimeLink(): void {
 	try {
 		runInfo = parseRunFile(readFileSync(rfp, "utf8"));
 	} catch {
-		// Daemon readiness will retry this after running.json becomes readable.
 	}
 	const address = runInfo?.browserRuntimeAddress;
 	if (!address) {
@@ -2008,9 +1693,6 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
-			// A render check or measure uses its own hidden offscreen window,
-			// never the main window or the session's Browser panel, so it does
-			// not need (or disturb) the view host.
 			if (command.action === "__render-check") {
 				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
 			}
@@ -2032,13 +1714,6 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLinkIdentity = identity;
 }
 
-/**
- * A daemon we only adopted holds the runtime token of the launch that started it,
- * so an `invalid-token` refusal is permanent for this launch: retrying cannot
- * help, and the browser panel stays unusable. Retire that daemon and start our
- * own, which is handed the current token. Bounded to one attempt per launch by
- * browserRuntimeRecoveryDecision.
- */
 function handleBrowserRuntimeRejection(reason: string): void {
 	if (daemonAutoRestartStandDown) return;
 	const decision = browserRuntimeRecoveryDecision({
@@ -2211,17 +1886,11 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
-// keepAlive carries a failed launch's captured keep-alive choice into its retry.
 async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent; trigger?: DaemonStartTrigger; keepAlive?: boolean } = {}): Promise<DaemonStatus> {
 	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
 		daemonStartEpoch += 1;
 		daemonStartPromise = null;
 	}
-	// Sticky, not a parameter of the in-flight call: the renderer's first
-	// daemon.getStatus() can attach while boot is still awaiting the shell
-	// environment, so a forced replacement requested in that window must be
-	// honored by the startup already running instead of being dropped by the
-	// memoized promise. startDaemonInner reads it at each attach decision.
 	if (options.forceReplaceAdopted) {
 		forceReplaceAdoptedRequested = true;
 	}
@@ -2241,9 +1910,6 @@ async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestart
 	return daemonStartPromise;
 }
 
-// The port this Electron instance expects the daemon to bind. In dev mode a
-// separate port isolates the dev daemon from the installed-app daemon.
-// AO_PORT always wins if set explicitly.
 function resolvedDaemonPort(): number {
 	return isDev && !process.env.AO_PORT ? DEV_DAEMON_PORT : expectedDaemonPort(process.env);
 }
@@ -2264,15 +1930,10 @@ function daemonLaunchEnv(): NodeJS.ProcessEnv {
 			}
 		}
 	} catch {
-		// Fall back to the legacy fixed dev path; build-daemon writes the manifest.
 	}
 	return process.env;
 }
 
-// `npm run dev` builds resources/acp-runtime in predev, but a cache cleaner or a
-// plain `electron .` launch can leave it missing and every chat resume then fails
-// with "entrypoint ... no such file". Rebuild it here. The script is idempotent
-// and a no-op when the runtime is intact. Dev only: a packaged runtime is signed.
 async function repairDevAcpRuntime(): Promise<void> {
 	if (app.isPackaged || process.env.AO_ACP_RUNTIME_DIR) return;
 	const runtimeDir = path.join(app.getAppPath(), "resources", "acp-runtime");
@@ -2310,7 +1971,6 @@ async function repairDevAcpRuntime(): Promise<void> {
 }
 
 async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAutoRestartIntent | undefined, trigger: DaemonStartTrigger, keepAliveOverride?: boolean): Promise<DaemonStatus> {
-	// Once quit is past its point of no return, no start of any kind may spawn.
 	const startCancelled = () => startEpoch !== daemonStartEpoch || browserQuitRequested ||
 		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
 	if (daemonProcess) {
@@ -2322,14 +1982,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		return daemonStatus;
 	}
 
-	// Single chokepoint: make sure the login-shell env is resolved before the
-	// daemon is spawned, so a Finder/Dock launch hands the daemon a real PATH and
-	// shell-exported credentials rather than launchd's minimal env. The probe
-	// spawns the user's login shell (0.2-2s with a heavy profile) and only feeds
-	// the spawn env, so start it now but only wait for it when we actually spawn:
-	// attaching to a running daemon (the common relaunch) no longer waits on it.
 	const shellEnvReady = ensureShellEnv();
-	// Attach paths return without awaiting it; keep a rejection observed there.
 	shellEnvReady.catch(() => undefined);
 
 	const launch = resolveDaemonLaunch(
@@ -2382,9 +2035,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			}
 		} else {
 			setDaemonStatus(existing.status);
-			// Re-link the supervisor only when attaching to an app-owned daemon (one we
-			// previously spawned). Headless `ao start` daemons (owner unset) stay unlinked
-			// so they remain persistent after app quit.
 			if (shouldLinkOnAttach(existing.owner)) {
 				establishSupervisorLink();
 			}
@@ -2392,14 +2042,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 
-	// Defensive: inspectExistingDaemon only attaches when the run-file agrees with
-	// a live daemon. Any divergence (missing/stale/unparseable run-file, dead PID,
-	// health.pid mismatch) makes it return null — yet a daemon may still be serving
-	// the port. Spawning then would just make the Go child refuse and exit 1. Probe
-	// the expected port directly, independent of the run-file, and attach if a
-	// daemon answers. The expected port (AO_PORT or the default) is exactly the
-	// port the Go child would bind and collide on — probing a hardcoded 3001 would
-	// miss an AO_PORT override.
 	const directDaemon = await resolveDaemonFromPort({
 		expectedPort: resolvedDaemonPort(),
 		probe: readDaemonProbe,
@@ -2412,13 +2054,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		if (autoRestartIntent) return daemonStatus;
 		let portAttachOwner: string | undefined;
 		let portAttachAppRunId: string | undefined;
-		// Re-link iff the daemon is app-owned. Read the run-file for the owner tag;
-		// if unavailable (run-file absent or unreadable), treat as headless and skip.
-		// ponytail: narrow TOCTOU here (the port was probed live, then the run-file
-		// is read separately), so in theory a headless daemon could have replaced an
-		// app-owned one in the gap. Acceptable: the window is tiny, the worst case is
-		// linking a headless daemon, and establishSupervisorLink disposes any prior
-		// link so nothing leaks.
 		const rfp = runFilePath();
 		if (rfp) {
 			try {
@@ -2426,7 +2061,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				portAttachOwner = info?.owner;
 				portAttachAppRunId = info?.appRunId;
 			} catch {
-				// run-file absent or unreadable: treat as headless, skip link.
 			}
 		}
 		const ownership = browserDaemonOwnershipDecision(appRunId, {
@@ -2463,7 +2097,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 
-	// Every path from here spawns a daemon, which needs the login-shell env.
 	await shellEnvReady;
 	if (startCancelled()) {
 		return daemonStatus;
@@ -2473,18 +2106,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		return daemonStatus;
 	}
 
-	// Wedged-orphan kill+replace: both attach paths returned null, but a process
-	// may still be holding the port: a hung daemon that bound it and then stopped
-	// answering /healthz (e.g. one that deadlocked), or one that started answering
-	// since the checks above. A run-file PID that is merely alive is not enough to
-	// signal: after a crash or reboot the OS hands that PID to an unrelated
-	// process, so portHolderPidToReplace names only a daemon it can identify. Two
-	// cases are intentionally NOT handled: an identity-mismatched but healthy AO
-	// daemon is already surfaced as an error status upstream by
-	// resolveDaemonFromPort (not killed here), and a foreign non-AO process holding
-	// the port is not replaced (out of scope). When no holder is identified, skip
-	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
-	// process that is left alone is logged below.
 	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
 	const runFilePath_ = runFilePath();
 	let runFile: ReturnType<typeof parseRunFile> = null;
@@ -2492,7 +2113,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		try {
 			runFile = parseRunFile(await readFile(runFilePath_, "utf8"));
 		} catch {
-			// run-file absent or unreadable; proceed without a PID.
 		}
 	}
 	if (startCancelled() || (autoRestartIntent && orphanProbe)) return daemonStatus;
@@ -2501,8 +2121,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		runFile,
 		processStartMs: readProcessStartMs,
 	});
-	// Declining to signal is otherwise silent, so say why a live process named by
-	// running.json is left alone (a hung daemon that is not replaced shows up here).
 	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
 		console.warn(`AO: not stopping process ${runFile.pid} named by running.json: ${holder.reason}`);
 		lifecycleLog("daemon_port_holder_left_alone", { trigger, pid: runFile.pid, healthz: orphanProbe ? "answering" : "silent", reason: holder.reason });
@@ -2522,10 +2140,8 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			try {
 				process.kill(holderPid, "SIGTERM");
 			} catch {
-				// process already gone; proceed
 			}
 		}
-		// Poll until the port is free (probe returns null) or 8 s elapses.
 		const TAKEOVER_TIMEOUT_MS = 8_000;
 		const TAKEOVER_POLL_MS = 200;
 		const deadline = Date.now() + TAKEOVER_TIMEOUT_MS;
@@ -2534,7 +2150,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			if (!still) break;
 			await new Promise<void>((r) => setTimeout(r, TAKEOVER_POLL_MS));
 		}
-		// Remove the stale run-file so the new daemon can write a fresh one.
 		if (runFilePath_) {
 			await rm(runFilePath_, { force: true });
 		}
@@ -2568,10 +2183,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			await mkdir(launch.cwd, { recursive: true, mode: 0o750 });
 		} catch (err) {
 			if (autoRestartIntent && startCancelled()) return daemonStatus;
-			// A failure here (home unwritable, launch.cwd exists as a file) would
-			// otherwise reject out of startDaemonInner; boot calls this via
-			// `void startDaemon()`, so it would surface as an unhandled rejection
-			// and leave the UI stuck on "starting". Report it as a failure instead.
 			setDaemonStatus({
 				state: "error",
 				message: `Could not create the Orchestrator data directory at ${launch.cwd}: ${(err as Error).message}`,
@@ -2580,10 +2191,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			return daemonStatus;
 		}
 	}
-	// Plan before the restart-marker check and before any descriptor is opened
-	// below: planning awaits, so the marker read and cancellation checks that
-	// follow must be the last awaits before spawn, and a stop or newer start
-	// during the wait must not leave anything to clean up.
 	const isolation = await planDaemonSpawnIsolation(launch);
 	if (startCancelled()) return daemonStatus;
 	const spawnLaunch = isolation.kind === "scope" ? isolation.launch : launch;
@@ -2593,25 +2200,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	}
 	if (startCancelled()) return daemonStatus;
 
-	// Capture the spawned handle locally so the async lifecycle listeners act only
-	// on THIS process. Without this, a stale exit from an already-stopped daemon
-	// could null out a newer daemonProcess started in the meantime, orphaning it.
-	//
-	// `detached` makes the child its own process-group leader. Because shell:true
-	// runs the command through /bin/sh, a plain kill() would only signal the shell
-	// wrapper and orphan the real daemon (which keeps holding the port). Killing
-	// the whole group via killDaemon() reaches the daemon and any PTY children.
-	//
-	// AO_KEEP_DAEMON: the daemon must survive this app, so it cannot inherit
-	// Electron-owned stdout/stderr pipes — when Electron exits, the pipe read
-	// ends close and the daemon's next stderr log write (SIGPIPE/EPIPE) kills it,
-	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
-	// child so the parent does not wait on it. Port discovery then relies on the
-	// running.json handshake (the log pipe scan is skipped).
 	const keep = autoRestartIntent?.keepAlive ?? keepAliveOverride ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
-	// We are about to own the daemon and hand it this launch's runtime token, so
-	// any forced replacement has been honored and must not leak into a later
-	// startup in this process.
 	forceReplaceAdoptedRequested = false;
 	let keepDaemonLogFd: number | undefined;
 	let stdio: "pipe" | "ignore" | ["pipe", number | "ignore", number | "ignore"] = "pipe";
@@ -2621,9 +2210,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			keepDaemonLogFd = openSync(logPath, "a");
 			stdio = ["pipe", keepDaemonLogFd, keepDaemonLogFd];
 		} catch {
-			// Log redirect failed (e.g. ~/.ao not creatable, permission denied):
-			// fall back to "ignore" so the daemon still runs, but warn — otherwise
-			// a long-lived keep-alive daemon would run with zero log output.
 			console.warn(`AO: keep-daemon log redirect failed; daemon will run with stdio disabled: ${logPath}`);
 			keepDaemonLogFd = undefined;
 			stdio = ["pipe", "ignore", "ignore"];
@@ -2644,17 +2230,14 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			env: daemonEnv(keep),
 			shell: launch.shell,
 			detached: true,
-			// Hide the daemon's console on a Windows GUI launch (no flashing terminal).
 			windowsHide: true,
 			stdio,
 		});
 	} catch (err) {
-		// spawn can throw synchronously for invalid args; don't leak the log fd.
 		if (keepDaemonLogFd !== undefined) {
 			try {
 				closeSync(keepDaemonLogFd);
 			} catch {
-				// best-effort — the throw below is the real error
 			}
 		}
 		lifecycleLog("daemon_spawn_failed", { trigger, stage: "spawn" }, err);
@@ -2664,20 +2247,13 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		? applyDaemonOomScoreAdj(child.pid, isolation.adjustment)
 		: undefined;
 	lifecycleLog("daemon_spawned", { trigger, daemonPid: child.pid ?? null, keepAlive: keep, oomScoreAdj });
-	// The child inherited its own copy of the log fd via stdio at spawn time;
-	// close the parent's copy now so each keep-alive start/stop cycle does not
-	// accumulate open descriptors until the process limit.
 	if (keepDaemonLogFd !== undefined) {
 		try {
 			closeSync(keepDaemonLogFd);
 		} catch {
-			// best-effort — the child still holds its inherited copy
 		}
 		keepDaemonLogFd = undefined;
 	}
-	// daemonEnv deliberately contains only a marker. Deliver the actual token
-	// over the inherited pipe, then close it; Go does not pass this descriptor to
-	// worker processes when it spawns them.
 	if (child.stdin) {
 		child.stdin.on("error", () => undefined);
 		child.stdin.end(`${browserRuntimeToken}\n`);
@@ -2688,10 +2264,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	daemonProcess = child;
 	daemonAutoRestartStandDown = false;
 
-	// Discover the port the daemon ACTUALLY bound rather than trusting AO_PORT:
-	// the daemon may fall back to a different port than the one requested. Two
-	// confirmed sources race — the "daemon listening" slog line (stderr, but both
-	// streams are scanned) and the running.json handshake — first one wins.
 	const spawnedAtMs = Date.now();
 	let portConfirmed = false;
 	let runFileTimer: ReturnType<typeof setInterval> | undefined;
@@ -2710,40 +2282,18 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		stopDiscovery();
 		lifecycleLog("daemon_ready", { daemonPid: child.pid ?? null, port, startupMs: Date.now() - spawnedAtMs });
 		setDaemonStatus({ state: "ready", port, pid: child.pid });
-		// The renderer opens event streams on a *.localhost name only while the
-		// daemon also serves [::1] at this port; its probe says whether it does.
 		void readDaemonProbe(port, "healthz").then((probe) => {
 			if (probe?.ipv6Loopback !== true || probe.pid !== child.pid) return;
 			if (daemonStatus.state !== "ready" || daemonStatus.port !== port || daemonStatus.pid !== child.pid) return;
-			// The same attachment, so only the renderer's copy changes.
 			daemonStatus = { ...daemonStatus, ipv6Loopback: true };
 			getShellWebContents()?.send("daemon:status", daemonStatus);
 		});
 
-		// Establish the OS-native liveness link on the spawn path (we own this
-		// daemon). Holding the connection keeps the daemon alive; when Electron
-		// exits for any reason, the OS closes the fd and the daemon detects EOF,
-		// then self-stops after its ~5s grace period. The attach paths link only
-		// when the daemon is app-owned (see establishSupervisorLink +
-		// shouldLinkOnAttach); headless `ao start` daemons stay unlinked so they
-		// remain persistent across app quit.
-		//
-		// AO_KEEP_DAEMON opts out of the link entirely: the daemon is spawned but
-		// survives the window closing, stopping only on an explicit `ao stop`.
-		// Reuse the `keep` captured at spawn rather than re-reading process.env
-		// here: the flag is a property of this spawn, not a value that should be
-		// able to flip between spawn and port-confirmation. (The process.on("exit")
-		// orphan-cleanup below re-reads process.env because this `keep` is scoped
-		// to the spawn function — AO_KEEP_DAEMON is set once at startup and never
-		// mutated, so both reads agree.)
 		if (!keep) {
 			establishSupervisorLink();
 		}
 	};
 
-	// One scanner per stream: each keeps its own partial-line buffer.
-	// Skipped under AO_KEEP_DAEMON: stdio is redirected to a log file (no pipes
-	// to scan), so port discovery falls back to the running.json handshake below.
 	if (!keep) {
 		const scanStdout = createListenPortScanner(reportBoundPort);
 		const scanStderr = createListenPortScanner(reportBoundPort);
@@ -2769,25 +2319,16 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			readFile(handshakePath, "utf8")
 				.then((contents) => {
 					const info = parseRunFile(contents);
-					// Ignore a stale handshake left by a previous daemon: only trust a
-					// file written at/after this spawn.
 					if (info && info.startedAtMs >= spawnedAtMs - RUN_FILE_FRESHNESS_SKEW_MS) {
 						reportBoundPort(info.port);
 					}
 				})
-				.catch(() => undefined); // absent until the daemon binds; keep polling
+				.catch(() => undefined);
 		}, RUN_FILE_POLL_MS);
 	}
 
-	// Neither source confirmed startup yet. The child is still alive and both
-	// discovery mechanisms remain active, so surface this as slow progress rather
-	// than a failure. A later listen line or running.json handshake still moves
-	// the same launch to ready.
 	fallbackTimer = setTimeout(() => {
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
-		// Keep running.json polling alive after surfacing slow startup. In
-		// keep-daemon mode there are no stdout/stderr scanners, so the run file is
-		// the only way a slow-but-successful boot can still recover to ready.
 		fallbackTimer = undefined;
 		lifecycleLog("daemon_port_unconfirmed", { daemonPid: child.pid ?? null, waitedMs: Date.now() - spawnedAtMs });
 		setDaemonStatus(slowDaemonStartupStatus({
@@ -2827,11 +2368,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		});
 		if (daemonProcess !== child) return;
 		daemonProcess = null;
-		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
-		// daemon-telemetry reports any status carrying a `code` as
-		// ao.renderer.daemon_failure, so don't stamp `code: "exited"` on a stop
-		// the user or app asked for — that would count intentional stops as
-		// failures. Preserve the clean stopped status instead.
 		if (daemonStoppingProcess === child) {
 			daemonStoppingProcess = null;
 			if (daemonRestartAfterExitProcess === child) {
@@ -2843,9 +2379,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			setDaemonStatus({ state: "stopped" });
 			return;
 		}
-		// A scoped launch that exits with a code before it is ready may be
-		// systemd-run failing (user manager gone, slice or property refused):
-		// stop using the scope for this run and retry once without it.
 		if (isolation.kind === "scope" && !portConfirmed && signal === null && !browserQuitRequested && !daemonScopeLaunchFailed) {
 			daemonScopeLaunchFailed = true;
 			lifecycleLog("daemon_restart_decision", {
@@ -2856,8 +2389,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				cause: "scope_launch_failed",
 				fallback: "oom_score_adj",
 			});
-			// Keep the originating automatic-restart intent (its marker check and
-			// safeguards) and this launch's keep-alive choice.
 			void startDaemonForRestart(autoRestartIntent, "scope_fallback", keep);
 			return;
 		}
@@ -2911,11 +2442,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	return daemonStatus;
 }
 
-// Opt-in Linux isolation (AO_DAEMON_SCOPE=systemd): see linux-daemon-scope.ts.
-// The systemd-run probe runs at most once per app run.
 let daemonScopeProbe: Promise<boolean> | null = null;
-// Set when a scoped daemon exits before it is ready; later starts in this run
-// use the oom_score_adj fallback even though the cached probe succeeded.
 let daemonScopeLaunchFailed = false;
 function planDaemonSpawnIsolation(launch: DaemonLaunchSpec): Promise<DaemonScopePlan> {
 	return planDaemonScope(launch, {
@@ -2943,10 +2470,6 @@ function applyDaemonOomScoreAdj(pid: number, adjustment: number): number | null 
 	});
 }
 
-// Signal the daemon's whole process group so the kill reaches the real daemon
-// behind the /bin/sh wrapper (and any PTY children it forked), not just the
-// shell. Falls back to a direct kill if the group signal can't be delivered
-// (e.g. the process already exited).
 function killDaemon(child: ChildProcess): void {
 	if (child.pid === undefined) return;
 	try {
@@ -2970,9 +2493,6 @@ function daemonAutoRestartMarkerMatches(intent: DaemonAutoRestartIntent, runFile
 	return intent.runFilePresent ? runFile.present && runFile.pid === intent.crashedPid : !runFile.present;
 }
 
-// Cancel a pending auto-restart and forget the recent-exit window. Called when
-// the user (or the app) deliberately changes daemon state, so a stale respawn
-// cannot race an explicit stop/restart or fire during shutdown.
 function cancelDaemonAutoRestart(): void {
 	daemonAutoRestartGeneration += 1;
 	if (daemonAutoRestartTimer !== null) {
@@ -2996,8 +2516,6 @@ function scheduleDaemonAutoRestart(
 	const { plan, recentExits } = planDaemonAutoRestart(daemonAutoRestartExits, Date.now());
 	daemonAutoRestartExits = recentExits;
 	daemonAutoRestartTimer = null;
-	// Written before the timer is armed, so the reason exists even if the app
-	// dies during the backoff or the respawn itself.
 	lifecycleLog("daemon_restart_decision", {
 		...observed,
 		cause: "ungraceful_exit",
@@ -3056,8 +2574,6 @@ function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	daemonStartAutoRestartIntent = undefined;
-	// An explicit stop (or a newer restart request) cancels any deferred restart
-	// left waiting for a previously slow child to exit.
 	daemonRestartAfterExitProcess = null;
 	cancelDaemonAutoRestart();
 	if (!daemonProcess) {
@@ -3067,9 +2583,6 @@ function stopDaemon(): DaemonStatus {
 
 	daemonStoppingProcess = daemonProcess;
 	lifecycleLog("daemon_stop_requested", { daemonPid: daemonProcess.pid ?? null });
-	// Drop the liveness link: an explicit stop is not a frontend death, so stop
-	// holding the socket open (and stop the reconnect loop retrying a dead daemon).
-	// A later daemon:start re-establishes the link via reportBoundPort.
 	supervisorLink?.dispose();
 	supervisorLink = null;
 	disposeBrowserRuntimeLink();
@@ -3099,7 +2612,6 @@ async function startDaemonForRestart(autoRestartIntent?: DaemonAutoRestartIntent
 
 async function restartDaemon(): Promise<DaemonStatus> {
 	daemonAutoRestartStandDown = false;
-	// A manual restart supersedes any pending automatic respawn.
 	cancelDaemonAutoRestart();
 	const child = daemonProcess;
 	lifecycleLog("daemon_restart_decision", { daemonPid: child?.pid ?? null, decision: "restart", cause: "user_requested" });
@@ -3121,14 +2633,8 @@ async function restartDaemon(): Promise<DaemonStatus> {
 	});
 
 	stopDaemon();
-	// Register the deferred intent immediately after signaling the child. The
-	// exit can race the five-second UI timeout, so waiting until after the
-	// timeout to set this would occasionally miss the only exit event.
 	daemonRestartAfterExitProcess = child;
 	if (!(await exited)) {
-		// The process may still honor SIGTERM after the UI timeout. Keep the
-		// restart intent attached to that exact child so its eventual exit starts
-		// a replacement instead of collapsing back to a code-less stopped state.
 		setDaemonStatus({
 			state: "error",
 			message: "Orchestrator daemon is still stopping. It will restart automatically when shutdown completes.",
@@ -3197,9 +2703,6 @@ ipcMain.handle("daemon:restart", async () => {
 });
 async function captureSideChatState(): Promise<void> {
 	const generation = daemonAttachmentGeneration;
-	// A verified OPEN side can accept a draft/receipt while an unrelated
-	// restore is rejected. Its capture must share the coverage-aware queue
-	// with close operations rather than wait for full-launch readiness.
 	const { attachment } = await sideLaunchRecovery.captureForClose();
 	if (generation !== daemonAttachmentGeneration || !sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
 }
@@ -3283,14 +2786,8 @@ ipcMain.handle("app:openChromeExtensions", () =>
 	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
 );
 
-// Docks under System Settings while Cua Driver's or Orchestrator's own
-// permissions are missing. It is a non-activating, always-on-top panel so
-// System Settings keeps focus; its only script is a preload that turns a drag
-// of the app tile into a native file drag, and its links are intercepted here.
 let privacyGuideContents: WebContents | undefined;
 const privacyGuideIcons = new Map<string, Electron.NativeImage>();
-// Orchestrator's own bundle; a dev build runs from Electron.app, which macOS
-// then charges for its sessions instead.
 function orchestratorApp(): PrivacyGuideApp | undefined {
 	const bundle = appBundlePath(process.execPath);
 	return bundle ? { name: app.getName(), path: bundle } : undefined;
@@ -3316,7 +2813,6 @@ const privacyGuide = new PrivacyGuide({
 		});
 		window.setAlwaysOnTop(true, "floating");
 		window.setVisibleOnAllWorkspaces(true);
-		// Kept from here: a closed window's webContents getter throws.
 		const contents = window.webContents;
 		contents.setWindowOpenHandler(() => ({ action: "deny" }));
 		privacyGuideContents = contents;
@@ -3341,8 +2837,6 @@ const privacyGuide = new PrivacyGuide({
 	},
 	openExternal: (url) => openAllowedAppExternalURL(url, shell),
 	appFor: (target) => (target === "orchestrator" ? orchestratorApp() : { name: "CuaDriver", path: CUA_DRIVER_APP_PATH }),
-	// Quick Look renders the app's real icon at a crisp size; getFileIcon only
-	// offers a 32px generic placeholder for it on macOS.
 	readIcon: async (appPath) => {
 		const icon = await nativeImage.createThumbnailFromPath(appPath, { width: 128, height: 128 }).catch(() => undefined);
 		const image = icon && !icon.isEmpty() ? icon : await app.getFileIcon(appPath, { size: "normal" });
@@ -3358,16 +2852,12 @@ const privacyGuide = new PrivacyGuide({
 	},
 	ownPid: process.pid,
 });
-// Dropping the app on a System Settings privacy list adds it there.
 ipcMain.on("privacyGuide:startDrag", (event) => {
 	const target = privacyGuide.currentApp();
 	const icon = target && privacyGuideIcons.get(target.path);
 	if (!privacyGuideContents || event.sender !== privacyGuideContents || !target || !icon || icon.isEmpty()) return;
 	event.sender.startDrag({ file: target.path, icon });
 });
-// Orchestrator's own Accessibility and Screen Recording grants, which Claude
-// Code's built-in computer use in a terminal session needs. Undefined off
-// macOS, or when they cannot be read.
 const readOrchestratorPrivacy = () => readAppPrivacy(execFileAsync);
 ipcMain.handle("app:getAppPrivacy", async (event): Promise<AppPrivacyGrants | undefined> => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted app privacy request.");
@@ -3381,7 +2871,6 @@ ipcMain.handle("app:requestAppPrivacy", async (event): Promise<AppPrivacyGrants 
 	if (!granted) return undefined;
 	await requestAppPrivacy(granted, {
 		accessibility: () => { systemPreferences.isTrustedAccessibilityClient(true); },
-		// Listing the screens is a screen capture: macOS prompts and lists Orchestrator.
 		screenRecording: async () => { await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } }).catch(() => undefined); },
 	});
 	return readOrchestratorPrivacy();
@@ -3411,10 +2900,6 @@ ipcMain.handle("window:getZoomFactor", () => {
 ipcMain.handle("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
 ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 
-// Drive Electron's nativeTheme from the app's theme preference so embedded
-// preview WebContentsViews (which follow prefers-color-scheme) flip in step with
-// the shell. The three preference values map 1:1 onto themeSource; "system" keeps
-// both the preview and the shell's own matchMedia following the OS.
 ipcMain.handle("theme:set", (_event, preference: "light" | "dark" | "system") => {
 	if (preference === "light" || preference === "dark" || preference === "system") {
 		nativeTheme.themeSource = preference;
@@ -3430,8 +2915,6 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 });
 
 ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	// No early return when the value is unchanged: each new shell document asks
-	// again, and re-applying is cheap and recovers any native state that drifted.
 	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
@@ -3444,7 +2927,6 @@ ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {
 	}
 });
 
-// Renderer calls this when focus lands on real shell UI (not the titlebar menu), so menu:action's panel fallback below doesn't go stale.
 ipcMain.on("shell:focus", () => browserViewHost?.forgetLastFocusedPanel());
 
 ipcMain.handle("browser:runtime:reconnect", (event) => {
@@ -3460,11 +2942,6 @@ ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 ipcMain.on("browser:overlay", (event, open: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof open !== "boolean") return;
 	windowComposition?.setOverlayOpen(open);
-	// Refresh the live page's surface only on macOS: refreshLastFocusedPanelSurface
-	// is a macOS-specific compositor workaround (its own docstring says so). On
-	// Windows, hiding/restoring the native view under the raised shell causes a
-	// brief black flash, and window-composition.ts gates its equivalent nudge to
-	// darwin for the same reason.
 	if (open && process.platform === "darwin") {
 		browserViewHost?.refreshLastFocusedPanelSurface();
 	}
@@ -3511,13 +2988,10 @@ ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unkn
 	chatDraftWindowCloseConfirmed = false;
 });
 
-// Backs the custom title-bar menu (WindowTitlebar). Each item maps to the same
-// action the native default menu would have performed.
 ipcMain.handle("menu:action", (event, action: string) => {
 	if (event.sender !== getShellWebContents()) return;
 	const win = mainWindow;
 	if (!win) return;
-	// Clicking this shell-painted menu moves focus off the panel, so prefer the last-focused panel, else the focused contents, else the shell.
 	const focused = webContents.getFocusedWebContents();
 	const shell = getShellWebContents();
 	const wc =
@@ -3579,7 +3053,6 @@ ipcMain.handle("menu:action", (event, action: string) => {
 			return;
 	}
 });
-/** The daemon's durable lifetime session count, or null while it is unreachable. */
 async function daemonLifetimeSessions(): Promise<number | null> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) return null;
 	try {
@@ -3592,7 +3065,6 @@ async function daemonLifetimeSessions(): Promise<number | null> {
 }
 ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!telemetryPolicyController) return null;
-	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
 	if (telemetryIdentity.isOptedOut()) return null;
 	const runFile = runFilePath();
 	const install = await readTelemetryInstallContext({
@@ -3606,14 +3078,8 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!bootstrap) return bootstrap;
 	const lifetimeSessions = await daemonLifetimeSessions();
 	if (lifetimeSessions !== null) bootstrap.lifetimeSessions = lifetimeSessions;
-	// Start the renderer identified when this desktop is signed in to the same
-	// AO Cloud account the daemon durably recorded, so launch events (active,
-	// loaded, first open) are not sent under a throwaway anonymous ID. Only the
-	// production WorkOS account is identified, as in TelemetryIdentityRuntime.
 	const stored = await readAuthStore(cloudDataDir()).catch(() => null);
 	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
-	// No stored sign-in but a binding left behind: a sign-out the daemon never
-	// heard (it was down, then the app quit). Retire it before anything exports.
 	if (stored && !stored.session) await telemetryIdentity.retireSignedOutBinding();
 	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
@@ -3642,8 +3108,6 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
-// The renderer claims ao.app.first_opened only when it is about to send it,
-// so an opt-out or a kill-switch entry never spends the one-time marker.
 ipcMain.handle("telemetry:claimFirstOpen", async () => {
 	if (telemetryIdentity.isOptedOut()) return "ineligible";
 	let daysSinceInstall: number | undefined;
@@ -3686,22 +3150,15 @@ async function chooseDirectory(title: string, defaultPath?: string): Promise<str
 		properties: ["openDirectory", "createDirectory"],
 		title,
 	};
-	// On Windows, parenting the common file dialog forces a repaint of the main
-	// window while Explorer initializes, which produces a visible white flash.
-	// The unparented native dialog remains foregrounded by Electron without that
-	// compositor handoff.
 	const result = await dialog.showOpenDialog(options);
 
 	if (result.canceled) return null;
 	const chosen = result.filePaths[0] ?? null;
-	// A cloud workspace may upload only a folder picked here.
 	if (chosen) rememberChosenFolder(chosen);
 	return chosen;
 }
 
 const remoteRegistry = new RemoteRegistry((entry) => {
-	// Node reports "null" for the custom app:// origin; only Vite's HTTP URL
-	// needs parsing. Never reflect an arbitrary request Origin here.
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
@@ -3787,7 +3244,6 @@ ipcMain.handle("app:getGitHubLogin", async (_event, repoPath?: string) => {
 		});
 		candidates.push(stdout.trim());
 	} catch {
-		// GitHub CLI may not be installed or authenticated yet; keep the editable fallback.
 	}
 	const gitNames = [
 		typeof repoPath === "string" && repoPath.trim() ? await gitConfig(["-C", repoPath.trim(), "config", "--get", "user.name"]) : "",
@@ -3813,7 +3269,6 @@ async function refreshGitHubOwners(): Promise<GitHubOwner[]> {
 				timeout: 8000,
 			}));
 		} catch {
-			// The authenticated account may not have the read:org scope; the personal owner is still usable.
 		}
 		const owners = [stdout, ...organizationOutput.split("\n")].map((line) => {
 			const [login, avatarUrl] = line.trim().split("\t");
@@ -3830,16 +3285,10 @@ type GitHubRepoSummary = { fullName: string; description: string; isPrivate: boo
 
 type GitHubRepoRow = { fullName?: string; full_name?: string; description?: string | null; isPrivate?: boolean; private?: boolean; url?: string; html_url?: string; owner?: { login?: string } };
 
-// Repositories the signed-in `gh` account can access. An empty query lists
-// everything it can reach (its own, collaborations and organization repos) by
-// recent push; a query searches every repository the account is allowed to see.
-// `gh repo list` is not used for the empty query: it only lists the signed-in
-// user's own repositories and leaves organization repositories out.
 async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 	await ensureShellEnv();
 	const term = query.trim().slice(0, 100);
 	const args = term
-		// `--` keeps a query that starts with "-" (a GitHub exclusion qualifier) from being read as a gh flag.
 		? ["search", "repos", "--limit", "30", "--json", "fullName,description,isPrivate,url,owner", "--", term]
 		: ["api", "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member"];
 	try {
@@ -3847,7 +3296,6 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 		const rows = JSON.parse(stdout) as GitHubRepoRow[];
 		return rows.flatMap((row) => {
 			const fullName = row.fullName ?? row.full_name;
-			// `gh api user/repos` rows set `url` to the REST API URL, which git cannot clone.
 			const url = row.html_url ?? row.url;
 			if (!fullName || !url) return [];
 			return [{
@@ -3888,8 +3336,6 @@ ipcMain.handle("app:checkGitHubRepositoryAvailability", async (_event, input: { 
 	}
 });
 ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
-	// Electron 44: writeText is async and the Linux selection clipboard moved
-	// to the clipboard.selection sub-namespace.
 	await clipboard.writeText(text);
 	if (process.platform === "linux") {
 		await clipboard.selection.writeText(text);
@@ -3908,7 +3354,6 @@ const artifactSnapshotRenderer = createArtifactSnapshotRenderer({
 	BrowserWindow,
 	preload: preloadPath(),
 	pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
-	// Never open the hidden window without the shell: the app stays alive on macOS after the shell closes.
 	shellOpen: () => {
 		const contents = getShellWebContents();
 		return contents !== null && !contents.isDestroyed();
@@ -3930,11 +3375,8 @@ registerCloudArtifactIpc({
 		}
 	},
 });
-// Copies made for "Show in" pile up under ~/.ao/cloud-artifacts; drop stale ones.
 void pruneCloudArtifactFolders().catch((error) => console.warn("AO: unable to prune old cloud artifact copies", error));
 
-// Share links: publishing reads the file and holds the token here, in the main
-// process; the renderer asks for it when the person presses Publish.
 const shareSnapshotDir = path.join(desktopDataDir, "tmp", "share-uploads");
 void clearShareSnapshots(shareSnapshotDir).catch(() => undefined);
 registerCloudShareIpc({
@@ -3945,8 +3387,6 @@ registerCloudShareIpc({
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
 });
-// Session and project share links this device made, so Copy link works again
-// later; only the signed-in account's, which the file names.
 const sessionShareUrls = new SessionShareUrls(path.join(desktopDataDir, "session-share-links.bin"), {
 	available: protectedStorageAvailable,
 	encrypt: (text) => safeStorage.encryptString(text),
@@ -3959,11 +3399,6 @@ registerAgentLoginIpc({
 	trustedSender: (sender) => sender === getShellWebContents(),
 });
 
-// A file dropped onto the terminal is delivered as raw bytes (its original path
-// is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
-// regressions in Electron 30-33). Stash the bytes under the app's own state dir
-// and return the path so the terminal can insert it, mirroring how a native
-// terminal inserts a dropped file's path.
 ipcMain.handle("terminal:saveDroppedFile", async (_event, input: { name: string; bytes: Uint8Array }) => {
 	const dir = path.join(app.getPath("userData"), "terminal-drops");
 	await mkdir(dir, { recursive: true });
@@ -4038,7 +3473,6 @@ ipcMain.handle("keybindings:set", async (_event, overrides: KeybindingOverrides)
 	const runFile = runFilePath();
 	if (!runFile) return keybindingOverrides;
 	keybindingOverrides = await writeKeybindingOverrides(path.dirname(runFile), overrides);
-	// Menu items show the user's own bindings.
 	if (process.platform === "darwin" && getShellWebContents()) installMacAppMenu();
 	return keybindingOverrides;
 });
@@ -4065,9 +3499,6 @@ ipcMain.handle("updates:download", async (_event, requestId?: string) => {
 	await downloadUpdateNow(requestId);
 });
 ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAndInstallUpdate(confirmedVersion));
-// Retry after a failed macOS preparation: Squirrel can't reset a stalled staging
-// in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
-// already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	recordUpdateDiagnostic("retry-relaunch-requested");
 	preserveAgentsOnQuit = true;
@@ -4075,12 +3506,6 @@ ipcMain.handle("updates:relaunch", () => {
 	desktopQuit.quitCompletely();
 });
 
-// Whether THIS boot is a post-update relaunch, so the startup loader can show
-// "Updating / Restarting" copy instead of the normal "Connecting" phrases. The
-// marker is written on the quitAndInstall path (auto-updater.ts) on every OS and
-// consumed exactly once here; a corrupt/stale/mismatched marker reads as false
-// (see consumeUpdateRelaunchFlag). Cached so every renderer that asks during the
-// same boot gets the same answer and the marker is deleted only once.
 let postUpdateRelaunchPromise: Promise<boolean> | undefined;
 function detectPostUpdateRelaunch(): Promise<boolean> {
 	if (!postUpdateRelaunchPromise) {
@@ -4105,34 +3530,18 @@ ipcMain.handle(
 	"notifications:show",
 	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) => {
 		if (!notification.id || !mainWindow) return;
-		// "Already looking" = the window has focus, or the renderer reports the
-		// prompt itself is on screen (`watched`). Visual signals are skipped then.
 		const looking = mainWindow.isFocused() || notification.watched === true;
-		// On Linux the sound ignores that guess: Wayland gives apps no reliable
-		// visibility, so a window parked on another workspace still reports
-		// focused/visible and would otherwise stay silent. macOS and Windows
-		// report focus accurately and keep the quieter behaviour.
 		const playsSound =
 			shouldSignalAttention(notification.type) &&
 			soundNotificationsEnabled &&
 			(process.platform === "linux" || !looking);
 		if (playsSound) playNotificationSound();
 		if (looking) return;
-		// OS toast: a native banner the user can click to jump straight back to the
-		// session. Fires for every backend notification type (see shouldToast), so a
-		// new type in notification.go never silently loses its toast.
 		if (shouldToast(notification, ElectronNotification.isSupported())) {
 			const toast = new ElectronNotification({
 				title: notification.title,
 				body: notification.body,
-				// Mute the OS chime when our sound replaces it or the user turned
-				// sound notifications off. Honoured on macOS/Windows only; Linux
-				// notification daemons ignore it (see toastSilent).
 				silent: toastSilent(process.platform, soundNotificationsEnabled, playsSound),
-				// AO logo as the notification icon on Windows/Linux. Omitted on macOS,
-				// where a custom icon renders only as a redundant right-side content image —
-				// macOS uses the app-bundle icon (the AO logo in a packaged build) as the
-				// single main icon.
 				icon: process.platform === "darwin" ? undefined : windowIconPath(),
 			});
 			toast.on("click", () => {
@@ -4145,18 +3554,8 @@ ipcMain.handle(
 			toast.show();
 		}
 
-		// Dock (macOS) / taskbar (Windows/Linux) attention signal. On macOS every
-		// notification bounces the dock — urgency is carried by the bounce type,
-		// so a merged PR bounces once while a blocked agent keeps bouncing. On
-		// Windows/Linux only the actionable types flash (see
-		// shouldSignalAttention), preserving the pre-existing behavior there.
 		if (process.platform === "darwin" && app.dock) {
-			// A pending critical bounce (agent blocked on the user) is never
-			// replaced: a later informational notification must not downgrade it
-			// to a one-shot bounce.
 			if (shouldReplaceBounce(pendingBounce)) {
-				// A focus listener from an earlier un-cancelled bounce still works for
-				// the new id, so only attach one at a time.
 				const hadPendingBounce = pendingBounce !== null;
 				cancelDockBounce();
 				const bounceType = dockBounceType(notification.type);
@@ -4179,10 +3578,6 @@ ipcMain.handle(
 	},
 );
 
-// The renderer could not decode or start the bundled sound. Beep so the
-// notification still makes a sound where the OS beep works at all.
-// The shell reports the first frame that shows the workspace, which ends the
-// launch. Logged once: a reload reports the frame again.
 let launchTimingLogged = false;
 ipcMain.on("app:sessionsShown", (event) => {
 	if (event.sender !== getShellWebContents() || launchTimingLogged) return;
@@ -4196,7 +3591,6 @@ ipcMain.on("notifications:soundFailed", (event) => {
 	shell.beep();
 });
 
-// Dev-only: force attention signal regardless of window focus (for testing)
 if (!app.isPackaged) {
 	ipcMain.handle("notifications:devBounce", () => {
 		if (!mainWindow) return;
@@ -4230,7 +3624,6 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 		}
 	} else if (process.platform === "win32") {
 		if (n > 0) {
-			// Pre-built red dot PNG overlay — indicates unread without needing Canvas.
 			const badgeDataUrl =
 				"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAN0lEQVR42mNgoAW4o6b2HxumSDNRhhDSjNcQYjVjNYRUzRiGjBpABQMojkaqJCSqJGWqZCZSAQASKE/UCaPI8AAAAABJRU5ErkJggg==";
 			const icon = nativeImage.createFromDataURL(badgeDataUrl);
@@ -4239,11 +3632,6 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 			mainWindow.setOverlayIcon(null, "");
 		}
 	} else if (process.platform === "linux") {
-		// setBadgeCount drives a numeric launcher badge on Unity only, and only
-		// when the app ships a matching .desktop entry. Other Linux launchers
-		// (KDE, GNOME) expose no equivalent API, so the call is a no-op there.
-		// Surface the boolean result so the renderer can tell the badge was not
-		// applied instead of assuming unconditional success.
 		return { ok: app.setBadgeCount(n) };
 	}
 	return { ok: true };
@@ -4253,8 +3641,6 @@ ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => trayLifecycle.han
 
 ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 	trayLifecycle.handleRendererReady(event);
-	// This existing handshake comes from TrayRuntime after the React shell has
-	// mounted. Loading the HTML or merely observing a new PID is not success.
 	if (app.isPackaged && process.platform === "darwin" && event.sender === getShellWebContents()) {
 		const runFile = runFilePath();
 		if (runFile) void acknowledgeMacUpdateRestart({
@@ -4280,39 +3666,25 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 	}
 });
 
-// Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
-// Data dir resolves to AO_DATA_DIR when set, else ~/.ao (prod) or ~/.ao/dev
-// (dev), so instances with their own data dir keep their own sign-in.
 function cloudDataDir(): string {
 	return resolveCloudAuthDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, !isDev);
 }
 
-// The control plane the daemon is configured for, the only server the AO
-// Cloud token is sent to (the renderer reads the same value from the daemon).
 const cloudControlPlaneUrl = createControlPlaneUrlResolver(() =>
 	daemonStatus.state === "ready" && daemonStatus.port
 		? { baseUrl: `http://127.0.0.1:${daemonStatus.port}`, key: `${daemonStatus.port}:${daemonStatus.pid ?? ""}` }
 		: null);
 
-// Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
 const cloudAgentProxy = createCloudAgentProxy(cloudDataDir, cloudControlPlaneUrl);
 
-// A sign-in completed through the website's return page also hands over that
-// visit's id (see CloudSignInContext). It waits here until the renderer takes
-// it, once: on the notification below, or when it mounts. A sign-in link that
-// starts the app arrives before any window listens (macOS sends open-url
-// before ready, and elsewhere the window may still be loading), and a context
-// sent then would be lost. A sign-out drops it.
 const pendingCloudSignIn = createPendingCloudSignIn();
 
 ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 
-// The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
 function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
 	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
-		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
 		console.warn("AO: could not delete the cached Cloud artifact previews", error);
 	});
 }
@@ -4322,16 +3694,10 @@ function notifyRenderersOfCloudSession(
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
 ): void {
 	pendingCloudSignIn.note(account, signIn);
-	// Share URLs belong to the account that made them: they go when it signs
-	// out or someone else signs in. The first notice of a run has no account
-	// to compare with; the store itself never shows another account's (its
-	// file names the owner), so one who signed in since the last run never sees them.
 	if (!account || (notifiedCloudUserId !== undefined && account.user.id !== notifiedCloudUserId)) {
 		void sessionShareUrls.clear().catch(() => undefined);
 	}
 	notifiedCloudUserId = account?.user.id;
-	// The Cloud artifact previews on disk belong to one account: another one signing in, or this one
-	// being lost (a sign-out, or a refresh that failed for good), clears them.
 	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
@@ -4342,28 +3708,17 @@ function notifyRenderersOfCloudSession(
 	contents.send("cloud:sessionChanged", account);
 }
 
-// Telemetry's Cloud binding is retired as part of sign-out itself, not only when
-// the renderer later hands the sign-out to the daemon: the app can quit first,
-// and a CLI-started daemon would then restore the departed account.
 installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
-	// Cloud artifact previews cached on disk go with the account, before the app can quit.
 	await artifactSnapshotStore.clearCloud().catch((error) => {
 		console.warn("AO: could not delete the cached Cloud artifact previews", error);
 	});
 	await telemetryIdentity.signOut();
 });
 
-// Dev-only local (email/password) sign-in against a loopback Docker control
-// plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback
-// CP inside the handlers; a no-op surface for production/WorkOS users.
 installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
-// Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
-// CP calls go through main so the WorkOS bearer token never reaches a renderer.
 const cloudCpProxy = installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
 
-// A local folder added to a cloud workspace is uploaded from here, into the
-// empty repository the control plane made for it, so the token stays in main.
 const folderImportDir = path.join(desktopDataDir, "tmp", "folder-imports");
 void clearFolderImports(folderImportDir).catch(() => undefined);
 registerCloudFolderPushIpc(ipcMain, {
@@ -4372,8 +3727,6 @@ registerCloudFolderPushIpc(ipcMain, {
 	tmpRoot: () => folderImportDir,
 	env: () => daemonEnv(),
 	homeDir: os.homedir(),
-	// The data directory this app resolved (AO_DATA_DIR) and its Electron
-	// profile: no folder inside or holding either is uploaded.
 	appStateDirs: () => [desktopDataDir, app.getPath("userData")],
 	ready: ensureShellEnv,
 	trustedSender: (sender) => {
@@ -4393,9 +3746,6 @@ function focusCloudWindow(): void {
 	window.focus();
 }
 
-// A shared session's link (ao-app://share/<code>, or ao-app://share/<orgId>/<token>
-// from before codes) the renderer has not taken yet: one that arrived before
-// the window was ready waits here. The renderer parses and checks it.
 let pendingShareLink: string | undefined;
 
 ipcMain.handle("cloud:takePendingShareLink", () => {
@@ -4414,26 +3764,14 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
-	// macOS keeps the app (and tray) alive after the close button —
-	// window-all-closed does not quit — and a link clicked then fires open-url
-	// without activate, so nothing else recreates the shell. Hidden utility
-	// windows can linger, so the window list is not the test: recreate when
-	// there is no shell to deliver to. The queued links below flush once its
-	// fresh shell mounts. Windows/Linux quit on the last window closing, so
-	// this never fires there.
 	if (!getShellWebContents()) void createWindow();
 	focusCloudWindow();
-	// A shared cloud session: the renderer redeems it and opens the session.
 	if (isShareDeepLink(url)) {
 		const contents = getShellWebContents();
 		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openShareLink", url);
 		else pendingShareLink = url;
 		return;
 	}
-	// Stripe Checkout and the Customer Portal return here (via the control
-	// plane's /billing/return page): open Settings on Billing, which re-reads
-	// the plan when it mounts. Queue while the shell is missing or still
-	// loading — flushed on renderer ready like the other pending links.
 	if (isBillingDeepLink(url)) {
 		const contents = getShellWebContents();
 		if (contents && !contents.isDestroyed() && !contents.isLoading()) {
@@ -4443,21 +3781,9 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		}
 		return;
 	}
-	// ao-app://sessions/… from external tools: forward the canonical URL to the
-	// shell, which re-reads it as its in-app ao:// form and resolves it against
-	// its workspace lists with the same session-links path as ao:// links
-	// (navigate, toast when the session is gone). The canonical form lowercases
-	// the scheme and strips query/hash/trailing slashes the ao:// parser would
-	// reject. Queue it while the renderer is still mounting (cold start) —
-	// flushed on renderer ready, same handshake as pendingFolderPath below.
 	const normalized = normalizeSessionDeepLink(url);
 	if (normalized) {
 		const contents = getShellWebContents()?.isDestroyed() ? null : getShellWebContents();
-		// The newest link wins: one queued for the readiness handshake is stale
-		// once a newer link arrives, so clear it here either way. Dropping it on
-		// the direct-send path keeps the handshake from navigating the stale
-		// link after this one; replacing it on the queue path keeps the newest
-		// click last.
 		pendingSessionDeepLink = null;
 		if (contents && !contents.isLoading()) {
 			contents.send(OPEN_SESSION_DEEP_LINK_CHANNEL, normalized);
@@ -4485,9 +3811,6 @@ function isBillingDeepLink(raw: string): boolean {
 	}
 }
 
-// macOS: the OS sends the ao-app:// URL via the open-url event when the app is
-// already running. If the app is not running, the URL is passed in process.argv
-// on first launch (handled in app.whenReady below).
 app.on("open-url", (event, url) => {
 	event.preventDefault();
 	void handleCloudDeepLinkAndFocus(url);
@@ -4499,12 +3822,6 @@ app.on("second-instance", (_event, argv) => {
 		void handleCloudDeepLinkAndFocus(deepLink);
 		return;
 	}
-	// A folder dropped on the taskbar icon/shortcut while already running.
-	// Usually the renderer is already mounted and listening, so send directly
-	// — but this can still fire while the first instance is early in
-	// app.whenReady() or creating its window, before any shell WebContents
-	// exists. Fall back to the same pendingFolderPath queue the cold-start
-	// path uses rather than silently dropping it.
 	const folderPath = parseOpenFolderPathArg(argv);
 	if (folderPath) {
 		const window = BaseWindow.getAllWindows()[0];
@@ -4527,30 +3844,15 @@ app.on("second-instance", (_event, argv) => {
 	window.show();
 	window.focus();
 });
-// (see forge.config.ts publishers). In dev there is no feed, so it is skipped.
-// A live updater additionally requires a signed + notarized build — see
-// frontend/docs/desktop-release.md.
 function initAutoUpdates(): void {
 	if (!app.isPackaged) return;
 	const runFile = runFilePath();
 	if (!runFile) return;
 	const stateDir = path.dirname(runFile);
-	// Route update pushes at the shell WebContents, the same target daemon status
-	// uses. The shell is a BaseWindow + WebContentsView (#3750), which
-	// BrowserWindow.getAllWindows() does not return, so the updater cannot find
-	// the renderer on its own. Resolved lazily so a recreated window still gets
-	// pushes.
 	setRendererSink(() => getShellWebContents());
 	void ensureUpdatePrefs(stateDir).then(() => startAutoUpdates(stateDir));
 }
 
-// Resolve the bundle path `ao start` will later `open` and stat as a usable app.
-// On macOS process.execPath is .../Agent Orchestrator.app/Contents/MacOS/<exe>;
-// the thing `ao start` opens is the enclosing `.app` directory, so walk up three
-// levels (MacOS -> Contents -> .app). app.getAppPath() is WRONG here: it returns
-// the app.asar archive path inside the bundle, not the bundle itself.
-// On win32/linux there is no .app wrapper, so record execPath; a richer
-// resolveApp() for those platforms lands in T6/T7.
 function resolveBundlePath(): string {
 	if (process.platform === "darwin") {
 		return path.resolve(process.execPath, "..", "..", "..");
@@ -4558,23 +3860,12 @@ function resolveBundlePath(): string {
 	return process.execPath;
 }
 
-// `ao start` opens the app with `--installed-via=<value>` so the app can record
-// how it arrived on first marker creation. Parse it out of argv; absent => the
-// marker defaults installSource to "unknown".
 function parseInstalledVia(argv: string[]): string | undefined {
 	const flag = argv.find((a) => a.startsWith("--installed-via="));
 	return flag ? flag.slice("--installed-via=".length) : undefined;
 }
 
-// Write ~/.ao/app-state.json so `ao start`'s resolveApp() can find this bundle
-// (spec §7.1). The app is the sole writer (invariant 3) and writes every launch.
-// A failure here must NOT block startup, so the caller wraps this in try/catch;
-// we still surface it via the log.
 async function writeAppStateOnLaunch(): Promise<void> {
-	// Reuse the same ~/.ao resolution as running.json; the marker lives beside it
-	// (the Go side computes its dir as dirname(RunFilePath)). runFilePath() returns
-	// null only when the home dir is unresolvable, in which case we cannot place
-	// the marker; the caller's try/catch logs it.
 	const runFile = runFilePath();
 	if (!runFile) {
 		throw new Error("cannot resolve ~/.ao run-file path; skipping app-state marker");
@@ -4600,7 +3891,6 @@ async function writeAppStateOnLaunch(): Promise<void> {
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	launchTiming.mark("appReady");
-	// Before any browser partition exists; both run in the background.
 	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
 		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);
 	});
@@ -4624,17 +3914,8 @@ app.whenReady().then(async () => {
 	telemetryPolicyController = policyController;
 	try { await policyController.initialize(); }
 	catch (error) { console.error("telemetry policy bootstrap failed; reporting remains disabled:", error); }
-	// Handled main failures (including any held from before this point) go
-	// through the same consent check as renderer captures.
 	setMainErrorSink((capture) => { policyController.captureMain(capture); });
 	setInterval(() => { if (telemetryPolicyRetryable(policyController.snapshot())) void policyController.retryPendingCleanup(); }, 1_000).unref();
-	// Capture install provenance BEFORE relocation. moveToApplicationsFolder()
-	// relaunches from /Applications WITHOUT forwarding our --installed-via arg, and
-	// code past a successful move never runs in this instance, so a post-move-only
-	// write would record installSource="unknown" and the sticky logic in
-	// writeAppStateMarker would then lock it there forever. Writing now (only when
-	// the arg is present, i.e. the npm-bootstrap launch) persists the source so the
-	// post-move instance preserves it while refreshing appPath to /Applications.
 	if (parseInstalledVia(process.argv)) {
 		try {
 			await writeAppStateOnLaunch();
@@ -4651,11 +3932,6 @@ app.whenReady().then(async () => {
 			...inspectInstalledBundle(bundlePath),
 		});
 		if (action === "handoff") {
-			// A stale copy (the original download, a mounted dmg) launching while a
-			// newer build sits in /Applications. Relocating here would trash that
-			// build and pin the user to this bundle's version forever, so open the
-			// install and quit instead. Return before the marker write below: the
-			// instance we just launched records the path and version.
 			const installed = installedBundlePath(bundlePath);
 			console.info(`newer install at ${installed}; handing off and quitting`);
 			await shell.openPath(installed);
@@ -4664,8 +3940,6 @@ app.whenReady().then(async () => {
 		}
 		if (action === "relocate") {
 			try {
-				// On success this restarts the app from /Applications, so code past
-				// here only runs when no move happened (already there, or declined).
 				app.moveToApplicationsFolder();
 			} catch (err) {
 				console.error("relocation to Applications failed:", err);
@@ -4673,18 +3947,12 @@ app.whenReady().then(async () => {
 		}
 	}
 
-	// Refresh the marker post-relocation so appPath records the final bundle path;
-	// the sticky installSource preserves the value captured above. A marker-write
-	// failure is non-fatal: log and continue so the app still boots.
 	try {
 		await writeAppStateOnLaunch();
 	} catch (err) {
 		console.error("failed to write app-state marker:", err);
 	}
 
-	// A pre-fix bundle cannot be patched retroactively. After the maintained
-	// /Applications build runs, offer to retire older AO copies that can still
-	// overwrite it if Finder, Spotlight, or an old Dock tile launches them.
 	try {
 		const { formatStaleAppCopies, retireStaleMacAppCopies } = await import("./main/stale-app-copies");
 		await retireStaleMacAppCopies({
@@ -4729,8 +3997,6 @@ app.whenReady().then(async () => {
 
 	registerRendererProtocol();
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
-	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
-	// even if the app quit before it could.
 	void getCloudSessionCached(cloudDataDir()).then(
 		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
 		() => bindArtifactSnapshotsToCloudAccount(null),
@@ -4761,16 +4027,10 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
-	// Boot the daemon alongside the window, not after it: the board cannot show
-	// until the daemon answers. createWindow links the browser runtime itself
-	// when the daemon is already ready by the time the window exists. Windows
-	// keeps the old order until this path has been tried there.
 	const daemonStartsWithWindow = process.platform !== "win32";
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
-	// Not awaited: launch must not wait on this network fetch (up to 10 s). It
-	// runs once the window exists so its dialogs attach to it.
 	if (app.isPackaged) {
 		void import("./main/desktop-version-floor")
 			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
@@ -4785,16 +4045,11 @@ app.whenReady().then(async () => {
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 
-	// Windows/Linux: on first launch, the deep-link URL may arrive as a
-	// process.argv entry (e.g. ao-app://callback?token=...).
 	const deepLinkArg = process.argv.find((a) => a.startsWith("ao-app://"));
 	if (deepLinkArg) {
 		void handleCloudDeepLinkAndFocus(deepLinkArg);
 	}
 
-	// Windows/Linux: a folder dropped on the taskbar icon/shortcut while the
-	// app was not running launches it with the folder's path in argv. The
-	// renderer isn't mounted yet — queue it, flushed on TRAY_RENDERER_READY_CHANNEL.
 	const folderPathArg = parseOpenFolderPathArg(process.argv);
 	if (folderPathArg) {
 		pendingFolderPath = folderPathArg;
@@ -4807,11 +4062,6 @@ app.whenReady().then(async () => {
 	});
 });
 
-// Daemon teardown is now handled via the OS-native supervisor socket: the daemon
-// self-stops ~5s after the last client (this process) drops its connection.
-// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
-// Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period and stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
@@ -4837,13 +4087,8 @@ app.on("before-quit", (event) => {
 	}
 	if (!agentQuitCleanupComplete) {
 		event.preventDefault();
-		// Quit has started: a pending crash respawn must not race the agent
-		// shutdown request below.
 		cancelDaemonAutoRestart();
 		if (!agentQuitCleanupPromise) {
-			// Fail open: a crashed, hung, or taken-over daemon must never block
-			// quit or an update restart. Dropping the supervisor link and the exit
-			// handler still clean up an app-owned daemon.
 			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
 				.catch((error) => {
 					console.error("AO: daemon shutdown on desktop quit failed; quitting anyway", error);
@@ -4857,8 +4102,6 @@ app.on("before-quit", (event) => {
 		return;
 	}
 	browserQuitRequested = true;
-	// Never respawn the daemon while the app is shutting down; the daemon's own
-	// link-EOF self-stop (or the orphan-cleanup kill below) handles teardown.
 	cancelDaemonAutoRestart();
 	disposeBrowserRuntimeLink();
 	disposeBrowserStreamLink();
@@ -4895,9 +4138,8 @@ app.on("before-quit", (event) => {
 		}
 		if (isUpdateRestartRequested() && !updateQuitDeadlineArmed) {
 			updateQuitDeadlineArmed = true;
-			// Also cover a normal quit already waiting on the same cleanup.
 			void finishUpdateQuit(browserQuitCleanupPromise, {
-				quit: () => undefined, // The existing cleanup continuation owns normal quit.
+				quit: () => undefined,
 				exit: () => { if (isUpdateRestartRequested()) app.exit(0); },
 				log: (error) => console.error("update shutdown:", error),
 			});
@@ -4906,17 +4148,6 @@ app.on("before-quit", (event) => {
 	}
 });
 
-// Last resort: if the OS-native supervisor link is not actually connected
-// (daemon socket never bound, e.g. UDS path-length limit, or addr was null),
-// the dropped fd will NOT stop the daemon on quit, so kill it here to avoid an
-// orphan. Safe because Phase A made the daemon's SIGTERM non-destructive: it
-// exits without tearing down sessions, which survive for the next boot to adopt.
-// When the link IS connected we do nothing here and rely on the OS closing the
-// fd on exit, which covers crash and SIGKILL uniformly.
-//
-// AO_KEEP_DAEMON opts out entirely: the daemon is deliberately spawned without a
-// supervisor link so it persists across app quit, so this orphan-cleanup kill
-// must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
 	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env) && !desktopAgentShutdownAccepted) {
 		killDaemon(daemonProcess);

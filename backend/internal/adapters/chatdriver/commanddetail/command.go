@@ -1,14 +1,7 @@
-// Package commanddetail normalizes provider command and tool metadata for AO's
-// durable conversation activity contract.
 package commanddetail
 
 import "strings"
 
-// UnwrapShell removes one conventional `<shell> -lc '<command>'` wrapper.
-//
-// It deliberately removes exactly one matching quote pair. Trimming every quote
-// at the edges corrupts valid nested quoting (for example `echo "hi"`) and would
-// make the audit timeline report a command different from the one that ran.
 func UnwrapShell(command string) string {
 	for _, flag := range []string{" -lc ", " -c "} {
 		if idx := strings.Index(command, flag); idx > 0 && looksLikeShell(command[:idx]) {

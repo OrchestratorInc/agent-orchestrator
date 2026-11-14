@@ -135,7 +135,6 @@ export function SideComposer({
 	};
 	useEffect(() => {
 		if (editor.current?.getSnapshot().text === draft.text) return;
-		// Loading a draft must not move keyboard focus out of the tab strip.
 		editor.current?.setText(draft.text, undefined, { preserveFocus: true });
 	}, [draft.text]);
 	useEffect(() => {
@@ -419,9 +418,6 @@ export function useIndependentSideChats(
 		setConfirmCloseState(next);
 	}, []);
 	const tabRowRef = useRef<HTMLElement>(null);
-	// The side transcript renders through the main chat's Timeline, which owns
-	// selection, source navigation, and scroll follow. Same-side annotations from
-	// the composer navigate through it.
 	const timelineNavigationRef = useRef<((annotation: ChatAnnotationSummaryItem) => void) | null>(null);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
@@ -486,7 +482,6 @@ export function useIndependentSideChats(
 		closeProjection.current = next;
 		setCloseRevision(value => value + 1);
 	}, []);
-	// These are derived permission views, not independent lifecycle state.
 	const closedSidesRef = { current: { has: (id: string) => closeStatus(closeProjection.current, id) === "closed" } };
 	const closingSidesRef = { current: { has: (id: string) => !canMutateSide(closeProjection.current, id) } };
 	const isClosing = (id: string) => closeInvocations.current.has(id) || closeStatus(closeProjection.current, id) === "closing";
@@ -498,8 +493,6 @@ export function useIndependentSideChats(
 	const closeStateRequests = useRef(0);
 	const appliedListRequest = useRef(0);
 	const localCreates = useRef(new Map<string, Side>());
-	// Rows recovered only from close state may learn their title after startup.
-	// Once HTTP/create supplies a row, its label wins over the recovery copy.
 	const closePlaceholders = useRef(new Set<string>());
 	const queuedCloseSummary = useRef(new Map<string, SideCloseState>());
 	const inventoryKnown = useRef(false);
@@ -740,8 +733,6 @@ export function useIndependentSideChats(
 				const next = data.snapshot;
 				setSnapshot((current) => {
 					if (!current || current.side.id !== next.side.id) return next;
-					// The latest page moves forward as turns arrive. Retain its
-					// previously loaded tail so it cannot leave a gap above older pages.
 					return {
 						...next,
 						hasMore: current.hasMore,
@@ -883,8 +874,6 @@ export function useIndependentSideChats(
 				if (!available()) throw new Error("Side chat is no longer active.");
 				if (excerpt) {
 					if (!canMutateSide(closeProjection.current, data.side.id)) throw new Error("Side chat status is unavailable.");
-					// An unconfirmed create can recover an existing, inactive side. Load
-					// its draft before appending, and save without focusing any composer.
 					let draft = draftsRef.current[data.side.id];
 					if (!draft) {
 						const { data: saved, error: draftError } = await readSideChatDraft(sessionId, data.side.id);
@@ -892,8 +881,6 @@ export function useIndependentSideChats(
 						if (!available()) throw new Error("Side chat is no longer active.");
 						draft = draftsRef.current[data.side.id] ?? parseSideChatDraft(saved?.contentJson ?? "");
 					}
-					// Commit a functional merge before saving: another side (or this
-					// one) may have an edit queued in the same React batch as the read.
 					const loadedDraft = draft;
 					let nextDraft = loadedDraft;
 					let appendError: string | undefined;
@@ -954,7 +941,6 @@ export function useIndependentSideChats(
 				pendingCommand: draftsRef.current[sideId]?.pendingCommand,
 				lastHandoffDelivery: draftsRef.current[sideId]?.lastHandoffDelivery,
 			};
-			// Apply the edit before awaiting I/O so its response cannot overwrite a newer receipt.
 			draftsRef.current = { ...draftsRef.current, [sideId]: next };
 			setDrafts((current) => ({ ...current, [sideId]: next }));
 			setAttachments((current) => ({ ...current, [sideId]: [] }));
@@ -1078,13 +1064,12 @@ export function useIndependentSideChats(
 			await aoBridge.sideChats.capture();
 		};
 		try {
-			// A remount/crash after this capture can only finish cancellation, never send.
 			await persist(apply(false));
 			await persist(apply(true));
 			if (available()) clearSideError(sideId, "delivery");
 		} catch (cause) {
 			if (available()) {
-				if (!draftsRef.current[sideId]?.pendingCommand || draftsRef.current[sideId].pendingCommand?.creationKey === command.creationKey) apply(false); // Preserve newer edits and cancellation intent.
+				if (!draftsRef.current[sideId]?.pendingCommand || draftsRef.current[sideId].pendingCommand?.creationKey === command.creationKey) apply(false);
 				setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "delivery" });
 			}
 		} finally {
@@ -1301,7 +1286,6 @@ export function useIndependentSideChats(
 					...current,
 					[sideId]: { ...(current[sideId] ?? draft), pendingDelivery: frozen },
 				}));
-				// Persist the receipt before dispatch so reconnect can retry the exact request.
 				const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(pending), available);
 				if (saved.error) throw saved.error;
 				await aoBridge.sideChats.capture();
@@ -1321,7 +1305,6 @@ export function useIndependentSideChats(
 					return;
 				}
 				if (requestError) {
-					// Server errors can occur after acceptance; keep their receipt too.
 					if (response && response.status < 500)
 						setDrafts((current) => {
 							const d = current[sideId];
@@ -1354,8 +1337,6 @@ export function useIndependentSideChats(
 				}
 
 				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
-				// The first accepted question may have named this tab. A list refresh
-				// failure must not turn an accepted delivery into a failed send.
 				void refreshList(false).catch(() => undefined);
 			} catch (cause) {
 				if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "delivery" });
@@ -1389,8 +1370,6 @@ export function useIndependentSideChats(
 			let resolveTerminal!: (state: SideCloseState) => void;
 			const terminal = new Promise<SideCloseState>(resolve => { resolveTerminal = resolve; });
 			closeWaiters.current.set(requestId, { sideId, expectedVersion, resolve: resolveTerminal, current });
-			// The main process owns dispatch, classification and cleanup even if this
-			// view disappears or its IPC reply is lost.
 			const response = aoBridge.sideChats.requestClose({ sessionId, sideId, requestId, epoch: state.epoch, expectedVersion });
 			const settled = response.then(summary => {
 				if (current()) reconcileCloseSummary(summary);
@@ -1472,9 +1451,6 @@ export function useIndependentSideChats(
 	const currentActiveId = sides.some((side) => side.id === activeId && side.sessionId === sessionId)
 		? activeId
 		: undefined;
-	// The main chat's Timeline renders the side transcript, so live status,
-	// "Worked for", and scroll follow behave exactly as they do in the main chat.
-	// Stable per side: the Timeline's draft effects depend on this identity.
 	const timelineDraftScope = useMemo(
 		() => (activeId ? { sessionId: `side:${activeId}`, incarnation: activeId } : undefined),
 		[activeId],
@@ -1647,7 +1623,6 @@ export function useIndependentSideChats(
 						})}
 					</div>
 				</div>
-				{/* The session strip's New terminal button, in its action slot. */}
 				<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-tab-strip-action>
 					<Button
 						type="button"
@@ -1700,8 +1675,6 @@ export function useIndependentSideChats(
 			}}
 		/>
 	);
-	// Like the main chat, the transcript shows answered requests and the pending
-	// ones wait beside the composer, where the reader acts on them.
 	const pendingInteractions = (snapshot?.side.id === activeId ? snapshot?.activities ?? [] : []).filter(
 		(activity) =>
 			activity.status === "pending" &&
@@ -1778,7 +1751,6 @@ export function useIndependentSideChats(
 						{conversation ? (
 							<div className="relative flex min-h-0 flex-1 flex-col">
 								{!readOnly && conversation.items.length === 0 ? (
-									// The Timeline draws nothing for an empty transcript.
 									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
 										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
 										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.emptyDescription")}</p>

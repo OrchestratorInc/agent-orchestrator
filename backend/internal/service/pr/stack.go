@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// StackLayer is one pull request of a stack as the PR tab lists it.
 type StackLayer struct {
 	Number         int
 	Title          string
@@ -22,15 +21,10 @@ type StackLayer struct {
 	CI             string
 	ReviewDecision string
 	Mergeability   string
-	// NoChecks says the layer's CI is unknown because nothing checks its
-	// head, as the provider confirms (see noChecksSettled), not because its
-	// checks weren't read or haven't started yet.
-	NoChecks bool
-	// SessionID is the AO session tracking this layer, when one does.
-	SessionID domain.SessionID
+	NoChecks       bool
+	SessionID      domain.SessionID
 }
 
-// Stack is a provider-native stack, bottom layer first.
 type Stack struct {
 	Number     int
 	URL        string
@@ -39,39 +33,29 @@ type Stack struct {
 	Layers     []StackLayer
 }
 
-// StackParent is the open pull request a PR is based on, which it could be
-// stacked on but isn't yet.
 type StackParent struct {
 	Number int
 	URL    string
 }
 
-// StackResult is what's known of a PR's place in a stack. Neither field is set
-// for a PR with no stack and no parent, or on a provider without stacks.
 type StackResult struct {
 	Stack  *Stack
 	Parent *StackParent
 }
 
-// StackHead pins one layer to the commit the user saw.
 type StackHead struct {
 	Number  int
 	HeadSHA string
 }
 
-// StackMergeRequest lands PRID and the unmerged layers below it. ExpectedHeads
-// names every one of those layers, so a push or a new layer stops the merge.
 type StackMergeRequest struct {
 	PRID          string
 	PRURL         string
 	Method        string
 	ExpectedHeads []StackHead
-	// AllowNoChecks lets layers that nothing checks land, as MergeRequest's does.
 	AllowNoChecks bool
 }
 
-// StackMergeResult reports the layers a stack merge covered. Status says
-// whether they landed, joined the merge queue, or are still landing.
 type StackMergeResult struct {
 	PRNumber       int
 	Numbers        []int
@@ -80,7 +64,6 @@ type StackMergeResult struct {
 	StateChangedAt time.Time
 }
 
-// Stack reads the stack holding a tracked PR, or the parent it could join.
 func (s *ActionService) Stack(ctx context.Context, prID, prURL string) (StackResult, error) {
 	tracked, repo, err := s.loadStackPR(ctx, prID, prURL)
 	if err != nil {
@@ -117,8 +100,6 @@ func (s *ActionService) Stack(ctx context.Context, prID, prURL string) (StackRes
 	return StackResult{Parent: &StackParent{Number: parent.Number, URL: parent.URL}}, nil
 }
 
-// stackParent finds the open PR that tracked is based on, as long as a new
-// layer can go on it: only the top of an open stack takes one.
 func (s *ActionService) stackParent(ctx context.Context, repo ports.SCMRepo, tracked domain.PullRequest) (ports.SCMPRRef, bool, error) {
 	target := strings.TrimSpace(tracked.TargetBranch)
 	if target == "" {
@@ -141,8 +122,6 @@ func (s *ActionService) stackParent(ctx context.Context, repo ports.SCMRepo, tra
 	return parent, true, nil
 }
 
-// stackView fills in the title and state of each layer. A layer the provider
-// didn't return keeps what the stack itself says about it.
 func (s *ActionService) stackView(ctx context.Context, repo ports.SCMRepo, stack ports.SCMStack) (Stack, error) {
 	view := Stack{Number: stack.Number, URL: stack.URL, BaseBranch: stack.BaseBranch, Open: stack.Open}
 	refs := make([]ports.SCMPRRef, 0, len(stack.Layers))
@@ -192,7 +171,6 @@ func stackLayerState(layer ports.SCMStackLayer) domain.PRState {
 	}
 }
 
-// AddToStack puts a tracked PR on top of the open PR it is based on.
 func (s *ActionService) AddToStack(ctx context.Context, prID, prURL string) (StackResult, error) {
 	tracked, repo, err := s.loadStackPR(ctx, prID, prURL)
 	if err != nil {
@@ -229,8 +207,6 @@ func (s *ActionService) AddToStack(ctx context.Context, prID, prURL string) (Sta
 	return StackResult{Stack: &view}, nil
 }
 
-// MergeStack re-reads the stack and every layer it would land, then merges them
-// together. A stack that moved since the user saw it stops the merge.
 func (s *ActionService) MergeStack(ctx context.Context, request StackMergeRequest) (StackMergeResult, error) {
 	tracked, repo, err := s.loadStackPR(ctx, request.PRID, request.PRURL)
 	if err != nil {
@@ -290,9 +266,6 @@ func (s *ActionService) MergeStack(ctx context.Context, request StackMergeReques
 			return StackMergeResult{}, fmt.Errorf("merge stack: %w", err)
 		}
 	}
-	// The provider has the layers now, so recording them must outlive the
-	// request: a slow merge can spend its budget, and a client that gives up
-	// must not leave AO without the merge.
 	record := context.WithoutCancel(ctx)
 	at := s.clock().UTC()
 	for _, fresh := range landing {
@@ -301,8 +274,6 @@ func (s *ActionService) MergeStack(ctx context.Context, request StackMergeReques
 	return StackMergeResult{PRNumber: tracked.Number, Numbers: numbers, Method: string(method), Status: string(status), StateChangedAt: at}, nil
 }
 
-// layersToLand returns the unmerged layers up to and including number, bottom
-// first, once they are all open, not drafts, and at the expected commits.
 func layersToLand(stack ports.SCMStack, number int, expected []StackHead) ([]ports.SCMStackLayer, ports.SCMStackLayer, error) {
 	var layers []ports.SCMStackLayer
 	var target ports.SCMStackLayer
@@ -337,11 +308,6 @@ func layersToLand(stack ports.SCMStack, number int, expected []StackHead) ([]por
 	return layers, target, nil
 }
 
-// recordStackLayer brings AO up to date with one layer after the provider took
-// the merge. A landed layer is recorded as a plain merge is, lifecycle included,
-// from fresh, the observation read before merging; the refresh only fills in
-// what the merge left unknown, such as its commit. A queued or pending layer
-// stays open, so the observer sees it land; it only needs a sooner look.
 func (s *ActionService) recordStackLayer(ctx context.Context, fresh ports.SCMObservation, status ports.SCMStackMergeStatus, at time.Time) {
 	if fresh.PR.URL == "" {
 		return
@@ -381,15 +347,12 @@ func (s *ActionService) loadStackPR(ctx context.Context, prID, prURL string) (do
 	return tracked, repo, nil
 }
 
-// guardStackedMerge refuses a plain merge of a layer with unmerged layers below
-// it, which would land on its parent's branch rather than the stack's base.
 func (s *ActionService) guardStackedMerge(ctx context.Context, ref ports.SCMPRRef) error {
 	if s.stacker == nil {
 		return nil
 	}
 	stack, inStack, err := s.stacker.PullRequestStack(ctx, ref)
 	if err != nil {
-		// Not knowing is no reason to block the ordinary path.
 		if !errors.Is(err, ports.ErrSCMUnsupported) {
 			s.logger.Warn("pull request stack check failed before merge", "pr", ref.URL, "err", err)
 		}

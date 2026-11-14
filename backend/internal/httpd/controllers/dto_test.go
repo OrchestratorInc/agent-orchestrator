@@ -82,8 +82,6 @@ func TestNewSessionPRSummaryMapsProviderReviewEntries(t *testing.T) {
 }
 
 func TestNewSessionPRSummaryThreadCountUnknownVsObservedZero(t *testing.T) {
-	// An unknown count must stay absent from the wire, while an observed zero
-	// must serialize explicitly rather than being dropped by omitempty.
 	unknown, err := json.Marshal(controllers.NewSessionPRSummary(sessionsvc.PRSummary{}))
 	if err != nil {
 		t.Fatal(err)
@@ -146,8 +144,6 @@ func TestNewSessionPRSummaryMapsPRDetailsAndKeepsListsAsArrays(t *testing.T) {
 		t.Fatalf("commits = %+v", got.Commits)
 	}
 
-	// Never observed: the lists stay [] on the wire (clients map over them) and
-	// detailsObservedAt is absent, so "not loaded" is distinguishable from "none".
 	raw, err := json.Marshal(controllers.NewSessionPRSummary(sessionsvc.PRSummary{}))
 	if err != nil {
 		t.Fatal(err)

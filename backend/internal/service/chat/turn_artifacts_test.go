@@ -13,10 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// The artifacts a turn changed are read from the artifact directory, not from the
-// provider's diff: an agent that writes a file through a shell command and
-// registers it with `ao artifact add` reports no diff at all.
-
 func artifactDirFor(t *testing.T, h *harness) string {
 	t.Helper()
 	record, found, err := h.st.GetSession(context.Background(), testSession)
@@ -57,8 +53,6 @@ func TestTurnRecordsArtifactsWrittenWithoutAProviderDiff(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	// What a Bash tool call would leave behind: a new file, an edited one, a new
-	// file in a subdirectory. The provider reports none of it.
 	later := earlier.Add(time.Hour)
 	writeTurnArtifact(t, dir, "chart.svg", "<svg/>", later)
 	writeTurnArtifact(t, dir, "notes.md", "# Notes\n\nMore.\n", later)
@@ -103,7 +97,6 @@ func TestTurnThatChangesNoArtifactRecordsNone(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	// Deleting an artifact is not something to show a card for.
 	if err := os.Remove(filepath.Join(dir, "notes.md")); err != nil {
 		t.Fatal(err)
 	}

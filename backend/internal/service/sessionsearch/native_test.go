@@ -12,7 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionsearch"
 )
 
-// writeTranscript writes a JSONL transcript under root and returns its path.
 func writeTranscript(t *testing.T, root, name string, lines ...string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o750); err != nil {
@@ -60,7 +59,6 @@ func TestNativeClaudeTranscriptIsIndexedAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	// Claude names the project directory after the workspace path.
 	key := strings.ReplaceAll("/tmp/proj", "/", "-")
 	path := writeTranscript(t, root, filepath.Join(key, string(session.ID)+".jsonl"),
 		claudeLine(t, "user", "user", "the checkout button is misaligned", "2026-08-09T12:00:00Z"),
@@ -129,7 +127,6 @@ func TestNativeTranscriptIndexesOnlyNewBytes(t *testing.T) {
 		t.Fatalf("first pass = %+v", got.Results)
 	}
 
-	// Appending must be picked up, and the earlier document must survive.
 	appended := claudeLine(t, "assistant", "assistant", "second answer about the parser", "2026-08-09T12:01:00Z")
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -151,8 +148,6 @@ func TestNativeTranscriptIndexesOnlyNewBytes(t *testing.T) {
 	}
 }
 
-// A transcript rewritten from the start (a fresh file at the same path) must
-// reset the cursor rather than read from a stale offset.
 func TestNativeTranscriptResetsWhenTruncated(t *testing.T) {
 	root := t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
@@ -233,8 +228,6 @@ func TestNativeCodexRolloutIsIndexed(t *testing.T) {
 	}
 }
 
-// A path outside the configured provider root must never be read, even when a
-// transcript file happens to carry the session id.
 func TestNativeTranscriptOutsideRootIsIgnored(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -299,7 +292,6 @@ func TestSweepSkipsUnchangedSources(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("unchanged sweep wrote %d documents, want 0", written)
 	}
-	// The already-indexed document is still there.
 	if got := search(t, f.svc, "unchanged"); len(got.Results) != 1 {
 		t.Fatalf("document lost after no-op sweep: %+v", got.Results)
 	}
@@ -331,7 +323,6 @@ func TestNativeTranscriptWithPartialTrailingLineIsDeferred(t *testing.T) {
 	if _, err := f.svc.IndexAll(ctx); err != nil {
 		t.Fatalf("IndexAll: %v", err)
 	}
-	// A half-written record must not be indexed as final.
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open transcript: %v", err)
@@ -350,7 +341,6 @@ func TestNativeTranscriptWithPartialTrailingLineIsDeferred(t *testing.T) {
 		t.Fatalf("complete line lost: %+v", got.Results)
 	}
 
-	// Completing the line makes it visible on the next pass.
 	file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("reopen transcript: %v", err)

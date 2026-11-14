@@ -39,7 +39,6 @@ describe("the snapshot renderer without the app window", () => {
 			const loading = new Promise<void>((resolve) => {
 				pageLoaded = resolve;
 			});
-			// A window whose page loads only when told to, so the first render is under way while the shell closes.
 			class FakeWindow {
 				webContents = {
 					setWindowOpenHandler: () => undefined,
@@ -65,14 +64,11 @@ describe("the snapshot renderer without the app window", () => {
 			const first = store.request(job("first.html"));
 			await vi.waitFor(() => expect(created).toHaveBeenCalledTimes(1));
 			const queued = [1, 2, 3].map((n) => store.request(job(`queued-${n}.html`)));
-			// A request reads the disk cache before it joins the queue; let all three get there.
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			// What main does when the shell window closes.
 			shell = false;
 			store.cancel();
 			renderer.close();
 			expect(await Promise.all(queued)).toEqual([SNAPSHOT_DROPPED, SNAPSHOT_DROPPED, SNAPSHOT_DROPPED]);
-			// The render under way ends, and the queue has nothing left to start.
 			pageLoaded();
 			expect(await first).toBeNull();
 			expect(await store.request(job("after.html"))).toBeNull();

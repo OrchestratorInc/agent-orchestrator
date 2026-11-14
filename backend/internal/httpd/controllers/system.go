@@ -12,20 +12,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 )
 
-// SystemChecker is the controller-facing contract for the lightweight startup
-// preflight the desktop loading screen runs before showing the board.
 type SystemChecker interface {
 	CheckStartup(ctx context.Context) (systemcheck.Report, error)
 	CheckGitHubAuth(ctx context.Context) (systemcheck.Requirement, error)
 	OpenGitHubAuthTerminal(ctx context.Context) (shellterm.ShellTerminal, error)
 }
 
-// SystemController owns the /system routes.
 type SystemController struct {
 	Checks SystemChecker
 }
 
-// Register mounts the system requirements route on the supplied router.
 func (c *SystemController) Register(r chi.Router) {
 	r.Get("/system/requirements", c.requirements)
 	r.Get("/system/github-auth", c.githubAuth)

@@ -29,8 +29,6 @@ function readDismissals(): Set<string> {
 	} catch { return new Set(); }
 }
 
-/** Always mounted in the shell, not in a route or Settings. Read-only checks
- * and updates share the Harness page's queries; a login hands off to that page. */
 export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const { t, i18n } = useTranslation();
 	const queryClient = useQueryClient();
@@ -45,27 +43,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const observedJobs = useRef(new Set<string>());
 	const [dismissed, setDismissed] = useState(readDismissals);
 	const [expanded, setExpanded] = useState(false);
-	// Updates started from a notice run right here; the notice shows progress
-	// and any failure instead of sending the user to Settings.
 	const [starting, setStarting] = useState<ReadonlySet<AgentId>>(new Set());
-	// Harnesses whose finished job is still refreshing its advisory: until the
-	// refresh lands, the old advisory would offer Update again for a moment.
 	const [settling, setSettling] = useState<ReadonlySet<AgentId>>(new Set());
 	const startingRef = useRef(new Set<AgentId>());
 	const updateAllInFlight = useRef(false);
 	const [startingAll, setStartingAll] = useState(false);
 	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [updateAllSummary, setUpdateAllSummary] = useState<string | null>(null);
-	// Updates started here that succeeded, by the version they moved to: shown
-	// as done for a moment once the advisory stops offering them, so success
-	// never looks like the notice simply vanishing.
 	const [updated, setUpdated] = useState<ReadonlyMap<AgentId, string>>(new Map());
 	const startedJobs = useRef(new Set<AgentId>());
-	// The advisory each update started here acted on, so its failure can still
-	// be shown after a refresh stops reporting a newer release.
 	const startedUpdates = useRef(new Map<AgentId, AgentUpdateAdvisory>());
 	const stackId = useId();
-	// The expanded stack scrolls; fade its lower edge while more cards sit below.
 	const stackRef = useRef<HTMLDivElement>(null);
 	const [stackOverflows, setStackOverflows] = useState(false);
 	const updateStackCue = () => {
@@ -78,17 +66,12 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	});
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
-	// AO Cloud is one more place a harness runs: its update joins that
-	// harness's entry, for someone who may change it, never a card of its own.
 	const cloud = useCloudHarnessVersions(enabled);
 	const [cloudStarting, setCloudStarting] = useState<ReadonlySet<AgentId>>(new Set());
 	const cloudStartingRef = useRef(new Set<AgentId>());
 	const [cloudErrors, setCloudErrors] = useState<Partial<Record<AgentId, string>>>({});
-	// The cloud update each failed attempt acted on, so its failure stays shown.
 	const failedCloudUpdates = useRef(new Map<AgentId, CloudHarnessDetails>());
 
-	// Refresh even on failure: a command can change the binary before
-	// failing verification. Never keep advertising an obsolete version.
 	const refreshAfterJob = (agentId: string) => {
 		setSettling((current) => new Set([...current, agentId as AgentId]));
 		void ensureAgentReadiness([agentId]).then(async (result) => {
@@ -124,7 +107,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		}
 	}, [enabled, jobs.data, queryClient]);
 
-	/** Resolves to the sessions that kept the update from starting, if any. */
 	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string): Promise<HarnessInUse | undefined> => {
 		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return undefined;
 		startedUpdates.current.set(agentId, advisory);
@@ -134,18 +116,15 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		try {
 			const result = await startHarnessUpdate({ agentId, methodId });
 			if (result.inUse) {
-				// The notice only updates; a refusal is explained, never a session list.
 				const refusal = result.inUse.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) })
 					: t("settings.harness.inUseBlocked", { count: result.inUse.count, agent: agentLabel(agentId) });
 				setErrors((current) => ({ ...current, [agentId]: refusal }));
 				return result.inUse;
 			}
-			// The click-time check may have moved the target to a newer release.
 			if (result.advisory) startedUpdates.current.set(agentId, result.advisory);
 			if (result.error) setErrors((current) => ({ ...current, [agentId]: result.error }));
 			if (!result.job) return undefined;
 			startedJobs.current.add(agentId);
-			// A job that already finished never shows up as running, so refresh it now.
 			if (!isActiveInstallJob(result.job)) {
 				refreshAfterJob(agentId);
 				showUpdated(agentId, result.job);
@@ -161,9 +140,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		}
 	};
 
-	/** Saves AO Cloud's newer release for new Cloud sessions; it has no job to
-	 * watch. alone: the entry has no update on this computer, whose finished
-	 * job would otherwise say it is done. */
 	const startCloudUpdate = async (agentId: AgentId, details: CloudHarnessDetails, alone: boolean) => {
 		if (cloudStartingRef.current.has(agentId)) return;
 		cloudStartingRef.current.add(agentId);
@@ -190,24 +166,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		}
 	};
 
-	// Settings is a modal that blocks pointer and focus outside it; its Harness
-	// page offers the same updates there.
 	if (settingsOpen || !readinessComplete || readiness.isError) return null;
-	// Only advertise updates AO can run without a login or manual maintenance.
-	// Wait for these checks so ineligible harnesses never flash in the stack. A
-	// failed background refetch keeps the cached data, so an update in flight
-	// or its failure stays visible.
 	if (!authPlans.data || !installers.data) return null;
-	// Let the first batch settle so a fast, seldom-used harness cannot jump
-	// ahead of the most-used one. Failed lookups don't block the other results.
 	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
-	// AO Cloud's answer joins the same first batch, so a harness never gains
-	// its cloud target after the notice is up.
 	if (cloud.isPending) return null;
 	const readinessById = new Map(readiness.data?.agents.map((agent) => [agent.id, agent]));
-	// An update started here that failed stays explained until it is dismissed,
-	// even once a refresh reports the harness current: an updater can replace
-	// the binary and still exit with an error.
 	const failedUpdateAdvisory = (agentId: AgentId) => {
 		const advisory = startedUpdates.current.get(agentId);
 		const job = jobs.data?.find((candidate) => candidate.target === agentId);
@@ -224,8 +187,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
 		return dismissed.has(key) ? undefined : { advisory, key };
 	};
-	// Only an update the person can make: someone who may not change AO
-	// Cloud's version never sees one.
 	const cloudUpdate = (agentId: AgentId) => {
 		if (!CLOUD_VERSIONED_HARNESSES.has(agentId)) return undefined;
 		const current = describeCloudHarness(cloud.data, agentId);
@@ -251,7 +212,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const dismiss = (...keys: string[]) => {
 		setDismissed((current) => {
 			const next = new Set([...current, ...keys].slice(-100));
-			try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next])); } catch { /* In-memory dismissal still works. */ }
+			try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next])); } catch { }
 			return next;
 		});
 		if (updates.length <= 2) setExpanded(false);
@@ -275,10 +236,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		setExpanded(true);
 		setUpdateAllSummary(null);
 		let started = 0;
-		// AO Cloud's side only saves a release, so it never waits on a session.
 		for (const target of cloudUpdateAllTargets) void startCloudUpdate(target.agentId, target.details, target.alone);
 		try {
-			// Each notice keeps its existing target/owner recheck and error display.
 			for (const target of targets) {
 				const refused = await startUpdate(target.agentId, target.advisory, target.methodId);
 				if (refused) skipped.push({ agentId: target.agentId, count: refused.count });
@@ -295,7 +254,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			}));
 		}
 	};
-	// Harnesses whose sessions must end first are skipped and named in the summary.
 	const startAllUpdates = () => {
 		if (updateAllInFlight.current || (updateAllTargets.length === 0 && cloudUpdateAllTargets.length === 0)) return;
 		const skipped: Array<{ agentId: AgentId; count: number }> = [];
@@ -309,8 +267,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	};
 
 	const jobFor = (agentId: AgentId) => jobs.data?.find((candidate) => candidate.target === agentId);
-	// While updates start the button stays solid: it reports progress, not an
-	// unavailable action.
 	const updateAllButton = <Button type="button" size="sm" className={cn("min-w-20 shrink-0", startingAll && "disabled:opacity-100")}
 		aria-busy={startingAll || undefined}
 		disabled={startingAll || (updateAllTargets.length === 0 && cloudUpdateAllTargets.length === 0)} onClick={() => void startAllUpdates()}>
@@ -327,10 +283,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const needsLogin = Boolean(advisory) && needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
 		const canUpdate = Boolean(method?.available && method.updateAvailable) || Boolean(cloudDetails?.actionable);
 		const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId) || cloudStarting.has(agentId);
-		// A job this notice started that failed stays explained here.
 		const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
 		const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined) ?? cloudErrors[agentId];
-		// A start error means this attempt made no job; any retained job is an older one.
 		const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
 		const requestAction = () => {
 			if (cloudDetails?.actionable) void startCloudUpdate(agentId, cloudDetails, !advisory);
@@ -339,10 +293,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				void startUpdate(agentId, advisory, method.id);
 				return;
 			}
-			// A login runs in a terminal on the Harness page, which starts it once on open.
 			openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, startLogin: true });
 		};
-		// Which places one Update covers, with each one's versions on hover.
 		const targets = cloudDetails ? <Tooltip>
 			<TooltipTrigger asChild>
 				<p tabIndex={0} className="mt-1 w-fit text-caption text-muted-foreground">{advisory ? t("settings.harness.cloud.targetBoth", { host: t("settings.harness.thisComputer") }) : t("settings.harness.cloud.label")}</p>
@@ -360,7 +312,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			{targets}
 			<div className="mt-2 flex items-center gap-2">
 				{versions}
-				{/* One width for every label, so Updating… never pushes the versions around. */}
 				{busy ? <Button size="sm" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-icon-2xs animate-spin" aria-hidden="true" />{t("settings.harness.updating")}</Button>
 				: (ready || !advisory) && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="min-w-20" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
 					: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
@@ -370,7 +321,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				</Tooltip>
 				: <Button size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 			</div>
-			{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 			{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
 				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
 				<Button type="button" size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
@@ -393,21 +343,16 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	</SwipeCard>);
 	const stackTitle = t("settings.harness.updateStackTitle", { count: updates.length });
 	const dismissAll = () => dismiss(...updates.flatMap((update) => update.keys));
-	// Portaled to the end of <body>: Electron applies window drag regions in DOM
-	// order, so a later drag strip (the home page's) would otherwise override no-drag.
 	return createPortal(<NoticeFrame label={t("settings.harness.updateNoticeTitle")}>
 		<div className="space-y-2">
 		{updates.length > 1 ? <SwipeCard variant="card" role="group" label={t("settings.harness.updateNoticeTitle")} onDismiss={dismissAll} swipeable={!isExpanded}
 			dismissLabel={t("settings.harness.dismissAllUpdates")}
-			// Overlapping marks, each cut out of the one beneath by a halo in the card's colour.
 			icon={<span className="flex shrink-0 items-center -space-x-1.5">
 				{updates.slice(0, 3).map(({ agentId }) => <AgentAvatar key={agentId} className="relative size-icon-xl [filter:drop-shadow(0_0_1px_var(--color-bg-settings-menu))_drop-shadow(0_0_1px_var(--color-bg-settings-menu))_drop-shadow(0_0_2px_var(--color-bg-settings-menu))_drop-shadow(0_0_3px_var(--color-bg-settings-menu))]" decorative provider={agentId} />)}
 			</span>}
 			title={stackTitle}
-			// The Update all summary takes the help line's place while it is shown.
 			help={updateAllSummary && !startingAll ? updateAllSummary : help}
 			footer={<>
-				{/* The list toggle keeps one place, opposite Update all, whichever way it points. */}
 				<Button type="button" size="sm" variant="secondary" className="shrink-0" aria-expanded={isExpanded} aria-controls={stackId}
 					onClick={() => setExpanded(!isExpanded)}>
 					{isExpanded ? t("settings.harness.hideUpdateStack") : t("settings.harness.showUpdateStack", { count: updates.length })}
@@ -416,8 +361,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				<span className="flex-1" />
 				{updateAllButton}
 			</>}>
-			{/* Mounted while closed, so opening only animates: building every row on
-			    the click would stall the first frames. */}
 			<div inert={!isExpanded} aria-hidden={!isExpanded || undefined}
 				className={cn("-mx-3 overflow-hidden transition-[height,opacity] duration-200 ease-out [interpolate-size:allow-keywords] motion-reduce:transition-none",
 					isExpanded ? "h-auto opacity-100" : "h-0 opacity-0")}>
@@ -433,9 +376,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	</NoticeFrame>, document.body);
 }
 
-/** A notice card, or a row in the expanded list: swipe it right (two fingers
- * or a drag) or press × to dismiss it. Every card puts its main action in the
- * same bottom-right place, so Update and Update all line up. */
 function SwipeCard({ variant, role, label, icon, title, help, dismissLabel, onDismiss, swipeable = true, footer, children }: {
 	variant: "card" | "row";
 	role?: "status" | "group";
@@ -452,8 +392,6 @@ function SwipeCard({ variant, role, label, icon, title, help, dismissLabel, onDi
 	const ref = useRef<HTMLElement>(null);
 	const leave = useSwipeToDismiss(ref, onDismiss, swipeable);
 	return <article ref={ref} aria-label={label} role={role}
-		// The chat model selector's menu surface, so it reads as a floating menu
-		// apart from the composer and other cards it can sit over.
 		className={cn("relative touch-pan-y select-none px-3 py-2.5",
 			variant === "card" && "rounded-(--radius-settings-panel) border border-(--color-border-settings-menu) bg-settings-menu shadow-(--shadow-popover)")}>
 		<div className="flex items-center gap-2">
@@ -467,9 +405,6 @@ function SwipeCard({ variant, role, label, icon, title, help, dismissLabel, onDi
 	</article>;
 }
 
-// Builds published as 0.0.<unix seconds>-g<sha> (Amp's) say nothing readable in
-// their digits, and cut short they look like neighbouring patch releases. Show
-// the build date instead; the full version stays in the hover title.
 const BUILD_STAMP = /^v?\d+\.\d+\.(\d{10})(?:[-+.].*)?$/;
 
 function buildDate(version: string): Date | null {
@@ -489,7 +424,6 @@ function VersionChange({ from, to }: { from: string; to: string }) {
 	const locale = i18n.resolvedLanguage ?? i18n.language;
 	let fromLabel = friendlyVersion(from, locale);
 	let toLabel = friendlyVersion(to, locale);
-	// Two builds from one day read the same as dates; fall back to the versions.
 	if (fromLabel === toLabel) {
 		fromLabel = versionLabel(from);
 		toLabel = versionLabel(to);
@@ -501,20 +435,9 @@ function VersionChange({ from, to }: { from: string; to: string }) {
 	</p>;
 }
 
-// Longer than the list's, a closing row's and the top-bar slide's transitions (200ms, 180ms, 200ms).
 const MOTION_SETTLE_MS = 260;
 const UPDATED_MS = 4_000;
 
-/** The notice's frame in the top-right corner of the framed center panel, just
- * below the page's top bar when it has one, so it never covers a page's own
- * actions and slides, rather than jumps, between pages. A fixed box that
- * tracks the panel clips it, so a swipe slides it out under the panel's edge
- * instead of over the window frame.
- *
- * The live browser page is a native view: anything drawn over it has to raise
- * the whole transparent shell above the page, which then swallows every click
- * and scroll meant for the browser. This notice never does that. It turns
- * invisible while the live page overlaps it, and stays measurable meanwhile. */
 function NoticeFrame({ label, children }: { label: string; children: ReactNode }) {
 	const browserRect = useLiveBrowserViewportRect();
 	const panel = useCenterPanelBox();
@@ -523,10 +446,6 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 	useLayoutEffect(() => {
 		const element = frameRef.current;
 		if (!element) return;
-		// While a height or position transition runs (the list opening, a row
-		// closing, the notice following a top bar) the rect changes every frame;
-		// measuring then would re-render every reader of the rect each frame, so
-		// it measures once the motion has settled.
 		let settle: number | undefined;
 		const measure = () => {
 			if (settle !== undefined) return;
@@ -555,26 +474,20 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 		};
 	}, [panel]);
 	const covered = noticeCoversLiveBrowser(browserRect, box);
-	// Session content in this corner reads this rect to keep itself clear.
 	useLayoutEffect(() => publishHarnessUpdateNoticeRect(covered ? null : box), [box, covered]);
 	useLayoutEffect(() => () => publishHarnessUpdateNoticeRect(null), []);
 	const area = panel ?? { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
 	return <div className="pointer-events-none fixed isolate z-[calc(var(--z-overlay)-1)] overflow-hidden"
 		style={{ left: area.left, top: area.top, width: area.right - area.left, height: area.bottom - area.top, borderRadius: panel?.radius }}>
 		<aside ref={frameRef} role="region" aria-label={label} inert={covered} aria-hidden={covered || undefined}
-			// Its own compositor layer: the card's height animation repaints only the card.
-			// Below the page's top bar when it has one, sliding to match as pages
-			// change; `translate` stays clear of the enter animation's transform.
 			className={cn("harness-update-notice pointer-events-auto absolute top-3 right-3 w-[min(320px,calc(100%-24px))] text-card-foreground will-change-transform transition-[translate] duration-200 ease-out motion-reduce:transition-none",
 				covered && "invisible", "toast-enter")}
-			// The window's drag region would otherwise swallow the notice's clicks.
 			style={{ WebkitAppRegion: "no-drag", translate: `0 ${panel?.topInset ?? 0}px` } as CSSProperties}>
 			{children}
 		</aside>
 	</div>;
 }
 
-/** Whether the notice overlaps the live native browser page. */
 export function noticeCoversLiveBrowser(browser: ViewportRect | null, notice: ViewportRect | null): boolean {
 	if (!browser || !notice) return false;
 	return notice.left < browser.right && notice.right > browser.left && notice.top < browser.bottom && notice.bottom > browser.top;

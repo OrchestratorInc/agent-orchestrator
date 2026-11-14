@@ -14,12 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// providerPromptTerminalOutput is a provider-owned input request (an approval
-// or question picker) whose rows can read as composer text.
 const providerPromptTerminalOutput = "provider-prompt"
 
-// composerProbeAgent is the transition test agent plus a provider-owned
-// waiting_input screen that also reports a draft-shaped composer.
 type composerProbeAgent struct{ transitionSurfaceAgent }
 
 func (a composerProbeAgent) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
@@ -29,7 +25,6 @@ func (a composerProbeAgent) InspectTerminalSurface(output string) ports.Terminal
 	return a.transitionSurfaceAgent.InspectTerminalSurface(output)
 }
 
-// fastComposerProbe keeps the production probe shape with test-sized timings.
 var fastComposerProbe = interfaceTransitionConfig{
 	pollInterval:   time.Millisecond,
 	idleSettle:     time.Nanosecond,
@@ -79,10 +74,6 @@ func TestComposerHoldsDraft(t *testing.T) {
 		}
 	})
 
-	// Review finding 2: agent activity after the last keystroke does not prove the
-	// composer is empty. An interrupt's Stop hook refreshes LastActivityAt while
-	// the draft stays on screen, and keystrokes typed over a direct tmux attach
-	// never reach lastInputAt at all. The screen is the only proof.
 	t.Run("draft is refused even when the agent acted after the last keystroke", func(t *testing.T) {
 		m, _, _ := draftProbeManager(transitionSurfaceAgent{}, draftTerminalOutput)
 		rec := draftProbeRecord(domain.ActivityIdle)
@@ -92,7 +83,6 @@ func TestComposerHoldsDraft(t *testing.T) {
 		}
 	})
 
-	// Review finding 3: provider-owned approval and input screens are not drafts.
 	t.Run("provider decision screen is not a draft", func(t *testing.T) {
 		m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, decisionTerminalOutput)
 		if m.composerHoldsDraft(ctx, draftProbeRecord(domain.ActivityIdle), noInput) {
@@ -183,9 +173,6 @@ func TestComposerHoldsDraft(t *testing.T) {
 	})
 
 	t.Run("active turn with a draft is inspected and refused", func(t *testing.T) {
-		// An active turn can still have an editable composer holding a human
-		// follow-up draft (Claude/Codex report composer state independently of work
-		// state), so activity alone is not proof of an empty composer (#5711).
 		m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, draftTerminalOutput)
 		if !m.composerHoldsDraft(ctx, draftProbeRecord(domain.ActivityActive), noInput) {
 			t.Fatal("an active turn with a proven draft must refuse, not deliver")
@@ -223,8 +210,6 @@ func TestComposerHoldsDraft(t *testing.T) {
 	}
 }
 
-// hangingStyledRuntime is a runtime whose styled capture never returns until
-// its context ends, like a wedged tmux server.
 type hangingStyledRuntime struct{ *transitionRuntime }
 
 func (hangingStyledRuntime) GetStyledOutput(ctx context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
@@ -232,8 +217,6 @@ func (hangingStyledRuntime) GetStyledOutput(ctx context.Context, _ ports.Runtime
 	return "", ctx.Err()
 }
 
-// recordingInputGate is a terminal input gate that also exposes the last
-// accepted keystroke without closing input.
 type recordingInputGate struct {
 	lastInputAt time.Time
 	drainCalls  int
@@ -246,7 +229,6 @@ func (g *recordingInputGate) BeginInputDrain(string) (time.Time, func()) {
 
 func (g *recordingInputGate) LastInputAt(string) time.Time { return g.lastInputAt }
 
-// drainOnlyInputGate only supports closing input, like an older gate.
 type drainOnlyInputGate struct{ drainCalls int }
 
 func (g *drainOnlyInputGate) BeginInputDrain(string) (time.Time, func()) {
@@ -255,8 +237,6 @@ func (g *drainOnlyInputGate) BeginInputDrain(string) (time.Time, func()) {
 }
 
 func TestComposerBusyCheckNeverClosesTerminalInput(t *testing.T) {
-	// Closing the input barrier DROPS the operator's keystrokes (they are not
-	// buffered), so reading the last keystroke for the probe must be read-only.
 	m, _, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
 	gate := &recordingInputGate{lastInputAt: time.Now()}
 	m.SetTerminalInputGate(gate)
@@ -312,7 +292,6 @@ func TestSend_TUIEmptyComposerDelivers(t *testing.T) {
 }
 
 func TestSend_EnterOnlyResubmitSkipsTheComposerCheck(t *testing.T) {
-	// An empty message is the deliberate Enter that submits the existing draft.
 	m, msg := composerSendTestManager(t, draftTerminalOutput)
 	if err := m.Send(context.Background(), "s1", "", nil); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -323,9 +302,6 @@ func TestSend_EnterOnlyResubmitSkipsTheComposerCheck(t *testing.T) {
 }
 
 func TestSend_InternalReportDeliveryHonorsTheComposerCheck(t *testing.T) {
-	// A worker report must not append to and submit an operator's unsent draft.
-	// It is refused with ErrComposerBusy; report.Coordinator defers the batch
-	// (ErrOrchestratorBusy) and retries, so the report is not lost (#5711).
 	m, msg := composerSendTestManager(t, draftTerminalOutput)
 	report := domain.WrapReportDelivery("cm-1", "worker finished")
 	err := m.Send(context.Background(), "s1", report, nil)
@@ -337,9 +313,6 @@ func TestSend_InternalReportDeliveryHonorsTheComposerCheck(t *testing.T) {
 	}
 }
 
-// fencingInputGate is a terminal input gate that records HoldInput/release so a
-// test can assert the composer guard fences input across the final proof and the
-// write (#5711).
 type fencingInputGate struct {
 	held     int
 	released int
@@ -354,8 +327,6 @@ func (g *fencingInputGate) HoldInput(string) (time.Time, func()) {
 	return time.Time{}, func() { g.released++ }
 }
 
-// lateKeystrokeGate models a keystroke accepted during the unfenced probe, just
-// before the fence closed, that the TUI draws only after renderDelay.
 type lateKeystrokeGate struct {
 	renderDelay time.Duration
 	mu          sync.Mutex
@@ -383,10 +354,6 @@ func (g *lateKeystrokeGate) frame(int) string {
 }
 
 func TestComposerBusyCheck_FencedRecheckWaitsForAKeystrokeToRender(t *testing.T) {
-	// Holding the fence stops later keystrokes, but one accepted during the probe
-	// may not be on screen yet. The fenced re-check must settle on the newest
-	// keystroke the fence reports before capturing, or it reads the still-empty
-	// composer and pastes onto the human's input (#5711).
 	gate := &lateKeystrokeGate{renderDelay: 30 * time.Millisecond}
 	m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
 	m.interfaceTransition.idleSettle = 80 * time.Millisecond
@@ -403,12 +370,6 @@ func TestComposerBusyCheck_FencedRecheckWaitsForAKeystrokeToRender(t *testing.T)
 }
 
 func TestComposerBusyCheck_FencedRecheckCatchesDraftAfterProbe(t *testing.T) {
-	// The unfenced multi-sample probe reads an empty composer, but a keystroke
-	// lands before the write. Once the probe proves empty, the guard fences input
-	// and repeats the draft proof: the now-present draft must be caught and the
-	// send refused, closing the probe/write race a read of LastInputAt cannot.
-	// The probe short-circuits to "empty" on its first non-draft frame (one
-	// capture), then the fenced re-check captures the draft that has since appeared.
 	m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput, draftTerminalOutput)
 	gate := &fencingInputGate{}
 	m.SetTerminalInputGate(gate)
@@ -429,9 +390,6 @@ func TestComposerBusyCheck_FencedRecheckCatchesDraftAfterProbe(t *testing.T) {
 }
 
 func TestComposerBusyCheck_FenceHeldForDeliveryUntilRelease(t *testing.T) {
-	// Empty throughout: probe and fenced re-check both read empty, so the send is
-	// delivered and the fence is handed back to the guard STILL HELD — it is
-	// released only after the pane write, so a human keystroke cannot interleave.
 	m, _, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
 	gate := &fencingInputGate{}
 	m.SetTerminalInputGate(gate)
@@ -464,25 +422,19 @@ func TestComposerBusyCheck_FencedDraftRequiresConsecutiveSamples(t *testing.T) {
 	}
 }
 
-// nudgeSafeSurfaceAgent reads the composer like transitionSurfaceAgent and is
-// nudge-safe like claude-code, so Send runs both the draft guard and confirmActive.
 type nudgeSafeSurfaceAgent struct{ transitionSurfaceAgent }
 
 func (nudgeSafeSurfaceAgent) EmitsSubmitActivity() bool  { return true }
 func (nudgeSafeSurfaceAgent) EmitsBlockedActivity() bool { return true }
 
 func TestSend_NoEnterNudgeAfterTheOperatorTypes(t *testing.T) {
-	// The prompt's Enter was swallowed (the session never goes active) and the
-	// operator typed once the write fence released. A confirmation Enter would
-	// now submit AO's prompt with their keystrokes appended (#5711 reversed), so
-	// the send stops nudging and reports the delivery as unconfirmed.
 	m, msg := composerSendTestManager(t, idleTerminalOutput)
 	m.agents = singleAgent{agent: nudgeSafeSurfaceAgent{}}
 	gate := &recordingInputGate{}
 	m.SetTerminalInputGate(gate)
 	msg.onSend = func(_ domain.SessionID, message string) {
 		if message != "" {
-			gate.lastInputAt = time.Now() // a keystroke right after AO's write
+			gate.lastInputAt = time.Now()
 		}
 	}
 
@@ -527,8 +479,6 @@ type confirmationInputLease struct {
 func (l *confirmationInputLease) AcquireSessionInput(domain.SessionID) (func(), bool) {
 	l.acquires++
 	if l.acquires == 2 && !l.gate.held {
-		// Typing lands while the retry acquires admission, after the old
-		// unfenced timestamp check but before its Enter write.
 		l.gate.lastInputAt = time.Now()
 	}
 	return func() {}, true

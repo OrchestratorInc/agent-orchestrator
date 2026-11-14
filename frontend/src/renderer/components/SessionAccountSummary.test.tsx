@@ -11,7 +11,6 @@ vi.mock("../lib/preview-mode", () => ({ usesPreviewWorkspaceData: false }));
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: vi.fn(), PUT: putMock },
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
-	// Trusted, so a local session's move status is read; the cloud one must not be.
 	hasTrustedApiBaseUrl: () => true,
 	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "Request failed",
@@ -35,8 +34,6 @@ const session = (id: string, overrides: Partial<WorkspaceSession> = {}) =>
 
 const sessionIdOf = (options: unknown) => (options as { params?: { path?: { sessionId?: string } } } | undefined)?.params?.path?.sessionId;
 
-// A cloud session has no row in the local daemon: its summary is hidden and
-// asks the local daemon for neither its account nor a move.
 it("asks the local daemon about a local session's account, never a cloud session's", async () => {
 	getMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/api/v1/agents/accounts" ? { accounts: [] } : {} }));
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -50,9 +47,6 @@ it("asks the local daemon about a local session's account, never a cloud session
 		expect(paths).toEqual(expect.arrayContaining(["/api/v1/agents/accounts/sessions/{sessionId}", "/api/v1/sessions/{sessionId}/interface-transition"]));
 	});
 	expect(getMock.mock.calls.filter(([, options]) => sessionIdOf(options) === "s-cloud")).toEqual([]);
-	// Let every query settle and React Query deliver its batched updates (on a
-	// timer) while the DOM still exists: one landing after the environment is
-	// torn down throws "window is not defined".
 	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
 	unmount();
 	queryClient.clear();

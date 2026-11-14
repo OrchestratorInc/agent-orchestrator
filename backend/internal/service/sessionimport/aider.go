@@ -23,15 +23,13 @@ func discoverAiderRegistered(ctx context.Context, projects []string) ([]sourceFi
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			continue // One unreadable registered project does not hide the others.
+			continue
 		}
 		out = append(out, files...)
 	}
 	return out, nil
 }
 
-// discoverAiderProject reads exactly one registered project root. It never
-// searches a home directory or recursively traverses a repository.
 func discoverAiderProject(ctx context.Context, project string) ([]sourceFiles, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -103,8 +101,6 @@ func readAiderTranscript(ctx context.Context, root string, paths ...string) (tra
 		}
 		t.messages = append(t.messages, Message{Role: role, Text: value, At: t.last})
 	}
-	// Match Aider utils.split_chat_history_markdown: headings are metadata,
-	// #### introduces user text, and > introduces tool output, which is hidden.
 	for _, raw := range bytes.SplitAfter(data, []byte("\n")) {
 		if err := ctx.Err(); err != nil {
 			return t, err

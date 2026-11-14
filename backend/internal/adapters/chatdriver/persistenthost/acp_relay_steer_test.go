@@ -11,8 +11,6 @@ import (
 
 const steerPromptParams = `{"sessionId":"s","prompt":[{"type":"text","text":"use staging"}],"_meta":{"ao.steerPrompt":true}}`
 
-// startRelayPrompt opens a session and starts one prompt, returning its
-// provider-side id.
 func startRelayPrompt(t *testing.T, relay *acpRelay) string {
 	t.Helper()
 	session := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`+"\n"), 1)
@@ -45,7 +43,6 @@ func TestACPRelaySettlesTheTurnOnTheSteerPrompt(t *testing.T) {
 	update, _ := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working"}}}}`+"\n"), 1, true)
 	steer := frameID(t, relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":`+steerPromptParams+`}`+"\n"), 1))
 
-	// The agent hands the first prompt off: its answer is not the turn's result.
 	handoff, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+first+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
 	if journaled || frameID(t, handoff) != "2" || strings.Contains(string(handoff), ACPEventIDMetaKey) {
 		t.Fatalf("handed-off answer = journaled:%v frame:%s, want a plain answer to client id 2", journaled, handoff)
@@ -54,7 +51,6 @@ func TestACPRelaySettlesTheTurnOnTheSteerPrompt(t *testing.T) {
 	if !state.ActivePrompt || state.PendingResultEventID != "" {
 		t.Fatalf("state after handoff = %+v, want the turn still active", state)
 	}
-	// The turn's journal survives the steer prompt joining it.
 	if replay := relayReplayFrames(t, relay); len(replay) != 1 || !strings.Contains(string(replay[0]), "working") {
 		t.Fatalf("replay after handoff = %q (update was %s)", replay, update)
 	}
@@ -69,8 +65,6 @@ func TestACPRelaySettlesTheTurnOnTheSteerPrompt(t *testing.T) {
 	}
 }
 
-// agy ends the first prompt only when the steer prompt takes the work over, so
-// once it has handed off, the steer prompt's failure is the turn's failure.
 func TestACPRelayHandedOffTurnFailsWhenTheSteerPromptFails(t *testing.T) {
 	relay := newTestACPRelay(t)
 	first := startRelayPrompt(t, relay)
@@ -119,9 +113,7 @@ func TestACPRelayRefusesASteerPromptOutsideATurn(t *testing.T) {
 			t.Fatalf("steer prompt %s = provider %q client %q err %v, want refused as too late", when, late.provider, late.client, err)
 		}
 	}
-	// The result is not acknowledged yet: the steer came too late for the turn.
 	steerAfter("before the result is acknowledged")
-	// Nor does it become a turn of its own once the result is acknowledged.
 	ack, _ := json.Marshal(map[string]any{"method": ACPPromptAckMethod, "params": map[string]string{"eventId": relay.snapshot().PendingResultEventID}})
 	relayClientFrame(t, relay, append(ack, '\n'), 1)
 	if state := relay.snapshot(); state.PendingResultEventID != "" {
@@ -130,8 +122,6 @@ func TestACPRelayRefusesASteerPromptOutsideATurn(t *testing.T) {
 	steerAfter("after the result is acknowledged")
 }
 
-// Hermes answers a steer prompt at once and the running prompt keeps the turn,
-// so the turn's result is the first prompt's later answer.
 func TestACPRelaySettlesTheTurnOnTheLastPromptToReturn(t *testing.T) {
 	relay := newTestACPRelay(t)
 	first := startRelayPrompt(t, relay)
@@ -150,9 +140,6 @@ func TestACPRelaySettlesTheTurnOnTheLastPromptToReturn(t *testing.T) {
 	}
 }
 
-// A controller that reattached mid-turn steers it with a prompt of its own. The
-// earlier attachment's prompt handing off reaches it as a notification, and its
-// own steer prompt's answer is the turn's result.
 func TestACPRelayTellsAReattachedControllerAboutAHandoff(t *testing.T) {
 	relay := newTestACPRelay(t)
 	first := startRelayPrompt(t, relay)
@@ -183,14 +170,8 @@ func TestACPRelayTellsAReattachedControllerAboutAHandoff(t *testing.T) {
 	}
 }
 
-// The stall watchdog answers every prompt of a steered turn, so the controller
-// is not left waiting on the one that started it.
 const stalledSteerPrompt = `{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"session-live","prompt":[],"_meta":{"ao.steerPrompt":true}}}` + "\n"
 
-// A steered turn that stalls has two prompts in flight. The watchdog cancels
-// the turn once, and the adapter's answers settle it: the earlier answer passes
-// through as it is, and only the last one, after which the adapter is quiet,
-// becomes the stall failure that ends the turn.
 func TestACPRelayStalledSteeredTurnEndsOnceWhenTheAdapterAnswersTheCancel(t *testing.T) {
 	relay, root := startStallTestPrompt(t)
 	steer := frameID(t, relayClientFrame(t, relay, []byte(stalledSteerPrompt), 1))
@@ -229,9 +210,6 @@ func TestACPRelayStalledSteeredTurnEndsOnceWhenTheAdapterAnswersTheCancel(t *tes
 	}
 }
 
-// When the adapter ignores the cancel, the watchdog settles every prompt still
-// waiting once the grace runs out, oldest first, in one pass. None carries the
-// stall marker, so the controller keeps its queue held.
 func TestACPRelayStalledSteeredTurnSettlesEveryPromptWhenTheCancelIsIgnored(t *testing.T) {
 	relay, _ := startStallTestPrompt(t)
 	relayClientFrame(t, relay, []byte(stalledSteerPrompt), 1)
@@ -265,8 +243,6 @@ func TestACPRelayStalledSteeredTurnSettlesEveryPromptWhenTheCancelIsIgnored(t *t
 	}
 }
 
-// Once the turn is being cancelled, by Stop or by the watchdog, a steer prompt
-// is refused at the host: the agent would run it as fresh work after the cancel.
 func TestACPRelayRefusesASteerPromptOnceTheTurnIsBeingCancelled(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -298,9 +274,6 @@ func TestACPRelayRefusesASteerPromptOnceTheTurnIsBeingCancelled(t *testing.T) {
 
 const steerCommandParams = `{"sessionId":"s","prompt":[{"type":"text","text":"/steer use staging"}],"_meta":{"ao.steerPrompt":true,"ao.steerKeepsTurn":true}}`
 
-// A steer command's answer is never the turn's result. The turn's own prompt's
-// answer is, success or failure. Answered first, the command leaves the turn
-// to that prompt as usual.
 func TestACPRelayNeverSettlesTheTurnOnASteerCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -334,10 +307,6 @@ func TestACPRelayNeverSettlesTheTurnOnASteerCommand(t *testing.T) {
 	}
 }
 
-// Hermes runs the guidance inside its `/steer` request when the turn ended just
-// before the command arrived ("No active turn"). The turn's own answer then
-// waits for the command's, so the run's output stays in the turn and the next
-// prompt does not reach a busy agent. The result is still the turn's own answer.
 func TestACPRelayKeepsTheTurnOpenWhileASteerCommandRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -386,9 +355,6 @@ func TestACPRelayKeepsTheTurnOpenWhileASteerCommandRuns(t *testing.T) {
 	}
 }
 
-// The stall watchdog cancels the turn first. If the adapter answers the
-// cancel, the turn's own answer, held for a running command, ends the turn
-// with the stall marker once the command answers too.
 func TestACPRelayStalledTurnWithARunningSteerCommandEndsOnceTheCommandAnswers(t *testing.T) {
 	relay, root := startStallTestPrompt(t)
 	steer := frameID(t, relayClientFrame(t, relay, []byte(stalledSteerCommand), 1))
@@ -413,8 +379,6 @@ func TestACPRelayStalledTurnWithARunningSteerCommandEndsOnceTheCommandAnswers(t 
 
 const stalledSteerCommand = `{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"session-live","prompt":[],"_meta":{"ao.steerPrompt":true,"ao.steerKeepsTurn":true}}}` + "\n"
 
-// If the adapter ignores the cancel, the watchdog answers a pending steer
-// command first, so the turn's own prompt's failure is its result.
 func TestACPRelayStallWatchdogEndsTheTurnOnItsOwnPrompt(t *testing.T) {
 	relay, _ := startStallTestPrompt(t)
 	relayClientFrame(t, relay, []byte(stalledSteerCommand), 1)
@@ -434,10 +398,6 @@ func TestACPRelayStallWatchdogEndsTheTurnOnItsOwnPrompt(t *testing.T) {
 	}
 }
 
-// When the turn's own prompt has answered and only a running command is left,
-// a watchdog whose cancel is ignored fails the command and then the turn. The
-// held success would release the queue into a wedged adapter, so it becomes a
-// failure, without the stall marker.
 func TestACPRelayStallWatchdogSettlesAHeldResultWhenTheCancelIsIgnored(t *testing.T) {
 	relay, root := startStallTestPrompt(t)
 	relayClientFrame(t, relay, []byte(stalledSteerCommand), 1)

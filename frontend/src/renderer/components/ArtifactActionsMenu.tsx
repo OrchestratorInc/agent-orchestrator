@@ -35,14 +35,6 @@ export function terminalName(): string {
 	return isWindowsPlatform() ? "Command Prompt" : "Terminal";
 }
 
-/**
- * Copies a cloud session's artifact files to its folder under ~/.ao and opens
- * it in the file manager, or, given `reveal`, copies only that artifact and
- * shows it there: a cloud session's artifacts live in the control plane, so
- * this is the folder a local session's "Show in" opens. With `browser`, it
- * copies them all, so a page's own files load, and opens `reveal` in the
- * default browser.
- */
 export async function openCloudArtifactsFolder(
 	client: CloudCpClient,
 	baseUrl: string,
@@ -64,12 +56,6 @@ export async function openCloudArtifactsFolder(
 	});
 }
 
-/**
- * The open artifact's name, as a menu: show it in the file manager or a
- * terminal (local sessions only), copy its contents, or delete it. Another
- * member's cloud session files are view only: the menu then offers none of
- * the actions that change or copy them, and says why.
- */
 export function ArtifactActionsMenu({
 	artifact,
 	downloadUrl,
@@ -94,13 +80,7 @@ export function ArtifactActionsMenu({
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
-	/** Draws the icon-only trigger as a vertical ellipsis. */
 	verticalDots?: boolean;
-	/**
-	 * Adds Publish to an icon-only menu, or Copy public link and Unpublish once
-	 * the artifact is published; Publish and Unpublish open the publish panel
-	 * under the trigger.
-	 */
 	share?: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	variant?: "default" | "sidebar";
 	onEdit?: () => void;
@@ -127,7 +107,6 @@ export function ArtifactActionsMenu({
 	const shareAvailable = useShareAvailable();
 	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
 	const actionClassName = cn(className, (menuOpen || shareOpen) && "opacity-100 [@media(hover:hover)]:opacity-100");
-	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
 	const sidebar = variant === "sidebar";
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
@@ -136,7 +115,6 @@ export function ArtifactActionsMenu({
 	const cloudFileUrl = session.cloud
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
 		: undefined;
-	// The deleted file leaves the session's artifact list on the next read.
 	const remove = useMutation({
 		mutationFn: () => session.cloud
 			? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
@@ -158,9 +136,6 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		open.mutate({ sessionId: session.id, targetId, path: artifact.path });
 	};
-	// The main process resolves the path inside the session's artifact
-	// directory; a cloud session's file opens from its copy under ~/.ao.
-	// A cloud open copies the session's files first; one at a time.
 	const [cloudBrowserOpening, setCloudBrowserOpening] = useState(false);
 	const openInBrowser = async () => {
 		open.reset();
@@ -195,7 +170,6 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl ?? cloudFileUrl, t("files.error.loadArtifact"), Boolean(session.cloud)));
-			// A cloud file is known to be text only once it is read.
 			if (session.cloud && detail.binary) throw new Error(t("artifacts.notText"));
 			await aoBridge.clipboard.writeText(detail.content);
 		} catch (error) {
@@ -214,7 +188,6 @@ export function ArtifactActionsMenu({
 		}
 	};
 	const copyable = owner && !fileMediaKind(artifact.path);
-	/** Copies the artifact's public link, showing why below the menu if the clipboard refuses. */
 	const copyPublicLink = async (url: string) => {
 		setCopyError("");
 		try {
@@ -318,14 +291,12 @@ export function ArtifactActionsMenu({
 					align={iconOnly ? "end" : "start"}
 					className="min-w-44"
 					data-browser-native-overlay="true"
-					// Focus goes to the share panel, not back to the trigger, which would close it.
 					onCloseAutoFocus={(event) => {
 						if (!sharing.current) return;
 						sharing.current = false;
 						event.preventDefault();
 					}}
 				>
-					{/* The caller's rows come first and end with their own separator, if any render. */}
 					{children}
 					{onTogglePin || onOpenInSession || canShare || published ? (
 						<>
@@ -458,19 +429,6 @@ export function ArtifactActionsMenu({
 
 type ArtifactActionsMenuProps = Parameters<typeof ArtifactActionsMenu>[0];
 
-/**
- * An icon-only ArtifactActionsMenu for one card of a long list. The Artifacts
- * page draws one per artifact, and the menu, its tooltips, share popover and
- * delete dialog cost far more to mount than the buttons a closed menu shows.
- * Until the pointer or focus first enters the card (its `li`), this draws
- * those buttons with the markup the closed menu gives them and starts the same
- * queries; then it mounts the menu in their place and keeps it.
- *
- * Focus on a replaced button moves to its replacement before the next paint,
- * and a press that still reaches a replaced button, as a touch or a scripted
- * click can, is passed on to its replacement. A press on Pin or Open in
- * session that starts first keeps them in place until its click lands.
- */
 export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	const { t } = useTranslation();
 	const { artifact, session, className, pinned = false, onTogglePin, pinInMenu = false, onOpenInSession, verticalDots = false } = props;
@@ -479,11 +437,8 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	const openRef = useRef<HTMLButtonElement>(null);
 	const menuRef = useRef<HTMLButtonElement>(null);
 	const cardRef = useRef<HTMLElement | null>(null);
-	// Each stand-in's place among its card's buttons, where its replacement goes.
 	const places = useRef(new Map<HTMLButtonElement, number>());
-	// What reached the stand-ins before the menu replaced them, to repeat on it.
 	const replay = useRef<{ hover?: [place: number, move: PointerEvent]; focus?: number; presses: Array<[place: number, press: Press]> }>({ presses: [] });
-	// The queries the menu starts, so it offers the same items when it first opens.
 	useShareAvailable();
 	useCloudMeUserId(Boolean(session.cloud));
 	useCloudArtifactAccess(session, Boolean(session.cloud) && !props.downloadUrl);
@@ -495,9 +450,6 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		if (!card) return;
 		cardRef.current = card;
 		let activated = false;
-		// A press on Pin or Open in session that began before the menu replaced
-		// them. Both act on click, which the browser sends only to the button
-		// pressed while it is still in the page, so the swap waits for the press.
 		let held: HTMLButtonElement | null = null;
 		let heldDown: PointerEvent | null = null;
 		let heldUp: PointerEvent | null = null;
@@ -513,9 +465,6 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 			for (const button of stand) places.current.set(button, buttons.indexOf(button));
 			const focused = document.activeElement instanceof HTMLButtonElement ? places.current.get(document.activeElement) : undefined;
 			if (focused !== undefined) replay.current.focus = focused;
-			// A tooltip's hover delay starts on a move over its trigger; the move that
-			// activated this went to a stand-in, so the replacement gets it, unless
-			// the pointer leaves before then.
 			const hovered = event?.type === "pointermove" && event.target instanceof Node
 				? stand.find((button) => button.contains(event.target as Node))
 				: undefined;
@@ -541,12 +490,10 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 			window.removeEventListener("contextmenu", release, true);
 			if (wanted) activate();
 		};
-		// Released over the button, a click follows; released elsewhere, none will.
 		const onPointerUp = (event: PointerEvent) => {
 			if (held && event.target instanceof Node && held.contains(event.target)) heldUp = event;
 			else release();
 		};
-		// Once the press is over, the next pointer event means no click came.
 		const afterPress = () => {
 			if (heldUp) release();
 		};
@@ -568,12 +515,10 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		const pass = (event: Event) => {
 			const button = event.currentTarget as HTMLButtonElement;
 			const press: Press = event.type === "click" ? "click" : event as PointerEvent;
-			// The held press is repeated whole, so its replacement sees what it would have.
 			const gesture = held === button && press === "click" ? [heldDown, heldUp] : [];
 			if (gesture.length) release();
 			activate();
 			const place = places.current.get(button) ?? -1;
-			// Still in the page, the menu has yet to replace it: repeat the press once it has.
 			if (button.isConnected) {
 				for (const step of gesture) if (step) replay.current.presses.push([place, step]);
 				replay.current.presses.push([place, press]);
@@ -605,7 +550,6 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		const { hover, focus, presses } = replay.current;
 		replay.current = { presses: [] };
 		if (hover) passOn(card, ...hover);
-		// In the order a browser gives them: a press's pointerdown, then focus, then the rest.
 		let refocus = focus !== undefined;
 		const restoreFocus = () => {
 			if (!refocus) return;
@@ -675,7 +619,6 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 
 type Press = "click" | PointerEvent;
 
-/** Sends a press that reached a stand-in to the button now in its place. */
 function passOn(card: HTMLElement, place: number, event: Press) {
 	const button = place < 0 ? undefined : card.querySelectorAll("button")[place];
 	if (!button) return;

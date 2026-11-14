@@ -1,6 +1,3 @@
-// URL rules for agent navigation, matching AO's Browser panel: explicit
-// http(s) URLs, localhost forms, or bare hostnames; never local files.
-
 import { BridgeError } from "./protocol";
 
 const LOCALHOST = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;

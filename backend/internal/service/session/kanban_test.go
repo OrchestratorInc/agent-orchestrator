@@ -101,13 +101,10 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 	}
 }
 
-// A review pass recorded against an older commit is filtered out in SQL, so the
-// service must not treat it as current-head validation work.
 func TestSessionKanbanIgnoresPassesForAnEarlierHead(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true}
 	st.pr["mer-1"] = domain.PRFacts{URL: "pr1", HeadSHA: "head2"}
-	// The store returns nothing: the stale head1 pass never reaches the reducer.
 	st.reviewRuns["mer-1"] = nil
 
 	got, err := (&Service{store: st}).Get(context.Background(), "mer-1")
@@ -270,14 +267,10 @@ func TestSessionGetInfersArtifactOutputAndValidatingKanban(t *testing.T) {
 
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{
-		ID:        "mer-1",
-		ProjectID: "mer",
-		Activity:  domain.Activity{State: domain.ActivityActive},
-		Metadata:  domain.SessionMetadata{ArtifactDir: artifactDir},
-		// OutputType is the persisted column lifecycle.Manager.
-		// ReconcileSessionOutputType maintains; Get() no longer re-derives it
-		// from the live artifact scan, so it must be set here directly for
-		// Kanban placement to see it as artifact output.
+		ID:         "mer-1",
+		ProjectID:  "mer",
+		Activity:   domain.Activity{State: domain.ActivityActive},
+		Metadata:   domain.SessionMetadata{ArtifactDir: artifactDir},
 		OutputType: domain.SessionOutputArtifact,
 	}
 
@@ -362,8 +355,6 @@ func TestSessionGetUsesLatestCurrentHeadRunPerHarness(t *testing.T) {
 	}
 }
 
-// The store counts every failed auto pass on the current head, not just the
-// latest one per harness, so the board knows when auto review stops retrying.
 func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
 	st := newSQLiteKanbanTestStore(t)
 	ctx := context.Background()
@@ -425,8 +416,6 @@ func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
 	}
 }
 
-// The label must agree with the coordinator, which stops on any cancelled or
-// decided pass for the head and harness, not just the latest one.
 func TestSessionGetDoesNotPromiseARetryAutoReviewWillNotRun(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -508,9 +497,6 @@ func (m *kanbanRecordingMessenger) Send(_ context.Context, _ domain.SessionID, m
 	return nil
 }
 
-// An AO review posts as COMMENT and reaches the worker only as inline comment
-// nudges. Delivering them does not mean the worker is addressing them: an idle
-// worker still reads "Changes requested" after the real lifecycle delivery.
 func TestSessionKanbanIdleWorkerAfterAOReviewDeliveryRequestsChanges(t *testing.T) {
 	st := newSQLiteKanbanTestStore(t)
 	ctx := context.Background()

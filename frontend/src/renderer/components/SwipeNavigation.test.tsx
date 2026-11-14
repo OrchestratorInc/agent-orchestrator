@@ -92,8 +92,6 @@ describe("SwipeNavigation", () => {
 		expect(pucks).toHaveLength(2);
 		for (const puck of pucks) {
 			const box = puck.parentElement;
-			// overflow-hidden would still let scrollIntoView or focus scroll the
-			// pane by the pucks' overhang and slide it under the sidebar.
 			expect(box).toHaveAttribute("data-swipe-pucks");
 			expect(box?.className).toContain("overflow-clip");
 			expect(box?.className).not.toContain("overflow-hidden");
@@ -272,13 +270,11 @@ describe("SwipeNavigation", () => {
 		const cell = getByTestId("cell");
 		act(() => {
 			cell.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaX: -20, deltaMode: 0 }));
-			// The browser scrolls the content with the swipe.
 			scroller.scrollLeft = 100;
 		});
 		swipe(cell, drag(-20, 8));
 		expect(history.back).not.toHaveBeenCalled();
 
-		// Already at its left edge, the content stays put and the swipe navigates.
 		scroller.scrollLeft = 0;
 		swipe(cell, drag(-20, 8));
 		expect(history.back).toHaveBeenCalledTimes(1);
@@ -300,7 +296,6 @@ describe("SwipeNavigation", () => {
 		const wheel = (deltaX: number) => new WheelEvent("wheel", { bubbles: true, composed: true, deltaX, deltaMode: 0 });
 		act(() => {
 			cell.dispatchEvent(wheel(-20));
-			// The browser scrolls the code view with the swipe.
 			scroller.scrollLeft = 100;
 		});
 		act(() => {

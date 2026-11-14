@@ -33,17 +33,9 @@ type EditorCandidate = {
 	id: EditorId;
 	name: string;
 	commands: string[];
-	/** CLI arguments for file handoff; workspace launches keep their existing behavior. */
 	fileArgs?: string[];
 	macApps?: string[];
 	requiresTerminal?: boolean;
-	/**
-	 * Windows-only fallback install locations, relative to a resolved root
-	 * (e.g. `%LOCALAPPDATA%\Programs\Cursor\bin`). These are probed only on
-	 * win32 and only AFTER a PATH scan fails, so an explicit PATH install
-	 * always wins. Paths are built from environment variables at resolve time,
-	 * never hard-coded to a specific machine.
-	 */
 	winInstallDirs?: string[][];
 };
 
@@ -90,27 +82,19 @@ export type EditorHandoffDeps = {
 	env: NodeJS.ProcessEnv;
 	homeDir: string;
 	resolveWorkspace: (sessionId: string) => Promise<string>;
-	/** The session's artifact directory, which lives outside its workspace. */
 	resolveArtifactDir: (sessionId: string) => Promise<string>;
 	readPreference: () => Promise<EditorId>;
 	writePreference: (editorId: EditorId) => Promise<void>;
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
 	openDirectory: (workspacePath: string) => Promise<void>;
-	/** Shows one file selected in the system file manager. */
 	revealPath: (filePath: string) => Promise<void>;
-	/** Opens one file in the system's default browser. */
 	openInBrowser?: (filePath: string) => Promise<void>;
-	/** Resolves symlinks in an existing path. */
 	realPath: (candidatePath: string) => Promise<string>;
-	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
 	copyText?: (text: string) => void | Promise<void>;
-	/** Reads a native app icon as a data URL; installation paths stay in main. */
 	readIcon?: (appPath: string) => Promise<string>;
-	/** Registered macOS shell apps that accept folder-open events. */
 	discoverTerminalApps?: () => Promise<MacTerminalApp[]>;
 	isExecutable?: (candidatePath: string) => boolean;
 	isDirectory?: (candidatePath: string) => boolean;
-	/** Reads the first bytes of a file as text, or undefined when unreadable. */
 	readFileHead?: (candidatePath: string) => string | undefined;
 	logError?: (message: string, error: unknown) => void;
 };
@@ -148,9 +132,6 @@ function defaultReadFileHead(candidatePath: string): string | undefined {
 	}
 }
 
-// The Cursor Agent CLI installer puts a `cursor` shim in ~/.local/bin. Without
-// the Cursor IDE it only runs `cursor agent` and exits 1 for anything else, so
-// it must not count as an installed editor.
 function isCursorAgentShim(candidatePath: string, readFileHead: (candidatePath: string) => string | undefined): boolean {
 	return readFileHead(candidatePath)?.includes("No Cursor IDE installation found") === true;
 }
@@ -172,8 +153,6 @@ function isInside(api: typeof path.posix, dir: string, candidate: string): boole
 	return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
 }
 
-// An artifact's absolute path with symlinks resolved, which must stay inside
-// the artifact directory both as written and once resolved.
 async function artifactFilePath(
 	api: typeof path.posix,
 	realPath: (candidatePath: string) => Promise<string>,
@@ -200,11 +179,6 @@ function executableNames(command: string, platform: Platform, env: NodeJS.Proces
 		...extensions.map((extension) => command + extension.toLowerCase()),
 		...extensions.map((extension) => command + extension.toUpperCase()),
 	];
-	// On win32, probe Windows-native launchers (.exe/.cmd/.bat/etc.) before the
-	// bare, extension-less name. Editors like VS Code and Cursor ship a `.cmd`
-	// batch shim and a bare `#!/usr/bin/env sh` script side by side; returning
-	// the bare script makes spawn fail because Windows cannot execute an `sh`
-	// script directly. Preferring the extension shims keeps the real launcher.
 	return [...extended, command];
 }
 
@@ -238,17 +212,11 @@ function resolveTerminalEditor(editorCommand: string, deps: EditorHandoffDeps, i
 		? {
 			command: spec.command,
 			argsForFile: (filePath) => resolve(filePath)!.args,
-			// launch() sets cwd to the workspace, so opening "." on Windows keeps the
-			// workspace path out of cmd.exe variable expansion (for example %TEMP%).
 			argsForWorkspace: (workspace) => resolve(deps.platform === "win32" ? "." : workspace)!.args,
 		}
 		: undefined;
 }
 
-// Expands a candidate's Windows install locations into real paths. Each entry
-// is a sequence of path segments whose root is one of the WIN_INSTALL_ROOTS
-// keys (resolved from env) followed by literal segments. Returns the concrete
-// directories, skipping any whose root env var is unset.
 function winInstallDirsFor(candidate: EditorCandidate, env: NodeJS.ProcessEnv): string[] {
 	const dirs: string[] = [];
 	for (const segments of candidate.winInstallDirs ?? []) {
@@ -286,7 +254,6 @@ function resolveEditor(
 	readFileHead: (candidatePath: string) => string | undefined,
 ): ResolvedCommand | undefined {
 	for (const command of candidate.commands) {
-		// Keep scanning PATH past the agent shim: a real Cursor CLI may follow it.
 		const skip = candidate.id === "cursor" ? (candidatePath: string) => isCursorAgentShim(candidatePath, readFileHead) : undefined;
 		const resolved = resolveOnPath(command, deps.platform, deps.env, isExecutable, skip);
 		if (resolved) {
@@ -305,9 +272,6 @@ function resolveEditor(
 			};
 		}
 	}
-	// Windows-only fallback: probe standard per-user and system install locations
-	// after PATH misses. Keep this on the PATH-first path so an explicit PATH
-	// install always wins, and gate strictly on win32 so macOS/Linux are untouched.
 	if (deps.platform === "win32") {
 		const installDirs = winInstallDirsFor(candidate, deps.env);
 		for (const command of candidate.commands) {
@@ -372,8 +336,6 @@ function resolveTerminal(
 	return undefined;
 }
 
-// Keep per-terminal directory arguments explicit: a GUI terminal may reuse an
-// existing process, in which case the launcher's cwd alone is not enough.
 const TERMINAL_CANDIDATES: {
 	id: TerminalId;
 	name: string;
@@ -418,14 +380,11 @@ function resolveInstalledTerminals(
 				return [{ target, command: {
 					command: "/usr/bin/open",
 					iconPath: appPath,
-					// Ghostty and iTerm set the surface directory from folder-open
-					// events, including when already running. Other apps use CLI flags.
 					argsForWorkspace: (dir: string) => candidate.id === "iterm2" || candidate.id === "ghostty"
 						? ["-a", appPath, dir]
 						: ["-n", "-a", appPath, "--args", ...candidate.args(dir)],
 				} }];
 			}
-			// Ghostty's native macOS app must launch through Launch Services.
 			if (candidate.id === "ghostty" || candidate.id === "iterm2") return [];
 		}
 		const command = candidate.command && resolveOnPath(candidate.command, deps.platform, deps.env, isExecutable);
@@ -436,7 +395,6 @@ function resolveInstalledTerminals(
 		if (claimedBundleIds.has(app.bundleId.toLowerCase()) || claimedApps.has(app.appPath) || !isDirectory(app.appPath)) return [];
 		claimedApps.add(app.appPath);
 		claimedBundleIds.add(app.bundleId.toLowerCase());
-		// An opaque stable ID crosses IPC; installation paths remain in main.
 		const id: TerminalId = `terminal-app:${createHash("sha256").update(app.bundleId.toLowerCase()).digest("hex")}`;
 		return [{ target: { id, name: app.name, kind: "terminal" as const, ...(app.iconDataUrl ? { iconDataUrl: app.iconDataUrl } : {}) }, command: {
 			command: "/usr/bin/open",
@@ -456,7 +414,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		name: deps.platform === "darwin" ? "Finder" : deps.platform === "win32" ? "File Explorer" : "File Manager",
 		kind: "file_manager",
 	};
-	// Linux opens folders through xdg-open, so there is no single app to take an icon from.
 	const fileManagerIconPath = deps.platform === "darwin" ? "/System/Library/CoreServices/Finder.app"
 		: deps.platform === "win32" ? path.win32.join(deps.env.SystemRoot || deps.env.windir || "C:\\Windows", "explorer.exe")
 			: undefined;
@@ -475,9 +432,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 		return icon;
 	};
 
-	// Only an explicit menu refresh queries Launch Services and renders bundle
-	// icons. Readiness polling, CDC invalidations, and launches use this shared
-	// main-process snapshot; file existence is still checked at resolution time.
 	let macApps: MacTerminalApp[] = [];
 	let terminalRefresh: Promise<void> | undefined;
 	const refreshTerminals = () => {
@@ -526,22 +480,18 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			if (typeof input.path !== "string" || !input.path.trim() || /[\x00-\x1f]/.test(input.path)) throw new Error("That path is not valid.");
 			const api = pathAPI(deps.platform);
 			const reference = input.path;
-			// Only normalized filesystem paths cross this boundary, never URLs or shell commands.
 			if ((/^[a-z][a-z\d+.-]*:/i.test(reference) && !(deps.platform === "win32" && /^[a-z]:[\\/]/i.test(reference))) || reference.startsWith("//") || reference.startsWith("\\\\")) {
 				throw new Error("That path is not valid.");
 			}
 			const workspace = await deps.resolveWorkspace(input.sessionId.trim());
 			const expanded = reference === "~" ? deps.homeDir : reference.startsWith("~/") ? deps.homeDir + reference.slice(1) : reference;
 			const absolute = api.isAbsolute(expanded);
-			// Resolve only the root/drive here. Joining or resolving the whole path
-			// would collapse parent components before the filesystem follows symlinks.
 			const root = api.parse(expanded).root;
 			const anchor = absolute ? api.resolve(workspace, root) : workspace;
 			const tail = absolute ? expanded.slice(root.length) : expanded;
 			const unnormalized = `${anchor}${anchor.endsWith(api.sep) ? "" : api.sep}${tail}`;
 			const target = deps.platform === "win32" ? unnormalized.replace(/\//g, "\\") : unnormalized;
 			if (input.action === "copy") {
-				// Copy is textual and supports missing files; retain their original components.
 				if (!absolute) {
 					const root = await deps.realPath(workspace);
 					let ancestor = target;
@@ -554,8 +504,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 						} catch (error) {
 							const parent = api.dirname(ancestor);
 							if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === ancestor) throw new Error("That path could not be resolved.");
-							// dirname preserves '..': follow existing links before normalizing
-							// the suffix whose components do not exist yet.
 							missing.unshift(api.basename(ancestor));
 							ancestor = parent;
 						}
@@ -578,7 +526,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			if (!isEditorId(input.editorId)) throw new Error("That editor is not supported.");
 			const editor = resolveEditors().find(({ target }) => target.id === input.editorId);
 			if (!editor) throw new Error("That editor is not installed. Choose another option.");
-			// Batch shims and terminal editors use cmd.exe, which expands percent variables even in quotes.
 			const command = editor.command.command;
 			if (deps.platform === "win32" && /[%!"]/.test(realTarget) && (/\.(?:cmd|bat)$/i.test(command) || api.basename(command).toLowerCase() === "cmd.exe")) {
 				throw new Error("That path cannot be passed safely to this editor launcher.");
@@ -590,9 +537,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			if (options?.refreshTerminals === true) await refreshTerminals();
 			const editors = resolveEditors();
 			const terminals = resolveTerminals();
-			// Linux's generic launcher may be the same binary (or an alternatives
-			// symlink) as a named terminal. Show it only as a fallback in the menu;
-			// the generic target remains available to existing shortcut/artifact callers.
 			const menuTerminals = deps.platform === "linux" && terminals.some(({ target }) => target.id !== "terminal")
 				? terminals.filter(({ target }) => target.id !== "terminal") : terminals;
 			const targets = [...editors.map(({ target }) => target), fileManager, ...menuTerminals.map(({ target }) => target)];
@@ -604,8 +548,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 					? terminal.command.iconPath ?? terminal.command.command
 					: target.kind === "file_manager" ? fileManagerIconPath : undefined);
 				if (editor) {
-					// CLI shims may point into a relocated .app. Use that actual bundle's
-					// native icon before falling back to the registered installation or executable.
 					const executable = await deps.realPath(editor.command.command).catch(() => editor.command.command);
 					const bundle = deps.platform === "darwin" ? executable.match(/^(.+?\.app)(?:\/|$)/i)?.[1] : undefined;
 					iconPath = bundle ?? iconPath ?? executable;
@@ -688,7 +630,6 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			}
 			const artifactDir = await deps.resolveArtifactDir(sessionId);
 			const filePath = await artifactFilePath(api, deps.realPath, artifactDir, input.path);
-			// The resolved file, not just the name asked for, must be one a browser renders.
 			if (!isBrowserArtifactPath(filePath)) throw new Error("This file does not open in a browser.");
 			await deps.openInBrowser(filePath);
 		},

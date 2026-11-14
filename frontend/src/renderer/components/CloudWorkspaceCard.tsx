@@ -1,11 +1,3 @@
-// Creates a cloud workspace: like a local workspace, several repositories side
-// by side in one folder where the agent starts. Members are GitHub App
-// repositories or folders from this machine; each folder gets a new private
-// repository (or, when its origin is a granted repository, is that
-// repository). The project itself is an ordinary GitHub project whose config
-// says layout "workspace": its first member authorizes it, the rest are
-// config.repos. See lib/cloud-folder-upload.ts for the folder half.
-
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Folder, FolderPlus, LoaderCircle, Plus, X, XCircle } from "@/components/app-icons";
@@ -74,34 +66,22 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
-/** One repository of the workspace being built. */
 export type WorkspaceMember =
 	| {
 		id: string;
 		kind: "repository";
 		githubRepositoryId: string;
 		fullName: string;
-		/** The local folder it was added from, when its origin is this repository. */
 		fromFolder?: string;
 	}
 	| {
 		id: string;
 		kind: "folder";
-		/** The local folder, an absolute path. */
 		path: string;
-		/** The new repository's name, which is also its folder in the workspace. */
 		name: string;
-		/**
-		 * Set when the folder is the top of a git repository with a commit: its
-		 * checked-out commit and history are uploaded, not its uncommitted
-		 * changes. branch is absent when HEAD is detached.
-		 */
 		committed?: { branch?: string };
-		/** The secret-looking files the upload leaves out, shown before it runs. */
 		leftOut?: string[];
-		/** Set once the control plane made the repository; a retry never makes it again. */
 		created?: CreatedFolderRepository;
-		/** The folder is in its repository; a retry skips it. */
 		pushed?: boolean;
 	};
 
@@ -110,7 +90,6 @@ type MemberProgress = { phase: "creating" | "uploading" | "done" | "failed"; mes
 let nextMemberId = 0;
 const memberId = () => `member-${++nextMemberId}`;
 
-/** The repository URL a member checks out from (a folder's planned one until it exists). */
 export function workspaceMemberUrl(member: WorkspaceMember, owner: string | undefined): string {
 	if (member.kind === "repository") return canonicalGitHubUrl(member.fullName);
 	if (member.created) return createdRepositoryUrl(member.created);
@@ -131,9 +110,7 @@ export function CloudWorkspaceCard({
 	onBack: () => void;
 	onClose?: () => void;
 	onCreated: (projectId: string) => void;
-	/** Switches the card back to a single project. */
 	onKindChange?: (kind: CloudCreateKind) => void;
-	/** Whether a create (uploads included) is running; a dialog stays open meanwhile. */
 	onBusyChange?: (busy: boolean) => void;
 }) {
 	const { t } = useTranslation();
@@ -149,24 +126,16 @@ export function CloudWorkspaceCard({
 
 	const [name, setName] = useState("");
 	const [members, setMembers] = useState<WorkspaceMember[]>([]);
-	// Folders picked whose checks (describeLocalFolder) are still running.
 	const [checking, setChecking] = useState<string[]>([]);
-	// Folder dialogs still open. The dialog does not block this window, so
-	// Create could be pressed meanwhile, and a folder picked once the create
-	// had begun would never be uploaded or added.
 	const [pickingFolders, setPickingFolders] = useState(0);
 	const [progress, setProgress] = useState<Record<string, MemberProgress>>({});
 	const [pickingRepository, setPickingRepository] = useState(false);
 	const [chosenOwner, setChosenOwner] = useState("");
 	const [ownerRequired, setOwnerRequired] = useState(false);
-	// The account a new repository goes in has no usable AO GitHub App
-	// installation: connecting GitHub again is the way on.
 	const [installationNeeded, setInstallationNeeded] = useState(false);
 	const [addError, setAddError] = useState<{ message: string; detail?: string } | null>(null);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [isCreating, setIsCreating] = useState(false);
-	// The create request's key, kept while its body stays the same so a retry
-	// after a lost answer cannot make a second project.
 	const idempotency = useRef<{ body: string; key: string } | null>(null);
 	const mounted = useMountedRef();
 	useReportBusy(isCreating, onBusyChange);
@@ -175,9 +144,6 @@ export function CloudWorkspaceCard({
 	const nameInvalid = nameTrimmed === "" || [...nameTrimmed].length > 120;
 	const repositoryMembers = members.filter((member) => member.kind === "repository");
 	const folderMembers = members.filter((member) => member.kind === "folder");
-	// An installation covers one GitHub account, and every repository of a
-	// workspace comes through the same installation: the account of the
-	// repositories already chosen, else the one picked for new repositories.
 	const repositoryOwners = [...new Set(repositoryMembers.map((member) => repositoryOwner(member.fullName).toLowerCase()))];
 	const installationAccounts = github.activeInstallations.map((installation) => installation.accountLogin);
 	const owner = repositoryMembers[0]
@@ -192,15 +158,10 @@ export function CloudWorkspaceCard({
 		? t("cloudWorkspace.problemLimit", { defaultValue: "A workspace can have at most {{count}} repositories and folders.", count: MAX_WORKSPACE_REPOSITORIES })
 		: additionalReposProblemMessage(t, problem);
 	const badName = folderMembers.find((member) => !member.created && !isValidGitHubRepositoryName(member.name));
-	// Additional repositories are an owner and admin setting, so a workspace of
-	// more than one needs one; a role the app does not know leaves it to the server.
 	const memberRoleBlocks = org?.role !== undefined && !canManageBilling(org) && members.length > 1;
 	const atLimit = members.length >= MAX_WORKSPACE_REPOSITORIES;
-	// A folder still being picked or checked would be left out of a workspace created now.
 	const createBlocked = nameInvalid || members.length === 0 || pickingFolders > 0 || checking.length > 0 || problem !== undefined || badName !== undefined || mixedOwners || ownerMissing || memberRoleBlocks || coderSetup.workspaceNamePrefixInvalid;
 
-	// Every change applies to the list as it is when it lands: a folder's
-	// checks can end after other members joined, left, or were renamed.
 	const update = (change: (current: WorkspaceMember[]) => WorkspaceMember[]) => {
 		setMembers(change);
 		setSubmitError(null);
@@ -222,8 +183,6 @@ export function CloudWorkspaceCard({
 		try {
 			path = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
 		} finally {
-			// In the same render as the folder's check starts below, so Create
-			// never comes back on between them.
 			setPickingFolders((open) => open - 1);
 		}
 		if (!path) return;
@@ -231,8 +190,6 @@ export function CloudWorkspaceCard({
 			setAddError({ message: t("cloudWorkspace.folderAlreadyAdded", { defaultValue: "{{folder}} is already in this workspace.", folder: folderLabel(path) }) });
 			return;
 		}
-		// A git repository whose origin the org already grants joins as that
-		// repository instead of being uploaded again.
 		setChecking((current) => [...current, path]);
 		let described: Awaited<ReturnType<typeof describeLocalFolder>>;
 		try {
@@ -250,8 +207,6 @@ export function CloudWorkspaceCard({
 			append({ id: memberId(), kind: "repository", githubRepositoryId: existing.githubRepositoryId, fullName: existing.fullName, fromFolder: path });
 			return;
 		}
-		// A folder that cannot be uploaded at all (the upload would refuse it)
-		// is refused now, not after its repository is made.
 		if (refusal) {
 			setAddError(folderPushErrorText(t, refusal, path));
 			return;
@@ -272,7 +227,6 @@ export function CloudWorkspaceCard({
 		setSubmitError(null);
 		setInstallationNeeded(false);
 		setIsCreating(true);
-		// Members as they stand after each step, so a failure keeps what was done.
 		const working = [...members];
 		const save = (index: number, member: WorkspaceMember) => {
 			working[index] = member;
@@ -280,8 +234,6 @@ export function CloudWorkspaceCard({
 		};
 		const mark = (id: string, value: MemberProgress) => setProgress((current) => ({ ...current, [id]: value }));
 		let current: { id: string; path: string } | undefined;
-		// Which request failed: only the project create is refused for a
-		// member's role, so only its 403 says an owner or admin is needed.
 		let step: "repository" | "upload" | "project" = "repository";
 		try {
 			for (const [index, member] of working.entries()) {
@@ -292,7 +244,6 @@ export function CloudWorkspaceCard({
 					step = "repository";
 					mark(member.id, { phase: "creating" });
 					created = await createFolderRepository(client, org.id, { name: member.name.trim(), owner });
-					// Closed meanwhile: nothing more runs for a card that is gone.
 					if (!mounted.current) return;
 					save(index, { ...member, created });
 				}
@@ -305,14 +256,11 @@ export function CloudWorkspaceCard({
 			}
 			current = undefined;
 			step = "project";
-			// The new repositories are the org's now; the pickers list them.
 			void queryClient.invalidateQueries({ queryKey: ["cloud-github-app-repos", baseUrl, org.id] });
 
 			const repositoryIdOf = (member: WorkspaceMember) => (member.kind === "repository" ? member.githubRepositoryId : member.created?.repository.githubRepositoryId ?? "");
 			const [first, ...rest] = working;
 			const coder = coderSetup.coderConfig();
-			// The server starts a workspace's agent in its folder; agentStartsIn is
-			// an owner and admin setting, so it is not sent.
 			const config = {
 				worker: { agent: selection.workerAgent },
 				orchestrator: { agent: selection.orchestratorAgent },
@@ -340,8 +288,6 @@ export function CloudWorkspaceCard({
 						? t("cloudWorkspace.forbidden", { defaultValue: "{{message}} A workspace with more than one repository needs an organization owner or admin.", message: err.message })
 						: err instanceof Error ? err.message : t("createProject.couldNotAdd"),
 				};
-			// A folder's failure shows once, under that folder; anything else
-			// shows below the list.
 			if (current !== undefined) mark(current.id, { phase: "failed", ...failure });
 			setSubmitError(current !== undefined ? null : failure.message);
 			setIsCreating(false);
@@ -574,8 +520,6 @@ function MemberProgressIcon({ progress }: { progress?: MemberProgress }) {
 	switch (progress.phase) {
 		case "creating":
 		case "uploading":
-			// The words sit under the folder's name (WorkspaceMemberRow), so the
-			// name keeps its width while the folder uploads.
 			return <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-muted-foreground" />;
 		case "done":
 			return <CheckCircle2 aria-label={t("cloudWorkspace.uploaded", { defaultValue: "Uploaded" })} className="size-4 shrink-0 text-success" />;

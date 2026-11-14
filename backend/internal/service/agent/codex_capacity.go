@@ -177,10 +177,6 @@ func (c *codexCapacityCoordinator) authGate(record codexAccountRecord, capabilit
 		return c.replace(record.Snapshot.ID, staticCodexCapacity(domain.CodexCapacityUnknown, domain.CodexCapacityReasonSkippedSignedOut, "Sign in to Codex to see subscription capacity."), "signed_out"), true
 	}
 	if auth.State == domain.AgentAuthenticationUnauthorized && auth.Freshness == domain.AgentReadinessFresh {
-		// Older AO versions could mark an account unauthorized from
-		// account/read(refreshToken=true) even while protected calls worked. Let
-		// one protected read repair that stale conclusion. A non-verified local
-		// signed-out observation still skips the provider call.
 		if !verified {
 			return c.replace(record.Snapshot.ID, staticCodexCapacity(domain.CodexCapacityUnknown, domain.CodexCapacityReasonSkippedSignedOut, "Sign in to Codex to see subscription capacity."), "signed_out"), true
 		}
@@ -630,8 +626,5 @@ func nearestCapacityReset(snapshot domain.CodexCapacitySnapshot) *time.Time {
 }
 
 func (c *codexCapacityCoordinator) publish(_ string, _ *domain.CodexCapacitySnapshot) {
-	// Account management owns the public stream. Capacity is one field on that
-	// shared snapshot, so publish the complete cached view after releasing the
-	// capacity mutex (cached() reads it again).
 	c.manager.publish()
 }

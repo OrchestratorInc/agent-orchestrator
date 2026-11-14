@@ -86,7 +86,6 @@ describe("session import commands", () => {
 		const items = buildCommands({ workspaces: workspaces() });
 		const command = byId(items).get("global-import-sessions");
 		expect(command?.action).toEqual({ kind: "open-session-import" });
-		// A project's Import chats leads the blank palette; one import row is enough there.
 		expect(filterCommands(items, "")).not.toContain(command);
 		for (const query of ["import", "resume claude code", "import codex sessions", "existing terminal chats"]) {
 			expect(filterCommands(items, query)).toContain(command);
@@ -553,7 +552,6 @@ describe("result caps", () => {
 
 	it("caps the pre-typing suggestion view per group so huge installs never render every row", () => {
 		const grouped = displayGroups(buildCommands({ workspaces: manyProjects(50) }), "");
-		// Projects wait for a search; the sidebar already lists them.
 		expect(grouped.some((g) => g.id === "projects")).toBe(false);
 		expect(filterCommands(buildCommands({ workspaces: manyProjects(50) }), "project-7").some((item) => item.id === "project:p7")).toBe(true);
 		expect(grouped.find((g) => g.id === "global")?.items.length).toBeGreaterThan(0);
@@ -593,8 +591,6 @@ describe("result caps", () => {
 		const ids = groups.map((g) => g.id);
 		expect(ids).toContain("attention");
 		expect(ids).toContain("projects");
-		// A search lists sessions before projects; Enter still takes the best
-		// match, the exact project title.
 		expect(ids.indexOf("attention")).toBeLessThan(ids.indexOf("projects"));
 		expect(bestMatch(groups.flatMap((g) => g.items), "alpha")?.id).toBe("project:alpha");
 		expect(groups.find((g) => g.id === "attention")?.items.some((item) => item.id === "attention:s-attn")).toBe(
@@ -620,7 +616,6 @@ describe("result caps", () => {
 	});
 
 	it("lists general commands first, then sessions, then projects and PRs", () => {
-		// "app" is the project title and a weaker hit on General (Appearance) and the session rows.
 		const ids = displayGroups(buildCommands({ workspaces: workspaces() }), "app").map((g) => g.id);
 		expect(ids[0]).toBe("global");
 		expect(ids.indexOf("attention")).toBeLessThan(ids.indexOf("sessions"));
@@ -723,7 +718,6 @@ describe("groupCommands", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" });
 		const grouped = groupCommands(items);
 		const order = grouped.map((g) => g.id);
-		// Sessions above Projects, as in the sidebar.
 		expect(order).toEqual(["current", "attention", "sessions", "projects", "prs", "global"]);
 		expect(grouped.every((g) => g.items.length > 0)).toBe(true);
 	});
@@ -826,7 +820,6 @@ describe("pending branch presentation", () => {
 		expect(sessionBranchPresentation(launched)).toEqual({ branch: undefined, naming: true });
 		expect(sessionBranchPresentation({ ...launched, branch: "ao/login-redirect/root", branchNaming: false })).toEqual({ branch: "ao/login-redirect/root", naming: false });
 		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
-		// A start that failed after launch has its worktree.
 		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
 	});
 });
@@ -885,8 +878,6 @@ describe("whole keyword matches", () => {
 
 	it("keep code to the rows that name it", () => {
 		const rows = buildSettingsCommands(appI18n.t, { developerMode: true, diagnostics: true, mac: true });
-		// Its title, Mobile's "qr code", the Harness page's "codex", Color theme's
-		// "VS Code" option, and last, loose letters of "Connected devices".
 		const ids = filterCommands(rows, "code").map((item) => item.id);
 		expect([...ids].sort()).toEqual(
 			["setting:color-theme", "setting:connection-password", "setting:harness", "setting:mobile", "setting:mobile-devices"],
@@ -897,11 +888,8 @@ describe("whole keyword matches", () => {
 	it("rank the code keyword above qr code, below a title that says code", () => {
 		const rows = [...buildShortcutCommands(appI18n.t, { session: "local" }), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
 		const byId = (id: string) => rows.find((item) => item.id === id)!;
-		// "Pairing code or password" names it in its title, and a title beats a keyword.
 		expect(bestMatch(rows, "code")?.id).toBe("setting:connection-password");
 		expect(matchScore("code", byId("shortcut:open-in-editor"))).toBeGreaterThan(matchScore("code", byId("setting:mobile")));
-		// Mobile's page words stay on the page row: "Connected devices" is found
-		// only by its title's loose letters, below the page's "qr code".
 		expect(matchScore("code", byId("setting:mobile-devices"))).toBeLessThan(matchScore("code", byId("setting:mobile")));
 	});
 });
@@ -955,7 +943,6 @@ describe("exact names", () => {
 			...buildCommands({ workspaces: [{ ...workspaces()[0]!, sessions: [session({ id: "s-theme", title: "theme" })] }] }),
 			...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false }),
 		];
-		// Enter runs the best match wherever its group sits.
 		expect(bestMatch(items, "theme")?.id).toBe("session:s-theme");
 	});
 });
@@ -968,7 +955,6 @@ describe("the blank palette", () => {
 		const items = buildCommands({ workspaces: [{ id: "proj-1", name: "app", path: "/repos/app", type: "main", sessions: many(10) }] });
 		expect(displayGroups(items, "").some((group) => group.id === "sessions")).toBe(false);
 		expect(goToCommands(items, "sessions").slice(0, 3).map((item) => item.id)).toEqual(["session:s9", "session:s8", "session:s7"]);
-		// Typing still searches every one of them.
 		expect(filterCommands(items, "s0").some((item) => item.id === "session:s0")).toBe(true);
 	});
 
@@ -983,7 +969,6 @@ describe("the blank palette", () => {
 		expect(byId(items).get("global-go-to-project")?.action).toMatchObject({ kind: "open-view", view: { mode: "go-to", target: "projects" } });
 		expect(goToCommands(items, "projects").map((item) => item.id)).toEqual(["project:proj-1"]);
 		const sessions = goToCommands(items, "sessions");
-		// Sessions that need attention are listed too, each once.
 		expect(sessions.some((item) => item.id === "attention:w-action")).toBe(true);
 		expect(sessions.some((item) => item.id === "session:w-working")).toBe(true);
 		expect(new Set(sessions.map((item) => item.id.split(":")[1])).size).toBe(sessions.length);

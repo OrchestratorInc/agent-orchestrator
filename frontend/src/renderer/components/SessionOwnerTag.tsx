@@ -1,10 +1,6 @@
 import { useTranslation } from "react-i18next";
 import type { WorkspaceSession } from "../types/workspace";
 
-/**
- * "Vaanya's session": marks a cloud session someone the project was shared
- * with asked its orchestrator for. Nothing for any other session.
- */
 export function SessionOwnerTag({ session }: { session: Pick<WorkspaceSession, "cloud"> }) {
 	const { t } = useTranslation();
 	const requester = session.cloud?.requestedBy;

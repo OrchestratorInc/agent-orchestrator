@@ -81,7 +81,7 @@ func TestTransientCloneFailure(t *testing.T) {
 func TestCloneStderrReportsPhasesAndKeepsErrorsClassifiable(t *testing.T) {
 	type step struct {
 		phase   CloneProgressPhase
-		percent int // -1 when git printed none
+		percent int
 	}
 	var steps []step
 	stderr := cloneStderr{report: func(phase CloneProgressPhase, percent *int) {
@@ -91,7 +91,6 @@ func TestCloneStderrReportsPhasesAndKeepsErrorsClassifiable(t *testing.T) {
 		}
 		steps = append(steps, step{phase, value})
 	}}
-	// A long redraw run would fill the 32 KiB buffer if progress were kept.
 	redraws := strings.Repeat("Receiving objects:  50% (1/2), 1.00 MiB | 1.00 MiB/s\r", 2000)
 	for _, chunk := range []string{
 		"Cloning into '/tmp/.ao-clone-1'...\nremote: Enumerating objects: 3, done.\nremote: Coun",
@@ -104,7 +103,6 @@ func TestCloneStderrReportsPhasesAndKeepsErrorsClassifiable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Redraws at the same percent report once; a new percent reports again.
 	want := []step{
 		{ClonePhaseEnumeratingObjects, -1},
 		{ClonePhaseCountingObjects, 100},

@@ -1,16 +1,7 @@
 import { hydratePartialDiff, type FileDiffLoadedFiles, type FileDiffMetadata } from "@pierre/diffs";
 
-/** Unchanged lines requested around each change in review patches (git's `--unified`). */
 export const REVIEW_CONTEXT_LINES = 3;
 
-/**
- * A diff parsed from a patch can't tell whether the file continues after its
- * last hunk, so Pierre always ends it with a "More unchanged context may be
- * available" row that loads the full file. git writes up to
- * REVIEW_CONTEXT_LINES unchanged lines after the last change, so fewer than
- * that (or a "No newline at end of file" marker) proves the file ends there
- * and the row could only ever expand to nothing.
- */
 export function endsAtLastHunk(fileDiff: FileDiffMetadata): boolean {
 	if (!fileDiff.isPartial || (fileDiff.type !== "change" && fileDiff.type !== "rename-changed")) return false;
 	const lastHunk = fileDiff.hunks[fileDiff.hunks.length - 1];
@@ -20,7 +11,6 @@ export function endsAtLastHunk(fileDiff: FileDiffMetadata): boolean {
 	return tail?.type === "change" || (tail?.type === "context" && tail.lines < REVIEW_CONTEXT_LINES);
 }
 
-// 32-bit FNV-1a over the given strings (each terminated so ["ab"] ≠ ["a", "b"]).
 function hashLines(lines: readonly string[]): number {
 	let hash = 0x811c9dc5;
 	for (const line of lines) {
@@ -32,11 +22,6 @@ function hashLines(lines: readonly string[]): number {
 
 const identities = new WeakMap<FileDiffMetadata, string>();
 
-/**
- * Identity of a file's patch content: hunk positions plus a hash of every
- * patch line. Parsing a new workspace version yields new metadata objects, so
- * this is what tells "same diff" apart from "changed diff".
- */
 export function patchIdentity(fileDiff: FileDiffMetadata): string {
 	const cached = identities.get(fileDiff);
 	if (cached) return cached;
@@ -47,21 +32,12 @@ export function patchIdentity(fileDiff: FileDiffMetadata): string {
 	return identity;
 }
 
-/**
- * A number that changes whenever the diff's content, or its patch-only vs
- * full-contents state, changes. CodeView only re-reads an item when its
- * version changes, so this is what lets updated or hydrated diffs through
- * while unchanged ones (new objects, same content) are left alone.
- */
 export function diffContentVersion(fileDiff: FileDiffMetadata): number {
 	return hashLines([fileDiff.isPartial ? "patch" : "full", patchIdentity(fileDiff)]);
 }
 
 const hydratedCopies = new WeakMap<FileDiffMetadata, { files: FileDiffLoadedFiles; diff: FileDiffMetadata | null }>();
 
-// Pierre 1.4.1's virtualizer asserts the rendered diff is the same object it
-// measured. Two objects that share a cacheKey (a reparse, or a second hydration
-// of the same patch) fail that check and the row is replaced with the error.
 const diffsByCacheKey = new Map<string, FileDiffMetadata>();
 
 export function stableFileDiff(fileDiff: FileDiffMetadata): FileDiffMetadata {
@@ -78,11 +54,6 @@ export function stableFileDiff(fileDiff: FileDiffMetadata): FileDiffMetadata {
 	return fileDiff;
 }
 
-/**
- * A full-content copy of a partial diff (the parsed patch itself is left
- * untouched), or null when the fetched contents don't fit the patch. Memoized
- * per partial diff + contents so re-renders hand CodeView the same object.
- */
 export function hydratedCopy(fileDiff: FileDiffMetadata, files: FileDiffLoadedFiles): FileDiffMetadata | null {
 	const cached = hydratedCopies.get(fileDiff);
 	if (cached?.files === files) return cached.diff;

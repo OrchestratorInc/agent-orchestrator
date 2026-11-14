@@ -94,8 +94,6 @@ func TestRenderedSurfaceDrainsTerminalReplies(t *testing.T) {
 	surface := newRenderedSurface(80, 24)
 	done := make(chan struct{})
 	go func() {
-		// Primary Device Attributes asks the emulator to write a reply to its
-		// input pipe. A passive surface must consume that reply or Write blocks.
 		surface.Write([]byte("\x1b[c"))
 		close(done)
 	}()

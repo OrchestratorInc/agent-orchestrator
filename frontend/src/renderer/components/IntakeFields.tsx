@@ -11,32 +11,16 @@ import { Switch } from "./ui/switch";
 
 type TrackerIntakeConfig = components["schemas"]["TrackerIntakeConfig"];
 
-// IntakeForm is the flat, string-backed shape both the create sheet and the
-// project settings form edit. repo has no input today (it's derived from the
-// git origin server-side) but is plumbed so a value set via the CLI
-// (--tracker-repo) survives a UI save instead of being wiped.
 export type IntakeForm = {
 	enabled: boolean;
 	repo: string;
 	assignee: string;
 };
 
-// The provider is not set here — the daemon infers it from the project's repo
-// origin URL (github.com → github, any other host → gitlab). Adding
-// Linear/Jira later means: the backend enum grows, IntakeFields gains a
-// provider <Select> + per-provider scope fields, and buildIntake switches the
-// scope field it emits.
-
-// intakeNeedsRule mirrors the backend guard (TrackerIntakeConfig.Validate):
-// enabling intake requires an assignee so it cannot drain an entire issue
-// backlog. v1 intake is assignee-only.
 export function intakeNeedsRule(form: IntakeForm): boolean {
 	return form.enabled && form.assignee.trim() === "";
 }
 
-// buildIntake produces the payload field, scrubbing empties so a disabled or
-// blank intake serializes to `undefined` (omit) rather than an empty object the
-// daemon would persist.
 export function buildIntake(
 	form: IntakeForm,
 	existing?: TrackerIntakeConfig,
@@ -50,11 +34,6 @@ export function buildIntake(
 	return Object.values(next).some((v) => v !== undefined) ? next : undefined;
 }
 
-// deriveRepoPath mirrors the daemon's server-side path derivation
-// (observe/trackerintake/observer.go): extract the provider-native repo path
-// from a git origin URL for display only. The daemon does the authoritative
-// derivation server-side at poll time; this is purely so a settings card can
-// show which repo intake will actually poll.
 export function deriveRepoPath(remote?: string): string | undefined {
 	const trimmed = remote?.trim();
 	if (!trimmed) return undefined;
@@ -74,13 +53,9 @@ export function deriveRepoPath(remote?: string): string | undefined {
 		.replace(/^\/+|\/+$/g, "")
 		.split("/");
 	if (parts.length < 2) return undefined;
-	// Keep all segments: GitHub uses owner/repo (2 parts), GitLab uses the full
-	// namespace path (group/subgroup/repo).
 	return parts.join("/");
 }
 
-// deriveRepoHost extracts the host from a git origin URL for building repo
-// links. Returns undefined for SSH URLs without a parseable host.
 export function deriveRepoHost(remote?: string): string | undefined {
 	const trimmed = remote?.trim();
 	if (!trimmed) return undefined;
@@ -95,15 +70,6 @@ export function deriveRepoHost(remote?: string): string | undefined {
 	}
 }
 
-// IntakeFields renders the shared "Tracker intake" controls: an enable checkbox
-// that reveals the eligibility inputs. It is deliberately card-agnostic (no
-// <Card> wrapper) so the create sheet and the settings form can frame it
-// however they like.
-//
-// repoPreview is only meaningful once a project exists and its git origin is
-// known: pass `{ value, host }` from settings to render the repo link
-// row, and omit it from the create sheet (the origin URL isn't available there,
-// and the daemon derives the repo regardless).
 export function IntakeFields({
 	form,
 	onChange,
@@ -117,13 +83,10 @@ export function IntakeFields({
 	form: IntakeForm;
 	onChange: (patch: Partial<IntakeForm>) => void;
 	repoPreview?: { value?: string; host?: string };
-	// compact drops the descriptive/help prose and folds the explanation into an
-	// info-icon tooltip — used by the create-project sheet, which stays minimal.
 	compact?: boolean;
 	controlClassName?: string;
 	labelClassName?: string;
 	variant?: "default" | "settings";
-	/** Replaces the settings row's description, for an intake with rules of its own (a Cloud project's). */
 	description?: string;
 }) {
 	const { t } = useTranslation();

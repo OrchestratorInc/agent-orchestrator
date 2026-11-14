@@ -117,9 +117,6 @@ func TestResolveWorkspacePathFollowsSymlinksBeforeAcceptingContainment(t *testin
 	}
 }
 
-// A ".." written after a symlink applies to the link's destination, so these
-// paths are built by concatenation: filepath.Join would collapse the ".."
-// against the link and hide the case.
 func TestResolveWorkspacePathAppliesParentAfterFollowingSymlink(t *testing.T) {
 	svc, workspace, _ := resolveFixture(t)
 	outside := t.TempDir()
@@ -160,7 +157,6 @@ func TestResolveWorkspacePathAppliesParentAfterFollowingSymlink(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// The fixture is only meaningful if the OS reads the path this way.
 			read, err := os.ReadFile(tc.path)
 			if err != nil || string(read) != tc.wantContent {
 				t.Fatalf("os.ReadFile(%q) = %q, %v; want %q", tc.path, read, err, tc.wantContent)

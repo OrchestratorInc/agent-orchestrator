@@ -32,8 +32,6 @@ func (r *recordingBrowserAuthority) Issue(id domain.SessionID) (string, string, 
 	return token, verifier, err
 }
 
-// newChatManager mirrors newManager() with a chat launcher injected, so both
-// branches can be exercised against the same fakes.
 func newChatManager(chat ChatLauncher) (*Manager, *fakeStore, *fakeRuntime) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -61,12 +59,7 @@ func (d fixedSessionModeDefaults) DefaultSessionMode(context.Context) domain.Ses
 	return domain.SessionMode(d)
 }
 
-// The load-bearing property of the split: exactly one controller starts. A chat
-// spawn must not touch the terminal runtime, and a TUI spawn must not touch the
-// chat launcher. Anything else means two writers on one conversation.
-
 type recordingLauncher struct {
-	// Empty preserves the default identity used by ordinary Chat fixtures.
 	providerConversationID string
 
 	permissionModes  []ports.PermissionMode
@@ -83,23 +76,19 @@ type recordingLauncher struct {
 	preflightPermissions []ports.PermissionMode
 	started              []ChatStart
 	turns                []string
-	// relayed is what arrived through Manager.Send rather than as an initial
-	// prompt, kept separate so a test can tell the two apart.
-	relayed             []string
-	relayOptions        []ports.MessageDeliveryOptions
-	relayIDs            []string
-	stopped             []domain.SessionID
-	backgroundHarnesses []domain.AgentHarness
-	background          []ports.ChatStartConfig
-	backgroundPrompts   []string
-	armed               []domain.SessionID
-	armPolicy           []domain.SessionInterfaceTransitionPolicy
-	prepared            []domain.SessionID
-	preparePolicy       []domain.SessionInterfaceTransitionPolicy
-	aborted             []domain.SessionID
+	relayed              []string
+	relayOptions         []ports.MessageDeliveryOptions
+	relayIDs             []string
+	stopped              []domain.SessionID
+	backgroundHarnesses  []domain.AgentHarness
+	background           []ports.ChatStartConfig
+	backgroundPrompts    []string
+	armed                []domain.SessionID
+	armPolicy            []domain.SessionInterfaceTransitionPolicy
+	prepared             []domain.SessionID
+	preparePolicy        []domain.SessionInterfaceTransitionPolicy
+	aborted              []domain.SessionID
 
-	// The asynchronous spawn path records the opening prompt instead of sending
-	// it, then drains once the controller is live.
 	queued   []string
 	queueErr error
 	drainErr error
@@ -925,8 +914,6 @@ func TestWakeHibernatedChatLeavesRecoveryAvailableAfterFailedLaunch(t *testing.T
 	rec.HibernatedAt = &at
 	store.sessions[rec.ID] = rec
 	launcher.beforeStart = func(cfg ChatStart) {
-		// The provider can fail after chat.Start claims a fresh generation,
-		// before the controller is published as ready.
 		claimed := store.sessions[cfg.SessionID]
 		claimed.Metadata.ControllerGeneration = "claimed-before-native-history-failed"
 		claimed.Revision++
@@ -1185,8 +1172,6 @@ func TestRestoreChatSessionRequiresProviderConversation(t *testing.T) {
 	}
 }
 
-// An unsupported chat request must be refused before anything durable exists: no
-// session row, no worktree, nothing to clean up.
 func TestChatSpawnRejectedBeforeDurableStateWhenUnsupported(t *testing.T) {
 	mgr, store, _ := newChatManager(&recordingLauncher{preflightErr: ports.ErrChatUnsupported})
 	launcher := mgr.chat.(*recordingLauncher)
@@ -1264,8 +1249,6 @@ func TestChatSpawnValidatesProjectEnvironmentBeforeDurableState(t *testing.T) {
 	}
 }
 
-// Chat mode with no launcher wired must fail, never silently become a TUI session
-// in a terminal the user did not ask for.
 func TestChatSpawnWithoutLauncherIsRefusedNotDowngraded(t *testing.T) {
 	mgr, _, runtime := newChatManager(nil)
 
@@ -1439,7 +1422,6 @@ func TestUnrealSpawnDefaultsToChatWithBypassPermissions(t *testing.T) {
 	}
 }
 
-// A TUI spawn must never reach the chat launcher, even when one is wired.
 func TestTUISpawnNeverTouchesTheChatLauncher(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, _, runtime := newChatManager(launcher)
@@ -1449,7 +1431,6 @@ func TestTUISpawnNeverTouchesTheChatLauncher(t *testing.T) {
 		Kind:      domain.KindWorker,
 		Harness:   domain.HarnessClaudeCode,
 		Prompt:    "hello",
-		// No requested mode: resolution must land on TUI.
 	})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -1466,8 +1447,6 @@ func TestTUISpawnNeverTouchesTheChatLauncher(t *testing.T) {
 	}
 }
 
-// A chat spawn must persist its mode and provider handle, start no runtime, and
-// deliver the initial prompt as a turn.
 func TestChatSpawnStartsControllerAndNoRuntime(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, _, runtime := newChatManager(launcher)
@@ -1500,14 +1479,6 @@ func TestChatSpawnStartsControllerAndNoRuntime(t *testing.T) {
 	if start.DataDir != "/ao-test-data" {
 		t.Errorf("controller data dir = %q, want manager-owned data dir", start.DataDir)
 	}
-	// The controller must receive the session env, which is what carries the
-	// HookPATH pin in production and is how the agent's own shell commands find
-	// `ao` — the mechanism an orchestrator delegates through.
-	//
-	// The PATH value itself is not asserted here: HookPATH deliberately declines
-	// to pin when the running binary is not named "ao", which is always the case
-	// under `go test`. That the pin works end to end was verified against a real
-	// app-server with a fake `ao` on an injected PATH.
 	if start.Env == nil {
 		t.Error("controller started with no environment; the agent could not resolve `ao`")
 	}
@@ -1515,15 +1486,12 @@ func TestChatSpawnStartsControllerAndNoRuntime(t *testing.T) {
 		t.Errorf("controller env missing %s; session-scoped hooks would not identify the session", EnvSessionID)
 	}
 
-	// The provider handle must be persisted, or a restart cannot resume.
 	if rec.Metadata.ProviderConversationID != "thread-1" {
 		t.Errorf("provider conversation id = %q", rec.Metadata.ProviderConversationID)
 	}
 	if rec.Metadata.ControllerGeneration != "gen-1" {
 		t.Errorf("controller generation = %q", rec.Metadata.ControllerGeneration)
 	}
-	// A chat session has no agent pane; leaving these empty is what stops the
-	// reaper probing for a terminal that never existed.
 	if rec.Metadata.RuntimeHandleID != "" || rec.Metadata.RuntimeLaunchID != "" {
 		t.Errorf("chat session carries runtime handles: handle=%q launch=%q",
 			rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID)
@@ -1616,7 +1584,6 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 		t.Fatalf("want a spawn and a resume, got %d starts", len(launcher.started))
 	}
 	for i, start := range launcher.started {
-		// The agent's own env carries the capability; the tool server never does.
 		if start.Env[EnvBrowserCapability] == "" || !reflect.DeepEqual(start.MCPServers, want) {
 			t.Fatalf("start %d: MCPServers = %+v, want %+v", i, start.MCPServers, want)
 		}
@@ -1715,7 +1682,6 @@ func TestChatSpawnAppliesRequestAgentConfigOverProjectDefaults(t *testing.T) {
 	}
 }
 
-// A controller that fails to start must leave nothing running and no live row.
 func TestChatSpawnRollsBackWhenControllerFailsToStart(t *testing.T) {
 	mgr, store, runtime := newChatManager(&recordingLauncher{startErr: errors.New("app-server exited")})
 
@@ -1743,8 +1709,6 @@ func TestChatSpawnRollsBackWhenControllerFailsToStart(t *testing.T) {
 	}
 }
 
-// Kill must close the controller, not tear down a runtime the session never had.
-// A chat controller owns an app-server child process, so skipping this leaks it.
 func TestKillClosesTheChatControllerAndTouchesNoRuntime(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, _, runtime := newChatManager(launcher)
@@ -1771,9 +1735,6 @@ func TestKillClosesTheChatControllerAndTouchesNoRuntime(t *testing.T) {
 	}
 }
 
-// Restore must not cross modes. A chat session resumes its provider conversation
-// with the handle it stored; giving it a terminal would hand it a controller it
-// was not created with.
 func TestRestoreResumesChatRatherThanRelaunchingATerminal(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, runtime := newChatManager(launcher)
@@ -1791,8 +1752,6 @@ func TestRestoreResumesChatRatherThanRelaunchingATerminal(t *testing.T) {
 	startsAfterSpawn := len(launcher.started)
 	runtimeAfterSpawn := runtime.created
 
-	// Simulate a daemon restart: the controller dies and the session is marked
-	// terminated with a restore marker, which is the state RestoreAll acts on.
 	if _, err := mgr.Kill(ctx, rec.ID); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
@@ -1821,18 +1780,11 @@ func TestRestoreResumesChatRatherThanRelaunchingATerminal(t *testing.T) {
 		t.Errorf("restore passed provider conversation %q, want the stored %q — without it this is a new conversation, not a resume",
 			resumed.ProviderConversationID, stored.Metadata.ProviderConversationID)
 	}
-	// The provider still holds the history, so continuity is native rather than a
-	// replayed prompt.
 	if result.Mode != RestoreModeNative {
 		t.Errorf("restore mode = %q, want native", result.Mode)
 	}
 }
 
-// `ao send` and orchestrator-to-worker relay both go through Manager.Send. A chat
-// session has no pane to type into, so without a mode branch the send reached the
-// runtime guard and was refused as "missing runtime handles" — which is true of
-// the handles and wrong about the session, and left chat workers unreachable by
-// AO's own automation.
 func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, _, runtime := newChatManager(launcher)
@@ -1855,13 +1807,9 @@ func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 	if len(launcher.relayed) != 1 || launcher.relayed[0] != "relayed from an orchestrator" {
 		t.Fatalf("relayed = %v, want the message routed to the conversation", launcher.relayed)
 	}
-	// The initial prompt is a different thing and must not be conflated with it.
 	if len(launcher.turns) != 1 || launcher.turns[0] != "initial brief" {
 		t.Errorf("initial prompt turns = %v", launcher.turns)
 	}
-	// The terminal path is not merely unused, it is unreachable here: no runtime
-	// was ever created for this session, so a send that fell through would have
-	// been refused by the runtime guard instead of returning nil above.
 	if runtime.created != 0 {
 		t.Errorf("chat spawn created %d runtimes", runtime.created)
 	}
@@ -1883,9 +1831,6 @@ func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 
 }
 
-// A terminated chat session cannot receive a message, matching the terminal path.
-// The controller is gone; accepting the send would record a message nothing will
-// ever deliver.
 func TestSendRefusedForTerminatedChatSession(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, _, _ := newChatManager(launcher)
@@ -1983,11 +1928,6 @@ func (a *hookRecordingAgent) GetAgentHooks(_ context.Context, cfg ports.Workspac
 	return a.hookErr
 }
 
-// TestChatSpawnInstallsAgentHooksBeforeControllerStart is the regression test
-// for the standing-instruction delivery gap: fresh Chat sessions used to start
-// the controller without ever installing the adapter'"'"'s workspace hooks, so
-// Command Code'"'"'s SessionStart hook (which injects the prompt file) was absent
-// and the session ran with no AO role or coordination instructions.
 func TestChatSpawnInstallsAgentHooksBeforeControllerStart(t *testing.T) {
 	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
 		t.Run(string(kind), func(t *testing.T) {
@@ -2081,13 +2021,6 @@ func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
 	}
 }
 
-// TestChatSpawnWritesCommandCodeSessionStartHook drives a fresh Chat spawn
-// through the real Command Code adapter and asserts the workspace actually
-// receives the managed hooks (SessionStart for the TUI lifecycle plus
-// PreToolUse/PostToolUse/Stop for activity). The SessionStart hook itself
-// never fires under `cmd acp` (issue #6784); Chat standing instructions ride
-// the first prompt preamble instead, so this asserts hook installation — not
-// Chat delivery.
 func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	dataDir := t.TempDir()
 	wsDir := t.TempDir()
@@ -2167,8 +2100,6 @@ func TestDockerAgentRejectsOnlyExplicitEffortBeforeSessionAllocation(t *testing.
 			AgentConfig: ports.AgentConfig{Effort: "high"}, EffortOverride: override,
 		})
 		if !override {
-			// Inherited or unflagged effort clears silently, like every other
-			// harness without an effort setting.
 			if err != nil || rec.Metadata.Effort != "" {
 				t.Fatalf("inherited effort: rec=%+v err=%v", rec, err)
 			}

@@ -133,7 +133,6 @@ func createLegacyDatabase(t *testing.T, dir string) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// The old URI percent-decoded this directory before opening ao.db.
 	if strings.Contains(dir, "%23") {
 		if err := os.MkdirAll(strings.ReplaceAll(dir, "%23", "#"), 0o750); err != nil {
 			t.Fatal(err)

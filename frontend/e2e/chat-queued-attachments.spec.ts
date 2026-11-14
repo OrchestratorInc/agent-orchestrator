@@ -87,8 +87,6 @@ test("queued image edits preserve attachments and the ordinary draft @T0", async
 				],
 			};
 			receipts.set(edit.clientMessageId, edit);
-			// Commit the first edit, then lose its 204 response. A reload must
-			// replay the same receipt even though the daemon revision advanced.
 			if (edits.length === 1) await route.abort("failed");
 			else await route.fulfill({ status: 204 });
 			return;
@@ -134,7 +132,6 @@ test("queued image edits preserve attachments and the ordinary draft @T0", async
 	await expect.poll(() => edits.length).toBe(1);
 	expect(edits[0]).toEqual({
 		clientMessageId: expect.any(String),
-		// The pasted image's inline chip names its path where it was pasted.
 		text: `Inspect the screenshot ${path}\n\nAttached files (read these files in the workspace):\n- ${path}`,
 		attachments: [{ mimeType: "image/png", data: png }],
 		retainedContent: [],

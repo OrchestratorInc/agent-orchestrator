@@ -127,7 +127,6 @@ it("aborts a clone when its owning host changes", async () => {
 
 it("reports each streamed git step and resolves with the streamed checkout", async () => {
 	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "streamed" };
-	// Frames split mid-event, as a network read can deliver them.
 	const body = `data: {"progress":{"phase":"receiving_objects","attempt":1}}\n\ndata: {"progress":{"phase":"resol`
 		+ `ving_deltas","attempt":1}}\n\ndata: ${JSON.stringify({ result: prepared })}\n\n`;
 	const chunks = [body.slice(0, 40), body.slice(40)];

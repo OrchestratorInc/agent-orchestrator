@@ -11,8 +11,6 @@ import (
 )
 
 func TestEverySupportedHarnessHasAccountSetupMethod(t *testing.T) {
-	// These CLIs authenticate through their own account flow and have no
-	// documented provider-key environment source for their runtime.
 	accountOnly := map[domain.AgentHarness]bool{
 		domain.HarnessAgy: true, domain.HarnessAuggie: true, domain.HarnessMiMoCode: true,
 	}

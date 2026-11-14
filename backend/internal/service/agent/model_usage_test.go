@@ -17,7 +17,6 @@ func usageSession(project, harness, model string, at time.Time) domain.SessionRe
 	}
 }
 
-// stampedModels returns each stamped model ID and its last-used time.
 func stampedModels(t *testing.T, svc *Service) map[string]time.Time {
 	t.Helper()
 	catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "fable"}, {ID: "opus"}, {ID: "haiku"}}}
@@ -56,7 +55,6 @@ func TestWithModelUsageUsesHistoryFromEveryProject(t *testing.T) {
 		usageSession("p2", "claude-code", "fable", now.Add(-time.Minute)),
 	}}
 
-	// The catalog is device-wide, so its recency hint is too.
 	if got := stampedModels(t, svc); len(got) != 2 || got["opus"].IsZero() || got["fable"].IsZero() {
 		t.Fatalf("stamps = %v, want both projects' models", got)
 	}

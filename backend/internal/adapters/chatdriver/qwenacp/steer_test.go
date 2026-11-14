@@ -27,8 +27,6 @@ func TestSteeringSupportedFollowsDrainVersion(t *testing.T) {
 }
 
 func TestDrainResponseIsAValidQwenDrainReply(t *testing.T) {
-	// Qwen treats a missing or non-array messages field as a broken drain and,
-	// with its watch flag set, a missing hasQueuedPrompt as unreliable.
 	for _, tc := range []struct {
 		texts []string
 		want  string

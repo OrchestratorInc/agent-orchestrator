@@ -19,19 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 )
 
-// TestChromeE2E drives the real AO Browser Bridge extension in a real Chrome.
-// It is opt-in; run it by hand after `ao browser chrome setup`:
-//
-//	AO_CHROME_E2E_ENDPOINT=<data>/browser-chrome/endpoint.json \
-//	AO_CHROME_E2E_HOST=<path to the ao binary the host wrapper runs> \
-//	AO_CHROME_E2E_CDP=http://127.0.0.1:9333 \
-//	go test ./internal/browserchrome -run TestChromeE2E -v
-//
-// Chrome must run with the extension loaded, --use-mock-keychain (or macOS asks
-// for the login password on every launch and pages stall until it is answered)
-// and --remote-debugging-port, used here only to click the consent prompt the
-// way a person would, and to act as the user on tabs and windows. Stop the
-// daemon first: this test serves the Chrome runtime socket itself.
 func TestChromeE2E(t *testing.T) {
 	endpointPath := os.Getenv("AO_CHROME_E2E_ENDPOINT")
 	hostExe := os.Getenv("AO_CHROME_E2E_HOST")
@@ -116,7 +103,6 @@ func TestChromeE2E(t *testing.T) {
 		}
 	}
 
-	// The first command waits for consent; answer it like a person would.
 	consentDone := make(chan error, 1)
 	go func() { consentDone <- clickConsent(ctx, cdp) }()
 	opened := run("open", map[string]interface{}{"url": site.URL + "/"})
@@ -227,7 +213,6 @@ func TestChromeE2E(t *testing.T) {
 	expectError("open", map[string]interface{}{"url": "file:///etc/hosts"}, "BROWSER_URL_FORBIDDEN")
 	expectError("devtools-open", nil, "BROWSER_ACTION_UNSUPPORTED_IN_TARGET")
 
-	// The rest uses the extension's own APIs to do what a person would.
 	extension := func(expression string) map[string]interface{} {
 		t.Helper()
 		value, err := evalInExtension(ctx, cdp, expression)
@@ -246,8 +231,6 @@ func TestChromeE2E(t *testing.T) {
 		return int(value["windowId"].(float64))
 	}
 
-	// The agent works in a tab group in the user's window, behind the tab the
-	// user has in front, without opening a window of its own.
 	agentWindow := windowOf("Orchestrator · " + session)
 	if windows := extension(fmt.Sprintf(`chrome.windows.getAll({ windowTypes: ["normal"] }).then((all) => ({ count: all.length, ours: all.some((w) => w.id === %d) }))`, agentWindow)); windows["count"].(float64) != 1 || windows["ours"] != true {
 		t.Fatalf("normal windows = %v, want only the user's window", windows)
@@ -256,8 +239,6 @@ func TestChromeE2E(t *testing.T) {
 		t.Fatal("the agent's tab took the front of the user's window")
 	}
 
-	// The user switches to their own tab in the agent's window: it stays in
-	// front, while input and screenshots still reach the agent's tab.
 	run("open", map[string]interface{}{"url": site.URL + "/"})
 	personal := int(extension(fmt.Sprintf(`chrome.tabs.create({ windowId: %d, active: true, url: %q }).then((tab) => ({ id: tab.id }))`, agentWindow, site.URL+"/next"))["id"].(float64))
 	isFront := func(tabID int) bool {
@@ -277,16 +258,12 @@ func TestChromeE2E(t *testing.T) {
 	}
 	extension(fmt.Sprintf(`chrome.tabs.remove(%d).then(() => ({}))`, personal))
 
-	// A minimized (hidden) agent window still takes trusted input and is
-	// never restored. Chrome stops drawing minimized windows, so a screenshot
-	// either returns or says so promptly; it never hangs or steals focus.
 	run("open", map[string]interface{}{"url": site.URL + "/"})
 	extension(fmt.Sprintf(`chrome.windows.update(%d, { state: "minimized" }).then(() => ({}))`, agentWindow))
 	minimized := func() bool {
 		t.Helper()
 		return extension(fmt.Sprintf(`chrome.windows.get(%d).then((w) => ({ state: w.state }))`, agentWindow))["state"] == "minimized"
 	}
-	// macOS animates the minimize; wait for the page to see it.
 	hidden := extension(fmt.Sprintf(`(async () => {
 		const [g] = await chrome.tabGroups.query({ title: %q });
 		const [tab] = await chrome.tabs.query({ groupId: g.id });
@@ -321,7 +298,6 @@ func TestChromeE2E(t *testing.T) {
 	}
 	extension(fmt.Sprintf(`chrome.windows.update(%d, { state: "normal" }).then(() => ({}))`, agentWindow))
 
-	// A second session gets its own window and doesn't disturb the first.
 	const second = "e2e-second"
 	secondConsent := make(chan error, 1)
 	go func() { secondConsent <- clickConsent(ctx, cdp) }()
@@ -342,7 +318,6 @@ func TestChromeE2E(t *testing.T) {
 		t.Fatalf("after the second session ended: %v, want the user's window open and its group gone", left)
 	}
 
-	// Allowing every session: the next new session runs without asking.
 	const third, fourth = "e2e-third", "e2e-fourth"
 	allConsent := make(chan error, 1)
 	go func() {
@@ -364,9 +339,6 @@ func TestChromeE2E(t *testing.T) {
 		t.Fatalf("destroy fourth: %v", err)
 	}
 
-	// The user, with another window open, closes the one holding the agent's
-	// group: the next command starts over cleanly in the window they use now.
-	// (Closing a profile's last window on macOS shuts the profile down.)
 	other := int(extension(`chrome.windows.create({ focused: true, url: "about:blank" }).then((w) => ({ id: w.id }))`)["id"].(float64))
 	time.Sleep(500 * time.Millisecond)
 	extension(fmt.Sprintf(`chrome.windows.remove(%d).then(() => ({}))`, agentWindow))
@@ -384,8 +356,6 @@ func TestChromeE2E(t *testing.T) {
 	}
 }
 
-// evalInExtension runs an expression in the extension's service worker. It must
-// resolve to a JSON object.
 func evalInExtension(ctx context.Context, cdp, expression string) (map[string]interface{}, error) {
 	resp, err := http.Get(cdp + "/json/list")
 	if err != nil {
@@ -447,7 +417,6 @@ func evalInExtension(ctx context.Context, cdp, expression string) (map[string]in
 	return nil, errors.New("the extension's service worker is not running")
 }
 
-// inputTier reads which input tier an act result's dispatch used.
 func inputTier(act map[string]interface{}) interface{} {
 	result, _ := act["result"].(map[string]interface{})
 	return result["inputTier"]
@@ -457,15 +426,11 @@ func errorAs(err error, target *browserruntime.CommandError) bool {
 	return errors.As(err, target)
 }
 
-// clickConsent waits for the extension's consent window and clicks Allow
-// through the Chrome DevTools Protocol, standing in for the person.
 func clickConsent(ctx context.Context, cdp string) error {
 	return clickConsentExpression(ctx, cdp, "document.getElementById('allow').click()")
 }
 
 func clickConsentExpression(ctx context.Context, cdp, expression string) error {
-	// Run the clicks only once consent.js has attached its listeners: the
-	// target appears before the page's script runs.
 	expression = `new Promise((resolve) => {
 		const go = () => {
 			if (document.getElementById('allow') && document.readyState === 'complete') { ` + expression + `; resolve(true); } else setTimeout(go, 50);

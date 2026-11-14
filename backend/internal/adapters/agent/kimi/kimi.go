@@ -1,19 +1,3 @@
-// Package kimi implements the Kimi CLI (Moonshot AI) agent adapter: launching
-// new interactive sessions and resuming sessions when a native Kimi session id
-// is known.
-//
-// Kimi CLI (binary "kimi") is Moonshot AI's terminal-native agentic coding
-// agent. AO launches Kimi sessions interactively as `kimi [--auto|-y]` and
-// delivers prompted worker tasks after startup through the runtime pane. Kimi's
-// `-p/--prompt` mode is intentionally avoided for AO workers because it is
-// non-interactive and streams transcript output without opening the TUI.
-// Sessions are resumed by id with `kimi --session <id>`.
-//
-// Kimi exposes no system-prompt launch flag, so AO injects standing
-// instructions through Kimi's documented project instruction file
-// (.kimi/AGENTS.md) in the per-session worktree. AO also installs Kimi
-// lifecycle hooks into Kimi's config so native session metadata and activity can
-// flow back through `ao hooks`.
 package kimi
 
 import (
@@ -35,15 +19,12 @@ const (
 	kimiDataDirName = "kimi"
 )
 
-// Plugin is the Kimi CLI agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Kimi adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -55,8 +36,6 @@ func kimiCodeHomeDir(dataDir string) string {
 	return filepath.Join(dataDir, kimiDataDirName)
 }
 
-// AugmentRuntimeEnv points Kimi at AO's isolated Kimi home so session hooks and
-// other managed state stay under AO_DATA_DIR instead of the user's profile.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	if strings.TrimSpace(dataDir) == "" {
 		return
@@ -64,7 +43,6 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	env[kimiCodeHomeEnv] = kimiCodeHomeDir(dataDir)
 }
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -77,7 +55,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Kimi understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -93,15 +70,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// GetLaunchCommand builds the argv to start a new Kimi session:
-//
-//	kimi [--auto|-y]                            (interactive)
-//
-// Prompted tasks are delivered after startup by the session manager rather than
-// via `-p`, so the dashboard keeps the interactive Kimi TUI instead of a plain
-// transcript stream. Kimi has no documented system-prompt flag, so standing
-// instructions are installed by GetAgentHooks as a project instruction file
-// instead of being passed in argv.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.kimiBinary(ctx)
 	if err != nil {
@@ -115,9 +83,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy reports that AO should inject prompted Kimi tasks
-// into the interactive terminal after startup. Kimi's `-p/--prompt` mode is
-// non-interactive and does not open the TUI.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -125,8 +90,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints waits for Kimi's interactive prompt before AO injects
-// the worker's first task.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -140,14 +103,6 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Kimi session
-// when a native Kimi session id is known:
-//
-//	kimi --session <agentSessionId>
-//
-// ok is false when no native session id has been captured, so callers fall back
-// to fresh launch behavior. Model and approval flags reapply the saved AO
-// configuration using the verified Kimi Code 2.2 CLI contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -169,14 +124,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// appendApprovalFlags reapplies the pinned policy. Kimi Code 2.2's CLI
-// accepts --auto/--yolo and --model alongside --session (verified --help).
-// The strict native history probe rejects older incompatible CLI contracts
-// before an automatic refresh can stop the existing process.
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch normalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
-		// No flag: defer to the user's Kimi config/default behavior.
 	case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
 		*cmd = append(*cmd, "--auto")
 	case ports.PermissionModeBypassPermissions:
@@ -184,9 +134,6 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	}
 }
 
-// appendModelFlag appends `--model <model>` when a role-specific model
-// override is configured. A blank/whitespace-only value means no override was
-// configured, so the flag is omitted and Kimi's own default model applies.
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
@@ -219,8 +166,6 @@ var kimiBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveKimiBinary finds the `kimi` binary, searching PATH then common install
-// locations (npm global dirs, ~/.local/bin, Homebrew, and ~/.cargo/bin).
 func ResolveKimiBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, kimiBinarySpec)
 }
@@ -241,8 +186,6 @@ func (p *Plugin) kimiBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

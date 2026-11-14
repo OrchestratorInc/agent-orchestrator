@@ -16,13 +16,8 @@ import (
 
 const maxRegistryMetadataBytes = 1 << 20
 
-// errLatestUnparseable means the package source answered with a release AO
-// cannot compare. It is not a lookup failure, so no fallback source is tried.
 var errLatestUnparseable = errors.New("latest release version could not be parsed")
 
-// managedVersionChecker reads the release the package source publishes as
-// latest. Updates always install that release, so a prerelease install is
-// compared with it rather than with its own prerelease channel.
 type managedVersionChecker func(context.Context, Plan) (string, error)
 
 func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client) managedVersionChecker {
@@ -34,9 +29,6 @@ func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client)
 		scheme := versionSchemeFor(plan.Target)
 		switch plan.Method {
 		case "npm", "pnpm", "yarn", "bun":
-			// The public registry answers without starting a package manager. Ask
-			// the manager, which honours the user's configured registry, only when
-			// that registry is unreachable, e.g. behind a corporate mirror.
 			result, registryErr := npmRegistryVersion(ctx, client, plan.Package, scheme)
 			if registryErr == nil || errors.Is(registryErr, errLatestUnparseable) {
 				return result, registryErr
@@ -158,10 +150,6 @@ func parseNodeView(method, raw string) string {
 }
 
 func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, client *http.Client, plan Plan, scheme versionScheme) (string, error) {
-	// brew outdated and brew info read local metadata that is only as fresh as
-	// the last brew update, so they can report a stale release as current.
-	// Core formulae and casks are read from the live Homebrew API first; tap
-	// packages (owner/tap/name) are not published there.
 	if !strings.Contains(plan.Package, "/") {
 		if latest, err := homebrewAPIVersion(ctx, client, plan.Package, plan.PackageCask); err == nil {
 			if result, ok := managedResult(latest, scheme); ok {
@@ -225,13 +213,10 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 	}
 	if cask {
 		for _, entry := range info.Casks {
-			// info uses a display-name array; outdated historically uses the
-			// package token as a string in name. Never match a display name.
 			token := entry.Token
 			if token == "" && outdated {
 				_ = json.Unmarshal(entry.Name, &token)
 			}
-			// A tapped cask (owner/tap/token) is named in full only by full_token.
 			if token != pkg && (entry.FullToken == "" || entry.FullToken != pkg) {
 				continue
 			}
@@ -243,8 +228,6 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 		return ""
 	}
 	for _, entry := range info.Formulae {
-		// brew info names a tapped formula (owner/tap/name) in full only in
-		// full_name; name is the short form an unqualified package matches.
 		if entry.Name != pkg && (entry.FullName == "" || entry.FullName != pkg) {
 			continue
 		}
@@ -260,8 +243,6 @@ func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, pla
 	if commands == nil {
 		return "", fmt.Errorf("winget command runner unavailable")
 	}
-	// Supplying --id makes winget upgrade install the selected update. Listing
-	// without a package selector is read-only; filter the exact ID in the output.
 	argv := []string{"winget", "upgrade", "--disable-interactivity"}
 	out, commandErr := runProbe(ctx, commands, managerProbeTimeout, false, argv)
 	latest, matches := parseWingetUpgrade(out, plan.Package)
@@ -357,10 +338,6 @@ func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, sc
 	return "", fmt.Errorf("%w: PyPI version for %s", errLatestUnparseable, pkg)
 }
 
-// npmLatestTag reads the release the npm registry tags latest. The dist-tags
-// endpoint returns only the tag map; the full package document lists every
-// published version and exceeds the metadata limit for popular harnesses
-// such as Claude Code (1.5 MB).
 func npmLatestTag(ctx context.Context, client *http.Client, pkg string) (string, error) {
 	var distTags map[string]string
 	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
@@ -369,7 +346,6 @@ func npmLatestTag(ctx context.Context, client *http.Client, pkg string) (string,
 	return distTags["latest"], nil
 }
 
-// pypiLatestRelease reads a PyPI project's current release.
 func pypiLatestRelease(ctx context.Context, client *http.Client, pkg string) (string, error) {
 	var metadata struct {
 		Info struct {
@@ -390,8 +366,6 @@ func fetchRegistryJSON(ctx context.Context, client *http.Client, endpoint string
 	return json.Unmarshal(body, destination)
 }
 
-// fetchRegistry GETs a release-metadata document, bounded to
-// maxRegistryMetadataBytes. accept, when set, is sent as the Accept header.
 func fetchRegistry(ctx context.Context, client *http.Client, endpoint, accept string) ([]byte, error) {
 	if client == nil {
 		return nil, fmt.Errorf("registry client unavailable")
@@ -429,8 +403,6 @@ func managedResult(raw string, scheme versionScheme) (string, bool) {
 	return latest.display, true
 }
 
-// homebrewAPIVersion reads the current release of a core formula or cask
-// from the Homebrew JSON API that brew itself syncs from.
 func homebrewAPIVersion(ctx context.Context, client *http.Client, pkg string, cask bool) (string, error) {
 	var metadata struct {
 		Version  string `json:"version"`
@@ -449,8 +421,6 @@ func homebrewAPIVersion(ctx context.Context, client *http.Client, pkg string, ca
 	if cask {
 		latest = metadata.Version
 	}
-	// Cask versions may append a comma-separated download token, as in
-	// 1.2.3,abcdef; only the release before it is a comparable version.
 	latest, _, _ = strings.Cut(latest, ",")
 	if latest == "" {
 		return "", fmt.Errorf("homebrew API returned no version for %s", pkg)

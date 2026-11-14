@@ -24,15 +24,12 @@ const usageQueryKey = (hostId?: HostId) => [...agentAccountsQueryKeyFor(hostId),
 const sessionAccountsKey = (sessionId: string, hostId?: HostId) => [...agentAccountsQueryKeyFor(hostId), "session", sessionId];
 const client = (hostId?: HostId) => clientForSessionHost(remoteHost(hostId));
 
-/** The account a harness signs in with, or null when it has none. */
 export function agentAccountProviderFor(harness: string | undefined): AgentAccountProvider | null {
 	if (harness === "claude-code") return "claude";
 	if (harness === "codex") return "codex";
 	return null;
 }
 
-/** New sessions start on a saved account, so readiness is that account's
- * sign-in; the CLI's own login is read from its row in the accounts list. */
 export function followsSavedAccount(agent: AgentReadinessSnapshot | undefined): boolean {
 	return Boolean(agent?.authentication.diagnostics?.some((step) => step.code === "saved_default_account"));
 }
@@ -46,7 +43,6 @@ export async function fetchAgentAccounts(refresh = false, hostId?: HostId) {
 	return unwrap(await client(hostId).GET("/api/v1/agents/accounts", { params: { query: refresh ? { refresh: true } : {} } }))?.accounts ?? [];
 }
 
-/** Every account with its limits. The daemon reuses a reading for five minutes. */
 export function useAgentAccounts(enabled = true, hostId?: HostId) {
 	return useQuery({ queryKey: agentAccountsQueryKeyFor(hostId), queryFn: () => fetchAgentAccounts(false, hostId), refetchInterval: 60_000, enabled });
 }
@@ -55,8 +51,6 @@ export const agentAccountProviderNames: Record<AgentAccountProvider, string> = {
 
 type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken", options?: { provider: string }) => string;
 
-/** An account's name: its email. A Claude login without one is a
- * CLAUDE_CODE_OAUTH_TOKEN login, which reports no identity. */
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean }, t: AccountNameT): string {
 	if (account.email) return account.email;
 	return account.provider === "claude" && account.signedIn
@@ -85,16 +79,12 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 	return parts.join(" · ");
 }
 
-/** A failed check of an account, said plainly. `detail` is the CLI's own
- * error, kept for a Details tooltip; `actionable` needs the user, the rest
- * clears on a later check. */
 export type AgentAccountProblem = { text: string; detail: string | null; actionable: boolean };
 
 export function describeAccountProblem(account: Pick<AgentAccount, "problem" | "problemKind" | "provider">, t: TFunction): AgentAccountProblem | null {
 	const detail = account.problem?.trim() || null;
 	if (!detail && !account.problemKind) return null;
 	const provider = agentAccountProviderNames[account.provider];
-	// A daemon from before problem kinds sends only the error text.
 	switch (account.problemKind ?? "unavailable") {
 		case "slow": return { text: t("settings.agentAccounts.problem.slow", { provider }), detail, actionable: false };
 		case "rate_limited": return { text: t("settings.agentAccounts.problem.rateLimited", { provider }), detail, actionable: false };
@@ -105,7 +95,6 @@ export function describeAccountProblem(account: Pick<AgentAccount, "problem" | "
 	}
 }
 
-/** Names an account by id in status text, such as "Moved from … to …". */
 export function useAgentAccountLabel(enabled = true, hostId?: HostId) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts(enabled, hostId);
@@ -123,7 +112,6 @@ export function useAgentAccountUsage(days = 30, hostId?: HostId) {
 	});
 }
 
-/** The account a session runs on, for each provider. */
 export async function fetchSessionAgentAccounts(sessionId: string, hostId?: HostId) {
 	return unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId } } })) ?? {};
 }
@@ -143,7 +131,6 @@ export function useAgentAccountActions(hostId?: HostId) {
 		refresh: async () => setAccounts(await fetchAgentAccounts(true, hostId)),
 		startLogin: async (provider: AgentAccountProvider) =>
 			unwrap(await client(hostId).POST("/api/v1/agents/accounts/login", { body: { provider } })),
-		/** Signs a saved account in again in its own folder; verify and cancel are the same as a new sign-in. */
 		signInAgain: async (accountId: string) =>
 			unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
 		verifyLogin: async (operationId: string) => {
@@ -166,7 +153,6 @@ export function useAgentAccountActions(hostId?: HostId) {
 			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
 			return result.outcome;
 		},
-		/** Starts the durable move; the shared interface-transition status shows its progress. */
 		switchSession: async (sessionId: string, accountId: string, stopTurn = false) => {
 			const result = unwrap(await client(hostId).PUT("/api/v1/agents/accounts/sessions/{sessionId}", {
 				params: { path: { sessionId } }, body: { accountId, ...(stopTurn ? { stopTurn: true } : {}) },

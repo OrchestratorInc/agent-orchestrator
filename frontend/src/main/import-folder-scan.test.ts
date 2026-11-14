@@ -57,8 +57,6 @@ describe("scanImportFolder", () => {
 		const nested = path.join(parent, "new-workspace");
 		await mkdir(nested);
 		expect(await resolveCheckedOutBranch(parent)).toBe("trunk");
-		// AO will initialize this folder on main; an ancestor's trunk must not
-		// become an explicit default that the new workspace root cannot resolve.
 		expect(await resolveCheckedOutBranch(nested)).toBeUndefined();
 	});
 	it("leaves a plain project folder nested inside a parent repo setup-ready with a warning", async () => {

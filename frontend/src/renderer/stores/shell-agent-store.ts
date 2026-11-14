@@ -1,8 +1,3 @@
-// Coding agents the user started by hand in a shell tab (claude, codex, ...).
-// The daemon names each from the terminal's foreground program and pushes the
-// set over the terminal mux. Nothing is persisted: when an agent exits, its tab
-// goes back to a plain terminal.
-
 import { useEffect } from "react";
 import { create } from "zustand";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
@@ -19,10 +14,8 @@ type Snapshot = ({ handleId: string } & ShellAgent)[];
 
 type ShellAgentStore = {
 	agents: Record<string, ShellAgent>;
-	/** Tabs whose agent finished a turn the user has not seen; cleared on select. */
 	unseenDone: Record<string, true>;
 	replace: (snapshot: Snapshot) => void;
-	/** Drops the agents while disconnected but keeps the done marks. */
 	clearAgents: () => void;
 	markSeen: (handleId: string) => void;
 };
@@ -81,13 +74,11 @@ function connect() {
 			}
 			useShellAgentStore.getState().replace(agents);
 		} catch {
-			// A malformed frame changes nothing; the next snapshot replaces everything.
 		}
 	};
 	ws.onclose = () => {
 		if (socket !== ws) return;
 		socket = undefined;
-		// Statuses are live facts: show plain tabs rather than stale ones.
 		useShellAgentStore.getState().clearAgents();
 		retryTimer = setTimeout(() => {
 			retryTimer = undefined;
@@ -105,7 +96,6 @@ function disconnect() {
 	ws?.close();
 }
 
-/** Keeps one shared mux subscription open while any shell tab is mounted. */
 export function useShellAgentStream(enabled: boolean): void {
 	useEffect(() => {
 		if (!enabled) return;

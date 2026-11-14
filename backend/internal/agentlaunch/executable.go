@@ -8,14 +8,8 @@ import (
 	"sync/atomic"
 )
 
-// stableExecutable is the ao AO-owned commands run instead of this process's
-// own path when that path dies with the app: an AppImage mounts the app under
-// a new /tmp/.mount_* directory on every launch, so a session that outlives an
-// app restart would otherwise call a binary that no longer exists.
 var stableExecutable atomic.Pointer[string]
 
-// Executable returns the ao that sessions, hooks and terminals should run:
-// the link UseStableExecutable keeps, or else this process's executable.
 func Executable() (string, error) {
 	if link := stableExecutable.Load(); link != nil {
 		return *link, nil
@@ -23,11 +17,6 @@ func Executable() (string, error) {
 	return os.Executable()
 }
 
-// UseStableExecutable makes Executable return <dataDir>/runtime/ao-current/ao
-// when this daemon runs from an AppImage (the desktop sets AO_APPIMAGE), and
-// points that link at the current mount. Every start moves it, so sessions
-// started before a restart keep reaching the running app's ao. Anywhere else
-// Executable returns this process's own path.
 func UseStableExecutable(dataDir string, getenv func(string) string) error {
 	if getenv("AO_APPIMAGE") == "" {
 		stableExecutable.Store(nil)
@@ -50,7 +39,6 @@ func UseStableExecutable(dataDir string, getenv func(string) string) error {
 	return nil
 }
 
-// swapSymlink atomically replaces link with a symlink to target.
 func swapSymlink(link, target string) error {
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {

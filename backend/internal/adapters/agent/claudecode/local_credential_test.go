@@ -15,12 +15,9 @@ import (
 
 const testSetupToken = "sk-ant-oat01-local-setup-token"
 
-// withSavedSetupToken isolates Claude's native credential sources and saves a
-// setup-token login under a fresh AO data directory.
 func withSavedSetupToken(t *testing.T) string {
 	t.Helper()
 	clearClaudeCredentialEnv(t)
-	// Prevent a macOS keychain helper from finding real user credentials.
 	t.Setenv("PATH", "")
 	dataDir := t.TempDir()
 	if err := SaveLocalOAuthToken(dataDir, []byte(testSetupToken)); err != nil {
@@ -29,8 +26,6 @@ func withSavedSetupToken(t *testing.T) string {
 	return dataDir
 }
 
-// Choosing the setup token in AO's login menu is an explicit sign-in, so it
-// signs sessions in even when Claude Code has a login of its own.
 func TestAugmentRuntimeEnvSignsInWithChosenSetupToken(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -78,7 +73,7 @@ func TestAugmentRuntimeEnvKeepsLaunchSpecificCredentials(t *testing.T) {
 
 func TestRemoveLocalOAuthTokenForgetsSetupToken(t *testing.T) {
 	dataDir := withSavedSetupToken(t)
-	for range 2 { // a second removal finds nothing and still succeeds
+	for range 2 {
 		if err := RemoveLocalOAuthToken(dataDir); err != nil {
 			t.Fatal(err)
 		}
@@ -147,8 +142,6 @@ func TestSaveLocalOAuthTokenReplacesTokenWithoutLeftovers(t *testing.T) {
 	}
 }
 
-// Work outside a session (model discovery, the computer's account check) asks
-// for the same credential a session would get.
 func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 	dataDir := withSavedSetupToken(t)
 	got := New().RuntimeCredentialEnv(dataDir, nil)
@@ -160,8 +153,6 @@ func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 	}
 }
 
-// AO exports its saved keys to the daemon, so the caller passes what Claude
-// Code's sessions do not get, and the probe must not see it either.
 func TestAuthStatusForRuntimeHoldsBackWhatTheCallerWithholds(t *testing.T) {
 	dataDir := withSavedSetupToken(t)
 	InvalidateAuthCache()
@@ -188,7 +179,6 @@ func TestAuthStatusForRuntimeHoldsBackWhatTheCallerWithholds(t *testing.T) {
 	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
 		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
 	}
-	// The credential a session launch gets itself is kept.
 	if probed["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
 		t.Fatalf("probe env = %v, want the saved setup token", probed)
 	}
@@ -196,12 +186,9 @@ func TestAuthStatusForRuntimeHoldsBackWhatTheCallerWithholds(t *testing.T) {
 
 const testCloudToken = "sk-ant-oat01-cloud-setup-token"
 
-// withCloudToken isolates Claude's native credential sources and saves the
-// token AO Cloud sign-in writes, as the desktop app does.
 func withCloudToken(t *testing.T) string {
 	t.Helper()
 	clearClaudeCredentialEnv(t)
-	// Prevent a macOS keychain helper from finding real user credentials.
 	t.Setenv("PATH", "")
 	dataDir := t.TempDir()
 	path := CloudOAuthTokenPath(dataDir)
@@ -214,8 +201,6 @@ func withCloudToken(t *testing.T) string {
 	return dataDir
 }
 
-// Nobody chose the AO Cloud token for local sessions, so it must never shadow
-// Claude Code's own login (#5878).
 func TestAugmentRuntimeEnvUsesCloudTokenOnlyWithoutNativeLogin(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -256,8 +241,6 @@ func TestChosenSetupTokenOutranksCloudToken(t *testing.T) {
 	}
 }
 
-// Signing in through options 1-3 forgets only the menu's token; the AO Cloud
-// copy stays for the cloud flow and already defers to the new native login.
 func TestRemoveLocalOAuthTokenKeepsCloudToken(t *testing.T) {
 	dataDir := withCloudToken(t)
 	if err := SaveLocalOAuthToken(dataDir, []byte(testSetupToken)); err != nil {
@@ -271,9 +254,6 @@ func TestRemoveLocalOAuthTokenKeepsCloudToken(t *testing.T) {
 	}
 }
 
-// An Anthropic key AO exported to the daemon for another harness is blanked
-// for Claude Code's sessions, so it is no login of Claude Code's own: the
-// probe gets the AO Cloud token those sessions get.
 func TestAuthStatusForRuntimeOffersTheCloudTokenWhenTheExportedKeyIsHeldBack(t *testing.T) {
 	dataDir := withCloudToken(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ao-exported")
@@ -306,8 +286,6 @@ func TestAuthStatusForRuntimeOffersTheCloudTokenWhenTheExportedKeyIsHeldBack(t *
 	}
 }
 
-// Model discovery and the account check pass the keys AO holds back as base:
-// a blanked exported key does not hide the AO Cloud token sessions get.
 func TestRuntimeCredentialEnvChoosesTheCloudTokenAgainstHeldBackKeys(t *testing.T) {
 	dataDir := withCloudToken(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ao-exported")

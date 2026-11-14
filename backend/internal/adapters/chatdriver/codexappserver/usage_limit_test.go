@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// These fixtures use the native account/rateLimits/updated and TurnError shapes
-// from Codex's app-server schema. They do not contact a live provider or exhaust
-// quota. Display-only dates intentionally lack a timezone and remain unusable.
 const codexQuotaCopy = "You've hit your usage limit. Try again at Aug 2nd, 2026 3:31 PM."
 
 func TestCodexUsageLimitNativeErrors(t *testing.T) {
@@ -103,7 +100,7 @@ func TestCodexUsageLimitResetWindows(t *testing.T) {
 }
 
 func TestCodexUsageLimitNotificationOrdering(t *testing.T) {
-	const reset = int64(4102444800) // 2100-01-01T00:00:00Z, safely future for pump's real clock.
+	const reset = int64(4102444800)
 	const start = `{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress"}}}`
 	const window = `{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100,"resetsAt":4102444800},"secondary":null}}}`
 	const sparse = `{"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100,"resetsAt":4102444800}}}}`

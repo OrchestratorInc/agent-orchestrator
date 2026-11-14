@@ -87,10 +87,6 @@ func TestBuildLaunchCommands(t *testing.T) {
 			},
 		},
 		{
-			// opencode v2 carries the model, agent, and system prompt in the
-			// caller-written OPENCODE_CONFIG (v2 has no flags for them), so the argv
-			// is just the approval flag plus the task prompt. Auto and bypass both
-			// map to --auto.
 			name: "opencode auto",
 			cfg: LaunchConfig{
 				Harness:    HarnessOpenCode,
@@ -106,8 +102,6 @@ func TestBuildLaunchCommands(t *testing.T) {
 			},
 		},
 		{
-			// default carries no approval flag; the prompt still rides --prompt so a
-			// leading "-" is never read as a flag.
 			name: "opencode default no prompt flag",
 			cfg: LaunchConfig{
 				Harness:    HarnessOpenCode,
@@ -199,8 +193,6 @@ func TestBuildRestoreCommands(t *testing.T) {
 			want: []string{"cursor-agent", "--force", "--resume", "chat-1"},
 		},
 		{
-			// opencode resumes by its plugin-captured native id via --session; bypass
-			// maps to --auto with the full-access rule riding the caller's config.
 			name: "opencode metadata identity",
 			cfg: RestoreConfig{
 				Harness:    HarnessOpenCode,
@@ -226,10 +218,6 @@ func TestBuildRestoreCommands(t *testing.T) {
 	}
 }
 
-// TestBuildRestoreCommandAppliesModel proves every harness restore command
-// carries the model chosen in ChatUI (#4893): rebuilding TUI must pass the
-// session's model through Codex, Claude Code, and Cursor resume commands rather
-// than silently reverting to a different default.
 func TestBuildRestoreCommandAppliesModel(t *testing.T) {
 	tests := []struct {
 		name string
@@ -349,8 +337,6 @@ func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// Effort is a per-model capability, so the flag appears only when a level was
-// actually chosen — a model that accepts none must launch exactly as before.
 func TestClaudeEffortFlag(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -15,7 +15,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.gooseBinary(ctx)
 	if err != nil {
@@ -49,9 +48,6 @@ func gooseLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	// Goose's own config and secrets files decide first; a key in the
-	// environment is the fallback. A file read error only surfaces when no
-	// key is set either.
 	var fileErr error
 	for _, path := range gooseConfigPaths() {
 		status, ok, err := gooseAuthStatusFromConfig(path)
@@ -93,11 +89,7 @@ func gooseConfigPaths() []string {
 		add(filepath.Join(xdg, "goose", "secrets.yaml"))
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		// Goose stores config here on macOS as well, rather than under
-		// os.UserConfigDir's "Application Support" path.
 		add(filepath.Join(home, ".config", "goose", "config.yaml"))
-		// Goose falls back to this plaintext secret store when its keyring is
-		// disabled or unavailable. Keyring-only credentials remain unknown.
 		add(filepath.Join(home, ".config", "goose", "secrets.yaml"))
 	}
 	return paths

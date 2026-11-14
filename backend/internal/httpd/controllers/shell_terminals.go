@@ -16,8 +16,6 @@ import (
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
-// ShellTerminalService is the controller-facing standalone shell terminal
-// contract.
 type ShellTerminalService interface {
 	OpenShellTerminal(ctx context.Context, in shelltermsvc.OpenShellTerminalInput) (shelltermsvc.ShellTerminal, error)
 	ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]shelltermsvc.ShellTerminal, error)
@@ -25,13 +23,10 @@ type ShellTerminalService interface {
 	CloseShellTerminal(ctx context.Context, handleID string) error
 }
 
-// ShellTerminalsController owns the /shell-terminals routes: standalone shells
-// the user opens by hand, independent of any agent session.
 type ShellTerminalsController struct {
 	Svc ShellTerminalService
 }
 
-// Register mounts the bounded shell terminal REST routes.
 func (c *ShellTerminalsController) Register(r chi.Router) {
 	r.Get("/shell-terminals", c.list)
 	r.Post("/shell-terminals", c.open)
@@ -41,8 +36,6 @@ func (c *ShellTerminalsController) Register(r chi.Router) {
 	r.Get("/terminal-shells/check", c.checkShell)
 }
 
-// listShells reports the shells installed on the daemon's machine, for the
-// Settings shell picker. Detection only reads the filesystem.
 func (c *ShellTerminalsController) listShells(w http.ResponseWriter, _ *http.Request) {
 	catalog := shelltermsvc.DetectShells()
 	shells := make([]TerminalShellResponse, 0, len(catalog.Shells))
@@ -55,7 +48,6 @@ func (c *ShellTerminalsController) listShells(w http.ResponseWriter, _ *http.Req
 	})
 }
 
-// checkShell validates a custom shell path before Settings saves it.
 func (c *ShellTerminalsController) checkShell(w http.ResponseWriter, r *http.Request) {
 	path, err := shelltermsvc.CheckShellPath(r.URL.Query().Get("path"))
 	if err != nil {
@@ -89,8 +81,6 @@ func (c *ShellTerminalsController) open(w http.ResponseWriter, r *http.Request) 
 		apispec.NotImplemented(w, r, "POST", "/api/v1/shell-terminals")
 		return
 	}
-	// An empty body is a valid request: it means "open a shell with no project
-	// context", which the service resolves to the daemon data dir.
 	var req OpenShellTerminalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)

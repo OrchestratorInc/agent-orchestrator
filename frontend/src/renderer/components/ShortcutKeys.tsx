@@ -1,6 +1,5 @@
 import "./shortcut-keys.css";
 
-// Modifier glyphs and arrows need spoken names in accessible labels.
 const spokenKeys: Record<string, string> = {
 	"⌘": "Command",
 	"⌥": "Option",

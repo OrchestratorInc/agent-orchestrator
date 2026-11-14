@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// Layout names returned by packageLayout.
 const (
 	layoutVersionManager = "version-manager"
 	layoutHomebrew       = "homebrew"
@@ -18,22 +17,14 @@ const (
 	layoutUV             = "uv"
 	layoutPipx           = "pipx"
 	layoutWinget         = "winget"
-	// layoutSystem is a directory owned by the operating system or a system
-	// package manager (apt, dnf, Nix, Snap, Flatpak, MacPorts). Neither AO nor
-	// the vendor's self-update maintains a copy there.
-	layoutSystem = "system"
+	layoutSystem         = "system"
 )
 
-// systemPathPrefixes are the slash-separated, lower-case roots of layoutSystem.
 var systemPathPrefixes = []string{
 	"/usr/bin/", "/usr/sbin/", "/usr/lib/", "/usr/libexec/", "/usr/share/", "/bin/", "/sbin/",
 	"/nix/store/", "/run/current-system/", "/snap/", "/var/lib/snapd/", "/var/lib/flatpak/", "/opt/local/",
 }
 
-// packageLayout names the package tool whose directory layout holds the
-// executable at path, or "" when none does. Version-manager shims are
-// checked on the unresolved path because they symlink to the manager's own
-// binary rather than the harness.
 func packageLayout(path string) string {
 	if path == "" {
 		return ""
@@ -48,20 +39,14 @@ func packageLayout(path string) string {
 	return layoutOf(resolved).layout
 }
 
-// pathLayout is the package tool whose directory layout holds a path and,
-// where that layout names it, the package directory the path belongs to.
 type pathLayout struct {
-	layout string
-	pkg    string
-	cask   bool
-	// receipt is Homebrew's install receipt for the keg or cask, which names
-	// the tap a formula came from.
+	layout  string
+	pkg     string
+	cask    bool
 	receipt string
 }
 
 func layoutOf(path string) pathLayout {
-	// Windows separators are normalised explicitly: filepath.ToSlash only
-	// rewrites the host separator, and paths may come from either platform.
 	slashed := strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
 	lowered := strings.ToLower(slashed)
 	for _, prefix := range systemPathPrefixes {
@@ -82,8 +67,6 @@ func layoutOf(path string) pathLayout {
 		}
 		return segments[index]
 	}
-	// npm's Windows global prefix (%APPDATA%\npm) names the layout before the
-	// node_modules directory that names the package.
 	windowsNPM := false
 	for i := range segments {
 		lower := segment(i)
@@ -140,8 +123,6 @@ func layoutOf(path string) pathLayout {
 	return pathLayout{}
 }
 
-// nodePackageAt reads the package name that starts at segments[index] below a
-// node_modules directory, including a scope such as @openai/codex.
 func nodePackageAt(segments []string, index int) string {
 	if index >= len(segments) {
 		return ""
@@ -156,10 +137,6 @@ func nodePackageAt(segments []string, index int) string {
 	return pkg
 }
 
-// officialChannelFits reports whether an official release channel describes
-// a binary in this layout. A binary inside another tool's layout follows that
-// tool's channel, which can lag or lead the vendor's, so comparing it with
-// the vendor channel could raise a permanent false update warning.
 func officialChannelFits(kind officialSourceKind, layout string) bool {
 	switch layout {
 	case "":
@@ -173,8 +150,6 @@ func officialChannelFits(kind officialSourceKind, layout string) bool {
 	}
 }
 
-// installedBaseline is the harness binary as it was before an update, used to
-// confirm the update changed the copy sessions actually run.
 type installedBaseline struct {
 	target   Target
 	path     string
@@ -184,9 +159,6 @@ type installedBaseline struct {
 	scheme   versionScheme
 }
 
-// confirmInstalledOwner refuses an update through a method that
-// does not own the binary the harness adapter runs, so AO never changes a
-// different copy than the one sessions launch.
 func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan Plan) (*installedBaseline, error) {
 	if s.verifier == nil || plan.Unsupported {
 		return nil, nil
@@ -196,11 +168,6 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 	var baseline *installedBaseline
 	switch {
 	case err != nil && verified.ResolvedPath != "":
-		// A broken binary cannot report its version, but AO's own successful
-		// install through this method still identifies it, as long as the
-		// method still owns the binary sessions resolve: the user may have
-		// installed another copy since. The update runs on the resolved path,
-		// never on whichever copy PATH finds first.
 		job, statusErr := s.Status(ctx, target)
 		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.ownershipMethod() ||
 			!s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
@@ -232,7 +199,6 @@ func (s *Service) methodOwnsBinary(ctx context.Context, plan Plan, path string) 
 		plan.Method, plan.Package = plan.sourceMethod, plan.sourcePackage
 	}
 	if s.isManagedPath(path) {
-		// AO's own versioned install: the method that installed it owns it.
 		record, ok := s.readManagedRecord(plan.Target)
 		return ok && s.managedRecordMatchesPlan(record, plan)
 	}
@@ -244,15 +210,10 @@ func (s *Service) methodOwnsBinary(ctx context.Context, plan Plan, path string) 
 		owned, err := s.ownsInstallation(ctx, path, plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask)
 		return err == nil && owned
 	default:
-		// Vendor installers write their own locations; any package tool's
-		// layout means another installer owns this binary.
 		return vendorLayout(plan.Target, packageLayout(path))
 	}
 }
 
-// updateOutcome checks the re-probed binary against the pre-update baseline.
-// It returns a failure message when a newer release was known and the binary
-// sessions run did not reach it, and a note for the job output otherwise.
 func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, note string) {
 	if baseline == nil {
 		return "", ""
@@ -277,7 +238,6 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 		return "The update finished, but Orchestrator could not read the target version.", note
 	}
 	if comparison, versionsComparable := baseline.scheme.compare(after, latest); latestOK && versionsComparable && comparison < 0 {
-		// The path stays in diagnostics; the notice only needs the versions.
 		hint := "The update may have changed a different installation."
 		if result.ResolvedPath != "" {
 			hint = fmt.Sprintf("The update may have changed a different installation than %s.", result.ResolvedPath)
@@ -292,8 +252,6 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	}
 	comparison, canCompare := baseline.scheme.compare(after, before)
 	if !canCompare && latestOK && after.display == latest.display {
-		// A same-version rebuild (e.g. Cursor's same-day build) has no order
-		// against the old build, but reaching the announced build is an update.
 		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
 	if !canCompare || comparison < 0 {

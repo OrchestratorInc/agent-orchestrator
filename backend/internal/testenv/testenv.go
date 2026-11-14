@@ -1,12 +1,7 @@
-// Package testenv keeps the environment of an enclosing AO session out of tests.
 package testenv
 
 import "os"
 
-// sessionVars are exported by AO, or by Claude Code, into the shell of an agent
-// session, a reviewer, a side chat, or a session terminal tab. Product code reads
-// them, so tests run from inside one would otherwise use its tmux socket,
-// session id, and daemon.
 var sessionVars = []string{
 	"AO_SESSION_ID",
 	"AO_PROJECT_ID",
@@ -45,9 +40,6 @@ var sessionVars = []string{
 	"CLAUDE_PID",
 }
 
-// ClearSession unsets the session variables for the test process. Call it from
-// TestMain before m.Run. It names each variable instead of clearing every AO_
-// name because some tests re-run the test binary with an AO_ marker set.
 func ClearSession() {
 	for _, name := range sessionVars {
 		_ = os.Unsetenv(name)

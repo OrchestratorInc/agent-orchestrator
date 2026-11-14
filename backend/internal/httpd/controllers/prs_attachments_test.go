@@ -11,7 +11,6 @@ import (
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 )
 
-// commentWithFiles is a comment body linking each file, as the composer sends it.
 func commentWithFiles(body string, files ...map[string]string) string {
 	b, _ := json.Marshal(map[string]any{"prUrl": prURLForTests, "body": body, "attachments": files})
 	return string(b)
@@ -76,8 +75,6 @@ func TestPRsRoutes_PostCommentWithFiles_Errors(t *testing.T) {
 	}
 }
 
-// A 10 MiB file is ~14 MiB as base64: the route must accept it, refuse one
-// byte more before decoding, and cap the raw body instead of reading it all.
 func TestPRsRoutes_PostCommentWithFiles_SizeLimits(t *testing.T) {
 	svc := &fakePRService{commentResult: prsvc.CommentResult{ID: "IC_1"}}
 	srv := newPRTestServer(t, svc)
@@ -88,8 +85,6 @@ func TestPRsRoutes_PostCommentWithFiles_SizeLimits(t *testing.T) {
 		t.Fatalf("10 MiB file: status = %d body=%s", status, resp)
 	}
 
-	// The pre-decode check works on base64 length, so it refuses the first
-	// size whose encoding is longer; the service checks the exact byte count.
 	svc.commentCalls = 0
 	overLimit := base64.StdEncoding.EncodeToString(make([]byte, prsvc.MaxAttachmentBytes+3))
 	resp, status, _ = doRequest(t, srv, "POST", "/api/v1/prs/42/comments", commentWithFiles("[big](attachment:0)", file("big.zip", "application/zip", overLimit)))

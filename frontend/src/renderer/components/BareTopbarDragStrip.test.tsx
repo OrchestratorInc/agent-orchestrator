@@ -18,7 +18,6 @@ describe("BareTopbarDragStrip", () => {
 		render(<BareTopbarDragStrip />);
 		const strip = screen.getByTestId("bare-topbar-drag-strip");
 		expect(strip).toHaveAttribute("aria-hidden", "true");
-		// React sets the vendor property directly, which jsdom does not reflect as CSS text.
 		expect((strip.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe("drag");
 	});
 

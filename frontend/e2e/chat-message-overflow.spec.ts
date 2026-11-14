@@ -132,8 +132,6 @@ test("long unbroken user messages stay inside their chat bubble @T0", async ({ p
 	await expectBubbleToStayInsideViewport(steerBubble);
 });
 
-// Claude's Read reaches AO over ACP as an MCP-style row whose only name is its
-// title, so the label carries the whole file path.
 test("a tool row named by a long file path truncates inside the chat column @T0", async ({ page }) => {
 	const readPath =
 		"/private/tmp/claude-501/-Users-dhruvsharma--ao-data-worktrees-agent-orchestrator-1-agent-orchestrator-1-349/d5f66703-1942-488f-aab0-aa2bf491a787/tasks/bkzss8xyu.output";
@@ -176,6 +174,5 @@ test("a tool row named by a long file path truncates inside the chat column @T0"
 
 	expect(layout.labelRight).toBeLessThanOrEqual(layout.rowRight);
 	expect(layout.rowRight).toBeLessThanOrEqual(layout.viewportRight);
-	// The full path stays one hover away.
 	await expect(label).toHaveAttribute("title", `Read ${readPath}`);
 });

@@ -123,7 +123,6 @@ describe("SessionPeopleControl", () => {
 	it("is one plain Share button, with no menu beside it, that opens this session's dialog", async () => {
 		mocks.live = live([{ userId: "me", name: "Mohak" }]);
 		const { container } = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
-		// Google Docs' Share: the one control in the header is the button itself.
 		expect(screen.getAllByRole("button")).toHaveLength(1);
 		const share = screen.getByRole("button", { name: "Share" });
 		expect(share).not.toHaveAttribute("aria-haspopup");
@@ -132,11 +131,9 @@ describe("SessionPeopleControl", () => {
 		expect(container.querySelector("[data-share-menu], [data-share-split]")).toBeNull();
 		await userEvent.click(share);
 		expect(screen.getByTestId("share-dialog").dataset.session).toBe("session");
-		// Nothing to copy from the header: Copy link is in the dialog, never a disabled menu item here.
 		expect(screen.queryByRole("menu")).toBeNull();
 		expect(screen.queryByRole("menuitem")).toBeNull();
 		expect(screen.queryByText("Link access is off")).toBeNull();
-		// It reads no links of its own: the dialog does.
 		expect(mocks.listShareLinks).not.toHaveBeenCalled();
 	});
 
@@ -171,7 +168,6 @@ describe("SessionPeopleControl", () => {
 		const alone = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="orchestrator" sessionName="Orchestrator" projectName="acme/web" canShare shareProject />);
 		fireEvent.click(screen.getByRole("button", { name: "Share" }));
 		const dialog = screen.getByTestId("share-dialog");
-		// No session: the dialog shares the project only, titled with its name.
 		expect(dialog.dataset.session).toBe("");
 		expect(dialog.dataset.sessionName).toBe("");
 		expect(dialog.dataset.projectName).toBe("acme/web");

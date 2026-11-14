@@ -1,4 +1,3 @@
-// Package kiro adapts Kiro's interactive terminal UI for AO code reviews.
 package kiro
 
 import (
@@ -17,34 +16,24 @@ import (
 
 const reviewerAgentName = "ao-reviewer"
 
-// Reviewer is Kiro's AO code-review adapter.
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 }
 
-// New builds the Kiro reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{resolveBinary: workeragent.ResolveKiroBinary}
 }
 
-// Harness identifies Kiro in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerKiro }
 
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)
 
-// ReviewPromptReadinessHints reuses Kiro's worker-TUI prompt markers.
 func (*Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.PromptReadinessHints, error) {
 	return workeragent.New().PromptReadinessHints(ctx, ports.LaunchConfig{})
 }
 
-// ReviewCommand launches Kiro as a persistent interactive TUI. It deliberately
-// avoids positional input and --no-interactive; AO injects InitialMessage only
-// after the pane exists. The process cwd is an AO-owned empty directory, so
-// project .kiro agents, MCP config, hooks, steering, skills, and AGENTS.md are
-// not inherited. The generated custom agent admits read tools plus a
-// deny-by-default shell policy for review inspection/reporting only.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	binary, err := r.resolveBinary(ctx)
 	if err != nil {
@@ -64,20 +53,15 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Kiro reviewer pane by relaunching
-// with the reviewer agent/profile and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// ReviewMessage keeps later passes in the same long-lived Kiro TUI.
 func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel uses Kiro TUI's cancel-stream key. Ctrl-C is the quit binding,
-// so the shared interrupt cancellation mode is intentionally not used here.
 func (r *Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInput, Input: "\x1b"}, nil
 }
@@ -142,9 +126,6 @@ func shellAllowedCommands(inv ports.ReviewInvocation) []string {
 	gitPrefix := `git --no-pager -C ['"]?` + workspace + `['"]? `
 	safeArg := `[A-Za-z0-9_./:=,@{}^~+\-]+`
 	base64Pipe := `printf '%s' '[A-Za-z0-9+/=]+' \| base64 (?:--decode|-D) \| `
-	// Kiro accepts regex policies rather than structured argv. Anchor every
-	// pattern to the complete command and intentionally support only the exact
-	// whitespace-free argument shapes described in the reviewer prompt above.
 	return []string{
 		`^` + gitPrefix + `status(?: --short)?$`,
 		`^` + gitPrefix + `diff --no-ext-diff --no-textconv(?: ` + safeArg + `)*(?: --(?: ` + safeArg + `)*)?$`,

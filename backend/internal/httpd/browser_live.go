@@ -38,10 +38,6 @@ type browserLiveSessionReader interface {
 	Get(context.Context, domain.SessionID) (domain.Session, error)
 }
 
-// BrowserLiveHub bridges authenticated mobile WebSockets to the private
-// daemon↔Electron media link. It also owns the exclusive controller lease for
-// each session and can synchronously revoke all streams when the desktop gate
-// is disabled.
 type BrowserLiveHub struct {
 	broker   browserLiveBroker
 	sessions browserLiveSessionReader
@@ -53,23 +49,16 @@ type BrowserLiveHub struct {
 	loopbackBase string
 }
 
-// NewBrowserLiveHub creates the authenticated LAN WebSocket bridge.
 func NewBrowserLiveHub(broker browserLiveBroker, sessions browserLiveSessionReader, enabled func() bool, log *slog.Logger) *BrowserLiveHub {
 	return &BrowserLiveHub{broker: broker, sessions: sessions, enabled: enabled, log: loggerOrDefault(log), leases: map[string]context.CancelFunc{}}
 }
 
-// SetLoopbackBaseURL records the daemon's own loopback origin. The desktop
-// browser loads workspace previews from it, so the hub needs it to hand the
-// desktop a preview URL on behalf of a phone that reached the LAN listener.
 func (h *BrowserLiveHub) SetLoopbackBaseURL(base string) {
 	h.mu.Lock()
 	h.loopbackBase = strings.TrimSpace(base)
 	h.mu.Unlock()
 }
 
-// previewTarget seeds only the session's explicit preview selection, matching
-// GET /preview. Resolve stored file selections against the current daemon origin
-// and their selected root; unrelated repository entrypoints are never discovered.
 func (h *BrowserLiveHub) previewTarget(session domain.Session) string {
 	target := strings.TrimSpace(session.Metadata.PreviewURL)
 	if entry, ok := preview.StoredEntryFromPreview(target, session.ID); ok {
@@ -105,7 +94,6 @@ func (h *BrowserLiveHub) previewTarget(session domain.Session) string {
 	return ""
 }
 
-// CloseAll revokes every active mobile browser lease.
 func (h *BrowserLiveHub) CloseAll() {
 	h.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(h.leases))
@@ -153,9 +141,6 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "BROWSER_REMOTE_DISABLED", "Browser viewing from mobile is disabled on the desktop", nil)
 		return
 	}
-	// A failed native WebSocket handshake hides the HTTP error envelope from
-	// mobile. Allow an authenticated HTTP retry to identify disabled sharing,
-	// but never reserve a browser lease or start capture for a plain request.
 	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		envelope.WriteAPIError(w, r, http.StatusUpgradeRequired, "upgrade_required", "WEBSOCKET_REQUIRED", "A WebSocket connection is required", nil)
 		return
@@ -236,9 +221,6 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Keep offering the current preview while a phone is watching. The page may
-// be generated after the WebSocket opens, or the first offer may arrive while
-// an agent command is active. Electron only accepts offers into an empty tab.
 func (h *BrowserLiveHub) watchPreview(ctx context.Context, sessionID string) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -269,8 +251,6 @@ func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Co
 	for {
 		var event browserstream.Event
 		var ok bool
-		// Drain queued controls before another frame so navigation state is
-		// delivered promptly even while JPEG traffic is under backpressure.
 		select {
 		case event, ok = <-events:
 		default:

@@ -8,8 +8,6 @@ describe("what to show while installing the connector", () => {
 		expect(installView(undefined, false)).toEqual({ kind: "offer" });
 	});
 
-	// The POST is in flight but no job has come back yet; without this the
-	// button would look untouched and invite a second click.
 	it("shows progress from the moment the request is sent", () => {
 		expect(installView(undefined, true)).toEqual({ kind: "running" });
 	});
@@ -22,9 +20,6 @@ describe("what to show while installing the connector", () => {
 		expect(installView(job({ status: "succeeded" }), false)).toEqual({ kind: "done" });
 	});
 
-	// Linux is unsupported *with* a command, because AO never asks for an
-	// administrator password. That is instructions, not a failure — showing it
-	// as an error would tell the user nothing they can act on.
 	it("hands over the command when AO cannot run it itself", () => {
 		const got = installView(
 			job({ status: "unsupported", command: "sudo apt-get install -y cloudflared", error: "needs root" }),
@@ -37,8 +32,6 @@ describe("what to show while installing the connector", () => {
 		});
 	});
 
-	// Unsupported with nothing to run — no package manager at all — is a dead
-	// end, and saying "run this" with no command would be worse than useless.
 	it("reports a dead end when there is no command to offer", () => {
 		expect(installView(job({ status: "unsupported", error: "no package manager found" }), false)).toEqual({
 			kind: "failed",
@@ -57,8 +50,6 @@ describe("what to show while installing the connector", () => {
 		expect(installView(job({ status: "running", method: "download" }), false)).toEqual({ kind: "downloading" });
 	});
 
-	// The next install request runs the package-manager plan, so a failed
-	// download is an offer of that route rather than a dead end.
 	it("offers the package manager after the download failed", () => {
 		expect(installView(job({ status: "failed", method: "download", error: "checksum mismatch" }), false)).toEqual({
 			kind: "fallback",

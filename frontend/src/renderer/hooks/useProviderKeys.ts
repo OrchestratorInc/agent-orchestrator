@@ -14,7 +14,6 @@ async function fetchProviderKeys(hostId?: string): Promise<ProviderKey[]> {
 	return data.keys;
 }
 
-/** Saved provider keys, without their values. */
 export function useProviderKeys(hostId?: string, enabled = true) {
 	return useQuery({ queryKey: providerKeysQueryKey(hostId), queryFn: () => fetchProviderKeys(hostId), staleTime: 30_000, enabled });
 }
@@ -24,16 +23,12 @@ export function useInvalidateProviderKeys(hostId?: string) {
 	return () => queryClient.invalidateQueries({ queryKey: providerKeysQueryKey(hostId) });
 }
 
-// Credentials go straight to the daemon and stay out of React Query's cache.
-
-/** Removes a key AO saved, and AO's copy of it in the OS user environment. */
 export async function removeProviderKey(name: string, hostId?: string): Promise<ProviderKey> {
 	const { data, error } = await clientForSessionHost(hostId).DELETE("/api/v1/agents/provider-keys/{name}", { params: { path: { name } } });
 	if (error || !data) throw apiErrorException(error, "Could not remove the key.");
 	return data;
 }
 
-/** Asks the provider whether it accepts secret, or the saved key when secret is empty. */
 export async function checkProviderKey(name: string, secret: string, hostId?: string): Promise<ProviderKeyCheck> {
 	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/provider-keys/{name}/check", {
 		params: { path: { name } }, body: secret ? { secret } : {},
@@ -42,7 +37,6 @@ export async function checkProviderKey(name: string, secret: string, hostId?: st
 	return data;
 }
 
-/** The environment variable behind an `env_<NAME>` login method. */
 export function providerKeyName(methodId: string): string | undefined {
 	return methodId.startsWith("env_") ? methodId.slice(4) : undefined;
 }

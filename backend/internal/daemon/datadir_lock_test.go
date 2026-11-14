@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
-// A daemon that finds its data dir owned logs that it is waiting, then gives
-// up after the bound with ErrLocked instead of opening ao.db.
 func TestLockDataDirWaitsThenRefusesToStart(t *testing.T) {
 	dir := t.TempDir()
 	held, err := datadirlock.Acquire(context.Background(), dir, 0)
@@ -41,8 +39,6 @@ func TestLockDataDirWaitsThenRefusesToStart(t *testing.T) {
 	}
 }
 
-// Only a lock that is still held gets the refusal verdict; any other failure
-// while waiting (here a cancelled context) comes back as itself.
 func TestLockDataDirReturnsOtherErrorsAsIs(t *testing.T) {
 	dir := t.TempDir()
 	held, err := datadirlock.Acquire(context.Background(), dir, 0)
@@ -78,8 +74,6 @@ func TestDataDirTakeoverWaitIncludesInstallerDrain(t *testing.T) {
 	}
 }
 
-// A replacement must keep waiting when installer cleanup holds the old
-// daemon's lock past the previous takeover deadline. Scale seconds to 5ms.
 func TestLockDataDirWaitsForInstallerCleanup(t *testing.T) {
 	const scale = 5 * time.Millisecond
 	wait := dataDirTakeoverWait(10*time.Second, systeminstall.DefaultShutdownTimeout()) / time.Second * scale
@@ -94,7 +88,6 @@ func TestLockDataDirWaitsForInstallerCleanup(t *testing.T) {
 		time.Sleep(120 * scale)
 		released <- held.Release()
 	}()
-	// Always join the predecessor before removing the temporary data dir.
 	t.Cleanup(func() {
 		if err := <-released; err != nil {
 			t.Errorf("release predecessor lock: %v", err)

@@ -8,10 +8,6 @@ import type { ComponentProps } from "react";
 import { msg } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react";
 
-/**
- * The framework's language menu, except each choice also closes the menu:
- * switching languages does not navigate, so nothing else would close it.
- */
 export function LanguageSelect({ className, variant = "ghost", children, ...rest }: LanguageSelectProps) {
   const context = useI18n();
   const { i18n } = useLingui();
@@ -40,7 +36,6 @@ export function LanguageSelect({ className, variant = "ghost", children, ...rest
                 : "text-fd-muted-foreground hover:bg-fd-accent hover:text-fd-accent-foreground"
             }`}
             onClick={() => context.onChange?.(item.locale)}
-            // Each name is in its own language; say so for screen readers.
             lang={item.locale}
           >
             {item.name}
@@ -51,7 +46,6 @@ export function LanguageSelect({ className, variant = "ghost", children, ...rest
   );
 }
 
-/** The current language's name, marked with its own language. */
 export function LanguageSelectText(props: ComponentProps<"span">) {
   const { locales, locale } = useI18n();
   return (

@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// AccountSwitchedEvent marks, on a turn an account move stopped, the account
-// the conversation continues on.
 const AccountSwitchedEvent = "account.switched"
 
 type activeTransitionReader interface {
@@ -30,13 +28,6 @@ func (s *Service) accountMoveAwaitingTarget(ctx context.Context, id domain.Sessi
 	return active && move.AccountMoveAwaitsTarget()
 }
 
-// MarkAccountSwitch records that the turn the session's account move stopped
-// ended for the move, rather than failing. It is the exact turn the handoff's
-// interrupt stopped: later rows (a swept queued message, a Codex subagent's own
-// turn) are not it. Stopping the old agent races its reply to the cancel, so
-// the turn may have settled as failed; it settles as interrupted, and a notice
-// names the account the next message continues on. A turn whose completion won
-// the race is left alone, and so is a move that stopped no turn.
 func (s *Service) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
 	s.mu.Lock()
 	providerTurnID := s.handoffInterrupted[id]

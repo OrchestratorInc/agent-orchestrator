@@ -24,14 +24,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// recentDays is the window of activity a chat needs to be offered. Neither
-// limit applies to Conductor chats: a user leaving Conductor brings them all.
 const (
 	recentDays         = 30
 	maxChatsPerProject = 100
 )
 
-// Store keeps registration and the readable copy atomic. It never launches a controller.
 type Store interface {
 	ListProjects(context.Context) ([]domain.ProjectRecord, error)
 	ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error)
@@ -40,7 +37,6 @@ type Store interface {
 	ReplaceImportedMessages(context.Context, domain.SessionID, []Message) error
 }
 
-// Candidate exposes an opaque selection handle, never a provider file path.
 type Candidate struct {
 	ID           string              `json:"id"`
 	Harness      domain.AgentHarness `json:"harness"`
@@ -49,19 +45,14 @@ type Candidate struct {
 	LastActivity time.Time           `json:"lastActivity"`
 	SessionID    domain.SessionID    `json:"sessionId,omitempty"`
 	MessageCount int                 `json:"messageCount"`
-	// Shortened reports text too large to import; the rest of the history is kept.
-	Shortened bool `json:"shortened,omitempty"`
-	// Folder is the repository a chat came from when no AO project holds it.
-	// The chat can be imported once that folder is added as a project.
-	Folder string `json:"folder,omitempty"`
+	Shortened    bool                `json:"shortened,omitempty"`
+	Folder       string              `json:"folder,omitempty"`
 }
 
-// Preview is a bounded, explicit scan of this host, independent of normal board reads.
 type Preview struct {
 	Candidates []Candidate `json:"candidates"`
 }
 
-// Result is one selected conversation's outcome; successful neighbors survive a failed item.
 type Result struct {
 	ID        string           `json:"id"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
@@ -76,7 +67,6 @@ type selection struct {
 	conductor bool
 }
 
-// sourceFiles is one native conversation on disk; Codex may split it into segments.
 type sourceFiles struct {
 	harness domain.AgentHarness
 	root    string
@@ -92,7 +82,6 @@ type parsed struct {
 	err    error
 }
 
-// Service owns the current opaque handles. Re-reading selected sources prevents stale preview writes.
 type Service struct {
 	store        Store
 	supportsChat func(domain.AgentHarness) bool
@@ -105,8 +94,6 @@ type Service struct {
 	now          func() time.Time
 }
 
-// New uses the same provider homes as ordinary native AO launches. AO's own
-// data directory holds its managed worktrees, which are never import sources.
 func New(store Store, dataDir string, supportsChat func(domain.AgentHarness) bool) *Service {
 	home, _ := os.UserHomeDir()
 	roots := map[domain.AgentHarness]string{}
@@ -136,9 +123,6 @@ func canonical(path string) string {
 	return physical
 }
 
-// gitIdentity reads Git metadata directly rather than spawning git for every
-// transcript folder. It returns the shared Git directory, which linked
-// worktrees have in common, and the normalized origin URL.
 func gitIdentity(path string) (common, remote string) {
 	for dir := canonical(path); dir != ""; {
 		dotGit := filepath.Join(dir, ".git")
@@ -172,8 +156,6 @@ func gitIdentity(path string) (common, remote string) {
 	return "", ""
 }
 
-// originURL normalizes the origin so clones of one repository compare equal. Git
-// resolves a relative path remote from the worktree folder, so this does too.
 func originURL(config, worktree string) string {
 	body, err := os.ReadFile(config)
 	if err != nil {
@@ -194,7 +176,6 @@ func originURL(config, worktree string) string {
 			if identity, ok := remoteIdentity(remote); ok {
 				return identity
 			}
-			// A local path, which keeps its case: the filesystem may be case-sensitive.
 			if !filepath.IsAbs(remote) {
 				remote = filepath.Join(worktree, remote)
 			}
@@ -204,10 +185,6 @@ func originURL(config, worktree string) string {
 	return ""
 }
 
-// remoteIdentity reduces a network remote to host/path, so the SSH, scp-style
-// and HTTPS forms of one repository, with or without a user, a default port or
-// .git, compare equal. Hosts such as GitHub ignore case in owner and repository
-// names. Other hosts may have case-sensitive paths. ok is false for a local path.
 func remoteIdentity(remote string) (string, bool) {
 	if filepath.IsAbs(remote) || filepath.VolumeName(remote) != "" {
 		return "", false
@@ -227,7 +204,6 @@ func remoteIdentity(remote string) (string, bool) {
 			}
 		}
 	} else if colon, slash := strings.Index(remote, ":"), strings.Index(remote, "/"); colon > 1 && (slash < 0 || colon < slash) {
-		// scp-like syntax: [user@]host:path. A one-letter "host" is a drive.
 		authority, path = remote[:colon], remote[colon+1:]
 	} else {
 		return "", false
@@ -244,7 +220,6 @@ func remoteIdentity(remote string) (string, bool) {
 	return host + "/" + path, true
 }
 
-// SameRepository recognizes linked worktrees and separate clones of the same origin.
 func SameRepository(_ context.Context, source, destination string) bool {
 	sourceCommon, sourceRemote := gitIdentity(source)
 	destinationCommon, destinationRemote := gitIdentity(destination)
@@ -256,7 +231,6 @@ type projectRoot struct {
 	path, common, remote string
 }
 
-// destinations resolves each project's Git identity once per scan or import.
 type destinations struct {
 	svc      *Service
 	projects []projectRoot
@@ -266,8 +240,7 @@ type destinations struct {
 type destination struct {
 	id       domain.ProjectID
 	eligible bool
-	// folder is set for a repository that no project holds yet.
-	folder string
+	folder   string
 }
 
 func (s *Service) destinations(ctx context.Context) (*destinations, error) {
@@ -296,8 +269,6 @@ func (s *Service) destinations(ctx context.Context) (*destinations, error) {
 	return d, nil
 }
 
-// standalone recognizes folders providers use for chats that have no project:
-// the home folder and Codex Desktop's per-chat folders.
 func (s *Service) standalone(cwd string) bool {
 	return s.home != "" && (cwd == s.home || pathWithin(filepath.Join(s.home, "Documents", "Codex"), cwd))
 }
@@ -323,10 +294,9 @@ func (d *destinations) destination(cwd string) destination {
 func (d *destinations) lookup(cwd string) destination {
 	for _, excluded := range d.svc.excluded {
 		if pathWithin(excluded, cwd) {
-			return destination{} // AO-managed worktrees already belong to AO sessions.
+			return destination{}
 		}
 	}
-	// A deleted folder has no files to continue from.
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
 		return destination{}
 	}
@@ -340,8 +310,6 @@ func (d *destinations) lookup(cwd string) destination {
 	same := func(p projectRoot) bool {
 		return (common != "" && p.common == common) || (remote != "" && p.remote == remote)
 	}
-	// A folder inside a project can hold an unrelated repository, such as an
-	// ignored clone; only the project's own repository belongs to the project.
 	if within != nil && (within.common == "" && within.remote == "" || same(*within)) {
 		return destination{id: within.id, eligible: true}
 	}
@@ -353,7 +321,7 @@ func (d *destinations) lookup(cwd string) destination {
 		if same(p) {
 			if best != "" && best != p.id {
 				return destination{}
-			} // Ambiguous destinations are not auto-adopted.
+			}
 			best = p.id
 		}
 	}
@@ -363,8 +331,6 @@ func (d *destinations) lookup(cwd string) destination {
 	return destination{id: best, eligible: true}
 }
 
-// repositoryRoot is the main checkout that owns a Git directory, so chats from
-// its linked worktrees offer one folder. Bare repositories have none.
 func repositoryRoot(common string) string {
 	if filepath.Base(common) != ".git" {
 		return ""
@@ -385,8 +351,6 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// discoverFor lists one harness's conversations through the discovery its
-// importer provides.
 func discoverFor(ctx context.Context, harness domain.AgentHarness, root string, projects []string) ([]sourceFiles, error) {
 	importer := harnessImporters[harness]
 	if importer.discoverRegistered != nil {
@@ -396,8 +360,6 @@ func discoverFor(ctx context.Context, harness domain.AgentHarness, root string, 
 	return importer.discover(ctx, root)
 }
 
-// walkSources lists the transcripts under root/dir without reading them,
-// newest first. keyOf names a file's conversation; "" skips the file.
 func walkSources(harness domain.AgentHarness, dir string, keyOf func(path, name string) string) func(context.Context, string) ([]sourceFiles, error) {
 	return func(ctx context.Context, root string) ([]sourceFiles, error) {
 		byKey := map[string]*sourceFiles{}
@@ -447,7 +409,6 @@ func walkSources(harness domain.AgentHarness, dir string, keyOf func(path, name 
 	}
 }
 
-// jsonlKey keeps each JSONL file as its own conversation.
 func jsonlKey(path, name string) string {
 	if strings.HasSuffix(name, ".jsonl") {
 		return path
@@ -455,14 +416,10 @@ func jsonlKey(path, name string) string {
 	return ""
 }
 
-// codexKey groups a thread's rollout segments.
 func codexKey(path, _ string) string {
 	return nativeconfig.CodexRolloutThread(path)
 }
 
-// codexThreadSegments finds one thread's rollout files. It runs before each
-// first-open attempt, so unlike discover it matches file names only: no other
-// rollout is stat'ed or grouped.
 func codexThreadSegments(ctx context.Context, root, threadID string) ([]string, error) {
 	var paths []string
 	err := filepath.WalkDir(filepath.Join(root, "sessions"), func(path string, entry fs.DirEntry, walkErr error) error {
@@ -483,8 +440,6 @@ func codexThreadSegments(ctx context.Context, root, threadID string) ([]string, 
 	return codexSegments(paths), nil
 }
 
-// codexSegments orders a thread's files by their timestamped names. While
-// Codex compresses a segment both copies can exist; the plain one is current.
 func codexSegments(paths []string) []string {
 	sort.Strings(paths)
 	out := make([]string, 0, len(paths))
@@ -497,9 +452,6 @@ func codexSegments(paths []string) []string {
 	return out
 }
 
-// nativeID names the conversation as its reader will: the JSONL file name for
-// Claude and Qwen, the UUID after the timestamp for Pi, OMP and Kimchi, and
-// otherwise the key discovery set, such as Codex's thread id.
 func (f sourceFiles) nativeID() string {
 	if len(f.paths) > 0 {
 		switch f.harness {
@@ -516,8 +468,6 @@ func (f sourceFiles) cacheKey() string {
 	return fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", f.harness, f.root, f.size, f.modTime.UnixNano(), strings.Join(f.paths, "\x00"))
 }
 
-// Scan offers chats active within recentDays and hides missing, malformed and unreadable sources.
-// A chat from a repository that no project holds names that repository's folder.
 func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -529,16 +479,11 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
-	// Config folder and native ID name one conversation; an agent switch changes
-	// the session's harness, never the conversation it came from. Histories AO
-	// already manages are not offered for a second session either.
 	imported := map[[2]string]domain.SessionID{}
 	managed := map[string]domain.SessionID{}
 	for _, rec := range sessions {
 		imp := rec.Metadata.ImportSource
 		if imp != nil && rec.IsTerminated {
-			// A terminated import no longer holds its conversation, which may
-			// be imported again.
 			continue
 		}
 		if imp != nil {
@@ -564,13 +509,9 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Preview{}, ctxErr
 			}
-			// An unreadable provider store, such as a locked, corrupt or
-			// older-schema opencode.db, hides only its own chats.
 			slog.Warn("session import: skipping a provider whose history could not be read", "harness", harness, "err", err)
 			continue
 		}
-		// Every scan reads the histories modified within recentDays; unchanged
-		// ones come from the cache, keyed by size and mtime.
 		recent := s.now().AddDate(0, 0, -recentDays)
 		if harness == conductorSource {
 			recent = time.Time{}
@@ -583,8 +524,6 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				results[i] = parsed{err: errInactive}
 				continue
 			}
-			// AO's own sessions are never offered; skip reading their histories.
-			// A Conductor chat is checked once read: it imports from another root.
 			if _, own := managed[file.nativeID()]; own && harness != conductorSource {
 				if _, wasImported := imported[[2]string{file.root, file.nativeID()}]; !wasImported {
 					results[i] = parsed{err: errManagedByAO}
@@ -601,7 +540,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 					return ctxErr
 				}
 				count := len(source.messages)
-				source.messages = nil // Retain only metadata between preview and import.
+				source.messages = nil
 				results[i] = parsed{source: source, count: count, err: err}
 				return nil
 			})
@@ -612,15 +551,13 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		for i, file := range files {
 			result := results[i]
 			if result.err != nil {
-				continue // Malformed, missing and unreadable histories are ineligible; read again next scan.
+				continue
 			}
 			cache[file.cacheKey()] = result
 			source := result.source
 			if source.last.Before(recent) {
 				continue
 			}
-			// A Conductor chat read from its agent's own history is the same
-			// candidate as that agent's, and keeps Conductor's title and limits.
 			conductor, shown, idHarness := harness == conductorSource, cmp.Or(importer.as, harness), harness
 			if conductor && source.harness != conductorSource {
 				shown, idHarness = source.harness, source.harness
@@ -670,10 +607,6 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	return preview, nil
 }
 
-// RefreshArchive rereads an imported conversation just before its first open,
-// so turns added in another app since the import stay in the visible history.
-// Once native preparation is checkpointed, retain the matching archive on
-// retries: later source turns need not exist in the pinned native copy.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
 	if source == nil || source.Adopted || source.ResumeNativeID != "" || source.ResumeCwd != "" {
@@ -686,7 +619,6 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	projects := s.registeredDiscoveryRoots(dests)
 	paths := []string{rec.Metadata.NativeTranscriptPath}
 	if rec.Harness == domain.HarnessCodex {
-		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
 		if err != nil {
 			return err
@@ -704,17 +636,15 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	}
 	if len(fresh.messages) == 0 {
 		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
-			return nil // A native server-side conversation need not expose a transcript.
+			return nil
 		}
 		return errors.New("the source no longer holds readable conversation history")
 	}
 	return s.store.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
 }
 
-// importOne registers one selected conversation from its fresh read. s.mu is held.
 func (s *Service) importOne(ctx context.Context, dests *destinations, id string, source transcript, readErr error) Result {
 	result := Result{ID: id, Status: "failed"}
-	// Out of time: report every row, so the dialog shows what was created.
 	if ctx.Err() != nil {
 		result.Error = "The import stopped before this conversation. Import it again."
 		return result
@@ -774,7 +704,6 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	return result
 }
 
-// Import revalidates source identity and destination before each atomic registration.
 func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 	if len(ids) == 0 || len(ids) > 500 {
 		return nil, apierr.Invalid("INVALID_IMPORT_SELECTION", "Select between 1 and 500 conversations", nil)
@@ -786,9 +715,6 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		return nil, err
 	}
 	results := make([]Result, 0, len(ids))
-	// Histories are read in parallel, as Scan reads them, a batch at a time so
-	// only one batch of full histories is held; each batch then registers in
-	// order.
 	batch := max(1, runtime.GOMAXPROCS(0)/2)
 	projects := s.registeredDiscoveryRoots(dests)
 	for start := 0; start < len(ids); start += batch {
@@ -805,7 +731,6 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 				continue
 			}
 			group.Go(func() error {
-				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
 				reads[i].source, reads[i].err = readTranscriptForProjects(ctx, item.source.harness, item.source.root, projects, item.source.paths...)
 				return nil
 			})

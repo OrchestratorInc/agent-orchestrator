@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 )
 
-// TestMain serves the detached chat-host child so live tests can start real
-// provider processes. Mirrors the hook in the acp package.
 func TestMain(m *testing.M) {
 	if len(os.Args) >= 7 && os.Args[1] == "chat-host" {
 		protocol := persistenthost.ProtocolRaw

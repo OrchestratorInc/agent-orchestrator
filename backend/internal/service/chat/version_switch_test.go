@@ -14,9 +14,6 @@ import (
 
 const refreshIdle = chatsvc.IdleBeforeHibernate + 10*time.Minute
 
-// versionRefreshHarness is a settled, idle Codex chat with idle hibernation
-// off and version refresh on. A resume starts resumed, standing in for the
-// newly installed release.
 func versionRefreshHarness(t *testing.T) (*harness, *hibernationConversation, *fakeConversation) {
 	t.Helper()
 	resumed := newFakeConversation()
@@ -42,7 +39,6 @@ func markStale(t *testing.T, h *harness) {
 	}
 }
 
-// wakeOnNewRelease resumes the hibernated session the way Session Manager does.
 func wakeOnNewRelease(t *testing.T, h *harness, old *hibernationConversation, wakeErr error) <-chan struct{} {
 	t.Helper()
 	woke := make(chan struct{}, 4)
@@ -96,8 +92,6 @@ func makeOrchestrator(t *testing.T, h *harness) {
 	}
 }
 
-// Idle hibernation keeps orchestrators awake, but a move to a new release
-// starts them again right away, so a quiet stale orchestrator moves too.
 func TestVersionRefreshMovesQuietStaleOrchestrator(t *testing.T) {
 	h, conv, _ := versionRefreshHarness(t)
 	ctx := context.Background()
@@ -169,7 +163,6 @@ func TestSendMovesQuietStaleSessionAndDeliversOnceOnNewRelease(t *testing.T) {
 	ctx := context.Background()
 	markStale(t, h)
 	h.advance(refreshIdle)
-	// The user is looking at the session; the message they send moves it.
 	if err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
 		t.Fatal(err)
 	}

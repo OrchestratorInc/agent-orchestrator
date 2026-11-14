@@ -54,11 +54,6 @@ func (fakeQuickTunnel) Endpoint() *mobilebridge.TunnelEndpoint {
 }
 func (fakeQuickTunnel) Status() mobilebridge.TunnelStatus { return mobilebridge.TunnelStatus{} }
 
-// AO Cloud answers one 401 for a link no account lists and for a listed one
-// whose signature it does not accept, so status reports a refused link, not a
-// missing listing. A link that then reaches AO Cloud nudges the publisher
-// through remote access, so the refusal clears without waiting out its
-// backoff, even at the same address and token (#7976).
 func TestAddressPublisherReportsARefusedLinkUntilALinkNudgesIt(t *testing.T) {
 	path := mobilebridge.Path(t.TempDir())
 	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", AccountTokenHash: strings.Repeat("a", 64)}); err != nil {

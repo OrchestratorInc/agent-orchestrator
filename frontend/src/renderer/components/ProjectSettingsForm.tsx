@@ -52,14 +52,12 @@ export type ProjectSettingsSaveState = {
 	requestPending?: boolean;
 	error?: string;
 	replacementError?: string;
-	/** The draft is dirty but cannot be saved as it stands (e.g. an invalid name). */
 	unsaveable?: boolean;
 	retry?: () => void;
 };
 
 type ProjectSettingsFormProps = {
 	projectId: string;
-	/** Installation ID of the self-hosted daemon that owns this project. */
 	hostId?: string;
 	cloudOrgId?: string;
 	section?: ProjectSettingsSection;
@@ -113,7 +111,6 @@ function LocalProjectSettingsAdapter({
 					project={query.data}
 					onSaved={() =>
 						queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }).catch(() => {
-							// Saving succeeds even if the cache refresh fails.
 						})
 					}
 					projectId={projectId}

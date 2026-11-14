@@ -15,6 +15,5 @@ export const Route = createFileRoute("/_shell/new")({
 
 function NewChatRoute() {
 	const { project, host, report } = Route.useSearch();
-	// Keyed by host: picks made for one machine never carry over to another.
 	return <NewChatPage key={host ?? "local"} projectId={project ?? STANDALONE_WORKSPACE_ID} hostId={host} report={report} />;
 }

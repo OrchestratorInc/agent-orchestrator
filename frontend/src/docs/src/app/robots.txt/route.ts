@@ -2,8 +2,6 @@ import { COMPANY } from "../../lib/constants";
 
 export const dynamic = "force-static";
 
-// A route handler instead of robots.ts, because MetadataRoute.Robots has no
-// field for the Content-Signal line.
 const body = `User-agent: *
 Allow: /
 Disallow: /api/

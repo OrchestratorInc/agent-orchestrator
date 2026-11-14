@@ -2,14 +2,12 @@ package domain
 
 import "time"
 
-// AwakeBrowserAttempt records durable browser-action intent and its outcome.
 type AwakeBrowserAttempt struct {
 	ID        string `json:"id"`
 	BrowserID string `json:"browserId"`
 	Outcome   string `json:"outcome"`
 }
 
-// AwakeNetworkAttempt bounds retries during one network outage.
 type AwakeNetworkAttempt struct {
 	Episode     string     `json:"episode"`
 	Attempts    int        `json:"attempts"`
@@ -17,7 +15,6 @@ type AwakeNetworkAttempt struct {
 	Outcome     string     `json:"outcome"`
 }
 
-// AwakeDocument contains durable intent and end facts, never observed native state.
 type AwakeDocument struct {
 	AgentAttempts   []AwakeAgentAttempt   `json:"agentAttempts,omitempty"`
 	AgentOutcome    string                `json:"agentOutcome,omitempty"`
@@ -31,8 +28,6 @@ type AwakeDocument struct {
 	Network         AwakeNetworkAttempt   `json:"network"`
 }
 
-// AwakeSettings configures desktop wake defaults. Deferred effect fields are
-// reserved and accepted only as false/empty values by the settings service.
 type AwakeSettings struct {
 	LidClosed              bool     `json:"lidClosed"`
 	DisplayAwake           bool     `json:"displayAwake"`
@@ -49,7 +44,6 @@ type AwakeSettings struct {
 	BrowserActions         bool     `json:"browserActions"`
 }
 
-// AwakeSession records a scoped wake request and its lifetime.
 type AwakeSession struct {
 	ID            string     `json:"id"`
 	Scope         string     `json:"scope" enum:"ao,session"`
@@ -65,7 +59,6 @@ type AwakeSession struct {
 	LidClosed     bool       `json:"lidClosed"`
 }
 
-// AwakeCondition defines one activation predicate.
 type AwakeCondition struct {
 	Kind      string `json:"kind" enum:"agent_activity,schedule,power,battery,network,device,display,app,uptime,download"`
 	Value     string `json:"value"`
@@ -75,7 +68,6 @@ type AwakeCondition struct {
 	Timezone  string `json:"timezone"`
 }
 
-// AwakeRule combines conditions into an automatic wake request.
 type AwakeRule struct {
 	ID         string           `json:"id"`
 	Name       string           `json:"name"`
@@ -86,14 +78,12 @@ type AwakeRule struct {
 	Suppressed bool             `json:"suppressed"`
 }
 
-// AwakeCapability reports host operation availability.
 type AwakeCapability struct {
 	ID        string `json:"id"`
 	Available bool   `json:"available"`
 	Reason    string `json:"reason"`
 }
 
-// AwakeApplication identifies an observed application process lifetime.
 type AwakeApplication struct {
 	Protected bool   `json:"protected"`
 	ID        string `json:"id"`
@@ -101,7 +91,6 @@ type AwakeApplication struct {
 	Identity  string `json:"identity"`
 }
 
-// AwakeObservation contains transient host readings for wake policy.
 type AwakeObservation struct {
 	DisplayControl     bool               `json:"displayControl"`
 	KeyboardControl    bool               `json:"keyboardControl"`
@@ -125,7 +114,6 @@ type AwakeObservation struct {
 	KnownNetworks      []string           `json:"knownNetworks"`
 }
 
-// AwakeState combines durable requests with current host status.
 type AwakeState struct {
 	AgentOutcome   string            `json:"agentOutcome"`
 	Settings       AwakeSettings     `json:"settings"`
@@ -142,7 +130,6 @@ type AwakeState struct {
 	NetworkOutcome string            `json:"networkOutcome"`
 }
 
-// StartAwakeRequest describes a new scoped wake request.
 type StartAwakeRequest struct {
 	Scope           string     `json:"scope" enum:"ao,session"`
 	SessionID       string     `json:"sessionId"`
@@ -154,14 +141,11 @@ type StartAwakeRequest struct {
 	BoundIdentity   string     `json:"boundIdentity,omitempty"`
 }
 
-// AwakeAgentTarget is evidence of a lost attachment to an existing provider,
-// never an instruction to launch a new agent or replay a prompt.
 type AwakeAgentTarget struct {
 	SessionID SessionID
 	Owner     SessionControllerOwner
 }
 
-// AwakeAgentAttempt records recovery intent for one controller generation.
 type AwakeAgentAttempt struct {
 	SessionID  SessionID `json:"sessionId"`
 	Generation string    `json:"generation"`

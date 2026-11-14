@@ -14,7 +14,6 @@ import (
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 )
 
-// AgentCatalog is the controller-facing contract for local agent inventory.
 type AgentCatalog interface {
 	CachedReadiness(ctx context.Context) (agentsvc.Readiness, error)
 	EnsureReadiness(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose) (agentsvc.Readiness, error)
@@ -26,12 +25,10 @@ type AgentCatalog interface {
 	RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error)
 }
 
-// AgentsController owns the /agents routes.
 type AgentsController struct {
 	Catalog AgentCatalog
 }
 
-// Register mounts the agent inventory routes on the supplied router.
 func (c *AgentsController) Register(r chi.Router) {
 	r.Get("/agents", c.list)
 	r.Post("/agents/refresh", c.refresh)

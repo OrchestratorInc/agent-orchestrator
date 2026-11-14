@@ -25,19 +25,13 @@ type legacyRepairStore interface {
 	CompleteUsageTierRepair(context.Context, int64, int64, map[string]string) (int, error)
 }
 
-// LegacyRepairerConfig controls bounded replay and lifecycle diagnostics.
 type LegacyRepairerConfig struct {
-	ChunkBytes  int64
-	RecordBytes int
-	Clock       func() time.Time
-	OnError     func(error)
-	// RaceRetry is the first delay before retrying a pass that lost its cursor
-	// guard to concurrent ingestion. It doubles up to maxRaceRetry.
+	ChunkBytes    int64
+	RecordBytes   int
+	Clock         func() time.Time
+	OnError       func(error)
 	RaceRetry     time.Duration
 	OnTiersFilled func(context.Context)
-	// StartupSettle delays one follow-up pass after the first. Startup
-	// ingestion begins after the repairer does, so the first pass can read the
-	// table before the rows it exists to repair are in it.
 	StartupSettle time.Duration
 }
 
@@ -47,14 +41,6 @@ const (
 	defaultStartupSettle = 30 * time.Second
 )
 
-// LegacyRepairer repairs provider-null historical rows: once at startup, and
-// again whenever Repair reports that new attribution evidence has arrived.
-//
-// The second trigger matters for Claude. A Claude transcript carries no
-// provider of its own, so its billing identity comes only from the route hint
-// on the binding, and that hint only appears once a hook runs. A session
-// collected before the hint existed would otherwise stay unattributed until the
-// next daemon start, however long that is.
 type LegacyRepairer struct {
 	store   legacyRepairStore
 	pricing *pricing.Manager
@@ -64,7 +50,6 @@ type LegacyRepairer struct {
 	done    chan struct{}
 }
 
-// NewLegacyRepairer constructs a historical attribution repairer.
 func NewLegacyRepairer(
 	store legacyRepairStore,
 	manager *pricing.Manager,
@@ -94,9 +79,6 @@ func NewLegacyRepairer(
 	}
 }
 
-// Start runs the first repair pass and then serves Repair requests until the
-// context is cancelled. Passes never overlap, so one long scan cannot be
-// stacked on top of itself by a burst of hooks.
 func (r *LegacyRepairer) Start(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return errors.New("legacy usage repairer already started")
@@ -119,10 +101,6 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 			r.config.OnError(err)
 		}
 		retry := r.config.RaceRetry
-		// The daemon starts pricing before it starts ingesting, so the first
-		// pass can read the table before startup ingestion has written to it.
-		// A hookless source registered afterwards has no hook coming to fire a
-		// trigger, so without this it waits for the next daemon start.
 		startupPending := true
 		for {
 			raced, err := r.run(ctx)
@@ -133,9 +111,6 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 				settleTimer.Stop()
 				settleTimer = nil
 			}
-			// A pass that lost its cursor guard is not finished, it was
-			// outrun. Backing off lets a busy source settle instead of
-			// spinning on it; a clean pass resets the delay.
 			var settle <-chan time.Time
 			switch {
 			case raced && ctx.Err() == nil:
@@ -164,9 +139,6 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Repair asks for another pass because new attribution evidence exists. It
-// never blocks: a pass already queued absorbs this request, so a busy session
-// cannot queue one scan per hook.
 func (r *LegacyRepairer) Repair() {
 	if r == nil {
 		return
@@ -177,7 +149,6 @@ func (r *LegacyRepairer) Repair() {
 	}
 }
 
-// Wait joins the repair loop. Callers cancel the start context first.
 func (r *LegacyRepairer) Wait() {
 	if !r.started.Load() {
 		return
@@ -185,15 +156,11 @@ func (r *LegacyRepairer) Wait() {
 	<-r.done
 }
 
-// Run performs one synchronous repair pass. Individual unverifiable sources
-// are intentionally skipped without mutating their lifecycle or cursor.
 func (r *LegacyRepairer) Run(ctx context.Context) error {
 	_, err := r.run(ctx)
 	return err
 }
 
-// run reports whether any repair lost its cursor guard to concurrent ingestion,
-// which means the source still owes work that a later pass can finish.
 func (r *LegacyRepairer) run(ctx context.Context) (raced bool, err error) {
 	if r.store == nil || r.pricing == nil {
 		return false, errors.New("legacy usage repairer requires store and pricing manager")
@@ -269,10 +236,6 @@ func (r *LegacyRepairer) repairSource(ctx context.Context, source domain.UsageSo
 				return nil
 			}
 			applied, err := r.store.ApplyLegacyUsageRepairs(ctx, repairs, r.config.Clock().UTC())
-			// Every repair is guarded on the source cursor it was derived from,
-			// so ingestion advancing mid-pass drops it. That is correct — the
-			// prefix it read is no longer the prefix on disk — but silently
-			// giving up would strand an always-active session forever.
 			if applied < len(repairs) {
 				*raced = true
 			}
@@ -284,29 +247,15 @@ func (r *LegacyRepairer) repairSource(ctx context.Context, source domain.UsageSo
 				return err
 			}
 			event := match.event
-			// The replay reads the binding's route hint too, so a nonempty
-			// provider here was named outright by one of the two.
 			billingProviderID := strings.TrimSpace(event.BillingProviderID)
 			providerSource := domain.UsageBillingProviderObserved
 			if billingProviderID == "" {
-				// Inference cannot improve on inference: re-deriving the same
-				// provider from the same model rewrites nothing and would churn
-				// the row on every pass. Leave an already-inferred event alone
-				// until an observation arrives to promote it.
 				if match.candidate.BillingProviderSource == domain.UsageBillingProviderInferred {
 					continue
 				}
-				// A hook that ran and could not name the route has already
-				// answered the question the model would be used to guess: the
-				// session is billed by something AO has no rates for. Guessing
-				// anthropic from a bare claude-* name would price a proxy at
-				// Anthropic list rates, and no observation is coming to fix it.
 				if strings.TrimSpace(source.ProviderHint) == pricing.UnidentifiedBillingRoute {
 					continue
 				}
-				// A session collected before its first hook has no route on the
-				// binding either, so the served model name is the only evidence
-				// left. It is still evidence: the provider answered with it.
 				billingProviderID = snapshot.ProviderForModel(event.ModelID)
 				providerSource = domain.UsageBillingProviderInferred
 			}
@@ -350,19 +299,8 @@ func (r *LegacyRepairer) repairSource(ctx context.Context, source domain.UsageSo
 	})
 }
 
-// replayCanImprove reports whether reparsing this source could still change any
-// of its open events, so a pass that cannot possibly gain anything never opens
-// the transcript at all.
-//
-// An unattributed event is always worth a replay: the reparse is the only way it
-// can gain the bounded provider object that makes it priceable. An event already
-// attributed by inference is different. Inference reads the model name, which is
-// the same on disk as it was at ingest, so the only input that can promote it to
-// an observation is a route hint the binding did not have then.
 func replayCanImprove(source domain.UsageSourceContext, candidates []domain.LegacyUsageEvent) bool {
 	hint := strings.TrimSpace(source.ProviderHint)
-	// The hook has already reported that this route has no name AO bills
-	// against, so no replay and no inference can produce one.
 	if hint == pricing.UnidentifiedBillingRoute {
 		return false
 	}
@@ -390,13 +328,6 @@ func legacyArtifactMatches(file *os.File, source domain.UsageSourceRecord, check
 	return err == nil && parserCheckpointsEqual(sample.checkpoint, checkpoint)
 }
 
-// legacyReplayIndex keeps only the replayed events a candidate could match.
-//
-// The chunk reader bounds each read, but a transcript prefix is unbounded, so
-// retaining every parsed event would make this one-shot startup repair allocate
-// in proportion to the whole file — exactly what the bounded ingestion design
-// exists to prevent. Retention is instead proportional to the number of legacy
-// rows on the one source being repaired.
 type legacyReplayIndex struct {
 	wanted     map[string]struct{}
 	byKey      map[string]domain.ModelUsageEvent
@@ -415,9 +346,6 @@ func newLegacyReplayIndex(candidates []domain.LegacyUsageEvent) *legacyReplayInd
 	return index
 }
 
-// observe records one chunk's events. A key repeated across the prefix is
-// ambiguous and disqualifies its candidate, so both sightings are tracked even
-// though only the last event is kept.
 func (i *legacyReplayIndex) observe(events []domain.ModelUsageEvent) {
 	for _, event := range events {
 		if _, want := i.wanted[event.SourceEventKey]; !want {
@@ -492,8 +420,6 @@ func matchLegacyEvents(candidates []domain.LegacyUsageEvent, replayed *legacyRep
 			continue
 		}
 		event, ok := replayed.byKey[candidate.SourceEventKey]
-		// The stored provider usage object is deliberately not compared: filling
-		// it in is what this repair exists to do, so a stored NULL must still match.
 		if !ok || event.ProviderID != candidate.ProviderID || event.ModelID != candidate.ModelID ||
 			event.MeasurementKind != candidate.MeasurementKind ||
 			!genericTokensEqual(event.Tokens, candidate.Tokens) {

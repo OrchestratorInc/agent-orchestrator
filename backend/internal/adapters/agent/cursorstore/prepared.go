@@ -38,9 +38,6 @@ func preparationFor(root, source, cwd, id, expected string) (preparation, error)
 	return preparation{Source: source, ID: id, CWD: cwd, Fingerprint: expected}, nil
 }
 
-// PreparedCopyIn reuses only a complete copy published for this exact
-// selection at layout's resume path. Its native state may have advanced since
-// publication and must not be replaced.
 func PreparedCopyIn(ctx context.Context, layout Layout, root, source, cwd, id, expected string) (string, bool, error) {
 	if expected == "" {
 		return "", false, nil

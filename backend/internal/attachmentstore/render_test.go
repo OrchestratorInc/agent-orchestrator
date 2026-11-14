@@ -28,7 +28,6 @@ func TestRenderRoundTripStaysOutOfWorkspaceAndPreview(t *testing.T) {
 		t.Fatalf("body = %q", body)
 	}
 
-	// The workspace preview origin may call the daemon API, so it must never serve a render.
 	if _, ok := NameFromWorkspacePath(".ao/attachments/" + renderName("r1")); ok {
 		t.Fatal("preview path resolved a render file")
 	}

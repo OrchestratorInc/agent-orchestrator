@@ -30,7 +30,6 @@ func TestBuildHandoffNoteTiersTurnsAndCountsTheRest(t *testing.T) {
 	if !strings.HasPrefix(got, Prefix) || !strings.HasSuffix(got, "</ao-handoff-request>") {
 		t.Fatalf("note is not wrapped in the handoff block:\n%s", got)
 	}
-	// 30 turns: the latest, five previous, fifteen older, nine only counted.
 	for _, want := range []string{
 		"request-30", "response-30", "request-25", "request-10", "ship the importer", "- a.go",
 		"9 earlier turns are not shown. Run `ao session history`", "then wait for the user",
@@ -206,8 +205,6 @@ func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
 	}
 }
 
-// Without a pointer to the full conversation the note only counts the turns
-// it left out.
 func TestBuildSaysWhereTheFullHistoryIsOnlyWhenTold(t *testing.T) {
 	short := Build(Input{Turns: handoffTestTurns(2)})
 	if strings.Contains(short, "## Earlier history") {

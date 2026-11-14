@@ -85,8 +85,6 @@ func (m *codexAccountManager) logout(ctx context.Context, accountID string) erro
 		if afterErr != nil || after.exists {
 			return apierr.Conflict("CODEX_ACCOUNT_LOGOUT_UNCONFIRMED", "Couldn't log out. Try again.", nil)
 		}
-		// If Codex removed the credential before its transport reported an error,
-		// local logout is already committed and must never be rolled back.
 		if logoutErr != nil {
 			m.logger.Warn("Codex logout completed with an unconfirmed provider result", "accountID", accountID)
 		}
@@ -168,8 +166,6 @@ func (m *codexAccountManager) accountMayOwnDeviceCredential(accountID string) bo
 		lastKnownDeviceAccountID = m.deviceAccountID
 	}
 	if lastKnownDeviceAccountID == "" {
-		// Without any local ownership result, every saved account is potentially
-		// the device owner. Reconcile before choosing a logout home.
 		return accountID != ""
 	}
 	return accountID != "" && accountID == lastKnownDeviceAccountID
@@ -299,10 +295,6 @@ func (m *codexAccountManager) validateGlobalCredentialStore() error {
 	if m.globalHome == "" {
 		return ports.ErrCodexGlobalCredentialStoreUnsupported
 	}
-	// A missing auth.json means that no device account is active; it does not
-	// mean that Codex is using a non-file-backed credential store. Validate the
-	// path and any credential that is present, while allowing activation to
-	// create the file (and, when needed, its private parent directory).
 	_, _, err := readCodexDeviceFileState(m.globalCredentialPath(), true)
 	if err != nil {
 		return ports.ErrCodexGlobalCredentialStoreUnsupported

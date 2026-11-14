@@ -31,8 +31,7 @@ type fakeStacker struct {
 	merge       []ports.SCMStackMergeRequest
 	status      ports.SCMStackMergeStatus
 	mergeErr    error
-	// onMerge runs once the provider has taken the merge.
-	onMerge func()
+	onMerge     func()
 }
 
 func (f *fakeStacker) PullRequestStack(_ context.Context, ref ports.SCMPRRef) (ports.SCMStack, bool, error) {
@@ -57,7 +56,6 @@ func (f *fakeStacker) MergeStack(_ context.Context, request ports.SCMStackMergeR
 	return f.status, f.mergeErr
 }
 
-// A reader answering per PR, unlike the single-observation fake.
 type stackReader struct {
 	byNumber map[int]ports.SCMObservation
 	review   ports.SCMReviewObservation
@@ -115,8 +113,7 @@ func newStackFixture(number int) stackFixture {
 		Stacker:     stacker,
 		MergeWriter: writer,
 		Clock:       func() time.Time { return time.Unix(100, 0) },
-		// Settled: queued app suites only, since well before noChecksSettle.
-		HeadChecks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: time.Unix(100, 0).Add(-3 * time.Minute)}},
+		HeadChecks:  &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: time.Unix(100, 0).Add(-3 * time.Minute)}},
 	})
 	return stackFixture{svc: svc, stacker: stacker, reader: reader, writer: writer}
 }
@@ -151,10 +148,6 @@ func TestStack_DescribesEveryLayer(t *testing.T) {
 	}
 }
 
-// GitHub reports no status rollup for a head nothing checks, so its CI reads
-// as unknown. Only a layer read with no checks at all, settled as the provider
-// confirms, says so; one whose checks weren't read, or whose run was
-// cancelled, is still unknown.
 func TestStack_SaysWhichLayersHaveNoChecks(t *testing.T) {
 	f := newStackFixture(2)
 	unchecked := readyLayer(1, headA)
@@ -239,7 +232,6 @@ func TestMergeStack_LandsLayersNothingChecks(t *testing.T) {
 		layer.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: head}
 		f.reader.byNumber[number] = layer
 	}
-	// Not asked, as the CLI: the layers wait for checks.
 	if _, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(1, 2)}); !errors.Is(err, ErrPRPreconditions) || len(f.stacker.merge) != 0 {
 		t.Fatalf("unasked err = %v, merge = %#v", err, f.stacker.merge)
 	}
@@ -249,7 +241,6 @@ func TestMergeStack_LandsLayersNothingChecks(t *testing.T) {
 	}
 }
 
-// A layer pushed seconds ago reads the same as one nothing checks, so it waits.
 func TestStack_ALayerJustPushedIsNotNoChecks(t *testing.T) {
 	f := newStackFixture(2)
 	f.svc.headChecks = &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: time.Unix(100, 0).Add(-10 * time.Second)}}
@@ -292,9 +283,6 @@ func TestMergeStack_SkipsLayersAlreadyMerged(t *testing.T) {
 	}
 }
 
-// layerBook is the store, merge writer and lifecycle behind a stack merge. It
-// keeps one row per layer and logs each bookkeeping step in order. Like the
-// real ones, every step fails on a cancelled context.
 type layerBook struct {
 	rows     map[string]domain.PullRequest
 	steps    []string
@@ -338,7 +326,6 @@ func (b *layerBook) ApplySCMObservation(ctx context.Context, sessionID domain.Se
 	return nil
 }
 
-// newLandingFixture tracks every layer of the stack, each in its own session.
 func newLandingFixture() (stackFixture, *layerBook, *fakeRefresher) {
 	f := newStackFixture(2)
 	book := &layerBook{rows: map[string]domain.PullRequest{}}
@@ -362,9 +349,6 @@ func mergeStackThrough2(ctx context.Context, f stackFixture) (StackMergeResult, 
 	return f.svc.MergeStack(ctx, StackMergeRequest{PRID: "2", PRURL: layerURL(2), ExpectedHeads: headsThrough(1, 2)})
 }
 
-// A merged row is terminal, so the observer's one forced refresh was lifecycle's
-// only chance to see the merge: a failed read meant no teardown and no merged
-// notification. Lifecycle hears of every landed layer however reads go after.
 func TestMergeStack_TellsLifecycleAboutEveryLandedLayer(t *testing.T) {
 	f, book, refresher := newLandingFixture()
 	f.stacker.onMerge = func() { f.reader.err = errors.New("rate limited") }
@@ -396,9 +380,6 @@ func withoutVia(steps []string) []string {
 	return slices.DeleteFunc(slices.Clone(steps), func(step string) bool { return strings.HasPrefix(step, "via ") })
 }
 
-// ao.usage.worker_pr_merged attributes a stacked merge to the client that asked
-// for it, as it does a plain merge, and each layer is attributed before its row
-// turns merged so the usage flush never reports it unattributed.
 func TestMergeStack_RecordsMergedViaForEveryLandedLayer(t *testing.T) {
 	for name, tc := range map[string]struct {
 		ctx  context.Context
@@ -423,15 +404,12 @@ func TestMergeStack_RecordsMergedViaForEveryLandedLayer(t *testing.T) {
 	}
 }
 
-// A slow merge outlives its request: the context is gone by the time GitHub
-// answers. The layers it took are still recorded, and still attributed.
 func TestMergeStack_RecordsLayersAfterTheRequestIsCancelled(t *testing.T) {
 	for name, tc := range map[ports.SCMStackMergeStatus][]string{
 		ports.SCMStackMerged: {
 			"via desktop " + layerURL(1), "merged " + layerURL(1), "lifecycle s-1 " + layerURL(1),
 			"via desktop " + layerURL(2), "merged " + layerURL(2), "lifecycle s-2 " + layerURL(2),
 		},
-		// Still landing: the rows stay open for the observer to see them merge.
 		ports.SCMStackPending:  nil,
 		ports.SCMStackEnqueued: nil,
 	} {

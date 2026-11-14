@@ -45,9 +45,6 @@ func TestTenureFirstObservationIsDayZero(t *testing.T) {
 	}
 }
 
-// Active days must count calendar days, not observations. The sink calls this on
-// every event, so counting calls would turn a busy afternoon into months of
-// apparent tenure.
 func TestTenureCountsCalendarDaysNotCalls(t *testing.T) {
 	now := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
 	tr := newTenureTracker(t.TempDir(), func() time.Time { return now })
@@ -64,8 +61,6 @@ func TestTenureCountsCalendarDaysNotCalls(t *testing.T) {
 		t.Fatalf("second calendar day = %d active days, want 2", active)
 	}
 
-	// A gap does not backfill: eight days later is one more active day, but the
-	// age jumps, which is exactly the difference the two numbers exist to show.
 	now = now.Add(8 * 24 * time.Hour)
 	age, active, bucket := tr.observe()
 	if active != 3 {
@@ -86,8 +81,6 @@ func TestTenureSurvivesRestart(t *testing.T) {
 	first := newTenureTracker(dir, func() time.Time { return now })
 	first.observe()
 
-	// A month later, a fresh process must read the original first-seen date
-	// rather than treating the install as new.
 	later := now.Add(40 * 24 * time.Hour)
 	second := newTenureTracker(dir, func() time.Time { return later })
 	age, active, bucket := second.observe()
@@ -102,8 +95,6 @@ func TestTenureSurvivesRestart(t *testing.T) {
 	}
 }
 
-// A state file copied from another machine, or a clock moved backwards, must not
-// report a negative age.
 func TestTenureClampsBackwardsClock(t *testing.T) {
 	dir := t.TempDir()
 	body := `{"first_seen":"2026-09-01","last_active":"2026-09-01","active_days":4}`
@@ -135,7 +126,6 @@ func TestTenureSurvivesCorruptState(t *testing.T) {
 	}
 }
 
-// Telemetry must never be the reason a read-only data dir breaks the daemon.
 func TestTenureWorksWithNoDataDir(t *testing.T) {
 	now := time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)
 	tr := newTenureTracker("", func() time.Time { return now })
@@ -144,9 +134,6 @@ func TestTenureWorksWithNoDataDir(t *testing.T) {
 	}
 }
 
-// End-to-end: the properties must survive the sink's own sanitisation and land in
-// the request body, because they are stamped outside the per-event payload
-// allowlist and that is easy to get wrong.
 func TestPostHogSinkStampsDefaultAgentAndTenure(t *testing.T) {
 	var got map[string]any
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "0.11.3", "codex",
@@ -177,8 +164,6 @@ func TestPostHogSinkStampsDefaultAgentAndTenure(t *testing.T) {
 	if got["tenure"] != string(TenureFirstDay) {
 		t.Errorf("tenure = %v, want d0", got["tenure"])
 	}
-	// The classifier: every daemon/CLI event must carry client="cli" so a
-	// shared event like ao.app.active splits by client across desktop/mobile/cli.
 	if got["client"] != "cli" {
 		t.Errorf("client = %v, want cli", got["client"])
 	}
@@ -195,8 +180,8 @@ func TestVersionChannel(t *testing.T) {
 		"1.0.0":             "stable",
 		"0.11.3-nightly.5":  "nightly",
 		"0.12.0-NIGHTLY.1":  "nightly",
-		"":                  "stable", // absent version is not nightly
-		"0.11.3-feature.42": "stable", // a pinned feature build is not a nightly
+		"":                  "stable",
+		"0.11.3-feature.42": "stable",
 	}
 	for v, want := range cases {
 		if got := versionChannel(v); got != want {
@@ -212,8 +197,6 @@ func TestSafeAgentSlug(t *testing.T) {
 			t.Errorf("safeAgentSlug(%q) = %q, want it kept", v, got)
 		}
 	}
-	// A path, whitespace, uppercase, or an over-long value must be dropped so it
-	// cannot leak on ao.daemon.started before the resolver rejects it.
 	drop := []string{
 		"/Users/me/bin/agent", "../codex", "claude code", "Claude-Code",
 		"agent;rm -rf", strings.Repeat("x", 60), "", "   ",

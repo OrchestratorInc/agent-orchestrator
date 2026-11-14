@@ -44,7 +44,6 @@ export type CommandGroupId =
 	| "prs"
 	| "settings"
 	| "global"
-	/** Session-text matches from the local search index. */
 	| "search";
 
 export type NavigateTarget =
@@ -79,13 +78,12 @@ export type CommandAction =
 	| { kind: "open-new-project" }
 	| { kind: "open-session-import"; projectId?: string }
 	| { kind: "open-orchestrator"; projectId: string }
-	/** No project: every project's archived sessions. */
 	| { kind: "open-archive"; projectId?: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
 	| { kind: "open-chat-message"; sessionId?: string; projectId?: string; reviewId?: string; messageId: string; text: string }
-	| { kind: "open-settings-section"; section: GlobalSettingsSection; /** Visible label of the row to land on. */ focus?: string }
+	| { kind: "open-settings-section"; section: GlobalSettingsSection; focus?: string }
 	| { kind: "run-shortcut"; shortcut: AppShortcutId }
 	| { kind: "resume-session"; projectId: string; sessionId: string }
 	| { kind: "copy-branch"; branch: string }
@@ -95,37 +93,21 @@ export type CommandAction =
 	| { kind: "toggle-theme" }
 	| { kind: "open-shared-link" }
 	| { kind: "report-problem" }
-	/** Runs a menu's own handler, as its context menu would. */
 	| { kind: "run"; run: () => void }
-	/** Opens one of the palette's nested lists. */
 	| { kind: "open-view"; view: PaletteMenuView }
-	/**
-	 * Opens a past session at the message a search matched, with the match
-	 * carried out-of-band so the Chat timeline can scroll to it.
-	 */
 	| {
 			kind: "open-search-result";
 			projectId: string;
 			sessionId: string;
 			messageId: string;
 			snippet: string;
-			/** What matched (user, assistant, tool, command, path, title). */
 			matchKind?: string;
-			/** Set when the match is in one of the session's reviewer chats. */
 			reviewId?: string;
-			/** Matched spans in the snippet; the first is what the message highlights. */
 			highlights?: ReadonlyArray<{ start: number; end: number }>;
-			/** The matched row's conversation sequence; a tool or command match opens at it. */
 			seq?: number;
 	  }
-	/** Copies the command that reopens a session from a terminal. */
 	| { kind: "copy-resume-command"; command: string };
 
-/**
- * The palette's nested lists beyond a session's actions and file search: a
- * project's actions, a session menu's submenu ("Open in"), a choice list
- * (Theme, Color theme, Language, ...) and renaming a session in the field.
- */
 export type PaletteMenuView =
 	| { mode: "project-actions"; projectId: string }
 	| { mode: "menu-submenu"; sessionId: string; entryId: string; title: string }
@@ -144,26 +126,16 @@ export type CommandItem = {
 	searchOnly?: boolean;
 	zone?: AttentionZone;
 	action?: CommandAction;
-	/** A matched line shown under the title, with the matched spans marked. */
 	snippet?: { text: string; highlights: { start: number; end: number }[]; code?: boolean };
-	/** Rows the daemon found by content: already matched, ranked by matchScore's content tier. */
 	contentMatch?: boolean;
-	/** The ⌘↵ alternative to `action`, such as a session's actions list. */
 	secondaryAction?: CommandAction;
-	/** A session row's live status, drawn as the sidebar's dot. */
 	status?: { className: string; breathe: boolean };
-	/** A session row's agent, drawn as its logo. */
 	agent?: AgentProvider;
-	/** The app shortcut this row runs, shown as its keys. */
 	shortcut?: AppShortcutId;
-	/** A menu entry's own icon, drawn in place of the group's. */
 	icon?: ReactNode;
-	/** A choice's current state: a check, or its value at the end of the row. */
 	checked?: boolean;
 	state?: string;
-	/** A switch row: drawn as an on/off switch at the end of the row. */
 	toggled?: boolean;
-	/** The palette stays open after it runs, to show the new state (choices, toggles). */
 	keepOpen?: boolean;
 };
 
@@ -173,25 +145,14 @@ export type CommandPaletteContext = {
 	currentSessionId?: string;
 	currentHostId?: string;
 	restartingProjectIds?: ReadonlySet<string>;
-	/**
-	 * Live review states per session, injected by the palette's queries. Omitting the
-	 * whole prop means "don't gate on review state" (callers that build items without
-	 * fetching, e.g. unit tests). Providing it but leaving a session's key absent means
-	 * that session's state is not known yet, and its review row is omitted entirely
-	 * rather than rendered with a guessed enabled state.
-	 */
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
-	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
 	developerMode?: boolean;
 };
 
-// Sessions sit above Projects, as in the sidebar. The palette places
-// session-text matches itself (see CommandPalette's groups).
 export const commandGroupOrder: CommandGroupId[] = ["session", "current", "attention", "search", "files", "content", "messages", "sessions", "projects", "prs", "settings", "global"];
 
 const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
-	// The palette draws this heading as the session itself.
 	session: "command.sessionFallback",
 	search: "command.sessionText",
 	current: "command.group.current",
@@ -203,7 +164,6 @@ const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
 	sessions: "command.group.sessions",
 	prs: "command.group.prs",
 	settings: "command.group.settings",
-	// The app's own name for app-wide commands (the shortcut catalog's General).
 	global: "shortcut.category.general",
 };
 
@@ -309,7 +269,6 @@ export function buildWorkspaceFileCommands(
 type WorkspaceContentHit = components["schemas"]["WorkspaceContentSearchHitResponse"];
 type ConversationSearchHit = components["schemas"]["ConversationSearchHitResponse"];
 
-/** Splits daemon search text, whose matches are wrapped in \x02 and \x03, into text and spans. */
 function markedSnippet(marked: string, code?: boolean): NonNullable<CommandItem["snippet"]> {
 	const highlights: { start: number; end: number }[] = [];
 	let text = "";
@@ -320,7 +279,6 @@ function markedSnippet(marked: string, code?: boolean): NonNullable<CommandItem[
 	return { text, highlights, ...(code ? { code } : {}) };
 }
 
-/** One row per file: its best matching line, opened at that line. */
 export function buildContentSearchCommands(
 	target: WorkspaceFileSearchTarget,
 	hits: readonly WorkspaceContentHit[],
@@ -339,15 +297,11 @@ export function buildContentSearchCommands(
 	});
 }
 
-/** One row per chat message, opened scrolled to it. */
 export function buildChatSearchCommands(
 	hits: readonly ConversationSearchHit[],
 	t: TFunction = appI18n.t,
-	/** The chat's session title, used when the chat has none, and where it lives, shown beside it. */
 	context?: (hit: ConversationSearchHit) => { title?: string; place?: string },
 ): CommandItem[] {
-	// One row per chat: its best match (the daemon ranks hits), with how many
-	// more of its messages matched, rather than a row per message.
 	const chats = new Map<string, { hit: ConversationSearchHit; count: number }>();
 	for (const hit of hits) {
 		const key = hit.reviewId ? `review:${hit.reviewId}` : `session:${hit.sessionId}`;
@@ -356,7 +310,6 @@ export function buildChatSearchCommands(
 		else chats.set(key, { hit, count: 1 });
 	}
 	return [...chats.values()].map(({ hit, count }) => {
-		// Line breaks and runs of spaces read as one line in a row.
 		const snippet = markedSnippet(hit.text.replace(/\s+/g, " ").trim());
 		const { title, place } = context?.(hit) ?? {};
 		const subtitle = [place, hit.reviewId ? t("terminal.reviewer") : undefined].filter(Boolean).join(" · ");
@@ -380,18 +333,15 @@ export function buildChatSearchCommands(
 	});
 }
 
-/** Where a row lives: its project, marked Cloud when it does not run on this machine. */
 function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
 	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
 }
 
-/** 0 when the sidebar flags a session red (it needs you), 1 for a review turn, -1 otherwise. */
 function attentionMarkerRank(session: WorkspaceSession): number {
 	const marker = getSessionRowMarker(session);
 	return marker === "attention" ? 0 : marker === "review" ? 1 : -1;
 }
 
-/** When the person last worked in a session, as the sidebar's age shows it. */
 function lastInteraction(session: WorkspaceSession): number {
 	const at = session.lastInteractionAt ?? session.lastUserMessageAt;
 	return at ? Date.parse(at) || 0 : 0;
@@ -458,11 +408,6 @@ export function buildSessionActions(
 	return items;
 }
 
-/**
- * A context menu's entries as palette rows, so a session's actions here are
- * the ones its right-click menu offers. A submenu (Open in) becomes a row that
- * opens it as a nested list; separators and custom rows have no row.
- */
 export function menuEntryCommands(entries: readonly MenuEntry[], sessionId: string): CommandItem[] {
 	return entries.flatMap((entry): CommandItem[] => {
 		if (entry.kind === "item") {
@@ -489,7 +434,6 @@ export function menuEntryCommands(entries: readonly MenuEntry[], sessionId: stri
 	});
 }
 
-/** A submenu's entries by id, searched through nested submenus. */
 export function findSubmenuEntries(entries: readonly MenuEntry[], entryId: string): MenuEntry[] | undefined {
 	for (const entry of entries) {
 		if (entry.kind !== "submenu") continue;
@@ -510,7 +454,6 @@ export type ProjectActionContext = {
 	remove?: () => void;
 };
 
-/** A project's actions, as its sidebar ⋮ and right-click menu offer them. */
 export function buildProjectActions(workspace: WorkspaceSummary, ctx: ProjectActionContext, t: TFunction = appI18n.t): CommandItem[] {
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
 	const isAgent = Boolean(workspace.standaloneAgent);
@@ -541,7 +484,6 @@ export function buildProjectActions(workspace: WorkspaceSummary, ctx: ProjectAct
 	return items;
 }
 
-/** The project or session rows a Go to list shows, out of the palette's root rows. */
 export function goToCommands(items: readonly CommandItem[], target: "projects" | "sessions"): CommandItem[] {
 	return items.filter((item) => (target === "projects" ? item.group === "projects" : item.group === "attention" || item.group === "sessions"));
 }
@@ -578,7 +520,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["new chat", "new session", "worker", "chat", "start", "agent", currentProject?.name ?? ""],
 		disabled: isProjectRestarting,
 		disabledReason: isProjectRestarting ? t("command.orchestratorRestarting") : undefined,
-		// Off a project it does what ⌘N does there (the last project, else Sessions).
 		action: currentProject
 			? { kind: "open-new-task", projectId: currentProject.id }
 			: { kind: "run-shortcut", shortcut: "new-session" },
@@ -594,7 +535,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				action: { kind: "open-session-import", projectId: currentProject.id },
 			});
 		}
-		// A Cloud standalone agent has no orchestrator either.
 		if (currentProject.id !== STANDALONE_WORKSPACE_ID && !currentProject.standaloneAgent) {
 			items.push({
 				id: "current-open-orchestrator",
@@ -663,9 +603,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		});
 	}
 
-	// The sessions the sidebar flags with an alert: first those that need the
-	// person now (input, CI, conflicts, changes requested), then their review
-	// turn, each most recent first. A PR ready to merge waits on nobody.
 	const attentionSessions = workspaces
 		.flatMap((workspace) => workerSessions(workspace.sessions).map((session) => ({ workspace, session })))
 		.filter(({ session }) => session.id !== currentSessionId && sessionIsActive(session))
@@ -679,7 +616,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		items.push(sessionCommand(workspace, session, "attention", t));
 	}
 
-	// Cloud standalone agents belong to Sessions, not projects; their sessions are listed.
 	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID && !candidate.standaloneAgent)) {
 		items.push({
 			id: `project:${workspace.id}`,
@@ -692,8 +628,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		});
 	}
 
-	// Most recently worked in first, so the blank palette's few rows are the
-	// sessions the person is likely to go back to. Stable for equal times.
 	const sessionRows = workspaces
 		.flatMap((workspace) => workerSessions(workspace.sessions)
 			.filter((session) => !attentionIds.has(session.id) && session.id !== currentSessionId)
@@ -707,10 +641,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	for (const workspace of workspaces) {
 		for (const session of workerSessions(workspace.sessions)) {
 			const sessionReviewStates = reviewStatesBySessionId?.[session.id];
-			// Whole prop omitted (e.g. a test that doesn't care about review state) means
-			// "assume eligible"; a defined map with this session's key absent means the
-			// live app hasn't loaded this session's review state yet — don't expose a
-			// mutating action until we know it's safe to trigger.
 			const dataLoadedForSession = reviewStatesBySessionId === undefined || sessionReviewStates !== undefined;
 			const openReviewStates = sessionReviewStates ? openReviewStatesFor(session, sessionReviewStates) : undefined;
 			const sessionReviewRunning = openReviewStates ? reviewIsRunning(openReviewStates) : false;
@@ -731,7 +661,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 					title: `#${pr.number}`,
 					subtitle,
 					keywords: [...prKeywords, "pr", "pull request"],
-					// The bare number means little until someone searches for it.
 					searchOnly: true,
 					action: { kind: "navigate", target: jumpTarget(workspace, session) },
 				});
@@ -767,7 +696,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["home", "start", "get started", "clone"],
 		action: { kind: "navigate", target: { to: "/" } },
 	});
-	// Projects and most sessions wait for a search; these list them all.
 	items.push({
 		id: "global-go-to-project",
 		group: "global",
@@ -820,7 +748,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("sessionImport.foldersTitle"),
 		subtitle: t("settings.harness.thisComputer"),
 		keywords: [...IMPORT_SESSION_KEYWORDS, "folders", "projects"],
-		// A project's own Import chats leads the blank palette; this waits for a search.
 		searchOnly: true,
 		action: { kind: "open-session-import" },
 	});
@@ -868,14 +795,6 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	return items;
 }
 
-/**
- * Per-PR review command. The trigger endpoint is session-scoped (one run covers
- * all of the session's eligible open PRs, same as the Reviews tab button), so
- * the disabled state mirrors the shared ReviewPanel eligibility logic — both
- * sides read it from `lib/session-reviews`, so the two can't drift. Callers only
- * reach here once the session's review state is known; until then the row is
- * omitted rather than shown with a guessed enabled state.
- */
 function prReviewCommand(
 	session: WorkspaceSession,
 	pr: PullRequestFacts,
@@ -917,12 +836,6 @@ function isSubsequence(query: string, haystack: string): boolean {
 	return i === query.length;
 }
 
-/**
- * Content rows rank below any name that holds every typed word, so "hide
- * sidebar" runs Toggle sidebar instead of opening a file that mentions it, and
- * above loose fuzzy name matches. Among content rows, the share of typed words
- * the snippet marks puts an exact chat sentence above a file matching one word.
- */
 function contentMatchScore(q: string, item: CommandItem): number {
 	const words = q.split(/\s+/).filter((word) => word.length > 1);
 	const snippet = item.snippet;
@@ -932,7 +845,6 @@ function contentMatchScore(q: string, item: CommandItem): number {
 	return 200 + Math.round((60 * covered) / words.length);
 }
 
-/** A typed word of 4+ letters missing at most two letters of a word in text: "sidbar" for "sidebar". */
 function nearMissIn(word: string, text: string): boolean {
 	if (word.length < 4) return false;
 	return wordsOf(text).some((candidate) =>
@@ -943,14 +855,12 @@ function wordsOf(text: string): string[] {
 	return text.split(/[^\p{L}\p{N}]+/u);
 }
 
-/** Where `q` starts a word of `text` (at its start or after a non-letter), or -1. */
 function wordStartIndex(text: string, q: string): number {
 	let at = text.indexOf(q);
 	while (at > 0 && /[\p{L}\p{N}]/u.test(text[at - 1] ?? "")) at = text.indexOf(q, at + 1);
 	return at;
 }
 
-/** Loose letters in order, starting at the start of one of the title's words. */
 function wordAnchoredSubsequence(q: string, title: string): boolean {
 	for (let at = 0; at < title.length; at++) {
 		const wordStart = at === 0 || !/[\p{L}\p{N}]/u.test(title[at - 1] ?? "");
@@ -959,14 +869,6 @@ function wordAnchoredSubsequence(q: string, title: string): boolean {
 	return false;
 }
 
-/**
- * How well a row matches the query, 0 for no match. In order: the row's exact
- * name; its name starting with the query; a word of its name starting with it;
- * one of its keywords exactly; a whole word, then a word start, of its
- * keywords or subtitle; every typed word somewhere; loose letters of its name.
- * Keywords never match inside a word, so "bug" finds Report a problem but not
- * Developer mode's "debug", and "keys" no keyword "monkeys".
- */
 export function matchScore(query: string, item: CommandItem): number {
 	const q = query.trim().toLowerCase();
 	if (!q) return 1;
@@ -980,7 +882,6 @@ export function matchScore(query: string, item: CommandItem): number {
 		if (titleIdx === 0) return 1100;
 		if (titleIdx > 0) return 900 - titleIdx;
 	}
-	// A session, project or command named exactly what was typed comes first.
 	if (title === q) return 1100;
 	if (title.startsWith(q)) return 1000;
 	const wordAt = wordStartIndex(title, q);
@@ -991,16 +892,12 @@ export function matchScore(query: string, item: CommandItem): number {
 	if (wordStartIndex(extras, q) >= 0) return 500;
 	const titleIdx = title.indexOf(q);
 	if (titleIdx > 0) return 400 - Math.min(titleIdx, 50);
-	// Every word somewhere, in any order: "add codex account", "hide sidebar",
-	// "toggle sidbar".
 	const words = q.split(/\s+/);
 	const inTitle = (word: string) => title.includes(word) || nearMissIn(word, title);
 	if (words.length > 1 && words.every((word) => inTitle(word) || wordStartIndex(extras, word) >= 0 || nearMissIn(word, extras))) {
 		return 300 + Math.round((100 * words.filter(inTitle).length) / words.length);
 	}
 	if (wordAnchoredSubsequence(q, title)) return 200;
-	// Loose letters scattered across every keyword match almost anything ("side"
-	// in "subscriptions"), so only a short query may match them.
 	if (q.length <= 2 && isSubsequence(q, extras)) return 100;
 	return 0;
 }
@@ -1062,25 +959,14 @@ export function visibleForQuery(items: CommandItem[], query: string): CommandIte
 	return [...attention, ...rest, ...backfill];
 }
 
-/**
- * Groups the daemon fills (file names, file contents, chats). They arrive after
- * the local rows, so they always sit below them: what Enter opens does not
- * change while a search is still answering.
- */
 const SEARCH_GROUPS: ReadonlySet<CommandGroupId> = new Set(["files", "content", "messages"]);
 
 export function isSearchGroup(group: CommandGroupId): boolean {
 	return SEARCH_GROUPS.has(group);
 }
 
-/** Rows each search group shows beside commands; the file view shows them all. */
 export const SEARCH_GROUP_ROWS = 6;
 
-/**
- * Rows the blank palette lists per navigation group. Sessions and projects
- * wait for a search (or Go to session / Go to project), since the sidebar
- * already lists them; only the sessions that need attention lead.
- */
 export const BLANK_GROUP_ROWS: Partial<Record<CommandGroupId, number>> = { attention: 5, sessions: 0, projects: 0 };
 
 function capBlankGroups(items: CommandItem[]): CommandItem[] {
@@ -1101,17 +987,13 @@ export function displayGroups(
 	searchGroupRows: number = SEARCH_GROUP_ROWS,
 ): DisplayGroup[] {
 	const local = items.filter((item) => !SEARCH_GROUPS.has(item.group));
-	// The daemon already matched these, so rank them without dropping any.
 	const searched = items
 		.filter((item) => SEARCH_GROUPS.has(item.group))
 		.map((item, index) => ({ item, index, score: matchScore(query, item) }))
 		.sort((a, b) => b.score - a.score || a.index - b.index)
 		.map((entry) => entry.item);
 	const searchGroups = groupCommands(searched, t, searchGroupRows);
-	// Keep matches under their category headings (Cursor-style), including while typing.
 	if (!query.trim()) return [...groupCommands(capBlankGroups(visibleForQuery(local, query)), t), ...searchGroups];
-	// A search lists actions and general commands first, then sessions, then
-	// projects and PRs. The palette highlights the best match wherever it sits.
 	const groups = groupCommands(visibleForQuery(local, query), t)
 		.sort((a, b) => searchGroupRank(a.id) - searchGroupRank(b.id));
 	return [...groups, ...searchGroups];
@@ -1124,7 +1006,6 @@ function searchGroupRank(id: string): number {
 	return rank === -1 ? SEARCH_GROUP_ORDER.length : rank;
 }
 
-/** The row Enter should run for a search: the best match, first on a tie. */
 export function bestMatch(items: readonly CommandItem[], query: string): CommandItem | undefined {
 	let best: CommandItem | undefined;
 	let bestScore = 0;
@@ -1138,11 +1019,6 @@ export function bestMatch(items: readonly CommandItem[], query: string): Command
 	return best;
 }
 
-/**
- * The spans of a row title the query matched, for drawing them brighter: the
- * typed text where it appears whole, else each typed word, else the letters a
- * loose match picked in order.
- */
 export function titleHighlights(query: string, title: string): { start: number; end: number }[] {
 	const q = query.trim().toLowerCase();
 	if (!q) return [];
@@ -1177,18 +1053,10 @@ function mergeSpans(spans: { start: number; end: number }[]): { start: number; e
 	return merged;
 }
 
-/**
- * One session-text search hit as the palette renders it.
- *
- * The palette owns presentation (title, subtitle, snippet segments); the search
- * hook owns transport. Keeping the mapping here means the palette's command
- * model stays testable without a query layer.
- */
 export type SessionSearchCommandHit = {
 	sessionId: string;
 	projectId: string;
 	messageId?: string;
-	/** The matched row's conversation sequence. */
 	seq?: number;
 	kind: string;
 	title?: string;
@@ -1198,22 +1066,12 @@ export type SessionSearchCommandHit = {
 	projectName?: string;
 	harness?: string;
 	sessionState?: string;
-	/** The command that reopens the session from a terminal, as the daemon names it. */
 	resumeCommand?: string;
 	createdAt: string;
-	/** How many messages in the session matched; the row is the best of them. */
 	sessionMatches?: number;
-	/** Set when the best match is in one of the session's reviewer chats. */
 	reviewId?: string;
 };
 
-/**
- * buildSessionSearchCommands maps ranked hits onto palette rows.
- *
- * A hit with a message id opens that message; a hit without one (tool output,
- * a native transcript record, a path) opens the session. The distinction is
- * carried in the row rather than guessed later.
- */
 export function buildSessionSearchCommands(
 	hits: readonly SessionSearchCommandHit[],
 	query: string,
@@ -1221,33 +1079,19 @@ export function buildSessionSearchCommands(
 ): CommandItem[] {
 	return hits.map((hit, index) => {
 		const sessionName = hit.sessionName || hit.sessionId;
-		// A recency browse has no query, so it has no match kind to report: the
-		// row is the session itself, and claiming "session" as a match kind would
-		// suggest a name match that did not happen. A reviewer-chat match says so,
-		// with the same label the chat search gives it, because Enter opens the
-		// reviewer chat rather than the session's own transcript.
 		const kindLabel = query.trim() === ""
 			? ""
 			: hit.reviewId ? t("terminal.reviewer") : (SEARCH_KIND_LABELS[hit.kind] ?? hit.kind);
-		// One row per session, shown at its best-matching message; the count is
-		// how many of its messages matched, which the opened session's find in chat
-		// steps through. A row found only by its name or metadata has none.
 		const matches = (hit.sessionMatches ?? 0) > 0 ? t("command.sessionMatches", { count: hit.sessionMatches ?? 0 }) : "";
 		return {
 			id: `search:${hit.sessionId}:${hit.messageId || hit.kind}:${index}`,
 			group: "search" as CommandGroupId,
 			title: sessionName,
 			subtitle: [kindLabel, matches, hit.projectName || hit.projectId, hit.harness].filter(Boolean).join(" · "),
-			// The snippet is what the query matched, so it must also be searchable
-			// text for cmdk's own filtering and for a keyword hit.
 			keywords: [hit.snippet, hit.title ?? "", hit.projectName ?? "", hit.harness ?? ""],
-			// The best-matching message, its matched words marked by the palette's
-			// own snippet line. A recent session with nothing matched has none.
 			...(hit.snippet
 				? { snippet: { text: hit.snippet, highlights: [...(hit.highlights ?? [])].sort((left, right) => left.start - right.start) } }
 				: {}),
-			// ⌘↵ copies the command that reopens the session from a terminal: the
-			// daemon's, which restores a terminated session instead of resuming it.
 			secondaryAction: {
 				kind: "copy-resume-command",
 				command: hit.resumeCommand
@@ -1268,17 +1112,6 @@ export function buildSessionSearchCommands(
 	});
 }
 
-/**
- * Keeps the palette at one row per session.
- *
- * Both searches can find the same session: the session index covers every
- * transcript of a session (its own chat, its reviewer chats, terminal
- * transcripts, tool output) as one row with a match count, while the chat index
- * lists AO chat messages one by one. A chat row whose session the session-text
- * group already lists is dropped, reviewer chats included: that row's count
- * already includes them, and the opened session's find in chat steps through them.
- * Chat rows for sessions the session-text group does not list are kept.
- */
 export function withoutChatHitsCoveredBySessionSearch(
 	chatItems: readonly CommandItem[],
 	sessionSearchItems: readonly CommandItem[],

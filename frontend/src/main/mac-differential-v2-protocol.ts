@@ -40,7 +40,6 @@ export function macV2Digest(bytes: Uint8Array): string {
   return createHash("sha512").update(bytes).digest("base64");
 }
 
-// Sign the canonical payload, not reserialized arbitrary input or the signature.
 export function macV2Canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(macV2Canonical).join(",")}]`;
   if (value !== null && typeof value === "object") {
@@ -84,7 +83,6 @@ function assetName(url: string, tag: string): string {
 }
 export function macV2ZipName(url: string, id: MacV2Identity, arch: MacV2Arch): string {
   const name = assetName(url, id.tag);
-  // Version required: unversioned ao-start aliases can never acquire maps.
   if (!name.endsWith(`-darwin-${arch}-${id.version}.zip`) || !/^[A-Za-z0-9][A-Za-z0-9._+-]+$/.test(name)) {
     throw new Error("Invalid v2 versioned ZIP");
   }
@@ -119,7 +117,6 @@ export function validateMacV2Payload(value: unknown): MacV2Payload {
     const oldZip = file(base.zip), oldMap = file(base.blockmap);
     const name = macV2ZipName(zip.url, candidate, a.arch);
     const oldName = macV2ZipName(oldZip.url, baseline, a.arch);
-    // Both versioned maps are on the candidate release. Neither is a legacy path.
     if (map.url !== macV2ReleaseURL(candidate.tag, `${name}.aoblockmap`) ||
         oldMap.url !== macV2ReleaseURL(candidate.tag, `${oldName}.aoblockmap`) ||
         map.size > MAC_V2_MAX_MAP || oldMap.size > MAC_V2_MAX_MAP) throw new Error("Invalid v2 blockmap location");

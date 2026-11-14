@@ -63,9 +63,6 @@ func TestSummaryReaderListCompactUsesOneBatchRead(t *testing.T) {
 	}
 }
 
-// Break caught: inferred prices were aggregated into the same dollar value as
-// observed prices without preserving the distinction the UI needs to explain
-// that the billing provider has not been confirmed.
 func TestSummaryReaderReportsCostProviderAttribution(t *testing.T) {
 	observed := completeCostAggregate(1, 100, 20, 10, 70)
 	inferred := completeCostAggregate(1, 200, 40, 20, 140)

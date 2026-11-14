@@ -24,7 +24,6 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 		return got
 	}
 
-	// A launch before AO manages the harness runs nothing of AO's.
 	rec := sampleRecord("mer")
 	rec.Harness, rec.Mode, rec.Metadata.ControllerGeneration = domain.HarnessCodex, domain.SessionModeChat, "gen-0"
 	chat, err := s.CreateSession(ctx, rec)
@@ -38,13 +37,11 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 	if err := s.SetManagedHarnessRelease(ctx, domain.HarnessCodex, "v1", now); err != nil {
 		t.Fatal(err)
 	}
-	// Its next launch (a new controller generation) records v1.
 	current, _, _ := s.GetSession(ctx, chat.ID)
 	current.Metadata.ControllerGeneration = "gen-1"
 	if err := s.UpdateSession(ctx, current); err != nil {
 		t.Fatal(err)
 	}
-	// A terminal spawned now records v1 too.
 	tuiRec := sampleRecord("mer")
 	tuiRec.Harness, tuiRec.Mode, tuiRec.Metadata.RuntimeLaunchID = domain.HarnessCodex, domain.SessionModeTUI, "launch-1"
 	if _, err := s.CreateSession(ctx, tuiRec); err != nil {
@@ -54,9 +51,6 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 		t.Fatalf("in use = %v, want [v1]", got)
 	}
 
-	// An update switches to v2. The chat reconnects live to its old process:
-	// its claim of the new generation carries the release over, so the launch
-	// trigger keeps it on v1 instead of claiming v2.
 	if err := s.SetManagedHarnessRelease(ctx, domain.HarnessCodex, "v2", now); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +64,6 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 		t.Fatalf("after a live reconnect in use = %v, want [v1]", got)
 	}
 
-	// A real relaunch starts the current release, and v1 is free.
 	current, _, _ = s.GetSession(ctx, chat.ID)
 	current.Metadata.ControllerGeneration = "gen-3"
 	if err := s.UpdateSession(ctx, current); err != nil {
@@ -90,8 +83,6 @@ func TestLaunchesRecordTheManagedReleaseTheyRun(t *testing.T) {
 	}
 }
 
-// A live reconnect claims its generation and keeps its process's release in
-// one write, so a cleanup prune right after the claim still sees v1 in use.
 func TestLiveClaimKeepsTheOldReleaseThroughAPrune(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -136,8 +127,6 @@ func TestLiveClaimKeepsTheOldReleaseThroughAPrune(t *testing.T) {
 	}
 }
 
-// A failed terminal move must keep both the stale notice and its old release
-// until a successful replacement commits a different runtime launch.
 func TestFailedTerminalRefreshRetainsRelease(t *testing.T) {
 	for _, harness := range domain.AllHarnesses {
 		switch harness {

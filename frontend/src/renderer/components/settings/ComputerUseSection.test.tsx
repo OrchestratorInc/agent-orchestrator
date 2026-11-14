@@ -138,12 +138,10 @@ describe("Orchestrator's own permissions", () => {
 
 		await userEvent.click(await appGear());
 		await waitFor(() => expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalled());
-		// The next read fails, and the user closes the guide with its X.
 		grants = undefined;
 		bridgeMocks.updatePrivacyGuide.mockResolvedValue(false);
 		const readsBefore = bridgeMocks.getAppPrivacy.mock.calls.length;
 		const updatesBefore = bridgeMocks.updatePrivacyGuide.mock.calls.length;
-		// The failed read still reports in, with the last grants the guide showed.
 		await waitFor(() => {
 			expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBeGreaterThan(readsBefore);
 			expect(bridgeMocks.updatePrivacyGuide.mock.calls.length).toBeGreaterThan(updatesBefore);
@@ -167,12 +165,10 @@ describe("Orchestrator's own permissions", () => {
 
 		await userEvent.click(await appGear());
 		await waitFor(() => expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalled());
-		// A focus refetch fails before the guide finishes opening.
 		grants = undefined;
 		const readsBefore = bridgeMocks.getAppPrivacy.mock.calls.length;
 		await client.invalidateQueries({ queryKey: ["computer-use", "app-privacy"] });
 		await waitFor(() => expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBeGreaterThan(readsBefore));
-		// The user closes the guide with its X as soon as it is up.
 		bridgeMocks.updatePrivacyGuide.mockResolvedValue(false);
 		opened();
 		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("orchestrator", { accessibility: false, screenRecording: false }));
@@ -192,7 +188,6 @@ describe("Orchestrator's own permissions", () => {
 		await userEvent.click(await appGear());
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveTextContent("System Settings did not open");
-		// Below the native section's row, so it reads as that section's error.
 		expect(screen.getByText("Grant macOS permissions to Orchestrator").compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
@@ -324,7 +319,6 @@ describe("ComputerUseSection", () => {
 			granted: { accessibility: true, screenRecording: false },
 			text: expect.objectContaining({ drag: "Drag CuaDriver into the list above", labels: { accessibility: "Accessibility", screenRecording: "Screen Recording" } }),
 		}));
-		// While macOS waits on the user, the gear spins and cannot be pressed again.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Open in System Settings" })).toHaveAttribute("aria-busy", "true"));
 		expect(screen.getByRole("button", { name: "Open in System Settings" })).toBeDisabled();
 		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("cuaDriver", { accessibility: true, screenRecording: false }));
@@ -342,7 +336,6 @@ describe("ComputerUseSection", () => {
 			granted: { accessibility: true, screenRecording: true },
 			text: expect.objectContaining({ allowed: "CuaDriver is allowed here", allowedHint: "Turn off its switch to revoke access." }),
 		}));
-		// Still followed: a revoke made from the strip reaches it.
 		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("cuaDriver", { accessibility: true, screenRecording: true }));
 	});
 

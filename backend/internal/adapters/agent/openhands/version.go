@@ -10,21 +10,12 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// minVersion is the first OpenHands CLI release that loads .openhands/hooks.json
-// (OpenHands-CLI#428, shipped in 1.12.0), which AO needs for native session
-// identity and activity.
 var minVersion = [3]int{1, 12, 0}
 
-// versionProbeTimeout covers a cold Python start; a warm `openhands --version`
-// already takes several seconds.
 const versionProbeTimeout = 30 * time.Second
 
-// versionPattern anchors on the CLI's own banner. The SDK prints a separate
-// "OpenHands SDK vX.Y.Z" banner on stderr, which must not be mistaken for the
-// CLI version; matching the product name also confirms binary identity.
 var versionPattern = regexp.MustCompile(`OpenHands CLI (\d+)\.(\d+)\.(\d+)`)
 
-// versionCommand is injectable so tests never launch a real CLI.
 var versionCommand = func(ctx context.Context, binary string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, binary, "--version").Output()
 }

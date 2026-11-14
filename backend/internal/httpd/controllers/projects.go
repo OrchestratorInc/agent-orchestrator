@@ -1,7 +1,3 @@
-// Package controllers holds the HTTP-facing controllers for the /api/v1
-// surface. Each controller groups one resource's routes, exposes a Register
-// method, and depends on exactly one resource-level Manager interface — never
-// directly on stores, lifecycle reducers, or adapters.
 package controllers
 
 import (
@@ -18,13 +14,10 @@ import (
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
-// ProjectsController owns the /projects routes. The controller depends only on
-// projectsvc.Manager; nil keeps routes registered but returns OpenAPI-backed 501s.
 type ProjectsController struct {
 	Mgr projectsvc.Manager
 }
 
-// Register mounts the project routes on the supplied router.
 func (c *ProjectsController) Register(r chi.Router) {
 	r.Get("/projects", c.list)
 	r.Post("/projects", c.add)
@@ -78,9 +71,6 @@ func (c *ProjectsController) prepareClone(w http.ResponseWriter, r *http.Request
 	envelope.WriteJSON(w, http.StatusOK, result)
 }
 
-// prepareCloneStream runs the same clone as prepareClone and reports each git
-// step as a server-sent event while it runs, so a long clone can show what it
-// is doing. The final event carries the result or the error envelope.
 func (c *ProjectsController) prepareCloneStream(w http.ResponseWriter, r *http.Request) {
 	if c.Mgr == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/projects/clone/prepare/stream")
@@ -102,8 +92,6 @@ func (c *ProjectsController) prepareCloneStream(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// Progress is reported from git's stderr reader; the lock keeps a late
-	// report from interleaving with, or following, the final event.
 	var mu sync.Mutex
 	done := false
 	send := func(event ClonePrepareStreamEvent, final bool) {
@@ -294,9 +282,6 @@ func decodeJSON(r *http.Request, out any) error {
 	return json.NewDecoder(r.Body).Decode(out)
 }
 
-// decodeJSONStrict rejects request bodies that include keys outside the target
-// type. It is used where misspelled or retired fields must surface as a 400
-// instead of being silently dropped.
 func decodeJSONStrict(r *http.Request, out any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()

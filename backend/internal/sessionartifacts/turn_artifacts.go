@@ -13,10 +13,6 @@ import (
 	"time"
 )
 
-// A turn's artifacts are listed in turnsDir, one file per turn, with their
-// content kept in keptDir. The version store forgets a renamed file's old path
-// and keeps only a file's latest versions; what a turn kept stays, so a fork of
-// an earlier turn still gets every artifact its conversation names.
 var (
 	turnsDir = filepath.Join(VersionsDir, "turns")
 	keptDir  = filepath.Join(VersionsDir, "kept")
@@ -25,15 +21,10 @@ var (
 var turnIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type turnArtifacts struct {
-	// Files maps each artifact's path to the sha256 of its content.
-	Files map[string]string `json:"files"`
-	// KeptAt orders the lists, for keeping only the latest.
-	KeptAt time.Time `json:"keptAt"`
+	Files  map[string]string `json:"files"`
+	KeptAt time.Time         `json:"keptAt"`
 }
 
-// TurnArtifacts returns the artifacts turnID started with in the artifact
-// directory dir, each path mapped to the sha256 of its content, and whether
-// that turn's list was kept.
 func TurnArtifacts(dir, turnID string) (map[string]string, bool, error) {
 	if !turnIDPattern.MatchString(turnID) {
 		return nil, false, nil
@@ -52,8 +43,6 @@ func TurnArtifacts(dir, turnID string) (map[string]string, bool, error) {
 	return list.Files, true, nil
 }
 
-// WriteTurnArtifacts records files as the artifacts turnID started with, at
-// keptAt.
 func WriteTurnArtifacts(dir, turnID string, files map[string]string, keptAt time.Time) error {
 	if !turnIDPattern.MatchString(turnID) {
 		return fmt.Errorf("bad turn id %q", turnID)
@@ -81,9 +70,6 @@ func WriteTurnArtifacts(dir, turnID string, files map[string]string, keptAt time
 	return os.Rename(tmp.Name(), filepath.Join(folder, turnID+".json"))
 }
 
-// PruneTurnArtifacts keeps the lists of only the keep most recently kept
-// turns in the artifact directory dir, and removes the kept content no
-// remaining list names.
 func PruneTurnArtifacts(dir string, keep int) error {
 	entries, err := os.ReadDir(filepath.Join(dir, turnsDir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -109,7 +95,6 @@ func PruneTurnArtifacts(dir string, keep int) error {
 		}
 		var list turnArtifacts
 		if json.Unmarshal(data, &list) != nil {
-			// Unreadable, so no fork could use it.
 			_ = os.Remove(path)
 			continue
 		}
@@ -124,15 +109,12 @@ func PruneTurnArtifacts(dir string, keep int) error {
 			if err == nil || errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
-			// Still on disk, so a fork may still read it: its content stays.
 			errs = append(errs, err)
 		}
 		for _, sum := range l.list.Files {
 			used[sum] = true
 		}
 	}
-	// Removed through a root, so a symlink inside can't point a removal
-	// outside the kept content.
 	root, err := os.OpenRoot(filepath.Join(dir, keptDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return errors.Join(errs...)
@@ -158,8 +140,6 @@ func PruneTurnArtifacts(dir string, keep int) error {
 	return errors.Join(errs...)
 }
 
-// KeptBlobPath is where a turn's artifact content with sha256 sum is kept in
-// the artifact directory dir.
 func KeptBlobPath(dir, sum string) string {
 	return filepath.Join(dir, keptDir, sum[:2], sum)
 }

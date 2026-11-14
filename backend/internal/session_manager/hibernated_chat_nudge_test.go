@@ -32,11 +32,6 @@ func (s managerMessenger) Send(ctx context.Context, id domain.SessionID, message
 	return s.m.Send(ctx, id, message, nil)
 }
 
-// A lifecycle nudge reaches a sleeping Chat session through the session guard,
-// which holds the session's input lease for the whole write. The relay has to
-// wake the session first, and the resume that wakes it waits for that same
-// lease to drain. Routine nudges (failing CI) and urgent ones (a merge
-// conflict) share that path.
 func TestLifecycleNudgeWakesHibernatedChat(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -98,8 +93,6 @@ func testLifecycleNudgeWakesHibernatedChat(
 		return m
 	}
 
-	// A worker that finished its turn and went to sleep: no controller, the
-	// durable hibernation marker set, the provider conversation kept.
 	firstChat := newChat()
 	first := newManager(firstChat)
 	deferred := deferredBackground(first)
@@ -128,9 +121,6 @@ func testLifecycleNudgeWakesHibernatedChat(
 			asleep.HibernatedAt, asleep.Activity.State, asleep.Metadata.ProviderConversationID)
 	}
 
-	// Chat wakes through Session Manager, as daemon.go wires it. The guard
-	// holds Session Manager's input lease, as lifecycle's guard once did: a
-	// relay must not deadlock under any caller that holds it.
 	chat := newChat()
 	t.Cleanup(func() { chat.StopAll(context.Background()) })
 	mgr := newManager(chat)
@@ -146,7 +136,6 @@ func testLifecycleNudgeWakesHibernatedChat(
 		took = time.Since(started)
 		nudged <- err
 	}()
-	// The user opens the worker and asks for a status while that wake runs.
 	time.Sleep(time.Second)
 	asked, err := chat.Send(ctx, rec.ID, ports.ChatUserMessage{Text: "status?", Origin: domain.MessageOriginHuman})
 	if err != nil {
@@ -159,8 +148,6 @@ func testLifecycleNudgeWakesHibernatedChat(
 	if nudgeErr != nil {
 		t.Errorf("nudge into a sleeping chat worker failed after %s: %v", took.Round(time.Millisecond), nudgeErr)
 	}
-	// The input lease blocks every exclusive operation on the session, so the
-	// nudge must not hold it through the provider start.
 	if took > 10*time.Second {
 		t.Errorf("nudge held the session's input lease for %s", took.Round(time.Millisecond))
 	}
@@ -182,7 +169,6 @@ func testLifecycleNudgeWakesHibernatedChat(
 	}
 }
 
-// settledTurn waits briefly for a queued turn to leave the queue.
 func settledTurn(t *testing.T, st *sqlite.Store, id domain.SessionID, turnID string) domain.ConversationTurn {
 	t.Helper()
 	ctx := context.Background()

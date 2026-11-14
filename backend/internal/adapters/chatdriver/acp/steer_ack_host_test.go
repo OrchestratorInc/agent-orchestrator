@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// startScriptedAckConversation is startScriptedHostConversation for an agent
-// that acknowledges steer prompts, as Hermes does.
 func startScriptedAckConversation(t *testing.T, adoptTurn string) (*conversation, *scriptedHost) {
 	t.Helper()
 	conv, host := startScriptedHostConversation(t, adoptTurn)
@@ -29,9 +27,6 @@ func ackNote(text string) string {
 		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}`
 }
 
-// The acknowledgement says the steer took. The `/steer` prompt is marked as a
-// command, so the host gives the turn's result to the running prompt, and the
-// turn settles with it whichever answer arrives or is routed first.
 func TestACPSteerPromptAcknowledgedSteerKeepsTheHostResultInEitherOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -46,7 +41,7 @@ func TestACPSteerPromptAcknowledgedSteerKeepsTheHostResultInEitherOrder(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			conv, host := startScriptedAckConversation(t, "")
 			answerOrder(conv, tc.first, tc.second)
-			_ = nextEvent(t, conv.Events()) // controller.ready
+			_ = nextEvent(t, conv.Events())
 			turn, root := startScriptedTurn(t, conv, host)
 			steer, outcome := steerAsync(t, conv, host, turn)
 			var meta struct {
@@ -76,15 +71,10 @@ func TestACPSteerPromptAcknowledgedSteerKeepsTheHostResultInEitherOrder(t *testi
 	}
 }
 
-// A declined acknowledgement stays a refusal however the turn's prompts then
-// answer: another prompt finishing says nothing about this steer.
 func TestACPSteerPromptDeclinedAcknowledgementStaysARefusal(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		// rootFirst sends the turn's own prompt's answer, which carries the
-		// host's receipt, before the steer prompt's.
-		rootFirst bool
-		// noteLate sends the note after the turn's own prompt has answered.
+		name          string
+		rootFirst     bool
 		noteLate      bool
 		first, second int
 	}{
@@ -97,7 +87,7 @@ func TestACPSteerPromptDeclinedAcknowledgementStaysARefusal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			conv, host := startScriptedAckConversation(t, "")
 			answerOrder(conv, tc.first, tc.second)
-			_ = nextEvent(t, conv.Events()) // controller.ready
+			_ = nextEvent(t, conv.Events())
 			turn, root := startScriptedTurn(t, conv, host)
 			steer, outcome := steerAsync(t, conv, host, turn)
 
@@ -127,11 +117,9 @@ func TestACPSteerPromptDeclinedAcknowledgementStaysARefusal(t *testing.T) {
 	}
 }
 
-// The running prompt failing fails the turn, even though the `/steer` command
-// took and answered fine after it.
 func TestACPSteerPromptAcknowledgedSteerKeepsTheTurnsFailure(t *testing.T) {
 	conv, host := startScriptedAckConversation(t, "")
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	turn, root := startScriptedTurn(t, conv, host)
 	steer, outcome := steerAsync(t, conv, host, turn)
 
@@ -148,11 +136,10 @@ func TestACPSteerPromptAcknowledgedSteerKeepsTheTurnsFailure(t *testing.T) {
 	}
 }
 
-// A `/steer` answer that never comes does not hold a turn the host has ended.
 func TestACPSteerPromptMissingSteerAnswerDoesNotHoldTheTurn(t *testing.T) {
 	conv, host := startScriptedAckConversation(t, "")
 	conv.stragglerWait = 100 * time.Millisecond
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	turn, root := startScriptedTurn(t, conv, host)
 	steer, outcome := steerAsync(t, conv, host, turn)
 
@@ -165,18 +152,15 @@ func TestACPSteerPromptMissingSteerAnswerDoesNotHoldTheTurn(t *testing.T) {
 	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:15" {
 		t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
 	}
-	// The answer arriving after all does not complete the turn again.
 	host.send(plainResult(steer))
 	if again := turnCompletions(t, conv.Events(), turn, 200*time.Millisecond); len(again) != 0 {
 		t.Fatalf("a late steer answer completed the turn again: %+v", again)
 	}
 }
 
-// After a daemon restart mid-turn, an acknowledging agent can be steered too;
-// the turn ends with the host's result for the prompt it adopted.
 func TestACPSteerPromptAcknowledgedSteerOfAnAdoptedTurn(t *testing.T) {
 	conv, host := startScriptedAckConversation(t, "durable-turn")
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	steer, outcome := steerAsync(t, conv, host, "durable-turn")
 	host.send(ackNote("ACK: queued for the active turn"))
 	host.send(plainResult(steer))
@@ -190,15 +174,10 @@ func TestACPSteerPromptAcknowledgedSteerOfAnAdoptedTurn(t *testing.T) {
 	}
 }
 
-// Hermes' turn can end just before `/steer` arrives. Hermes then answers "No
-// active turn" and runs the guidance inside the `/steer` request, and the host
-// holds the turn's own answer until that request answers. The steer took, the
-// run's output belongs to the turn, and the turn ends once, with its own
-// prompt's receipt, after the run.
 func TestACPSteerPromptRunAfterNoActiveTurnStaysInTheTurn(t *testing.T) {
 	conv, host := startScriptedAckConversation(t, "")
 	conv.stragglerWait = 100 * time.Millisecond
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	turn, root := startScriptedTurn(t, conv, host)
 	steer, outcome := steerAsync(t, conv, host, turn)
 
@@ -221,7 +200,6 @@ func TestACPSteerPromptRunAfterNoActiveTurnStaysInTheTurn(t *testing.T) {
 			t.Fatal("the steer's run never reached the turn")
 		}
 	}
-	// No receipt yet, so the straggler wait never starts.
 	if early := turnCompletions(t, conv.Events(), turn, 300*time.Millisecond); len(early) != 0 {
 		t.Fatalf("the turn ended before the host gave its result: %+v", early)
 	}
@@ -234,13 +212,10 @@ func TestACPSteerPromptRunAfterNoActiveTurnStaysInTheTurn(t *testing.T) {
 	}
 }
 
-// A steer command's answer that outlives its turn, and a later steered turn
-// too, is dropped. It must not end the old turn a second time or close the
-// running turn's items under the old turn's id.
 func TestACPSteerPromptLateAnswerAfterALaterSteeredTurnIsDropped(t *testing.T) {
 	conv, host := startScriptedAckConversation(t, "")
 	conv.stragglerWait = 100 * time.Millisecond
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 
 	first, firstRoot := startScriptedTurn(t, conv, host)
 	lateSteer, outcome := steerAsync(t, conv, host, first)
@@ -282,12 +257,9 @@ func TestACPSteerPromptLateAnswerAfterALaterSteeredTurnIsDropped(t *testing.T) {
 	}
 }
 
-// The acknowledgement starts the reply's next segment as it settles the steer,
-// so text Hermes streams without a message id right after the note renders
-// below the steer, not inside the reply above it.
 func TestACPSteerPromptAcknowledgementStartsTheNextSegmentAtOnce(t *testing.T) {
 	conv, host := startScriptedAckConversation(t, "")
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	turn, _ := startScriptedTurn(t, conv, host)
 	waiter := &promptSteer{turn: turn, seq: 1, result: make(chan error, 1), ackSeen: make(chan struct{}), sent: true}
 	conv.mu.Lock()

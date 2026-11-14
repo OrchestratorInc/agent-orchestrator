@@ -1,8 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
-// A tray-only catalog: importing the renderer's catalogs put every locale file
-// (1.3 MB) into main.js. Regenerate with `node scripts/sync-tray-catalog.mjs`.
 import { trayCatalogs, type TrayMessageKey } from "./tray-catalog.generated";
 import type { AppLocale } from "../shared/ui-locale";
 
@@ -88,7 +86,6 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 
 	const render = () => {
 		const count = sessions.length;
-		// A compact drawn cup stays legible without relying on font glyph sizing.
 		tray.setImage(lastAwake ? awakeIcon : icon);
 		tray.setTitle([lastAwake && awake === null ? "?" : "", count > 0 ? String(count) : ""].filter(Boolean).join(" "));
 		const awakeLabel = awake === true ? t("tray.awakeActive") : awake === null && lastAwake ? t("tray.awakeUnknown") : "";

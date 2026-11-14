@@ -14,12 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// SupportsTerminalVersionRefresh declares unattended exact-conversation resume.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 
-// NativeConversationExists verifies the CLI's durable root session, not the
-// SDK conversation/task ID in older hooks. Cline --id silently starts fresh
-// when its saved history is missing, so check before stopping the old process.
 func (*Plugin) NativeConversationExists(ctx context.Context, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
 	if ref.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
 		return importedClineConversationExists(ctx, ref, nativeID, env)

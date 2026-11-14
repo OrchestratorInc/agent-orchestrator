@@ -173,8 +173,6 @@ it.each(["creation", "send"])("recovers a legacy /side handoff after a lost %s r
 	const pending = JSON.parse(drafts.get("source")!).pendingCommand;
 	expect(pending.receipt.request.resources.map((r: { uri: string }) => r.uri)).toEqual(["/staged/notes.txt", "/staged/image-0.png"]);
 	expect(pending.receipt.request.attachments).toEqual([image]);
-	// Model an older saved command. Explicit retry must use its frozen receipt,
-	// not parse /side as a new command or stage the original files again.
 	const legacy = JSON.parse(drafts.get("source")!);
 	legacy.text = "/side explain files";
 	legacy.pendingCommand.receipt.submitted.text = legacy.text;
@@ -270,7 +268,6 @@ it.each(["intent save","intent capture","clear save","clear capture"])("retains 
  expect(hook.result.current.activeId).toBe(selectedDestination);
  await act(async()=>{hook.result.current.show("source")});
  expect(hook.result.current.error).toContain("failed");
- // Flush the failed-operation state through the same ordered writer before remount.
  await act(async()=>{await hook.result.current.replaceDraft("source",{...emptySideChatDraft(),text:"newer draft"})});
  expect(JSON.parse(drafts.get("source")!).pendingCommand.cancelRequested).toBe(true);
  hook.unmount();

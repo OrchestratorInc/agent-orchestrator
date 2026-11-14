@@ -12,20 +12,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// ArtifactRegistration is the outcome of RegisterArtifacts. OtherFiles counts
-// the session's files that are not registered; OtherRootFiles names those at
-// the root of the artifact directory, the ones most likely to be a deliverable
-// the agent has not registered yet.
 type ArtifactRegistration struct {
 	Registered     []string
 	OtherFiles     int
 	OtherRootFiles []string
 }
 
-// RegisterArtifacts registers the files or bundle directories at references as
-// the session's deliverables. Each is an absolute path in the session's
-// artifact directory or a path relative to it. Nothing is registered unless
-// every reference is valid. Registering a path again changes nothing.
 func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, references []string) (ArtifactRegistration, error) {
 	rec, err := s.GetRecord(ctx, id)
 	if err != nil {
@@ -66,7 +58,6 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 	return result, nil
 }
 
-// UnregisterArtifact forgets one registered path, after the user deleted it.
 func (s *Service) UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error {
 	return s.store.RemoveSessionArtifact(ctx, id, path)
 }

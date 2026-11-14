@@ -46,7 +46,7 @@ func TestPersistentClaudeACPHibernateAndNativeResume(t *testing.T) {
 	if !first.Capabilities()[ports.ChatCapabilityResume] {
 		t.Fatal("Claude ACP did not advertise native resume")
 	}
-	_ = nextEvent(t, first.Events()) // ready
+	_ = nextEvent(t, first.Events())
 	providerID := first.ProviderConversationID()
 	firstPID := completedProviderPID(t, first)
 	if err := first.(ports.ChatProviderHibernator).Hibernate(); err != nil {
@@ -75,7 +75,7 @@ func TestPersistentClaudeACPHibernateAndNativeResume(t *testing.T) {
 	if second.ProviderConversationID() != providerID || second.(ports.ChatLiveReconnector).ReconnectedLive() {
 		t.Fatal("Claude ACP did not native-resume the same session in a replacement process")
 	}
-	_ = nextEvent(t, second.Events()) // ready
+	_ = nextEvent(t, second.Events())
 	if secondPID := completedProviderPID(t, second); secondPID == firstPID {
 		t.Fatalf("Claude ACP bridge process did not change: %d", secondPID)
 	}
@@ -148,8 +148,6 @@ func TestPersistentACPFailedPromptAcknowledgementAllowsNextTurn(t *testing.T) {
 				}
 				completed = true
 			case ports.ChatEventControllerState:
-				// TurnCompleted is emitted before the driver releases activeTurn.
-				// ControllerReady is the barrier after which the next turn is valid.
 				ready = completed && event.ControllerState == ports.ChatControllerReady
 			}
 		}

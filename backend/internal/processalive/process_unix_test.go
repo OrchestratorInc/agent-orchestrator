@@ -38,7 +38,6 @@ func TestExitedOnlyOnceTheProcessIsReaped(t *testing.T) {
 	for !isZombie(pid) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	// A zombie still exists for signal 0, as for Node's process.kill(pid, 0).
 	if Exited(pid) {
 		t.Fatal("Exited returned true for a zombie")
 	}

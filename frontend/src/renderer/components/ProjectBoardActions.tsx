@@ -27,8 +27,6 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	const actionLabel = orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestrator");
 	const busyLabel = isProjectRestarting ? t("shell.restartingDots") : isProvisioning
 		? t("shell.provisioningDots", { defaultValue: "Setting up…" }) : isSpawning ? t("shell.spawningDots") : undefined;
-	// The header shows Orchestrator quiet, labeled, first. The empty board's
-	// body keeps it as the call to action.
 	const orchestratorVariant = header || quiet ? "quiet" : "primary";
 	const orchestratorButton = (
 		<Tooltip>
@@ -69,7 +67,6 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 							if (header) captureTopbarAction("new_task", "board");
 							openNewTask();
 						}}
-						// The header's one filled action is New task.
 						variant={header ? "primary" : quiet || cloud ? "quiet" : "secondary"}
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />

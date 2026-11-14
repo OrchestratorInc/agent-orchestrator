@@ -12,10 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// idleCoordinatorStub stands in for Session Manager. Stopping a session puts
-// it to sleep, so the installer no longer sees it as live. With terminals set
-// it stops them the way Session Manager stops a terminal: the agent exits,
-// unhibernated.
 type idleCoordinatorStub struct {
 	mu        sync.Mutex
 	sessions  *[]domain.SessionRecord
@@ -25,7 +21,6 @@ type idleCoordinatorStub struct {
 	stopErr   error
 	resumeErr error
 	terminals bool
-	// unstopped is left running and not reported as stopped.
 	unstopped domain.SessionID
 }
 
@@ -76,8 +71,6 @@ func (l mutableSessionLister) ListAllSessions(context.Context) ([]domain.Session
 	return append([]domain.SessionRecord(nil), *l.sessions...), nil
 }
 
-// windowsIdleService is a Windows service with update-when-idle on, one live
-// Auggie session, and an npm update that succeeds unless failUpdate is set.
 func windowsIdleService(t *testing.T, failUpdate bool) (*Service, *idleCoordinatorStub, *[]ports.InstallCommand) {
 	t.Helper()
 	s := newTestService("windows", "npm")
@@ -126,17 +119,14 @@ func waitForJob(t *testing.T, s *Service, target Target, done func(Job) bool) Jo
 func TestWindowsUpdateWaitsForIdleSessions(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	coordinator.busy = []domain.SessionWait{{SessionID: "auggie-1", Reason: domain.SessionWaitCommand}}
-	// No confirmation: the update just waits for the sessions.
 	job, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "")
 	if err != nil || job.Status != StatusWaitingForIdle {
 		t.Fatalf("update = %+v, %v; want waiting_for_idle", job, err)
 	}
-	// While a session runs a command, nothing is stopped and npm never runs.
 	waiting := waitForJob(t, s, TargetAuggie, func(job Job) bool { return len(job.WaitingOn) == 1 })
 	if waiting.WaitingOn[0].Reason != domain.SessionWaitCommand || coordinator.stops != 0 || len(*ran) != 0 {
 		t.Fatalf("waiting job = %+v, stops=%d ran=%v", waiting, coordinator.stops, *ran)
 	}
-	// New sessions may start while the update waits.
 	if release, ok := s.TryBeginHarnessUse(domain.AgentHarness(TargetAuggie)); !ok {
 		t.Fatal("a launch was refused while the update only waited")
 	} else {
@@ -199,7 +189,6 @@ func TestCancelledIdleUpdateLeavesSessionsUntouched(t *testing.T) {
 
 func TestIdleUpdateNeverRunsNPMWhileASessionStillRuns(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
-	// Stopping fails, so a session keeps running.
 	coordinator.stopErr = errors.New("chat has work in progress")
 	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
@@ -218,8 +207,6 @@ func TestIdleUpdateNeverRunsNPMWhileASessionStillRuns(t *testing.T) {
 	s.workers.Wait()
 }
 
-// A stopped terminal is never hibernated: its agent exits. The update must
-// still run instead of resuming the old release and trying again every poll.
 func TestIdleUpdateRunsAfterStoppingTerminalSessions(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	coordinator.terminals = true
@@ -237,7 +224,6 @@ func TestIdleUpdateRunsAfterStoppingTerminalSessions(t *testing.T) {
 	}
 }
 
-// A live session the coordinator did not stop still keeps the installer out.
 func TestIdleUpdateNeverRunsBesideASessionThatWasNotStopped(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	coordinator.terminals = true
@@ -283,7 +269,6 @@ func TestLaunchWaitsForAHarnessChangeInsteadOfFailing(t *testing.T) {
 	}
 }
 
-// eventRecorder keeps the telemetry events a test emitted.
 type eventRecorder struct {
 	mu     sync.Mutex
 	events []ports.TelemetryEvent
@@ -337,9 +322,6 @@ func TestUpdatesThatCannotRunBesideSessionsWaitForIdleOnEveryPlatform(t *testing
 	}
 }
 
-// Regression: StartAgentOperation recorded the level under s.mu, and
-// effectiveUpdateLevel locks s.mu to check the coordinator, so an update with
-// update-when-idle on and no live session hung the daemon.
 func TestUpdateWhenIdleWithoutSessionsDoesNotDeadlock(t *testing.T) {
 	for _, goos := range []string{"darwin", "windows"} {
 		s, coordinator, ran := windowsIdleService(t, false)

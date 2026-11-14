@@ -13,10 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// planRecorder explains every single-row query before running it. A test can
-// then assert on the plan of the statement sqlc compiled in, instead of on a
-// hand-copied duplicate of its text that keeps passing after the real query
-// drifts.
 type planRecorder struct {
 	gen.DBTX
 	t     *testing.T
@@ -51,11 +47,6 @@ func (r *planRecorder) explain(ctx context.Context, query string, args []any) []
 	return details
 }
 
-// Break caught: SelectVerifiedAuthenticationTurn runs inside the projection
-// transaction of every completed turn, and its EXISTS found the turn.completed
-// event by walking every archive row of the branch through
-// idx_conversation_provider_events_branch and reading each row to test method.
-// On a long conversation that scan held the single writer for seconds.
 func TestVerifiedAuthenticationTurnLookupSearchesOnlyTurnCompletedArchiveRows(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -78,8 +69,6 @@ func TestVerifiedAuthenticationTurnLookupSearchesOnlyTurnCompletedArchiveRows(t 
 	if err := s.AdoptProviderTurn(ctx, conversation.ID, session.ID, "gen-1", "turn", "provider-turn", startAt); err != nil {
 		t.Fatal(err)
 	}
-	// A streamed delta sits in the archive next to the completion, as it does in
-	// every real turn; the lookup has to find the completion among them.
 	if _, err := s.ProjectProviderEvent(ctx, conversation.ID, session.ID, "gen-1", "delta", "reasoning.delta", `{"providerTurnId":"provider-turn"}`, startAt, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}

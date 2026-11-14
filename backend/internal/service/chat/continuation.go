@@ -15,14 +15,8 @@ import (
 const continuationTextBudget = 8 * 1024
 const continuationContextMarker = "Interrupted task context (JSON):\n"
 
-// ErrContinuationUnavailable refuses a stale Continue intent without starting
-// a context-free turn. The user can give a new instruction instead.
 var ErrContinuationUnavailable = errors.New("the interrupted task is no longer available to continue; send a new instruction")
 
-// prepareContinuation runs under sendMu, before persisting the provider request.
-// The intake hash and visible text remain the client's original payload.
-// Persisting internal content makes queue recovery and retries send the same context rather
-// than reconstructing it from a conversation that may have changed meanwhile.
 func (c *Controller) prepareContinuation(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
 	return prepareContinuation(ctx, c.store, c.continuationReader, c.conversation.ID, msg)
 }
@@ -37,16 +31,12 @@ func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader
 			return msg, fmt.Errorf("read continuation delivery: %w", err)
 		}
 		if found {
-			// AppendUserMessage performs the fingerprint/conflict check. A duplicate
-			// must not depend on whether the task is still the latest stopped turn.
 			return msg, nil
 		}
 	}
 	if reader == nil {
 		return msg, fmt.Errorf("prepare continuation: history reader is unavailable")
 	}
-	// Continue only runs while the agent is idle, so one full read is acceptable
-	// and guarantees the stopped turn's request is present.
 	rows, err := reader.LoadConversationSnapshot(ctx, conversationID)
 	if err != nil {
 		return msg, fmt.Errorf("read interrupted conversation: %w", err)
@@ -59,8 +49,6 @@ func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader
 	return msg, nil
 }
 
-// ContinuableTurnID selects the latest dispatched, non-withdrawn turn. The
-// durable StartedAt survives provider-scope changes; queued Stop sweeps do not.
 func ContinuableTurnID(turns []domain.ConversationTurn) string {
 	for i := len(turns) - 1; i >= 0; i-- {
 		turn := turns[i]
@@ -75,16 +63,11 @@ func ContinuableTurnID(turns []domain.ConversationTurn) string {
 	return ""
 }
 
-// continuationRelevantTurn excludes withdrawn work and queued messages swept
-// to interrupted by Stop before they reached the provider.
 func continuationRelevantTurn(turn domain.ConversationTurn) bool {
 	return turn.RolledBackAt == nil && turn.State != domain.TurnStateCancelled &&
 		(turn.State != domain.TurnStateInterrupted || turn.StartedAt != nil || turn.ProviderTurnID != "")
 }
 
-// stoppedContinuationContext consumes the active-lineage snapshot, never another
-// session's history. It supplies a task reminder, not a replacement transcript or
-// an execution checkpoint. Reasoning and tool outputs are deliberately omitted.
 func stoppedContinuationContext(rows ConversationRows) string {
 	stoppedID := ContinuableTurnID(rows.Turns)
 	if stoppedID == "" {
@@ -106,9 +89,6 @@ func stoppedContinuationContext(rows ConversationRows) string {
 		}
 	}
 	if cutoff == 0 {
-		// The provider started this turn itself (for example a Codex thread-goal
-		// continuation), so it has no user message. Its task is the latest real
-		// request in the visible history.
 		for _, message := range rows.Messages {
 			if _, visible := turns[message.TurnID]; visible && message.Sequence > cutoff {
 				cutoff = message.Sequence

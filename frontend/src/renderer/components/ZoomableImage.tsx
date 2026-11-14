@@ -1,13 +1,6 @@
 import { useEffect, useRef, type ImgHTMLAttributes } from "react";
 import type { ArtifactZoomController } from "../lib/artifact-zoom";
 
-/**
- * An image fit to its box that the artifact zoom scales with a transform:
- * a pinch zooms around the cursor, and once zoomed a two-finger scroll or a
- * drag pans it. Pan is clamped to the image as fitted (object-contain leaves
- * letterbox space), so its edges never pass the viewer's, and an axis where
- * the zoomed image still fits stays centered.
- */
 export function ZoomableImage({ controller, ...props }: ImgHTMLAttributes<HTMLImageElement> & { controller: ArtifactZoomController }) {
 	const boxRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
@@ -19,9 +12,7 @@ export function ZoomableImage({ controller, ...props }: ImgHTMLAttributes<HTMLIm
 		let zoom = controller.getZoom();
 		let x = 0;
 		let y = 0;
-		// How far the image's center may move from the box's center on each axis.
 		const room = () => {
-			// The image's drawn size is its natural size fitted into the box, until it has loaded.
 			const width = box.clientWidth;
 			const height = box.clientHeight;
 			const fit = image.naturalWidth && image.naturalHeight ? Math.min(width / image.naturalWidth, height / image.naturalHeight) : 0;
@@ -47,7 +38,6 @@ export function ZoomableImage({ controller, ...props }: ImgHTMLAttributes<HTMLIm
 			if (next === zoom) return;
 			const anchor = controller.takeAnchor();
 			const rect = box.getBoundingClientRect();
-			// The anchor relative to the box's center keeps the point under it in place.
 			const px = anchor ? anchor.clientX - rect.left - rect.width / 2 : 0;
 			const py = anchor ? anchor.clientY - rect.top - rect.height / 2 : 0;
 			const ratio = next / zoom;
@@ -58,7 +48,6 @@ export function ZoomableImage({ controller, ...props }: ImgHTMLAttributes<HTMLIm
 			paint();
 		};
 		const onWheel = (event: WheelEvent) => {
-			// A pinch (ctrlKey) is the viewer's; a plain scroll pans a zoomed image.
 			if (event.ctrlKey || !pannable()) return;
 			event.preventDefault();
 			x -= event.deltaX;
@@ -90,8 +79,6 @@ export function ZoomableImage({ controller, ...props }: ImgHTMLAttributes<HTMLIm
 		const refit = () => { clamp(); paint(); };
 		const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(refit);
 		resize?.observe(box);
-		// A remount (a rewritten file or a fresh cloud link keys a new image)
-		// keeps the viewer's zoom, so the new image starts painted at it.
 		refit();
 		const unsubscribe = controller.subscribe(onZoom);
 		image.addEventListener("load", refit);

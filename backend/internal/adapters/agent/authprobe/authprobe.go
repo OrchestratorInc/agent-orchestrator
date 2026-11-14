@@ -14,26 +14,14 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// CmdRunner runs the command and returns the combined stdout/stderr.
-// It is exposed as a package variable to allow mocking in tests. The child
-// gets PATH augmented as session launches do, so an npm launcher resolved
-// outside the daemon PATH can still find node.
 var CmdRunner = func(ctx context.Context, name string, arg ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, name, arg...)
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
 	return cmd.CombinedOutput()
 }
 
-// Classifier reads one probe's raw output. The bool reports whether it
-// recognized the shape at all; false defers to the shared prose classifier.
 type Classifier func(out []byte) (ports.AgentAuthStatus, bool)
 
-// CLIStatusWithDiagnostics runs bounded local CLI probes in order and returns
-// the first definite verdict with each probe's outcome, never its stdout or
-// stderr. Callers pass adapter-owned status commands with no credentials in
-// their arguments; catalog refresh must not run a generic sequence of
-// auth-like commands against every installed binary. A classifier, when
-// given, reads each output before the shared prose classifier.
 func CLIStatusWithDiagnostics(ctx context.Context, binary string, commands [][]string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, []domain.AgentAuthDiagnostic, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, nil, err
@@ -80,8 +68,6 @@ func commandStatus(ctx context.Context, binary string, args []string, timeout ti
 	return status, step, nil
 }
 
-// CommandStep is the CommandDiagnostic for binary run with args: it is
-// labelled by the command's base name and sourced from the binary's path.
 func CommandStep(binary string, args []string, status ports.AgentAuthStatus, err, contextErr error, started time.Time) domain.AgentAuthDiagnostic {
 	step := CommandDiagnostic(strings.Join(append([]string{filepath.Base(binary)}, args...), " "), status, err, contextErr, started)
 	if source := FileSource(binary).Sanitized(); source != nil {
@@ -90,7 +76,6 @@ func CommandStep(binary string, args []string, status ports.AgentAuthStatus, err
 	return step
 }
 
-// CommandDiagnostic classifies execution facts; it never copies err.Error().
 func CommandDiagnostic(method string, status ports.AgentAuthStatus, err, contextErr error, started time.Time) domain.AgentAuthDiagnostic {
 	code := "output_unrecognized"
 	switch {
@@ -118,7 +103,6 @@ func CommandDiagnostic(method string, status ports.AgentAuthStatus, err, context
 	return step
 }
 
-// StatusFromText classifies common CLI auth/status output.
 func StatusFromText(out string) ports.AgentAuthStatus {
 	text := strings.ToLower(out)
 	compactText := compact(text)
@@ -139,9 +123,6 @@ func StatusFromText(out string) ports.AgentAuthStatus {
 		`"loggedin": false`,
 		`"loggedin":false`,
 	) || hasAny(compactText,
-		// A null account is a CLI saying "nobody is signed in" in JSON rather
-		// than prose. Kiro's `whoami --format json` answers exactly this when
-		// signed out, and matched none of the phrases above.
 		`"account":null`,
 		`'account':null`,
 		"account:null",

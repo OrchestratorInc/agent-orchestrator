@@ -52,31 +52,23 @@ type mergeStateWriter interface {
 	MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error
 }
 
-// StateWriter records a provider-confirmed PR state change locally.
 type StateWriter interface {
 	MarkPRState(ctx context.Context, prURL string, state domain.PRState, changedAt time.Time) error
 }
 
-// CommentWriter records a just-posted comment locally so the PR summary shows
-// it before the next SCM observation reconciles it.
 type CommentWriter interface {
 	UpsertPRReviewComment(ctx context.Context, prURL string, comment domain.PullRequestComment) error
 	AppendPRConversationComment(ctx context.Context, prURL string, comment domain.PullRequestConversationComment) (bool, error)
 }
 
-// ReviewRefresher asks the SCM observer to re-fetch one PR's metadata and
-// review threads now without waiting for its regular cadence.
 type ReviewRefresher interface {
 	RequestReviewRefresh(prURL string)
 }
 
-// mergedViaWriter records which client asked AO to merge, for the worker PR
-// merge measurement (ao.usage.worker_pr_merged). Optional on the merge writer.
 type mergedViaWriter interface {
 	RecordWorkerPRMergedVia(ctx context.Context, prURL, mergedVia string) error
 }
 
-// ActionDeps contains the storage and SCM boundaries used by ActionService.
 type ActionDeps struct {
 	Store        actionStore
 	ResolveStore resolveStore
@@ -88,8 +80,6 @@ type ActionDeps struct {
 	Lifecycle    actionLifecycle
 	Clock        func() time.Time
 	Logger       *slog.Logger
-	// ThreadWriter updates one resolved thread and its comments without
-	// replacing a potentially newer SCM observation.
 	ThreadWriter interface {
 		MarkPRReviewThreadResolved(context.Context, string, string) error
 	}
@@ -99,16 +89,11 @@ type ActionDeps struct {
 	CommentWriter CommentWriter
 	Refresher     ReviewRefresher
 	Attachments   ports.SCMAttachmentStore
-	// Stacker is nil where no provider supports stacks.
-	Stacker ports.SCMStacker
-	// Details stores details read on demand; when nil, Store is used if it can.
-	Details detailsStore
-	// HeadChecks confirms that nothing checks a PR's head, for a merge that
-	// asks to treat no checks as passing. Nil means it's never confirmed.
-	HeadChecks ports.SCMHeadChecksReader
+	Stacker       ports.SCMStacker
+	Details       detailsStore
+	HeadChecks    ports.SCMHeadChecksReader
 }
 
-// ActionService validates current pull request state before applying mutations.
 type ActionService struct {
 	store        actionStore
 	resolve      resolveStore
@@ -135,7 +120,6 @@ type ActionService struct {
 
 var _ ActionManager = (*ActionService)(nil)
 
-// NewActionService builds the guarded pull request action service.
 func NewActionService(deps ActionDeps) *ActionService {
 	resolve := deps.ResolveStore
 	if resolve == nil {
@@ -182,9 +166,6 @@ func NewActionService(deps ActionDeps) *ActionService {
 	}
 }
 
-// Merge re-fetches authoritative SCM state and then merges (squash by default,
-// or the requested merge/rebase method) only the exact head the user saw. The
-// provider repeats the SHA guard atomically.
 func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeResult, error) {
 	prNumber, err := parsePRNumber(request.PRID)
 	if err != nil || strings.TrimSpace(request.PRURL) == "" {
@@ -267,16 +248,7 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	}, nil
 }
 
-// recordMerge brings AO up to date with a merge the provider confirmed, from
-// fresh, the observation read just before merging. A merged row is terminal and
-// the observer stops polling it, so this is lifecycle's one look at the merge.
-// The provider has already committed the irreversible remote mutation, so a
-// failure here only logs: callers still report the merge so it isn't retried,
-// and a row that failed to persist stays open for the observer to reconcile.
 func (s *ActionService) recordMerge(ctx context.Context, tracked domain.PullRequest, fresh ports.SCMObservation, mergeCommitSHA string, mergedAt time.Time) {
-	// Recorded before the merged row, so the usage flush can never see this
-	// merge without its client; a failed local write leaves the observer to
-	// record the merge later, still attributed correctly.
 	if via, ok := s.mergeWriter.(mergedViaWriter); ok {
 		if err := via.RecordWorkerPRMergedVia(ctx, tracked.URL, deliverytelemetry.MergedViaSurface(telemetrymeta.SurfaceFromContext(ctx))); err != nil {
 			s.logger.Warn("pr merge telemetry: record merged_via", "pr", tracked.URL, "err", err)
@@ -324,10 +296,6 @@ func (s *ActionService) fetchMergeReadiness(ctx context.Context, ref ports.SCMPR
 	return observations[0], review, nil
 }
 
-// readyToMerge is the merge guard on a fresh observation. noChecks says the
-// head is confirmed to have nothing checking it (see noChecksSettled), so its
-// unknown CI has nothing to wait for; the provider's mergeability still
-// enforces any checks a branch requires.
 func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation, noChecks bool) bool {
 	if o.PR.HeadSHA == "" || o.CI.HeadSHA != o.PR.HeadSHA || review.Partial {
 		return false
@@ -347,23 +315,12 @@ func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation, noC
 	}.ReadyToMerge()
 }
 
-// hasNoChecks says the head's status rollup is empty: CI reads as unknown with
-// no checks listed. A cancelled run still lists its checks, so it never counts.
-// An empty rollup is also what a commit pushed seconds ago looks like before
-// its checks register, so it alone never lets a PR merge: see noChecksSettled.
 func hasNoChecks(ci ports.SCMCIObservation) bool {
 	return ci.Summary == string(domain.CIUnknown) && len(ci.Checks) == 0 && len(ci.FailedChecks) == 0
 }
 
-// noChecksSettle is how long a head's checks get to start before an empty
-// rollup is taken to mean nothing checks it. Actions and other check apps
-// register within seconds of a push.
 const noChecksSettle = 2 * time.Minute
 
-// noChecksSettled confirms with the provider that nothing checks o's head: its
-// rollup is empty, no check suite has started and no status was posted, for at
-// least noChecksSettle since checks could first have started. Without that, a
-// merge right after a push would land a commit whose CI hadn't begun.
 func (s *ActionService) noChecksSettled(ctx context.Context, repo ports.SCMRepo, o ports.SCMObservation) bool {
 	if s.headChecks == nil || !hasNoChecks(o.CI) || o.PR.HeadSHA == "" {
 		return false
@@ -423,13 +380,6 @@ func scmRepoForPR(pr domain.PullRequest) (ports.SCMRepo, bool) {
 	}, true
 }
 
-// ResolveComments resolves provider review threads first and then marks each
-// successful mutation locally. Empty commentIDs resolves every unresolved
-// thread returned by the provider. Supplied IDs may be either provider thread
-// IDs or comment IDs; comment IDs are mapped to their owning thread before the
-// mutation. Resolve-all requires a complete provider listing; an explicit ID
-// may still be used when it is present in a partial listing, while unknown IDs
-// are rejected because the response cannot prove their membership.
 func (s *ActionService) ResolveComments(ctx context.Context, prID string, commentIDs []string) (ResolveResult, error) {
 	if s.resolve == nil || s.reader == nil || s.resolver == nil || s.threadWriter == nil {
 		return ResolveResult{}, errors.New("pr: resolve-comments action is not configured")
@@ -445,8 +395,6 @@ func (s *ActionService) ResolveComments(ctx context.Context, prID string, commen
 	}
 	ref := ports.SCMPRRef{Repo: repo, Number: pr.Number, URL: pr.URL}
 
-	// Refresh the provider view before mutating anything. This both supplies the
-	// resolve-all set and confirms that the tracked number still exists remotely.
 	review, err := s.reader.FetchReviewThreads(ctx, ref)
 	if err != nil {
 		if errors.Is(err, ports.ErrSCMNotFound) {
@@ -533,8 +481,6 @@ func normalizeThreadIDs(ids []string) []string {
 	return out
 }
 
-// requestedThreadIDs validates explicit IDs against the provider observation
-// and maps documented comment IDs to their owning thread IDs.
 func requestedThreadIDs(review ports.SCMReviewObservation, commentIDs []string) ([]string, error) {
 	if len(commentIDs) == 0 {
 		return nil, nil
@@ -577,14 +523,8 @@ func mapResolveError(err error) error {
 	return fmt.Errorf("resolve review thread: %w", err)
 }
 
-// maxCommentBodyBytes mirrors GitHub's 65,536-character comment limit as a
-// byte bound so oversized bodies fail fast with a 400 instead of a provider 422.
 const maxCommentBodyBytes = 65536
 
-// ChangeState closes, reopens, marks ready, or converts to draft a tracked PR.
-// The transition is checked against AO's stored state first; the provider is
-// the final authority. On success the stored state is updated immediately and
-// lifecycle receives a fresh observation, as Merge does.
 func (s *ActionService) ChangeState(ctx context.Context, request StateRequest) (StateResult, error) {
 	prNumber, err := parsePRNumber(request.PRID)
 	if err != nil || strings.TrimSpace(request.PRURL) == "" {
@@ -625,8 +565,6 @@ func (s *ActionService) ChangeState(ctx context.Context, request StateRequest) (
 	persisted := false
 	if s.stateWriter != nil {
 		if err := s.stateWriter.MarkPRState(ctx, tracked.URL, target, changedAt); err != nil {
-			// The provider already applied the change; report its success and let
-			// the observer reconcile the durable row.
 			s.logger.Error("pr state change succeeded but local state persistence failed", "pr", tracked.URL, "state", target, "err", err)
 		} else {
 			persisted = true
@@ -638,9 +576,6 @@ func (s *ActionService) ChangeState(ctx context.Context, request StateRequest) (
 	return StateResult{PRNumber: tracked.Number, State: target, StateChangedAt: changedAt}, nil
 }
 
-// notifyStateChange hands lifecycle a fresh observation of the new state. A
-// closed PR is not polled again, so this is the only time lifecycle sees the
-// close; failures are logged because the provider mutation already happened.
 func (s *ActionService) notifyStateChange(ctx context.Context, tracked domain.PullRequest, ref ports.SCMPRRef, target domain.PRState, changedAt time.Time) {
 	if s.lifecycle == nil || s.reader == nil {
 		return
@@ -651,17 +586,11 @@ func (s *ActionService) notifyStateChange(ctx context.Context, tracked domain.Pu
 		return
 	}
 	fresh := observations[0]
-	// This read has no CI log tails (the observer fetches those). Without the
-	// stored ones, an unchanged failure would look new to the CI nudge's dedup
-	// and the agent would be told again about a failure it already has.
 	if fresh.CI.Summary == string(domain.CIFailing) && s.resolve != nil {
 		if checks, err := s.resolve.ListChecks(ctx, tracked.URL); err == nil {
 			fresh.CI.ApplyStoredLogTails(checks)
 		}
 	}
-	// The provider may answer the read before the mutation is visible; the
-	// mutation's confirmed result is authoritative for the state fields.
-	// Closing leaves a draft a draft; the other actions decide it.
 	if target == domain.PRStateClosed {
 		fresh.PR.Draft = tracked.Draft
 	} else {
@@ -676,8 +605,6 @@ func (s *ActionService) notifyStateChange(ctx context.Context, tracked domain.Pu
 	}
 }
 
-// stateTransitionTarget validates action against the stored PR state and
-// returns the state the PR moves to.
 func stateTransitionTarget(pr domain.PullRequest, action ports.SCMPRStateAction) (domain.PRState, error) {
 	if pr.Merged {
 		return "", fmt.Errorf("%w: pull request is merged", ErrInvalidTransition)
@@ -711,8 +638,6 @@ func stateTransitionTarget(pr domain.PullRequest, action ports.SCMPRStateAction)
 	}
 }
 
-// PostComment posts a conversation comment, or a reply in one of the PR's
-// review threads, then stores it locally and asks the observer to reconcile.
 func (s *ActionService) PostComment(ctx context.Context, request CommentRequest) (CommentResult, error) {
 	prNumber, err := parsePRNumber(request.PRID)
 	if err != nil || strings.TrimSpace(request.PRURL) == "" {
@@ -747,15 +672,11 @@ func (s *ActionService) PostComment(ctx context.Context, request CommentRequest)
 	threadID := strings.TrimSpace(request.ThreadID)
 	var thread *storedThread
 	if threadID != "" {
-		// A provider thread id is global: without this check a reply could land
-		// in a thread of another PR the token can reach.
 		if thread, err = s.findThread(ctx, tracked, ref, threadID); err != nil {
 			return CommentResult{}, err
 		}
 	}
 
-	// A comment's files are stored only now that it is being posted, and
-	// removed again if the post fails, so a cancelled draft writes nothing.
 	body, attachmentsHandle := request.Body, ""
 	if len(files) > 0 {
 		if body, attachmentsHandle, err = s.storeCommentAttachments(ctx, ref, request.Body, files); err != nil {
@@ -778,9 +699,6 @@ func (s *ActionService) PostComment(ctx context.Context, request CommentRequest)
 	return CommentResult{ID: posted.ID, URL: posted.URL, CreatedAt: createdAt}, nil
 }
 
-// storedThread is a review thread confirmed to belong to the PR. Stored is
-// false when only the live provider listing knew it, so there is no local row
-// to attach an immediate reply to.
 type storedThread struct {
 	ID               string
 	Path             string
@@ -805,7 +723,6 @@ func (s *ActionService) findThread(ctx context.Context, tracked domain.PullReque
 			if err != nil {
 				return nil, fmt.Errorf("load review comments: %w", err)
 			}
-			// A reply inherits the injection decision its thread was stored with.
 			for _, c := range comments {
 				if c.ThreadID == threadID {
 					found.AutoInjectReview = c.AutoInjectReview
@@ -817,7 +734,6 @@ func (s *ActionService) findThread(ctx context.Context, tracked domain.PullReque
 	if s.reader == nil {
 		return nil, fmt.Errorf("%w: %q", ErrThreadNotFound, threadID)
 	}
-	// The thread may be newer than the last stored observation.
 	review, err := s.reader.FetchReviewThreads(ctx, ref)
 	if err != nil {
 		if errors.Is(err, ports.ErrSCMNotFound) {
@@ -883,7 +799,6 @@ func truncateUTF8(body string, limit int) string {
 	return body[:cut]
 }
 
-// mapMutationError maps provider sentinels from a PR mutation to service errors.
 func mapMutationError(op string, err error) error {
 	switch {
 	case errors.Is(err, ports.ErrSCMNotFound):

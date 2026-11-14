@@ -5,8 +5,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// workspaceRestoreContext is the native identity a restored launch continues,
-// with the imported state root when that identity is the import's.
 type workspaceRestoreContext struct {
 	nativeID, configDir string
 }

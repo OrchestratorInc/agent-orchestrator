@@ -22,7 +22,6 @@ function setStreaming(hostId: string, streaming: boolean) {
 	for (const listener of streamListeners) listener();
 }
 
-/** One stream per connected host; the existing REST query polls until a frame arrives. */
 export function connectRemoteNotificationStreams(queryClient: QueryClient): () => void {
 	const connections = new Map<string, { base: string; close: () => void }>();
 	const invalidate = (hostId: string) => {

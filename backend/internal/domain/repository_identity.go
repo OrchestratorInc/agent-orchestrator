@@ -9,18 +9,13 @@ import (
 	"strings"
 )
 
-// RepositoryIdentity identifies a provider repository, including its entire namespace.
-// Git transport remotes never implicitly authorize additional repositories.
 type RepositoryIdentity struct {
-	Provider string
-	// Host includes an explicit port, matching the SCM provider authority.
+	Provider  string
 	Host      string
 	Namespace string
 	Name      string
 }
 
-// RepositoryProvider follows the SCM dispatcher: recognized GitHub hosts use
-// GitHub; other hosts use GitLab, including self-managed installations.
 func RepositoryProvider(host string) string {
 	if hostname, _, err := net.SplitHostPort(host); err == nil {
 		host = hostname
@@ -32,7 +27,6 @@ func RepositoryProvider(host string) string {
 	return "gitlab"
 }
 
-// ParseRepositoryIdentity accepts repository URLs and Git SSH remotes, never PR URLs.
 func ParseRepositoryIdentity(raw string) (RepositoryIdentity, error) {
 	invalid := errors.New("expected a repository URL with host and full namespace/repository")
 	if raw == "" || strings.TrimSpace(raw) != raw {
@@ -78,8 +72,6 @@ func ParseRepositoryIdentity(raw string) (RepositoryIdentity, error) {
 	return RepositoryIdentity{Provider: provider, Host: strings.ToLower(u.Host), Namespace: strings.Join(parts[:len(parts)-1], "/"), Name: parts[len(parts)-1]}, nil
 }
 
-// ValidateCanonicalRepository keeps an explicitly selected upstream on the
-// checkout's provider and host. Empty canonical identity preserves origin-only claims.
 func (c ProjectConfig) ValidateCanonicalRepository(origin string) error {
 	if c.CanonicalRepoURL == "" {
 		return nil

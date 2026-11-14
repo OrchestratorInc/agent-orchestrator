@@ -185,8 +185,6 @@ run: |
     const contents = await readFile(artifactBuilder, "utf8");
 
     expect(contents).toContain("VITE_AO_TEAMS: ${{ vars.VITE_AO_TEAMS }}");
-    // Never forced on in the workflow itself: stable gets Teams only when
-    // someone sets the variable.
     expect(contents).not.toMatch(/VITE_AO_TEAMS:\s*["']?on\b/);
   });
 });

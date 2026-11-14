@@ -2,8 +2,6 @@ package cli
 
 import "testing"
 
-// TestAPIErrorString covers how the CLI renders the daemon's error envelope,
-// including the requestId it now surfaces for log correlation.
 func TestAPIErrorString(t *testing.T) {
 	cases := []struct {
 		name string

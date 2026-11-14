@@ -16,7 +16,6 @@ func TestWorkspacePRDiscoveryAndClaimPersist(t *testing.T) {
 	if err := f.store.UpsertWorkspaceProject(ctx, project, []domain.WorkspaceRepoRecord{{Name: "hello", RelativePath: "hello", RepoOriginURL: scmTestOriginURL, RegisteredAt: f.now}}); err != nil {
 		t.Fatal(err)
 	}
-	// A repository registered to another workspace must not authorize a claim.
 	if err := f.store.UpsertWorkspaceProject(ctx, domain.ProjectRecord{ID: "other", Kind: domain.ProjectKindWorkspace, Path: t.TempDir(), RegisteredAt: f.now}, []domain.WorkspaceRepoRecord{{Name: "hello", RelativePath: "hello", RepoOriginURL: "https://github.com/other/hello", RegisteredAt: f.now}}); err != nil {
 		t.Fatal(err)
 	}

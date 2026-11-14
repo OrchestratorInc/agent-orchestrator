@@ -49,7 +49,6 @@ const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 		name: "services", displayName: "Services", type: "list(string)", mutable: true, required: false, defaultValue: "[\"db\"]", order: 5,
 		options: [{ name: "Database", value: "db" }, { name: "Cache", value: "cache" }],
 	},
-	// AO sets size and startup_script itself, so they never show here.
 	{ name: "size", type: "string", mutable: true, required: false, defaultValue: "medium" },
 ];
 
@@ -91,7 +90,6 @@ describe("CoderTemplateOptions", () => {
 		await appI18n.changeLanguage("en");
 		mocks.hasCoder = true;
 		mocks.getCoderTemplateParameters.mockReset();
-		// An older control plane without the evaluate route: the form reads the GET.
 		mocks.evaluateCoderTemplateParameters.mockReset().mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
 	});
 
@@ -99,18 +97,15 @@ describe("CoderTemplateOptions", () => {
 		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: PARAMETERS.slice(0, 3) });
 		renderOptions();
 		expect(await screen.findByText("Template options")).toBeInTheDocument();
-		// Set apart from the repositories AO checks out itself.
 		expect(screen.getByText("Your Coder template's own options. Orchestrator checks out this project's repositories itself.")).toBeInTheDocument();
 		expect(mocks.getCoderTemplateParameters).toHaveBeenCalledWith("org-1", "tpl-1", expect.anything());
 
 		const branch = screen.getByRole("textbox", { name: "Base branch" });
 		expect(branch).toHaveValue("main");
 		expect(screen.getByText("Checked out on boot.")).toBeInTheDocument();
-		// Required parameters carry a marker.
 		expect(screen.getByRole("spinbutton", { name: /CPUs/ })).toHaveValue(4);
 		expect(screen.getByText("Required")).toBeInTheDocument();
 		expect(screen.getByRole("switch", { name: "Docker" })).not.toBeChecked();
-		// Ordered by the template's `order`.
 		const labels = Array.from(document.querySelectorAll("label")).map((node) => node.textContent?.replace(" *Required", ""));
 		expect(labels).toEqual(["CPUs", "Base branch", "Docker"]);
 		expect(screen.queryByText("size")).not.toBeInTheDocument();
@@ -124,8 +119,6 @@ describe("CoderTemplateOptions", () => {
 		const marked = Array.from(document.querySelectorAll("label"))
 			.filter((node) => node.textContent?.endsWith(" *Required"))
 			.map((node) => node.textContent?.replace(" *Required", ""));
-		// CPUs is required by Coder; Region is a dropdown. A free-text field, a
-		// switch and a multi-select (which may be left empty) stay unmarked.
 		expect(marked).toEqual(["CPUs", "Region"]);
 		expect(screen.getByRole("spinbutton", { name: /CPUs/ })).toHaveAttribute("aria-required", "true");
 		expect(screen.getByRole("combobox", { name: /^Region/ })).toHaveAttribute("aria-required", "true");
@@ -144,7 +137,6 @@ describe("CoderTemplateOptions", () => {
 		await user.click(screen.getByRole("switch", { name: "Docker" }));
 		expect(onChange).toHaveBeenLastCalledWith({ branch: "dev", docker: "true" });
 
-		// Back to the default drops the key.
 		await user.clear(branch);
 		await user.type(branch, "main");
 		expect(onChange).toHaveBeenLastCalledWith({ docker: "true" });
@@ -207,13 +199,11 @@ describe("CoderTemplateOptions", () => {
 	it("says so when the options fail to load for another reason", async () => {
 		mocks.getCoderTemplateParameters.mockRejectedValue(new CloudCpError("Bad gateway", { status: 502 }));
 		renderOptions();
-		// The hook retries once before giving up.
 		expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent("Couldn't load this template's options.");
 	});
 });
 
 describe("CoderTemplateOptions with dynamic parameters", () => {
-	// Like 11x's template: other_github_repo exists only once "Other" is picked.
 	const repos: CloudCpCoderTemplateParameter = {
 		name: "github_repos", displayName: "Github Repositories", type: "list(string)", mutable: false, required: false, defaultValue: "[\"Alice\"]", order: 1,
 		options: [{ name: "Alice", value: "Alice" }, { name: "Other", value: "Other" }],
@@ -254,7 +244,6 @@ describe("CoderTemplateOptions with dynamic parameters", () => {
 	it("drops the value of a parameter that no longer applies after an edit", async () => {
 		const { onChange } = renderOptions({ github_repos: "[\"Alice\",\"Other\"]", other_github_repo: "https://github.com/acme/places" });
 		expect(await screen.findByRole("textbox", { name: "Other Github Repository" })).toHaveValue("https://github.com/acme/places");
-		// Opening the form never prunes a saved value.
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("checkbox", { name: "Other" }));
 		await waitFor(() => expect(onChange).toHaveBeenLastCalledWith({}), { timeout: 3000 });
@@ -277,7 +266,6 @@ describe("CoderTemplateOptions with dynamic parameters", () => {
 		expect(field).toHaveAttribute("maxLength", "4096");
 		await userEvent.type(field, "much-too-long");
 		expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent("Change the last value you edited");
-		// The value can still be fixed.
 		await userEvent.clear(screen.getByRole("textbox", { name: "Region" }));
 		await userEvent.type(screen.getByRole("textbox", { name: "Region" }), "us");
 		await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument(), { timeout: 4000 });
@@ -291,7 +279,6 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 	};
 	const projectRepos = ["https://github.com/11x-ai/alice", "https://github.com/11x-ai/carol"];
 	const warning = /Your template also clones .*\. Untick to keep one copy\./;
-	// The visible warning, not its live announcement.
 	const shown = { ignore: "script, style, [role=status]" };
 
 	beforeEach(async () => {
@@ -307,8 +294,6 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		const { onChange } = renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
 		const notice = await screen.findByText("Your template also clones Alice. Untick to keep one copy.", shown);
-		// A heads-up, not an error: nothing blocks saving, and it reads as muted
-		// helper text behind a warning icon rather than in the error color.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(notice.parentElement).toHaveClass("text-muted-foreground");
 		expect(notice.parentElement).not.toHaveClass("text-warning");
@@ -322,7 +307,6 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.workerWorkingFolder = true;
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
-		// This one means the session will fail to start, so it keeps the warning color.
 		expect((await screen.findByText("Your template also clones Alice into the working folder, so Orchestrator cannot start there. Untick it.", shown)).parentElement).toHaveClass("text-warning");
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
@@ -380,14 +364,12 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		const user = userEvent.setup();
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
 		const header = await screen.findByRole("button", { name: "Template options (5)" });
-		// Not opened for it: the warning sits under the header instead.
 		expect(header).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByRole("group", { name: "Github Repositories" })).not.toBeInTheDocument();
 		expect(screen.getAllByText(warning, shown)).toHaveLength(1);
 		await user.click(header);
 		const group = screen.getByRole("group", { name: "Github Repositories" });
 		expect(screen.getAllByText(warning, shown)).toHaveLength(1);
-		// Now under the field, right after its checkboxes.
 		expect(group.nextElementSibling).toHaveTextContent(warning);
 	});
 

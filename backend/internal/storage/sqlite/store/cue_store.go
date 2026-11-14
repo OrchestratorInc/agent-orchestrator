@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// InsertCue persists a user-managed cue. A duplicate (project_id, name) pair
-// reports domain.ErrCueNameExists.
 func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -46,8 +44,6 @@ func (s *Store) InsertCue(ctx context.Context, cue domain.Cue) error {
 	return tx.Commit()
 }
 
-// SelectCueByID looks up one cue, reporting whether it existed so the caller
-// can answer 404 for an unknown cue id.
 func (s *Store) SelectCueByID(ctx context.Context, cueID domain.CueID) (domain.Cue, bool, error) {
 	row, err := s.qr.SelectCueByID(ctx, cueID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -59,7 +55,6 @@ func (s *Store) SelectCueByID(ctx context.Context, cueID domain.CueID) (domain.C
 	return cueFromGen(row), true, nil
 }
 
-// SelectCuesByProject returns one project's cues in name order.
 func (s *Store) SelectCuesByProject(ctx context.Context, projectID domain.ProjectID) ([]domain.Cue, error) {
 	rows, err := s.qr.SelectCuesByProject(ctx, projectID)
 	if err != nil {
@@ -72,9 +67,6 @@ func (s *Store) SelectCuesByProject(ctx context.Context, projectID domain.Projec
 	return out, nil
 }
 
-// UpdateCue replaces a cue's definition, reporting whether a row actually
-// existed and domain.ErrCueNameExists when a renamed cue collides with an
-// existing name in the same project.
 func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -114,8 +106,6 @@ func (s *Store) UpdateCue(ctx context.Context, cue domain.Cue) (domain.Cue, bool
 	return cueFromGen(row), true, nil
 }
 
-// DeleteCueByID forgets one cue, reporting whether a row actually existed so
-// the caller can answer 404 for an unknown cue id.
 func (s *Store) DeleteCueByID(ctx context.Context, cueID domain.CueID) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

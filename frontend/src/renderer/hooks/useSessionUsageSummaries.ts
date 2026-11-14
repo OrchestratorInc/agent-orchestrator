@@ -28,7 +28,6 @@ export function sessionUsageQueryOptions(projectId?: string, hostId?: string) {
 	};
 }
 
-// Module-level so the Map keeps its identity between renders.
 function summariesById(items: SessionUsageSummary[]) {
 	return new Map(items.map((item) => [item.sessionId, item] as const));
 }

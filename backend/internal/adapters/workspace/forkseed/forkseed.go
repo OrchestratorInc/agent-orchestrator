@@ -1,9 +1,3 @@
-// Package forkseed copies a worktree's current files, including uncommitted
-// and untracked ones, into a new worktree for a session fork.
-//
-// Capture records the files as a commit under a ref, using a temporary index
-// so the source's branch, index, and stash are never touched. Apply writes
-// that commit's files into the fork's worktree and leaves them uncommitted.
 package forkseed
 
 import (
@@ -21,14 +15,10 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// RefPrefix holds every seed ref. Leftovers here with no fork are reaped.
 const RefPrefix = "refs/ao/fork-seeds/"
 
-// ErrNotRepository means the workspace isn't in a git repository.
 var ErrNotRepository = errors.New("forkseed: not a git repository")
 
-// Capture returns the workspace's HEAD and, when ref is set, records the
-// workspace's files under ref. Ignored files are left out.
 func Capture(ctx context.Context, workspace, ref string) (string, error) {
 	if _, err := run(ctx, workspace, nil, "rev-parse", "--is-inside-work-tree"); err != nil {
 		return "", ErrNotRepository
@@ -46,7 +36,6 @@ func Capture(ctx context.Context, workspace, ref string) (string, error) {
 	return head, record(ctx, workspace, head, ref)
 }
 
-// record commits the workspace's files, on top of head, under ref.
 func record(ctx context.Context, workspace, head, ref string) error {
 	tree, err := worktreeTree(ctx, workspace)
 	if err != nil {
@@ -62,8 +51,6 @@ func record(ctx context.Context, workspace, head, ref string) error {
 	return nil
 }
 
-// worktreeTree is the tree of the workspace's files as they are now, ignored
-// files left out, written without touching the real index.
 func worktreeTree(ctx context.Context, workspace string) (string, error) {
 	index, err := tempIndex(ctx, workspace)
 	if err != nil {
@@ -81,14 +68,10 @@ func worktreeTree(ctx context.Context, workspace string) (string, error) {
 	return tree, nil
 }
 
-// BasePrefix holds each fork's starting files, so cleanup can tell inherited
-// uncommitted changes from the fork's own.
 const BasePrefix = "refs/ao/fork-base/"
 
-// BaseRef names a fork's starting files.
 func BaseRef(forkSessionID string) string { return BasePrefix + forkSessionID }
 
-// RecordBase records the fork worktree's files, as it starts, under ref.
 func RecordBase(ctx context.Context, worktree, ref string) error {
 	if !strings.HasPrefix(ref, BasePrefix) {
 		return fmt.Errorf("forkseed: ref %q is outside %s", ref, BasePrefix)
@@ -100,8 +83,6 @@ func RecordBase(ctx context.Context, worktree, ref string) error {
 	return record(ctx, worktree, head, ref)
 }
 
-// UnchangedSince reports whether the worktree's files are exactly those
-// recorded under ref. A missing ref reports false.
 func UnchangedSince(ctx context.Context, worktree, ref string) (bool, error) {
 	base, err := run(ctx, worktree, nil, "rev-parse", "--verify", "--quiet", ref+"^{tree}")
 	if err != nil {
@@ -114,13 +95,6 @@ func UnchangedSince(ctx context.Context, worktree, ref string) (bool, error) {
 	return now == base, nil
 }
 
-// RestoreBase writes a fork's starting files, recorded under ref, back into
-// its worktree, uncommitted, when the worktree was recreated and lost them.
-// It does so only while the worktree is still at the commit the fork started
-// on: a fork that committed since has its own history, which the starting
-// files would undo. A worktree that already has changes, such as the fork's
-// own edits replayed by restore, is left alone. applied is false when nothing
-// was written.
 func RestoreBase(ctx context.Context, worktree, ref string) (applied bool, err error) {
 	if !strings.HasPrefix(ref, BasePrefix) {
 		return false, fmt.Errorf("forkseed: ref %q is outside %s", ref, BasePrefix)
@@ -136,8 +110,6 @@ func RestoreBase(ctx context.Context, worktree, ref string) (applied bool, err e
 	if head != start {
 		return false, nil
 	}
-	// Restore may already have put the fork's own edits back, from the copy
-	// archiving preserved; the starting files would overwrite them.
 	status, err := run(ctx, worktree, nil, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return false, fmt.Errorf("forkseed: read status: %w", err)
@@ -151,8 +123,6 @@ func RestoreBase(ctx context.Context, worktree, ref string) (applied bool, err e
 	return true, nil
 }
 
-// DiscardChanges drops the worktree's uncommitted changes and untracked
-// files, keeping ignored ones such as dependencies.
 func DiscardChanges(ctx context.Context, worktree string) error {
 	if _, err := run(ctx, worktree, nil, "reset", "-q", "--hard", "HEAD"); err != nil {
 		return fmt.Errorf("forkseed: reset: %w", err)
@@ -163,8 +133,6 @@ func DiscardChanges(ctx context.Context, worktree string) error {
 	return nil
 }
 
-// Apply writes the seed's files into worktree, which must be checked out at
-// the seed's parent. The files stay uncommitted.
 func Apply(ctx context.Context, worktree, ref string) error {
 	if _, err := run(ctx, worktree, nil, "checkout", ref, "--", "."); err != nil {
 		return fmt.Errorf("forkseed: write files: %w", err)
@@ -181,18 +149,14 @@ func Apply(ctx context.Context, worktree, ref string) error {
 			return fmt.Errorf("forkseed: delete %s: %w", name, err)
 		}
 	}
-	// Unstage, so the fork shows the same changes as uncommitted work.
 	if _, err := run(ctx, worktree, nil, "reset", "-q"); err != nil {
 		return fmt.Errorf("forkseed: unstage files: %w", err)
 	}
 	return nil
 }
 
-// ErrSnapshotMissing means no snapshot exists under the ref.
 var ErrSnapshotMissing = errors.New("forkseed: snapshot missing")
 
-// SnapshotHead is the commit a snapshot was taken on: its first parent. It
-// reads seeds and the rollback snapshots saved before each turn alike.
 func SnapshotHead(ctx context.Context, workspace, ref string) (string, error) {
 	if _, err := run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", ref); err != nil {
 		return "", ErrSnapshotMissing
@@ -204,8 +168,6 @@ func SnapshotHead(ctx context.Context, workspace, ref string) (string, error) {
 	return head, nil
 }
 
-// Delete removes the seed ref. A missing ref is not an error. Only refs the
-// fork created are deleted; a borrowed snapshot under another prefix is kept.
 func Delete(ctx context.Context, workspace, ref string) error {
 	if ref == "" {
 		return nil
@@ -222,7 +184,6 @@ func Delete(ctx context.Context, workspace, ref string) error {
 	return nil
 }
 
-// List returns every seed ref in the workspace's repository.
 func List(ctx context.Context, workspace string) ([]string, error) {
 	out, err := run(ctx, workspace, nil, "for-each-ref", "--format=%(refname)", RefPrefix)
 	if err != nil {
@@ -237,7 +198,6 @@ func List(ctx context.Context, workspace string) ([]string, error) {
 	return refs, nil
 }
 
-// tempIndex copies the real index so `git add` reuses its file stats.
 func tempIndex(ctx context.Context, workspace string) (string, error) {
 	indexPath, err := run(ctx, workspace, nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
 	if err != nil {
@@ -280,8 +240,6 @@ func run(ctx context.Context, dir string, env []string, args ...string) (string,
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// Reap deletes seed refs created more than maxAge before now. A seed lives
-// only while its fork is being created, so an old one is a crash leftover.
 func Reap(ctx context.Context, workspace string, maxAge time.Duration, now time.Time) (int, error) {
 	out, err := run(ctx, workspace, nil, "for-each-ref", "--format=%(refname) %(committerdate:unix)", RefPrefix)
 	if err != nil {

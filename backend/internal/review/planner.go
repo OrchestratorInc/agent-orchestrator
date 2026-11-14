@@ -7,23 +7,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
-// StateStatus is the per-PR review planning state.
 type StateStatus = contract.AOReviewState
 
 const (
-	// ReviewStateNeedsReview means an eligible PR has no current AO approval or running pass.
-	ReviewStateNeedsReview = contract.AOReviewNeedsReview
-	// ReviewStateRunning means a review run is already active for the PR's current head.
-	ReviewStateRunning = contract.AOReviewRunning
-	// ReviewStateUpToDate means AO approved the PR's current head.
-	ReviewStateUpToDate = contract.AOReviewUpToDate
-	// ReviewStateChangesRequested means AO requested changes on the PR's current head.
+	ReviewStateNeedsReview      = contract.AOReviewNeedsReview
+	ReviewStateRunning          = contract.AOReviewRunning
+	ReviewStateUpToDate         = contract.AOReviewUpToDate
 	ReviewStateChangesRequested = contract.AOReviewChangesRequested
-	// ReviewStateIneligible means the PR is closed, merged, or missing required facts.
-	ReviewStateIneligible = contract.AOReviewIneligible
+	ReviewStateIneligible       = contract.AOReviewIneligible
 )
 
-// PRReviewState is one PR-scoped review decision for a worker session.
 type PRReviewState struct {
 	PRURL       string            `json:"prUrl"`
 	PRNumber    int               `json:"prNumber"`
@@ -34,9 +27,6 @@ type PRReviewState struct {
 	PreviousRun *domain.ReviewRun `json:"previousRun,omitempty"`
 }
 
-// Plan computes per-PR review work from the currently observed PRs and existing
-// review runs. It is pure so the trigger path and API list path share exactly
-// the same eligibility/status rules.
 func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 	latest := latestRunsByPRAndSHA(runs)
 	reviews := make([]PRReviewState, 0, len(prs))
@@ -109,10 +99,6 @@ func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA str
 	return latest, found
 }
 
-// latestRunsByPRAndSHA picks the authoritative run per PR head: the newest
-// running pass while any reviewer is still working on that head, otherwise the
-// newest pass. Several reviewers may review one head at once, so a reviewer that
-// finished first must not hide one that is still running.
 func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 	latest := make(map[string]domain.ReviewRun)
 	for _, run := range runs {

@@ -10,34 +10,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// Daemon-owned user preferences.
-//
-// The row is seeded by migration, so a read is a plain SELECT and no caller has
-// to handle "settings do not exist yet".
-
-// AppSettings is the durable preference set. Field-compatible with
-// service/settings.Snapshot, which the daemon wiring adapts.
 type AppSettings struct {
-	HarnessDefaults map[string]domain.HarnessDefault
-	// DefaultSessionMode is the interface a new session gets when the spawn does
-	// not name one. Never applied to an existing session: only an explicit
-	// interface transition changes a live session's committed mode, so
-	// changing this only affects sessions created afterwards.
-	DefaultSessionMode domain.SessionMode
-	// VersionRefresh moves idle open sessions to a harness release installed
-	// while they ran.
-	VersionRefresh bool
-	// ComputerUse gives new chat sessions tools to drive desktop apps through
-	// Cua Driver.
-	ComputerUse bool
-	// SessionRetentionDays is how long an archived session is kept before the
-	// daemon deletes it; 0 keeps it.
+	HarnessDefaults      map[string]domain.HarnessDefault
+	DefaultSessionMode   domain.SessionMode
+	VersionRefresh       bool
+	ComputerUse          bool
 	SessionRetentionDays int
 	AccountHandoff       bool
 	UpdatedAt            time.Time
 }
 
-// GetAppSettings reads the preference row.
 func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 	row, err := s.qr.GetAppSettings(ctx)
 	if err != nil {
@@ -48,9 +30,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		return AppSettings{}, fmt.Errorf("read harness defaults: %w", err)
 	}
 	return AppSettings{
-		HarnessDefaults: defaults,
-		// Normalized on read: a value written by a build that knows a mode this
-		// one does not must still resolve to something dispatchable.
+		HarnessDefaults:      defaults,
 		DefaultSessionMode:   domain.NormalizeSessionMode(row.DefaultSessionMode),
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
@@ -60,7 +40,6 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 	}, nil
 }
 
-// SetDefaultSessionMode persists the default interface for new sessions.
 func (s *Store) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error {
 	if !mode.Valid() {
 		return fmt.Errorf("invalid session mode %q", mode)
@@ -76,7 +55,6 @@ func (s *Store) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMo
 	return nil
 }
 
-// SetVersionRefresh persists whether open sessions move to new harness releases.
 func (s *Store) SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -89,7 +67,6 @@ func (s *Store) SetVersionRefresh(ctx context.Context, enabled bool, now time.Ti
 	return nil
 }
 
-// SetComputerUse persists whether new chat sessions get the computer-use tools.
 func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -102,7 +79,6 @@ func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time)
 	return nil
 }
 
-// SetSessionRetentionDays persists how long archived sessions are kept.
 func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -115,7 +91,6 @@ func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.
 	return nil
 }
 
-// SetAccountHandoff stores the usage-limit account handoff setting.
 func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -128,8 +103,6 @@ func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Ti
 	return nil
 }
 
-// SetHarnessDefault updates one entry atomically so concurrent saves for other
-// harnesses cannot overwrite each other. Empty values remove the override.
 func (s *Store) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

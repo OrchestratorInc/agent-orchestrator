@@ -15,9 +15,9 @@ func TestLabelClaudeAliasVersionsUsesNewestProviderModelPerFamily(t *testing.T) 
 	reference := []ports.AgentModelInfo{
 		{ID: "claude-opus-5-1-20260301", Label: "Claude Opus 5.1"},
 		{ID: "claude-opus-5-5-20260901", Label: "Claude Opus 5.5"},
-		{ID: "claude-sonnet-5-5-20260901"}, // no display name: the ID carries the version
+		{ID: "claude-sonnet-5-5-20260901"},
 		{ID: "claude-haiku-5-5-20261001", Label: "Claude Haiku 5.5"},
-		{ID: "opus", Label: "Opus 9.9"}, // aliases are never a reference
+		{ID: "opus", Label: "Opus 9.9"},
 	}
 	got := map[string]string{}
 	for _, item := range LabelClaudeAliasVersions(aliases, normalize(reference)) {
@@ -36,7 +36,6 @@ func TestLabelClaudeAliasVersionsUsesNewestProviderModelPerFamily(t *testing.T) 
 
 func TestLabelClaudeAliasVersionsKeepsConfiguredContextVariant(t *testing.T) {
 	reference := []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}
-	// A configured default the catalog lacks is appended labeled with its ID.
 	models := applyClaudeConfiguredDefault(append([]ports.AgentModelInfo(nil), reference...), "opus[1m]")
 	got := map[string]string{}
 	for _, item := range LabelClaudeAliasVersions(models, reference) {

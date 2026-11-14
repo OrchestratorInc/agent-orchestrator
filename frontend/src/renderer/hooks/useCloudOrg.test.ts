@@ -5,7 +5,6 @@ describe("orgDisplayNameForAccount", () => {
 	it.each([
 		["a full name", { displayName: "Asha Rao", email: "asha@acme.dev" }, "Asha's workspace"],
 		["one name", { displayName: "Dana", email: "dana@acme.dev" }, "Dana's workspace"],
-		// The control plane names someone without a profile name by their email.
 		["the email the control plane fell back to", { displayName: "asha.k77@example.com", email: "asha.k77@example.com" }, "asha.k77's workspace"],
 		["no name", { displayName: "  ", email: "dana.kim@acme.dev" }, "dana.kim's workspace"],
 		["neither", { displayName: "", email: "" }, "Workspace"],

@@ -1,4 +1,3 @@
-// Real chat components with deterministic provider state; no agent process runs.
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

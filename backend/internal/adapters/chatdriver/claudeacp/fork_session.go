@@ -26,10 +26,6 @@ type nativeConfigDirResolver interface {
 	NativeSessionConfigDir(context.Context, map[string]string) (string, error)
 }
 
-// ForkIntoWorkspace copies a whole Claude session so it opens from
-// cfg.WorkspacePath. The SDK writes the copy beside the source, keyed by the
-// source folder, so it is then moved to the new folder's key and its cwd is
-// rewritten. The source session file is never modified.
 func (d *checkpointDriver) ForkIntoWorkspace(ctx context.Context, sourceID, sourceWorkspace, upToMessageID string, cfg ports.ChatStartConfig) (string, error) {
 	resolver, ok := d.plugin.(nativeConfigDirResolver)
 	if !ok {
@@ -65,7 +61,6 @@ func (d *checkpointDriver) ForkIntoWorkspace(ctx context.Context, sourceID, sour
 	}
 	from := filepath.Join(configDir, "projects", claudeProjectKey(src), childID+".jsonl")
 	to := filepath.Join(configDir, "projects", claudeProjectKey(dst), childID+".jsonl")
-	// The transcript may name the worktree as given or as resolved.
 	if err := moveSessionFile(ctx, from, to, []string{src, filepath.Clean(sourceWorkspace)}, dst); err != nil {
 		_ = os.Remove(from)
 		return "", fmt.Errorf("claude fork: move session: %w", err)
@@ -73,13 +68,8 @@ func (d *checkpointDriver) ForkIntoWorkspace(ctx context.Context, sourceID, sour
 	return childID, nil
 }
 
-// DeleteWorkspaceFork removes a session made by ForkIntoWorkspace. The copy
-// is found by its session id, which is the fork's own, in whichever project
-// folder holds it: the folder can't be derived again from a workspace that is
-// already gone or was reached through a symlink.
 func (d *checkpointDriver) DeleteWorkspaceFork(ctx context.Context, providerConversationID, _ string, env map[string]string) error {
 	resolver, ok := d.plugin.(nativeConfigDirResolver)
-	// A path separator or a pattern character would reach other files.
 	if !ok || providerConversationID == "" || strings.ContainsAny(providerConversationID, `/\*?[`) {
 		return nil
 	}
@@ -102,9 +92,6 @@ func (d *checkpointDriver) DeleteWorkspaceFork(ctx context.Context, providerConv
 
 var nonAlphanumeric = regexp.MustCompile(`[^A-Za-z0-9]`)
 
-// resolveForkPoint finds the session-file line to cut a fork after: the last
-// line of the API message apiMessageID, since one message is written as
-// several lines while it streams. It reads the source session's own file.
 func resolveForkPoint(ctx context.Context, sessionFile, apiMessageID string) (string, error) {
 	file, err := os.Open(sessionFile)
 	if err != nil {
@@ -137,12 +124,10 @@ func resolveForkPoint(ctx context.Context, sessionFile, apiMessageID string) (st
 	return last, nil
 }
 
-// claudeProjectKey is the folder name Claude keeps a workspace's sessions in.
 func claudeProjectKey(realPath string) string {
 	return nonAlphanumeric.ReplaceAllString(realPath, "-")
 }
 
-// moveSessionFile rewrites every cwd under src to dst while moving the file.
 func moveSessionFile(ctx context.Context, from, to string, sources []string, dst string) error {
 	in, err := os.Open(from)
 	if err != nil {
@@ -189,12 +174,6 @@ func moveSessionFile(ctx context.Context, from, to string, sources []string, dst
 	return os.Remove(from)
 }
 
-// rewriteWorkspacePaths points every mention of a source worktree path in
-// one JSONL record at dst: its cwd, and the paths in tool inputs and results.
-// Left as they are, the fork's agent would read and edit the original's
-// files. A path is matched only as a whole folder name, so a sibling such as
-// "fork-test-10" beside "fork-test-1" is left alone. The paths are matched as
-// JSON encodes them, so the record stays valid.
 func rewriteWorkspacePaths(line []byte, sources []string, dst string) []byte {
 	to := jsonStringBody(dst)
 	for _, src := range sources {
@@ -226,14 +205,11 @@ func rewriteWorkspacePaths(line []byte, sources []string, dst string) []byte {
 	return line
 }
 
-// continuesPathName reports whether c can continue a folder name, so a path
-// followed by it names another folder.
 func continuesPathName(c byte) bool {
 	return c >= 0x80 || c == '.' || c == '-' || c == '_' ||
 		('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
 
-// jsonStringBody is s as it appears inside a JSON string.
 func jsonStringBody(s string) []byte {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -242,7 +218,6 @@ func jsonStringBody(s string) []byte {
 	return bytes.TrimSuffix(bytes.TrimPrefix(bytes.TrimSpace(b.Bytes()), []byte(`"`)), []byte(`"`))
 }
 
-// runForkScript runs fork_session.mjs with the bundled Node and Agent SDK.
 var runForkScript = func(ctx context.Context, env []string, sourceID, dir, upTo string) (string, error) {
 	runtimeDir := strings.TrimSpace(os.Getenv("AO_ACP_RUNTIME_DIR"))
 	if runtimeDir == "" {

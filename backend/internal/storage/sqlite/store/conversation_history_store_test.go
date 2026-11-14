@@ -17,16 +17,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// The durable half of rollback and of the provider thread title.
-//
-// These go through the real store because the invariants they protect are the
-// database's: a compare-and-set that a manual rename must be able to win, and a
-// snapshot that must stop returning prose the agent has forgotten. Neither can be
-// demonstrated against a fake.
-
 var histClock = time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
 
-// conversationFixture seeds a project, a chat session and a conversation.
 func conversationFixture(t *testing.T) (*sqlite.Store, domain.SessionID, string) {
 	t.Helper()
 	s := newTestStore(t)
@@ -329,10 +321,6 @@ func TestProjectConversationRebindsAcrossOrchestratorReplacement(t *testing.T) {
 	}
 }
 
-// Older builds opened a session-scoped row while an orchestrator provisioned and
-// a project row when its controller started, binding both to the session (#6523).
-// The project row holds the live transcript, so lookups must not return the
-// older provisioning row that only kept the stranded opening prompt.
 func TestConversationForSessionPrefersProjectNarrativeOverProvisioningRow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -368,10 +356,6 @@ func TestConversationForSessionPrefersProjectNarrativeOverProvisioningRow(t *tes
 	}
 }
 
-// A first orchestrator controller takes over the prompts queued while it
-// provisioned (#6523). The rebind and the move are one transaction, the rows keep
-// their IDs so a client's turn ids still resolve, and they land after the context
-// boundary in queue order.
 func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -436,8 +420,6 @@ func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 		histClock.Add(10*time.Second), editReceipt); err != nil {
 		t.Fatalf("edit queued follow-up: %v", err)
 	}
-	// A drain that reserved a turn and then died leaves promotion_started_at set.
-	// That turn moves too, rather than staying where no lookup can find it.
 	if _, err := s.ReserveQueuedTurnForPromotion(ctx, provisioning.ID, "queued-turn-3", histClock.Add(20*time.Second)); err != nil {
 		t.Fatalf("reserve queued turn for an interrupted drain: %v", err)
 	}
@@ -492,8 +474,6 @@ func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 		t.Fatalf("retried edit after adoption = %v, want the receipt to keep it idempotent", err)
 	}
 
-	// The prompt that already reached the project row under its client id stays
-	// behind, settled, so nothing queued is left in a row no lookup returns.
 	duplicate, err := s.TurnByID(ctx, "queued-turn-2")
 	if err != nil || duplicate.ConversationID != provisioning.ID || duplicate.State == domain.TurnStateQueued {
 		t.Fatalf("duplicate turn = %+v, %v; want it settled in the provisioning row", duplicate, err)
@@ -514,9 +494,6 @@ func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 	}
 }
 
-// A Send can read the provisioning row just before the orchestrator's first
-// controller moves the queue out of it. Appending there would accept a prompt
-// that never drains or shows, so the append refuses and the caller looks again.
 func TestQueuedAppendRefusesConversationTheSessionNoLongerHolds(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -784,8 +761,6 @@ func TestConversationSnapshotPagesCombinedTimelineBySequence(t *testing.T) {
 	}
 }
 
-// seedToolTurn records a dispatched turn: its prompt, a run of tool calls, then
-// the agent's reply.
 func seedToolTurn(t *testing.T, s *sqlite.Store, conversationID string, session domain.SessionID, turnID string, tools int, at time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -815,8 +790,6 @@ func seedToolTurn(t *testing.T, s *sqlite.Store, conversationID string, session 
 	}
 }
 
-// A worker started by one orchestrator prompt and running hundreds of tools is a
-// single turn. Its prompt belongs on the first page, not behind "Load earlier".
 func TestConversationSnapshotPageDoesNotCountToolActivity(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	seedToolTurn(t, s, conversation, session, "turn-worker", store.DefaultConversationPageSize+50, histClock)
@@ -833,8 +806,6 @@ func TestConversationSnapshotPageDoesNotCountToolActivity(t *testing.T) {
 	}
 }
 
-// A page ends between two turns: a turn that does not fit moves whole to the
-// older page instead of losing its prompt to it.
 func TestConversationSnapshotPageCutsBetweenTurns(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -842,7 +813,6 @@ func TestConversationSnapshotPageCutsBetweenTurns(t *testing.T) {
 		seedToolTurn(t, s, conversation, session, turnID, 2, histClock.Add(time.Duration(i)*time.Second))
 	}
 
-	// Three messages reach into turn-2, so the page stops at turn-3's prompt.
 	newest, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 3)
 	if err != nil {
 		t.Fatal(err)
@@ -866,9 +836,6 @@ func TestConversationSnapshotPageCutsBetweenTurns(t *testing.T) {
 func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
-	// Three queued prompts, the human one first. Its tools run after the other
-	// two prompts, so a one-message page holds the human turn's tools but cannot
-	// reach back past two more prompts to its prompt.
 	turns := []struct {
 		id     string
 		origin domain.MessageOrigin
@@ -933,9 +900,6 @@ func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 	}
 }
 
-// Prompts queued while the agent works land before the replies they lead to. A
-// page that ends among those replies reaches back to their prompts, as long as
-// that costs no more than another page of messages.
 func TestConversationSnapshotPageKeepsQueuedPromptsWithTheirTurns(t *testing.T) {
 	for _, tc := range []struct{ turns, limit int }{{2, 2}, {101, 200}} {
 		t.Run(fmt.Sprintf("%d-turns-limit-%d", tc.turns, tc.limit), func(t *testing.T) {
@@ -984,9 +948,6 @@ func TestConversationSnapshotPageKeepsQueuedPromptsWithTheirTurns(t *testing.T) 
 	}
 }
 
-// A long tool run with a prompt queued part way through fills a page at the
-// activity bound inside the long turn. Reaching back to that turn's prompt may
-// cost one more page, so the page still opens on the prompt.
 func TestConversationSnapshotPageReachesPastTheActivityBoundForAPrompt(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1347,8 +1308,6 @@ func TestCancelQueuedTurnByIDHidesMessageFromSnapshot(t *testing.T) {
 	t.Fatal("cancelled turn row disappeared")
 }
 
-// seedTurn records one dispatched turn with a user message and an activity, which is
-// the shape a real turn leaves behind.
 func seedTurn(t *testing.T, s *sqlite.Store, conversationID string, session domain.SessionID, turnID, text string, at time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -1414,8 +1373,6 @@ func TestSettleTurnStopsStreamingAssistantMessages(t *testing.T) {
 	}
 }
 
-// The core of the model: rollback hides what the agent forgot without destroying it.
-// A turn's rows stay, marked; its prose leaves the timeline.
 func TestRollbackHidesDiscardedProseAndKeepsTheTurnRows(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1437,8 +1394,6 @@ func TestRollbackHidesDiscardedProseAndKeepsTheTurnRows(t *testing.T) {
 		t.Fatalf("load snapshot: %v", err)
 	}
 
-	// Every turn row survives. Deleting them would make "this was taken back"
-	// indistinguishable from "this never happened".
 	if len(snapshot.Turns) != 3 {
 		t.Fatalf("turns = %d, want all 3 still readable", len(snapshot.Turns))
 	}
@@ -1449,7 +1404,6 @@ func TestRollbackHidesDiscardedProseAndKeepsTheTurnRows(t *testing.T) {
 		}
 	}
 
-	// The prose the agent no longer remembers is gone from the timeline.
 	if len(snapshot.Messages) != 1 || snapshot.Messages[0].Text != "first" {
 		t.Fatalf("messages = %+v, want only the surviving turn's message", snapshot.Messages)
 	}
@@ -1457,15 +1411,12 @@ func TestRollbackHidesDiscardedProseAndKeepsTheTurnRows(t *testing.T) {
 		t.Fatalf("activities = %+v, want only the surviving turn's activity", snapshot.Activities)
 	}
 
-	// Sequence is immutable, so the surviving row keeps the position it was given.
 	if snapshot.Messages[0].Sequence != 1 {
 		t.Errorf("surviving message sequence = %d, want its original 1",
 			snapshot.Messages[0].Sequence)
 	}
 }
 
-// Rolling back to the first turn empties the conversation as far as the agent is
-// concerned, which has to be expressible: it is what "start over" means.
 func TestRollbackToTheFirstTurnDiscardsEverything(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1491,14 +1442,11 @@ func TestRollbackToTheFirstTurnDiscardsEverything(t *testing.T) {
 	}
 }
 
-// A message still waiting to be sent must not be dispatched against a history it was
-// never written for, so a rollback that sweeps past it settles it.
 func TestRollbackInterruptsAQueuedTurnItDiscarded(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
 
 	seedTurn(t, s, conversation, session, "turn-1", "first", histClock)
-	// Recorded but never dispatched, exactly as a mid-turn send is.
 	if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1",
 		domain.ConversationMessage{ID: "queued-msg", Text: "and also", Origin: domain.MessageOriginHuman},
 		"turn-queued", histClock.Add(time.Minute)); err != nil || !created {
@@ -1529,8 +1477,6 @@ func TestRollbackInterruptsAQueuedTurnItDiscarded(t *testing.T) {
 	t.Fatal("queued turn row disappeared")
 }
 
-// An approval inside a discarded turn can never be answered, so it must not be left
-// looking actionable.
 func TestRollbackFailsAPendingApprovalItDiscarded(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1551,8 +1497,6 @@ func TestRollbackFailsAPendingApprovalItDiscarded(t *testing.T) {
 		t.Fatalf("RollbackTurns: %v", err)
 	}
 
-	// The row is hidden from the snapshot, so read it back through the archive-free
-	// path the pending-approval query uses instead.
 	pending, err := s.LoadConversationSnapshot(ctx, conversation)
 	if err != nil {
 		t.Fatalf("load snapshot: %v", err)
@@ -1564,8 +1508,6 @@ func TestRollbackFailsAPendingApprovalItDiscarded(t *testing.T) {
 	}
 }
 
-// A turn from a different conversation would anchor the rowid cut somewhere
-// arbitrary in this one and discard a range nobody named.
 func TestRollbackRefusesATurnFromAnotherConversation(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1588,7 +1530,6 @@ func TestRollbackRefusesATurnFromAnotherConversation(t *testing.T) {
 		t.Fatalf("err = %v, want ErrConversationTurnNotFound", err)
 	}
 
-	// And nothing in the target conversation moved.
 	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
 	if err != nil {
 		t.Fatalf("load snapshot: %v", err)
@@ -1606,8 +1547,6 @@ func TestRollbackRefusesAnUnknownTurn(t *testing.T) {
 	}
 }
 
-// A session nobody has named adopts the provider's title. This is the whole point of
-// routing it through display_name: every surface that shows a session name gets it.
 func TestApplyProviderTitleNamesAnUnnamedSession(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1629,8 +1568,6 @@ func TestApplyProviderTitleNamesAnUnnamedSession(t *testing.T) {
 	}
 }
 
-// The rule that matters most: a name a person chose is never overwritten, however
-// late the provider's title turns up.
 func TestApplyProviderTitleNeverOverwritesAManualName(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1656,8 +1593,6 @@ func TestApplyProviderTitleNeverOverwritesAManualName(t *testing.T) {
 	}
 }
 
-// A later provider title may replace an earlier one AO applied itself: refining the
-// name it chose is not the same as overruling the user.
 func TestApplyProviderTitleReplacesTheTitleAOAppliedBefore(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1683,8 +1618,6 @@ func TestApplyProviderTitleReplacesTheTitleAOAppliedBefore(t *testing.T) {
 	}
 }
 
-// A rename landing after AO applied a title still wins, because the witness no longer
-// matches. This is the race the compare-and-set exists for.
 func TestApplyProviderTitleLosesToARenameThatFollowedIt(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1706,8 +1639,6 @@ func TestApplyProviderTitleLosesToARenameThatFollowedIt(t *testing.T) {
 	}
 }
 
-// The provider's name for the thread is kept whether or not it became the label, so
-// the conversation's own identity survives a manual override.
 func TestSetProviderTitleIsRecordedIndependentlyOfTheLabel(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -1998,10 +1929,6 @@ func TestAppendUserMessagePersistsContinuation(t *testing.T) {
 	}
 }
 
-// The chat host replays a pending question after a reconnect, and a question
-// reaches the store with only its request id. The replay must land on the row
-// AO already stored rather than tripping the (conversation_id, request_id)
-// index and stopping the whole projection with the turn still running (#7944).
 func TestUpsertActivityReplayRefreshesTheStoredQuestionInsteadOfColliding(t *testing.T) {
 	s, _, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -2029,7 +1956,6 @@ func TestUpsertActivityReplayRefreshesTheStoredQuestionInsteadOfColliding(t *tes
 		t.Fatalf("after replay: rows=%d status=%q, want one pending row", rows, status)
 	}
 
-	// A question the user answered is not reopened by a late replay.
 	if err := s.ResolveApproval(ctx, conversation, "replayed-request",
 		`{"resolvedBy":"user"}`, histClock.Add(2*time.Minute)); err != nil {
 		t.Fatalf("ResolveApproval: %v", err)
@@ -2063,10 +1989,6 @@ func questionRowsByRequest(
 	return rows, status
 }
 
-// settleOrphanedWork fails a pending question and its turn in the same pass,
-// so a replay that reopened it would leave a pending question on a failed
-// turn — one the dock never shows, because latestPendingInteraction only
-// docks a question linked to the running turn. A failed row stays failed.
 func TestUpsertActivityReplayDoesNotReopenAFailedQuestion(t *testing.T) {
 	s, _, conversation := conversationFixture(t)
 	ctx := context.Background()

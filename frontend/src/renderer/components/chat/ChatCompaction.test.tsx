@@ -16,11 +16,6 @@ import type {
 	ConversationTurn,
 } from "../../types/conversation";
 
-// Compaction is the difference between a session that works for an hour and one
-// that works for a day: every turn re-sends the history, so context fills on its
-// own until the conversation cannot accept another turn. These cover the two halves
-// the user sees — that a compaction happened, and how to cause one.
-
 beforeEach(() => localStorage.clear());
 
 function compaction(overrides: Partial<ConversationActivity> = {}): ConversationActivity {
@@ -86,9 +81,6 @@ describe("compaction in the timeline", () => {
 		expect(screen.getByText("−11.0k · 2% full")).toHaveClass("text-muted-foreground/70");
 	});
 
-	// A compaction right after a daemon restart genuinely does not know what it
-	// saved, because AO has seen no token report yet. Showing "0 freed" would be a
-	// lie rather than a gap.
 	it("claims no figures when the provider never reported any", () => {
 		render(
 			<ChatWorkspace
@@ -120,8 +112,6 @@ describe("compaction in the timeline", () => {
 });
 
 describe("the compact control", () => {
-	// Compaction lives on `/compact` rather than a toolbar button: the composer
-	// tools stay for attach/settings, and compact is an AO slash command.
 	it("is offered in the slash menu, not the message tools", async () => {
 		render(<ChatWorkspace snapshot={snapshot([assistantSaid])} onCompact={vi.fn()} />);
 
@@ -141,9 +131,6 @@ describe("the compact control", () => {
 		expect(screen.getByRole("option", { name: /compact/i })).toBeInTheDocument();
 	});
 
-	// Measured against a live app-server: thread/compact/start mid-turn silently
-	// interrupts the running turn, then compacts. The command refuses locally and
-	// preserves the draft rather than letting the user discover the loss afterwards.
 	it("refuses while a turn is in flight and keeps the command editable", async () => {
 		const user = userEvent.setup();
 		const onCompact = vi.fn();

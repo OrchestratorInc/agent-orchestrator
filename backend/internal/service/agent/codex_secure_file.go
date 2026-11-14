@@ -34,11 +34,6 @@ func codexFileMutationCommitted(err error) bool {
 	return errors.As(err, &outcome) && outcome.committed
 }
 
-// codexStorageIOError keeps a filesystem operation's opaque, path-free summary
-// for the API and log boundary while preserving the underlying cause. Bootstrap
-// unwraps the cause to tell a transient I/O fault (retryable) from an unsafe
-// storage rejection (fail closed); Error only ever exposes the summary, so a
-// credential path never crosses the boundary through these helpers.
 type codexStorageIOError struct {
 	summary string
 	cause   error

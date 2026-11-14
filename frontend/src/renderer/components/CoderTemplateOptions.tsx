@@ -24,24 +24,9 @@ import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 
-// Past this many options the section starts collapsed behind its header.
 const COLLAPSE_AFTER = 4;
-// Radix Select reserves "" for "no value", so an option whose value is empty
-// rides on this stand-in.
 const EMPTY_OPTION_VALUE = "\u0000empty";
 
-/**
- * "Template options": the chosen Coder template's own parameters, prefilled
- * with their defaults. `overrides` holds only the values the user changed;
- * an edit back to the default drops its key. The parameters are evaluated with
- * the current overrides, so one the template declares only for some value of
- * another appears once that value is picked, and after an edit a value whose
- * parameter no longer applies is dropped. Renders nothing while loading,
- * for a template without parameters, and for a control plane without the
- * parameters route (404). The caller decides it is a Coder project with a
- * template; this component only fetches once both ids are present.
- */
-/** The control plane refuses a template option value over 4 KB. */
 const TEMPLATE_PARAMETER_MAX_LENGTH = 4096;
 
 export function CoderTemplateOptions({
@@ -59,33 +44,19 @@ export function CoderTemplateOptions({
 	overrides: Readonly<Record<string, string>>;
 	onChange: (next: Record<string, string>) => void;
 	disabled?: boolean;
-	/** Shown under the fields, e.g. the settings form's save state. */
 	footer?: ReactNode;
-	/** The project's main and additional repositories, which AO checks out itself. */
 	repositoryUrls?: readonly string[];
-	/** The project's own working folder, when it sets one. */
 	projectWorkingDirectory?: string;
 }) {
 	const { t, i18n } = useTranslation();
 	const { parameters: all, isError, settled } = useCoderTemplateParameters(orgId, templateId, true, overrides);
 	const parameters = editableTemplateParameters(all);
-	// A ticked template option naming one of the project's repositories makes
-	// the template clone a second copy beside AO's own checkout, unless the
-	// session adopts the template's checkout (workspace user with reuse or a
-	// working folder). Stay quiet until the connection's mode is known; a
-	// disabled read (no own Coder connection) means the default ao-worker.
-	// The project's org decides the mode, which need not be the signed-in org.
 	const orgCoder = useOrgCoderConfig(true, orgId);
-	// With a project working folder and the ao-worker user, the template's
-	// clone lands where AO checks out, so the session cannot start at all;
-	// only once the control plane checks ao-worker sessions out there.
 	const { coderWorkerWorkingFolder } = useCloudOffering();
 	const modeKnown = orgCoder.data !== undefined || (!orgCoder.isLoading && !orgCoder.isError);
 	const duplicates = modeKnown && !coderReusesTemplateCheckout(orgCoder.data ?? null, projectWorkingDirectory)
 		? duplicateCloneOptions(parameters, overrides, repositoryUrls)
 		: undefined;
-	// Only an edit made here prunes values: a saved value is never dropped just
-	// because the form opened.
 	const edited = useRef(false);
 	useEffect(() => {
 		if (!edited.current || !settled || all.length === 0) return;
@@ -113,12 +84,9 @@ export function CoderTemplateOptions({
 		<TemplateOptionWarning id={id} startFails={blocksWorkingFolder}>{duplicateMessage(labels)}</TemplateOptionWarning>
 	);
 	const duplicateLabels = duplicates ? [...new Set([...duplicates.values()].flat())] : [];
-	// Collapsed, the fields (and their warnings) are hidden, so the warning
-	// moves up under the header; expanded, it sits under its field instead.
 	const collapsedDuplicates = expanded ? [] : duplicateLabels;
 	return (
 		<section className="flex flex-col gap-3 text-sm" aria-label={t("coder.templateOptions.title")} data-testid="coder-template-options">
-			{/* Said when a warning appears, wherever it is shown. */}
 			<LiveStatus text={duplicateLabels.length > 0 ? duplicateMessage(duplicateLabels) : ""} />
 			{isError ? <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.checkFailed")}</p> : null}
 			<div className="flex flex-col gap-1">
@@ -167,19 +135,11 @@ export function CoderTemplateOptions({
 	);
 }
 
-/** Coder's first error about a parameter's value, for showing under its field. */
 function valueProblem(parameter: CloudCpCoderTemplateParameter): string | undefined {
 	return parameter.diagnostics?.find((diagnostic) => diagnostic.severity === "error")?.summary?.trim() || undefined;
 }
 
-/**
- * A heads-up under a template option. It does not block saving, so it reads as
- * muted helper text behind a warning icon rather than as a red field error;
- * only one that means the session will fail to start keeps the warning color.
- */
 function TemplateOptionWarning({ id, startFails, children }: { id: string; startFails: boolean; children: ReactNode }) {
-	// The field's description, so a screen reader hears it on reaching the
-	// option; the section's live status says it when it appears.
 	return (
 		<p id={id} className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
 			<TriangleAlert aria-hidden="true" className="mt-1 size-3 shrink-0 text-warning" />
@@ -199,9 +159,7 @@ function TemplateParameterField({
 	parameter: CloudCpCoderTemplateParameter;
 	value: string;
 	disabled?: boolean;
-	/** Coder's error about the current value, shown under the field. */
 	problem?: string;
-	/** A heads-up about the current value that does not block saving, rendered with the id the field is described by. */
 	warning?: (id: string) => ReactNode;
 	onChange: (value: string) => void;
 }) {
@@ -211,8 +169,6 @@ function TemplateParameterField({
 	const label = parameter.displayName?.trim() || parameter.name;
 	const description = parameter.description?.trim() ?? "";
 	const options = parameter.options ?? [];
-	// Coder calls a parameter required only when it has no default. A
-	// single-choice parameter can't be left empty either, so it is marked too.
 	const mandatory = parameter.required || (options.length > 0 && parameter.type !== "list(string)" && parameter.type !== "bool");
 	const heading = (
 		<Label htmlFor={id} className="text-foreground">
@@ -267,7 +223,6 @@ function TemplateParameterField({
 									const set = new Set(selected);
 									if (next === true) set.add(option.value);
 									else set.delete(option.value);
-									// Keep the template's option order, not the click order.
 									onChange(encodeListValue(options.map((item) => item.value).filter((item) => set.has(item))));
 								}}
 							/>
@@ -328,10 +283,6 @@ function TemplateParameterField({
 	);
 }
 
-/**
- * A free-form list(string) as comma-separated text. The raw text is kept
- * locally so a trailing comma survives typing; the encoded list goes up.
- */
 function ListTextInput({
 	id,
 	value,

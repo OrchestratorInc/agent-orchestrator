@@ -13,7 +13,6 @@ func writeJSON(w io.Writer, v any) error {
 }
 
 func writeClaimPRCheckout(w io.Writer, branchChanged bool) error {
-	// An unchanged branch does not establish that HEAD matches the PR head.
 	checkout := "not performed; workspace unchanged"
 	if branchChanged {
 		checkout = "switched to PR branch"

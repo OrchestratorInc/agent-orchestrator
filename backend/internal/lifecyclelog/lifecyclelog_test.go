@@ -146,7 +146,6 @@ func TestRecordRefusesSymlinkedLog(t *testing.T) {
 	}
 }
 
-// A fatal panic in a child process must leave its traceback in the crash file.
 func TestCrashOutputCapturesFatalPanic(t *testing.T) {
 	if dir := os.Getenv("AO_LIFECYCLELOG_CRASH_CHILD"); dir != "" {
 		if err := Open(dir, "v").InstallCrashOutput(); err != nil {

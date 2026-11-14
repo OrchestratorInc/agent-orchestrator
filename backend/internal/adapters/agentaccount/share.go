@@ -1,7 +1,3 @@
-// Package agentaccount runs Claude Code and Codex under subscription accounts
-// that are config folders of the CLIs themselves. Each folder keeps only its
-// own login; everything a conversation needs to resume under another account
-// is a link to the computer's own folder. Nothing here reads a token.
 package agentaccount
 
 import (
@@ -17,13 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// linkShared makes home/name a symlink to shared/name. A missing target is
-// created first (a directory, or an empty file when file is true), so the link
-// never dangles; when only the account has the entry, its copy becomes the
-// shared one instead, so nothing it holds stays split off. An existing link is
-// left alone; so is a real entry, unless it is an empty directory or
-// replaceable, which the CLI made before the link did. A failure is
-// ErrAgentAccountUnshared: the folder would keep history of its own.
 func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 	defer func() {
 		if err != nil {
@@ -51,7 +40,7 @@ func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 			return fmt.Errorf("replace %s: %w", name, err)
 		}
 	default:
-		return nil // the account's own copy; leave it rather than lose it
+		return nil
 	}
 	if err := os.Symlink(target, link); err != nil && !errors.Is(err, fs.ErrExist) {
 		return fmt.Errorf("link %s: %w", name, err)
@@ -59,8 +48,6 @@ func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 	return nil
 }
 
-// createShared makes the missing shared target. When only the account has the
-// entry, its copy is moved there; otherwise an empty file or directory is made.
 func createShared(target, link string, file bool) error {
 	if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink == 0 && os.Rename(link, target) == nil {
 		return nil
@@ -75,10 +62,6 @@ func createShared(target, link string, file bool) error {
 	return f.Close()
 }
 
-// pruneDangling removes links in home that point into shared at an entry that
-// is gone, unless keep names it (linkShared recreates those). The user deleted
-// the entry from the computer's own folder; the account should not keep a
-// broken link to it.
 func pruneDangling(home, shared string, keep map[string]bool) {
 	entries, err := os.ReadDir(home)
 	if err != nil {
@@ -104,7 +87,6 @@ func emptyDir(path string) bool {
 	return err == nil && len(entries) == 0
 }
 
-// writeIfChanged atomically replaces path with data unless it already holds it.
 func writeIfChanged(path string, data []byte) error {
 	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, data) {
 		return nil
@@ -128,8 +110,6 @@ func writeIfChanged(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// neutralize returns key="" for each key set in the daemon's environment, so a
-// key or token the computer has for its own login cannot override the account.
 func neutralize(env map[string]string, keys ...string) {
 	for _, key := range keys {
 		if _, set := os.LookupEnv(key); set {
@@ -138,18 +118,14 @@ func neutralize(env map[string]string, keys ...string) {
 	}
 }
 
-// ledgerName records, for each JSON file AO shares into an account, every
-// shared key's value as AO last wrote it. A key still holding that value
-// follows the computer; any other value was changed on the account, and stays.
 const ledgerName = ".ao-shared.json"
 
 type ledger struct {
 	path  string
-	fresh bool // no record yet, so the account holds AO's earlier copy
+	fresh bool
 	files map[string]map[string]json.RawMessage
 }
 
-// readLedger loads home's record. A missing or unreadable one starts fresh.
 func readLedger(home string) *ledger {
 	l := &ledger{path: filepath.Join(home, ledgerName), files: map[string]map[string]json.RawMessage{}}
 	data, err := os.ReadFile(l.path)
@@ -159,8 +135,6 @@ func readLedger(home string) *ledger {
 	return l
 }
 
-// keys is file's record. A fresh one takes the account's values of the shared
-// keys as AO's own, so a folder set up before the record keeps following.
 func (l *ledger) keys(file string, account, source map[string]json.RawMessage) map[string]json.RawMessage {
 	wrote := l.files[file]
 	if wrote == nil {
@@ -185,11 +159,6 @@ func (l *ledger) save() error {
 	return writeIfChanged(l.path, append(out, '\n'))
 }
 
-// shareKeys brings source's keys into account and reports whether account
-// changed. A key the account lacks, or still holds as AO last wrote it, takes
-// source's value; any other value was changed on the account and stays. A key
-// AO wrote that source no longer has is removed, unless the account changed
-// it. Each entry of a nested key is shared the same way, on its own.
 func shareKeys(account, source, wrote map[string]json.RawMessage, nested map[string]bool) bool {
 	keys := map[string]bool{}
 	for key := range source {
@@ -227,13 +196,12 @@ func shareKeys(account, source, wrote map[string]json.RawMessage, nested map[str
 			}
 			wrote[key] = src
 		case same(cur, src):
-			wrote[key] = src // changed back on the account: follows again
+			wrote[key] = src
 		}
 	}
 	return changed
 }
 
-// same compares two JSON values, ignoring formatting and key order.
 func same(a, b json.RawMessage) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -259,7 +227,6 @@ func encode(m map[string]json.RawMessage) json.RawMessage {
 	return out
 }
 
-// readObject reads a JSON object file; a missing file is empty.
 func readObject(path string) (map[string]json.RawMessage, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

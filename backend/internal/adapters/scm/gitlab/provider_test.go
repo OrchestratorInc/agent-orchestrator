@@ -35,8 +35,6 @@ func testServer(t *testing.T, handler http.Handler) (*httptest.Server, *Provider
 }
 
 func TestParseRepository(t *testing.T) {
-	// Provider with gitlab.mycompany.com allowlisted so the self-managed test
-	// cases exercise the allowlist path.
 	p, err := NewProvider(ProviderOptions{
 		Token:              StaticTokenSource("tok"),
 		SkipTokenPreflight: true,
@@ -90,7 +88,6 @@ func TestParseRepository(t *testing.T) {
 			remote: "myorg/myrepo",
 			ok:     false,
 		},
-		// Nested GitLab namespaces: group/subgroup/repo
 		{
 			name:   "ssh nested namespace",
 			remote: "git@gitlab.com:group/subgroup/repo.git",
@@ -109,7 +106,6 @@ func TestParseRepository(t *testing.T) {
 			want:   ports.SCMRepo{Provider: "gitlab", Host: "gitlab.mycompany.com", Owner: "eng/team", Name: "widget", Repo: "eng/team/widget"},
 			ok:     true,
 		},
-		// Non-allowlisted self-managed host is rejected (review Item 5).
 		{
 			name:   "non-allowlisted self-managed host rejected",
 			remote: "git@gitlab.attacker.example:team/project.git",
@@ -148,7 +144,6 @@ func TestIsHostAllowed(t *testing.T) {
 		{"gitlab.com", true},
 		{"www.gitlab.com", true},
 		{"gitlab.mycompany.com", true},
-		// Non-allowlisted hosts are rejected, even if they contain "gitlab".
 		{"gitlab.attacker.example", false},
 		{"github.com", false},
 		{"api.github.com", false},
@@ -326,8 +321,6 @@ func TestFetchPullRequests(t *testing.T) {
 	if len(o.CI.Checks) != 2 {
 		t.Errorf("CI.Checks = %d, want 2", len(o.CI.Checks))
 	}
-	// base_sha arrives nested under diff_refs in the MR detail response;
-	// it must be parsed via the nested struct (not the broken dotted tag).
 	if got, want := o.PR.BaseSHA, "base123"; got != want {
 		t.Errorf("PR.BaseSHA = %q, want %q", got, want)
 	}
@@ -495,10 +488,6 @@ func TestFetchReviewThreads(t *testing.T) {
 	}
 }
 
-// TestFetchReviewThreads_SingleApprovalsCall verifies that FetchReviewThreads
-// makes exactly ONE approvals API call, not two. The
-// previous implementation called fetchApprovalDecision AND re-fetched the
-// approvals endpoint separately.
 func TestFetchReviewThreads_SingleApprovalsCall(t *testing.T) {
 	approvalsHits := 0
 	mux := http.NewServeMux()
@@ -543,16 +532,6 @@ func TestFetchReviewThreads_SingleApprovalsCall(t *testing.T) {
 	}
 }
 
-// TestApprovalsDedup_BetweenFetchPullRequestsAndFetchReviewThreads verifies
-// ticket 04's core behavior: when FetchPullRequests and FetchReviewThreads run
-// for the same MR in the same observer cycle, the /merge_requests/:iid/approvals
-// endpoint is hit exactly ONCE — not twice. The first call (fetchApprovalDecision
-// inside FetchPullRequests) fetches and caches the approvals; the second call
-// (FetchReviewThreads) serves the cached copy from memory with zero network I/O.
-//
-// This is the single highest-impact deduplication: one eliminated HTTP
-// round-trip per active MR per review-refresh cycle. The 304 from the ETag
-// cache (which still counts against rate limits) is avoided entirely.
 func TestApprovalsDedup_BetweenFetchPullRequestsAndFetchReviewThreads(t *testing.T) {
 	var approvalsHits atomic.Int32
 	mux := http.NewServeMux()
@@ -586,9 +565,6 @@ func TestApprovalsDedup_BetweenFetchPullRequestsAndFetchReviewThreads(t *testing
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
 
-	// 1. FetchPullRequests runs first (the observer's PR-facts refresh). This
-	//    fetches approvals via fetchApprovalDecision, which populates the
-	//    approvals cache.
 	obs, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
 	if err != nil {
 		t.Fatalf("FetchPullRequests: %v", err)
@@ -604,9 +580,6 @@ func TestApprovalsDedup_BetweenFetchPullRequestsAndFetchReviewThreads(t *testing
 		t.Fatalf("approvals endpoint hit %d times after FetchPullRequests, want 1", hitsAfterFetchPR)
 	}
 
-	// 2. FetchReviewThreads runs second (the observer's review-thread refresh).
-	//    It must serve the cached approvals from memory — zero additional HTTP
-	//    round-trips to the approvals endpoint.
 	review, err := p.FetchReviewThreads(context.Background(), ref)
 	if err != nil {
 		t.Fatalf("FetchReviewThreads: %v", err)
@@ -614,8 +587,6 @@ func TestApprovalsDedup_BetweenFetchPullRequestsAndFetchReviewThreads(t *testing
 	if got := approvalsHits.Load(); got != 1 {
 		t.Errorf("approvals endpoint hit %d times after FetchReviewThreads, want 1 (served from cache)", got)
 	}
-	// The cached approvals must still produce the correct review decision and
-	// approval summaries — serving from cache must not lose data.
 	if review.Decision != "approved" {
 		t.Errorf("FetchReviewThreads Decision = %q, want %q (cached approvals must preserve decision)", review.Decision, "approved")
 	}
@@ -630,11 +601,6 @@ func TestApprovalsDedup_BetweenFetchPullRequestsAndFetchReviewThreads(t *testing
 	}
 }
 
-// TestApprovalsDedup_TTLExpiry verifies that after the approvals TTL (60s)
-// elapses, a second FetchReviewThreads call hits the approvals endpoint again
-// (the cache entry has expired and a fresh fetch is required). This guards the
-// staleness bound (~60s, one poll interval) so cached approvals do not persist
-// beyond their freshness window.
 func TestApprovalsDedup_TTLExpiry(t *testing.T) {
 	var approvalsHits atomic.Int32
 	mux := http.NewServeMux()
@@ -655,12 +621,9 @@ func TestApprovalsDedup_TTLExpiry(t *testing.T) {
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
 
-	// Inject a controllable clock so TTL expiry is fast and deterministic
-	// (no real sleeping). syntheticClock is defined in cache_test.go.
 	clock := &syntheticClock{t: time.Now()}
 	p.cache.now = clock.now
 
-	// First FetchReviewThreads — cache miss, fetches via HTTP.
 	if _, err := p.FetchReviewThreads(context.Background(), ref); err != nil {
 		t.Fatalf("first FetchReviewThreads: %v", err)
 	}
@@ -668,7 +631,6 @@ func TestApprovalsDedup_TTLExpiry(t *testing.T) {
 		t.Fatalf("approvals endpoint hit %d times after first call, want 1", got)
 	}
 
-	// Second FetchReviewThreads within TTL — cache hit, no HTTP round-trip.
 	if _, err := p.FetchReviewThreads(context.Background(), ref); err != nil {
 		t.Fatalf("second FetchReviewThreads (within TTL): %v", err)
 	}
@@ -676,8 +638,6 @@ func TestApprovalsDedup_TTLExpiry(t *testing.T) {
 		t.Errorf("approvals endpoint hit %d times after second call (within TTL), want 1 (cache hit)", got)
 	}
 
-	// Advance past the approvals TTL (60s). The cached entry must now be
-	// treated as a miss, so the next FetchReviewThreads fetches again.
 	clock.advance(approvalsCacheTTL + time.Second)
 	if _, err := p.FetchReviewThreads(context.Background(), ref); err != nil {
 		t.Fatalf("third FetchReviewThreads (after TTL): %v", err)
@@ -687,9 +647,6 @@ func TestApprovalsDedup_TTLExpiry(t *testing.T) {
 	}
 }
 
-// TestFetchReviewThreads_StableReviewIDs verifies that review summaries have
-// stable, unique IDs so multiple approvers don't overwrite each other in
-// persistence
 func TestFetchReviewThreads_StableReviewIDs(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/discussions", func(w http.ResponseWriter, r *http.Request) {
@@ -734,14 +691,9 @@ func TestFetchReviewThreads_StableReviewIDs(t *testing.T) {
 	}
 }
 
-// TestFetchApprovalDecision_TrustsApprovedField verifies that the approved
-// field is trusted regardless of len(approved_by) — approved_by can contain
-// approvals that don't satisfy the applicable rules
 func TestFetchApprovalDecision_TrustsApprovedField(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/approvals", func(w http.ResponseWriter, r *http.Request) {
-		// approved=true but approved_by is EMPTY — the adapter must trust
-		// the approved field, not compare len(approved_by).
 		json.NewEncoder(w).Encode(map[string]any{
 			"approved":           true,
 			"approvals_required": 2,
@@ -760,8 +712,6 @@ func TestFetchApprovalDecision_TrustsApprovedField(t *testing.T) {
 	}
 }
 
-// TestFetchApprovalDecision_NotApproved verifies that approved=false with
-// approvals_required>0 yields ReviewRequired
 func TestFetchApprovalDecision_NotApproved(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/approvals", func(w http.ResponseWriter, r *http.Request) {
@@ -785,10 +735,6 @@ func TestFetchApprovalDecision_NotApproved(t *testing.T) {
 	}
 }
 
-// TestApprovalDecision is a table test covering every combination of
-// approved / approvals_required / approved_by that approvalDecision must
-// handle, including the vacuous-approval case (approved=true,
-// approvals_required=0, approved_by empty) which must report ReviewNone.
 func TestApprovalDecision(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -891,26 +837,12 @@ func TestCommitChecksGuard(t *testing.T) {
 	}
 }
 
-// TestCommitChecksGuard_ThenFetchPullRequests_Pipelines304Reused asserts that
-// CommitChecksGuard and fetchCI produce the same pipelines-endpoint cache key
-// (same query parameters), so the second call is served as a 304 by the
-// doGET ETag cache rather than a fresh 200. This is ticket 06's core
-// acceptance criterion: aligning per_page=1 across both call sites lets the
-// existing ETag cache do its job across the guard and the full fetch.
-//
-// The test counts 200 responses (full body transfers) on the pipelines
-// endpoint. With the guard running first, it populates the ETag cache; when
-// fetchCI runs second with the same query, it sends If-None-Match and receives
-// a 304 — so the pipelines handler sees exactly one 200.
 func TestCommitChecksGuard_ThenFetchPullRequests_Pipelines304Reused(t *testing.T) {
 	var pipelines200 atomic.Int32
 	var pipelinesTotal atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines", func(w http.ResponseWriter, r *http.Request) {
 		pipelinesTotal.Add(1)
-		// Behave like a real ETag-aware GitLab server: if the client sends
-		// If-None-Match matching our stable ETag, return 304 (no body). This is
-		// what lets the doGET ETag cache downgrade the second call.
 		if inm := r.Header.Get("If-None-Match"); inm == `"pipelines-v1"` {
 			w.Header().Set("ETag", `"pipelines-v1"`)
 			w.WriteHeader(http.StatusNotModified)
@@ -941,15 +873,10 @@ func TestCommitChecksGuard_ThenFetchPullRequests_Pipelines304Reused(t *testing.T
 	_, p := testServer(t, mux)
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 
-	// 1. Guard runs first (the cheap pre-check). This populates the doGET ETag
-	//    cache for the pipelines endpoint with per_page=1.
 	if _, err := p.CommitChecksGuard(context.Background(), repo, "abc123", ""); err != nil {
 		t.Fatalf("CommitChecksGuard: %v", err)
 	}
 
-	// 2. fetchCI (via FetchPullRequests) runs second with the same query
-	//    parameters. The doGET ETag cache sends If-None-Match and receives a
-	//    304, so the pipelines handler is NOT hit with a fresh 200.
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
 	obs, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
 	if err != nil {
@@ -962,9 +889,6 @@ func TestCommitChecksGuard_ThenFetchPullRequests_Pipelines304Reused(t *testing.T
 		t.Errorf("CI.Summary = %q, want %q", obs[0].CI.Summary, "passing")
 	}
 
-	// The pipelines endpoint must have been hit exactly once with a 200
-	// (the guard's fetch). The second call (fetchCI) must be served as a 304
-	// by the ETag cache, so the handler never emits a second 200 body.
 	if got := pipelines200.Load(); got != 1 {
 		t.Errorf("pipelines 200 count = %d, want 1 (second call should be a 304 served by ETag cache)", got)
 	}
@@ -976,8 +900,8 @@ func TestCommitChecksGuard_ThenFetchPullRequests_Pipelines304Reused(t *testing.T
 func TestMergeabilityFromMR(t *testing.T) {
 	tests := []struct {
 		name           string
-		detailedStatus string // populates restMR.DetailedMergeStatus (current GitLab enum)
-		legacyStatus   string // populates restMR.MergeStatus (deprecated since GitLab 15.6)
+		detailedStatus string
+		legacyStatus   string
 		ciState        string
 		review         string
 		draft          bool
@@ -986,7 +910,6 @@ func TestMergeabilityFromMR(t *testing.T) {
 		wantBehind     bool
 		wantBlockers   []string
 	}{
-		// Current detailed_merge_status values (GitLab >= 15.6).
 		{"mergeable", "mergeable", "", "passing", "approved", false, "mergeable", false, false, nil},
 		{"mergeable+failing-ci", "mergeable", "", "failing", "approved", false, "blocked", false, false, []string{"ci_failing"}},
 		{"mergeable+review-required", "mergeable", "", "passing", "review_required", false, "blocked", false, false, []string{"review_required"}},
@@ -1005,8 +928,6 @@ func TestMergeabilityFromMR(t *testing.T) {
 		{"not_open", "not_open", "", "passing", "approved", false, "blocked", false, false, []string{"blocked_by_provider"}},
 		{"merge_request_blocked", "merge_request_blocked", "", "passing", "approved", false, "blocked", false, false, []string{"blocked_by_provider"}},
 
-		// Legacy merge_status values (deprecated since GitLab 15.6, still
-		// returned by older self-managed installations).
 		{"legacy-can_be_merged", "", "can_be_merged", "passing", "approved", false, "mergeable", false, false, nil},
 		{"legacy-cannot_be_merged", "", "cannot_be_merged", "passing", "approved", false, "conflicting", true, false, []string{"conflicts"}},
 		{"legacy-cannot_be_merged_recheck", "", "cannot_be_merged_recheck", "passing", "approved", false, "conflicting", true, false, []string{"conflicts"}},
@@ -1040,10 +961,6 @@ func TestMergeabilityFromMR(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_DetailedMergeStatus verifies that a current GitLab
-// detailed_merge_status value ("mergeable") flows through to the observation's
-// Mergeability.State rather than being misclassified as blocked (review
-// finding #3).
 func TestFetchPullRequests_DetailedMergeStatus(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -1051,8 +968,8 @@ func TestFetchPullRequests_DetailedMergeStatus(t *testing.T) {
 			"iid": 1, "title": "Fix bug", "state": "opened", "draft": false,
 			"web_url":       "https://gitlab.com/myorg/myrepo/-/merge_requests/1",
 			"source_branch": "fix-bug", "target_branch": "main", "sha": "abc123",
-			"merge_status":          "can_be_merged", // deprecated legacy field
-			"detailed_merge_status": "mergeable",     // current authoritative field
+			"merge_status":          "can_be_merged",
+			"detailed_merge_status": "mergeable",
 			"author":                map[string]any{"username": "alice"},
 		})
 	})
@@ -1168,12 +1085,7 @@ func TestSCMCredentialsAvailable(t *testing.T) {
 	}
 }
 
-// TestSCMCredentialsAvailable_HostTokens verifies that the credentials probe
-// checks hostTokens in addition to the default token. When a user configures
-// only AO_GITLAB_HOST_TOKENS (self-managed host tokens) without a default
-// token, the probe must still return true so the observer is not disabled.
 func TestSCMCredentialsAvailable_HostTokens(t *testing.T) {
-	// No default token, but a valid hostToken → true.
 	pHostOnly, _ := NewProvider(ProviderOptions{
 		Client:             NewClient(ClientOptions{Token: StaticTokenSource("")}),
 		SkipTokenPreflight: true,
@@ -1187,7 +1099,6 @@ func TestSCMCredentialsAvailable_HostTokens(t *testing.T) {
 		t.Errorf("no default token + valid hostToken: want (true, nil), got (%v, %v)", avail, err)
 	}
 
-	// No default token, no hostTokens → false.
 	pNoTokens, _ := NewProvider(ProviderOptions{
 		Client:             NewClient(ClientOptions{Token: StaticTokenSource("")}),
 		SkipTokenPreflight: true,
@@ -1197,7 +1108,6 @@ func TestSCMCredentialsAvailable_HostTokens(t *testing.T) {
 		t.Errorf("no default token, no hostTokens: want (false, nil), got (%v, %v)", avail, err)
 	}
 
-	// Valid default token, no hostTokens → true.
 	pDefaultOnly, _ := NewProvider(ProviderOptions{
 		Client: NewClient(ClientOptions{Token: StaticTokenSource("default-token")}),
 	})
@@ -1206,7 +1116,6 @@ func TestSCMCredentialsAvailable_HostTokens(t *testing.T) {
 		t.Errorf("valid default token, no hostTokens: want (true, nil), got (%v, %v)", avail, err)
 	}
 
-	// No default token, hostToken present but error → false with error.
 	errSrc := &errorTokenSource{err: errors.New("glab command failed")}
 	pHostErr, _ := NewProvider(ProviderOptions{
 		Client:             NewClient(ClientOptions{Token: StaticTokenSource("")}),
@@ -1225,7 +1134,6 @@ func TestSCMCredentialsAvailable_HostTokens(t *testing.T) {
 	}
 }
 
-// errorTokenSource is a test TokenSource that always returns the given error.
 type errorTokenSource struct {
 	err error
 }
@@ -1255,10 +1163,6 @@ func TestClassifyError(t *testing.T) {
 	}
 }
 
-// TestClassifyError_RateLimitRetryAfter verifies that a 429 with a Retry-After
-// header is parsed into a RateLimitError exposing RetryAfter, so the observer
-// can apply a provider-level cooldown instead of hammering every 30s (review
-// finding #4).
 func TestClassifyError_RateLimitRetryAfter(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusTooManyRequests,
@@ -1280,9 +1184,6 @@ func TestClassifyError_RateLimitRetryAfter(t *testing.T) {
 	}
 }
 
-// TestClassifyError_RateLimitResetHeader verifies that a 429 with a
-// RateLimit-Reset header (Unix epoch seconds) is parsed into a RateLimitError
-// exposing ResetAt
 func TestClassifyError_RateLimitResetHeader(t *testing.T) {
 	resetEpoch := time.Now().Add(5 * time.Minute).Unix()
 	resp := &http.Response{
@@ -1290,9 +1191,6 @@ func TestClassifyError_RateLimitResetHeader(t *testing.T) {
 		Status:     http.StatusText(http.StatusTooManyRequests),
 		Header:     http.Header{},
 	}
-	// Header.Set canonicalizes the key on store, matching how Go's HTTP
-	// transport populates headers from the wire (a raw map-literal key would
-	// NOT be canonicalized and Get() would miss it).
 	resp.Header.Set("RateLimit-Reset", strconv.FormatInt(resetEpoch, 10))
 	err := classifyError(resp, nil)
 	var rle *RateLimitError
@@ -1302,15 +1200,11 @@ func TestClassifyError_RateLimitResetHeader(t *testing.T) {
 	if rle.ResetAt.IsZero() {
 		t.Error("ResetAt = zero, want parsed from RateLimit-Reset header")
 	}
-	// Allow a small clock-skew window.
 	if diff := time.Until(rle.ResetAt); diff < 4*time.Minute || diff > 6*time.Minute {
 		t.Errorf("ResetAt is %v from now, want ~5m", diff)
 	}
 }
 
-// TestNewClient_DefaultHTTPTimeout verifies the client uses a finite HTTP
-// timeout by default so a hung GitLab API call does not block the observer
-// indefinitely
 func TestNewClient_DefaultHTTPTimeout(t *testing.T) {
 	c := NewClient(ClientOptions{Token: StaticTokenSource("tok")})
 	if c.http == nil {
@@ -1321,9 +1215,6 @@ func TestNewClient_DefaultHTTPTimeout(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_SelfManagedRESTBase verifies that a self-managed GitLab
-// host derives its REST base as https://<host>/api/v4 rather than hitting
-// gitlab.com
 func TestFetchPullRequests_SelfManagedRESTBase(t *testing.T) {
 	var seenHost string
 	var seenPath string
@@ -1349,11 +1240,6 @@ func TestFetchPullRequests_SelfManagedRESTBase(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// Build a provider with no default client (so clientForHost always builds
-	// per-host clients) and a hostClientCfg whose HTTPClient is a test-server
-	// redirecting transport so the derived https://<host>/api/v4 URL is
-	// rewritten to the test server. This proves the REST base is derived from
-	// the host, not hardcoded to gitlab.com.
 	p, err := NewProvider(ProviderOptions{
 		Token:              StaticTokenSource("test-token"),
 		SkipTokenPreflight: true,
@@ -1368,7 +1254,6 @@ func TestFetchPullRequests_SelfManagedRESTBase(t *testing.T) {
 			Transport: &rewriteTransport{target: srv.URL},
 		},
 	}
-	// Default client also points at the test server for the empty-host fallback.
 	p.client = NewClient(ClientOptions{
 		Token:      StaticTokenSource("test-token"),
 		RESTBase:   srv.URL + "/api/v4",
@@ -1384,9 +1269,6 @@ func TestFetchPullRequests_SelfManagedRESTBase(t *testing.T) {
 	if seenHost == "" {
 		t.Fatal("no request was made to the self-managed host")
 	}
-	// The request must have gone to the test server (derived REST base),
-	// NOT to gitlab.com. If it had used the hardcoded default, seenHost would
-	// be "gitlab.com" and the request would have failed with a DNS error.
 	if seenHost == "gitlab.com" {
 		t.Errorf("request went to gitlab.com (host=%q), want self-managed test server — REST base not derived from host", seenHost)
 	}
@@ -1395,10 +1277,6 @@ func TestFetchPullRequests_SelfManagedRESTBase(t *testing.T) {
 	}
 }
 
-// rewriteTransport rewrites every request's URL scheme+host to target, so a
-// client whose REST base is https://gitlab.mycompany.com/api/v4 is transparently
-// routed to a test server. This lets self-managed host tests prove the REST
-// base is derived from the host without real DNS.
 type rewriteTransport struct {
 	target string
 }
@@ -1414,9 +1292,6 @@ func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return http.DefaultTransport.RoundTrip(req2)
 }
 
-// TestFetchPullRequests_PipelineJobsPagination verifies that when a pipeline
-// has more than one page of jobs, all pages are fetched by following the
-// Link: <...>; rel="next" header
 func TestFetchPullRequests_PipelineJobsPagination(t *testing.T) {
 	page := 1
 	mux := http.NewServeMux()
@@ -1434,8 +1309,6 @@ func TestFetchPullRequests_PipelineJobsPagination(t *testing.T) {
 	})
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/100/jobs", func(w http.ResponseWriter, r *http.Request) {
 		if page == 1 {
-			// Page 1: full page of pipelineJobsPageSize jobs + a Link header
-			// pointing to page 2.
 			jobs := make([]map[string]any, pipelineJobsPageSize)
 			for i := range jobs {
 				jobs[i] = map[string]any{
@@ -1448,7 +1321,6 @@ func TestFetchPullRequests_PipelineJobsPagination(t *testing.T) {
 			page = 2
 			return
 		}
-		// Page 2: 50 more jobs (no next link → stop).
 		jobs := make([]map[string]any, 50)
 		for i := range jobs {
 			jobs[i] = map[string]any{
@@ -1548,9 +1420,6 @@ func TestFetchPullRequests_CanceledPipeline(t *testing.T) {
 	}
 }
 
-// TestFetchReviewThreads_DiscussionsPagination verifies that when an MR has
-// more than one page of discussions, all pages are fetched by following the
-// Link header
 func TestFetchReviewThreads_DiscussionsPagination(t *testing.T) {
 	page := 1
 	mux := http.NewServeMux()
@@ -1573,7 +1442,6 @@ func TestFetchReviewThreads_DiscussionsPagination(t *testing.T) {
 			page = 2
 			return
 		}
-		// Page 2: 30 more discussions, no next link.
 		discs := make([]map[string]any, 30)
 		for i := range discs {
 			discs[i] = map[string]any{
@@ -1603,21 +1471,14 @@ func TestFetchReviewThreads_DiscussionsPagination(t *testing.T) {
 	if len(review.Threads) != totalWant {
 		t.Errorf("Threads = %d, want %d (pagination must follow Link rel=next)", len(review.Threads), totalWant)
 	}
-	// Pagination completed naturally (no next link on page 2) — Partial must be false.
 	if review.Partial {
 		t.Error("Partial = true, want false (all discussions fetched, no truncation)")
 	}
 }
 
-// TestFetchReviewThreads_DiscussionsTruncated verifies that Partial is set to
-// true only when the 10-page pagination cap is hit (actual truncation), not
-// whenever a full page is returned. Previously Partial was set based on
-// len(discussions) >= pageSize, which was true even for a single full page.
 func TestFetchReviewThreads_DiscussionsTruncated(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/discussions", func(w http.ResponseWriter, r *http.Request) {
-		// Always return a full page and always include a next link, simulating
-		// a repo with more than 10 pages of discussions (1000+).
 		discs := make([]map[string]any, reviewDiscussionPageSize)
 		for i := range discs {
 			discs[i] = map[string]any{
@@ -1644,7 +1505,6 @@ func TestFetchReviewThreads_DiscussionsTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 10 pages × 100 = 1000 threads, and the cap was hit so Partial must be true.
 	if len(review.Threads) != maxPaginationPages*reviewDiscussionPageSize {
 		t.Errorf("Threads = %d, want %d (10-page cap × page size)", len(review.Threads), maxPaginationPages*reviewDiscussionPageSize)
 	}
@@ -1653,10 +1513,6 @@ func TestFetchReviewThreads_DiscussionsTruncated(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_TransientFailureReturnsError verifies that a transient
-// failure on the MR detail endpoint is propagated as an error rather than being
-// swallowed into a Fetched=false placeholder observation. The observer must
-// reject failed observations to preserve last durable state
 func TestFetchPullRequests_TransientFailureReturnsError(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -1679,9 +1535,6 @@ func TestFetchPullRequests_TransientFailureReturnsError(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_PipelineFailureReturnsError verifies that a transient
-// failure on the pipelines endpoint is propagated as an error rather than
-// silently degrading CI to "unknown" while Fetched stays true
 func TestFetchPullRequests_PipelineFailureReturnsError(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -1708,9 +1561,6 @@ func TestFetchPullRequests_PipelineFailureReturnsError(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_ApprovalFailureReturnsError verifies that a transient
-// failure on the approvals endpoint is propagated as an error rather than
-// silently degrading review to "none" while Fetched stays true
 func TestFetchPullRequests_ApprovalFailureReturnsError(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -1740,9 +1590,6 @@ func TestFetchPullRequests_ApprovalFailureReturnsError(t *testing.T) {
 	}
 }
 
-// TestListPRsByRepo_UpdatedAfterAndStateAll verifies that ListPRsByRepo
-// sends the updated_after (RFC3339) and state=all query parameters when an
-// updatedAfter cursor is supplied
 func TestListPRsByRepo_UpdatedAfterAndStateAll(t *testing.T) {
 	var seenState, seenUpdatedAfter string
 	mux := http.NewServeMux()
@@ -1764,7 +1611,6 @@ func TestListPRsByRepo_UpdatedAfterAndStateAll(t *testing.T) {
 	if seenUpdatedAfter == "" {
 		t.Error("updated_after query param is empty, want RFC3339 timestamp")
 	}
-	// Verify it parses as a valid RFC3339 timestamp.
 	parsed, err := time.Parse(time.RFC3339, seenUpdatedAfter)
 	if err != nil {
 		t.Fatalf("updated_after %q is not valid RFC3339: %v", seenUpdatedAfter, err)
@@ -1774,8 +1620,6 @@ func TestListPRsByRepo_UpdatedAfterAndStateAll(t *testing.T) {
 	}
 }
 
-// TestListPRsByRepo_FirstPollFullListing verifies that a zero updatedAfter
-// (first poll) omits the updated_after param, requesting a full listing
 func TestListPRsByRepo_FirstPollFullListing(t *testing.T) {
 	var seenUpdatedAfter string
 	mux := http.NewServeMux()
@@ -1794,17 +1638,9 @@ func TestListPRsByRepo_FirstPollFullListing(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_ForkMR_ResolvesSourceProjectHeadRepo verifies that a
-// fork merge request (source_project_id != target_project_id) resolves its
-// head repository to the source project's path_with_namespace rather than the
-// target project (review Item 4). Without this resolution, a fork MR with a
-// matching branch name can pass AO's head-repository ownership guard against
-// the wrong project.
 func TestFetchPullRequests_ForkMR_ResolvesSourceProjectHeadRepo(t *testing.T) {
 	var sourceProjectHits int
 	mux := http.NewServeMux()
-	// MR detail: source_project_id (99) differs from target_project_id (10)
-	// — this is the signal that the MR comes from a fork.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"iid":               1,
@@ -1822,8 +1658,6 @@ func TestFetchPullRequests_ForkMR_ResolvesSourceProjectHeadRepo(t *testing.T) {
 			"diff_refs":         map[string]any{"base_sha": "base123"},
 		})
 	})
-	// Source project lookup: projects/:id returns path_with_namespace of the
-	// fork the MR head branch lives in.
 	mux.HandleFunc("/api/v4/projects/99", func(w http.ResponseWriter, r *http.Request) {
 		sourceProjectHits++
 		json.NewEncoder(w).Encode(map[string]any{
@@ -1859,24 +1693,14 @@ func TestFetchPullRequests_ForkMR_ResolvesSourceProjectHeadRepo(t *testing.T) {
 	if !o.Fetched {
 		t.Fatal("expected Fetched=true for a fork MR with a resolvable source project")
 	}
-	// HeadRepo MUST be the source project's path_with_namespace, NOT the
-	// target project repo (myorg/myrepo). This is the core of review Item 4:
-	// without resolution, a fork MR with a matching branch name passes the
-	// head-repository ownership guard against the wrong project.
 	if got, want := o.PR.HeadRepo, "contributor/myrepo-fork"; got != want {
 		t.Errorf("PR.HeadRepo = %q, want %q (source project path_with_namespace)", got, want)
 	}
-	// The source-project endpoint must actually have been queried once.
 	if sourceProjectHits != 1 {
 		t.Errorf("source project endpoint hits = %d, want 1", sourceProjectHits)
 	}
 }
 
-// TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject verifies that a
-// same-project MR (source_project_id == target_project_id) does NOT trigger a
-// source-project fetch. The source-project resolution is exclusively for fork
-// MRs; issuing it for same-repo MRs would be wasted work per poll (review
-// Item 4 — no-cache, per-poll fetch is rare because fork MRs are a minority).
 func TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject(t *testing.T) {
 	var sourceProjectHits int
 	mux := http.NewServeMux()
@@ -1910,8 +1734,6 @@ func TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject(t *testing.T) {
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/approvals", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"approved": false, "approvals_required": 0, "approved_by": []any{}})
 	})
-	// Catch-all that fails the test if the source-project endpoint is hit at
-	// all — the non-fork path must not issue this request.
 	mux.HandleFunc("/api/v4/projects/10", func(w http.ResponseWriter, r *http.Request) {
 		sourceProjectHits++
 		t.Errorf("source project endpoint hit for non-fork MR; should not be fetched")
@@ -1927,7 +1749,6 @@ func TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject(t *testing.T) {
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// For a same-repo MR, HeadRepo stays the target repo (no fork resolution).
 	if got, want := obs[0].PR.HeadRepo, "myorg/myrepo"; got != want {
 		t.Errorf("PR.HeadRepo = %q, want %q (target repo for non-fork MR)", got, want)
 	}
@@ -1936,13 +1757,6 @@ func TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_ForkMR_SourceProjectFetchFails_FailClosed verifies
-// that when a fork MR's source-project fetch fails (404 here, but the same
-// applies to 5xx/timeout), the observation is marked Fetched=false with the
-// error attached (ticket 03's obs.Error mechanism) and the head repository is
-// NOT fabricated to the target project (review Item 4 — fail closed, do not
-// falsify the head repository). This preserves the cross-cutting rule: a
-// failed retrieval must not advance durable state.
 func TestFetchPullRequests_ForkMR_SourceProjectFetchFails_FailClosed(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -1962,7 +1776,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectFetchFails_FailClosed(t *testing.
 			"diff_refs":         map[string]any{"base_sha": "base123"},
 		})
 	})
-	// Source project lookup 404s — e.g. the fork was deleted or made private.
 	mux.HandleFunc("/api/v4/projects/99", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"message":"404 Project Not Found"}`)
@@ -1972,9 +1785,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectFetchFails_FailClosed(t *testing.
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
 
 	obs, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
-	// A transient fetch failure must propagate as a non-nil error so the
-	// observer preserves the last durable state rather than persisting a
-	// falsified observation.
 	if err == nil {
 		t.Fatal("FetchPullRequests: error = nil, want non-nil for failed fork-MR source-project fetch")
 	}
@@ -1985,26 +1795,14 @@ func TestFetchPullRequests_ForkMR_SourceProjectFetchFails_FailClosed(t *testing.
 	if o.Fetched {
 		t.Error("expected Fetched=false (fail closed) when source-project fetch fails")
 	}
-	// The error classification must be attached as transient per-observation
-	// metadata (ticket 03 mechanism) so the observer can route it to
-	// refresh-incomplete without discarding the classification.
 	if o.Error == nil {
 		t.Error("expected obs.Error set on failed fork-MR observation")
 	}
-	// HeadRepo must NOT be the target project repo — failing closed means we
-	// do not fabricate the head repository for a fork whose source is
-	// unresolvable. It should be empty (zero value), not "myorg/myrepo".
 	if o.PR.HeadRepo != "" {
 		t.Errorf("PR.HeadRepo = %q, want empty (must not fabricate head repo on fetch failure)", o.PR.HeadRepo)
 	}
 }
 
-// TestFetchPullRequests_ForkMR_SourceProjectCachedWithinTTL verifies that the
-// fork source-project path_with_namespace is cached across poll cycles within
-// the 5-min TTL (ticket 05). Two FetchPullRequests calls for the same fork MR
-// within the TTL window must hit the source-project endpoint exactly once —
-// the second call is served from the cache without an HTTP round-trip. The
-// cached path must still produce the correct HeadRepo on the second call.
 func TestFetchPullRequests_ForkMR_SourceProjectCachedWithinTTL(t *testing.T) {
 	var sourceProjectHits atomic.Int32
 	mux := http.NewServeMux()
@@ -2049,12 +1847,9 @@ func TestFetchPullRequests_ForkMR_SourceProjectCachedWithinTTL(t *testing.T) {
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
 
-	// Inject a controllable clock so TTL behaviour is deterministic (no real
-	// sleeping). syntheticClock is defined in cache_test.go.
 	clock := &syntheticClock{t: time.Now()}
 	p.cache.now = clock.now
 
-	// First FetchPullRequests — fork-project cache miss, fetches via HTTP.
 	obs, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
 	if err != nil {
 		t.Fatalf("first FetchPullRequests: unexpected error: %v", err)
@@ -2069,8 +1864,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectCachedWithinTTL(t *testing.T) {
 		t.Fatalf("source-project endpoint hits after first call = %d, want 1", got)
 	}
 
-	// Second FetchPullRequests within the 5-min TTL — cache hit, no HTTP
-	// round-trip to the source-project endpoint.
 	obs2, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
 	if err != nil {
 		t.Fatalf("second FetchPullRequests (within TTL): unexpected error: %v", err)
@@ -2078,7 +1871,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectCachedWithinTTL(t *testing.T) {
 	if len(obs2) != 1 || !obs2[0].Fetched {
 		t.Fatalf("second call: expected one fetched observation, got %+v", obs2)
 	}
-	// HeadRepo must still be the cached source-project path on a cache hit.
 	if got, want := obs2[0].PR.HeadRepo, "contributor/myrepo-fork"; got != want {
 		t.Errorf("second call: PR.HeadRepo = %q, want %q (cached path on cache hit)", got, want)
 	}
@@ -2087,11 +1879,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectCachedWithinTTL(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_ForkMR_SourceProjectCacheExpiresAfterTTL verifies that
-// after the 5-min fork-project TTL elapses, the cached entry is treated as a
-// miss and the source-project endpoint is fetched again (ticket 05). This is
-// the staleness-recovery path: if a project is renamed/transferred mid-session,
-// the cache refreshes within the TTL window.
 func TestFetchPullRequests_ForkMR_SourceProjectCacheExpiresAfterTTL(t *testing.T) {
 	var sourceProjectHits atomic.Int32
 	mux := http.NewServeMux()
@@ -2139,7 +1926,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectCacheExpiresAfterTTL(t *testing.T
 	clock := &syntheticClock{t: time.Now()}
 	p.cache.now = clock.now
 
-	// First call — populates the fork-project cache.
 	if _, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref}); err != nil {
 		t.Fatalf("first FetchPullRequests: %v", err)
 	}
@@ -2147,8 +1933,6 @@ func TestFetchPullRequests_ForkMR_SourceProjectCacheExpiresAfterTTL(t *testing.T
 		t.Fatalf("source-project endpoint hits after first call = %d, want 1", got)
 	}
 
-	// Advance past the fork-project TTL (5 min). The cached entry must now be
-	// treated as a miss, so the next FetchPullRequests fetches again.
 	clock.advance(forkProjectCacheTTL + time.Second)
 	if _, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref}); err != nil {
 		t.Fatalf("second FetchPullRequests (after TTL): %v", err)
@@ -2158,45 +1942,14 @@ func TestFetchPullRequests_ForkMR_SourceProjectCacheExpiresAfterTTL(t *testing.T
 	}
 }
 
-// TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe verifies that the
-// provider-level TTL cache (added by ticket 01, consumed by tickets 03, 04, 05)
-// is thread-safe under the existing fetchConcurrency=5 parallelism exercised by
-// FetchPullRequests. This is the integration guard for ticket 07: it locks in
-// the concurrency invariant once all cache consumers are wired in.
-//
-// The test deliberately contends on every cache domain simultaneously:
-//
-//   - MR-detail cache: each ref's /merge_requests/:iid response is served from
-//     the same fork project (source_project_id=99) so the MR-detail path runs
-//     concurrently across refs.
-//   - Fork-project cache: 5+ fork MRs all resolve to source_project_id=99 —
-//     the same cache entry is read and written by concurrent goroutines, which
-//     is the exact write-write contention path the mutex must guard.
-//   - Approvals cache: every ref consults the approvals cache; the first
-//     goroutine to fetch populates it, the rest read it concurrently.
-//
-// Under go test -race the race detector flags any unsynchronized access to the
-// shared cache maps. The test asserts that all observations return correct
-// results (no missing/stale entries from a racing overwrite) and that the
-// source-project endpoint is not duplicated unnecessarily (no duplicate
-// cache writes producing stale or missing entries). 7 refs exceeds the
-// fetchConcurrency=5 cap, guaranteeing the semaphore is saturated and goroutines
-// queue — the exact interleaving most likely to surface a race.
 func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 	var sourceProjectHits atomic.Int32
-	// Per-MR-detail hit counters so the test can verify each ref is fetched
-	// (the MR-detail cache is cold at the start of this test).
 	var mrDetailHits atomic.Int32
 	var approvalsHits atomic.Int32
 	var pipelinesHits atomic.Int32
 
 	mux := http.NewServeMux()
 
-	// 7 fork MRs, all with source_project_id=99. They share the same
-	// fork-project cache entry (host=gitlab.com, source_project_id=99) and
-	// each has its own approvals + MR-detail cache entry. fetchConcurrency=5
-	// means at most 5 of these run concurrently; the remaining 2 wait on the
-	// semaphore, so the mutex is contended from the very first cycle.
 	const numRefs = 7
 	for i := 1; i <= numRefs; i++ {
 		iid := i
@@ -2218,7 +1971,7 @@ func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 				"sha":               sha,
 				"merge_status":      "can_be_merged",
 				"author":            map[string]any{"username": "alice"},
-				"source_project_id": 99, // same fork project for all refs → shared cache entry
+				"source_project_id": 99,
 				"target_project_id": 10,
 				"diff_refs":         map[string]any{"base_sha": "base123"},
 			})
@@ -2238,13 +1991,6 @@ func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 		})
 	}
 
-	// Shared source-project endpoint: all 7 refs resolve to the same
-	// source_project_id=99, so under correct cache behavior this is fetched
-	// exactly once (the first goroutine populates the fork-project cache; the
-	// rest read the cached entry). A write-write race that creates duplicate
-	// entries would show up here as >1 hit (though under -race the detector
-	// flags the underlying map access, not the hit count — the hit count is
-	// the correctness assertion for the no-duplicated-entries criterion).
 	mux.HandleFunc("/api/v4/projects/99", func(w http.ResponseWriter, r *http.Request) {
 		sourceProjectHits.Add(1)
 		json.NewEncoder(w).Encode(map[string]any{
@@ -2252,13 +1998,9 @@ func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 			"path_with_namespace": "contributor/myrepo-fork",
 		})
 	})
-	// Pipelines list endpoint (per repo, not per ref). Track total hits so
-	// the test confirms CI state was fetched for every ref.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines", func(w http.ResponseWriter, r *http.Request) {
 		pipelinesHits.Add(1)
 		sha := r.URL.Query().Get("sha")
-		// Return a pipeline whose id encodes the sha so the per-iid jobs
-		// handler above matches.
 		var pipelineID int
 		for i := 1; i <= numRefs; i++ {
 			if sha == fmt.Sprintf("sha%d", i) {
@@ -2295,11 +2037,6 @@ func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 		t.Fatalf("got %d observations, want %d", len(obs), numRefs)
 	}
 
-	// Every observation must be Fetched=true with the correct fork head repo
-	// resolved from the shared source-project cache entry. A racing
-	// overwrite that dropped or corrupted the cached entry would surface as
-	// HeadRepo == "myorg/myrepo" (the fallback target repo) for at least one
-	// ref, or as Fetched=false.
 	for i, o := range obs {
 		if !o.Fetched {
 			t.Errorf("obs[%d].Fetched = false, want true (cache race may have dropped an entry)", i)
@@ -2313,29 +2050,6 @@ func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 		}
 	}
 
-	// Correctness assertions for cache behavior under contention:
-	//
-	// source-project endpoint: the fork-project cache uses check-then-fetch-
-	// then-set (NOT single-flight) per the spec's design decision — the mutex
-	// guards map access, not the HTTP fetch. So all goroutines that start
-	// concurrently (up to fetchConcurrency=5) can see a miss before any of them
-	// completes and populates the entry; goroutines released from the semaphore
-	// after the first write sees a hit. The expected hit count is therefore
-	// 1 <= hits <= fetchConcurrency. Asserting exactly 1 would demand
-	// single-flight semantics the implementation deliberately does not
-	// provide; the acceptance criterion is "no stale or missing entries from
-	// write-write races" — and all concurrent writes store the identical value
-	// ("contributor/myrepo-fork"), so the final cache entry is correct.
-	//
-	//   - MR-detail endpoint hit once per ref (cold cache): each ref's
-	//     /merge_requests/:iid is fetched exactly once. The MR-detail cache
-	//     is keyed by (host, repo, iid) so refs do not collide here; this
-	//     counter confirms all refs were actually processed.
-	//   - approvals endpoint hit once per ref (cold cache): the approvals
-	//     cache is also keyed by iid, so each ref fetches its own approvals
-	//     exactly once. This is the contention path: concurrent goroutines
-	//     for *different* iids run the setApprovals path simultaneously on
-	//     the shared mutex.
 	if got := sourceProjectHits.Load(); got < 1 || got > int32(fetchConcurrency) {
 		t.Errorf("source-project endpoint hits = %d, want in [1, %d] (fork-project cache: at least one fetch, at most one per concurrent goroutine)", got, fetchConcurrency)
 	} else {
@@ -2352,14 +2066,6 @@ func TestFetchPullRequests_ConcurrentCacheAccess_RaceSafe(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_PipelineJobsTruncated_Partial verifies that when the
-// pipeline-jobs pagination hits the 10-page cap (more than 1,000 jobs), the
-// observation's CI.Partial flag is set to true so the observer does not
-// authoritatively persist a capped snapshot as Fetched=true complete (review
-// Item 13). The truncation flag comes from doGETPaginated's boolean return
-// value — a separate code path from the rolling-tail byte bound (ticket 12).
-// Durable checks must NOT be overwritten by the capped snapshot; that
-// preservation is the observer's responsibility, gated by CI.Partial.
 func TestFetchPullRequests_PipelineJobsTruncated_Partial(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -2375,10 +2081,6 @@ func TestFetchPullRequests_PipelineJobsTruncated_Partial(t *testing.T) {
 		json.NewEncoder(w).Encode([]map[string]any{{"id": 100, "status": "success", "sha": "abc123"}})
 	})
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/100/jobs", func(w http.ResponseWriter, r *http.Request) {
-		// Always return a full page and always include a next link,
-		// simulating a repo with more than 10 pages of pipeline jobs
-		// (1,000+ jobs). The doGETPaginated loop hits the maxPaginationPages
-		// cap and returns truncated=true.
 		jobs := make([]map[string]any, pipelineJobsPageSize)
 		for i := range jobs {
 			jobs[i] = map[string]any{
@@ -2401,25 +2103,14 @@ func TestFetchPullRequests_PipelineJobsTruncated_Partial(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := obs[0]
-	// 10 pages × 100 jobs = 1,000 jobs collected before the cap stopped the loop.
 	if len(o.CI.Checks) != maxPaginationPages*pipelineJobsPageSize {
 		t.Errorf("CI.Checks = %d, want %d (10-page cap × page size)", len(o.CI.Checks), maxPaginationPages*pipelineJobsPageSize)
 	}
-	// Partial MUST be true so the observer does not authoritatively persist the
-	// capped snapshot as Fetched=true complete. Without this flag, more than
-	// 1,000 jobs are treated as a complete CI snapshot and later failures can
-	// be omitted while durable checks are overwritten.
 	if !o.CI.Partial {
 		t.Error("CI.Partial = false, want true (pagination cap hit — response is truncated)")
 	}
 }
 
-// TestFetchPullRequests_AllowFailureJobNotActionable verifies that a job with
-// allow_failure: true is classified as an optional failure and does NOT appear
-// in FailedChecks when the pipeline succeeds (review Item 13). Optional failed
-// jobs must not become actionable failed checks — they are informational, not
-// blocking. The job still appears in Checks (full CI snapshot), but its failure
-// is not promoted to an actionable failure.
 func TestFetchPullRequests_AllowFailureJobNotActionable(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -2432,21 +2123,12 @@ func TestFetchPullRequests_AllowFailureJobNotActionable(t *testing.T) {
 		})
 	})
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines", func(w http.ResponseWriter, r *http.Request) {
-		// Pipeline succeeds overall, even though one optional job failed.
 		json.NewEncoder(w).Encode([]map[string]any{{"id": 100, "status": "success", "sha": "abc123"}})
 	})
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/100/jobs", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{
 			{"id": 200, "name": "build", "status": "success", "web_url": "https://gitlab.com/jobs/200", "allow_failure": false},
-			// Optional failed job — allow_failure: true. It must NOT appear in
-			// FailedChecks because its failure is optional and the pipeline
-			// succeeded.
 			{"id": 201, "name": "flakey-e2e", "status": "failed", "web_url": "https://gitlab.com/jobs/201", "allow_failure": true},
-			// Required failed job — allow_failure: false (or absent). This one
-			// MUST appear in FailedChecks because its failure blocks the pipeline.
-			// (The pipeline status is mocked to success for this test to isolate
-			// the allow_failure classification; the classification logic operates
-			// per-job regardless of the pipeline-level status.)
 			{"id": 202, "name": "required-test", "status": "failed", "web_url": "https://gitlab.com/jobs/202", "allow_failure": false},
 		})
 	})
@@ -2462,13 +2144,9 @@ func TestFetchPullRequests_AllowFailureJobNotActionable(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := obs[0]
-	// All three jobs appear in the full Checks snapshot.
 	if len(o.CI.Checks) != 3 {
 		t.Fatalf("CI.Checks = %d, want 3 (all jobs, including optional failures)", len(o.CI.Checks))
 	}
-	// Only the required failure (required-test) appears in FailedChecks.
-	// The optional failure (flakey-e2e) must NOT be promoted to an
-	// actionable failed check.
 	if len(o.CI.FailedChecks) != 1 {
 		t.Fatalf("FailedChecks = %d, want 1 (only the required failure; optional failures excluded)", len(o.CI.FailedChecks))
 	}
@@ -2477,12 +2155,6 @@ func TestFetchPullRequests_AllowFailureJobNotActionable(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_DiffStatsNotParsed verifies that the undocumented
-// diff_stats object returned by the GitLab MR detail endpoint is NOT parsed
-// into the observation's Additions/Deletions/ChangedFiles fields (review S2).
-// GitLab does not document diff_stats as part of the MR detail response, so
-// relying on it is fragile. The observation's diff-stat fields must be
-// zero-valued unless sourced from a documented endpoint.
 func TestFetchPullRequests_DiffStatsNotParsed(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -2508,9 +2180,6 @@ func TestFetchPullRequests_DiffStatsNotParsed(t *testing.T) {
 				"web_url":       "https://gitlab.com/myorg/myrepo/-/merge_requests/1",
 				"source_branch": "fix-bug", "target_branch": "main", "sha": "abc123",
 				"merge_status": "can_be_merged", "author": map[string]any{"username": "alice"},
-				// GitLab may return this undocumented object; it must be
-				// ignored (not parsed) so the observation does not depend on
-				// undocumented fields.
 				"diff_stats": map[string]any{
 					"additions": 42,
 					"deletions": 7,
@@ -2560,9 +2229,6 @@ func TestFetchPullRequests_DiffStatsNotParsed(t *testing.T) {
 	}
 }
 
-// mrDetailFixture returns a GitLab MR JSON payload (as a Go map) suitable for
-// both the list and detail endpoints — GitLab returns the same shape for the
-// fields AO uses, which is what ticket 03's MR-detail cache relies on.
 func mrDetailFixture(iid int, baseSHA string) map[string]any {
 	return map[string]any{
 		"iid":               iid,
@@ -2581,9 +2247,6 @@ func mrDetailFixture(iid int, baseSHA string) map[string]any {
 	}
 }
 
-// registerMRSupportingEndpoints wires the CI/approvals sub-fetch endpoints
-// that FetchPullRequests calls after the MR detail. They return minimal
-// success payloads so fetchSingleMR completes without error.
 func registerMRSupportingEndpoints(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{
@@ -2600,22 +2263,12 @@ func registerMRSupportingEndpoints(mux *http.ServeMux) {
 	})
 }
 
-// TestFetchPullRequests_ReusesMRDetailFromListCache verifies ticket 03's core
-// behavior: after ListPRsByRepo fetches the MR list, FetchPullRequests for one
-// of the listed MRs within the MR-detail TTL does NOT issue a redundant
-// GET /merge_requests/:iid. The cached restMR from the listing is a valid
-// substitute for the detail response (same shape for the fields AO uses), and
-// diff_refs.base_sha must be populated from the list payload.
 func TestFetchPullRequests_ReusesMRDetailFromListCache(t *testing.T) {
 	var mrDetailHits atomic.Int32
 	mux := http.NewServeMux()
-	// MR list endpoint returns the MR that will later be fetched by detail.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests", func(w http.ResponseWriter, r *http.Request) {
-		// state=all + pagination are fine; return one MR.
 		json.NewEncoder(w).Encode([]map[string]any{mrDetailFixture(1, "base123")})
 	})
-	// MR detail endpoint — this is what ticket 03 must SKIP. If it is hit,
-	// the test fails.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
 		mrDetailHits.Add(1)
 		json.NewEncoder(w).Encode(mrDetailFixture(1, "base123"))
@@ -2624,7 +2277,6 @@ func TestFetchPullRequests_ReusesMRDetailFromListCache(t *testing.T) {
 	_, p := testServer(t, mux)
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 
-	// Populate the MR-detail cache via the listing.
 	if _, err := p.ListPRsByRepo(context.Background(), repo, time.Time{}); err != nil {
 		t.Fatalf("ListPRsByRepo: %v", err)
 	}
@@ -2637,19 +2289,12 @@ func TestFetchPullRequests_ReusesMRDetailFromListCache(t *testing.T) {
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// The MR detail endpoint must NOT have been hit — the list-cached restMR
-	// is reused.
 	if got := mrDetailHits.Load(); got != 0 {
 		t.Errorf("MR detail endpoint hits = %d, want 0 (cached restMR from listing must be reused)", got)
 	}
-	// Base SHA must be populated from the list-cached restMR (acceptance
-	// criterion: diff_refs.base_sha correctly populated when served from the
-	// list cache).
 	if got, want := obs[0].PR.BaseSHA, "base123"; got != want {
 		t.Errorf("PR.BaseSHA = %q, want %q (served from list cache)", got, want)
 	}
-	// Sanity: the other observation fields are correct (the cached restMR is
-	// a valid substitute for the detail response).
 	if got, want := obs[0].PR.Number, 1; got != want {
 		t.Errorf("PR.Number = %d, want %d", got, want)
 	}
@@ -2658,9 +2303,6 @@ func TestFetchPullRequests_ReusesMRDetailFromListCache(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_ColdCache_FetchesMRDetailViaHTTP verifies the
-// fallback path: with no prior listing (cold MR-detail cache), FetchPullRequests
-// fetches the MR detail endpoint via HTTP and returns the correct result.
 func TestFetchPullRequests_ColdCache_FetchesMRDetailViaHTTP(t *testing.T) {
 	var mrDetailHits atomic.Int32
 	mux := http.NewServeMux()
@@ -2680,7 +2322,6 @@ func TestFetchPullRequests_ColdCache_FetchesMRDetailViaHTTP(t *testing.T) {
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// Cold cache → the MR detail endpoint MUST be hit exactly once.
 	if got := mrDetailHits.Load(); got != 1 {
 		t.Errorf("MR detail endpoint hits = %d, want 1 (cold cache must fall back to HTTP)", got)
 	}
@@ -2692,10 +2333,6 @@ func TestFetchPullRequests_ColdCache_FetchesMRDetailViaHTTP(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_MRDetailCacheTTLExpiry verifies that after the
-// MR-detail TTL elapses, a FetchPullRequests call falls back to the HTTP
-// fetch even though ListPRsByRepo populated the cache earlier. This guards the
-// staleness bound (~60s, one poll interval) and the miss → HTTP fallback path.
 func TestFetchPullRequests_MRDetailCacheTTLExpiry(t *testing.T) {
 	var mrDetailHits atomic.Int32
 	mux := http.NewServeMux()
@@ -2710,18 +2347,13 @@ func TestFetchPullRequests_MRDetailCacheTTLExpiry(t *testing.T) {
 	_, p := testServer(t, mux)
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 
-	// Inject a controllable clock so TTL expiry is fast and deterministic
-	// (no real sleeping). syntheticClock is defined in cache_test.go.
 	clock := &syntheticClock{t: time.Now()}
 	p.cache.now = clock.now
 
-	// Populate the MR-detail cache via the listing.
 	if _, err := p.ListPRsByRepo(context.Background(), repo, time.Time{}); err != nil {
 		t.Fatalf("ListPRsByRepo: %v", err)
 	}
 
-	// Advance past the MR-detail TTL (60s). The cached entry must now be
-	// treated as a miss.
 	clock.advance(mrDetailCacheTTL + time.Second)
 
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
@@ -2732,8 +2364,6 @@ func TestFetchPullRequests_MRDetailCacheTTLExpiry(t *testing.T) {
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// After TTL expiry, the MR detail endpoint MUST be hit (cache expired,
-	// fell back to HTTP).
 	if got := mrDetailHits.Load(); got != 1 {
 		t.Errorf("MR detail endpoint hits = %d, want 1 (cache expired, must fall back to HTTP)", got)
 	}
@@ -2742,23 +2372,14 @@ func TestFetchPullRequests_MRDetailCacheTTLExpiry(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_ListCacheMissingDiffRefs_FetchesDetail is the regression
-// test for finding #2: when the MR list payload omits diff_refs (GitLab's
-// project MR listing does not guarantee it), fetchSingleMR must NOT reuse the
-// cached restMR. Instead it falls through to the HTTP GET /merge_requests/:iid
-// detail request, and BaseSHA is populated from the detail response.
 func TestFetchPullRequests_ListCacheMissingDiffRefs_FetchesDetail(t *testing.T) {
 	var mrDetailHits atomic.Int32
 	mux := http.NewServeMux()
-	// MR list endpoint returns one MR WITHOUT diff_refs — simulates a GitLab
-	// instance or API version that omits diff_refs from the listing.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests", func(w http.ResponseWriter, r *http.Request) {
-		listMR := mrDetailFixture(1, "") // base_sha is irrelevant; we delete diff_refs below
+		listMR := mrDetailFixture(1, "")
 		delete(listMR, "diff_refs")
 		json.NewEncoder(w).Encode([]map[string]any{listMR})
 	})
-	// MR detail endpoint — returns the MR WITH diff_refs. This MUST be hit
-	// because the list-cached entry lacks diff_refs.base_sha.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
 		mrDetailHits.Add(1)
 		json.NewEncoder(w).Encode(mrDetailFixture(1, "base123"))
@@ -2767,7 +2388,6 @@ func TestFetchPullRequests_ListCacheMissingDiffRefs_FetchesDetail(t *testing.T) 
 	_, p := testServer(t, mux)
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 
-	// Populate the MR-detail cache via the listing (entry has no diff_refs).
 	if _, err := p.ListPRsByRepo(context.Background(), repo, time.Time{}); err != nil {
 		t.Fatalf("ListPRsByRepo: %v", err)
 	}
@@ -2780,29 +2400,20 @@ func TestFetchPullRequests_ListCacheMissingDiffRefs_FetchesDetail(t *testing.T) 
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// The MR detail endpoint MUST have been hit — the list-cached entry lacks
-	// diff_refs.base_sha, so the cache must not be reused.
 	if got := mrDetailHits.Load(); got != 1 {
 		t.Errorf("MR detail endpoint hits = %d, want 1 (cached entry lacks diff_refs.base_sha, must fall back to HTTP)", got)
 	}
-	// BaseSHA must be populated from the detail response, not empty.
 	if got, want := obs[0].PR.BaseSHA, "base123"; got != want {
 		t.Errorf("PR.BaseSHA = %q, want %q (populated from detail HTTP response)", got, want)
 	}
 }
 
-// TestFetchPullRequests_ListCacheWithDiffRefs_SkipsDetail verifies the happy
-// path of finding #2's guard: when the list-cached restMR has a non-empty
-// diff_refs.base_sha, fetchSingleMR reuses the cache and does NOT issue the
-// detail HTTP request. BaseSHA comes from the cached entry.
 func TestFetchPullRequests_ListCacheWithDiffRefs_SkipsDetail(t *testing.T) {
 	var mrDetailHits atomic.Int32
 	mux := http.NewServeMux()
-	// MR list endpoint returns one MR WITH diff_refs (the common case).
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{mrDetailFixture(1, "base123")})
 	})
-	// MR detail endpoint — if hit, the test fails (cache should be reused).
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
 		mrDetailHits.Add(1)
 		json.NewEncoder(w).Encode(mrDetailFixture(1, "base123"))
@@ -2811,7 +2422,6 @@ func TestFetchPullRequests_ListCacheWithDiffRefs_SkipsDetail(t *testing.T) {
 	_, p := testServer(t, mux)
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 
-	// Populate the MR-detail cache via the listing (entry has diff_refs).
 	if _, err := p.ListPRsByRepo(context.Background(), repo, time.Time{}); err != nil {
 		t.Fatalf("ListPRsByRepo: %v", err)
 	}
@@ -2824,24 +2434,14 @@ func TestFetchPullRequests_ListCacheWithDiffRefs_SkipsDetail(t *testing.T) {
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// The MR detail endpoint must NOT have been hit — the cached entry has
-	// a non-empty diff_refs.base_sha.
 	if got := mrDetailHits.Load(); got != 0 {
 		t.Errorf("MR detail endpoint hits = %d, want 0 (cached entry has diff_refs.base_sha, cache must be reused)", got)
 	}
-	// BaseSHA comes from the list-cached restMR.
 	if got, want := obs[0].PR.BaseSHA, "base123"; got != want {
 		t.Errorf("PR.BaseSHA = %q, want %q (served from list cache)", got, want)
 	}
 }
 
-// TestRestMR_DiffRefsBaseSHA_FromListResponse verifies the restMR struct tag
-// correctly parses diff_refs.base_sha from a GitLab MR list payload. The list
-// and detail MR responses share the same shape for diff_refs, so this also
-// covers the list path that the MR-detail cache (ticket 03) will rely on.
-//
-// This test is the regression guard for the dead-code dotted tag
-// json:"diff_refs.base_sha" (Go does not do dotted JSON tag nesting).
 func TestRestMR_DiffRefsBaseSHA_FromListResponse(t *testing.T) {
 	payload := `[
 	  {
@@ -2872,10 +2472,6 @@ func TestRestMR_DiffRefsBaseSHA_FromListResponse(t *testing.T) {
 		t.Errorf("DiffRefs.StartSHA = %q, want %q", mr.DiffRefs.StartSHA, "parent789")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AuthenticatedIdentity tests
-// ---------------------------------------------------------------------------
 
 func TestAuthenticatedIdentityCachesHumanUser(t *testing.T) {
 	var calls atomic.Int32
@@ -2946,7 +2542,6 @@ func TestAuthenticatedIdentityAuthErrorNotCached(t *testing.T) {
 		t.Fatalf("expected ErrAuthFailed, got %v", err)
 	}
 
-	// Second call must not return cached result — it should hit the API again.
 	_, err = p.AuthenticatedIdentity(context.Background())
 	if err == nil {
 		t.Fatal("expected error on second call, got nil")
@@ -2959,19 +2554,7 @@ func TestAuthenticatedIdentityAuthErrorNotCached(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AuthenticatedIdentityForHost tests (ticket 04 — per-host identity)
-// ---------------------------------------------------------------------------
-
-// TestAuthenticatedIdentityForHost_TwoHostsDifferentIdentities verifies that
-// AuthenticatedIdentityForHost resolves the correct identity per host. Two
-// hosts with different tokens must return different identities — the GitLab
-// provider uses clientForHost(host) to select the correct client, so a
-// self-managed GitLab instance with a different token resolves its own
-// identity rather than the gitlab.com default.
 func TestAuthenticatedIdentityForHost_TwoHostsDifferentIdentities(t *testing.T) {
-	// Two test servers: one for gitlab.com (default), one for self-managed.
-	// Each returns a different /user response.
 	defaultSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v4/user" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"username": "alice-dotcom"})
@@ -2990,9 +2573,6 @@ func TestAuthenticatedIdentityForHost_TwoHostsDifferentIdentities(t *testing.T) 
 	}))
 	t.Cleanup(selfManagedSrv.Close)
 
-	// Build a provider whose default client points at defaultSrv, and whose
-	// hostClientCfg uses a rewriteTransport that routes self-managed host
-	// requests to selfManagedSrv.
 	p, err := NewProvider(ProviderOptions{
 		Token:              StaticTokenSource("dotcom-token"),
 		SkipTokenPreflight: true,
@@ -3012,7 +2592,6 @@ func TestAuthenticatedIdentityForHost_TwoHostsDifferentIdentities(t *testing.T) 
 		},
 	}
 
-	// gitlab.com (empty host) → alice-dotcom
 	identDefault, err := p.AuthenticatedIdentityForHost(context.Background(), "")
 	if err != nil {
 		t.Fatalf("AuthenticatedIdentityForHost empty host: %v", err)
@@ -3024,7 +2603,6 @@ func TestAuthenticatedIdentityForHost_TwoHostsDifferentIdentities(t *testing.T) 
 		t.Errorf("default host identity Human = false, want true")
 	}
 
-	// self-managed host → bob-internal
 	identSelf, err := p.AuthenticatedIdentityForHost(context.Background(), "gitlab.internal")
 	if err != nil {
 		t.Fatalf("AuthenticatedIdentityForHost(gitlab.internal): %v", err)
@@ -3036,17 +2614,11 @@ func TestAuthenticatedIdentityForHost_TwoHostsDifferentIdentities(t *testing.T) 
 		t.Errorf("self-managed host identity Human = false, want true")
 	}
 
-	// The two identities must differ — this is the core bug the ticket fixes:
-	// the old code always used p.client (gitlab.com) for /user, so a self-managed
-	// host with a different token resolved the wrong identity.
 	if identDefault.Login == identSelf.Login {
 		t.Errorf("both hosts returned the same identity %q — per-host identity not working", identDefault.Login)
 	}
 }
 
-// TestAuthenticatedIdentityForHost_PerHostCaching verifies that a second call
-// for the same host does not hit the API — the identity is cached per-host for
-// the provider's lifetime.
 func TestAuthenticatedIdentityForHost_PerHostCaching(t *testing.T) {
 	var defaultCalls atomic.Int32
 	var selfManagedCalls atomic.Int32
@@ -3090,7 +2662,6 @@ func TestAuthenticatedIdentityForHost_PerHostCaching(t *testing.T) {
 		},
 	}
 
-	// First call for each host — should hit the respective API.
 	if _, err := p.AuthenticatedIdentityForHost(context.Background(), ""); err != nil {
 		t.Fatalf("first default call: %v", err)
 	}
@@ -3104,7 +2675,6 @@ func TestAuthenticatedIdentityForHost_PerHostCaching(t *testing.T) {
 		t.Fatalf("self-managed /user calls after first round = %d, want 1", got)
 	}
 
-	// Second call for each host — must be served from cache (no API hit).
 	identDefault2, err := p.AuthenticatedIdentityForHost(context.Background(), "")
 	if err != nil {
 		t.Fatalf("second default call: %v", err)
@@ -3120,7 +2690,6 @@ func TestAuthenticatedIdentityForHost_PerHostCaching(t *testing.T) {
 		t.Errorf("self-managed /user calls after second round = %d, want 1 (cached)", got)
 	}
 
-	// Cached identities must still be correct.
 	if identDefault2.Login != "alice-dotcom" {
 		t.Errorf("cached default identity = %q, want %q", identDefault2.Login, "alice-dotcom")
 	}
@@ -3129,9 +2698,6 @@ func TestAuthenticatedIdentityForHost_PerHostCaching(t *testing.T) {
 	}
 }
 
-// TestAuthenticatedIdentityDelegatesToForHost verifies that the existing
-// AuthenticatedIdentity(ctx) method delegates to AuthenticatedIdentityForHost
-// with the default host (empty string = gitlab.com).
 func TestAuthenticatedIdentityDelegatesToForHost(t *testing.T) {
 	var calls atomic.Int32
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3144,8 +2710,6 @@ func TestAuthenticatedIdentityDelegatesToForHost(t *testing.T) {
 	})
 	_, p := testServer(t, handler)
 
-	// AuthenticatedIdentity should produce the same result as
-	// AuthenticatedIdentityForHost with empty host.
 	ident1, err := p.AuthenticatedIdentity(context.Background())
 	if err != nil {
 		t.Fatalf("AuthenticatedIdentity: %v", err)
@@ -3157,14 +2721,11 @@ func TestAuthenticatedIdentityDelegatesToForHost(t *testing.T) {
 	if ident1 != ident2 {
 		t.Errorf("AuthenticatedIdentity = %#v, AuthenticatedIdentityForHost empty host = %#v — must be identical", ident1, ident2)
 	}
-	// Both calls share the same per-host cache entry for "", so only one API hit.
 	if got := calls.Load(); got != 1 {
 		t.Errorf("GET /user calls = %d, want 1 (AuthenticatedIdentity must share cache with AuthenticatedIdentityForHost)", got)
 	}
 }
 
-// TestAuthenticatedIdentityForHost_RejectedHost verifies that a host not in
-// the allowlist is rejected before any credential is attached.
 func TestAuthenticatedIdentityForHost_RejectedHost(t *testing.T) {
 	p, err := NewProvider(ProviderOptions{
 		Token:              StaticTokenSource("tok"),
@@ -3184,22 +2745,12 @@ func TestAuthenticatedIdentityForHost_RejectedHost(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// requested_changes → ReviewChangesRequest override tests
-// ---------------------------------------------------------------------------
-
-// mrDetailFixtureWithStatus is like mrDetailFixture but allows overriding
-// the detailed_merge_status.
 func mrDetailFixtureWithStatus(iid int, baseSHA, detailedMergeStatus string) map[string]any {
 	m := mrDetailFixture(iid, baseSHA)
 	m["detailed_merge_status"] = detailedMergeStatus
 	return m
 }
 
-// TestFetchPullRequests_RequestedChangesOverridesReviewDecision verifies
-// that fetchSingleMR returns ReviewChangesRequest when the MR's
-// detailed_merge_status is "requested_changes", even when approvals say the
-// MR is fully approved.
 func TestFetchPullRequests_RequestedChangesOverridesReviewDecision(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
@@ -3217,26 +2768,16 @@ func TestFetchPullRequests_RequestedChangesOverridesReviewDecision(t *testing.T)
 	if len(obs) != 1 || !obs[0].Fetched {
 		t.Fatalf("expected one fetched observation, got %+v", obs)
 	}
-	// The review decision must be overridden to changes_requested even though
-	// the approvals endpoint returns approved=true (registerMRSupportingEndpoints
-	// returns approved=true with approvals_required=1).
 	if got, want := obs[0].Review.Decision, string(domain.ReviewChangesRequest); got != want {
 		t.Errorf("Review.Decision = %q, want %q (requested_changes must override approvals)", got, want)
 	}
-	// The mergeability blocker must be changes_requested, not review_required.
 	if len(obs[0].Mergeability.Blockers) == 0 || obs[0].Mergeability.Blockers[0] != "changes_requested" {
 		t.Errorf("Mergeability.Blockers = %v, want [changes_requested]", obs[0].Mergeability.Blockers)
 	}
 }
 
-// TestFetchReviewThreads_RequestedChangesOverridesWhenMRDetailCached verifies
-// that FetchReviewThreads returns ReviewChangesRequest when the cached MR
-// detail (populated by ListPRsByRepo or fetchSingleMR) has
-// detailed_merge_status == "requested_changes", even when approvals say the
-// MR is fully approved.
 func TestFetchReviewThreads_RequestedChangesOverridesWhenMRDetailCached(t *testing.T) {
 	mux := http.NewServeMux()
-	// MR list endpoint — populates the MR-detail cache with requested_changes.
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{mrDetailFixtureWithStatus(1, "base123", "requested_changes")})
 	})
@@ -3256,8 +2797,6 @@ func TestFetchReviewThreads_RequestedChangesOverridesWhenMRDetailCached(t *testi
 	_, p := testServer(t, mux)
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 
-	// Populate the MR-detail cache via the listing so FetchReviewThreads can
-	// consult it.
 	if _, err := p.ListPRsByRepo(context.Background(), repo, time.Time{}); err != nil {
 		t.Fatalf("ListPRsByRepo: %v", err)
 	}
@@ -3272,10 +2811,6 @@ func TestFetchReviewThreads_RequestedChangesOverridesWhenMRDetailCached(t *testi
 	}
 }
 
-// TestFetchReviewThreads_FallsBackToApprovalsWhenMRDetailCacheCold verifies
-// that when the MR-detail cache is cold (no prior listing or detail fetch),
-// FetchReviewThreads does NOT override the review decision — it falls back to
-// the approvals-based decision without crashing.
 func TestFetchReviewThreads_FallsBackToApprovalsWhenMRDetailCacheCold(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/discussions", func(w http.ResponseWriter, r *http.Request) {
@@ -3295,22 +2830,15 @@ func TestFetchReviewThreads_FallsBackToApprovalsWhenMRDetailCacheCold(t *testing
 	repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
 	ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
 
-	// No prior ListPRsByRepo or FetchPullRequests — the MR-detail cache is cold.
 	review, err := p.FetchReviewThreads(context.Background(), ref)
 	if err != nil {
 		t.Fatalf("FetchReviewThreads: %v", err)
 	}
-	// With a cold cache, the override is skipped and the approvals-based
-	// decision stands: approved (true + approvals_required=2 + 2 approvers).
 	if got, want := review.Decision, string(domain.ReviewApproved); got != want {
 		t.Errorf("Decision = %q, want %q (cold cache must fall back to approvals)", got, want)
 	}
 }
 
-// A branch lookup asks GitLab for the open MRs from that source branch only,
-// keeping each MR's author, which decides whether AO may attach it. A fork MR
-// with the same branch name is dropped, and a kept MR names the project as
-// both head and base.
 func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 	var query url.Values
 	mux := http.NewServeMux()

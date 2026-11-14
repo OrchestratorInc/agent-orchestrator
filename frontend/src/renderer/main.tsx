@@ -25,25 +25,16 @@ import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
-// Bind before the first render: errors during route setup and the first
-// render used to fire before TelemetryBoundary's effect bound these. Captures
-// made before the consent policy arrives are held by preload.
 bindRendererErrorHandlers();
 void preloadMarkdownFonts();
 const router = createAppRouter(queryClient);
 
-// Main owns consent and only acknowledges opt-out after every live AO shell
-// confirms that its in-memory renderer queues were actually purged.
 aoBridge.telemetry.onClearQueues(clearRendererTelemetryQueues);
-// Main decides *when* a notification sound plays; the renderer only supplies
-// the speakers, since main has no audio output of its own.
 aoBridge.notifications.onPlaySound(() => {
 	playNotificationSound(() => aoBridge.notifications.reportSoundFailure());
 });
 aoBridge.telemetry.onPolicy((view) => applyRendererTelemetryPolicy(view.eventsEnabled && view.acknowledged && view.state === "applied"));
 
-// The analytics opt-out lives in main (shared with the daemon and mobile). Apply
-// it to this renderer's PostHog client at launch and whenever Settings flips it.
 void aoBridge.telemetry.getAnalyticsOptOut().then((optedOut) => {
 	if (optedOut) void applyAnalyticsOptOut(true);
 }).catch(() => undefined);
@@ -55,9 +46,6 @@ aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 if (import.meta.env.DEV) {
 	const w = window as never as Record<string, unknown>;
 	w.__qc = queryClient;
-	// __testNotif("needs_input") — simulates a real notification:
-	//   bell count + dock badge update immediately; dock bounces after 3s
-	//   (gives you time to click away from AO so the bounce is visible)
 	const testNotifTitles: Record<string, string> = {
 		needs_input: "Agent needs your input",
 		ready_to_merge: "Ready to merge",
@@ -69,7 +57,6 @@ if (import.meta.env.DEV) {
 	) => {
 		const key = unreadNotificationsQueryKey;
 		const id = `test-${Date.now()}`;
-		// Freeze the query so window-focus refetch doesn't wipe test data
 		queryClient.setQueryDefaults(key, { staleTime: 60_000 });
 		await queryClient.cancelQueries({ queryKey: key });
 		mergeUnreadNotification(queryClient, {
@@ -87,7 +74,6 @@ if (import.meta.env.DEV) {
 		console.log("[testNotif] bell updated - click away from AO now, bounce fires in 3s");
 		setTimeout(() => {
 			void window.ao?.notifications.devBounce();
-			// Restore normal stale time after bounce
 			queryClient.setQueryDefaults(key, { staleTime: 0 });
 		}, 3000);
 	};
@@ -117,16 +103,8 @@ declare module "@tanstack/react-router" {
 
 async function renderApp(): Promise<void> {
 	void useTelemetryPolicyStore.getState().load();
-	// The persisted locale is cosmetic; do not leave a newly opened native
-	// window blank while its IPC read completes. The router's pending screen
-	// renders immediately, then i18n updates if the user chose another locale.
 	void useLocaleStore.getState().load();
-	// The sound-notifications toggle only needs to be right by the time
-	// Settings renders, so it loads in the background rather than blocking mount.
 	void useSoundNotificationsStore.getState().load();
-	// Do not wrap the desktop root in StrictMode. React 19 enables per-component
-	// performance tracking for that tree in development, which made common route
-	// switches and drag updates spend hundreds of milliseconds recording timings.
 	createRoot(document.getElementById("root") as HTMLElement).render(
 		<I18nextProvider i18n={appI18n}>
 			<TelemetryBoundary>

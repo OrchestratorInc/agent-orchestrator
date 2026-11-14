@@ -19,7 +19,6 @@ export type { KanbanColumn, SessionActivity, SessionActivityState, SessionStatus
 
 export type AgentProvider = AgentId | "fake";
 
-/** A file changed in a worker workspace (drives the review rail). */
 export type ChangedFile = {
 	path: string;
 	additions: number;
@@ -29,15 +28,8 @@ export type ChangedFile = {
 
 export type SessionKind = "worker" | "orchestrator";
 
-/** Lifecycle state of a single pull request, mirrors the daemon's enum. */
 export type PRState = "open" | "draft" | "merged" | "closed";
 
-/**
- * One attributed pull request, mirroring the daemon's SessionPRFacts wire shape.
- * A session can own many (e.g. a stack), so {@link WorkspaceSession.prs} is a
- * list. The wire carries no source/target branch or parent pointer, so the UI
- * renders a flat list of PRs, not a stack tree.
- */
 export type PullRequestFacts = {
 	url: string;
 	number: number;
@@ -55,52 +47,29 @@ export type PullRequestFacts = {
 	updatedAt: string;
 };
 
-/** What kind of durable output a session has produced, when known. */
 export type SessionOutputType = "none" | "pr" | "artifact" | "pr_artifact";
 
-/** One kind of file a worker can leave in its session-owned artifact directory. */
 export type ArtifactKind = "html" | "markdown" | "file";
 
-/**
- * One file present in a session's artifact directory, mirroring the daemon's
- * SessionArtifact wire shape. `previewUrl` is only set for `html` artifacts,
- * which route through the existing Browser preview flow; `markdown`/`file`
- * artifacts have no preview URL and open in the Files inspector instead.
- * `rawUrl` is set for every kind: it is the artifact preview origin's raw
- * byte fetch, a distinct host from the workspace preview origin, so it can
- * never resolve to a workspace-relative file of the same path.
- */
 export type SessionArtifact = {
-	/** The artifact's identity, kept when its file is renamed. */
 	id?: string;
 	kind: ArtifactKind;
 	name: string;
 	path: string;
 	previewUrl?: string;
 	rawUrl?: string;
-	/**
-	 * The page on its own inline origin, for framing it in the chat thread: its
-	 * files load same-origin there, and the daemon refuses that origin. html only.
-	 */
 	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
-	/** Set on a file the agent registered with `ao artifact add`. */
 	registered?: boolean;
-	/** The paths the artifact had before it was renamed, latest last. */
 	previousPaths?: string[];
-	/** The file's public link while it is published from this computer. */
 	shareUrl?: string;
-	/** A cloud file's SHA-256, from its listing: the Publish button compares it with the published one. */
 	sha256?: string;
-	/** Who shareUrl opens for, as this computer last recorded it; the link list has the final say. */
 	shareAccess?: "restricted" | "anyone";
 };
 
-/** The daemon-committed controller currently responsible for the session. */
 export type SessionMode = "chat" | "tui";
 
-/** One stage of an asynchronous Chat start. */
 export type SessionProvisionStep = {
 	id: "fetch" | "worktree" | "setup" | "agent";
 	status: "pending" | "running" | "done";
@@ -108,210 +77,97 @@ export type SessionProvisionStep = {
 	endedAt?: string;
 };
 
-/** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
 export type SessionBranchState = {
 	commits: number;
 	remoteBranch?: string;
-	/** The commit the remote branch points at, as last read. */
 	remoteHead?: string;
 	unpushed: number;
-	/** Short name of the branch commits and behind are counted against, such as "main". Absent when the daemon only knows the base as a commit. */
 	base?: string;
-	/** The exact ref that was read for base, such as "origin/main". */
 	baseRef?: string;
-	/** Commits on base the branch does not have. Only meaningful when base is set. */
 	behind: number;
-	/** Merging into base would conflict, read locally. Absent from daemons that predate it. */
 	conflicts?: boolean;
-	/** The branch's tip commit. */
 	head?: string;
 };
 
-/** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
 
 export type WorkspaceSession = {
 	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
-	/** The cleanup was started by a sweep, not an archive: its state raises no app feedback. */
 	workspaceCleanupReportOnly?: boolean;
 	id: string;
-	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;
 	terminalHandleId?: string;
-	/** Opaque controller generation; changes even when a restarted PTY reuses its handle. */
 	terminalGeneration?: string;
 	workspaceId: string;
 	workspaceName: string;
 	title: string;
-	/** Raw issue/task identifier from the daemon. Intake ids are provider-prefixed. */
 	issueId?: string;
 	provider: AgentProvider;
-	/** Reviewer selected for this session; absent means use the project default. */
 	reviewerHarness?: ReviewerHarnessId;
-	/** Per-session reviewer override, including hidden fields preserved across saves. */
 	reviewerConfig?: {
 		model?: string;
 		mode?: string;
 		effort?: string;
 		permissions?: string;
 	};
-	/** Whether the daemon may automatically review this session after it becomes idle. */
 	autoReviewEnabled?: boolean;
 	kind?: SessionKind;
-	/**
-	 * Which controller is currently committed for this session. The session
-	 * surface renders from THIS value, never from the current creation default.
-	 * Only the daemon's durable interface-transition coordinator may change it.
-	 */
 	mode?: SessionMode;
 	branch?: string;
 	status: SessionStatus;
-	/** Stack-aware PR context derived by the daemon independently of runtime activity. */
 	scmStatus?: SessionStatus;
-	/**
-	 * Board lane derived by the daemon from durable delivery facts (PR
-	 * lifecycle, review runs, review ownership). `validating` and
-	 * `needs_review` are the same review-feedback loop seen from either side:
-	 * AO turning it, or a person taking the next turn. The board groups by this
-	 * and never re-derives a lane from {@link status}. For a daemon too old to
-	 * send one, {@link toKanbanColumn} keeps the placement the status already
-	 * implied rather than inventing a new one.
-	 */
 	kanbanColumn?: KanbanColumn;
-	/**
-	 * Phrase the daemon derived for what is happening inside
-	 * {@link kanbanColumn} — "Reviewing", "Fixing CI failures", "Needs human
-	 * review". It arrives renderable, so the UI prints it rather than mapping it.
-	 * Absent from a daemon too old to send one, which keeps the label
-	 * {@link status} already produced.
-	 */
 	displayStatus?: string;
 	statusReadiness?: "checking" | "ready" | "unavailable";
-	/**
-	 * How far this session's start-up got. A Chat spawn answers as soon as the
-	 * session is addressable, so a session can be open and typeable while its
-	 * worktree and agent are still being created ("provisioning"), and a start
-	 * that fails leaves the session in place ("failed") with
-	 * {@link provisionError} explaining why. Absent means ready — which is also
-	 * what every session created before asynchronous spawn reads as.
-	 */
 	provisionState?: "provisioning" | "ready" | "failed";
-	/** Why a failed start stopped, in the daemon's words. */
 	provisionError?: string;
-	/**
-	 * The checklist an asynchronous start works through, in order. A step still
-	 * "running" on a failed session is the step that failed.
-	 */
 	provisionSteps?: SessionProvisionStep[];
-	/**
-	 * The daemon has a recorded workspace for this session, so workspace reads
-	 * can succeed. Absent from older daemons, which is treated as published.
-	 */
 	workspacePublished?: boolean;
-	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
-	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
 	branchNaming?: boolean;
-	/** Set while this launch runs a harness release an update replaced; it moves to `version` when idle. */
 	staleBinary?: SessionStaleBinary;
-	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
-	/** Whether the cloud worker has a current control-plane connection. */
 	runtimeConnected?: boolean;
 	chatProviderPreserved?: boolean;
-	/** An imported chat not opened yet: it has no AO workspace until it resumes. */
 	needsResume?: boolean;
-	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
-	/** Whether SCM review feedback is automatically injected into the worker. */
 	autoInjectReview?: boolean;
-	/** Whether CI failures are automatically injected into the worker. */
 	autoInjectCI?: boolean;
-	/** ISO timestamp from the daemon — used for relative time in the inspector. */
 	createdAt?: string;
-	/** ISO timestamp from the daemon. */
 	updatedAt: string;
-	/** ISO timestamp of the latest real user-authored message, when known. */
 	lastUserMessageAt?: string;
-	/** ISO timestamp of human direction or deliberate same-project orchestrator direction. */
 	lastInteractionAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string;
-	/** Raw agent lifecycle activity from the daemon. */
 	activity?: SessionActivity;
-	/**
-	 * Live preview target set by the daemon (via `ao preview`) and streamed over
-	 * CDC. When non-empty, the browser panel opens and navigates here.
-	 */
 	previewUrl?: string;
-	/**
-	 * Monotonic counter the daemon bumps on every `ao preview` call (even when
-	 * previewUrl is unchanged), so the browser panel can re-navigate / refresh on
-	 * a repeated preview of the same target.
-	 */
 	previewRevision?: number;
-	/** The session's git diff against its base, when known. */
 	changedFiles?: ChangedFile[];
-	/** Pre-filled commit subject for the Git rail, when known. */
 	commitMessage?: string;
-	/**
-	 * The session's attributed pull requests. One session can own many (a stack
-	 * or independent PRs); empty when none are open yet. Status aggregation is
-	 * done server-side, so {@link status} already reflects all of these.
-	 */
 	prs: PullRequestFacts[];
-	/** What kind of durable output this session has produced, when known. */
 	outputType?: SessionOutputType;
-	/** The deliverable requested at spawn; "artifact" for sessions started from Create artifact. */
 	requestedOutput?: "artifact";
-	/**
-	 * Files present in this session's artifact directory, when {@link outputType}
-	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
-	 */
 	artifactFiles?: SessionArtifact[];
-	/** A cloud session counts artifacts whose list has not loaded yet. */
 	artifactFilesPending?: boolean;
-	/**
-	 * Present only for sessions that run in a control-plane sandbox. Carries the
-	 * org the session is scoped to so its terminal can be opened against the CP;
-	 * absent for local sessions, which route through the local daemon.
-	 */
 	cloud?: {
 		orgId: string;
-		/** Reached through a share link: what this person may do comes from its grant. */
 		shared?: boolean;
-		/** The team a shared session reaches this person through, when it isn't shared with them directly. */
 		sharedVia?: string;
-		/** The guest the session was started for, when someone the project was shared with asked for it. */
 		requestedBy?: { userId: string; name: string };
-		/** The control-plane user who started the session; only they share its files as public links. */
 		createdByUserId?: string;
-		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
-		/** Sandbox runtime state; "terminated" means AO stopped retrying startup. */
 		runtimeState?: string;
 		runtimeError?: string;
-		/** Why the worker has not started; cleared once it connects. */
 		startupError?: { code: string; message: string; at: string; detail?: string };
-		/** Bring-your-own Coder workspace page; absent for managed compute. */
 		coderWorkspaceUrl?: string;
 	};
 };
 
-// Tracker providers whose ids the intake daemon stamps sessions with, in
-// "<provider>:<native>" form. Adding a provider (Linear, Jira, ...) later is
-// just another prefix in this list — no caller of canonicalTrackerIssueId
-// needs to change.
 const TRACKER_PROVIDER_PREFIXES = ["github:"] as const;
 
-/**
- * The provider-prefixed issue id if `issueId` came from tracker intake, or
- * undefined for manually created sessions (whose issueId, if any, is a plain
- * task title with no provider prefix).
- */
 export function canonicalTrackerIssueId(issueId?: string): string | undefined {
 	if (!issueId) return undefined;
 	return TRACKER_PROVIDER_PREFIXES.some((prefix) => issueId.startsWith(prefix)) ? issueId : undefined;
@@ -319,17 +175,10 @@ export function canonicalTrackerIssueId(issueId?: string): string | undefined {
 
 export type ProjectKind = "single_repo" | "workspace" | "scratch";
 
-/** UI-only grouping for sessions that have no daemon project row. */
 export const STANDALONE_WORKSPACE_ID = "__standalone__" as const;
 export const STANDALONE_PROJECT_KIND = "standalone" as const;
-/**
- * The new-chat target that starts a Cloud standalone agent: one worker session
- * with no repository, its own (POST /orgs/{orgId}/standalone-agents). It names
- * no project; the agent gets its own once created.
- */
 export const CLOUD_STANDALONE_WORKSPACE_ID = "__cloud_standalone__" as const;
 
-/** Sentinel `kind` value for projects hosted by the AO cloud control plane. */
 export const CLOUD_PROJECT_KIND = "cloud" as const;
 
 const projectKinds = new Set<ProjectKind>(["single_repo", "workspace", "scratch"]);
@@ -344,15 +193,12 @@ export type WorkspaceRepoSummary = {
 	repo: string;
 };
 
-// Open PRs (actionable) sort above merged/closed; ties break by number.
 const prStateRank: Record<PRState, number> = { open: 0, draft: 1, merged: 2, closed: 3 };
 
-/** A session's PRs ordered actionable-first (open, draft, merged, closed). */
 export function sortedPRs(session: WorkspaceSession): PullRequestFacts[] {
 	return [...session.prs].sort((a, b) => prStateRank[a.state] - prStateRank[b.state] || a.number - b.number);
 }
 
-/** PRs still in flight (open or draft). */
 export function openPRs(session: WorkspaceSession): PullRequestFacts[] {
 	return session.prs.filter((pr) => pr.state === "open" || pr.state === "draft");
 }
@@ -361,12 +207,10 @@ export function mergedPRCount(session: WorkspaceSession): number {
 	return session.prs.filter((pr) => pr.state === "merged").length;
 }
 
-/** The highest-priority PR for compact one-line surfaces (board card, sidebar). */
 export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefined {
 	return sortedPRs(session)[0];
 }
 
-/** Every artifact file of a session whose output includes artifacts, listed or not, newest first. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
 	return [...(session.artifactFiles ?? [])].sort(
@@ -374,11 +218,6 @@ export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	);
 }
 
-/**
- * The session's artifacts as the artifact lists show them. Use
- * {@link sessionArtifacts} for anything that needs every file, such as a count
- * of what a delete removes.
- */
 export function sessionDeliverables(session: WorkspaceSession): Deliverable<SessionArtifact>[] {
 	return deliverableArtifacts(sessionArtifacts(session));
 }
@@ -387,14 +226,6 @@ export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "ki
 	return session.kind === "orchestrator" || session.id.endsWith("-orchestrator");
 }
 
-/**
- * The project's LIVE orchestrator, if any. Terminated orchestrator rows stay in
- * the session list (the daemon returns all sessions, ordered by spawn number),
- * so an earlier dead orchestrator must not shadow a live one — its zellij
- * session is deleted and attaching to it dead-ends in an instant
- * "[process exited]". No live orchestrator → undefined, so the topbar offers
- * Spawn instead of navigating to a dead session.
- */
 export function findProjectOrchestrator(
 	workspaces: WorkspaceSummary[],
 	projectId: string,
@@ -431,7 +262,6 @@ function sessionRecentlyMessagedNewer(a: WorkspaceSession, b: WorkspaceSession):
 	return a.id > b.id;
 }
 
-/** The sidebar's direction-age label and sort share the same timestamp. */
 function sessionLastMessageTimestamp(session: WorkspaceSession): number {
 	return (
 		validTimestamp(session.lastInteractionAt) ??
@@ -456,20 +286,12 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by the user's latest message (else an unopened import's source activity, else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
 }
 
-/**
- * Whether workspace reads can succeed. The daemon reports whether it has a
- * recorded workspace: an asynchronous start publishes one partway through, a
- * failed start can keep one, and an agent-only retry reuses it. Until then
- * every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND. An older
- * daemon does not report it, so its sessions are treated as published.
- */
 export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspacePublished">): boolean {
 	return session.workspacePublished !== false;
 }
@@ -478,27 +300,14 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
 	return session.isTerminated !== true && session.status !== "terminated";
 }
 
-/**
- * Whether a live worker can be archived from its own tab, topbar shortcut, or
- * inspector: local, remote, or Cloud alike. The orchestrator goes with its
- * project, and a Cloud session shared from another organization is the
- * sharer's to archive.
- */
 export function canArchiveWorkerSession(session: WorkspaceSession): boolean {
 	return !isOrchestratorSession(session) && session.cloud?.shared !== true && sessionIsActive(session);
 }
 
-/**
- * Whether the agent PROCESS is gone while the session ROW is still alive —
- * Ctrl+C, `/exit`, a usage limit. Recovered with `resume-agent`, not `restore`.
- * Not `sessionIsActive`, which reports row liveness and calls this state alive.
- */
 export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
 	return Boolean(session && !session.needsResume && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
-/** Whether a session can accept a Cue from its topbar. The daemon makes the
- * final decision, including whether a command Cue's worktree still exists. */
 export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
 	return Boolean(session && sessionIsActive(session) && !session.needsResume && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
 }
@@ -510,21 +319,9 @@ export function sessionNeedsAttention(session: WorkspaceSession): boolean {
 export { attentionZone, attentionZoneLabel, attentionZoneOrder } from "../lib/session-presentation";
 export type { AttentionZone } from "../lib/session-presentation";
 
-/**
- * How one thing reached the person: who shared it and, for a team share,
- * which team. `source` is how: a link they opened themselves, a direct
- * share, or a team (absent from a control plane from before teams, which
- * had only links).
- */
 export type WorkspaceShareSource = { byName?: string; viaTeamName?: string; grantId?: string; source?: "link" | "direct" | "team" };
 
-/**
- * A cloud project someone in another organization shared with this person:
- * who shared the project itself (when they did), and each session shared on
- * its own. Roles come from each session's live state.
- */
 export type WorkspaceShare = WorkspaceShareSource & {
-	/** Set when the whole project is shared, not only some of its sessions. */
 	wholeProject?: WorkspaceShareSource;
 	sessions?: Record<string, WorkspaceShareSource>;
 };
@@ -532,37 +329,14 @@ export type WorkspaceShare = WorkspaceShareSource & {
 export type WorkspaceSummary = {
 	id: string;
 	cloudOrgId?: string;
-	/**
-	 * Set on a cloud project someone in another organization shared with this
-	 * person. It carries no role: each shared session has its own grant, which
-	 * the session's live state reports.
-	 */
 	shared?: WorkspaceShare;
-	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;
-	/**
-	 * Discriminator for where the project lives. Local projects carry the
-	 * daemon's ProjectKind (or undefined for older daemons); projects hosted by
-	 * the AO cloud control plane carry CLOUD_PROJECT_KIND — branch on
-	 * `kind === CLOUD_PROJECT_KIND`.
-	 */
 	kind?: ProjectKind | typeof CLOUD_PROJECT_KIND | typeof STANDALONE_PROJECT_KIND;
-	/**
-	 * "workspace" on a cloud project laid out like a local workspace: every
-	 * repository (workspaceRepos) side by side in one folder.
-	 */
 	cloudLayout?: "workspace";
-	/**
-	 * Set on a Cloud standalone agent's project: it holds that one agent, which
-	 * the Scratchpad lists beside local standalone sessions, and is not shown
-	 * as a project.
-	 */
 	standaloneAgent?: boolean;
-	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;
-	/** Automatic starts (tracker intake, schedules) the daemon paused after repeated identical failures. */
 	autoSpawnPauses?: import("../hooks/useAutoSpawnPauseNotice").AutoSpawnPause[];
 	workspaceRepos?: WorkspaceRepoSummary[];
 	type?: "main" | "worktree";
@@ -575,20 +349,10 @@ export type WorkspaceSummary = {
 	sessions: WorkspaceSession[];
 };
 
-/**
- * Whether the workspace is the Scratchpad's rather than a project: the local
- * group of standalone sessions, or a Cloud standalone agent's project. Neither
- * has an orchestrator, a board, or project settings.
- */
 export function isScratchpadWorkspace(workspace: Pick<WorkspaceSummary, "kind" | "standaloneAgent"> | undefined): boolean {
 	return workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.standaloneAgent === true;
 }
 
-/**
- * The workspaces the Scratchpad lists: the local standalone sessions and the
- * person's own Cloud standalone agents. A standalone agent someone shared with
- * them stays with the other shared projects.
- */
 export function ownScratchpadWorkspaces(workspaces: readonly WorkspaceSummary[]): WorkspaceSummary[] {
 	return workspaces.filter((workspace) =>
 		workspace.kind === STANDALONE_PROJECT_KIND || (workspace.standaloneAgent === true && !workspace.shared));
@@ -649,13 +413,6 @@ export type NextSessionNavigation =
 	| { target: "session"; sessionId: string }
 	| { target: "project" };
 
-/**
- * Resolves where to navigate after an active session is killed.
- * Prioritizes:
- * 1. Adjacent remaining worker session (previous if available, else first remaining).
- * 2. Active non-terminated orchestrator if no worker sessions remain.
- * 3. Project board if no alive sessions remain.
- */
 export function resolveNextNavigationAfterSessionKill(
 	workspace: WorkspaceSummary | undefined,
 	killedSessionId: string,

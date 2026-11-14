@@ -19,8 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Exercise production launch selection, lifecycle, Chat and SQLite together.
-// Only external runtime and provider I/O are controlled.
 func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessQwen} {
 		t.Run(string(harness), func(t *testing.T) {
@@ -202,7 +200,6 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					// Exercise native identity selection through the generated launch command.
 					argv := runtime.lastCfg.Argv
 					terminalID := ""
 					for i, arg := range argv {
@@ -214,7 +211,6 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 						t.Fatalf("fresh launch has no native ID: %v", argv)
 					}
 					if tc.changeTerminalIdentity {
-						// Simulate a native context change after launch.
 						terminalID = freshID(string(sess.ID))
 					}
 					if tc.replaceOrchestrator || tc.changeTerminalIdentity || tc.removeTranscript {
@@ -287,8 +283,6 @@ func TestInterfaceTransitionNativeHistoryOwnership(t *testing.T) {
 	}
 }
 
-// A non-Claude handoff-capable adapter with opaque IDs. It deliberately uses
-// no Claude identity, UUID derivation, or production adapter implementation.
 type nativeOwnershipAgent struct {
 	transitionAgent
 	configDir string
@@ -333,8 +327,6 @@ func (c *nativeOwnershipHistory) ReadHistory(context.Context) ([]ports.ChatEvent
 		{Kind: ports.ChatEventMessageCompleted, ProviderConversationID: c.providerID, ProviderTurnID: "terminal-turn", ProviderItemID: "assistant", ProviderEventID: "assistant-event", Text: "terminal answer"},
 		{Kind: ports.ChatEventTurnCompleted, ProviderConversationID: c.providerID, ProviderTurnID: "terminal-turn", ProviderEventID: "turn-end"},
 	}
-	// Like the real ACP driver, namespace opaque IDs using the reserved scope.
-	// Native A and B deliberately reuse both opaque IDs and identical text.
 	for i := range events {
 		events[i].ProviderTurnID = c.scope + ":" + events[i].ProviderTurnID
 		events[i].ProviderEventID = c.scope + ":" + events[i].ProviderEventID

@@ -42,7 +42,6 @@ func TestCLIStatus_Mocked(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Save and restore CmdRunner
 			oldCmdRunner := CmdRunner
 			defer func() { CmdRunner = oldCmdRunner }()
 

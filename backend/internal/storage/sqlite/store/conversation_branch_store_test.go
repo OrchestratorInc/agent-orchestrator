@@ -614,8 +614,6 @@ func TestCompleteEditDeliveryRollsBackBranchMutationWhenResultCannotSettle(t *te
 		t.Fatalf("ReserveEditDelivery: created=%v err=%v", created, err)
 	}
 
-	// The branch update executes first inside CompleteEditDelivery. Settling an
-	// absent handle then fails, and the transaction must undo that first write.
 	err = s.CompleteEditDelivery(ctx, conversation.ID, "missing-edit-handle",
 		conversation.ActiveBranchID, child.ID, turn, testNow.Add(2*time.Minute))
 	if err == nil {
@@ -794,8 +792,6 @@ func TestConversationBranchSnapshotKeepsTheNarrowestNestedCutoff(t *testing.T) {
 	activateTestBranch(t, s, session, conversation, child.ID, child.ProviderConversationID, "generation-child")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "b-edited", "B edited")
 
-	// Editing A from the child branch cuts the entire lineage at sequence zero.
-	// The child's older root cutoff must not widen that boundary and leak A back in.
 	nested := domain.ConversationBranch{
 		ID: "branch-nested", ConversationID: conversation.ID, SessionID: session.ID,
 		ProviderConversationID: "thread-nested", ParentBranchID: child.ID,
@@ -1066,8 +1062,6 @@ func TestCommitChatSpawnAtomicallyPublishesProviderBoundaryAndOwner(t *testing.T
 	}
 }
 
-// Queued intake runs on the fresh provider, so it must share that provider's
-// replay scope. Work the previous provider already received keeps its branch.
 func TestCommitChatSpawnMovesOnlyUndispatchedIntakeToProviderBoundary(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
@@ -1085,7 +1079,6 @@ func TestCommitChatSpawnMovesOnlyUndispatchedIntakeToProviderBoundary(t *testing
 	if err := s.BindTurnToProvider(ctx, "turn-dispatched", "provider-turn-root", testNow); err != nil {
 		t.Fatalf("BindTurnToProvider: %v", err)
 	}
-	// A provisioning retry queues intake before its fresh controller exists.
 	if _, err := s.SetSessionProvisionState(ctx, session.ID, domain.SessionProvisionProvisioning, "", testNow); err != nil {
 		t.Fatalf("SetSessionProvisionState: %v", err)
 	}
@@ -1136,8 +1129,6 @@ func TestCommitChatSpawnRollsBackProviderBoundaryWhenOwnerWriteFails(t *testing.
 	sourceGeneration := session.Metadata.ControllerGeneration
 	session.Metadata.ProviderConversationID = "thread-fresh"
 	session.Metadata.ControllerGeneration = "generation-fresh"
-	// The sessions table rejects this during the final write, after the branch
-	// insert and head move have run inside the same transaction.
 	session.Activity = domain.Activity{State: domain.ActivityState("not-a-state"), LastActivityAt: committedAt}
 	session.UpdatedAt = committedAt
 	boundary := domain.ConversationBranch{

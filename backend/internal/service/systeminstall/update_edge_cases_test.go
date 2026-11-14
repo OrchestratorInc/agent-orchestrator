@@ -148,7 +148,6 @@ func TestNpmRegistryVersionReadsOnlyLatestDistTag(t *testing.T) {
 		name, tags, want string
 	}{
 		{"ignores prerelease tags", `{"latest":"1.9.0","next":"2.0.0-beta.3"}`, "1.9.0"},
-		// Some packages publish prereleases on latest (DeepSeek ships 0.2.0-rc.2 there).
 		{"prerelease on latest", `{"latest":"2.0.0-rc.2"}`, "2.0.0-rc.2"},
 		{"no latest tag", `{"next":"2.0.0-rc.3"}`, ""},
 	} {

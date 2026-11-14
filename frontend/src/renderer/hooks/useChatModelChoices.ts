@@ -5,15 +5,6 @@ import type { ChatConfigChoice, ChatConfigOption, ChatModel } from "../types/con
 import { agentModelsQueryOptions } from "./useAgentModelsQuery";
 import { useOfferedModels } from "./useOfferedModels";
 
-/**
- * The models and provider options a chat composer offers, for local and cloud chats alike.
- * `liveModelsLoaded` reports whether `controllerModels` is the provider's answer yet;
- * until it is, the agent's saved device catalog is shown so the picker never waits.
- * `runsOnDevice` is false for a chat whose agent runs elsewhere (a cloud worker): the
- * device catalog's availability marks describe this computer's CLI, not that one, and
- * its own list names its models, so the device catalog stands in only while that list
- * is empty.
- */
 export function useChatModelChoices(
 	harness: string | undefined,
 	controllerModels: ChatModel[],
@@ -23,23 +14,14 @@ export function useChatModelChoices(
 	liveModelsLoaded = true,
 	runsOnDevice = true,
 ) {
-	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
 	const isClaude = harness === "claude-code";
-	// A provider's own model option (ACP config) replaces the native list below,
-	// so the same setting narrows its choices; other options pass through as is.
 	const providerModelOption = options?.find(
 		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
 	);
-	// A worker's CLI can run another model than this computer's for the same alias,
-	// so a cloud chat's own list is never named or filtered through this computer's catalog.
 	const ownList = !runsOnDevice && controllerModels.length > 0;
-	// Other agents show their saved catalog until the live list arrives, then the
-	// live list, which reflects this account's entitlements, replaces it.
 	const showSavedCatalog = (isClaude && !ownList) || (!liveModelsLoaded && !providerModelOption);
 	const savedCatalog = useQuery({ ...agentModelsQueryOptions(harness ?? "", "", hostId), enabled: Boolean(harness) && showSavedCatalog }).data;
 	const catalogModels = useMemo(() => {
-		// A catalog response may omit models (an older daemon or a mock); treat that
-		// like an empty catalog rather than reading through it.
 		const savedModels = savedCatalog?.models ?? [];
 		if (!showSavedCatalog || savedModels.length === 0) return controllerModels;
 		return savedModels
@@ -51,8 +33,6 @@ export function useChatModelChoices(
 				...(runsOnDevice && model.unavailableReason ? { unavailableReason: model.unavailableReason } : {}),
 			}));
 	}, [showSavedCatalog, savedCatalog, controllerModels, runsOnDevice]);
-	// A concrete model id the installed CLI is too old for. Aliases ("opus") are never
-	// marked: each CLI resolves them to a model it can run.
 	const unavailableReasons = useMemo(() => {
 		if (!isClaude || !runsOnDevice) return undefined;
 		const reasons = new Map<string, string>();
@@ -65,9 +45,6 @@ export function useChatModelChoices(
 		() => providerModelOption?.choices.map((choice) => ({ id: choice.value, name: choice.name })),
 		[providerModelOption],
 	);
-	// Resolve current Claude aliases before filtering so their labels cannot move
-	// to an older enabled model when the current concrete entry is switched off.
-	// A cloud chat's choices are filtered by their own ids, as New Task filters its Cloud catalog.
 	const resolveClaudeChoice = useMemo(
 		() => isClaude && runsOnDevice && savedCatalog?.models ? claudeChoiceModel(savedCatalog.models) : undefined,
 		[isClaude, runsOnDevice, savedCatalog],
@@ -77,7 +54,6 @@ export function useChatModelChoices(
 		hostId,
 		keep: [...currentModels, ...currentModels.map((id) => id ? resolveClaudeChoice?.(id)?.id : undefined)],
 	});
-	// Claude's choices are family aliases ("sonnet"); Settings names catalog ids.
 	const claudeChoiceID = useMemo(
 		() => resolveClaudeChoice && ((choice: { id: string; name?: string }) => resolveClaudeChoice(choice.id, choice.name)?.id ?? choice.id),
 		[resolveClaudeChoice],
@@ -87,7 +63,6 @@ export function useChatModelChoices(
 		if (!providerModelOption) return options;
 		const offered = new Set(offeredProviderModels.map((choice) => choice.id));
 		const markUnavailable = (choice: ChatConfigChoice): ChatConfigChoice => {
-			// A context variant may be gated on its own, or through its base model.
 			const reason = unavailableReasons?.get(choice.value) ?? unavailableReasons?.get(choice.value.replace(/\[.*\]$/, ""));
 			return reason ? { ...choice, unavailableReason: reason } : choice;
 		};

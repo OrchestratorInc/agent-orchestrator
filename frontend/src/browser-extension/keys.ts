@@ -1,6 +1,3 @@
-// Key presses for trusted input (CDP Input.dispatchKeyEvent). Accepts the same
-// names and chords as `ao browser press`: "Enter", "ArrowDown", "Control+A".
-
 import { BridgeError } from "./protocol";
 
 export const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
@@ -50,8 +47,6 @@ const ALIASES: Record<string, string> = {
 	del: "Delete",
 };
 
-// Editing shortcuts need explicit commands; Chrome does not run them for
-// synthesized key events on macOS.
 const EDITING_COMMANDS: Record<string, string> = { a: "selectAll", c: "copy", v: "paste", x: "cut", z: "undo" };
 
 function canonical(name: string): string {
@@ -86,7 +81,6 @@ export type KeyEvent = {
 	commands?: string[];
 };
 
-/** The CDP key events for one press of a key or chord, in dispatch order. */
 export function keyEvents(chord: string): KeyEvent[] {
 	const parts = chord
 		.split("+")
@@ -108,7 +102,6 @@ export function keyEvents(chord: string): KeyEvent[] {
 		events.push({ type: "rawKeyDown", key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, modifiers: held });
 	}
 	const def = definitionFor(keyName, (bits & MODIFIER_BITS.Shift) !== 0);
-	// Text is produced only without Control/Meta/Alt, as on a real keyboard.
 	const producesText = def.text !== undefined && (bits & (MODIFIER_BITS.Control | MODIFIER_BITS.Meta | MODIFIER_BITS.Alt)) === 0;
 	const shortcut = bits & ~MODIFIER_BITS.Shift;
 	let command = shortcut === MODIFIER_BITS.Control || shortcut === MODIFIER_BITS.Meta ? EDITING_COMMANDS[def.key.toLowerCase()] : undefined;

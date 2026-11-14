@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// qwenDefaultKeyEnv is the credential variable Qwen reads for a protocol when
-// a model entry names no envKey of its own.
 var qwenDefaultKeyEnv = map[string]string{
 	"openai": "OPENAI_API_KEY", "openai-responses": "OPENAI_API_KEY",
 	"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY", "vertex-ai": "GOOGLE_API_KEY",
@@ -31,11 +29,6 @@ type qwenSettings struct {
 	} `json:"security"`
 }
 
-// qwenConfiguredProviders reports the protocols Qwen holds a credential for:
-// a stored Qwen OAuth login, an inline key, or the variable a protocol's model
-// entries (or Qwen's default for it) read, set in the environment,
-// settings.json's env map or Qwen's global .env files. It checks presence
-// only; whether the provider accepts the key is not proven.
 func qwenConfiguredProviders(workingDir string, env map[string]string) []string {
 	home := credentialPresence(env["HOME"])
 	if home == "" {
@@ -118,7 +111,6 @@ func qwenConfiguredProviders(workingDir string, env map[string]string) []string 
 	return providers
 }
 
-// uniqueProviders drops repeated provider IDs, keeping first-seen order.
 func uniqueProviders(providers []string) []string {
 	if len(providers) == 0 {
 		return providers

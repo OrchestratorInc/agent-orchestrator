@@ -1,6 +1,3 @@
-// Package agentauth owns the fixed, daemon-trusted authentication plans for
-// supported harnesses. Clients select an agent and a reviewed login method;
-// commands stay private, and optional credentials never appear in API results.
 package agentauth
 
 import (
@@ -20,14 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
-// ExecutableFinder resolves an executable on the host PATH.
 type ExecutableFinder interface {
 	LookPath(string) (string, error)
 }
 
-// AgentBinaryResolver resolves an agent through the same adapter-aware search
-// used by normal session startup, including managed install locations outside
-// the daemon PATH.
 type AgentBinaryResolver interface {
 	ResolveAgentBinary(context.Context, string) (string, error)
 }
@@ -36,79 +29,52 @@ type executableFinderFunc func(string) (string, error)
 
 func (f executableFinderFunc) LookPath(name string) (string, error) { return f(name) }
 
-// Action describes the native authentication action a plan offers.
 type Action string
 
 const (
-	// ActionLogin opens an agent's native login flow.
-	ActionLogin Action = "login"
-	// ActionLogout opens an agent's native logout flow.
-	ActionLogout Action = "logout"
-	// ActionSetup opens an agent's native provider/setup flow.
-	ActionSetup Action = "setup"
-	// ActionInstructions points the user to agent-owned setup documentation.
+	ActionLogin        Action = "login"
+	ActionLogout       Action = "logout"
+	ActionSetup        Action = "setup"
 	ActionInstructions Action = "instructions"
 )
 
-// LaunchMode describes how the user enters an agent-owned authentication or
-// provider setup flow.
 type LaunchMode string
 
 const (
-	// LaunchTerminal opens a daemon-owned terminal running a reviewed command.
-	LaunchTerminal LaunchMode = "terminal"
-	// LaunchDocumentation opens the agent's official setup documentation.
+	LaunchTerminal      LaunchMode = "terminal"
 	LaunchDocumentation LaunchMode = "documentation"
 )
 
-// Plan is the display-safe authentication plan for one harness. Trusted
-// command and terminal details remain private to this package.
 type Plan struct {
-	AgentID    string     `json:"agentId"`
-	Action     Action     `json:"action"`
-	LaunchMode LaunchMode `json:"launchMode" enum:"terminal,documentation"`
-	Available  bool       `json:"available"`
-	// LogoutCommand is empty when native logout is unsupported. It is display
-	// text only; clients cannot supply or override the private command.
-	LogoutCommand    string `json:"logoutCommand,omitempty"`
-	logoutCommand    []string
-	DisplayCommand   string `json:"displayCommand,omitempty"`
-	Guidance         string `json:"guidance,omitempty"`
-	DocumentationURL string `json:"documentationUrl"`
-	Reason           string `json:"reason,omitempty"`
-	// Methods lists the login methods supported by the background UI flow.
-	Methods       []LoginMethod `json:"methods,omitempty"`
-	command       []string
-	title         string
-	terminalInput string
-	// initialInput and initialInputReadyStates, when set, make the daemon inject
-	// the reviewed input automatically once the terminal renders a known ready
-	// state, instead of waiting for the user to trigger terminalInput.
-	initialInput            string
-	initialInputReadyStates []shellterm.InitialInputReadyState
-	// sendInitialInputOnReadyTimeout delivers initialInput even when no ready
-	// state appears in time, for harnesses whose input is safe once started.
+	AgentID                        string     `json:"agentId"`
+	Action                         Action     `json:"action"`
+	LaunchMode                     LaunchMode `json:"launchMode" enum:"terminal,documentation"`
+	Available                      bool       `json:"available"`
+	LogoutCommand                  string     `json:"logoutCommand,omitempty"`
+	logoutCommand                  []string
+	DisplayCommand                 string        `json:"displayCommand,omitempty"`
+	Guidance                       string        `json:"guidance,omitempty"`
+	DocumentationURL               string        `json:"documentationUrl"`
+	Reason                         string        `json:"reason,omitempty"`
+	Methods                        []LoginMethod `json:"methods,omitempty"`
+	command                        []string
+	title                          string
+	terminalInput                  string
+	initialInput                   string
+	initialInputReadyStates        []shellterm.InitialInputReadyState
 	sendInitialInputOnReadyTimeout bool
-	// prepareWorkspace, when set, runs reviewed harness-specific setup against
-	// the plan's stable auth workspace before the terminal launches (for
-	// example pre-recording workspace trust so a first-run dialog cannot
-	// swallow the login flow).
-	prepareWorkspace func(context.Context, string) error
-	launcher         string
-	launcherArgs     []string
-	hiddenTerminal   bool
+	prepareWorkspace               func(context.Context, string) error
+	launcher                       string
+	launcherArgs                   []string
+	hiddenTerminal                 bool
 }
 
-// TerminalOpener opens the daemon-trusted terminal used for a native
-// authentication command.
 type TerminalOpener interface {
 	OpenCommandTerminal(context.Context, shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error)
 	IsShellTerminalChildAlive(context.Context, string) (bool, error)
 	CommandTerminalHandles(context.Context, string) ([]string, error)
 }
 
-// StartResult is the display-safe result of starting a native authentication
-// flow. Command arguments remain private to the resolved plan.
 type StartResult struct {
 	AgentID       string                  `json:"agentId"`
 	Action        Action                  `json:"action"`
@@ -117,10 +83,6 @@ type StartResult struct {
 	Terminal      shellterm.ShellTerminal `json:"terminal"`
 }
 
-// Service resolves the fixed authentication registry through AO's registered
-// harness adapters, with direct PATH lookup only for callers without one.
-// dataDir roots the stable per-harness auth workspaces used by plans with a
-// prepareWorkspace hook.
 type Service struct {
 	executables    ExecutableFinder
 	agents         AgentBinaryResolver
@@ -128,8 +90,6 @@ type Service struct {
 	dataDir        string
 	selfExecutable func() (string, error)
 	mu             sync.Mutex
-	// keysMu serializes changes to AO's provider keys and their OS user
-	// environment copies: saves, removals and the startup republication.
 	keysMu         sync.Mutex
 	operations     map[string]*loginOperation
 	terminalStarts map[string]bool
@@ -138,40 +98,25 @@ type Service struct {
 	loginTimeout   time.Duration
 }
 
-// New creates an authentication-plan service.
 func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 	return NewWithAgentResolver(executables, nil, terminals, "")
 }
 
-// NewWithAgentResolver creates a service that uses AO's adapter-aware binary
-// resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
-	// Restore AO-managed provider variables before adapter authentication probes
-	// and model discovery run after a daemon restart.
 	republish := map[string]string{}
 	if keys, err := providerkeys.Load(dataDir); err == nil {
 		device, _ := providerkeys.DeviceNames(dataDir)
 		users, _ := providerkeys.UserValueNames(dataDir)
 		for name, value := range keys {
-			// Recorded first, so a value the user exported before starting AO
-			// still reaches the sessions that must not receive AO's copy. A
-			// key AO published itself comes back from the OS user environment
-			// after a restart; that copy is AO's, not the user's.
 			var published []string
 			if device[name] && !users[name] {
 				published = []string{value}
 			}
 			_ = providerkeys.ExportForProbes(name, value, published...)
-			// A value the user set themselves comes from their own setup.
 			if device[name] && !users[name] && deviceSupported {
 				republish[name] = value
 			}
 		}
-		// launchd and systemd user environments are session-scoped. Restore
-		// the keys the user published when AO starts again after a login or
-		// daemon restart, in the background so a slow or missing user bus
-		// never delays daemon startup. A value the user set there since is
-		// left in place.
 	}
 	s := &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
 	if len(republish) > 0 {
@@ -180,9 +125,6 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 	return s
 }
 
-// republishProviderKeys restores the shared keys recorded at startup. Each
-// runs under keysMu and only if it is still stored with the same value and
-// still shared, so a removal or sharing change made meanwhile is never undone.
 func (s *Service) republishProviderKeys(republish map[string]string) {
 	for name, value := range republish {
 		s.keysMu.Lock()
@@ -198,7 +140,6 @@ func (s *Service) republishProviderKeys(republish map[string]string) {
 	}
 }
 
-// Plans returns every known harness plan in stable Harness settings order.
 func (s *Service) Plans(ctx context.Context) []Plan {
 	out := make([]Plan, 0, len(plans))
 	for _, plan := range plans {
@@ -207,7 +148,6 @@ func (s *Service) Plans(ctx context.Context) []Plan {
 	return out
 }
 
-// Plan returns the resolved plan for agentID.
 func (s *Service) Plan(ctx context.Context, agentID string) (Plan, error) {
 	plan, ok := planByAgentID[agentID]
 	if !ok {
@@ -216,12 +156,6 @@ func (s *Service) Plan(ctx context.Context, agentID string) (Plan, error) {
 	return s.resolve(ctx, plan), nil
 }
 
-// Start opens the reviewed native authentication flow for agentID. Callers
-// choose only the registry key; command arguments come exclusively from the
-// resolved private plan fields. Interactive slash commands are either returned
-// as a fixed, reviewed action that the user explicitly triggers after the TUI
-// starts, or — for plans with initialInput — injected by the daemon
-// automatically once the terminal renders a reviewed ready state.
 func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error) {
 	plan, ok := planByAgentID[agentID]
 	if !ok {
@@ -230,7 +164,6 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 	return s.start(ctx, plan)
 }
 
-// Logout opens the fixed native logout flow using the binary sessions launch.
 func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, error) {
 	plan, ok := planByAgentID[agentID]
 	if !ok {
@@ -249,8 +182,6 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	return s.start(ctx, plan)
 }
 
-// reserveLogin excludes both startup and live terminal commands. Runtime probes
-// run outside the registry lock; an inconclusive probe never releases exclusion.
 func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), error) {
 	s.mu.Lock()
 	if s.closed {
@@ -276,8 +207,6 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 			return nil, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A login is already in progress for this harness.", map[string]any{"operationId": op.snapshot.ID})
 		}
 	}
-	// Reserve this harness's startup, but never hold the output/polling lock
-	// across binary resolution, workspace preparation, or terminal startup I/O.
 	s.terminalStarts[agentID] = true
 	s.mu.Unlock()
 	release := func() {
@@ -288,8 +217,6 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 	if s.terminals == nil {
 		return release, nil
 	}
-	// Shellterm persists command ownership across same-app daemon restarts.
-	// Reconcile every retained handle, not just commands started by this service.
 	handles, err := s.terminals.CommandTerminalHandles(ctx, "agentauth:"+agentID)
 	if err != nil {
 		release()
@@ -318,7 +245,6 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	return s.startReserved(ctx, plan)
 }
 
-// startReserved launches only after reserveLogin excludes other login flows.
 func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, error) {
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
@@ -350,13 +276,8 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 		InitialInputReadyStates:        plan.initialInputReadyStates,
 		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
 	}
-	// The terminal starts from the daemon's environment, which holds every
-	// AO-saved provider key. A key that would override this harness's own
-	// sign-in is held back, so the CLI never asks about it mid-login.
 	env := providerkeys.WithheldForSignIn(plan.AgentID)
 	if plan.AgentID == "claude-code" && s.dataDir != "" {
-		// The launcher runs in a private auth workspace. Preserve the daemon's
-		// resolved data root instead of re-resolving a relative inherited value.
 		env["AO_DATA_DIR"] = s.dataDir
 	}
 	if plan.AgentID == "opencode-v2" {
@@ -389,11 +310,6 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 	}, nil
 }
 
-// authWorkspaceRootName mirrors shellterm's auth-workspace root so all
-// daemon-owned authentication terminals live under one directory; plans with a
-// prepareWorkspace hook get a stable per-harness subdirectory instead of a
-// throwaway per-handle one, so harness state the hook seeds (for example
-// Kimi's workspace-trust record) persists across login attempts.
 const authWorkspaceRootName = "auth-workspace"
 
 func (s *Service) prepareAuthWorkspace(ctx context.Context, plan Plan) (string, error) {

@@ -1,9 +1,5 @@
 package scm
 
-// This file tests the SCM observer orchestration contract with fake provider,
-// store, and lifecycle collaborators so ETag decisions, batching, log fetching,
-// review cadence, semantic hashes, and notification behavior stay provider-neutral.
-
 import (
 	"bytes"
 	"context"
@@ -31,13 +27,11 @@ var (
 type fakeStore struct {
 	mu sync.Mutex
 
-	sessions       []domain.SessionRecord
-	projects       map[string]domain.ProjectRecord
-	workspaceRepos map[string][]domain.WorkspaceRepoRecord
-	prs            map[domain.SessionID][]domain.PullRequest
-	checks         map[string][]domain.PullRequestCheck
-	// detailsUpdatedAt is the provider updatedAt of each PR's stored details,
-	// by PR URL; a PR missing from it has none stored.
+	sessions         []domain.SessionRecord
+	projects         map[string]domain.ProjectRecord
+	workspaceRepos   map[string][]domain.WorkspaceRepoRecord
+	prs              map[domain.SessionID][]domain.PullRequest
+	checks           map[string][]domain.PullRequestCheck
 	detailsUpdatedAt map[string]time.Time
 	writeErr         error
 
@@ -148,10 +142,6 @@ type fakeProvider struct {
 	fetchErr     error
 	reviewErr    error
 
-	// fetchObsErrors maps a prKey to a per-observation error that the fake
-	// attaches to the observation it returns for that ref, mimicking the
-	// multi dispatcher's per-provider Error metadata. When set, the returned
-	// observation has Fetched=false + Error=err so the observer can route it.
 	fetchObsErrors map[string]error
 
 	credentialGate   bool
@@ -229,9 +219,6 @@ func (p *fakeProvider) CommitChecksGuard(_ context.Context, repo ports.SCMRepo, 
 	return p.checkGuards[commitKey(repo, sha)], nil
 }
 
-// FetchPullRequests honors the positional-alignment contract: out[i] answers
-// refs[i], with a zero-value Fetched=false placeholder for refs the fake has
-// no observation for.
 func (p *fakeProvider) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -242,9 +229,6 @@ func (p *fakeProvider) FetchPullRequests(_ context.Context, refs []ports.SCMPRRe
 	out := make([]ports.SCMObservation, len(refs))
 	for i, ref := range refs {
 		key := prKey(ref.Repo, ref.Number)
-		// Per-observation error mimics the multi dispatcher's per-provider
-		// Error metadata: a Fetched=false placeholder carrying the failure
-		// so the observer can route it to cooldown / refresh-incomplete.
 		if err, ok := p.fetchObsErrors[key]; ok {
 			out[i] = ports.SCMObservation{
 				Fetched:  false,
@@ -400,9 +384,6 @@ func TestDomainFromObservationCarriesPRDetailsWithTheObservationTime(t *testing.
 	}
 }
 
-// Providers read details only when none are stored or the PR's updatedAt
-// moved, so the hash leaves them out: a poll that skipped them must not look
-// like a change, and an edit still changes the hash through updatedAt.
 func TestMetadataHashLeavesOutPRDetails(t *testing.T) {
 	base := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, UpdatedAtProvider: time.Unix(50, 0).UTC()}}
 	withDetails := base
@@ -446,8 +427,6 @@ func TestDomainFromObservationPreservesStableIdentityAndAliases(t *testing.T) {
 func knownPR(num int) domain.PullRequest {
 	obs := testObs(num)
 	pr, _, _, _, _ := domainFromObservation("p-1", domain.SessionRecord{AutoInjectReview: true}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
-	// A known PR has been previously observed — simulate a prior review fetch
-	// so needsReviewRefresh does not fire solely because ReviewObservedAt is zero.
 	pr.ReviewObservedAt = time.Unix(2, 0).UTC()
 	return pr
 }
@@ -682,8 +661,6 @@ func TestPoll_RetriesTransientCredentialErrors(t *testing.T) {
 	}
 }
 
-// syncBuffer is a goroutine-safe wrapper around bytes.Buffer for capturing
-// slog output emitted from the observer's background goroutine.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -701,14 +678,9 @@ func (s *syncBuffer) String() string {
 	return s.buf.String()
 }
 
-// TestStart_LogsDisabledWarningWhenNoTokenAndNoSubjects exercises the bug-7
-// regression: on a fresh daemon with no tracked sessions/PRs, discoverSubjects
-// returns empty and Poll short-circuits before reaching the credential gate.
-// The "scm observer disabled: provider credentials unavailable" warn line must
-// still fire exactly once from the observer loop's pre-Poll credential check.
 func TestStart_LogsDisabledWarningWhenNoTokenAndNoSubjects(t *testing.T) {
 	store := &fakeStore{
-		sessions: nil, // no sessions → discoverSubjects returns empty
+		sessions: nil,
 		projects: map[string]domain.ProjectRecord{},
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
@@ -731,7 +703,6 @@ func TestStart_LogsDisabledWarningWhenNoTokenAndNoSubjects(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := obs.Start(ctx)
-	// Wait until the loop has emitted the expected warn line, or fail on timeout.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if strings.Contains(buf.String(), "scm observer disabled: provider credentials unavailable") {
@@ -902,8 +873,6 @@ func TestPoll_DisablesAutomaticDiscoveryWithoutHumanIdentity(t *testing.T) {
 	}
 }
 
-// A session whose branch is the prefix of two open PRs (its root plus a stacked
-// child on branch "feat/child") picks up both PRs in a single poll.
 func TestPoll_DiscoversStackedChildByBranchPrefix(t *testing.T) {
 	store := testStoreWithSession()
 	childObs := testObs(2)
@@ -965,8 +934,6 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 }
 
-// A worker renamed after launch keeps owning branches under its temporary
-// name, which the agent may have made or remembered before the rename landed.
 func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {
 	for _, tc := range []struct {
 		name, branch, temporary, source string
@@ -982,7 +949,6 @@ func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {
 			t.Errorf("%s: %q not attributed after rename", tc.name, tc.source)
 		}
 	}
-	// A later task named after the old temporary branch owns it outright.
 	renamed := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: "ao/p-1/root"}, branch: "ao/login/root"}
 	named := sessionRepo{session: domain.SessionRecord{ID: "p-9"}, branch: "ao/p-1/root"}
 	for _, source := range []string{"ao/p-1/root", "ao/p-1/fix"} {
@@ -1125,9 +1091,6 @@ func TestPoll_DiscoversWorkspaceChildRepoUpstreamPR(t *testing.T) {
 	}
 }
 
-// A PR whose head branch matches a session branch but lives in a fork (its head
-// repo differs from the project repo) must not be auto-attributed: its commits
-// are not the session's work. It is neither fetched nor persisted.
 func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
@@ -1177,11 +1140,6 @@ func mustGit(t *testing.T, args ...string) {
 	}
 }
 
-// A PR opened from the fork push origin against an upstream base repo (the
-// standard fork -> upstream contribution flow) must be discovered and attributed
-// by scanning every remote in the project checkout, not just origin. Its head
-// lives in origin (o/r) while its base lives in upstream (up/r); the persisted
-// row records the upstream base repo so refresh refetches against it.
 func TestPoll_DiscoversCrossForkPRFromUpstreamRemote(t *testing.T) {
 	dir := t.TempDir()
 	mustGit(t, "init", dir)
@@ -1240,9 +1198,6 @@ func TestPoll_DiscoversCrossForkPRFromUpstreamRemote(t *testing.T) {
 	}
 }
 
-// A PR on a scanned upstream remote whose head lives in some third-party fork
-// (not this project's origin) must never be attributed, even though its branch
-// name matches a session. Scanning extra remotes stays safe.
 func TestPoll_IgnoresUpstreamPRFromForeignHead(t *testing.T) {
 	dir := t.TempDir()
 	mustGit(t, "init", dir)
@@ -1275,17 +1230,12 @@ func TestPoll_IgnoresUpstreamPRFromForeignHead(t *testing.T) {
 	}
 }
 
-// A newly discovered open PR is persisted as a baseline row during discovery,
-// before the refresh/lifecycle pass. This is what lets a same-poll terminal
-// observation for a sibling PR see the open PR in the store and avoid completing
-// the session prematurely. The persist holds even when the refresh fetch yields
-// no observation for the new PR.
 func TestPoll_DiscoveredPRPersistedAsBaselineBeforeRefresh(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
 		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}}},
-		observations: map[string]ports.SCMObservation{}, // refresh returns nothing
+		observations: map[string]ports.SCMObservation{},
 	}
 	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
 	if err := obs.Poll(context.Background()); err != nil {
@@ -1326,8 +1276,6 @@ func TestPoll_CIETagChangeRefreshesWhenRepoUnchanged(t *testing.T) {
 	}
 }
 
-// stallingLifecycle hangs on one session's reaction until its context ends,
-// like a merge-conflict nudge stuck on a wedged agent pane or chat host.
 type stallingLifecycle struct {
 	mu       sync.Mutex
 	stall    domain.SessionID
@@ -1353,7 +1301,7 @@ func TestPoll_StalledLifecycleDoesNotBlockOtherSessions(t *testing.T) {
 		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
 		pr := knownPR(i)
 		pr.SessionID = id
-		pr.MetadataHash = "" // force candidate
+		pr.MetadataHash = ""
 		store.prs[id] = []domain.PullRequest{pr}
 		provider.observations[prKey(testRepo, i)] = testObs(i)
 	}
@@ -1402,8 +1350,6 @@ func (l *deadlineLifecycle) ApplySCMObservation(ctx context.Context, id domain.S
 	return err
 }
 
-// A merged or closed PR is not selected again after a failed reaction, so the
-// reaction timeout must not cut its teardown and final notifications short.
 func TestPoll_TerminalPRLifecycleIsNotTimeBounded(t *testing.T) {
 	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
 	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
@@ -1412,7 +1358,7 @@ func TestPoll_TerminalPRLifecycleIsNotTimeBounded(t *testing.T) {
 		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
 		pr := knownPR(i)
 		pr.SessionID = id
-		pr.MetadataHash = "" // force candidate
+		pr.MetadataHash = ""
 		store.prs[id] = []domain.PullRequest{pr}
 		provider.observations[prKey(testRepo, i)] = testObs(i)
 	}
@@ -1442,7 +1388,7 @@ func TestPoll_GraphQLBatchChunksAt25(t *testing.T) {
 		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
 		pr := knownPR(i)
 		pr.SessionID = id
-		pr.MetadataHash = "" // force candidate
+		pr.MetadataHash = ""
 		store.prs[id] = []domain.PullRequest{pr}
 		provider.observations[prKey(testRepo, i)] = testObs(i)
 	}
@@ -1570,8 +1516,6 @@ func TestPoll_UnchangedHashesDoNotWriteOrNotify(t *testing.T) {
 	}
 }
 
-// detailsPollFixture is a tracked PR #1 whose stored hashes match obsValue,
-// with a provider that answers obsValue.
 func detailsPollFixture(obsValue ports.SCMObservation) (*fakeStore, *fakeProvider, domain.PullRequest) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -1583,9 +1527,6 @@ func detailsPollFixture(obsValue ports.SCMObservation) (*fakeStore, *fakeProvide
 	return store, provider, local
 }
 
-// The ref carries the updatedAt the stored details were read at, so the
-// provider skips details that cannot have changed; a PR with none stored
-// sends zero and gets them.
 func TestPoll_RefCarriesTheStoredDetailsUpdatedAt(t *testing.T) {
 	stored := time.Unix(50, 0).UTC()
 	for _, tc := range []struct {
@@ -1613,8 +1554,6 @@ func TestPoll_RefCarriesTheStoredDetailsUpdatedAt(t *testing.T) {
 	}
 }
 
-// An unchanged PR whose details the provider skipped is not a change: nothing
-// is written, so the stored details stay, and lifecycle hears nothing.
 func TestPoll_SkippedDetailsAreNotAChange(t *testing.T) {
 	read := testObs(1)
 	read.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
@@ -1634,9 +1573,6 @@ func TestPoll_SkippedDetailsAreNotAChange(t *testing.T) {
 	}
 }
 
-// Details read for a PR that has none stored (one stored before details
-// existed, say) are written even though no hash changed, without a lifecycle
-// round or a rewrite of its checks and reviews.
 func TestPoll_StoresDetailsReadForAnOtherwiseUnchangedPR(t *testing.T) {
 	obsValue := testObs(1)
 	obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
@@ -1667,8 +1603,6 @@ func TestPoll_StoresDetailsReadForAnOtherwiseUnchangedPR(t *testing.T) {
 	}
 }
 
-// Details still owed after a poll, because the read or the write failed, keep
-// the repository's cursor where it was, so the next poll comes back for them.
 func TestPoll_OwedDetailsKeepTheRepoCursor(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -1696,7 +1630,6 @@ func TestPoll_OwedDetailsKeepTheRepoCursor(t *testing.T) {
 			}
 		})
 	}
-	// Once they are stored, the cursor moves on.
 	obsValue := testObs(1)
 	obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
 	store, provider, _ := detailsPollFixture(obsValue)
@@ -1712,8 +1645,6 @@ func TestPoll_OwedDetailsKeepTheRepoCursor(t *testing.T) {
 	}
 }
 
-// A PR whose updatedAt moved gets its new details written with the change,
-// so the stored details and their updatedAt move together.
 func TestPoll_MovedUpdatedAtWritesTheNewDetails(t *testing.T) {
 	old := testObs(1)
 	old.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
@@ -1824,9 +1755,6 @@ func TestPoll_PartialCIPreservesDurableChecks(t *testing.T) {
 		{Name: "lint", CommitHash: "sha1", Status: domain.PRCheckPassed, Conclusion: "success", URL: "ci-lint"},
 	}
 	store.checks[local.URL] = durableChecks
-	// Compute the durable CI hash from the full two-check snapshot so the
-	// incoming one-check partial observation differs and would trigger a
-	// CI change write without the gate.
 	durableObs := testObs(1)
 	durableObs.CI = ports.SCMCIObservation{
 		Summary: string(domain.CIPassing),
@@ -1839,11 +1767,6 @@ func TestPoll_PartialCIPreservesDurableChecks(t *testing.T) {
 	local.CIHash = ciSemanticHash(durableObs.CI)
 	local.MetadataHash = metadataSemanticHash(durableObs)
 	store.prs["p-1"] = []domain.PullRequest{local}
-	// Provider returns a truncated CI snapshot: Partial=true, only one of
-	// the two durable checks is present. Without the CI.Partial gate this
-	// capped snapshot would be persisted as Fetched=true complete and
-	// overwrite the durable lint check. The title differs so a metadata
-	// change forces a write even when the CI hash is preserved by the gate.
 	partialObs := testObs(1)
 	partialObs.PR.Title = "PR (updated)"
 	partialObs.CI = ports.SCMCIObservation{
@@ -1866,13 +1789,9 @@ func TestPoll_PartialCIPreservesDurableChecks(t *testing.T) {
 		t.Fatalf("writes = %#v, want one write", store.writes)
 	}
 	write := store.writes[0]
-	// The durable CI hash must be preserved — the capped snapshot must
-	// not advance it as if it were a complete observation.
 	if write.pr.CIHash != local.CIHash {
 		t.Fatalf("CI hash = %q, want preserved durable %q", write.pr.CIHash, local.CIHash)
 	}
-	// CIObservedAt must not advance — the partial snapshot is not an
-	// authoritative complete observation.
 	if !write.pr.CIObservedAt.Equal(local.CIObservedAt) {
 		t.Fatalf("CIObservedAt = %s, want preserved durable %s", write.pr.CIObservedAt, local.CIObservedAt)
 	}
@@ -1999,8 +1918,8 @@ func TestPoll_ReviewObservedAtZeroTriggersReviewRefresh(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
 	local.Review = domain.ReviewApproved
-	local.ReviewHash = "some-hash"       // non-empty but review_observed_at is zero
-	local.ReviewObservedAt = time.Time{} // review threads were never fetched
+	local.ReviewHash = "some-hash"
+	local.ReviewObservedAt = time.Time{}
 	store.prs["p-1"] = []domain.PullRequest{local}
 	review := ports.SCMReviewObservation{
 		Decision: string(domain.ReviewApproved),
@@ -2063,27 +1982,22 @@ func TestNeedsReviewRefresh_UpdatedAtProviderTriggersRefresh(t *testing.T) {
 		ReviewObservedAt: time.Unix(100, 0).UTC(),
 	}
 
-	// updated_at newer than ReviewObservedAt → refresh
 	if !obs.needsReviewRefresh(key, base, string(domain.ReviewApproved), true, time.Unix(200, 0).UTC(), time.Unix(500, 0).UTC()) {
 		t.Fatal("expected refresh when updatedAtProvider is newer than ReviewObservedAt")
 	}
 
-	// updated_at older than ReviewObservedAt → no refresh
 	if obs.needsReviewRefresh(key, base, string(domain.ReviewApproved), true, time.Unix(50, 0).UTC(), time.Unix(500, 0).UTC()) {
 		t.Fatal("expected no refresh when updatedAtProvider is older than ReviewObservedAt")
 	}
 
-	// updated_at equal to ReviewObservedAt → no refresh
 	if obs.needsReviewRefresh(key, base, string(domain.ReviewApproved), true, time.Unix(100, 0).UTC(), time.Unix(500, 0).UTC()) {
 		t.Fatal("expected no refresh when updatedAtProvider equals ReviewObservedAt")
 	}
 
-	// updated_at is zero → no refresh (falls back to existing conditions)
 	if obs.needsReviewRefresh(key, base, string(domain.ReviewApproved), true, time.Time{}, time.Unix(500, 0).UTC()) {
 		t.Fatal("expected no refresh when updatedAtProvider is zero")
 	}
 
-	// hasObs is false → updated_at check skipped, no refresh
 	if obs.needsReviewRefresh(key, base, string(domain.ReviewApproved), false, time.Unix(200, 0).UTC(), time.Unix(500, 0).UTC()) {
 		t.Fatal("expected no refresh when hasObs is false even with newer updatedAtProvider")
 	}
@@ -2133,7 +2047,7 @@ func TestPoll_UpdatedAtProviderTriggersReviewRefresh(t *testing.T) {
 func TestPoll_UpdatedAtProviderStaleDoesNotTriggerReviewRefresh(t *testing.T) {
 	store := testStoreWithSession()
 	obsValue := testObs(1)
-	obsValue.PR.UpdatedAtProvider = time.Unix(100, 0).UTC() // older than ReviewObservedAt
+	obsValue.PR.UpdatedAtProvider = time.Unix(100, 0).UTC()
 	obsValue.Review = ports.SCMReviewObservation{Decision: string(domain.ReviewApproved)}
 
 	local := knownPR(1)
@@ -2168,9 +2082,6 @@ func TestPoll_RefreshReviewsDoesNotDowngradeChangesRequested(t *testing.T) {
 	local.ReviewHash = "old-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// The fast-path observation set ReviewChangesRequest (e.g. from
-	// detailed_merge_status=requested_changes). FetchReviewThreads derives the
-	// decision from approvals and returns a lower-priority "approved".
 	obsValue := testObs(1)
 	obsValue.Review.Decision = string(domain.ReviewChangesRequest)
 	review := ports.SCMReviewObservation{
@@ -2198,8 +2109,6 @@ func TestPoll_RefreshReviewsDoesNotDowngradeChangesRequested(t *testing.T) {
 	if write.pr.Review != domain.ReviewChangesRequest {
 		t.Fatalf("Review = %q, want %q (should not downgrade ChangesRequested to lower-priority decision)", write.pr.Review, domain.ReviewChangesRequest)
 	}
-	// Threads, summaries, and partial flag from FetchReviewThreads must still
-	// be adopted regardless of the decision guard.
 	if len(write.threads) != 1 || write.threads[0].ThreadID != "t1" {
 		t.Fatalf("expected review thread t1 persisted, got %#v", write.threads)
 	}
@@ -2218,9 +2127,6 @@ func TestPoll_RefreshReviewsOverwritesWithEqualOrHigherPriority(t *testing.T) {
 	local.ReviewHash = "old-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// Local decision is ReviewApproved (priority 1). FetchReviewThreads
-	// returns ReviewChangesRequest (priority 3) — higher priority, should
-	// overwrite as before (no regression).
 	local.ReviewObservedAt = time.Unix(100, 0).UTC()
 	obsValue := testObs(1)
 	obsValue.Review.Decision = string(domain.ReviewApproved)
@@ -2257,9 +2163,6 @@ func TestPoll_RefreshReviewsDowngradeToNoneBlocked(t *testing.T) {
 	local.ReviewHash = "old-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// FetchReviewThreads returns Decision="none" (priority 0), which is
-	// lower than ReviewChangesRequest (priority 3). The guard must keep the
-	// existing ChangesRequested decision but still adopt the threads.
 	obsValue := testObs(1)
 	obsValue.Review.Decision = string(domain.ReviewChangesRequest)
 	review := ports.SCMReviewObservation{
@@ -2294,9 +2197,6 @@ func TestPoll_RefreshReviewsDowngradeToReviewRequiredBlocked(t *testing.T) {
 	local.ReviewHash = "old-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// FetchReviewThreads returns Decision="review_required" (priority 2),
-	// which is lower than ReviewChangesRequest (priority 3). The guard must
-	// keep the existing ChangesRequested decision but still adopt the threads.
 	obsValue := testObs(1)
 	obsValue.Review.Decision = string(domain.ReviewChangesRequest)
 	review := ports.SCMReviewObservation{
@@ -2444,10 +2344,6 @@ func TestPoll_DuplicateTrackedPRKeepsFirstSession(t *testing.T) {
 	}
 }
 
-// TestDiscoverSubjects_BackfillsRepoOriginURL asserts that a project row with
-// an empty RepoOriginURL but a real on-disk repo gets its origin filled in
-// during discovery and persisted, so the same project becomes observable
-// without re-running project add.
 func TestDiscoverSubjects_BackfillsRepoOriginURL(t *testing.T) {
 	dir := t.TempDir()
 	if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
@@ -2459,7 +2355,7 @@ func TestDiscoverSubjects_BackfillsRepoOriginURL(t *testing.T) {
 
 	store := &fakeStore{
 		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
-		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}}, // empty RepoOriginURL
+		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}},
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
 	}
@@ -2474,20 +2370,13 @@ func TestDiscoverSubjects_BackfillsRepoOriginURL(t *testing.T) {
 	}
 }
 
-// TestPoll_StaleOpenPRForcedRefreshAfterMaxAge verifies that an open PR whose
-// LastPRFetchAt is zero (never fetched) is re-fetched even when both the repo
-// ETag guard and the commit checks guard return NotModified. This covers the
-// post-merge stale-ETag scenario where the PR has been merged server-side but
-// the provider ETag signals no change.
 func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
-	// Fully-populated open PR — all hashes set, not merged, not closed.
 	local.Merged = false
 	local.Closed = false
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// Provider: both guards return NotModified, but the observation reports merged.
 	mergedObs := testObs(1)
 	mergedObs.PR.Merged = true
 	mergedObs.PR.State = "merged"
@@ -2505,10 +2394,8 @@ func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 
 	now := time.Unix(1000, 0).UTC()
 	obs := newTestObserver(store, provider, &fakeLifecycle{}, now)
-	// Pre-seed ETags so both guards fire NotModified.
 	obs.Cache.RepoPRListETag[repoKey] = "v1"
 	obs.Cache.CommitChecksETag[commitCacheKey] = "ci1"
-	// Leave LastPRFetchAt empty (zero time) for the PR key — forces refresh.
 
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -2527,12 +2414,9 @@ func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 		t.Fatalf("expected a write with pr.Merged==true, got writes: %#v", store.writes)
 	}
 
-	// Now simulate a recent fetch: set LastPRFetchAt to now and poll again.
-	// The PR is now merged in the store, so openTrackedPRs will not include it.
-	// Reset the store to still have the open PR so we test the max-age guard specifically.
 	store.writes = nil
 	provider.fetchBatches = nil
-	store.prs["p-1"] = []domain.PullRequest{local} // restore open PR
+	store.prs["p-1"] = []domain.PullRequest{local}
 	obs.Cache.LastPRFetchAt[prKey(testRepo, 1)] = now
 
 	if err := obs.Poll(context.Background()); err != nil {
@@ -2542,14 +2426,9 @@ func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 		t.Fatalf("expected no fetch batch within max-age window, got %d: %#v", len(provider.fetchBatches), provider.fetchBatches)
 	}
 
-	// Backdate the last fetch beyond DefaultPRMaxAge. This is the behavior the PR
-	// actually adds: the max-age guard (not the never-fetched branch) forces a
-	// refetch. The clock is pinned, so parts 1 and 2 only cover last.IsZero() and
-	// a zero elapsed time; without this, deleting the `> DefaultPRMaxAge` compare
-	// would still pass.
 	store.writes = nil
 	provider.fetchBatches = nil
-	store.prs["p-1"] = []domain.PullRequest{local} // restore open PR
+	store.prs["p-1"] = []domain.PullRequest{local}
 	obs.Cache.LastPRFetchAt[prKey(testRepo, 1)] = now.Add(-(DefaultPRMaxAge + time.Minute))
 
 	if err := obs.Poll(context.Background()); err != nil {
@@ -2560,9 +2439,6 @@ func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 	}
 }
 
-// TestDiscoverSubjects_NonGitPathDoesNotBackfill confirms the backfill is
-// best-effort: a non-git project path leaves RepoOriginURL empty without
-// erroring or persisting a stub, so the project is simply skipped.
 func TestDiscoverSubjects_NonGitPathDoesNotBackfill(t *testing.T) {
 	dir := t.TempDir()
 	store := &fakeStore{
@@ -2584,10 +2460,6 @@ func TestDiscoverSubjects_NonGitPathDoesNotBackfill(t *testing.T) {
 	}
 }
 
-// TestPoll_RejectsFetchedFalseObservation verifies that a Fetched=false
-// observation from a transient provider failure is rejected: the store is not
-// written, ETags are not advanced, and lifecycle is not notified (review
-// finding #1). The last durable state must be preserved.
 func TestPoll_RejectsFetchedFalseObservation(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2595,8 +2467,6 @@ func TestPoll_RejectsFetchedFalseObservation(t *testing.T) {
 	local.CIHash = "durable-ci"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// Provider returns a Fetched=false placeholder (simulating a transient
-	// GitLab 5xx that the adapter converts to Fetched=false + error).
 	failedObs := ports.SCMObservation{
 		Fetched:  false,
 		Provider: "github",
@@ -2618,16 +2488,12 @@ func TestPoll_RejectsFetchedFalseObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Store must not be written with placeholder facts that would overwrite
-	// durable metadata/CI hashes.
 	if len(store.writes) != 0 {
 		t.Fatalf("store writes = %d, want 0 (Fetched=false must not persist)", len(store.writes))
 	}
-	// Lifecycle must not be notified with stale/placeholder observations.
 	if len(lc.observed) != 0 {
 		t.Fatalf("lifecycle observed = %d, want 0 (Fetched=false must not notify)", len(lc.observed))
 	}
-	// ETags must not advance — the failed observation is not authoritative.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "repo1" {
 		t.Fatalf("repo ETag advanced after Fetched=false: got %q want repo1", got)
 	}
@@ -2636,14 +2502,8 @@ func TestPoll_RejectsFetchedFalseObservation(t *testing.T) {
 	}
 }
 
-// TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed verifies that after
-// the first poll establishes a sync cursor, only MRs in the updated set are
-// refreshed on subsequent polls — not every tracked MR in the repo (review
-// finding #2).
 func TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed(t *testing.T) {
 	store := testStoreWithSession()
-	// Three tracked PRs with durable hashes so missingLocalState does not
-	// force a refresh; the listedPRs filter is the deciding factor.
 	pr1, pr2, pr3 := knownPR(1), knownPR(2), knownPR(3)
 	for _, p := range []*domain.PullRequest{&pr1, &pr2, &pr3} {
 		p.MetadataHash = "durable-meta"
@@ -2652,7 +2512,6 @@ func TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed(t *testing.T) {
 	}
 	store.prs["p-1"] = []domain.PullRequest{pr1, pr2, pr3}
 
-	// Poll 1: full listing (no cursor), all 3 PRs returned.
 	provider := &fakeProvider{
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo1"}},
 		openPRs: map[string][]ports.SCMPRObservation{
@@ -2681,19 +2540,11 @@ func TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed(t *testing.T) {
 	}
 	cursor := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]
 
-	// Poll 2: ETag changed (repo2), but only PR 2 is in the updated set.
-	// PRs #1 and #3 are tracked open but absent from the listing, so they
-	// trigger terminal-state reconciliation fetches (Item 2). With durable
-	// hashes matching their observations, the reconciled fetches are no-op
-	// persists (no writes, no ETag/cursor advance) — but they still issue
-	// detail fetches.
 	provider.mu.Lock()
 	provider.repoGuards[prKey(testRepo, 0)] = ports.SCMGuardResult{ETag: "repo2"}
 	provider.openPRs[prKey(testRepo, 0)] = []ports.SCMPRObservation{
 		{Number: 2, State: "open", SourceBranch: "feat", HeadRepo: "o/r"},
 	}
-	// Match durable hashes so the reconciliation results for PRs #1 and #3
-	// are no-op persists (still-open, no terminal transition).
 	o1, o3 := testObs(1), testObs(3)
 	pr1.MetadataHash = metadataSemanticHash(o1)
 	pr1.CIHash = ciSemanticHash(o1.CI)
@@ -2710,36 +2561,23 @@ func TestPoll_IncrementalDiscovery_OnlyUpdatedMRsRefreshed(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// Cursor must advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; !got.After(cursor) {
 		t.Fatalf("poll 2: cursor did not advance: got %v, want > %v", got, cursor)
 	}
-	// The incremental-discovery filter selects only PR 2 (in the updated
-	// set) for normal refresh. PRs #1 and #3 are fetched via the
-	// reconciliation pass. So we expect 2 fetch batches: one for PR 2
-	// (normal refresh) and one for PRs #1 and #3 (reconciliation).
 	if len(provider.fetchBatches) != 2 {
 		t.Fatalf("poll 2: fetchBatches = %d, want 2 (normal + reconciliation)", len(provider.fetchBatches))
 	}
-	// Collect all fetched PR numbers.
 	fetched := map[int]bool{}
 	for _, batch := range provider.fetchBatches {
 		for _, ref := range batch {
 			fetched[ref.Number] = true
 		}
 	}
-	// All three PRs are fetched: PR 2 via normal refresh, PRs 1 and 3 via
-	// reconciliation. The incremental-discovery filter correctly prevents
-	// PRs 1 and 3 from being in the normal refresh batch — they are only
-	// fetched via reconciliation.
 	if !fetched[1] || !fetched[2] || !fetched[3] {
 		t.Fatalf("poll 2: expected PRs 1, 2, 3 fetched (2 via normal, 1+3 via reconciliation); got %v", fetched)
 	}
 }
 
-// TestPoll_IncrementalDiscovery_CursorNotAdvancedOnFailure verifies that when
-// FetchPullRequests fails, the sync cursor is NOT advanced so the next poll
-// re-fetches MRs updated during the failed poll
 func TestPoll_IncrementalDiscovery_CursorNotAdvancedOnFailure(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2765,7 +2603,6 @@ func TestPoll_IncrementalDiscovery_CursorNotAdvancedOnFailure(t *testing.T) {
 		t.Fatal("poll 1: cursor not set")
 	}
 
-	// Poll 2: FetchPullRequests fails — cursor must not advance.
 	provider.mu.Lock()
 	provider.repoGuards[prKey(testRepo, 0)] = ports.SCMGuardResult{ETag: "repo2"}
 	provider.fetchErr = errors.New("transient fetch failure")
@@ -2780,8 +2617,6 @@ func TestPoll_IncrementalDiscovery_CursorNotAdvancedOnFailure(t *testing.T) {
 	}
 }
 
-// returns a rate-limit error, subsequent polls within the cooldown window skip
-// that provider's calls instead of hammering it every 30s
 func TestPoll_RateLimitCooldown_SkipsProviderCalls(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2792,8 +2627,6 @@ func TestPoll_RateLimitCooldown_SkipsProviderCalls(t *testing.T) {
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
 	}
-	// First FetchPullRequests returns a rate-limit error; subsequent calls
-	// would succeed, but the cooldown must suppress them.
 	provider.mu.Lock()
 	provider.fetchErr = rle
 	provider.mu.Unlock()
@@ -2810,7 +2643,6 @@ func TestPoll_RateLimitCooldown_SkipsProviderCalls(t *testing.T) {
 		t.Fatal("github provider should be in rate-limit cooldown after rate-limit error")
 	}
 
-	// Second poll within the cooldown window — provider calls must be skipped.
 	provider.mu.Lock()
 	provider.fetchErr = nil
 	provider.fetchBatches = nil
@@ -2826,9 +2658,6 @@ func TestPoll_RateLimitCooldown_SkipsProviderCalls(t *testing.T) {
 	}
 }
 
-// TestPoll_RateLimitCooldown_ResumesAfterExpiry verifies that after the
-// cooldown expires, the observer resumes calling the provider (review
-// finding #4).
 func TestPoll_RateLimitCooldown_ResumesAfterExpiry(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2849,7 +2678,6 @@ func TestPoll_RateLimitCooldown_ResumesAfterExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// After the cooldown expires, provider calls resume.
 	provider.mu.Lock()
 	provider.fetchErr = nil
 	provider.fetchBatches = nil
@@ -2864,8 +2692,6 @@ func TestPoll_RateLimitCooldown_ResumesAfterExpiry(t *testing.T) {
 	}
 }
 
-// testRateLimitError is a minimal rate-limit error satisfying the observer's
-// rateLimitedError interface (GetRetryAfter / GetResetAt) via errors.As.
 type testRateLimitError struct {
 	retryAfter time.Duration
 }
@@ -2876,12 +2702,6 @@ func (e *testRateLimitError) GetRetryAfter() time.Duration { return e.retryAfter
 
 func (e *testRateLimitError) GetResetAt() time.Time { return time.Time{} }
 
-// TestPoll_PerObservationRateLimitError_TriggersCooldown (Item 7) verifies that
-// when the provider returns a Fetched=false observation carrying a rate-limit
-// error in its Error field, the observer enters per-provider cooldown for that
-// observation's provider. This is the mixed-batch case: the multi dispatcher
-// attaches the error as per-observation metadata so a rate-limited GitLab
-// alongside a healthy GitHub enters cooldown without suppressing GitHub.
 func TestPoll_PerObservationRateLimitError_TriggersCooldown(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2902,7 +2722,6 @@ func TestPoll_PerObservationRateLimitError_TriggersCooldown(t *testing.T) {
 	if !obs.inRateLimitCooldown(now, "github") {
 		t.Fatal("github provider should be in rate-limit cooldown after per-observation rate-limit error")
 	}
-	// Subsequent poll within cooldown must skip provider calls.
 	provider.mu.Lock()
 	provider.fetchObsErrors = nil
 	provider.fetchBatches = nil
@@ -2917,10 +2736,6 @@ func TestPoll_PerObservationRateLimitError_TriggersCooldown(t *testing.T) {
 	}
 }
 
-// TestPoll_PerObservationNonRateLimitError_MarksRefreshIncomplete (Item 7)
-// verifies that a Fetched=false observation carrying a non-rate-limit error is
-// routed to refresh-incomplete, NOT cooldown: the repo ETag and sync cursor
-// must not advance, and the provider must not enter cooldown.
 func TestPoll_PerObservationNonRateLimitError_MarksRefreshIncomplete(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2937,25 +2752,17 @@ func TestPoll_PerObservationNonRateLimitError_MarksRefreshIncomplete(t *testing.
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// Non-rate-limit errors must NOT enter cooldown.
 	if obs.inRateLimitCooldown(now, "github") {
 		t.Fatal("github provider must not enter cooldown for a non-rate-limit error")
 	}
-	// The repo's new ETag ("repo2") must NOT have been cached because the
-	// refresh was marked incomplete.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
 		t.Fatalf("repo ETag advanced to %q after refresh-incomplete; durable state must not advance", got)
 	}
-	// The sync cursor must NOT have advanced.
 	if cursor := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; !cursor.IsZero() {
 		t.Fatalf("sync cursor advanced to %v after refresh-incomplete; durable state must not advance", cursor)
 	}
 }
 
-// TestPoll_PerObservationError_NiledBeforePersistence (Item 7) verifies that
-// the observer nils out the Error field before the observation reaches the
-// store and lifecycle. The Error field is transient metadata, not durable
-// state: the storage layer must never see provider-error classification.
 func TestPoll_PerObservationError_NiledBeforePersistence(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2971,7 +2778,6 @@ func TestPoll_PerObservationError_NiledBeforePersistence(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// A healthy observation must reach lifecycle with Error == nil.
 	if len(lc.observed) == 0 {
 		t.Skip("no observation reached lifecycle; adjust test fixture")
 	}
@@ -2981,16 +2787,10 @@ func TestPoll_PerObservationError_NiledBeforePersistence(t *testing.T) {
 		}
 	}
 	for _, w := range store.writes {
-		_ = w // store writes carry domain types, not the obs.Error field; the
-		// lifecycle assertion above is the authoritative nil-out check.
+		_ = w
 	}
 }
 
-// TestPoll_CommitCheckETagChange_PromotesIndependentOfListing (Item 1)
-// verifies that a changed commit-check ETag independently promotes a PR to a
-// refresh candidate even when the repository listing is a 304 (so listedPRs is
-// empty). CI state changes during a 304 listing must be persisted rather than
-// silently dropped. This is the reviewer's non-zero-cursor regression test.
 func TestPoll_CommitCheckETagChange_PromotesIndependentOfListing(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -2999,16 +2799,13 @@ func TestPoll_CommitCheckETagChange_PromotesIndependentOfListing(t *testing.T) {
 	local.ReviewHash = "durable-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// New CI observation (pending → passing) that should be persisted.
 	updated := testObs(1)
 	updated.CI.Summary = string(domain.CIPassing)
 	updated.CI.HeadSHA = "sha1"
 	updated.CI.Checks = []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckPassed), Conclusion: "success", URL: "ci"}}
 
 	provider := &fakeProvider{
-		// Repo-list guard reports 304 (NotModified) against the cached ETag.
-		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo1", NotModified: true}},
-		// Commit-check ETag changed.
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo1", NotModified: true}},
 		checkGuards:  map[string]ports.SCMGuardResult{commitKey(testRepo, "sha1"): {ETag: "ci2"}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): updated},
 	}
@@ -3017,19 +2814,15 @@ func TestPoll_CommitCheckETagChange_PromotesIndependentOfListing(t *testing.T) {
 	obs := newTestObserver(store, provider, lc, now)
 	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
 	obs.Cache.CommitChecksETag[commitKey(testRepo, "sha1")] = "ci1"
-	// Non-zero cursor: simulates the post-first-poll state where a 304 leaves
-	// listedPRs empty.
 	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = now.Add(-time.Hour)
 
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	// The PR must be fetched despite the 304 listing.
 	if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 || provider.fetchBatches[0][0].Number != 1 {
 		t.Fatalf("commit-check ETag change with 304 listing must promote PR to refresh candidate; batches=%#v", provider.fetchBatches)
 	}
-	// The new CI state must be persisted despite the 304 listing.
 	if len(store.writes) == 0 {
 		t.Fatalf("expected at least one store write with updated CI state, got 0")
 	}
@@ -3043,22 +2836,15 @@ func TestPoll_CommitCheckETagChange_PromotesIndependentOfListing(t *testing.T) {
 	if !found {
 		t.Fatalf("updated CI state (passing) not persisted; writes=%#v", store.writes)
 	}
-	// The commit-check ETag must advance after successful persistence.
 	if got := obs.Cache.CommitChecksETag[commitKey(testRepo, "sha1")]; got != "ci2" {
 		t.Fatalf("commit ETag not advanced after successful persist: got %q want ci2", got)
 	}
 }
 
-// TestPoll_GitHubTerminalReconciliation_StillOpenNoOp (Item 2) verifies that a
-// tracked open GitHub PR not in the current listing triggers a terminal-
-// reconciliation detail fetch, and that a "still open" result is a no-op
-// persistence that does NOT advance any cursor or ETag.
 func TestPoll_GitHubTerminalReconciliation_StillOpenNoOp(t *testing.T) {
 	store := testStoreWithSession()
 	stillOpen := testObs(1)
 	local := knownPR(1)
-	// Compute durable hashes from the observation so the "still open" result
-	// is semantically a no-op (unchanged hashes → no write, no ETag advance).
 	local.MetadataHash = metadataSemanticHash(stillOpen)
 	local.CIHash = ciSemanticHash(stillOpen.CI)
 	local.ReviewHash = reviewSemanticHash(stillOpen.Review)
@@ -3066,7 +2852,7 @@ func TestPoll_GitHubTerminalReconciliation_StillOpenNoOp(t *testing.T) {
 
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{}, // PR not in listing
+		openPRs:      map[string][]ports.SCMPRObservation{},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): stillOpen},
 	}
 	lc := &fakeLifecycle{}
@@ -3079,23 +2865,17 @@ func TestPoll_GitHubTerminalReconciliation_StillOpenNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The reconciliation pass must issue a detail fetch for the missing PR.
 	if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 || provider.fetchBatches[0][0].Number != 1 {
 		t.Fatalf("reconciliation must fetch the missing PR; batches=%#v", provider.fetchBatches)
 	}
-	// The repo ETag must NOT advance — the "still open" result is a no-op.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
 		t.Fatalf("repo ETag advanced to %q on still-open reconciliation; durable state must not advance", got)
 	}
-	// The sync cursor must NOT advance.
 	if cursor := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; cursor.Equal(now) {
 		t.Fatalf("sync cursor advanced to %v on still-open reconciliation; durable state must not advance", cursor)
 	}
 }
 
-// TestPoll_GitHubTerminalReconciliation_TerminalTransition (Item 2) verifies
-// that when the reconciliation detail fetch reports a terminal state
-// (merged/closed), the terminal state is observed and persisted.
 func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -3104,13 +2884,12 @@ func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 	local.ReviewHash = "durable-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// The detail fetch returns a merged terminal state.
 	terminalObs := testObs(1)
 	terminalObs.PR.Merged = true
 	terminalObs.PR.State = string(domain.PRStateMerged)
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{}, // PR not in state=open listing
+		openPRs:      map[string][]ports.SCMPRObservation{},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): terminalObs},
 	}
 	lc := &fakeLifecycle{}
@@ -3123,11 +2902,9 @@ func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The reconciliation pass must issue a detail fetch.
 	if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 {
 		t.Fatalf("reconciliation must fetch the missing PR; batches=%#v", provider.fetchBatches)
 	}
-	// The terminal (merged) state must be persisted.
 	foundMerged := false
 	for _, w := range store.writes {
 		if w.pr.Number == 1 && w.pr.Merged {
@@ -3138,18 +2915,11 @@ func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 	if !foundMerged {
 		t.Fatalf("terminal merged state not persisted; writes=%#v", store.writes)
 	}
-	// Lifecycle must see the terminal transition.
 	if len(lc.observed) == 0 {
 		t.Fatalf("lifecycle not notified of terminal transition; observed=%#v", lc.observed)
 	}
 }
 
-// TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile (Item 2)
-// verifies the reviewer's explicit multi-poll requirement: after a PR is
-// reconciled on poll N (still-open, no-op), poll N+1 does NOT re-reconcile it
-// unnecessarily when the listing is unchanged. Once the terminal
-// reconciliation finds the PR is still open, the repo ETag has not advanced,
-// so a subsequent 304 poll skips reconciliation entirely.
 func TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -3172,7 +2942,6 @@ func TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile(t *testing.T) {
 	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
 	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = now.Add(-time.Hour)
 
-	// Poll 1: non-304 guard, PR missing from listing → reconciliation fetch.
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -3180,8 +2949,6 @@ func TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile(t *testing.T) {
 		t.Fatalf("poll 1: reconciliation must fetch the missing PR; batches=%#v", provider.fetchBatches)
 	}
 
-	// Poll 2: repo-list guard is now a 304 (NotModified). The PR is still
-	// missing from listing, but reconciliation must NOT run on a 304 poll.
 	provider.mu.Lock()
 	provider.repoGuards[prKey(testRepo, 0)] = ports.SCMGuardResult{ETag: "repo2", NotModified: true}
 	provider.fetchBatches = nil
@@ -3197,10 +2964,6 @@ func TestPoll_GitHubTerminalReconciliation_SecondPollNoReconcile(t *testing.T) {
 	}
 }
 
-// TestPoll_CooldownSkip_MarksRepoRefreshIncomplete (Item 3) verifies that when
-// a ref is skipped under cooldown, the repository is marked refresh-incomplete
-// so the repo ETag and sync cursor do NOT advance without an observation being
-// fetched. After cooldown, a 304 must not make the skipped update unrecoverable.
 func TestPoll_CooldownSkip_MarksRepoRefreshIncomplete(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -3219,36 +2982,25 @@ func TestPoll_CooldownSkip_MarksRepoRefreshIncomplete(t *testing.T) {
 	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
 	cursorBefore := now.Add(-time.Hour)
 	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = cursorBefore
-	// Put the github provider under cooldown so the ref is skipped.
 	obs.setRateLimitCooldown(now, "github", 2*time.Minute)
 
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	// The ref must not have been fetched (cooldown skipped it).
 	if len(provider.fetchBatches) != 0 {
 		t.Fatalf("cooldown-skip must not fetch refs; batches=%#v", provider.fetchBatches)
 	}
-	// The repo ETag must NOT advance — the refresh was marked incomplete.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
 		t.Fatalf("repo ETag advanced to %q after cooldown-skip; durable state must not advance", got)
 	}
-	// The sync cursor must NOT advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; got != cursorBefore {
 		t.Fatalf("sync cursor advanced after cooldown-skip: got %v, want %v (unchanged)", got, cursorBefore)
 	}
 }
 
-// TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds (finding #1) verifies
-// that when two MRs share a repo and one fetch fails while the other succeeds,
-// the repo ETag and LastSyncCursor do NOT advance. Without per-ref tracking,
-// markRepoRefreshOK (called after the successful PR persistence) would clear
-// the repo-level failure set by markRepoRefreshFailed for the failed PR,
-// making the failed update unrecoverable.
 func TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds(t *testing.T) {
 	store := testStoreWithSession()
-	// Two tracked PRs in the same repo with durable hashes.
 	pr1, pr2 := knownPR(1), knownPR(2)
 	for _, p := range []*domain.PullRequest{&pr1, &pr2} {
 		p.MetadataHash = "durable-meta"
@@ -3257,14 +3009,12 @@ func TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds(t *testing.T) {
 	}
 	store.prs["p-1"] = []domain.PullRequest{pr1, pr2}
 
-	// PR 1 fetch will fail (per-observation error), PR 2 fetch will succeed.
 	pr2Obs := testObs(2)
-	pr2Obs.PR.Title = "PR 2 updated" // force a metadata change so it persists
+	pr2Obs.PR.Title = "PR 2 updated"
 	provider := &fakeProvider{
-		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{Number: 1, State: "open", SourceBranch: "feat", HeadRepo: "o/r"}, {Number: 2, State: "open", SourceBranch: "feat", HeadRepo: "o/r"}}},
-		observations: map[string]ports.SCMObservation{prKey(testRepo, 2): pr2Obs},
-		// PR 1 returns a Fetched=false placeholder with a non-rate-limit error.
+		repoGuards:     map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
+		openPRs:        map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{Number: 1, State: "open", SourceBranch: "feat", HeadRepo: "o/r"}, {Number: 2, State: "open", SourceBranch: "feat", HeadRepo: "o/r"}}},
+		observations:   map[string]ports.SCMObservation{prKey(testRepo, 2): pr2Obs},
 		fetchObsErrors: map[string]error{prKey(testRepo, 1): errors.New("gitlab 503")},
 	}
 	lc := &fakeLifecycle{}
@@ -3278,7 +3028,6 @@ func TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// PR 2 must have been persisted (metadata changed).
 	foundPr2Write := false
 	for _, w := range store.writes {
 		if w.pr.Number == 2 {
@@ -3290,22 +3039,16 @@ func TestPoll_RepoRefreshMonotonicity_OneRefFailsOneSucceeds(t *testing.T) {
 		t.Fatalf("PR 2 (successful fetch) must be persisted; writes=%#v", store.writes)
 	}
 
-	// The repo ETag must NOT advance — PR 1 failed.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
 		t.Fatalf("repo ETag advanced to %q when one ref failed; durable state must not advance", got)
 	}
-	// The sync cursor must NOT advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; got != cursorBefore {
 		t.Fatalf("sync cursor advanced when one ref failed: got %v, want %v (unchanged)", got, cursorBefore)
 	}
 }
 
-// TestPoll_RepoRefreshMonotonicity_BothRefsSucceed (finding #1) verifies
-// that when two MRs share a repo and both fetches succeed, the repo ETag and
-// LastSyncCursor DO advance.
 func TestPoll_RepoRefreshMonotonicity_BothRefsSucceed(t *testing.T) {
 	store := testStoreWithSession()
-	// Two tracked PRs in the same repo with durable hashes.
 	pr1, pr2 := knownPR(1), knownPR(2)
 	for _, p := range []*domain.PullRequest{&pr1, &pr2} {
 		p.MetadataHash = "durable-meta"
@@ -3314,7 +3057,6 @@ func TestPoll_RepoRefreshMonotonicity_BothRefsSucceed(t *testing.T) {
 	}
 	store.prs["p-1"] = []domain.PullRequest{pr1, pr2}
 
-	// Both PR observations have a metadata change so they persist.
 	pr1Obs := testObs(1)
 	pr1Obs.PR.Title = "PR 1 updated"
 	pr2Obs := testObs(2)
@@ -3335,7 +3077,6 @@ func TestPoll_RepoRefreshMonotonicity_BothRefsSucceed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Both PRs must have been persisted.
 	foundPr1, foundPr2 := false, false
 	for _, w := range store.writes {
 		if w.pr.Number == 1 {
@@ -3349,32 +3090,16 @@ func TestPoll_RepoRefreshMonotonicity_BothRefsSucceed(t *testing.T) {
 		t.Fatalf("both PRs must be persisted; writes=%#v", store.writes)
 	}
 
-	// The repo ETag must advance.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "repo2" {
 		t.Fatalf("repo ETag not advanced after all refs succeeded: got %q, want repo2", got)
 	}
-	// The sync cursor must advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; !got.After(cursorBefore) {
 		t.Fatalf("sync cursor not advanced after all refs succeeded: got %v, want > %v", got, cursorBefore)
 	}
 }
 
-// TestPoll_AllFail_ScopedPerProviderError (Ticket 02) verifies that when ALL
-// providers fail in a single chunk, the observer applies the correct error
-// classification PER PROVIDER — not one arbitrary classification to all refs.
-// GitHub fails with a rate-limit error → GitHub enters per-provider cooldown.
-// GitLab fails with an auth error (non-rate-limit) → GitLab is marked
-// refresh-incomplete (repo ETag/cursor do not advance) but does NOT enter
-// cooldown. The two classifications must not be cross-applied: GitHub must not
-// be marked refresh-incomplete-only (missing its cooldown), and GitLab must
-// not enter cooldown (wrongly treating an auth error as rate-limit).
-//
-// This test uses the hostAwareProvider (from scoped_identity_test.go) which
-// routes gitlab.com URLs to the gitlab provider key, so the observer sees two
-// providers in a single poll.
 func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 	store := testStoreWithTwoSessions()
-	// Two tracked PRs — one GitHub, one GitLab — both with durable hashes.
 	ghPR := knownPR(1)
 	ghPR.MetadataHash = "durable-meta"
 	ghPR.CIHash = "durable-ci"
@@ -3408,7 +3133,6 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 			prKey(testRepo, 0): {{Number: 1, State: "open", SourceBranch: "feat", HeadRepo: "o/r"}},
 			prKey(glRepo, 0):   {{Number: 3, State: "open", SourceBranch: "feat", HeadRepo: "o/r"}},
 		},
-		// Both PRs fail: GitHub with rate-limit, GitLab with auth error.
 		fetchObsErrors: map[string]error{
 			prKey(testRepo, 1): ghRateLimitErr,
 			prKey(glRepo, 3):   glAuthErr,
@@ -3434,19 +3158,14 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// GitHub must be in rate-limit cooldown (rate-limit error classified correctly).
 	if !obs.inRateLimitCooldown(now, "github") {
 		t.Fatal("github provider must be in rate-limit cooldown after rate-limit error")
 	}
 
-	// GitLab must NOT be in cooldown (auth error is non-rate-limit).
 	if obs.inRateLimitCooldown(now, "gitlab") {
 		t.Fatal("gitlab provider must NOT enter cooldown for a non-rate-limit (auth) error")
 	}
 
-	// Both repos must be marked refresh-incomplete: GitHub via cooldown-skip,
-	// GitLab via per-observation non-rate-limit routing. The ETags must NOT
-	// have advanced to "repo2".
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
 		t.Fatalf("github repo ETag advanced to %q after all-fail; durable state must not advance", got)
 	}
@@ -3454,7 +3173,6 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 		t.Fatalf("gitlab repo ETag advanced to %q after all-fail; durable state must not advance", got)
 	}
 
-	// Neither sync cursor must advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; got != ghCursorBefore {
 		t.Fatalf("github sync cursor advanced after all-fail: got %v, want %v (unchanged)", got, ghCursorBefore)
 	}
@@ -3462,7 +3180,6 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 		t.Fatalf("gitlab sync cursor advanced after all-fail: got %v, want %v (unchanged)", got, glCursorBefore)
 	}
 
-	// No PRs should have been persisted (all failed).
 	for _, w := range store.writes {
 		if w.pr.Number == 1 || w.pr.Number == 3 {
 			t.Fatalf("failed PR %d must not be persisted; writes=%#v", w.pr.Number, store.writes)
@@ -3470,34 +3187,19 @@ func TestPoll_AllFail_ScopedPerProviderError(t *testing.T) {
 	}
 }
 
-// TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds (finding #1)
-// verifies that when ListPRsByRepo fails for a repo but a tracked PR in that
-// repo is still fetched and persisted successfully (via the commit-check ETag
-// path), the repo ETag and LastSyncCursor do NOT advance. Without the
-// repoListFailed monotonicity guard, markRepoRefreshOK (called after the
-// successful PR persistence) would flip the repo back to OK. The per-ref
-// monotonicity check would then see an empty repoCandidateKeys (because the
-// listing failed, the PR never entered candidateKeys through the listing path)
-// and allRefsOK would be vacuously true, advancing the ETag/cursor and making
-// the failed listing unrecoverable on the next poll.
 func TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds(t *testing.T) {
 	store := testStoreWithSession()
-	// A tracked PR with durable hashes.
 	local := knownPR(1)
 	local.MetadataHash = "durable-meta"
 	local.CIHash = "durable-ci"
 	local.ReviewHash = "durable-review"
 	store.prs["p-1"] = []domain.PullRequest{local}
 
-	// The PR observation has a metadata change so it persists.
 	successObs := testObs(1)
 	successObs.PR.Title = "PR 1 updated"
 	provider := &fakeProvider{
-		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
-		// Listing fails — the PR is not discovered through the listing path.
-		listErr: errors.New("gitlab 502"),
-		// A changed commit-check ETag promotes the PR to a refresh candidate
-		// even though the listing failed.
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
+		listErr:      errors.New("gitlab 502"),
 		checkGuards:  map[string]ports.SCMGuardResult{commitKey(testRepo, local.HeadSHA): {ETag: "checks2"}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): successObs},
 	}
@@ -3507,14 +3209,12 @@ func TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds(t *testing.T) {
 	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
 	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = now.Add(-time.Hour)
 	cursorBefore := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]
-	// Seed the commit-check ETag so the guard reports a change.
 	obs.Cache.CommitChecksETag[commitKey(testRepo, local.HeadSHA)] = "checks1"
 
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
-	// The PR must have been persisted (metadata changed).
 	foundWrite := false
 	for _, w := range store.writes {
 		if w.pr.Number == 1 {
@@ -3526,23 +3226,13 @@ func TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds(t *testing.T) {
 		t.Fatalf("PR 1 (successful fetch via commit-check ETag) must be persisted; writes=%#v", store.writes)
 	}
 
-	// The repo ETag must NOT advance — the listing failed.
 	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got == "repo2" {
 		t.Fatalf("repo ETag advanced to %q when listing failed; durable state must not advance", got)
 	}
-	// The sync cursor must NOT advance.
 	if got := obs.Cache.LastSyncCursor[prKey(testRepo, 0)]; got != cursorBefore {
 		t.Fatalf("sync cursor advanced when listing failed: got %v, want %v (unchanged)", got, cursorBefore)
 	}
 }
-
-// After a repository rename or org transfer, the provider serves fetches for
-// the old owner/name through a redirect: the tracked subject still carries the
-// stale repo recorded on the stored PR row, while the fetched observation
-// canonicalizes to the new owner/name. These tests pin that such observations
-// are dispatched under the tracked subject's key (and persisted with the
-// canonical repo so the identities converge) instead of being dropped, which
-// left CI/mergeability permanently "unknown" while review stayed fresh.
 
 func renamedRepoFixture() (*fakeStore, *fakeProvider, ports.SCMRepo) {
 	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
@@ -3594,9 +3284,6 @@ func TestPoll_RenamedRepoObservationPersistsUnderTrackedRef(t *testing.T) {
 
 func TestPoll_RenamedRepoReconciliationPersistsUnderTrackedRef(t *testing.T) {
 	store, provider, oldRepo := renamedRepoFixture()
-	// A fully-observed local row keeps the PR out of the normal refresh
-	// candidate set; the empty incremental listing then routes it through
-	// terminal reconciliation, which must survive the rename the same way.
 	local := &store.prs["p-1"][0]
 	local.MetadataHash = "stale-meta"
 	local.CIHash = "stale-ci"
@@ -3631,12 +3318,6 @@ func TestKeyForTrackedPR(t *testing.T) {
 	}
 }
 
-// The discovery clobber (issue #4089, mechanism 2): a second scan name for the
-// same repository (stale upstream remote after a transfer) lists the same PRs.
-// A tracked PR recognized by its provider identity must NOT be re-discovered —
-// the baseline write would overwrite the row's CI/mergeability facts and wipe
-// its semantic hashes, flapping the PR panel back to "Checking merge
-// readiness" on every listing change.
 func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
 	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
 	newRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "new", Name: "r", Repo: "new/r"}
@@ -3676,8 +3357,6 @@ func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
 					prKey(newRepo, 0): {ETag: "vN"},
 					prKey(oldRepo, 0): {ETag: "vO"},
 				},
-				// Both scan names list the same PR: the canonical listing and the
-				// stale-remote listing served through GitHub's rename redirect.
 				openPRs: map[string][]ports.SCMPRObservation{
 					prKey(newRepo, 0): listing,
 					prKey(oldRepo, 0): listing,
@@ -3697,17 +3376,12 @@ func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
 	}
 }
 
-// Identity-first dispatch: when the tracked row carries a provider id, a
-// canonical observation for a renamed repo is delivered by identity — no URL
-// fallback involved — and the persisted row heals to the canonical repo.
 func TestPoll_IdentityKeyedDispatchSurvivesRename(t *testing.T) {
 	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
 	store := &fakeStore{
 		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/old/r.git"}},
 		prs: map[domain.SessionID][]domain.PullRequest{"p-1": {{
-			// URL intentionally differs from the canonical URL so the legacy
-			// URL fallback cannot be what delivers this observation.
 			URL: "https://github.com/old/r/pull/1", SessionID: "p-1", Number: 1,
 			Provider: "github", Host: "github.com", Repo: "old/r", ProviderID: "PR_stable_1",
 			SourceBranch: "feat",
@@ -3743,10 +3417,6 @@ func TestPoll_IdentityKeyedDispatchSurvivesRename(t *testing.T) {
 	}
 }
 
-// A permanently unresolvable tracked PR (provider returns an ErrSCMNotFound
-// placeholder every tick) must stay quiet at Warn level — Debug only — while
-// still pinning the repo ETag/cursor and never entering a rate-limit
-// cooldown. Guards the ~2.9k-warnings/day regression flagged in review.
 func TestPoll_NotFoundObservationLogsDebugAndPinsRepo(t *testing.T) {
 	store := testStoreWithSession()
 	store.prs["p-1"] = []domain.PullRequest{knownPR(1)}
@@ -3786,10 +3456,6 @@ func TestPoll_NotFoundObservationLogsDebugAndPinsRepo(t *testing.T) {
 func TestPoll_FailedFirstReviewFetchDoesNotManufactureCompleteness(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
-	// The PR has never had a successful review fetch. A metadata change in the
-	// same poll must not turn that into a complete-looking review observation:
-	// the summary gate treats (zero timestamp, non-partial) as unknown, and a
-	// manufactured timestamp would publish a known-looking zero count.
 	local.ReviewObservedAt = time.Time{}
 	store.prs["p-1"] = []domain.PullRequest{local}
 	obsValue := testObs(1)
@@ -3821,10 +3487,6 @@ func TestPoll_FailedFirstReviewFetchDoesNotManufactureCompleteness(t *testing.T)
 func TestPoll_CompletenessUpgradePersistsWithUnchangedReviewContent(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
-	// Simulate a row upgraded by the conservative review_partial default: the
-	// stored flag says partial even though the review hash was computed from a
-	// full observation. A later full fetch with identical content must still
-	// persist the completeness repair — the content-hash match must not skip it.
 	local.ReviewPartial = true
 	store.prs["p-1"] = []domain.PullRequest{local}
 	obsValue := testObs(1)
@@ -3835,8 +3497,6 @@ func TestPoll_CompletenessUpgradePersistsWithUnchangedReviewContent(t *testing.T
 		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): review},
 	}
 	obs := newTestObserver(store, provider, nil, time.Unix(300, 0).UTC())
-	// Force a review retry without touching any content: the retry cache slot
-	// is what a failed-fetch recovery or a post-upgrade poll would hit.
 	obs.cacheSetBool(obs.Cache.ReviewRefreshFailed, &obs.Cache.reviewFailedOrder, prKey(testRepo, 1), true)
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
@@ -3856,10 +3516,6 @@ func TestPoll_CompletenessUpgradePersistsWithUnchangedReviewContent(t *testing.T
 	}
 }
 
-// TestMergeabilityFromProviderFacts_UnstableOutranksBlockers pins issue #2401: an
-// UNSTABLE PR is mergeable-with-a-failing-optional-check, so it must NOT be
-// downgraded to blocked by the ci/review/draft blockers. doc.go rule (3) beats
-// rules (5) and (6), matching the mergeabilityFromGraphQL sibling.
 func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -3873,8 +3529,6 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 		wantBehind   bool
 	}{
 		{
-			// The repro from the issue: optional codecov fails, rollup is
-			// FAILURE (-> ci failing), review approved, GitHub still merges.
 			name:      "unstable with failing ci stays unstable",
 			mergeable: "MERGEABLE", state: "UNSTABLE",
 			ci:     string(domain.CIFailing),
@@ -3895,7 +3549,6 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 			want:       domain.MergeBlocked,
 			wantBehind: true, wantBlockers: []string{"behind_base", "ci_failing"},
 		},
-		// Regressions guarded: the non-UNSTABLE paths must be untouched.
 		{
 			name:      "conflicting still wins",
 			mergeable: "CONFLICTING", state: "DIRTY",
@@ -3949,8 +3602,6 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 	}
 }
 
-// A review AO just posted must reach the worker on the next poll, not after the
-// repo guard, review cadence, or max-age backstop happen to notice it.
 func TestPoll_RequestedReviewRefreshFetchesThreadsOnce(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)
@@ -4004,8 +3655,6 @@ func TestPoll_RequestedReviewRefreshFetchesThreadsOnce(t *testing.T) {
 	}
 }
 
-// A forced review refresh is still a provider call: during a rate-limit
-// cooldown it must not fetch threads (or the PR) before Retry-After elapses.
 func TestPoll_RequestedReviewRefreshRespectsRateLimitCooldown(t *testing.T) {
 	store := testStoreWithSession()
 	local := knownPR(1)

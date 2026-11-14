@@ -35,7 +35,6 @@ func TestTerminalLoginExclusionSurvivesDaemonRestart(t *testing.T) {
 	if err != nil || !found || record.CommandOwner != "agentauth:codex" {
 		t.Fatalf("persisted command owner = %q, found=%v, err=%v", record.CommandOwner, found, err)
 	}
-	// Ownership must not depend on the editable display title.
 	if _, err := shells.RenameShellTerminal(ctx, terminal.Terminal.HandleID, "Renamed login"); err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +42,6 @@ func TestTerminalLoginExclusionSurvivesDaemonRestart(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Reopen the actual database and rebuild both services, keeping only the
-	// runtime and app-run identity as Electron does across a daemon restart.
 	reopened, err := sqlite.Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +72,6 @@ func TestTerminalLoginExclusionSurvivesDaemonRestart(t *testing.T) {
 	if rt.probes != 3 || launches != 0 {
 		t.Fatalf("probes=%d background launches=%d, want 3 and 0", rt.probes, launches)
 	}
-	// More than one retained command can exist after the old overlap bug.
-	// A dead first handle must not hide another live or unknown command.
 	other, err := shells.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
 		Owner: "agentauth:codex", Argv: []string{"codex", "login"}, Title: "Another login",
 	})
@@ -139,8 +134,6 @@ func TestManagedAccountLoginDoesNotExcludeMainAuthentication(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					// Exercise the actual account caller, persisted shellterm ownership,
-					// and main-auth admission while browser approval is still pending.
 					auth := loginTestService(t, "wait")
 					auth.terminals = shells
 					switch action {
@@ -167,8 +160,6 @@ func TestManagedAccountLoginDoesNotExcludeMainAuthentication(t *testing.T) {
 	}
 }
 
-// Only the provider CLI and runtime are fakes; the account, terminal, and
-// authentication services above share the real SQLite store.
 type isolatedAccountProvider struct{ provider domain.AgentAccountProvider }
 
 func (p isolatedAccountProvider) Provider() domain.AgentAccountProvider { return p.provider }
@@ -205,7 +196,6 @@ func TestLoginRejectsFailedTerminalReconciliation(t *testing.T) {
 	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_TERMINAL_UNKNOWN" {
 		t.Fatalf("error = %v, want AGENT_AUTH_TERMINAL_UNKNOWN", err)
 	}
-	// A failed listing releases the per-harness admission reservation for retry.
 	svc.terminals = &recordingTerminalOpener{}
 	if _, err := svc.Start(t.Context(), "codex"); err != nil {
 		t.Fatalf("retry after listing failure: %v", err)
@@ -228,7 +218,7 @@ func (r *retainedAuthRuntime) Destroy(_ context.Context, handle ports.RuntimeHan
 	return nil
 }
 func (*retainedAuthRuntime) IsAlive(context.Context, ports.RuntimeHandle) (bool, error) {
-	return true, nil // Host/scrollback deliberately outlives the child.
+	return true, nil
 }
 func (r *retainedAuthRuntime) IsChildAlive(_ context.Context, handle ports.RuntimeHandle) (bool, error) {
 	r.probes++

@@ -25,8 +25,6 @@ vi.mock("../hooks/useProjectMergeRequests", () => ({
 		request: { mutate: vi.fn(), isPending: false, error: null },
 	}),
 }));
-// The orchestrator lists every pull request in its project; a worker's
-// summary adds the ones it claimed to its own.
 vi.mock("../hooks/useSessionScmSummary", () => ({
 	useSessionScmSummary: (sessionId: string) => ({
 		data: sessionId === "orch" ? { prs: mocks.projectPRs, linkedPrs: [] } : mocks.workerPRs.length ? { prs: mocks.workerPRs, linkedPrs: [] } : undefined,
@@ -86,7 +84,6 @@ describe("SharedProjectPanel", () => {
 		const button = screen.getByRole("button", { name: "Shared project: 1 pull request · 1 to approve" });
 		expect(button).toHaveAttribute("data-priority", "secondary");
 		expect(button.querySelector("[data-compact-label]")?.textContent).toBe("1 pull request · 1 to approve");
-		// Closed, nothing of the list is on the page to cover the conversation.
 		expect(document.querySelector("[data-shared-project-list]")).toBeNull();
 		fireEvent.click(button);
 		const list = document.querySelector("[data-shared-project-list]");

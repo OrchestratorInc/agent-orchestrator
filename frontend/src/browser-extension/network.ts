@@ -1,7 +1,3 @@
-// Network capture for Chrome mode: request metadata from chrome.webRequest
-// (observational, no bodies), in the shapes `ao browser network` prints for
-// AO's Browser panel.
-
 import { sanitizeBrowserURL } from "../shared/browser-sanitize";
 import type { ChromeApi, WebRequestDetails } from "./chrome-api";
 import type { SessionTabRegistry } from "./sessions";

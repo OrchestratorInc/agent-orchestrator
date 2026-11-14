@@ -39,7 +39,6 @@ function setup(lifecycle?: CloudScriptRunsLifecycle) {
 }
 
 beforeEach(() => {
-	// A fresh client per test: the refused-filter memory is per client.
 	mocks.client = { listChatEvents: vi.fn() };
 	mocks.subscribe.mockReset();
 	mocks.subscribe.mockResolvedValue(undefined);
@@ -63,7 +62,6 @@ describe("useCloudScriptRuns", () => {
 		const chatRead = vi.fn(() => new Promise<CloudCpClientEvent[]>((resolve) => { answerChat = resolve; }));
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-		// The inspector's Setup log and the chat surface mount together.
 		const { result } = renderHook(() => {
 			const runs = useCloudScriptRuns("org-1", "s1", { lifecycle: { desiredState: "running", observedState: "running" } });
 			useQuery({ queryKey: ["cloud-chat-events", "org-1", "s1"], queryFn: chatRead });
@@ -86,9 +84,7 @@ describe("useCloudScriptRuns", () => {
 		expect(calls[0].types).toBeDefined();
 		expect(calls[1]).toMatchObject({ after: 0, types: undefined });
 		expect(calls[2]).toMatchObject({ after: 2, types: undefined });
-		// The cache holds the newest step event only, not the other event types.
 		expect(queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-script-steps", "org-1", "s1"])?.map((event) => event.sequence)).toEqual([3]);
-		// Later reads skip the filter rather than being refused again.
 		mocks.client.listChatEvents.mockResolvedValueOnce(page([]));
 		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-script-steps", "org-1", "s1"] }));
 		expect(mocks.client.listChatEvents.mock.calls.at(-1)?.[2]).toMatchObject({ after: 3, types: undefined });
@@ -102,7 +98,6 @@ describe("useCloudScriptRuns", () => {
 		expect(options.after).toBe(5);
 		act(() => options.onEvent(step(6, { status: "succeeded", exitCode: 0 })));
 		await waitFor(() => expect(result.current[0].status).toBe("succeeded"));
-		// The run ended: the stream closes and is not opened again.
 		expect(options.signal.aborted).toBe(true);
 		expect(mocks.subscribe).toHaveBeenCalledTimes(1);
 		expect(mocks.client.listChatEvents).toHaveBeenCalledTimes(1);
@@ -114,7 +109,6 @@ describe("useCloudScriptRuns", () => {
 		const { result, rerender } = setup({ desiredState: "running", observedState: "running" });
 		await waitFor(() => expect(result.current).toHaveLength(1));
 		expect(mocks.subscribe).not.toHaveBeenCalled();
-		// The same state again does not read again.
 		rerender({ lifecycle: { desiredState: "running", observedState: "running" } });
 		expect(mocks.client.listChatEvents).toHaveBeenCalledTimes(1);
 
@@ -124,10 +118,8 @@ describe("useCloudScriptRuns", () => {
 		expect(mocks.client.listChatEvents.mock.calls[1][2]).toMatchObject({ after: 5 });
 		await waitFor(() => expect(mocks.subscribe).toHaveBeenCalledTimes(1));
 		const stream = mocks.subscribe.mock.calls[0][0] as { after?: number; signal: AbortSignal };
-		// From the newest event held when the deletion was seen.
 		expect(stream.after).toBeGreaterThanOrEqual(5);
 
-		// Deleted: Cleanup is over, the stream closes, and its unfinished run ends.
 		mocks.client.listChatEvents.mockResolvedValueOnce(page([]));
 		rerender({ lifecycle: { desiredState: "deleted", observedState: "deleted" } });
 		await waitFor(() => expect(mocks.client.listChatEvents).toHaveBeenCalledTimes(3));

@@ -20,9 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// conductorSource offers every Claude Code and Codex chat in conductor.db. A
-// chat reads from its agent's own history when this Mac has it; a Claude chat
-// without one is rebuilt from conductor.db as a new Claude Code transcript.
 const conductorSource domain.AgentHarness = "conductor"
 
 var errClaudeHasConversation = errors.New("claude code already holds this conversation; scan again")
@@ -46,11 +43,6 @@ func conductorDB(root string) (*sql.DB, error) {
 	}
 	dsn := opencode.ReadOnlyDSN(path, 2000)
 	if _, err := os.Stat(path + "-wal"); errors.Is(err, os.ErrNotExist) {
-		// A mode=ro open of a closed WAL database creates -wal and -shm files
-		// in Conductor's folder; with no -wal file every commit is in the main
-		// file, so read it as immutable instead.
-		// ponytail: a checkpoint by a Conductor that starts during the read can
-		// tear it; copy the file first if that is ever seen.
 		dsn += "&immutable=1"
 	}
 	return sql.Open("sqlite", dsn)
@@ -79,14 +71,11 @@ func conductorColumns(ctx context.Context, db *sql.DB) (map[string]map[string]bo
 	return cols, rows.Err()
 }
 
-// conductorEvents reports the session_events log Conductor 0.94 writes.
 func conductorEvents(cols map[string]map[string]bool) bool {
 	e := cols["session_events"]
 	return e["session_id"] && e["session_index"] && e["event_type"] && e["content"] && e["received_at"] && e["reverted_at"]
 }
 
-// conductorChats lists Claude and Codex chats with sent messages, newest
-// first, in every workspace including archived ones. Deleted chats are left out.
 func conductorChats(ctx context.Context, db *sql.DB, sessionID string) ([]conductorChat, error) {
 	cols, err := conductorColumns(ctx, db)
 	if err != nil {
@@ -107,8 +96,6 @@ func conductorChats(ctx context.Context, db *sql.DB, sessionID string) ([]conduc
 	}
 	nativeID, count := "COALESCE(NULLIF(s.claude_session_id, ''), s.id)", "(SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id AND m.sent_at IS NOT NULL)"
 	if conductorEvents(cols) {
-		// The newest agent event names the conversation: Codex's thread or the
-		// Claude Code session it resumes.
 		nativeID = `COALESCE((SELECT id FROM (
 			SELECT CASE WHEN json_valid(e.content) THEN COALESCE(json_extract(e.content, '$.rawPayload.thread_id'), json_extract(e.content, '$.rawPayload.session_id')) END AS id, e.session_index
 			FROM session_events e WHERE e.session_id = s.id AND e.event_type = 'agent' AND e.reverted_at IS NULL)
@@ -158,7 +145,6 @@ func conductorChats(ctx context.Context, db *sql.DB, sessionID string) ([]conduc
 	return out, rows.Err()
 }
 
-// conductorWorkspacesRoot is where Conductor creates workspaces by default.
 func conductorWorkspacesRoot(ctx context.Context, db *sql.DB) string {
 	var root string
 	_ = db.QueryRowContext(ctx, `SELECT TRIM(value) FROM settings WHERE key = 'conductor_root_path'`).Scan(&root)
@@ -169,8 +155,6 @@ func conductorWorkspacesRoot(ctx context.Context, db *sql.DB) string {
 	return filepath.Join(root, "workspaces")
 }
 
-// conductorWorkspacePath places a workspace that has no recorded path the way
-// Conductor does for the repository's storage_version.
 func conductorWorkspacePath(version int64, checkout, repoWorkspaces, dir string) string {
 	var path string
 	switch {
@@ -192,7 +176,6 @@ func conductorWorkspacePath(version int64, checkout, repoWorkspaces, dir string)
 	return path
 }
 
-// conductorTime reads SQLite datetime('now') text, which is UTC without a zone.
 func conductorTime(value any) time.Time {
 	switch v := value.(type) {
 	case time.Time:
@@ -214,7 +197,6 @@ func conductorTime(value any) time.Time {
 	return time.Time{}
 }
 
-// claudeTranscripts finds every conversation Claude Code holds under root.
 func claudeTranscripts(root string) map[string]string {
 	ids := map[string]string{}
 	dirs, _ := os.ReadDir(filepath.Join(root, "projects"))
@@ -252,8 +234,6 @@ func discoverConductor(ctx context.Context, root string) ([]sourceFiles, error) 
 	if err != nil {
 		return nil, err
 	}
-	// paths[0] is Conductor's session; the rest is the agent's own history,
-	// whose size and time then key the scan cache.
 	claude := claudeTranscripts(conductorClaudeRoot())
 	codex, err := walkSources(domain.HarnessCodex, "sessions", codexKey)(ctx, conductorCodexRoot())
 	if err != nil {
@@ -278,7 +258,6 @@ func discoverConductor(ctx context.Context, root string) ([]sourceFiles, error) 
 	return out, nil
 }
 
-// conductorRecord is one sent message as Claude Code records it.
 type conductorRecord struct {
 	role    string
 	message map[string]json.RawMessage
@@ -287,10 +266,6 @@ type conductorRecord struct {
 	at      time.Time
 }
 
-// eachConductorRecord reads a chat in Conductor's order: session_messages
-// rows, then the session_events log that replaced them. A typed prompt is
-// plain text; agent output is Claude Agent SDK stream JSON. Subagent messages
-// and SDK status records are not part of the conversation.
 func eachConductorRecord(ctx context.Context, db *sql.DB, sessionID string, fn func(conductorRecord) error) (version string, err error) {
 	cols, err := conductorColumns(ctx, db)
 	if err != nil {
@@ -382,8 +357,6 @@ func rawString(raw json.RawMessage) string {
 	return s
 }
 
-// readConductorTranscript reads one chat; paths[0] is Conductor's session id
-// and any further paths are the agent's own history of it.
 func readConductorTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: conductorSource, root: root, paths: paths}
 	if len(paths) == 0 {
@@ -410,9 +383,6 @@ func readConductorTranscript(ctx context.Context, root string, paths ...string) 
 	case chat.agent == "codex" && len(native) > 0:
 		return named(readCodexTranscript(ctx, conductorCodexRoot(), native...))
 	case chat.agent == "codex":
-		// ponytail: AO writes no Codex rollout, so a Codex chat continues only
-		// from the rollout this Mac holds; write one from session_events if
-		// Cloud chats turn up without it.
 		return t, errNoReadableConversation
 	case len(native) > 0:
 		return named(readClaudeTranscript(ctx, conductorClaudeRoot(), native...))
@@ -481,9 +451,6 @@ type claudeLine struct {
 	Timestamp   string          `json:"timestamp"`
 }
 
-// writeConductorTranscript writes the chat as a new Claude Code transcript, so
-// Claude Code can continue it. A tool call without its result, or a result
-// without its call, is left out: the Claude API rejects either one.
 func writeConductorTranscript(ctx context.Context, t transcript) (transcript, error) {
 	root := conductorClaudeRoot()
 	if claudeTranscripts(root)[t.nativeID] != "" {
@@ -509,8 +476,6 @@ func writeConductorTranscript(ctx context.Context, t transcript) (transcript, er
 	if err != nil {
 		return t, err
 	}
-	// ponytail: Claude Code hashes folder names over 200 characters; such a
-	// transcript still resumes by id, only Claude's own picker misses it.
 	dir := filepath.Join(root, "projects", claudeProjectDirChars.ReplaceAllString(t.cwd, "-"))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return t, err

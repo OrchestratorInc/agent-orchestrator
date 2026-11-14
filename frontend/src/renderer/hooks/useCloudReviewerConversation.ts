@@ -10,11 +10,6 @@ export function cloudReviewerConversationQueryKey(orgId: string, sessionId: stri
 	return ["cloud-reviewer-conversation", orgId, sessionId, reviewRunId] as const;
 }
 
-/**
- * A review conversation's events as the session chat's own: review.* events
- * become chat.* ones and their reviewTurnId the turnId, so the Cloud Chat
- * projection reads them unchanged.
- */
 export function asChatEvents(events: readonly CloudCpClientEvent[]): CloudCpClientEvent[] {
 	return events.flatMap((event) => {
 		if (!event.type.startsWith("review.")) return [];
@@ -42,11 +37,6 @@ export async function loadReviewChatEvents(
 	}
 }
 
-/**
- * One Cloud review that runs in Chat: its conversation, as a snapshot the
- * chat view renders, and the person's messages and stop. The reviewer runs
- * with its own agent (`harness`), beside the session's.
- */
 export function useCloudReviewerConversation(session: WorkspaceSession, reviewRunId: string, harness: string) {
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();

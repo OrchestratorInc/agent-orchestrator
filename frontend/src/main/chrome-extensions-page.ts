@@ -1,5 +1,3 @@
-// chrome:// URLs have no OS handler, so shell.openExternal cannot open them.
-// Chrome accepts one when it is launched with the URL as an argument.
 const EXTENSIONS_PAGE = "chrome://extensions";
 
 export type ChromeCommandRunner = (file: string, args: string[]) => Promise<unknown>;

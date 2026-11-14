@@ -15,25 +15,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// OpenCode keeps its history in its own SQLite database rather than a JSONL
-// transcript, so it is read as a second native source shape: the database is
-// opened strictly read-only and queried by session id.
-//
-// Two schemas exist in the wild. Older OpenCode v1 builds store one row per
-// message in `message(session_id, data)`. Newer v1 builds and all v2 builds use
-// `session_message(session_id, type, seq, data)`, where `type` is already
-// `user`/`assistant`/`idle`. The reader probes which one the file has rather
-// than assuming a version.
-
-// openCodeStore is the read-only handle to one OpenCode database.
 type openCodeStore struct {
 	db   *sql.DB
 	path string
 }
 
-// openOpenCodeStore opens an OpenCode database read-only. The DSN carries
-// mode=ro, so a bug in this reader cannot modify the provider's store; the file
-// is never created if missing.
 func openOpenCodeStore(ctx context.Context, path string) (*openCodeStore, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -51,8 +37,6 @@ func openOpenCodeStore(ctx context.Context, path string) (*openCodeStore, error)
 		_ = db.Close()
 		return nil, err
 	}
-	// One connection: this reader is sequential, and a pool would hold open
-	// handles on a provider-owned file.
 	db.SetMaxOpenConns(1)
 	return &openCodeStore{db: db, path: path}, nil
 }
@@ -64,17 +48,8 @@ func (s *openCodeStore) close() {
 	_ = s.db.Close()
 }
 
-// resolveSession finds the provider's own session row for an AO session.
-//
-// AO's session id and OpenCode's are different identifiers: AO mints
-// "{projectId}-{num}", while OpenCode mints its own id. The provider id AO
-// recorded for the session (agent_session_id) is used when OpenCode still has
-// it. Otherwise the two are matched on the workspace directory, and when
-// several provider sessions share it the most recently updated one wins.
 func (s *openCodeStore) resolveSession(ctx context.Context, nativeID, workspacePath string) (string, bool, error) {
 	var id string
-	// The provider session the AO session recorded is the one it ran, even when
-	// other AO sessions share its directory (a project root, a restart in place).
 	if nativeID = strings.TrimSpace(nativeID); nativeID != "" {
 		err := s.db.QueryRowContext(ctx, `SELECT id FROM session WHERE id = ?`, nativeID).Scan(&id)
 		if err == nil {
@@ -101,11 +76,6 @@ LIMIT 1`, workspacePath).Scan(&id)
 	return id, true, nil
 }
 
-// messages reads one session's messages, in order. It returns the searchable
-// units and a cursor: the highest seq (session_message) or row count (message)
-// it saw, which is what the incremental pass compares against, the latest
-// update time it saw, and the rows at or below the cursor it read again
-// because they changed (session_message only).
 func (s *openCodeStore) messages(ctx context.Context, sessionID string, afterSeq, afterUpdated int64) (openCodeRead, error) {
 	if ok, err := s.hasTable(ctx, "session_message"); err != nil {
 		return openCodeRead{}, err
@@ -121,14 +91,10 @@ func (s *openCodeStore) messages(ctx context.Context, sessionID string, afterSeq
 	return openCodeRead{}, fmt.Errorf("opencode store has no message table")
 }
 
-// openCodeRead is what one pass read from an OpenCode session.
 type openCodeRead struct {
-	lines []nativeLine
-	// cursor is the highest seq read; updated is the latest row update read.
+	lines           []nativeLine
 	cursor, updated int64
-	// revisited are rows at or below the previous cursor read again because
-	// they changed: their earlier documents are replaced, not added to.
-	revisited []int64
+	revisited       []int64
 }
 
 func (s *openCodeStore) hasTable(ctx context.Context, name string) (bool, error) {
@@ -141,15 +107,6 @@ func (s *openCodeStore) hasTable(ctx context.Context, name string) (bool, error)
 	return count > 0, nil
 }
 
-// sessionMessages reads the newer schema. Only `user` and `assistant` rows carry
-// conversation; `idle` and other control rows are skipped.
-//
-// OpenCode updates a row in place, keeping its seq, while a reply is still
-// being written, so a row read early is read again once it changes: rows past
-// the cursor and rows updated at or after the latest update seen are both read.
-// "At" matters: update times are whole numbers, so a row can change again
-// within the same one. A row read again whose documents did not change is not
-// rewritten (replaceOpenCodeRows).
 func (s *openCodeStore) sessionMessages(ctx context.Context, sessionID string, afterSeq, afterUpdated int64) (openCodeRead, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT seq, type, data, COALESCE(time_created, 0), COALESCE(time_updated, 0)
@@ -184,7 +141,6 @@ ORDER BY seq`, sessionID, afterSeq, afterUpdated, afterUpdated)
 	return read, rows.Err()
 }
 
-// legacyMessages reads the older schema, whose rows carry their own ordering.
 func (s *openCodeStore) legacyMessages(ctx context.Context, sessionID string) ([]nativeLine, int64, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, data, COALESCE(time_created, 0)
@@ -219,13 +175,6 @@ ORDER BY COALESCE(time_created, 0), id`, sessionID)
 	return lines, ordinal, rows.Err()
 }
 
-// openCodeMessageUnits reads one session_message row of the newer schema.
-//
-// An assistant row is a list of parts, and most of a session is tool parts
-// (shell commands and their output, files written and edited, web fetches),
-// not prose. Each part is its own unit, with the kind AO Chat gives the same
-// thing: a command and its output, a file change with its path, a tool call,
-// or prose. Reasoning parts are not indexed (coverage.go).
 func openCodeMessageUnits(role, data string) []nativeLine {
 	var payload struct {
 		Text    string          `json:"text"`
@@ -263,18 +212,12 @@ func openCodeMessageUnits(role, data string) []nativeLine {
 	return units
 }
 
-// openCodeToolRun is a tool part's state: what it was asked to do, what it
-// printed, and the error if it failed.
 type openCodeToolRun struct {
 	Input   json.RawMessage `json:"input"`
 	Content json.RawMessage `json:"content"`
 	Error   json.RawMessage `json:"error"`
 }
 
-// openCodeToolUnit turns one tool part into a unit: its name and remembered
-// argument, then the start of its output (coverage.go). A shell command is a
-// command row; a file read, written or edited is a path row whose path goes in
-// the paths column. Written and edited contents are not indexed.
 func openCodeToolUnit(name string, run openCodeToolRun) (nativeLine, bool) {
 	output := strings.TrimSpace(toolResultText(run.Content) + "\n" + toolResultText(run.Error))
 	body := toolText(name, toolArgument(run.Input), output)
@@ -301,7 +244,6 @@ func openCodeToolUnit(name string, run openCodeToolRun) (nativeLine, bool) {
 	}
 }
 
-// openCodeLegacyMessage extracts the role and text from a legacy message row.
 func openCodeLegacyMessage(data string) (role, text string) {
 	var payload struct {
 		Role    string `json:"role"`
@@ -326,7 +268,6 @@ func openCodeLegacyMessage(data string) (role, text string) {
 	return payload.Role, builder.String()
 }
 
-// openCodeDatabasePath resolves the OpenCode database for a data home.
 func openCodeDatabasePath(dataHome string) string {
 	if strings.TrimSpace(dataHome) == "" {
 		return ""
@@ -334,9 +275,6 @@ func openCodeDatabasePath(dataHome string) string {
 	return filepath.Join(dataHome, "opencode", "opencode.db")
 }
 
-// indexOpenCodeSession indexes one OpenCode session from its provider database.
-// It is a native source like the JSONL ones: the cursor is the provider's own
-// sequence, and the database is opened read-only.
 func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.SessionSearchTarget, dataHome string) bool {
 	sourceKey := NativeSourceKey(target.Harness, string(target.ID))
 	path := openCodeDatabasePath(dataHome)
@@ -346,8 +284,6 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 	}
 	store, err := openOpenCodeStore(ctx, path)
 	if errors.Is(err, os.ErrNotExist) {
-		// No OpenCode install is not a failure: the session is still findable by
-		// its title, and coverage stays quiet.
 		s.markUnsupported(ctx, sourceKey, target)
 		return false
 	}
@@ -367,12 +303,7 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 		s.recordSourceError(ctx, sourceKey, domain.SessionSearchSourceNative, target, resolveErr)
 		return false
 	}
-	// The cursor is a position in one provider session. A source read by an
-	// older reader, or from another provider session (a recorded id replacing a
-	// directory match, say), is read again from the start, and what it indexed
-	// from the other session is dropped.
 	fingerprint := nativeFormat + ":" + providerID
-	// FileMtime holds the latest row update read (see sessionMessages).
 	cursor, updated := int64(0), int64(0)
 	if hadPrevious && previous.Path == path && previous.Fingerprint == fingerprint {
 		cursor, updated = previous.CursorValue, previous.FileMtime
@@ -383,8 +314,6 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 		}
 	}
 	if !found {
-		// The provider has no session for this workspace. The title document is
-		// still worth having, and the source is not broken.
 		s.writeTitleDoc(ctx, sourceKey, target)
 		_ = s.store.UpsertSessionSearchSource(ctx, domain.SessionSearchSource{
 			SourceKey: sourceKey,
@@ -408,9 +337,6 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 	for _, line := range read.lines {
 		docs = append(docs, nativeDocs(sourceKey, target, line, now)...)
 	}
-	// A row read again may have been rewritten: a chunk or part it no longer has
-	// must not stay searchable, so a changed row's documents are dropped before
-	// its new ones are written. Rows not read again keep theirs.
 	if err := s.replaceOpenCodeRows(ctx, sourceKey, read.revisited, docs); err != nil {
 		s.recordSourceError(ctx, sourceKey, domain.SessionSearchSourceNative, target, err)
 		return false
@@ -418,8 +344,6 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 	if title, ok := s.sessionTitleDoc(sourceKey, target); ok {
 		docs = append(docs, title)
 	}
-	// A transcript is read forward from its cursor, so its documents only grow:
-	// nothing is deleted here, and unchanged ones (the title) are not rewritten.
 	if _, err := s.writeChanged(ctx, sourceKey, docs, false); err != nil {
 		s.recordSourceError(ctx, sourceKey, domain.SessionSearchSourceNative, target, err)
 		return false
@@ -450,11 +374,6 @@ func (s *Service) indexOpenCodeSession(ctx context.Context, target domain.Sessio
 	return len(docs) > 0
 }
 
-// replaceOpenCodeRows deletes the stored documents of each revisited row whose
-// documents changed, so the new ones replace them whole. A row's documents are
-// keyed "line:<seq>:<part>", with a "#<n>" suffix per chunk; one whose stored
-// keys and fingerprints match the new ones is left alone, and writeChanged
-// then skips it too.
 func (s *Service) replaceOpenCodeRows(ctx context.Context, sourceKey string, seqs []int64, docs []domain.SessionSearchDoc) error {
 	if len(seqs) == 0 {
 		return nil

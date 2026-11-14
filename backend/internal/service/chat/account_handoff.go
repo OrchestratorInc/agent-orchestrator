@@ -13,7 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// AccountHandoffEvent is the thread note event of an automatic usage-limit account move.
 const AccountHandoffEvent = "account.limit_handoff"
 
 const (
@@ -32,13 +31,11 @@ type accountHandoffStore interface {
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
 }
 
-// AccountHandoffAccounts reads accounts and their native limits.
 type AccountHandoffAccounts interface {
 	SessionAccountID(context.Context, domain.SessionID, domain.AgentHarness) (string, error)
 	HandoffTarget(context.Context, domain.SessionID, domain.AgentHarness, string) (string, error)
 }
 
-// AccountHandoffMover starts Session Manager's durable account move.
 type AccountHandoffMover interface {
 	StartAccountTransition(context.Context, domain.SessionID, string, domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error)
 }
@@ -64,7 +61,6 @@ type accountHandoff struct {
 	stepAt        time.Time
 }
 
-// SetAccountHandoff wires the automatic usage-limit account handoff.
 func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts AccountHandoffAccounts, mover AccountHandoffMover) {
 	s.handoffMu.Lock()
 	defer s.handoffMu.Unlock()
@@ -72,7 +68,6 @@ func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts
 	s.handoffSince = s.now()
 }
 
-// HandoffUsageLimitedTurns advances the automatic usage-limit account handoffs by one step.
 func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 	store, ok := s.store.(accountHandoffStore)
 	s.handoffMu.Lock()

@@ -21,17 +21,10 @@ import { SettingsSection } from "./SettingsSection";
 
 export { cloudBillingQueryKey };
 
-/** After Checkout or the Portal opens, poll briefly so the new plan shows without a manual refresh. */
 const POLL_WINDOW_MS = 3 * 60_000;
 const RECOMMENDED_PLAN = "starter";
-/** Enterprise is sold by the founders, not through Checkout. */
 const ENTERPRISE_BOOKING_URL = "https://cal.com/agentwrapper/ao-design-partner?overlayCalendar=true";
 
-/**
- * Upgrade: the AO Cloud plans (Free, Starter, Pro, Enterprise), the org's usage against its
- * plan, and the actions an admin takes on it. Payment happens on Stripe's pages
- * in the system browser, which return to the app afterwards.
- */
 export function BillingSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;
@@ -47,18 +40,14 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const billing = useCloudBilling({ pollUntil });
 	const orgId = billing.orgId;
 	const offering = billing.offering;
-	// Plan actions (Checkout, Portal, reset) are for org owners and admins; the
-	// control plane refuses them for anyone else.
 	const manage = offering.canManageBilling;
 	const [pending, setPending] = useState<string | null>(null);
-	// Which plan card opened the billing portal, so only that card shows the spinner.
 	const [portalFor, setPortalFor] = useState("");
 	useEffect(() => {
 		if (pending === null) setPortalFor("");
 	}, [pending]);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
-	// The Upgrade page is the paywall's landing: count each visit once mounted.
 	useEffect(() => {
 		if (status === "authenticated") reportUpgradeViewed("settings");
 	}, [status]);
@@ -67,8 +56,6 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	if (status !== "authenticated") {
 		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.signIn")} />;
 	}
-	// Plans exist only for self-serve orgs. A contract org is billed outside the
-	// app, and a deployment without Stripe has nothing to buy.
 	if (offering.loaded && !offering.selfServeBilling) {
 		return <Notice title={title} titleHidden={titleHidden} text={offering.billingMode === "contract" ? t("settings.billing.contract") : t("settings.billing.disabled")} />;
 	}
@@ -127,7 +114,6 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const currentPlan = summary.entitled && !summary.exempt ? (summary.limits?.plan ?? summary.plan) : "free";
 	const subscribed = currentPlan !== "free";
 	const lapsed = summary.subscriptionStatus === "past_due" || summary.subscriptionStatus === "unpaid";
-	// A plan set to cancel stays current until it ends, then the org moves to Free.
 	const endsAt = subscribed && summary.cancelAt ? formatDay(summary.cancelAt) : "";
 	const offers = summary.plans ?? [];
 	const limits = summary.limits;
@@ -317,7 +303,6 @@ function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boo
 	);
 }
 
-/** A theme token as a hex string, resolved from the live document so every theme style is followed. */
 function tokenHex(name: string): string | null {
 	try {
 		const probe = document.createElement("span");
@@ -327,7 +312,6 @@ function tokenHex(name: string): string | null {
 		probe.remove();
 		if (!computed) return null;
 		const channels = (rgb: number[]) => `#${rgb.map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
-		// Computed colors are rgb() for sRGB tokens; anything else (color-mix, oklch) goes through a canvas.
 		const direct = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(computed);
 		if (direct) return channels([Number(direct[1]), Number(direct[2]), Number(direct[3])]);
 		const canvas = document.createElement("canvas");
@@ -340,12 +324,10 @@ function tokenHex(name: string): string | null {
 		const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
 		return channels([r, g, b]);
 	} catch {
-		// A decorative effect must never break the page: no color, no glow.
 		return null;
 	}
 }
 
-/** The brand logo blue with its hue kept and its saturation raised: the logo token is a muted tone meant for text. */
 function saturatedBrand(): string | null {
 	const hex = tokenHex("--color-brand-logo");
 	if (!hex) return null;
@@ -383,18 +365,11 @@ function usePrefersReducedMotion(): boolean {
 	return reduced;
 }
 
-/**
- * The recommended plan's highlight: a slow dithered vortex across the top half
- * of the card that fades into the surface: saturated brand-blue dither on a
- * transparent ground, so the card shows through. The color resolves on the first render, so it is there with the card and never
- * pops in. Held still for reduced motion.
- */
 function PlanGlow() {
 	const resolvedTheme = useResolvedTheme();
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const [color, setColor] = useState(saturatedBrand);
 	useEffect(() => {
-		// The theme class lands on the document after the store updates, so re-read a frame later.
 		const frame = requestAnimationFrame(() => {
 			const next = saturatedBrand();
 			setColor((current) => next ?? current);
@@ -413,23 +388,14 @@ function PlanGlow() {
 	);
 }
 
-/**
- * One plan as a column: name and status, a large price, the plan action, then
- * what it adds over the plan below it, what it leaves out, and its limits on
- * cloud agents (local agents are never limited). The current or recommended
- * plan sits on the raised surface; the rest stay on the quiet one, with no outlines.
- */
 function PlanCard({ plan, name, amount, interval, intro, features, excluded = [], cloudLimits = [], current, recommended, action, t }: {
-	/** Stable id (not the translated name) for tests and hooks. */
 	plan: string;
 	name: string;
 	amount: string;
 	interval?: string;
 	intro?: string;
 	features: string[];
-	/** What the plan leaves out, shown without a check. */
 	excluded?: string[];
-	/** Limits that apply only to cloud agents, grouped under their own label. */
 	cloudLimits?: string[];
 	current: boolean;
 	recommended?: boolean;
@@ -445,13 +411,10 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 			className={cn(
 				"flex flex-col gap-4 rounded-lg p-4",
 				current ? "bg-(--color-bg-tertiary)" : "bg-(--color-bg-secondary)",
-				// The recommended plan carries a dithered glow behind its header.
 				recommended && "relative isolate overflow-hidden",
 			)}
 		>
 			{recommended ? <PlanGlow /> : null}
-			{/* Fixed-height slots above the list keep the divider and the first
-			    feature on one line across every column, whatever a plan omits. */}
 			<div className="flex h-5 items-center justify-between gap-2">
 				<h3 className="text-control font-medium text-settings-label">{name}</h3>
 				{current || recommended ? (
@@ -490,14 +453,9 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 	);
 }
 
-/**
- * One plan line: a check (or a dash for what the plan leaves out) centered on
- * the first line of text, so wrapped lines keep the icon beside their start.
- */
 function PlanFeature({ text, excluded }: { text: string; excluded?: boolean }) {
 	const Icon = excluded ? Minus : Check;
 	return (
-		// Not cn(): tailwind-merge reads text-control and the color as one group and drops the size.
 		<li className={`flex items-start gap-2 text-control leading-5 ${excluded ? "text-settings-muted" : "text-settings-label"}`}>
 			<span className="flex h-5 shrink-0 items-center">
 				<Icon className="size-icon-sm text-settings-muted" aria-hidden="true" />
@@ -558,12 +516,6 @@ function planName(plan: string): string {
 	return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
-/**
- * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
- * builds on Starter), then the limits from its Stripe product. The control
- * plane enforces those limits only on cloud sessions, so they are listed apart.
- * Session-hour windows and resets are left to the Usage section.
- */
 function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro?: string; features: string[]; cloudLimits: string[] } {
 	const starter = plan === RECOMMENDED_PLAN;
 	const pro = plan === "pro";
@@ -577,7 +529,6 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { 
 			: [];
 	const cloudLimits = [
 		t("settings.billing.featureProjects", { count: limits.orchestratorSlots }),
-		// Agents run in the plan's running slots; each cloud project's orchestrator is on top.
 		t("settings.billing.featureAgents", { count: runningSlots(limits) }),
 	];
 	return {
@@ -603,7 +554,6 @@ function formatMoney(minorUnits: number, currency: string): string {
 	}
 }
 
-/** Session-minutes as hours with at most one decimal: 252 → "4.2". */
 export function formatHours(minutes: number): string {
 	const hours = Math.round((minutes / 60) * 10) / 10;
 	return Number.isInteger(hours) ? String(hours) : hours.toFixed(1);
@@ -616,14 +566,12 @@ function formatDate(iso: string | undefined): string {
 	return date.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-/** A day such as "Tue, 10 Nov 2026", for when a cancelled plan ends. */
 function formatDay(iso: string): string {
 	const date = new Date(iso);
 	if (Number.isNaN(date.getTime())) return "";
 	return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
-/** Time until `iso` as "in 1 h 20 m" / "in 5 m" / "now". */
 export function formatRelative(iso: string, t: TFunction, now = Date.now()): string {
 	const ms = new Date(iso).getTime() - now;
 	if (!Number.isFinite(ms) || ms <= 0) return t("settings.billing.resetsNow");

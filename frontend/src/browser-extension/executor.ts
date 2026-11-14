@@ -1,7 +1,3 @@
-// Executes `ao browser` actions in the user's Chrome. Every action is scoped
-// to the session's AO tab group, gated by per-session consent and the site
-// policy, and returns the same result shapes as AO's Browser panel.
-
 import { matchInstruction, type ActCandidate } from "../main/browser-act-matcher";
 import { sanitizeBrowserTitle, sanitizeBrowserURL } from "../shared/browser-sanitize";
 import type { ChromeApi, Tab } from "./chrome-api";
@@ -20,15 +16,12 @@ import { normalizeAgentURL, originOf } from "./urls";
 
 const ACT_VERBS = new Set(["click", "dblclick", "focus", "hover", "fill", "type", "check", "uncheck"]);
 const NAVIGATION_TIMEOUT_MS = 30_000;
-// Heavy pages can take many seconds to fire load after they are usable.
 const LOAD_GRACE_MS = 1_500;
 const POSTCONDITION_POLL_MS = 150;
 const CONTENT_TIMEOUT_MS = 15_000;
 export const POLICY_KEY = "aoSitePolicy";
 
 type FrameLink = { frameId: number; parentFrameId: number; ref: string };
-// The selected frame, plus every frame between it and the page (outermost
-// first): trusted input needs the sum of all their offsets.
 type FrameSelection = { logicalTabId: string; frameId: number; chain: FrameLink[] };
 type SessionExtras = {
 	frame?: FrameSelection;
@@ -55,7 +48,6 @@ type Context = {
 
 export class Executor {
 	private readonly extras = new Map<string, SessionExtras>();
-	/** One activate-and-capture at a time per Chrome window, across sessions. */
 	private readonly captureLocks = new Map<number, Promise<unknown>>();
 	private readonly navigationCounts = new Map<number, number>();
 
@@ -201,8 +193,6 @@ export class Executor {
 		}
 	}
 
-	// --- pages, content scripts, and policy -------------------------------
-
 	private async withPage<T>(ctx: Context, fn: (page: ActiveTab) => Promise<T>, options: { allowBlocked?: boolean } = {}): Promise<T> {
 		const page = await this.deps.sessions.active(ctx.session);
 		if (!options.allowBlocked) this.assertAllowed(ctx.policy, page.tab.url ?? page.tab.pendingUrl);
@@ -215,11 +205,6 @@ export class Executor {
 		if (!decision.allowed) throw new BridgeError("BROWSER_SITE_BLOCKED", decision.reason);
 	}
 
-	/**
-	 * Current URLs of a frame and every frame above it, up to (not including)
-	 * the page itself, which withPage checks. Frames can navigate after they
-	 * are selected, so these are read fresh from Chrome each time.
-	 */
 	private async frameChainUrls(page: ActiveTab, frameId: number): Promise<string[]> {
 		if (frameId === 0) return [];
 		const frames = (await this.deps.chrome.webNavigation.getAllFrames({ tabId: page.tabId })) ?? [];
@@ -234,10 +219,8 @@ export class Executor {
 		return urls;
 	}
 
-	/** Apply the site policy to a frame's own address and its ancestors'. */
 	private async assertFrameAllowed(ctx: Context, page: ActiveTab, frameId: number): Promise<void> {
 		for (const url of await this.frameChainUrls(page, frameId)) {
-			// about:blank and srcdoc frames inherit their parent, checked in turn.
 			if (inheritsParentOrigin(url)) continue;
 			const decision = evaluateUrl(ctx.policy, url);
 			if (!decision.allowed) throw new BridgeError("BROWSER_SITE_BLOCKED", `${decision.reason} (in a frame on this page)`);
@@ -254,11 +237,8 @@ export class Executor {
 		if (dialog) {
 			throw new BridgeError("BROWSER_DIALOG_OPEN", `A ${dialog.type} dialog is open; answer it with \`ao browser dialog accept|dismiss\``);
 		}
-		// The tab's own address is checked by withPage; a selected frame (or an
-		// ancestor of it) may host a site the policy denies.
 		await this.assertFrameAllowed(ctx, page, frameId);
 		const message = { aoBridge: 1, ...request };
-		// A page blocked by a dialog never answers; do not hang the command.
 		const limit = (typeof request.timeoutMs === "number" ? request.timeoutMs : 0) + CONTENT_TIMEOUT_MS;
 		const send = () =>
 			Promise.race([
@@ -306,7 +286,6 @@ export class Executor {
 		ctx.extras.baseline = undefined;
 	}
 
-	/** Trusted input only when the tab and every frame on the way allow it. */
 	private async useTrustedInput(ctx: Context, page: ActiveTab): Promise<boolean> {
 		await this.assertFrameAllowed(ctx, page, this.frameFor(ctx, page));
 		if (!ctx.approval.trusted || !trustedInputAllowed(ctx.policy, page.tab.url)) return false;
@@ -314,18 +293,12 @@ export class Executor {
 		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));
 	}
 
-	/** The user is on a tab no agent owns in this tab's window. */
 	private async userChoseAnotherTab(page: ActiveTab): Promise<boolean> {
 		if (page.tab.active) return false;
 		const [front] = await this.deps.chrome.tabs.query({ windowId: page.tab.windowId, active: true });
 		return front?.id !== undefined && !this.deps.sessions.ownerOf(front.id);
 	}
 
-	/**
-	 * captureVisibleTab needs the agent's tab painted, so bring it to the front
-	 * of its window (never focusing the window) and wait until it is visible.
-	 * A minimized window stays minimized: restoring it would take focus.
-	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
 		const chrome = this.deps.chrome;
 		const hidden = () =>
@@ -344,8 +317,6 @@ export class Executor {
 			await sleep(50, ctx.signal);
 		}
 	}
-
-	// --- navigation and tabs ----------------------------------------------
 
 	private async waitForNavigation(tabId: number, signal: AbortSignal): Promise<boolean> {
 		throwIfAborted(signal);
@@ -366,13 +337,10 @@ export class Executor {
 				if (error) reject(error);
 				else resolve(loaded);
 			};
-			// Until this navigation commits, load events belong to the page that
-			// was already loading.
 			let committed = false;
 			const onCommitted = (details: { tabId: number; frameId: number }) => {
 				if (details.tabId === tabId && details.frameId === 0) committed = true;
 			};
-			// A same-document navigation is done at once and fires no load events.
 			const onFragment = (details: { tabId: number; frameId: number }) => {
 				if (details.tabId === tabId && details.frameId === 0) finish(true);
 			};
@@ -465,15 +433,12 @@ export class Executor {
 			}
 			const current = ctx.extras.frame && ctx.extras.frame.logicalTabId === page.logicalId ? ctx.extras.frame.chain : [];
 			const frameId = matches[0]!.frameId;
-			// Never select a frame hosting a site the policy denies.
 			await this.assertFrameAllowed(ctx, page, frameId);
 			ctx.extras.frame = { logicalTabId: page.logicalId, frameId, chain: [...current, { frameId, parentFrameId, ref: target }] };
 			ctx.extras.baseline = undefined;
 			return { frame: target, name: info.name, url: sanitizeBrowserURL(matches[0]!.url), target: this.target(page) };
 		});
 	}
-
-	// --- snapshot and act ---------------------------------------------------
 
 	private async rawSnapshot(ctx: Context, page: ActiveTab, interactive: boolean): Promise<{ text: string; refs: Record<string, RefInfo> }> {
 		const value = (await this.content(page, ctx, { op: "snapshot", interactive })) as { snapshot: string; refs: Record<string, RefInfo> };
@@ -596,7 +561,6 @@ export class Executor {
 					if (dialog.open === true) return { status: "satisfied", kind: "dialog", dialog };
 				}
 			} catch (error) {
-				// The page may be between documents mid-navigation; keep observing.
 				if (!(error instanceof BridgeError) || !["BROWSER_TARGET_UNAVAILABLE", "BROWSER_PAGE_RESTRICTED", "STALE_REFERENCE"].includes(error.code)) throw error;
 			}
 			const remaining = deadline - Date.now();
@@ -612,8 +576,6 @@ export class Executor {
 		}
 	}
 
-	// --- element actions ------------------------------------------------------
-
 	private async point(ctx: Context, page: ActiveTab, ref: string): Promise<{ x: number; y: number }> {
 		const geometry = (await this.content(page, ctx, { op: "geometry", ref })) as Geometry;
 		if (!geometry.inViewport || geometry.width <= 0 || geometry.height <= 0) {
@@ -621,8 +583,6 @@ export class Executor {
 		}
 		const frame = ctx.extras.frame;
 		if (!frame || frame.logicalTabId !== page.logicalId) return { x: geometry.x, y: geometry.y };
-		// Frame coordinates are relative to the frame; trusted input uses the
-		// page's. Add each enclosing iframe's offset within its own parent.
 		let x = geometry.x;
 		let y = geometry.y;
 		for (const link of frame.chain) {
@@ -748,7 +708,6 @@ export class Executor {
 									? ["dom-stable", String(args.stableMs)]
 									: ["", ""];
 			if (!kind) throw new BridgeError("INVALID_ARGUMENT", "wait needs exactly one condition");
-			// Retry through document replacement during navigation.
 			for (;;) {
 				throwIfAborted(ctx.signal);
 				const remaining = deadline - Date.now();
@@ -768,19 +727,11 @@ export class Executor {
 		});
 	}
 
-	/**
-	 * The session's tab as base64 PNG. The debugger captures the tab itself,
-	 * so its window may be covered or the user may be on another tab. Sites
-	 * that keep the debugger away fall back to captureVisibleTab.
-	 */
 	private async captureTab(ctx: Context, page: ActiveTab): Promise<string> {
 		if (ctx.approval.trusted && trustedInputAllowed(ctx.policy, page.tab.url)) {
 			try {
 				return await this.deps.trusted.screenshot(page.tabId, ctx.signal);
 			} catch (error) {
-				// A page that loaded while its window was minimized has never
-				// painted. Restoring the window would take focus from the user
-				// on macOS, so leave it minimized.
 				if (error instanceof BridgeError && error.code === "SCREENSHOT_TIMEOUT") {
 					throw new BridgeError(
 						"SCREENSHOT_UNAVAILABLE",
@@ -794,12 +745,6 @@ export class Executor {
 		return dataUrl.slice(dataUrl.indexOf(",") + 1);
 	}
 
-	/**
-	 * captureVisibleTab captures whatever tab is in front of a window, not a
-	 * given tab. Serialize activation and capture per window across sessions,
-	 * and refuse the pixels if the window showed any other tab meanwhile, so a
-	 * screenshot can never contain another session's page or the user's tab.
-	 */
 	private async captureOwnTab(ctx: Context, page: ActiveTab): Promise<string> {
 		const chrome = this.deps.chrome;
 		for (let attempt = 0; ; attempt++) {

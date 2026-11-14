@@ -40,7 +40,6 @@ const cloudCpClientMock = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
 	retrySessionStartup: vi.fn(),
-	// The presence heartbeat beats once the test document has focus.
 	touchSessionPresence: vi.fn(async () => undefined),
 }));
 const cloudResumeMock = cloudCpClientMock.resumeSession;
@@ -69,8 +68,6 @@ const interfaceTransitionState = vi.hoisted(() => ({
 	startError: undefined as string | undefined,
 	status: undefined as SessionInterfaceTransitionStatus | undefined,
 }));
-// Unset by default so the suite follows the per-session status; tests that
-// exercise the daemon's Chat harness list set it explicitly.
 const settingsState = vi.hoisted(() => ({
 	chatHarnesses: undefined as string[] | undefined,
 }));
@@ -91,7 +88,6 @@ const cloudSessionQueryState = vi.hoisted(() => ({
 	isError: false,
 	error: null as unknown,
 }));
-// The person's own Cloud workspace.
 const ownCloudOrgState = vi.hoisted(() => ({ org: { id: "cloud-org", slug: "mine", displayName: "Mine", role: "owner" } as { id: string; slug: string; displayName: string; role: string } | undefined }));
 const cloudSessionLookup = vi.hoisted(() => vi.fn());
 const cloudSessionPoll = vi.hoisted(() => vi.fn());
@@ -121,8 +117,6 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("../lib/platform", () => ({
-	// Exercise the macOS shell layout without changing the existing Ctrl-based
-	// shortcut assertions in this suite.
 	hidesShellTopbar: () => true,
 	isMacPlatform: () => false,
 	isLinuxPlatform: () => false,
@@ -133,8 +127,6 @@ vi.mock("../hooks/useWindowFullScreen", () => ({
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: cloudGateState.cloudEnabled, localEnabled: true, client: "" }),
 }));
-// A test that names the session organization's features gets them; the rest
-// read the offering as the real hook does.
 const sessionOfferingFeatures = vi.hoisted(() => ({ current: undefined as string[] | undefined }));
 vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
@@ -286,10 +278,6 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 	return { workspaces, workspaceQueryState, shellTerminalsState };
 });
 
-// The terminal and inspector body pull in xterm/SSE machinery irrelevant to
-// the split under test.
-// The shared project control stands in as a marker: these tests check where it
-// renders, and SharedProjectPanel.test covers what it shows.
 vi.mock("./SharedProjectPanel", () => ({
 	SharedProjectPanel: ({ orchestrator }: { orchestrator: { id: string } }) => (
 		<button type="button" data-testid="shared-project-control">{orchestrator.id}</button>
@@ -489,7 +477,6 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	),
 }));
 vi.mock("./TerminalAgentControls", () => ({ TerminalAgentPickerRow: () => null }));
-// The session tab's ⋮ menu is stood in for by its interface switch row, as a button.
 vi.mock("./TabContextMenu", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./TabContextMenu")>();
 	const { useContext } = await import("react");
@@ -863,15 +850,12 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		});
 	},
 }));
-// Standalone shell terminals are orthogonal to the split under test, and their
-// real hooks would need a QueryClientProvider this suite deliberately omits.
 vi.mock("../hooks/useShellTerminals", () => ({
 	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
 	useShellTerminals: () => ({ data: shellTerminalsState.loaded ? shellTerminalsState.data : undefined, isLoading: !shellTerminalsState.loaded }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
 	useCloseShellTerminal: () => ({
 		mutate: closeShellTerminalMock,
-		// Settles on the mock's callbacks, like the real mutation does.
 		mutateAsync: (handleId: string) =>
 			new Promise<void>((resolve, reject) => {
 				closeShellTerminalMock(handleId, {
@@ -885,9 +869,6 @@ vi.mock("../hooks/useShellTerminals", () => ({
 
 type TestShell = (typeof shellTerminalsState.data)[number];
 
-// Mirrors useOpenShellTerminal().open(): each call shows a pending tab at once;
-// finish() resolves its create, replacing the tab's row with its shell and
-// recording what it became, as the real hook does.
 function mockShellCreation() {
 	const opens: TestShell[] = [];
 	openShellTerminalMock.mockImplementation(
@@ -981,7 +962,6 @@ function render(ui: ReactNode) {
 	};
 }
 
-/** A PR the session's summary reports, as the inspector reads it. */
 function prSummaryFixture(number: number, url: string): SessionPRSummary {
 	return {
 		...noPRDetails(),
@@ -1054,9 +1034,6 @@ describe("SessionView", () => {
 			activeShellTerminalHandleId: null,
 			prView: false,
 			workspaceFileOpenRequest: null,
-			// Opening a session leaves the inspector closed (covered by the
-			// "keeps the inspector closed" test); most tests here exercise the
-			// open rail, so start the workers the way a user left them: open.
 			inspectorSessions: {
 				"sess-1": { isOpen: true, view: "summary" },
 				"sess-2": { isOpen: true, view: "summary" },
@@ -1157,7 +1134,6 @@ describe("SessionView", () => {
 			expect(screen.queryByTestId("pr-tab-pane")).not.toBeInTheDocument();
 			expect(screen.queryByRole("tab", { name: /^#7 Seven/ })).not.toBeInTheDocument();
 
-			// Turning the PR view on brings the tab back where it was.
 			act(() => useUiStore.setState({ developerMode: true, prView: true }));
 			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
 		} finally {
@@ -1177,7 +1153,6 @@ describe("SessionView", () => {
 			openPRTab("sess-1", url);
 			render(<SessionView sessionId="sess-1" />);
 			await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr", expect.anything()));
-			// The workspace facts don't list PR #9 yet; its tab stays open.
 			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
 		} finally {
@@ -1186,7 +1161,6 @@ describe("SessionView", () => {
 	});
 
 	it("keeps a PR's tab mounted behind the others, so coming back finds it as it was", () => {
-		// A PR's tab is part of the PR view, a Developer mode preview.
 		useUiStore.setState({ developerMode: true, prView: true });
 		const url = "https://github.com/acme/app/pull/7";
 		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
@@ -1225,7 +1199,6 @@ describe("SessionView", () => {
 			expect(pane.parentElement).not.toHaveClass("invisible");
 			expect(useUiStore.getState().activeShellTerminalHandleId).toBeNull();
 
-			// The shell's title changes, as a running command renames it.
 			shellTerminalsState.data = [{ ...shell, title: "build (watching)" }];
 			view.rerender(<SessionView sessionId="sess-1" />);
 			expect(screen.getByTestId("pr-tab-pane").parentElement).not.toHaveClass("invisible");
@@ -1262,7 +1235,6 @@ describe("SessionView", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
 
-		// Files opens on the checked-out branch's default review.
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
 		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
@@ -1403,9 +1375,6 @@ describe("SessionView", () => {
 	});
 
 	it("polls the direct Cloud lookup only while the session list does not have it", () => {
-		// Opened before the list has it (created through the API, or in a project
-		// the list has not fetched yet), the view shows the direct lookup, which
-		// must keep refreshing or its lifecycle stays where it was at open.
 		workspaceQueryState.data = [];
 		cloudSessionPoll.mockClear();
 		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
@@ -1476,7 +1445,6 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 		expect(workspaceSessionLookup).toHaveBeenCalledWith("sess-1", undefined, false);
-		// Its Browser panel shows the sandbox's agent browser, from the control plane.
 		expect(browserViewOptions.current).toMatchObject({ cloudAgentBrowser: { baseUrl: "https://cloud.example.test", orgId: "cloud-org", sessionId: "sess-1" } });
 		cloudView.unmount();
 
@@ -1511,14 +1479,12 @@ describe("SessionView", () => {
 			expect(within(await screen.findByTestId("cloud-chat-header-actions")).getByRole("button", { name: "Share" })).toBeInTheDocument();
 			shared.unmount();
 
-			// WorkOS has not enabled sharing for the organization.
 			sessionOfferingFeatures.current = ["attachments"];
 			const notShared = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 			expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
 			notShared.unmount();
 
-			// A deleted session is not shared, whatever the organization may do.
 			sessionOfferingFeatures.current = ["share"];
 			workspaceQueryState.data = [
 				...workspaces,
@@ -1554,8 +1520,6 @@ describe("SessionView", () => {
 		render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
 
-		// The local Chat surface would ask this machine's daemon for the
-		// conversation, which answers "session not found" for a Cloud session.
 		act(() => useUiStore.getState().setActiveShellTerminal("cloud-shell-1"));
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
@@ -1593,7 +1557,6 @@ describe("SessionView", () => {
 	});
 
 	it("says a session shared earlier is no longer shared once it drops off the list, though its route names no workspace", () => {
-		// The shared list showed it earlier in this run; now the owner removed access.
 		rememberSharedSessions("https://cloud.example.test", "guest-user", ["was-shared"]);
 		workspaceQueryState.data = [];
 		render(<SessionView projectId="shared-project" sessionId="was-shared" />);
@@ -1621,10 +1584,6 @@ describe("SessionView", () => {
 		expect(screen.getByText(/Session not found/)).toBeInTheDocument();
 		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 	});
-	// Regression: shell terminals are an app-wide list, so without a per-session
-	// filter a shell opened in another session would show up as a tab in this
-	// session's strip. Only this session's shells (not another session's, and no
-	// session-less ones) should reach the terminal pane.
 	it("shows only the current session's shell terminals as tabs", () => {
 		shellTerminalsState.data = [
 			{
@@ -1679,7 +1638,6 @@ describe("SessionView", () => {
 		act(() => appShortcutBus.emit({ id: "reopen-closed-tab" }));
 		expect(screen.getByRole("button", { name: "close file:src/App.tsx" })).toBeInTheDocument();
 
-		// Nothing left to reopen: the tab stays as it is.
 		act(() => appShortcutBus.emit({ id: "reopen-closed-tab" }));
 		expect(screen.getAllByRole("button", { name: "close file:src/App.tsx" })).toHaveLength(1);
 	});
@@ -1746,10 +1704,6 @@ describe("SessionView", () => {
 		copy.mockRestore();
 	});
 
-	// The pane shows one terminal at a time, so selecting a shell takes the
-	// agent's terminal off screen while the route still points at this session.
-	// The notification runtime lives outside this subtree and reads the published
-	// kind to decide whether the user can actually see a needs_input prompt.
 	it("publishes which terminal the session pane is showing", () => {
 		shellTerminalsState.data = [
 			{
@@ -1769,8 +1723,6 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "select agent tab" }));
 		expect(useUiStore.getState().visibleTerminalKindBySession["sess-1"]).toBe("worker");
 
-		// Leaving the session drops the entry rather than leaving a stale "worker"
-		// behind for a pane that is no longer mounted.
 		view.unmount();
 		expect(useUiStore.getState().visibleTerminalKindBySession["sess-1"]).toBeUndefined();
 	});
@@ -1790,8 +1742,6 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-1" />);
 		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
 
-		// Selecting the shell keeps the chat surface mounted — the shell renders
-		// as a tab inside it instead of swapping in the terminal CenterPane.
 		act(() => useUiStore.getState().setActiveShellTerminal("chat-shell"));
 		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("shell");
@@ -1961,8 +1911,6 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("chat-surface")).not.toBe(firstSurface);
 	});
 
-	// The strip only ever shows the session on screen — pinning another session's
-	// terminal as a tab (and the cross-project picker that did it) is gone (#3208).
 	it("shows only the session on screen in the tab strip", () => {
 		render(<SessionView sessionId="sess-1" />);
 
@@ -1971,8 +1919,6 @@ describe("SessionView", () => {
 		expect(screen.queryByRole("button", { name: /^Add / })).not.toBeInTheDocument();
 	});
 
-	// The daemon roots a shell in the session's worktree when it is given that
-	// session's id, so a new terminal must name the session actually on screen.
 	it("opens new terminals in the on-screen session's worktree", () => {
 		render(<SessionView sessionId="sess-2" />);
 
@@ -2008,10 +1954,8 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 
-		// The reviewer opens as a tab inside the Cloud chat, not the local chat surface.
 		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("reviewer:cloud-reviewer-7:codex"));
 		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
-		// Chat stays reachable while the review runs, and the Reviewer tab reopens it.
 		fireEvent.click(screen.getByRole("button", { name: "cloud chat tab" }));
 		await waitFor(() => expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat"));
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
@@ -2091,7 +2035,6 @@ describe("SessionView", () => {
 		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
 		render(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
-		// The checkout would follow the resume; let that chain settle first.
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 		expect(checkout).not.toHaveBeenCalled();
 	});
@@ -2118,7 +2061,6 @@ describe("SessionView", () => {
 			if (prepares) {
 				await waitFor(() => expect(checkout).toHaveBeenCalledWith("cloud-org", id));
 			} else {
-				// The checkout would follow the resume; let that chain settle first.
 				await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 				expect(checkout).not.toHaveBeenCalled();
 			}
@@ -2133,7 +2075,6 @@ describe("SessionView", () => {
 			orgId: "cloud-org",
 			sandboxProvider: "coder",
 			desiredState: "running",
-			// The workspace exists and AO is starting its worker inside it.
 			observedState: "bootstrapping",
 		};
 
@@ -2142,11 +2083,6 @@ describe("SessionView", () => {
 		const loaderScreen = screen.getByTestId("cloud-session-loader-screen");
 		const loader = within(loaderScreen).getByRole("status", { name: "Session setup activity" });
 		expect(loaderScreen).toHaveClass("absolute", "inset-0", "grid", "place-items-center", "bg-background");
-		// The loader covers the session pane but MUST stay within the app z-scale,
-		// below the overlay layer (dialogs/dropdowns at z-overlay). A raw high z
-		// (previously z-[200]) painted over any shell modal opened while a cloud
-		// session loads (New Task, the project three-dots menu), hiding it while
-		// its Radix modal still locked body pointer-events and froze the whole UI.
 		expect(loaderScreen).toHaveClass("z-chrome");
 		expect(loaderScreen.className).not.toMatch(/z-\[\d+\]/);
 		expect(loaderScreen.children).toHaveLength(1);
@@ -2206,7 +2142,6 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
 		const { onEvent } = subscribeSessionEventsMock.mock.lastCall![0];
-		// An earlier worker's connect, replayed from before this loader, is not this one.
 		act(() => onEvent({ type: "worker.connected", createdAt: new Date(Date.now() - 10 * 60_000).toISOString(), sessionId: "sess-2", sequence: 1, payload: {} }));
 		expect(refreshCloudSessionLifecycleMock).not.toHaveBeenCalled();
 		act(() => onEvent({ type: "worker.connected", createdAt: new Date().toISOString(), sessionId: "sess-2", sequence: 2, payload: {} }));
@@ -2268,10 +2203,8 @@ describe("SessionView", () => {
 			observedState: "provisioning",
 		};
 		const view = render(<SessionView sessionId="sess-2" />);
-		// Provisioning is still creating the workspace.
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace"));
 
-		// Bootstrapping: the workspace exists and its worker is starting.
 		session.cloud.observedState = "bootstrapping";
 		view.rerender(<SessionView sessionId="sess-2" />);
 		await waitFor(() => expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker"));
@@ -2335,7 +2268,6 @@ describe("SessionView", () => {
 		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalled());
 		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
 		for (const [type, sequence, phrase] of [
-			// The start of workspace creation does not complete the workspace step.
 			["sandbox.provisioning", 1, "Creating the workspace"],
 			["worker.connected", 2, "Preparing your repository and agent"],
 			["agent.ready", 3, "Connecting your terminal"],
@@ -2380,8 +2312,6 @@ describe("SessionView", () => {
 	});
 
 	it("never covers a restored Chat-mode cloud session with the terminal reconnect loader", () => {
-		// Restore marks the session reconnecting; only its terminal pane clears
-		// that, and a Chat-mode session never mounts one.
 		const session = workerSession("sess-2");
 		session.mode = "chat";
 		session.runtimeConnected = true;
@@ -2397,8 +2327,6 @@ describe("SessionView", () => {
 
 		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
-		// The flag is kept: a later switch to the terminal still waits for the
-		// fresh worker's terminal.
 		expect(useTerminalResetStore.getState().reconnecting["sess-2"]).toBe(true);
 	});
 
@@ -2412,8 +2340,6 @@ describe("SessionView", () => {
 		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 
-		// The sandbox reports running a moment before its worker connects; the
-		// startup screen must not flash in over the conversation then.
 		session.cloud = { ...session.cloud, observedState: "running" };
 		view.rerender(<SessionView sessionId="sess-2" />);
 		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
@@ -2442,7 +2368,6 @@ describe("SessionView", () => {
 			act(() => seedCloudOpening(view.client, "cloud-org", "sess-2", opening("chat")));
 			const loader = screen.getByTestId("cloud-session-loader-screen");
 			expect(await within(loader).findByRole("figure", { name: queued })).toHaveTextContent("Fix the flaky login test");
-			// The checklist stays.
 			expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent("Creating the workspace");
 		});
 
@@ -2453,7 +2378,6 @@ describe("SessionView", () => {
 				const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 				act(() => seedCloudOpening(view.client, "cloud-org", "sess-1", opening("chat")));
 				expect(await within(screen.getByTestId("cloud-session-loader-screen")).findByRole("figure", { name: queued })).toBeInTheDocument();
-				// One started in the terminal does not show it: the agent gets it as its prompt.
 				act(() => seedCloudOpening(view.client, "cloud-org", "sess-1", opening("tui")));
 				await waitFor(() => expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument());
 			} finally {
@@ -2489,14 +2413,12 @@ describe("SessionView", () => {
 	it("leaves a booting Coder Chat session's events to its chat, from before the session resolves", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {
-			// Just created: the list does not have it yet.
 			workspaceQueryState.data = [];
 			cloudSessionQueryState.isLoading = true;
 			const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 			expect(listSessionEventsMock).not.toHaveBeenCalled();
-			// It resolves as a Chat session whose Coder workspace boots for minutes.
 			workspaceQueryState.data = [...workspaces, {
 				id: "cloud-project", name: "Cloud project", kind: "cloud", path: "",
 				sessions: [{
@@ -2509,9 +2431,7 @@ describe("SessionView", () => {
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-			// The chat under the screen reads them (mocked here); the screen reads none itself.
 			expect(listSessionEventsMock).not.toHaveBeenCalled();
-			// Its steps follow the chat's list.
 			act(() => view.client.setQueryData(["cloud-chat-events", "cloud-org", "sess-1"], [
 				{ type: "worker.connected", createdAt: new Date().toISOString(), sequence: 1, sessionId: "sess-1", payload: {} },
 			]));
@@ -2569,7 +2489,6 @@ describe("SessionView", () => {
 		const view = render(<SessionView sessionId="sess-2" />);
 		expect(screen.getByRole("status")).toHaveAttribute("data-cloud-lifecycle-stage", "paused");
 
-		// Opening it wakes it: still no startup screen, and the badge stays.
 		for (const observedState of ["restoring", "bootstrapping", "running"]) {
 			session.cloud = { ...session.cloud, desiredState: "running", observedState };
 			view.rerender(<SessionView sessionId="sess-2" />);
@@ -2704,22 +2623,14 @@ describe("SessionView", () => {
 			observedState: "running",
 		};
 		const view = render(<SessionView sessionId="sess-2" />);
-		// Connected: no lifecycle loader over the terminal.
 		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 
-		// The worker relay row lapses mid-turn: runtimeConnected flips false while the
-		// sandbox stays running (stage -> "restoring_agent"). The connect latch must
-		// keep the terminal visible instead of re-raising the full-screen loader.
 		session.runtimeConnected = false;
 		view.rerender(<SessionView sessionId="sess-2" />);
 		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("shows the live agent terminal (not the loader) while the sandbox is still bootstrapping", () => {
-		// Fresh spawn: the agent runs its first turn while observed is still
-		// "bootstrapping" (flips to "running" only afterwards). Once the agent
-		// terminal is minted (terminalGeneration set) and the relay is connected,
-		// the terminal is streaming and must be visible, not covered by the loader.
 		const session = workerSession("sess-2");
 		session.runtimeConnected = true;
 		session.terminalGeneration = "6234";
@@ -2769,7 +2680,6 @@ describe("SessionView", () => {
 			expect(within(errorState).getByRole("heading", { name: "This session couldn't start" })).toBeInTheDocument();
 			expect(errorState).toHaveTextContent(startupError.message);
 			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
-			// The topbar stays usable above the error state.
 			expect(screen.getByTestId("session-topbar-host").contains(errorState)).toBe(false);
 
 			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
@@ -2778,7 +2688,6 @@ describe("SessionView", () => {
 		});
 
 		it("keeps a transiently failed runtime on the loader with its startup reason", () => {
-			// "failed" is retried by the reconciler with backoff, so it is not final.
 			failedCloudSession({ runtimeState: "failed", observedState: "failed", startupError });
 			render(<SessionView sessionId="sess-2" />);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
@@ -2871,7 +2780,6 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("pending-shell:2");
 
-		// The first shell arrives while the second tab is selected.
 		finishCreate(0, shell(1), view);
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("pending-shell:2");
 		expect(screen.getByTestId("auxiliary-tab-order-tui-sess-1")).toHaveTextContent("sh-1|pending-shell:2");
@@ -2900,9 +2808,6 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("sh-3");
 	});
 
-	// The close runs against a render that has not seen Terminal 3's shell
-	// arrive, so it selects Terminal 3's pending tab; the selection must follow
-	// that tab to its shell rather than fall back to the agent.
 	it("selects the neighbouring shell when a pending tab is closed before the view sees its neighbour arrive", () => {
 		const shell = (n: number) => ({
 			handleId: `sh-${n}`,
@@ -2914,7 +2819,6 @@ describe("SessionView", () => {
 		});
 		const pending = (n: number) => ({ ...shell(n), handleId: `pending-shell:${n}`, workingDir: "", optimistic: true as const });
 		const view = render(<SessionView sessionId="sess-1" />);
-		// The shell layout opens the tab and makes it active; the view follows.
 		for (let n = 1; n <= 4; n++) {
 			shellTerminalsState.data = [...shellTerminalsState.data, pending(n)];
 			act(() => useUiStore.getState().setActiveShellTerminal(`pending-shell:${n}`));
@@ -2952,7 +2856,6 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
 		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
-		// Outside a split, a reviewer chat that is not selected is not kept mounted.
 		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
 		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
@@ -3003,10 +2906,6 @@ describe("SessionView", () => {
 		expect(screen.queryByRole("button", { name: "New terminal" })).not.toBeInTheDocument();
 	});
 
-	// Regression (#3874 then re-added by #4252): the prime top bar carries session
-	// identity, status, and controls — never the worktree branch. A branch badge
-	// beside the actions duplicates a fact the inspector, board card, and command
-	// palette already own, and its long name crowds the controls it sits next to.
 	it.each([
 		["a terminal worker", "sess-1", "tui", true],
 		["a chat worker", "sess-1", "chat", true],
@@ -3019,7 +2918,6 @@ describe("SessionView", () => {
 		expect(screen.queryByText("ao/sess-1")).not.toBeInTheDocument();
 		expect(screen.queryByTitle("ao/sess-1")).not.toBeInTheDocument();
 		expect(document.querySelector(".icon-git-branch")).toBeNull();
-		// The session's own actions still ride in the same top-bar slot.
 		expect(screen.getByTestId("mock-session-topbar")).toBeInTheDocument();
 		expect(Boolean(screen.queryByRole("button", { name: "New terminal" }))).toBe(offersNewTerminal);
 	});
@@ -3040,8 +2938,6 @@ describe("SessionView", () => {
 		const view = render(<SessionView sessionId="sess-1" />);
 		expect(screen.getByText("chat surface")).toBeInTheDocument();
 
-		// Opening a shell from chat keeps the chat surface mounted: the shell is
-		// a tab in its header and renders as the surface's active pane.
 		fireEvent.click(screen.getByRole("button", { name: "open shell from chat" }));
 		finishCreate(0, shell, view);
 		expect(screen.getByText("chat surface")).toBeInTheDocument();
@@ -3085,10 +2981,6 @@ describe("SessionView", () => {
 		expect(await screen.findByTestId("session-file-workspace")).not.toHaveAttribute("data-line");
 	});
 
-	// #5997 review: SessionView remounts on a route round-trip (session -> board ->
-	// session), so a new open request must never reuse a key the store
-	// remembered a display mode for; otherwise an explicit "open diff" (or Edit)
-	// is hijacked into the remembered Rich preview.
 	it("never lets a remembered display mode capture a new request after a remount", async () => {
 		workerSession("sess-1").mode = "chat";
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
@@ -3096,7 +2988,6 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
 		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
 		const firstKey = Number((await screen.findByTestId("session-file-workspace")).getAttribute("data-request-key"));
-		// The pane records the Rich preview picked for that request.
 		act(() => useUiStore.getState().setFileDisplayMode("sess-1", "src/App.tsx", "rendered", firstKey));
 		first.unmount();
 
@@ -3128,8 +3019,6 @@ describe("SessionView", () => {
 		expect(rememberedFileDisplayMode(useUiStore.getState(), "sess-1", "src/App.tsx", Number(pane.getAttribute("data-request-key")))).toBeUndefined();
 	});
 
-	// #5984 follow-up from the issue author: a file revealed from a link must
-	// not reopen, or take focus back from the agent, on every return.
 	it("does not reopen a revealed file the user closed after switching sessions", async () => {
 		workerSession("sess-1").mode = "chat";
 		workerSession("sess-2").mode = "chat";
@@ -4371,8 +4260,6 @@ describe("SessionView", () => {
 		});
 		await waitFor(() => expect(finishStaging).toBeTypeOf("function"));
 		act(() => {
-			// Inline edit registers first, so the legacy single-kind snapshot hides
-			// the composer's pending attachment work behind a failed draft save.
 			setChatDraftBoundary(session.id, "inline-edit", "persistence-failed");
 			setChatDraftBoundary(session.id, "composer", "pending-attachments");
 		});
@@ -4916,8 +4803,6 @@ describe("SessionView", () => {
 
 	it("returns to the source terminal while a failed Chat switch mode refetch settles", () => {
 		const session = workerSession("sess-1");
-		// The workspace cache observed the transition's intermediate mode commit,
-		// but the durable transition already says the target failed and rolled back.
 		session.mode = "chat";
 		const transition = {
 			id: "transition-failed",
@@ -4994,7 +4879,6 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-1" />);
 
-		// An unsupported switch stays visible but disabled, with the reason as its tooltip.
 		expect(screen.getByRole("button", { name: "Switch to chat UI" })).toBeDisabled();
 	});
 
@@ -5078,10 +4962,8 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-1" />);
 		await screen.findByRole("button", { name: "Reviewer" });
 		fireEvent.click(screen.getByRole("button", { name: "Reviewer" }));
-		// The chat surface stays mounted; the reviewer pane renders inside it.
 		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("reviewer");
-		// Selecting the chat tab returns to the chat timeline.
 		fireEvent.click(screen.getByRole("button", { name: "select chat tab" }));
 		expect(screen.queryByTestId("terminal-target")).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
@@ -5523,7 +5405,6 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 
-		// The sidebar toggle is a different command — the inspector must not react.
 		act(() => appShortcutBus.emit({ id: "toggle-sidebar" }));
 		expect(inspectorOpen("sess-1")).toBe(true);
 	});
@@ -5558,7 +5439,6 @@ describe("SessionView", () => {
 	it("reopens the inspector on the tab it last showed", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
 		render(<SessionView sessionId="sess-1" />);
-		// Mounting applies the "entering a session" defaults, so pick the tab afterwards.
 		act(() => useUiStore.getState().setInspectorView("sess-1", "browser"));
 
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
@@ -5665,7 +5545,6 @@ describe("SessionView", () => {
 		act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
 		await waitFor(() => {
 			expect(screen.getByTestId("panel-group")).toHaveAttribute("data-workspace-mode", "files");
-			// Files sizes like Summary/Review: opening it doesn't widen the panel.
 			expect(inspectorWidthVariable()).toBe("500px");
 			expect(
 				screen.getByTestId("panel-group").style.getPropertyValue("--session-inspector-max-width"),
@@ -5714,9 +5593,6 @@ describe("SessionView", () => {
 	});
 
 	it("grows each tab's width back when the window widens after a narrow tab switch", async () => {
-		// A 712px split caps every profile at 300px. A tab switch re-runs the restore
-		// against that cap; widening the window must bring the preferred width back
-		// instead of leaving the rail (and its top bar) pinned narrow.
 		let splitWidth = 712;
 		const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => splitWidth);
 		try {
@@ -5735,7 +5611,6 @@ describe("SessionView", () => {
 
 			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
 			await waitFor(() => expect(inspectorWidthVariable()).toBe("500px"));
-			// Nothing about the narrow window was saved as a preference.
 			expect(window.localStorage.getItem("ao.inspector.widthPx")).toBeNull();
 			expect(window.localStorage.getItem("ao.workspace.browser.canvasWidthPx")).toBeNull();
 		} finally {
@@ -5981,7 +5856,6 @@ describe("SessionView", () => {
 		const worker = workerSession("sess-1");
 		const uiKey = sessionUiKey("sess-1", "box-a");
 		worker.artifactFiles = [];
-		// The sidebar's kept list from an earlier visit is stale and predates the artifact.
 		workspaceQueryState.isStale = true;
 		try {
 			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
@@ -6079,7 +5953,6 @@ describe("SessionView", () => {
 
 	it("takes the baseline from a cloud session's artifact list once it loads", () => {
 		const worker = workerSession("sess-1");
-		// The session arrives before its artifact list.
 		worker.artifactFilesPending = true;
 		try {
 			const view = render(<SessionView sessionId="sess-1" />);
@@ -6114,7 +5987,6 @@ describe("SessionView", () => {
 
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
-			// The toast reaches a maximized Browser and screen readers; Open shows the file.
 			const toast = useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === "artifact-registered:sess-1");
 			expect(toast?.title).toContain("shot.png");
 			expect(toast?.action).toBeDefined();
@@ -6246,9 +6118,6 @@ describe("SessionView", () => {
 			expect(screen.getByText("terminal center")).toBeInTheDocument();
 			fireEvent.click(screen.getByRole("button", { name: "pop browser" }));
 
-			// Native browser geometry switches atomically. Animating it would require
-			// resizing the WebContentsView over IPC on every frame and leaves the
-			// portaled URL bar visible until the animation finishes.
 			const overlay = document.querySelector(".browser-popout-overlay");
 			expect(overlay).toHaveAttribute("data-phase", "open");
 			expect(overlay).toHaveClass("browser-popout-overlay--mac-windowed");
@@ -6326,7 +6195,6 @@ describe("SessionView", () => {
 		expect(screen.getByRole("tab", { name: "other.ts" })).toHaveAttribute("aria-selected", "true");
 		const views = screen.getAllByTestId("cloud-file-workspace");
 		expect(views.map((view) => view.textContent)).toEqual(["src/cloud.ts", "src/other.ts"]);
-		// The first file is hidden, not unmounted, so it keeps its mode, scroll and edit.
 		expect(views[0]).toBe(first);
 		expect(first.closest("[inert]")).not.toBeNull();
 		expect(views[1].closest("[inert]")).toBeNull();
@@ -6595,8 +6463,6 @@ describe("SessionView", () => {
 		const overlay = document.querySelector(".files-popout-overlay");
 		expect(overlay).toHaveClass("files-popout-overlay--mac-windowed");
 		expect(overlay?.parentElement).toBe(document.body);
-		// Same chrome as the maximized browser: the filter sits in the titlebar
-		// band, outside the inset frame that holds the explorer.
 		const titlebar = screen.getByTestId("files-popout-topbar");
 		const frame = overlay?.querySelector(".files-popout-frame");
 		expect(titlebar).toHaveClass("files-popout-titlebar--mac-windowed");
@@ -6706,11 +6572,9 @@ describe("SessionView", () => {
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
 		expect(browserUnseen("sess-1")).toBe(false);
 
-		// The same start event remains in the hook when the user closes Browser.
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
 		expect(inspectorOpen("sess-1")).toBe(false);
 		browserViewState.agentBrowserActivity = { ...browserViewState.agentBrowserActivity, active: false, phase: "finished" };
-		// Another command can keep the aggregate active flag true at completion.
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(inspectorOpen("sess-1")).toBe(false);
 
@@ -6783,11 +6647,6 @@ describe("SessionView", () => {
 		expect(inspectorButton()).toHaveAttribute("data-view", "browser");
 	});
 
-	// Regression: the session-entry effect that defaults a brand-new session to
-	// Summary tracked only the single most-recently-initialized session ID, so
-	// re-entering ANY session that was not the immediately preceding one looked
-	// identical to a first-ever visit and forced it back to Summary — silently
-	// discarding whatever tab (Files, Browser) the user had left it on.
 	it("remembers the tab a session was left on when returning to it after visiting another session", () => {
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
@@ -6802,12 +6661,6 @@ describe("SessionView", () => {
 		expect(inspectorButton()).toHaveAttribute("data-view", "files");
 	});
 
-	// Regression: the "initialized" marker used to live in a component-local
-	// ref, which is recreated whenever SessionView unmounts. Remounting an
-	// already-visited session (e.g. across a route transition) then looked
-	// identical to a first-ever visit and forced the tab back to Summary. The
-	// marker now lives in the ui-store's persisted inspectorSessions state, so
-	// it survives unmount/remount, not just re-renders of one mounted instance.
 	it("remembers the tab a session was left on after unmounting and remounting the view", () => {
 		const view = render(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
@@ -6854,8 +6707,6 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-1" />);
 		expect(browserUnseen("sess-1")).toBe(false);
 
-		// Switching away during an already-running command must still mark the
-		// Browser as unseen; it should not wait for another command transition.
 		act(() => useUiStore.getState().setInspectorView("sess-1", "summary"));
 
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
@@ -6937,9 +6788,6 @@ describe("SessionView", () => {
 		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
-	// Regression: a terminated session's `previewUrl` is a stale DB fact —
-	// useBrowserView suppresses and destroys the live preview for terminated
-	// sessions, so it must not count as active Browser content.
 	it("keeps Summary selected for a terminated session with a stale previewUrl", () => {
 		const worker = workerSession("sess-1");
 		worker.status = "merged";
@@ -6966,10 +6814,6 @@ describe("SessionView", () => {
 		expect(browserUnseen("sess-1")).toBe(false);
 	});
 
-	// Regression: agent-browser commands (fill, click, snapshot, …) are real
-	// activity even on an empty target that has not navigated anywhere yet.
-	// Gating the glow on hasBrowserContent/browserContentRevealed meant a
-	// command run before any page loaded never surfaced as unseen.
 	it("glows for agent browser activity even before any browser content has loaded", () => {
 		const { rerender } = render(<SessionView sessionId="sess-1" />);
 		expect(inspectorButton()).toHaveAttribute("data-view", "summary");
@@ -6979,8 +6823,6 @@ describe("SessionView", () => {
 
 		expect(browserUnseen("sess-1")).toBe(true);
 
-		// An explicit clear still resets unseen activity when the target was
-		// already empty, so only previewRevision changes.
 		browserViewState.agentBrowserActive = false;
 		workerSession("sess-1").previewRevision = 1;
 		rerender(<SessionView sessionId="sess-1" />);

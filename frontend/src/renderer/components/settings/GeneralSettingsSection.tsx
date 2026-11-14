@@ -31,11 +31,6 @@ import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 import type { TerminalClickMode } from "../../lib/terminal-mouse";
 
-/**
- * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
- * resolve the same value. Only affects sessions created afterwards — a
- * session's interface is fixed when it is born.
- */
 function SessionInterfaceRow() {
 	const { t } = useTranslation();
 	const { settings, isLoading, error } = useSettings();
@@ -46,8 +41,6 @@ function SessionInterfaceRow() {
 	] satisfies SettingsOption<SessionMode>[];
 
 	const chatAvailable = (settings?.chatHarnesses.length ?? 0) > 0;
-	// Silent when everything works; speak up only when the control is limited
-	// (no chat-capable agent installed) or a save failed.
 	const note = saveError ?? error ?? (!chatAvailable ? t("settings.sessionInterface.unavailable") : null);
 
 	const failed = Boolean(saveError || error);
@@ -68,11 +61,6 @@ function SessionInterfaceRow() {
 	);
 }
 
-/**
- * The editor that "Open in editor" uses from the session top bar and session
- * menus. Electron main stores it; opening a session in another editor from the
- * top bar changes it too.
- */
 function DefaultEditorRow() {
 	const { t } = useTranslation();
 	const preference = useEditorPreference();
@@ -112,11 +100,6 @@ function DefaultEditorRow() {
 	);
 }
 
-/**
- * After a harness update, idle open sessions restart on the new release
- * instead of running the old one until they happen to restart. Daemon-owned:
- * the daemon does the moving.
- */
 function VersionRefreshRow() {
 	const { t } = useTranslation();
 	const { settings, isLoading } = useSettings();
@@ -142,18 +125,12 @@ function VersionRefreshRow() {
 
 const SESSION_RETENTION_DAYS = [7, 30, 90];
 
-/**
- * How long an archived session is kept before the daemon deletes it for good.
- * Only sessions whose worktree is already cleaned up are deleted. Hidden on a
- * daemon that predates the setting, where the choice would do nothing.
- */
 function SessionRetentionRow() {
 	const { t } = useTranslation();
 	const { settings, isLoading } = useSettings();
 	const { update, saving, error } = useUpdateSessionRetention();
 	const days = settings?.sessionRetentionDays;
 	if (days === undefined) return null;
-	// A value set through the API outside the menu still shows as itself.
 	const choices = SESSION_RETENTION_DAYS.includes(days) || days === 0 ? SESSION_RETENTION_DAYS : [...SESSION_RETENTION_DAYS, days].sort((a, b) => a - b);
 	const options: SettingsOption<string>[] = [
 		{ value: "0", label: t("settings.sessionRetention.never") },
@@ -176,8 +153,6 @@ function SessionRetentionRow() {
 }
 
 const WINDOWS_SHELL_KINDS = ["pwsh", "powershell", "cmd", "git-bash", "wsl"] as const;
-// A shell picked from the detected list on macOS and Linux is stored as a
-// custom path, so the stored setting keeps one shape on every platform.
 const DETECTED_SHELL_PREFIX = "path:";
 
 type ShellOption = SettingsOption<string> & { path?: string };
@@ -362,7 +337,6 @@ export function GeneralSettingsSection({
 		{ value: "mod-enter", label: t("settings.chatSendKey.modEnter") },
 	] satisfies SettingsOption<ChatSendKeyMode>[];
 
-	// Trigger and menu rows share one layout: name, then the palette on the right.
 	const renderColorTheme = (option: SettingsOption<ThemeStyle> | undefined, compact = false) =>
 		option ? (
 			<>
@@ -391,7 +365,6 @@ export function GeneralSettingsSection({
 
 	return (
 		<>
-			{/* Appearance */}
 			<SettingsSection title={t("settings.appearance")} titleHidden={titleHidden} grouped>
 				<SettingsRow label={t("settings.theme")}>
 					<div className="flex items-center gap-1.5">
@@ -446,7 +419,6 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 			</SettingsSection>
 
-			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
 				<DefaultEditorRow />
@@ -501,7 +473,6 @@ export function GeneralSettingsSection({
 				<AnalyticsRow />
 			</SettingsSection>
 
-			{/* Advanced */}
 			<SettingsSection title={t("settings.advanced")} grouped>
 				<SettingsRow label={t("settings.developerMode")}>
 					<Switch
@@ -522,10 +493,6 @@ export function GeneralSettingsSection({
 	);
 }
 
-/**
- * PostHog usage analytics opt-out. Independent of the error-event row above: it
- * switches off the renderer, the daemon and a paired phone together.
- */
 function AnalyticsRow() {
 	const { t } = useTranslation();
 	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
@@ -589,11 +556,6 @@ function TelemetryEventsRow() {
 	);
 }
 
-/**
- * Developer Mode-only toggle for memory and CPU monitoring: the card chips,
- * the board's memory light and window, and the Diagnostics settings page.
- * Off by default so Developer mode alone does not poll process trees.
- */
 function DiagnosticsRow() {
 	const { t } = useTranslation();
 	const diagnostics = useUiStore((state) => state.diagnostics);
@@ -605,10 +567,6 @@ function DiagnosticsRow() {
 	);
 }
 
-/**
- * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw, and "Add to side chat".
- */
 function SideChatsRow() {
 	const { t } = useTranslation();
 	const sideChats = useUiStore((state) => state.sideChats);
@@ -620,7 +578,6 @@ function SideChatsRow() {
 	);
 }
 
-/** Developer Mode-only switch for dragging center tabs into split panes. Off by default. */
 function SplitPanesRow() {
 	const { t } = useTranslation();
 	const splitPanes = useUiStore((state) => state.splitPanes);
@@ -632,7 +589,6 @@ function SplitPanesRow() {
 	);
 }
 
-/** Developer Mode-only switch for the PR view: a PR's own tab, comments, stacks and actions. Off by default. */
 function PRViewRow() {
 	const { t } = useTranslation();
 	const prView = useUiStore((state) => state.prView);
@@ -644,10 +600,6 @@ function PRViewRow() {
 	);
 }
 
-/**
- * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
- * browser settings, so this row only takes the user there.
- */
 function ChromeAgentsRow() {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -661,10 +613,6 @@ function ChromeAgentsRow() {
 	);
 }
 
-/**
- * macOS Appearance toggle for window translucency: native
- * vibrancy blurs the desktop behind a translucent shell. Renderer state.
- */
 function WindowTranslucencyRow() {
 	const { t } = useTranslation();
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);

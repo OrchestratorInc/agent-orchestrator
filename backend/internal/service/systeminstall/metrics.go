@@ -7,16 +7,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Telemetry event names for updates that meet running sessions.
 const (
-	// EventHarnessUpdate records an update request's outcome: refused for
-	// consent or for sessions that must end, waiting, succeeded or failed.
-	EventHarnessUpdate = "ao.harnesses.updated"
-	// EventHarnessIdleWait records how long a Windows update waited for idle sessions.
+	EventHarnessUpdate   = "ao.harnesses.updated"
 	EventHarnessIdleWait = "ao.harness.update_idle_wait"
 )
 
-// SetTelemetry late-binds the daemon's telemetry sink.
 func (s *Service) SetTelemetry(sink ports.EventSink) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

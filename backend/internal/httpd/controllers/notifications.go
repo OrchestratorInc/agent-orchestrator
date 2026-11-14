@@ -18,7 +18,6 @@ import (
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 )
 
-// NotificationService is the controller-facing notification service contract.
 type NotificationService interface {
 	List(ctx context.Context, filter notificationsvc.ListFilter) (notificationsvc.ListPage, error)
 	MarkRead(ctx context.Context, id string) (notificationsvc.Notification, bool, error)
@@ -27,18 +26,15 @@ type NotificationService interface {
 	ClearAll(ctx context.Context) (notificationsvc.ClearResult, error)
 }
 
-// NotificationStream is the live notification stream used by SSE clients.
 type NotificationStream interface {
 	Subscribe(projectID domain.ProjectID) (<-chan domain.NotificationEvent, func())
 }
 
-// NotificationsController owns the /notifications routes.
 type NotificationsController struct {
 	Svc    NotificationService
 	Stream NotificationStream
 }
 
-// Register mounts bounded notification REST routes on the supplied router.
 func (c *NotificationsController) Register(r chi.Router) {
 	r.Get("/notifications", c.list)
 	r.Post("/notifications/read-all", c.markAllRead)
@@ -47,7 +43,6 @@ func (c *NotificationsController) Register(r chi.Router) {
 	r.Delete("/notifications", c.clearAll)
 }
 
-// RegisterStream mounts long-lived notification stream routes on the supplied router.
 func (c *NotificationsController) RegisterStream(r chi.Router) {
 	r.Get("/notifications/stream", c.stream)
 }
@@ -102,7 +97,6 @@ func (c *NotificationsController) markAllRead(w http.ResponseWriter, r *http.Req
 		apispec.NotImplemented(w, r, "POST", "/api/v1/notifications/read-all")
 		return
 	}
-	// The body is optional: older clients POST nothing and mean "everything".
 	var req MarkAllNotificationsReadRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {

@@ -4,7 +4,6 @@ import { THEMES, type ThemePalette } from "./theme-palettes";
 
 const HUE_ROLES = ["accent", "red", "orange", "yellow", "green", "blue", "purple", "cyan"] as const;
 
-// Orchestrate's palette is a swatch mirror of tokens.css, which owns its values.
 const cases = THEMES.filter((theme) => theme.id !== "orchestrate").flatMap((theme) =>
 	(["dark", "light"] as const).map((mode) => ({ id: theme.id, mode, palette: theme[mode] as ThemePalette })),
 );

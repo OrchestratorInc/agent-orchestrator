@@ -147,7 +147,6 @@ func TestRemoteJSONCompressionFlushesEventStreams(t *testing.T) {
 func TestRemoteJSONCompressionPreservesPartialResponses(t *testing.T) {
 	for _, encoding := range []string{"gzip", "deflate"} {
 		t.Run(encoding, func(t *testing.T) {
-			// A 206 without a Range request still must bypass compression.
 			handler := remoteJSONCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Content-Range", "bytes 0-3/10")

@@ -9,8 +9,6 @@ import (
 
 var statusNow = time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 
-// statusRec builds a session whose agent HAS delivered a hook signal; the
-// no-signal cases below zero FirstSignalAt explicitly.
 func statusRec(activity domain.ActivityState, terminated bool) domain.SessionRecord {
 	return domain.SessionRecord{
 		Activity:      domain.Activity{State: activity, LastActivityAt: statusNow},
@@ -19,16 +17,12 @@ func statusRec(activity domain.ActivityState, terminated bool) domain.SessionRec
 	}
 }
 
-// silentRec builds a live session that has never delivered a hook signal,
-// seeded (spawned/restored) `age` before the derivation time.
 func silentRec(age time.Duration) domain.SessionRecord {
 	return domain.SessionRecord{
 		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: statusNow.Add(-age)},
 	}
 }
 
-// chatRec marks a record as a Chat-mode session, whose activity reaches AO
-// through its own controller rather than an agent hook pipeline.
 func chatRec(rec domain.SessionRecord) domain.SessionRecord {
 	rec.Mode = domain.SessionModeChat
 	return rec
@@ -38,11 +32,9 @@ func statusPR(facts domain.PRFacts) []domain.PRFacts { return []domain.PRFacts{f
 
 func TestServiceDerivesStatusFromSessionFactsAndPR(t *testing.T) {
 	tests := []struct {
-		name string
-		rec  domain.SessionRecord
-		pr   []domain.PRFacts
-		// hookless marks a harness with no activity pipeline (signalCapable
-		// false): silence is its permanent normal state, never no_signal.
+		name     string
+		rec      domain.SessionRecord
+		pr       []domain.PRFacts
 		hookless bool
 		want     domain.SessionStatus
 	}{
@@ -63,20 +55,11 @@ func TestServiceDerivesStatusFromSessionFactsAndPR(t *testing.T) {
 		{"working", statusRec(domain.ActivityActive, false), nil, false, domain.StatusWorking},
 		{"idle", statusRec(domain.ActivityIdle, false), nil, false, domain.StatusIdle},
 
-		// A live session whose hook-capable agent never signaled is no_signal
-		// once the grace passes — never a confident idle.
 		{"no-signal-after-grace", silentRec(noSignalGrace + time.Second), nil, false, domain.StatusNoSignal},
-		// A hook-less harness can never signal: its silence stays idle forever
-		// instead of degrading into a false "needs you".
 		{"hookless-silent-stays-idle", silentRec(2 * noSignalGrace), nil, true, domain.StatusIdle},
-		// A chat session's silence is not evidence of anything. AO owns the
-		// provider connection, so a lost controller arrives as exited; an idle
-		// chat session is simply waiting on the user and must not read as broken.
 		{"chat-silent-stays-idle", chatRec(silentRec(4 * noSignalGrace)), nil, false, domain.StatusIdle},
-		// Right after spawn the agent legitimately hasn't called back yet.
 		{"silent-within-grace-is-idle", silentRec(10 * time.Second), nil, false, domain.StatusIdle},
 		{"silent-at-grace-boundary-is-idle", silentRec(noSignalGrace), nil, false, domain.StatusIdle},
-		// Termination and PR facts outrank the missing-signal downgrade.
 		{
 			"no-signal-terminated-wins",
 			domain.SessionRecord{Activity: domain.Activity{State: domain.ActivityExited, LastActivityAt: statusNow.Add(-2 * noSignalGrace)}, IsTerminated: true},
@@ -157,9 +140,6 @@ func TestDeriveSCMStatusRemainsAvailableWhileAgentIsActive(t *testing.T) {
 	}
 }
 
-// A blocked stacked child cannot merge until its parent does, so its readiness
-// signals are suppressed, but its problem signals (failing CI, draft,
-// requested-changes/unresolved-comments) must still surface for the session.
 func TestAggregateStackedChildSignals(t *testing.T) {
 	parent := domain.PRFacts{URL: "parent", SourceBranch: "feat", Mergeability: domain.MergeMergeable}
 	child := func(f domain.PRFacts) domain.PRFacts {
@@ -177,12 +157,8 @@ func TestAggregateStackedChildSignals(t *testing.T) {
 		{"blocked-child-draft-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{Draft: true})}, domain.StatusDraft},
 		{"blocked-child-changes-requested-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{Review: domain.ReviewChangesRequest})}, domain.StatusChangesRequested},
 		{"blocked-child-unresolved-comments-surfaces", []domain.PRFacts{parent, child(domain.PRFacts{ReviewComments: true})}, domain.StatusCommented},
-		// A blocked child's readiness signals stay hidden: only the parent's
-		// mergeable state drives the session.
 		{"blocked-child-mergeable-suppressed", []domain.PRFacts{parent, child(domain.PRFacts{Mergeability: domain.MergeMergeable})}, domain.StatusMergeable},
 		{"blocked-child-approved-suppressed", []domain.PRFacts{parent, child(domain.PRFacts{Review: domain.ReviewApproved})}, domain.StatusMergeable},
-		// Degenerate set where every open PR is blocked and none is actionable:
-		// fall back to the raw aggregate so the session never goes dark.
 		{
 			"all-blocked-no-actionable-falls-back",
 			[]domain.PRFacts{
@@ -201,8 +177,6 @@ func TestAggregateStackedChildSignals(t *testing.T) {
 	}
 }
 
-// Without an injected capability predicate the service must never claim
-// no_signal; with one, capability follows the predicate per harness.
 func TestHarnessSignalsCapabilityGate(t *testing.T) {
 	if (&Service{}).harnessSignals(domain.HarnessCodex) {
 		t.Fatal("zero-value Service reports signal-capable; want incapable (never no_signal)")

@@ -9,8 +9,6 @@ import {
 
 const MENU_ID = "menu-content";
 
-// Stands in for what Radix renders while a dropdown is open: a trigger linked
-// to the content by `aria-controls`, and the content itself.
 function OpenMenu() {
 	const contentRef = useMenuReturnTarget<HTMLDivElement>();
 	return (
@@ -25,8 +23,6 @@ function OpenMenu() {
 	);
 }
 
-// A context menu has no `aria-controls` trigger and grabs the caret for itself
-// while it opens, which is the case the return target has to survive.
 function ContextMenuLike() {
 	const contentRef = useMenuReturnTarget<HTMLDivElement>();
 	return (
@@ -43,8 +39,6 @@ async function openContextMenu() {
 
 	const { getByRole } = render(<ContextMenuLike />);
 	const menu = getByRole("menu");
-	// Radix moves focus into the content as it opens, before any microtask the
-	// capture might have deferred to.
 	menu.focus();
 	await Promise.resolve();
 	return { menu, openedFrom };
@@ -52,7 +46,6 @@ async function openContextMenu() {
 
 async function openMenu() {
 	const { getByRole } = render(<OpenMenu />);
-	// The return target is captured a microtask after the content attaches.
 	await Promise.resolve();
 	return {
 		menu: getByRole("menu"),
@@ -61,11 +54,8 @@ async function openMenu() {
 	};
 }
 
-/** Radix dispatches its unmount handler on the content element. */
 function closeMenu(menu: HTMLElement) {
 	const event = new CustomEvent("focusScope.autoFocusOnUnmount", { cancelable: true });
-	// The full composition, the way ui/dropdown-menu.tsx wires it — the hand-off
-	// guard plus the teardown report.
 	menu.addEventListener("focusScope.autoFocusOnUnmount", composeMenuCloseAutoFocus() as EventListener, {
 		once: true,
 	});
@@ -80,7 +70,6 @@ function openDialogField() {
 	return field;
 }
 
-/** A Radix dialog closes by unmounting: focus falls through to `document.body`. */
 function closeDialogField(field: HTMLElement) {
 	field.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
 	field.remove();
@@ -125,16 +114,12 @@ describe("keepFocusOnOpenedSurface", () => {
 		const field = openDialogField();
 		closeMenu(menu);
 
-		// The dialog hands focus straight to another element instead of dropping
-		// it, so there is nothing to hand back.
 		const elsewhere = document.createElement("input");
 		document.body.append(elsewhere);
 		field.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: elsewhere }));
 		elsewhere.focus();
 		field.remove();
 
-		// Much later, an unrelated element loses focus to nowhere. The stale menu
-		// trigger must not steal the caret off the back of it.
 		const unrelated = document.createElement("button");
 		document.body.append(unrelated);
 		unrelated.focus();
@@ -150,13 +135,11 @@ describe("keepFocusOnOpenedSurface", () => {
 		const field = openDialogField();
 		closeMenu(menu);
 
-		// A blur elsewhere on the page drops focus while the dialog is still there.
 		field.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
 		(document.activeElement as HTMLElement | null)?.blur();
 		await new Promise((resolve) => setTimeout(resolve, 60));
 		expect(document.activeElement).not.toBe(trigger);
 
-		// Closing it for real still hands the caret back.
 		closeDialogField(field);
 		await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
 	});
@@ -188,9 +171,6 @@ describe("keepFocusOnOpenedSurface", () => {
 	});
 });
 
-// The teardown report is how a surface opened from a menu item (e.g. the
-// dialog) learns that the opening interaction is over: the menu
-// content is gone and the deferred focus restore has been decided.
 describe("menu teardown signal", () => {
 	it("reports the menu and its trigger once the restore has been decided", async () => {
 		const { menu, trigger } = await openMenu();
@@ -198,7 +178,7 @@ describe("menu teardown signal", () => {
 		const seen: MenuTeardownDetail[] = [];
 		const unsubscribe = onMenuTeardownComplete((detail) => seen.push(detail));
 
-		const event = closeMenu(menu); // keepFocusOnOpenedSurface preventDefaults the restore
+		const event = closeMenu(menu);
 
 		expect(event.defaultPrevented).toBe(true);
 		expect(seen).toHaveLength(1);
@@ -227,7 +207,6 @@ describe("menu teardown signal", () => {
 		const seen: MenuTeardownDetail[] = [];
 		const unsubscribe = onMenuTeardownComplete((detail) => seen.push(detail));
 
-		// Radix restores focus to the trigger itself in this case.
 		expect(closeMenu(menu).defaultPrevented).toBe(false);
 
 		expect(seen).toHaveLength(1);

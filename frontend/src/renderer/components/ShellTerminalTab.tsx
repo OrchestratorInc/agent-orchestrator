@@ -17,24 +17,11 @@ type ShellTerminalTabProps = {
 	isActive: boolean;
 	onSelect: () => void;
 	onClose: () => void;
-	/** Visually connects the active tab to a terminal pane directly below it. */
 	appearance?: "pill" | "connected";
-	/** Commit a new tab title. Omitted where rename is not wired. */
 	onRename?: (title: string) => void;
-	/** Every shell tab handle in this strip; tabs running the same agent keep their numbers. */
 	stripShellHandleIds?: readonly string[];
 };
 
-// One shell tab in the session pane's tab strip (CenterPane). Session-pane
-// tabs use a connected treatment that visually continues into xterm below.
-// The full title only becomes the hover tooltip when the strip truncates it.
-//
-// Renaming happens inline: double-click, F2, or Rename in the right-click menu.
-// Enter or blur commits, Escape cancels, and an empty or unchanged name is
-// discarded. The close control is a sibling
-// button, not nested inside the tab button - nesting interactive elements is
-// invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
-// the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
 export function ShellTerminalTab({
 	shell,
 	isActive,
@@ -50,15 +37,11 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
-	// Only the local daemon watches shells, so cloud and remote-host tabs stay plain.
 	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
 	useShellAgentStream(tracksAgent);
 	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
 	const markSeen = useShellAgentStore((state) => state.markSeen);
-	// A default-named tab ("Terminal 3") reads as its agent ("Claude Code"),
-	// keeping the number when another tab runs the same agent. Display only:
-	// rename edits the stored title, which returns when the agent exits.
 	const defaultNumber = /^Terminal (\d+)$/.exec(shell.title)?.[1];
 	const sharesAgent = useShellAgentStore((state) =>
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
@@ -66,7 +49,6 @@ export function ShellTerminalTab({
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
 	const terminalTitle = shell.terminalTitle;
 	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
-	// An agent's name is display only, so renaming starts from the real title.
 	const renameBase = terminalTitle ?? shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
@@ -85,15 +67,8 @@ export function ShellTerminalTab({
 		setIsEditing(true);
 	};
 
-	// Detect a double-click ourselves from two quick clicks rather than relying on
-	// the native dblclick event: some trackpad configurations deliver two taps as
-	// two separate clicks that never synthesize a dblclick, so onDoubleClick would
-	// never fire. Two clicks within 500ms anywhere on the tab start the rename.
 	const handleClick = (event: MouseEvent) => {
 		onSelect();
-		// Roving tab navigation activates the focused tab with HTMLElement.click(),
-		// whose detail is 0. It should select, but must not participate in the
-		// pointer-only double-click rename gesture.
 		if (event.detail === 0) return;
 		const now = Date.now();
 		const isDoubleClick = now - lastClickAtRef.current < 500;
@@ -101,8 +76,6 @@ export function ShellTerminalTab({
 		if (isDoubleClick) beginEdit();
 	};
 
-	// The selection button owns the whole visible tab surface; the
-	// click-timing detector above catches the double-click rename.
 	const tabRenameHandlers = isEditing ? {} : { onClick: handleClick, onDoubleClick: beginEdit };
 
 	const renameKeyProps = canEdit
@@ -120,7 +93,6 @@ export function ShellTerminalTab({
 		if (!isEditing) return;
 		setIsEditing(false);
 		const next = draft.trim();
-		// Confirming unchanged must not pin a program's title as the tab's name.
 		if (next && next !== renameBase) onRename?.(next);
 	};
 
@@ -263,9 +235,6 @@ export function ShellTerminalTab({
 	);
 }
 
-// The agent's state as a dot on its logo, the sidebar's vocabulary: pulsing
-// while it works, red while it waits on the user, muted for a finished turn
-// not yet seen. It sits on the icon, so it never moves the title.
 const AGENT_BADGE = {
 	working: { label: "terminal.agentWorking", className: "bg-foreground animate-pulse motion-reduce:animate-none" },
 	waiting: { label: "terminal.agentWaiting", className: "bg-destructive" },
@@ -276,13 +245,11 @@ function shellAgentBadgeState(agent: ShellAgent, done: boolean) {
 	return agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
 }
 
-/** The agent's state in words, for an accessible name that would hide the badge's own text. */
 export function shellAgentStateLabel(t: TFunction, agent: ShellAgent, done: boolean): string | undefined {
 	const state = shellAgentBadgeState(agent, done);
 	return state ? t(AGENT_BADGE[state].label, { agent: agentLabel(agent.harness) }) : undefined;
 }
 
-/** A shell's agent logo, with its state as a badge on the logo's corner. */
 export function ShellAgentIcon({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
 	const state = shellAgentBadgeState(agent, done);

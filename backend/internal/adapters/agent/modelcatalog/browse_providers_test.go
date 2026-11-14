@@ -23,7 +23,6 @@ func TestMarkConfiguredProvidersMarksCredentialedProviders(t *testing.T) {
 		t.Fatalf("configured providers = %v, want %v", catalog.ConfiguredProviders, want)
 	}
 
-	// A harness without a registered check is left exactly as discovered.
 	untouched := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "glm", Provider: "zai"}}}
 	markConfiguredProviders(context.Background(), &untouched, ports.AgentModelDiscoveryRequest{AgentID: "unregistered"})
 	if untouched.ConfiguredProviders != nil {

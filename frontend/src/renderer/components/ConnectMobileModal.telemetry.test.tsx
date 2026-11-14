@@ -4,8 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
 
-// vi.mock is hoisted above module-level consts, so the shared doubles have to
-// be created inside vi.hoisted to exist by the time the factories run.
 const { captureRendererEvent, mobileStatus, post } = vi.hoisted(() => ({
 	captureRendererEvent: vi.fn(),
 	mobileStatus: {
@@ -19,8 +17,6 @@ const { captureRendererEvent, mobileStatus, post } = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent }));
-// An app with no AO sign-in pairs signed out; signing in to pair is covered in
-// settings/ConnectMobileContent.signin.test.tsx.
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ session: null, status: "unauthenticated", configured: false, signIn: () => undefined }),
 }));
@@ -74,10 +70,6 @@ describe("Connect Mobile telemetry", () => {
 	});
 
 	test("does not re-report the open when the bridge is toggled on", async () => {
-		// The status query is invalidated by every enable/disable/regenerate, so
-		// bridge_enabled changes while the Mobile page stays open. Without the once-per-open
-		// guard the effect re-fires on that change and a single visit reports an open
-		// for each toggle, inflating the top of the funnel it is supposed to measure.
 		renderMobileSettings();
 		await waitFor(() => expect(openEvents()).toHaveLength(1));
 		expect(openEvents()[0][1]).toEqual({ bridge_enabled: false });
@@ -94,8 +86,6 @@ describe("Connect Mobile telemetry", () => {
 
 	test("reports nothing while closed", async () => {
 		renderMobileSettings(false);
-		// The status query is disabled while closed, so there is no state to report
-		// and nothing should be emitted.
 		await new Promise((r) => setTimeout(r, 20));
 		expect(captureRendererEvent).not.toHaveBeenCalled();
 	});
@@ -109,8 +99,6 @@ describe("Connect Mobile telemetry", () => {
 		await waitFor(() => expect(toggleEvents()).toHaveLength(1));
 		expect(toggleEvents()[0][1]).toEqual({ enabled: true, outcome: "succeeded" });
 
-		// The host, port, and connection password are on screen and in the QR, so
-		// assert directly that no reported property ever carries them.
 		const reported = JSON.stringify(captureRendererEvent.mock.calls);
 		expect(reported).not.toContain("hunter2secret");
 		expect(reported).not.toContain("192.168.1.20");

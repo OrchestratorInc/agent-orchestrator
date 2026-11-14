@@ -198,12 +198,10 @@ describe("useCloudNotifications clearing", () => {
 		await act(() => result.current.clearAll());
 		expect(result.current.items).toHaveLength(0);
 
-		// Re-raised in place: back to unread with a newer updatedAt.
 		items = [cloudRow({ status: "unread", updatedAt: "2026-07-21T12:00:00Z" })];
 		await act(() => result.current.refetch());
 		await waitFor(() => expect(result.current.items).toHaveLength(1));
 
-		// Opening the panel marks it read, which must not hide it again.
 		items = [cloudRow({ status: "read", updatedAt: "2026-07-21T12:05:00Z" })];
 		await act(() => result.current.refetch());
 		await waitFor(() => expect(result.current.items[0]?.status).toBe("read"));

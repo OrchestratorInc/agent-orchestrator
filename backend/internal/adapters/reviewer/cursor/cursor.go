@@ -1,4 +1,3 @@
-// Package cursor adapts the Cursor CLI worker agent for code-review sessions.
 package cursor
 
 import (
@@ -12,12 +11,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Reviewer is the Cursor code-review adapter.
 type Reviewer struct {
 	agent agent
 }
 
-// New builds the Cursor reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{agent: workeragent.New()}
 }
@@ -27,13 +24,10 @@ type agent interface {
 	InstallWorkspaceTrust(context.Context, ports.WorkspaceHookConfig) error
 }
 
-// Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCursor
 }
 
-// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
-// the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
 	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
 		invalidator.InvalidateBinaryResolution()
@@ -43,15 +37,10 @@ func (r *Reviewer) InvalidateBinaryResolution() {
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
-// PreLaunch installs the reviewer-only Cursor permissions and MCP policy into
-// its isolated AO-owned data directory without touching the checkout or user
-// configuration.
 func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) error {
 	if err := installReviewerConfig(ctx, inv); err != nil {
 		return err
 	}
-	// Disable every MCP server the review checkout or host config declares so
-	// the unattended pane cannot stall on Cursor's MCP approval screen.
 	if err := applyReviewerMCPDisable(ctx, inv); err != nil {
 		return err
 	}
@@ -63,9 +52,6 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 	})
 }
 
-// ReviewCommand launches Cursor's normal persistent interactive TUI. Cursor
-// has no system-prompt flag, so the short initial prompt points it at the
-// AO-owned system file and then carries the already-short task-file reference.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	prompt := cursorPrompt(inv)
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
@@ -88,8 +74,6 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Cursor reviewer pane by relaunching
-// with the AO-owned profile and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
@@ -106,13 +90,10 @@ func cursorPrompt(inv ports.ReviewInvocation) string {
 	return strings.TrimSpace(inv.Prompt)
 }
 
-// ReviewMessage returns the centrally-authored task for the persistent pane.
 func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel stops the active Cursor reviewer turn while preserving the
-// terminal pane for inspection.
 func (r *Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInterrupt, Interrupts: 2}, nil
 }

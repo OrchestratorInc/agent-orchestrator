@@ -11,12 +11,10 @@ import {
 	resolveDaemonFromRunFile,
 } from "./daemon-attach";
 
-// A run-file the daemon would write: pid+port+timestamp, as JSON.
 function runFile(pid: number, port: number): string {
 	return JSON.stringify({ pid, port, startedAt: "2026-06-10T16:15:04Z" });
 }
 
-// A probe map keyed by `${port}:${endpoint}` → fake an HTTP probe deterministically.
 function fakeProbe(responses: Record<string, DaemonProbe | null>): DaemonProber {
 	return (port, endpoint) => Promise.resolve(responses[`${port}:${endpoint}`] ?? null);
 }
@@ -133,7 +131,7 @@ describe("resolveDaemonFromRunFile", () => {
 			identityError: NO_IDENTITY_ERROR,
 		});
 		expect(result).toBeNull();
-		expect(probe).not.toHaveBeenCalled(); // never probes without a parseable run-file
+		expect(probe).not.toHaveBeenCalled();
 	});
 
 	it("returns null for an unparseable run-file", async () => {
@@ -289,7 +287,6 @@ describe("resolveDaemonFromPort", () => {
 			identityError: NO_IDENTITY_ERROR,
 		});
 		expect(await ready(true)).toEqual({ state: "ready", port: 3001, pid: 777, ipv6Loopback: true });
-		// Down, or an older daemon that does not say: 127.0.0.1 only.
 		expect(await ready(false)).toEqual({ state: "ready", port: 3001, pid: 777 });
 		expect(await ready(undefined)).toEqual({ state: "ready", port: 3001, pid: 777 });
 		expect(await ready("true")).toEqual({ state: "ready", port: 3001, pid: 777 });
@@ -342,9 +339,6 @@ describe("resolveDaemonFromPort", () => {
 	});
 });
 
-// End-to-end against a REAL loopback HTTP server, exercising the actual network
-// probe (Node's global fetch, mirroring main.ts's readDaemonProbe) and the real
-// startup decision order: run-file first, then the #367 port-probe backstop.
 describe("end-to-end against a real daemon server", () => {
 	const servers: Server[] = [];
 
@@ -352,8 +346,6 @@ describe("end-to-end against a real daemon server", () => {
 		await Promise.all(servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
 	});
 
-	// Stand up a server on an ephemeral port. `service` lets us simulate a foreign
-	// (non-AO) server squatting on the port.
 	function startServer(opts: {
 		pid: number;
 		service?: string;
@@ -391,8 +383,6 @@ describe("end-to-end against a real daemon server", () => {
 		});
 	}
 
-	// Faithful copy of main.ts's readDaemonProbe, but with global fetch in place of
-	// electron's net.fetch — so this test exercises the real HTTP round-trip + parse.
 	const realProbe: DaemonProber = async (port, endpoint) => {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), 2_000);
@@ -407,8 +397,6 @@ describe("end-to-end against a real daemon server", () => {
 		}
 	};
 
-	// The real startup decision: attach via run-file if possible, else fall back to
-	// the direct port probe (the #367 fix), else null → caller spawns.
 	async function startupDecision(opts: {
 		runFileContents: string | null;
 		isProcessAlive: (pid: number) => boolean;
@@ -444,7 +432,6 @@ describe("end-to-end against a real daemon server", () => {
 
 	it("returns null when the port is closed (caller spawns)", async () => {
 		const port = await startServer({ pid: 1 });
-		// Close the only server so the port is now refused.
 		await Promise.all(servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
 		const result = await resolveDaemonFromPort({
 			expectedPort: port,
@@ -464,13 +451,10 @@ describe("end-to-end against a real daemon server", () => {
 		expect(result).toBeNull();
 	});
 
-	// A foreign AO daemon (correct service, wrong binary) serving the port. The
-	// identity check must surface an error rather than silently attach — the same
-	// guard the run-file path enforces, now enforced on the port-probe path too.
 	it("surfaces an identity error for a foreign AO binary serving the port (does not silently attach)", async () => {
 		const port = await startServer({ pid: 909, executablePath: "/old/build/ao", workingDirectory: "/old/build" });
 		const result = await startupDecision({
-			runFileContents: null, // run-file diverged, so we reach the port probe
+			runFileContents: null,
 			isProcessAlive: ALIVE,
 			expectedPort: port,
 			identityError: (probe) =>
@@ -486,28 +470,22 @@ describe("end-to-end against a real daemon server", () => {
 		});
 	});
 
-	// THE #367 SCENARIO: a standalone `ao daemon` is serving the port, but the
-	// run-file diverges — here it names a DEAD pid (e.g. a stale handshake from a
-	// crashed launch). Pre-fix this fell through to spawn() and the Go child
-	// refused with exit 1. Post-fix the port probe attaches instead.
 	it("attaches when a daemon serves the port but the run-file names a dead pid", async () => {
 		const port = await startServer({ pid: 6060, executablePath: "/bin/ao" });
 		const result = await startupDecision({
-			runFileContents: runFile(4242, port), // stale pid 4242 ...
-			isProcessAlive: DEAD, // ... which is no longer alive
+			runFileContents: runFile(4242, port),
+			isProcessAlive: DEAD,
 			expectedPort: port,
 		});
 		expect(result).toEqual({
 			state: "ready",
 			port,
-			pid: 6060, // attached to the daemon actually serving the port
+			pid: 6060,
 			executablePath: "/bin/ao",
 			workingDirectory: undefined,
 		});
 	});
 
-	// #367 VARIANT: run-file pid is alive, but /healthz reports a different pid
-	// (run-file points at the wrong process). Old code returned null → spawn.
 	it("attaches when the run-file pid disagrees with the daemon's reported pid", async () => {
 		const port = await startServer({ pid: 8080 });
 		const result = await startupDecision({

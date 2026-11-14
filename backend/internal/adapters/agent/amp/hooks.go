@@ -19,10 +19,6 @@ const (
 	ampPluginSentinel = "agent-orchestrator: managed amp system prompt plugin"
 )
 
-// GetAgentHooks installs AO's Amp integration plugin into the worktree-local
-// .amp/plugins directory. It injects hidden standing instructions at turn start
-// and forwards Amp's thread lifecycle to AO. AO owns only ao-system-prompt.ts;
-// other user plugin files are preserved.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

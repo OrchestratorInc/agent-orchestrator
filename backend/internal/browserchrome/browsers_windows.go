@@ -8,8 +8,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// Windows Chrome reads native hosts from the registry, so the manifest stays
-// under ~/.ao and only a registry value points at it.
 func defaultBrowsers(string) []Browser { return []Browser{} }
 
 const hostKeyPrefix = `Software\Google\Chrome\NativeMessagingHosts\`

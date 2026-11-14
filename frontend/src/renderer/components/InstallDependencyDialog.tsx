@@ -23,16 +23,10 @@ import {
 } from "./ui/dialog";
 
 type InstallJob = components["schemas"]["InstallJob"];
-// `notice` is emitted by the daemon's OpenCode 2 install plan. Keep this
-// narrow compatibility extension while older generated clients are in use;
-// it becomes part of InstallJob when the accompanying API schema regenerates.
 type InstallJobWithNotice = InstallJob & { notice?: string };
 type InstallTarget = "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot";
 type AgentInstallTarget = Exclude<InstallTarget, "tmux" | "gh">;
 
-// Labels are the CLIs' own product names — not translated, same treatment as
-// "Agent Orchestrator" itself. Descriptions are ordinary UI copy and go
-// through t() at render time (see AGENT_INSTALL_DESCRIPTION_KEYS below).
 const AGENT_INSTALL_OPTIONS: Array<{ target: AgentInstallTarget; label: string }> = [
 	{ target: "claude", label: "Claude Code" },
 	{ target: "codex", label: "Codex" },
@@ -55,19 +49,12 @@ export function isActiveInstallJob(job: InstallJob | undefined): boolean {
 	return job?.status === "running" || job?.status === "installing" || job?.status === "verifying";
 }
 
-// Startup requirements are read through a process-free GET. An explicit user
-// request to check again first forces the daemon's normal agent refresh so
-// identity-sensitive adapters can perform their bounded validation probe.
 export async function checkRequirementsAgain(onRefetchRequirements: () => Promise<unknown> | void): Promise<void> {
 	const { error } = await apiClient.POST("/api/v1/agents/refresh");
 	if (error) throw apiErrorException(error, "Could not refresh agent inventory.");
 	await onRefetchRequirements();
 }
 
-/** Sequential single-target install job runner: POST to start, GET on an
- *  interval while running. One target is ever in flight at a time — this
- *  gate only ever needs one, and serializing keeps the UI unambiguous about
- *  which command is running. */
 export function useInstallRunner(onSucceeded: () => void) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
@@ -95,7 +82,7 @@ export function useInstallRunner(onSucceeded: () => void) {
 				const { data, error } = await apiClient.GET("/api/v1/system/install/{target}", {
 					params: { path: { target: polledTarget } },
 				});
-				if (error || !data) return; // transient — try again next tick
+				if (error || !data) return;
 				setJob(data as InstallJobWithNotice);
 				if (isActiveInstallJob(data)) return;
 				stopPolling();
@@ -104,9 +91,6 @@ export function useInstallRunner(onSucceeded: () => void) {
 		}, POLL_INTERVAL_MS);
 	};
 
-	// GET doubles as a safe install-plan preview. In particular, Linux returns
-	// Unsupported plus the exact sudo command, so the renderer can show manual
-	// instructions without first POSTing a job that is guaranteed to fail.
 	const inspect = useCallback(async (nextTarget: InstallTarget) => {
 		if (inspectedRef.current.has(nextTarget)) return;
 		inspectedRef.current.add(nextTarget);
@@ -117,8 +101,6 @@ export function useInstallRunner(onSucceeded: () => void) {
 			if (error || !data) return;
 			setPreviews((current) => ({ ...current, [nextTarget]: data as InstallJobWithNotice }));
 		} catch {
-			// The requirements gate remains usable if plan inspection fails. The
-			// POST action will still surface its own concrete error when selected.
 		} finally {
 			setInspectedTargets((current) => ({ ...current, [nextTarget]: true }));
 		}

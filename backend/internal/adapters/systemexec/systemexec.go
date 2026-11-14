@@ -1,5 +1,3 @@
-// Package systemexec adapts host PATH lookup and child-process execution to
-// the narrow ports consumed by the system requirement/install services.
 package systemexec
 
 import (
@@ -18,14 +16,10 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Adapter implements the host executable and command-runner ports.
 type Adapter struct {
 	installerRoot string
-	// binDir holds release binaries AO downloads itself (<data dir>/bin).
-	binDir     string
-	httpClient *http.Client
-	// downloadStall overrides how long a managed binary download may go
-	// without a byte. Zero uses managedBinaryStallTimeout.
+	binDir        string
+	httpClient    *http.Client
 	downloadStall time.Duration
 }
 
@@ -39,14 +33,10 @@ var (
 	_ ports.ManagedBinaryInstaller = Adapter{}
 )
 
-// New creates a host adapter whose installer scratch space stays inside AO's
-// configured data directory.
 func New(dataDir string) Adapter {
 	return newAdapter(dataDir, http.DefaultClient)
 }
 
-// PathWritable reports whether path can be created or written by the current
-// daemon user without changing the filesystem when the probe completes.
 func (Adapter) PathWritable(ctx context.Context, path string) (bool, error) {
 	return pathWritable(ctx, path)
 }
@@ -59,14 +49,10 @@ func newAdapter(dataDir string, client *http.Client) Adapter {
 	}
 }
 
-// LookPath resolves file against the daemon process PATH.
 func (Adapter) LookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
-// RunInstall executes a server-owned installer command without interactive
-// stdin. The small Env list augments the daemon environment rather than
-// replacing PATH and the user's package-manager configuration.
 func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, stdout, stderr io.Writer) error {
 	cmd, err := commandContext(ctx, command.Argv[0], command.Argv[1:]...)
 	if err != nil {
@@ -87,16 +73,10 @@ func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, std
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	// Windows installers persist PATH changes outside the already-running
-	// daemon's process environment. Refresh it before adapter-backed
-	// verification tries to resolve the newly installed executable.
 	refreshExecutablePath()
 	return nil
 }
 
-// installerSafeEnv keeps the inherited variables an isolated installer still
-// needs to reach the network and write temp files: locale, temp, proxy and
-// TLS trust settings.
 func installerSafeEnv(environ []string) []string {
 	kept := make([]string, 0, len(environ))
 	for _, entry := range environ {
@@ -115,8 +95,6 @@ var installerSafeVars = map[string]bool{
 	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "CURL_CA_BUNDLE": true, "REQUESTS_CA_BUNDLE": true, "NODE_EXTRA_CA_CERTS": true,
 }
 
-// Probe takes one cancellation-aware snapshot of the package-manager facts
-// needed by every fixed recipe in a Settings response.
 func (Adapter) Probe(ctx context.Context) (ports.InstallCapabilities, error) {
 	var snapshot ports.InstallCapabilities
 
@@ -189,9 +167,6 @@ func capabilityLines(ctx context.Context, name string, args ...string) (map[stri
 	return items, nil
 }
 
-// pathWritable checks the nearest existing ancestor by creating and removing
-// a private temporary file. This honors ACLs and ownership more accurately
-// than permission-bit inspection and aborts promptly with its request.
 func pathWritable(ctx context.Context, path string) (bool, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -217,7 +192,6 @@ func pathWritable(ctx context.Context, path string) (bool, error) {
 	}
 }
 
-// Run executes argv with ctx and connects its output to the supplied writers.
 func (Adapter) Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
 	cmd, err := commandContext(ctx, argv[0], argv[1:]...)
 	if err != nil {

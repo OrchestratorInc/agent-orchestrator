@@ -62,11 +62,9 @@ export class BrowserScreencast {
 		try {
 			await this.debug.sendCommand("Page.stopScreencast");
 		} catch {
-			// The tab/debugger may already be gone; local teardown still wins.
 		}
 	}
 
-	// Input wakes a backed-off hidden page on the next capture tick.
 	requestFrame(): void {
 		this.inputGeneration += 1;
 		this.fallbackDelay = 500;
@@ -78,12 +76,7 @@ export class BrowserScreencast {
 		else this.debug.removeListener?.("message", this.listener);
 	}
 
-	// Chromium stops screencast events when a native surface is hidden or its
-	// window is minimized. Request a clipped paint without unhiding the view,
-	// with at most one screenshot in flight.
 	private async captureHiddenFrame(): Promise<void> {
-		// Visible surfaces already publish on repaint. Capturing a scaled clip
-		// there can disturb Chromium's on-screen compositor after idle periods.
 		if (this.stopped || !this.needsHiddenPaint() || this.fallbackPending || Date.now() - this.lastFrameAt < this.fallbackDelay) return;
 		this.fallbackPending = true;
 		const inputGeneration = this.inputGeneration;
@@ -109,8 +102,6 @@ export class BrowserScreencast {
 				}
 			}
 		} catch {
-			// Navigation or teardown can temporarily remove the capture target.
-			// Retry on the next tick; the stream owner reports target closure.
 		} finally {
 			this.fallbackPending = false;
 		}
@@ -140,8 +131,6 @@ export class BrowserScreencast {
 		const sessionId = typeof params.sessionId === "number" ? params.sessionId : undefined;
 		if (sessionId === undefined) return;
 		try {
-			// Only a changed frame resets backoff. Screenshot-triggered repaints
-			// can arrive after the screenshot promise settles with identical data.
 			this.emitJPEG(typeof params.data === "string" ? params.data : "");
 		} catch (error) {
 			this.fail("BROWSER_CAPTURE_INVALID_FRAME", error instanceof Error ? error.message : "Browser frame was invalid");
@@ -149,7 +138,6 @@ export class BrowserScreencast {
 			try {
 				await this.debug.sendCommand("Page.screencastFrameAck", { sessionId });
 			} catch {
-				// A detached target will be handled by the owning browser lifecycle.
 			}
 		}
 	}

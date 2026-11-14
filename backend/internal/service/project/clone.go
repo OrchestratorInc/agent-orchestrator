@@ -33,8 +33,6 @@ var allowedCloneSchemes = map[string]struct{}{
 
 const clonePreparationMarker = ".ao-clone-prepared"
 
-// normalizeCloneURL only rewrites public GitHub repository roots. Other Git
-// transports and self-hosted URL shapes retain their original meaning.
 func normalizeCloneURL(raw string) string {
 	value := strings.TrimSpace(raw)
 	u, err := url.Parse(value)
@@ -51,7 +49,6 @@ func normalizeCloneURL(raw string) string {
 	return u.String()
 }
 
-// CheckCloneDestination inspects local clone readiness without contacting the remote.
 func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error) {
 	remoteURL := normalizeCloneURL(in.RemoteURL)
 	name, err := cloneRepositoryName(remoteURL)
@@ -78,8 +75,6 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return result, nil
 	}
-	// Only offer reuse for a repository root with the requested origin. This
-	// does not change branches, fetch, reset, or remove any local files.
 	if _, err := os.Stat(filepath.Join(target, ".git")); err != nil {
 		return result, nil //nolint:nilerr // Unusable Git metadata leaves a normal destination conflict.
 	}
@@ -91,10 +86,6 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 	return result, nil
 }
 
-// Clone checks out one remote repository into a user-selected parent folder,
-// then registers it through the same Add boundary as an existing local repo.
-// The checkout is staged in a unique sibling directory so a failed or cancelled
-// clone can never leave a half-populated destination behind.
 func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 	prepared, err := m.prepareClone(ctx, in, nil)
 	if err != nil {
@@ -119,19 +110,14 @@ func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 	return project, nil
 }
 
-// PrepareClone checks out a repository without registering it as a project.
 func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
 	return m.prepareClone(ctx, in, nil)
 }
 
-// PrepareCloneWithProgress is PrepareClone that reports each git step through
-// onProgress as the clone reaches it.
 func (m *Service) PrepareCloneWithProgress(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error) {
 	return m.prepareClone(ctx, in, onProgress)
 }
 
-// CleanupPreparedClone removes an unregistered checkout created by PrepareClone,
-// or releases AO's cleanup ownership when the user chooses to keep it.
 func (m *Service) CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error {
 	path, err := normalizePath(in.Path)
 	if err != nil {
@@ -204,8 +190,6 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 		return ClonePreparationResult{}, err
 	}
 	if _, err := os.Lstat(target); err == nil {
-		// A stale marker cannot grant a new request cleanup ownership. The
-		// original caller keeps its token; later flows must explicitly reuse.
 		return ClonePreparationResult{}, apierr.Conflict("CLONE_DESTINATION_EXISTS", "A folder with this repository name already exists in the selected destination.", map[string]any{"path": target})
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "The clone destination could not be inspected.", map[string]any{"path": target})
@@ -229,7 +213,6 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 		args := []string{"clone", "--origin", "origin"}
 		stderr := cloneStderr{}
 		if onProgress != nil {
-			// Git only prints progress to a terminal unless asked.
 			args = append(args, "--progress")
 			stderr.report = func(phase CloneProgressPhase, percent *int) {
 				onProgress(CloneProgress{Phase: phase, Attempt: attempt + 1, Percent: percent})
@@ -257,7 +240,6 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 			if attempt == 2 {
 				return ClonePreparationResult{}, apierr.Unavailable("GIT_CLONE_NETWORK_FAILED", "The connection failed after three attempts. Check your connection, then retry. Your URL and destination have been kept.")
 			}
-			// Only discard this attempt's private staging folder, never target.
 			if err := os.RemoveAll(temporaryPath); err != nil {
 				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not reset the temporary clone. Choose another destination.", nil)
 			}
@@ -293,8 +275,6 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 	return ClonePreparationResult{Path: target, RemoteURL: remoteURL, PreparationID: preparationID}, nil
 }
 
-// Git may print a URL containing secrets. Inspect bounded output for retry
-// classification only; never return or log it.
 type limitedCloneOutput struct{ data []byte }
 
 func (b *limitedCloneOutput) Write(p []byte) (int, error) {
@@ -307,7 +287,6 @@ func (b *limitedCloneOutput) Write(p []byte) (int, error) {
 
 func (b *limitedCloneOutput) String() string { return string(b.data) }
 
-// cloneProgressPhases maps git's progress titles (LC_ALL=C) to their phases.
 var cloneProgressPhases = map[string]CloneProgressPhase{
 	"Enumerating objects": ClonePhaseEnumeratingObjects,
 	"Counting objects":    ClonePhaseCountingObjects,
@@ -321,10 +300,6 @@ var cloneProgressPhases = map[string]CloneProgressPhase{
 
 const maxCloneStderrLine = 4 * 1024
 
-// cloneStderr splits git's stderr into lines; progress redraws end in \r. A
-// progress line only moves the reported phase and percent. Every other line is kept,
-// bounded, for retry classification, so a long progress run cannot push the
-// final error out of the buffer.
 type cloneStderr struct {
 	output  limitedCloneOutput
 	pending []byte
@@ -374,8 +349,6 @@ func (s *cloneStderr) line(line []byte) {
 
 func (s *cloneStderr) String() string { return s.output.String() + string(s.pending) }
 
-// cloneProgressLine reads a progress line's phase and, when git prints one,
-// its percent, as in "Receiving objects:  45% (1234/2700), 12.30 MiB | …".
 func cloneProgressLine(line []byte) (CloneProgressPhase, *int, bool) {
 	title, rest, found := strings.Cut(strings.TrimPrefix(string(line), "remote: "), ":")
 	if !found {

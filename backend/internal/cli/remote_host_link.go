@@ -18,17 +18,10 @@ import (
 	"rsc.io/qr"
 )
 
-// The AuthKit client the desktop signs in with. It is public configuration.
-// Release builds stamp the desktop's VITE_WORKOS_CLIENT_ID here (see
-// frontend/scripts/build-daemon.mjs) so the CLI signs in to the same WorkOS
-// environment, and so the same AO account, as the desktop it ships with.
-// AO_WORKOS_CLIENT_ID overrides it at run time.
 var defaultWorkOSClientID = "client_01KZ3VRKC374HS91XGRDPT3671"
 
-// workOSAPIBase is a variable so tests can point it at a fake.
 var workOSAPIBase = "https://api.workos.com"
 
-// remoteHostLinkLabelMaxBytes matches AO Cloud's limit on host labels.
 const remoteHostLinkLabelMaxBytes = 64
 
 type remoteHostAccountToken struct {
@@ -47,8 +40,6 @@ type accountHostDirectory struct {
 	HostKeys       bool `json:"hostKeys"`
 }
 
-// errTunnelNotReady means the wait ran out before the daemon reported an
-// address; the tunnel may still come up.
 var errTunnelNotReady = errors.New("the tunnel address is not ready; run `ao remote-host status`")
 
 type workOSDeviceAuthorization struct {
@@ -69,12 +60,6 @@ type workOSDeviceSession struct {
 	Error string `json:"error"`
 }
 
-// newRemoteHostLinkCommand links a machine with no desktop app, such as a VM,
-// to an AO account the way a signed-in desktop links itself: the user approves
-// a sign-in code on any device, and the machine then appears on all of the
-// account's desktops and phones. The account session is used for this one
-// registration and never stored; from then on the machine speaks to AO Cloud
-// with its own credential.
 func newRemoteHostLinkCommand(ctx *commandContext) *cobra.Command {
 	var label string
 	var noQR bool
@@ -96,8 +81,6 @@ func newRemoteHostLinkCommand(ctx *commandContext) *cobra.Command {
 }
 
 func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, label string, showQR bool) error {
-	// The daemon's AO Cloud, not this shell's: its connector asks that one for
-	// the machine's address.
 	var settings struct {
 		CloudControlPlaneURL string `json:"cloudControlPlaneUrl"`
 	}
@@ -109,8 +92,6 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		return errors.New("no Orchestrator Cloud connection is configured on this machine")
 	}
 
-	// Nothing on this machine changes until the sign-in succeeds, so a
-	// declined or abandoned sign-in leaves remote access as it was.
 	session, err := c.signInWithDeviceCode(ctx, out, showQR)
 	if err != nil {
 		return err
@@ -120,8 +101,6 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		return remoteHostDaemonError(err)
 	}
 	if !status.Enabled {
-		// A machine with no screen is reached only through the tunnel, so its
-		// listener stays on loopback.
 		if err := c.doJSON(ctx, http.MethodPost, "mobile/enable-tunnel-only", nil, &status); err != nil {
 			return remoteHostDaemonError(err)
 		}
@@ -129,8 +108,6 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	if status.Password == "" || status.HostID == "" {
 		return errors.New("remote access did not start; run `ao remote-host status`")
 	}
-	// The account's devices reach the machine through its tunnel; this starts
-	// one on a listener that was LAN-only, as `enable --tunnel` does.
 	if err := c.doJSON(ctx, http.MethodPost, "mobile/remote-access", nil, &status); err != nil {
 		return remoteHostDaemonError(err)
 	}
@@ -145,14 +122,11 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 			listedLabel, listedToken = host.Label, host.Token
 		}
 	}
-	// The same account gets the token it already holds, so linking again is
-	// safe; another account rotates it, taking the machine from the old one.
 	var issued remoteHostAccountToken
 	headers := map[string]string{"Authorization": "Bearer " + status.Password, "X-AO-Account-ID": session.User.ID}
 	if err := c.doJSONPathWithHeaders(ctx, http.MethodPost, "/api/v1/remote-host/account-token", nil, &issued, headers); err != nil {
 		return remoteHostDaemonError(err)
 	}
-	// Keep a name set on another device unless --label replaces it.
 	if label = fitHostLabel(label); label == "" {
 		label = listedLabel
 	}
@@ -175,15 +149,10 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		registration["url"] = address
 	}
 	put := cloudBase + "/api/cloud/v1/me/hosts/" + url.PathEscape(issued.HostID)
-	// No time limit: AO Cloud may first make or retire the machine's tunnel,
-	// which can take more than a minute, and finishes either way.
 	putClient := &http.Client{}
 	err = cloudJSON(ctx, putClient, http.MethodPut, put, session.AccessToken, registration, nil)
 	var refused *cloudError
 	if errors.As(err, &refused) && noFixedAddressNow(refused.status) && registration["url"] == "" {
-		// AO Cloud could not make the fixed address: list the machine at its
-		// quick tunnel instead, which AO Cloud follows when the address
-		// changes. The machine keeps asking for the fixed address.
 		address, waitErr := c.waitForTunnelAddress(ctx, false)
 		if waitErr != nil {
 			return waitErr
@@ -202,8 +171,6 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		return err
 	}
 
-	// The connector asks AO Cloud for this machine's address now that an
-	// account holds it.
 	if err := c.doJSON(ctx, http.MethodPost, "mobile/remote-access", nil, &status); err != nil {
 		return remoteHostDaemonError(err)
 	}
@@ -220,16 +187,10 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	return err
 }
 
-// noFixedAddressNow reports AO Cloud's answers to a registration without
-// `url` that mean it could not make the fixed address: out of fixed
-// addresses (409), too many fixed-address writes (429), or Cloudflare failed
-// (502). A registration with `url` still lists the machine.
 func noFixedAddressNow(status int) bool {
 	return status == http.StatusConflict || status == http.StatusTooManyRequests || status == http.StatusBadGateway
 }
 
-// waitForTunnelAddress returns the tunnel's https origin once the daemon
-// reports one; with fixed, only once it is the fixed address.
 func (c *commandContext) waitForTunnelAddress(ctx context.Context, fixed bool) (string, error) {
 	deadline := c.deps.Now().Add(90 * time.Second)
 	for {
@@ -261,8 +222,6 @@ func (c *commandContext) waitForTunnelAddress(ctx context.Context, fixed bool) (
 	}
 }
 
-// signInWithDeviceCode runs WorkOS's device authorization flow: the user
-// approves the printed code on any signed-in browser or phone.
 func (c *commandContext) signInWithDeviceCode(ctx context.Context, out io.Writer, showQR bool) (workOSDeviceSession, error) {
 	clientID := strings.TrimSpace(os.Getenv("AO_WORKOS_CLIENT_ID"))
 	if clientID == "" {
@@ -324,7 +283,6 @@ func (c *commandContext) signInWithDeviceCode(ctx context.Context, out io.Writer
 		case session.Error == "expired_token":
 			return workOSDeviceSession{}, errors.New("the sign-in link expired; run `ao remote-host link` again")
 		case err != nil && session.Error == "":
-			// A dropped connection is retried until the code expires.
 		default:
 			return workOSDeviceSession{}, fmt.Errorf("sign-in failed: %s", session.Error)
 		}
@@ -334,8 +292,6 @@ func (c *commandContext) signInWithDeviceCode(ctx context.Context, out io.Writer
 	}
 }
 
-// workOSPost decodes the body into out for any status, so a 400 still yields
-// its OAuth error field.
 func workOSPost(ctx context.Context, client *http.Client, path, contentType string, body io.Reader, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, workOSAPIBase+path, body)
 	if err != nil {
@@ -421,15 +377,12 @@ func fitHostLabel(name string) string {
 	return strings.TrimSpace(string(runes))
 }
 
-// writeQR prints text as a QR code in black on white with half-block
-// characters, two modules per character row, so it scans on dark and light
-// terminals alike.
 func writeQR(out io.Writer, text string) error {
 	code, err := qr.Encode(text, qr.L)
 	if err != nil {
 		return err
 	}
-	const quiet = 4 // the QR spec's minimum margin
+	const quiet = 4
 	black := func(x, y int) bool {
 		x, y = x-quiet, y-quiet
 		return x >= 0 && y >= 0 && x < code.Size && y < code.Size && code.Black(x, y)

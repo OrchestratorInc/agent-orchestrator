@@ -51,8 +51,6 @@ func withFreshChatHistory(manager *Manager, store *transitionStore) *freshChatTr
 }
 
 func TestInterfaceTransitionUnpromptedChatRoundTrip(t *testing.T) {
-	// Keep production argv generation without requiring installed providers.
-	// The fake runtime records these paths but never executes the files.
 	binDir := t.TempDir()
 	for _, name := range []string{"claude", "codex"} {
 		if runtime.GOOS == "windows" {
@@ -91,8 +89,6 @@ func TestInterfaceTransitionUnpromptedChatRoundTrip(t *testing.T) {
 			rec.Metadata.AgentSessionID = ""
 			rec.Metadata.ProviderConversationID = "019fc430-1234-7abc-8def-0123456789ab"
 			store.sessions[rec.ID] = rec
-			// Exercise the production conversation/branch reads. Runtime and
-			// lifecycle effects stay in the existing handoff fixture.
 			ctx := context.Background()
 			history := sqlitetest.MustOpenAt(t, t.TempDir())
 			if err := history.UpsertProject(ctx, store.projects["proj"]); err != nil {
@@ -143,8 +139,6 @@ func TestInterfaceTransitionUnpromptedChatRoundTrip(t *testing.T) {
 			if runtime.created != 1 || strings.Contains(strings.Join(runtime.lastCfg.Argv, " "), "resume") {
 				t.Fatalf("expected one fresh terminal launch: %+v", runtime.lastCfg)
 			}
-			// SessionStart reserves a transcript path before the first prompt
-			// creates that file. Exercise the immediate reverse handoff too.
 			rec = store.sessions[rec.ID]
 			rec.Metadata.AgentSessionID = "019fc430-1234-7abc-8def-0123456789ab"
 			rec.Metadata.AgentSessionIDLaunchID = rec.Metadata.RuntimeLaunchID
@@ -199,7 +193,6 @@ func TestInterfaceTransitionUnpromptedChatRoundTrip(t *testing.T) {
 
 func TestInterfaceTransitionUnpromptedChatWithoutNativeID(t *testing.T) {
 	manager, store, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
-	// Chat's durable empty-root proof does not need a provider file probe.
 	manager.agents = singleAgent{agent: transitionAgent{}}
 	rec := store.sessions["session-1"]
 	rec.Metadata.AgentSessionID = ""
@@ -250,10 +243,6 @@ func TestInterfaceTransitionChatRequiresUntouchedConversationProof(t *testing.T)
 }
 
 func TestInterfaceTransitionChatWithoutAnyConversationStartsFresh(t *testing.T) {
-	// A session switched into Chat but never messaged has no conversation row
-	// at all: the Chat controller materializes it on the first turn. That is
-	// the freshest possible state and must not fail the Terminal handoff with
-	// NATIVE_SESSION_MISSING (issue #5482 reproduction).
 	manager, store, runtime, chat, log := newTransitionManager(t, domain.SessionModeChat)
 	manager.agents = singleAgent{agent: emptyTransitionAgent{}}
 	rec := store.sessions["session-1"]
@@ -301,8 +290,6 @@ func TestInterfaceTransitionFreshChatRechecksAfterFencing(t *testing.T) {
 	manager.agents = singleAgent{agent: emptyTransitionAgent{}}
 	history := withFreshChatHistory(manager, store)
 	manager.chat = &racingFreshChat{transitionChat: chat, beforePrepare: func() {
-		// Message intake won the race with ArmChatHandoff. Its durable sequence
-		// remains even if interrupt settles it before a native transcript exists.
 		history.conversation.LatestSequence = 1
 	}}
 	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1",

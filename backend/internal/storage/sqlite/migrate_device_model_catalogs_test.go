@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// Model catalogs are device-wide. Older builds wrote a row per project (and a
-// Settings browse scope); the migration drops those and keeps the device row
-// and cloud credential scopes.
 func TestMigrationDropsPerProjectModelCatalogs(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 20261021230230412)
 

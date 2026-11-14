@@ -31,7 +31,6 @@ function isBelow(running: string, floor: string): boolean {
 
 type FloorOptions = {
   parent?: () => BaseWindow | null;
-  // Quits past the macOS tray; app.quit alone would leave the app running.
   quit?: () => void;
 };
 
@@ -40,8 +39,6 @@ function showFloorDialog(options: FloorOptions, box: MessageBoxOptions) {
   return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, box) : dialog.showMessageBox(box);
 }
 
-// A quit can be cancelled, for example to keep an unsaved chat draft. Ask again
-// after this long so the unsupported version does not stay in use.
 const REQUIRED_UPDATE_REPROMPT_MS = 60_000;
 
 async function requireUpdate(options: FloorOptions, running: string, minVersion: string, downloadUrl: string) {

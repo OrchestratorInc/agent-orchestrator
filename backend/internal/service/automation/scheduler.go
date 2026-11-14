@@ -20,14 +20,11 @@ const (
 	maxRunErrorBytes  = 512
 )
 
-// SessionSpawner is the existing user-facing session launch boundary.
 type SessionSpawner interface {
 	Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error)
 	Kill(context.Context, domain.SessionID) (bool, error)
 }
 
-// schedulerStore is deliberately separate from CRUD Store so focused CRUD
-// tests and alternate read adapters need not implement daemon-only operations.
 type schedulerStore interface {
 	ListDueAutomations(context.Context, time.Time, int64) ([]domain.Automation, error)
 	MaterializeAutomationRuns(context.Context, domain.AutomationID, time.Time, []domain.AutomationRun, time.Time, time.Time, time.Time) (bool, error)
@@ -49,9 +46,6 @@ func (s *Service) schedulerStore() (schedulerStore, error) {
 	return store, nil
 }
 
-// Tick performs one bounded materialization, lifecycle projection, claim, and
-// dispatch pass. One bad definition is joined into the returned diagnostic but
-// does not prevent other definitions from progressing.
 func (s *Service) Tick(ctx context.Context, at time.Time) error {
 	store, err := s.schedulerStore()
 	if err != nil {
@@ -73,8 +67,6 @@ func (s *Service) Tick(ctx context.Context, at time.Time) error {
 		}
 	}
 
-	// Claim the batch before launching anything. Each spawning claim blocks its
-	// siblings, which guarantees at most one dispatch per definition this poll.
 	claims := make([]domain.AutomationRun, 0)
 	for len(claims) < dispatchScanLimit && ctx.Err() == nil {
 		run, ok, claimErr := store.ClaimNextAutomationRun(ctx, now, now.Add(spawnLease))
@@ -168,8 +160,6 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 			_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, runError(spawnErr), now)
 			return errors.Join(spawnErr, markErr)
 		}
-		// A paused project fails this occurrence rather than re-queueing it: the
-		// pause holds until a person starts a session or changes its settings.
 		permanent := errors.As(spawnErr, &apiError) && (apiError.Kind == apierr.KindInvalid || apiError.Kind == apierr.KindNotFound || apiError.Code == "AUTO_SPAWN_PAUSED")
 		if permanent {
 			_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, runError(spawnErr), now)
@@ -182,9 +172,6 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 	return err
 }
 
-// Reconcile repairs crash-interrupted claims, projects durable completion, and
-// materializes a bounded startup catch-up. Dispatch begins in the observer's
-// immediate Tick after reconciliation.
 func (s *Service) Reconcile(ctx context.Context) error {
 	store, err := s.schedulerStore()
 	if err != nil {
@@ -233,9 +220,6 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 					problems = append(problems, lookupErr)
 				}
 			} else if !ok && run.LeaseExpiresAt != nil && !run.LeaseExpiresAt.After(now) {
-				// The daemon died between claiming and session creation, and
-				// startup reconciliation ran before the lease expired. Release
-				// the claim so later occurrences are not blocked forever.
 				if _, lookupErr = store.ReleaseAutomationRun(ctx, run.ID, "Recovered expired spawn claim", now); lookupErr != nil {
 					problems = append(problems, lookupErr)
 				}

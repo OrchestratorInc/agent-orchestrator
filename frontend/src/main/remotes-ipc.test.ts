@@ -48,7 +48,6 @@ describe("updateSavedRemote", () => {
 			return "online";
 		});
 		expect(health).toBe("online");
-		// Probed with the new password against the saved address, not with either half.
 		expect(probed).toEqual([{ label: "workbox", url: "http://192.0.2.1:1", password: "rotated" }]);
 	});
 
@@ -61,8 +60,6 @@ describe("updateSavedRemote", () => {
 		expect(disconnect).not.toHaveBeenCalled();
 	});
 
-	// A live proxy holds the address and password that were saved when it
-	// started; after an edit both may be stale, so it does not get to keep serving.
 	it("drops the edited host's proxy by its old url", async () => {
 		const path = await tempFile();
 		const disconnect = dropped();

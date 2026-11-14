@@ -1,4 +1,3 @@
-// Package primeagent implements the Prime Agent terminal adapter.
 package primeagent
 
 import (
@@ -17,31 +16,21 @@ import (
 
 const adapterID = "prime-agent"
 
-// Plugin launches Prime Agent as an AO-managed persistent terminal process.
-// Binary resolution is cached because a registered adapter is shared across
-// concurrent session operations.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 	runCommand     primeCommandRunner
-	// extensionFlag remembers, per binary, whether it accepts --extension.
-	extensionMu   sync.Mutex
-	extensionFlag map[string]bool
+	extensionMu    sync.Mutex
+	extensionFlag  map[string]bool
 }
 
-// New returns a ready-to-register Prime Agent adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSemanticMessageAcceptance reports that AO's Prime Agent plugin includes
-// the accepted prompt text in its user-prompt-submit callback.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
-// AugmentRuntimeEnv points Prime Agent at AO's isolated profile so persistent
-// daemon/config state stays under AO_DATA_DIR instead of the user's normal
-// ~/.prime/agent profile.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	dir, err := primeDataDir(dataDir)
 	if err != nil {
@@ -59,7 +48,6 @@ var _ ports.ActiveTurnSteerer = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
 var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -72,7 +60,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project Prime Agent configuration AO exposes.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -84,13 +71,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}}}, nil
 }
 
-// GetLaunchCommand builds a persistent Prime Agent process:
-//
-//	prime-agent --session-dir <ao-sessions> --extension <managed-extension> [--append-system-prompt <text>] [--model <model>] [-- <task>]
-//
-// The explicit separator ensures task text beginning with a hyphen cannot be
-// parsed as an option. Prime Agent has no safe CLI permission-mode equivalent,
-// so AO intentionally emits no permission arguments for any requested mode.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -163,8 +143,6 @@ func resolveSystemPrompt(ctx context.Context, inline, file string) (string, erro
 	return string(data), nil
 }
 
-// GetRestoreCommand rebuilds the persistent Prime command and resumes the
-// native transcript captured by the managed extension.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -180,16 +158,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return append(cmd, "--resume", agentSessionID), true, nil
 }
 
-// SteersActiveTurn reports that Prime queues input submitted during a turn as
-// steering for that active turn.
 func (p *Plugin) SteersActiveTurn() bool { return true }
 
-// EmitsSubmitActivity reports that the managed extension emits an active
-// signal when Prime starts processing a submitted prompt.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
-// EmitsBlockedActivity is false because Prime has no lifecycle signal with the
-// safe pre/post correlation AO requires for automated permission handling.
 func (p *Plugin) EmitsBlockedActivity() bool { return false }
 
 var primeAgentBinarySpec = binaryutil.BinarySpec{
@@ -205,13 +177,10 @@ var primeAgentBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolvePrimeAgentBinary finds Prime Agent on PATH or in the existing set of
-// supported Node-managed global binary locations.
 func ResolvePrimeAgentBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, primeAgentBinarySpec)
 }
 
-// ResolveBinary resolves the executable path for the optional registry probe.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return p.primeAgentBinary(ctx)
 }
@@ -239,20 +208,15 @@ func (p *Plugin) primeAgentBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
-	// A binary replaced in place may have changed its flags too.
 	p.extensionMu.Lock()
 	p.extensionFlag = nil
 	p.extensionMu.Unlock()
 }
 
-// acceptsExtension reports whether binary's help lists --extension: prime-agent
-// 0.10 (the Rust rewrite) exits at once when given it. An unreadable help keeps it.
 func (p *Plugin) acceptsExtension(ctx context.Context, binary string) bool {
 	p.extensionMu.Lock()
 	defer p.extensionMu.Unlock()

@@ -1,7 +1,3 @@
-// Moves the Markdown copies of the articles from `out/markdown/` to the site
-// root, so `/quickstart/` has `/quickstart.md` beside it. A static export
-// cannot serve a route handler at that URL directly: the article pages
-// already take every path there.
 import { cpSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

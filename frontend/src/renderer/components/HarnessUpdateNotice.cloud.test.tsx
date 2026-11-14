@@ -22,7 +22,6 @@ function mountNotice() {
 	return render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdateNotice enabled /></TooltipProvider></QueryClientProvider>);
 }
 
-/** Claude Code on this computer, behind or current. */
 function mockLocal(behind: boolean) {
 	const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
 	vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
@@ -61,7 +60,6 @@ describe("AO Cloud in the startup update notice", () => {
 		cloud.value = cloudClaude(true);
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		// One entry for the harness: no card of Cloud's own.
 		const cards = within(notice).getAllByRole("article");
 		expect(cards).toHaveLength(1);
 		const card = cards[0]!;

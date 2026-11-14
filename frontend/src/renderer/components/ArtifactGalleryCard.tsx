@@ -8,21 +8,10 @@ import { ArtifactSnapshotThumbnail } from "./ArtifactSnapshotThumbnail";
 import { Checkbox } from "./ui/checkbox";
 import { Pressable } from "./ui/pressable";
 
-/**
- * While the page is selecting, the card toggles its checkbox instead of
- * opening a preview. The checkbox is the control keyboard and screen-reader
- * users reach; the card is a larger target for the pointer.
- */
 export type ArtifactCardSelection = {
 	selected: boolean;
-	/** Set when this person may not delete the file, with why. */
 	disabledReason?: string;
 	label: string;
-	/**
-	 * Which project, session and path the file belongs to. The card is hidden
-	 * from assistive technology while selecting, so this describes the
-	 * checkbox and tells same-named files apart.
-	 */
 	description: string;
 	onToggle: () => void;
 };

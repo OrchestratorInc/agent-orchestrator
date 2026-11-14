@@ -30,35 +30,19 @@ import { useChatBrowserOpen } from "./ChatMarkdown";
 
 type RenderImage = { src: string; alt: string };
 
-/** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
 interface FramePage {
 	title: string;
-	/** Daemon-relative route the page is served from. */
 	path: string;
 	height: number;
 	heights?: Array<[number, number]>;
-	/** The file Save writes. */
 	fileName: string;
-	/**
-	 * The page on its own inline-artifact origin. When set, the frame loads it
-	 * from there with allow-same-origin, so its module scripts, fetches and
-	 * fonts work; the daemon refuses that origin, and it is not the app's.
-	 */
 	frameUrl?: string;
-	/**
-	 * Caps the inline frame and scrolls the page inside it. An artifact is an
-	 * ordinary document, not written to the render rules, so a page sized to
-	 * its viewport would otherwise grow the frame each time it reported.
-	 */
 	scrollable?: boolean;
 }
 
-// An artifact is never measured: its frame opens at this height, then fits the
-// page up to ARTIFACT_FRAME_MAX_HEIGHT, past which it scrolls inside the frame.
 const ARTIFACT_FRAME_HEIGHT = 400;
 const ARTIFACT_FRAME_MAX_HEIGHT = 640;
 
-/** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
 	const [theme, setTheme] = useState(readRenderTheme);
 	useEffect(() => {
@@ -68,7 +52,6 @@ function useRenderTheme(): RenderTheme {
 				return renderThemesEqual(current, next) ? current : next;
 			}),
 		);
-		// Not `style`: only sidebar/zoom geometry writes it, on every animation tick.
 		observer.observe(document.documentElement, {
 			attributes: true,
 			attributeFilter: ["data-theme", "data-style-theme", "class"],
@@ -78,15 +61,6 @@ function useRenderTheme(): RenderTheme {
 	return theme;
 }
 
-/**
- * An agent's HTML page inline in its turn. The page runs in an opaque-origin
- * sandbox (no allow-same-origin), so it cannot reach the app's session,
- * storage, or the daemon. It reads the theme from its URL fragment before
- * first paint and restyles from posted messages after, so the src never changes.
- * Both carry the display mode; in fullscreen the page centers a width-capped
- * top-level block and shows its scrollbar. In both modes the frame fits the
- * page's height; the expanded frame's class caps it at the window.
- */
 function RenderDocument({
 	page,
 	displayMode,
@@ -108,18 +82,12 @@ function RenderDocument({
 	wrapContentRef.current = wrapContent;
 	const onOpenImageRef = useRef(onOpenImage);
 	onOpenImageRef.current = onOpenImage;
-	// The daemon can come back on another port, so the src follows the API base
-	// (a frame not yet loaded would otherwise point at a dead port). Theme and
-	// wrapping ride in the fragment only for the first paint; later changes are
-	// posted, so they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
 		() => `${page.frameUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, page.scrollable, wrapContentRef.current)}`,
 		[baseUrl, page.path, page.frameUrl, displayMode, page.scrollable],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
-	// The frame's width picks its measured first height; read before the first
-	// paint, so the frame opens at that height rather than the agent's.
 	const [width, setWidth] = useState<number>();
 	const { heights } = page;
 	useLayoutEffect(() => {
@@ -137,7 +105,6 @@ function RenderDocument({
 	useEffect(() => {
 		postTheme();
 	}, [theme, wrapContent]);
-	// Layout effect: a fast page can post its height before a passive effect runs.
 	useLayoutEffect(() => {
 		const onMessage = (event: MessageEvent) => {
 			const frame = frameRef.current;
@@ -147,7 +114,6 @@ function RenderDocument({
 				setContentHeight(height);
 				return;
 			}
-			// Only while the reader is using this frame: a page can post on load.
 			if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
 			const url = readRenderLinkRequest(event.data);
 			if (url) window.open(url, "_blank", "noopener,noreferrer");
@@ -176,7 +142,6 @@ function RenderDocument({
 	);
 }
 
-/** An icon-only ghost button, named by its tooltip. */
 function RenderAction({ label, children, ...props }: ButtonProps & { label: string }) {
 	return (
 		<Tooltip>
@@ -190,14 +155,12 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 	);
 }
 
-/** The render as the daemon serves it; `?source=1` is the page as the agent wrote it. */
 async function fetchRender(path: string, signal?: AbortSignal): Promise<Response> {
 	const response = await fetch(`${getApiBaseUrl()}${path}`, { signal });
 	if (!response.ok) throw new Error(`render ${path}: HTTP ${response.status}`);
 	return response;
 }
 
-/** The served page, bootstrap included, so the saved file renders on its own. */
 async function saveRender(page: FramePage) {
 	const url = URL.createObjectURL(await (await fetchRender(page.path)).blob());
 	const link = document.createElement("a");
@@ -207,9 +170,7 @@ async function saveRender(page: FramePage) {
 	setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-/** Keeps the page as a session artifact; resolves to the saved file's name. */
 async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
-	// readRenderRef only accepts /api/v1/sessions/{sessionId}/renders/{renderId}.
 	const sessionId = decodeURIComponent(render.path.split("/")[4] ?? "");
 	const { data, error } = await apiClient.POST("/api/v1/sessions/{sessionId}/renders/{renderId}/artifact", {
 		params: { path: { sessionId, renderId: render.id } },
@@ -219,10 +180,8 @@ async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
 	return data.name;
 }
 
-/** The page's HTML as plain text. No highlighting: a page can run to 25 MiB. */
 function RenderSource({ path }: { path: string }) {
 	const { t } = useTranslation();
-	// undefined while loading, null when the fetch failed.
 	const [source, setSource] = useState<string | null>();
 	useEffect(() => {
 		const controller = new AbortController();
@@ -252,7 +211,6 @@ function RenderSource({ path }: { path: string }) {
 	);
 }
 
-/** Opens the artifact in the session's contextual Artifacts tab. */
 function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; path: string; onOpen: () => void }) {
 	const { t } = useTranslation();
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
@@ -269,7 +227,6 @@ function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; pat
 	);
 }
 
-/** A render, or an HTML artifact, inline in its turn and expandable to a dialog sized to the page. */
 export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
 	const { t } = useTranslation();
 	const remoteHost = useChatRemoteHost();
@@ -298,9 +255,6 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 		setImageOpen(true);
 	};
 	const openInBrowserPanel = useChatBrowserOpen();
-	// The local daemon has no copy of a remote host's render, and the remote
-	// proxy URL must not reach the page: its path carries the proxy's capability
-	// token, which the page could read from its own location.
 	if (remoteHost) {
 		return (
 			<p className="text-xs text-muted-foreground">
@@ -337,13 +291,6 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			<WrapText aria-hidden="true" className="size-3.5" />
 		</RenderAction>
 	);
-	// The page on its own, as a tab opens it. A render opens from its render
-	// route, whose sandbox CSP keeps it off the daemon wherever it is opened.
-	// An HTML artifact opens from its preview origin, the same URL the
-	// Artifacts tab and `ao preview` open: the daemon serves the artifact-files
-	// route the chat frames only to the app's own frames, and refuses a
-	// browser tab there (ORIGIN_FORBIDDEN). With no preview URL listed for it,
-	// the artifact does not open outside the chat.
 	const artifactPreviewUrl = "artifact" in props && links?.previewUrl && /^https?:\/\//.test(links.previewUrl) ? links.previewUrl : undefined;
 	const standaloneUrl = (): string | undefined => "artifact" in props
 		? artifactPreviewUrl
@@ -398,16 +345,12 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent
 					aria-describedby={undefined}
-					// A reading column wide and as tall as the page, up to the window;
-					// borderless, like the inline frame.
 					className="z-overlay w-[min(64rem,calc(100vw-4rem))] max-w-none gap-2 border-0 p-2 outline-none"
-					// Focus the dialog, not its first action: a focused action opens its tooltip.
 					onOpenAutoFocus={(event) => {
 						event.preventDefault();
 						(event.currentTarget as HTMLElement).focus();
 					}}
 				>
-					{/* pe-9 keeps the actions clear of the dialog's own close button. */}
 					<div className="flex h-8 shrink-0 items-center gap-1 ps-2 pe-9">
 						<DialogTitle className="min-w-0 flex-1 truncate text-subtitle">{page.title}</DialogTitle>
 						{wrapAction}

@@ -40,9 +40,6 @@ func postUserMessage(t *testing.T, svc *steerStub, recorder *fakeUserMessages, p
 	return rec.Code
 }
 
-// Only a person's accepted steer is counted here: an AO session steering
-// another (`ao send --steer` inside a session), an idempotent replay, and a
-// send that became a Chat message (counted at its insert) are not.
 func TestUserMessageRecordedOnlyForHumanSends(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -56,7 +53,6 @@ func TestUserMessageRecordedOnlyForHumanSends(t *testing.T) {
 		{"agent steer", "steer", chatsvc.SteerOrSendResult{}, map[string]any{"text": "focus", "clientMessageId": "a", "senderSessionId": "orch-1"}, nil},
 		{"steer-or-send that steered", "steer-or-send", chatsvc.SteerOrSendResult{Steered: true}, map[string]any{"text": "x", "clientMessageId": "b"},
 			[]userMessageCall{{id: "p1-1", isSteer: true}}},
-		// A fallback send is a Chat message, counted where it is inserted.
 		{"steer-or-send that sent", "steer-or-send", chatsvc.SteerOrSendResult{}, map[string]any{"text": "x", "clientMessageId": "c"}, nil},
 		{"replayed steer-or-send", "steer-or-send", chatsvc.SteerOrSendResult{Duplicate: true}, map[string]any{"text": "x", "clientMessageId": "d"}, nil},
 		{"recover only", "steer-or-send", chatsvc.SteerOrSendResult{}, map[string]any{"clientMessageId": "e", "recoverOnly": true}, nil},
@@ -80,8 +76,6 @@ func TestUserMessageRecordedOnlyForHumanSends(t *testing.T) {
 	}
 }
 
-// replayingSteerStub answers a repeated client message id from its stored
-// receipt, as the chat service does for an accepted steer.
 type replayingSteerStub struct {
 	*steerStub
 	accepted map[string]bool
@@ -95,7 +89,6 @@ func (s *replayingSteerStub) Steer(_ context.Context, _ domain.SessionID, msg po
 	return chatsvc.SteerResult{ProviderTurnID: "turn-1", ActivityID: "act-1"}, nil
 }
 
-// A retried steer (same handle, e.g. after a daemon restart) is one steer.
 func TestReplayedSteerIsCountedOnce(t *testing.T) {
 	svc := &replayingSteerStub{steerStub: &steerStub{fakeConversationService: &fakeConversationService{}}, accepted: map[string]bool{}}
 	recorder := &fakeUserMessages{}

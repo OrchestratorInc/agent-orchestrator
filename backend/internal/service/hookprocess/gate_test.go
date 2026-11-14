@@ -19,10 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// The session's tmux panes lead pids 10 and 11. Its terminal Claude is 20; the
-// agent started an interactive claude, 40, from a tool (via a shell, 30); the
-// user started another claude, 50, in the second pane; 70 runs outside the
-// session.
 const processTable = `
    10     1  1000 0:00.01 -zsh
    20    10  1000 0:01.00 claude --session-id 511e68be
@@ -87,7 +83,6 @@ func newGateHarness() *gateHarness {
 	return h
 }
 
-// hook reports whether a hook from pid reached the lifecycle.
 func (h *gateHarness) hook(t *testing.T, pid int, mutate ...func(*ports.ActivitySignal)) bool {
 	t.Helper()
 	signal := ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", LaunchID: "launch-1", ProcessID: pid}
@@ -115,19 +110,15 @@ func TestGateAppliesOnlyTheTerminalClaudeProcess(t *testing.T) {
 	if h.hook(t, 70) {
 		t.Fatal("a claude outside the session was applied")
 	}
-	// A subagent runs in the terminal's process.
 	if !h.hook(t, 20, func(s *ports.ActivitySignal) { s.SubagentID = "child-1"; s.Event = "subagent-start" }) {
 		t.Fatal("a subagent hook of the terminal's Claude was dropped")
 	}
-	// The pinned process is answered without another process table read.
 	h.tableErr = errors.New("ps failed")
 	if !h.hook(t, 20) || h.hook(t, 40) {
 		t.Fatal("pinned and remembered processes must not need the process table")
 	}
 }
 
-// After a daemon restart the first hook can come from a nested claude. The
-// terminal's next hook takes over, and the nested one is dropped from then on.
 func TestGateRepinsToTheOutermostClaudeProcess(t *testing.T) {
 	h := newGateHarness()
 	if !h.hook(t, 40) {
@@ -141,7 +132,6 @@ func TestGateRepinsToTheOutermostClaudeProcess(t *testing.T) {
 	}
 }
 
-// Once the terminal's Claude exits, a new Claude under the session is its.
 func TestGatePinsANewClaudeAfterTheTerminalsExits(t *testing.T) {
 	h := newGateHarness()
 	h.hook(t, 20)
@@ -185,14 +175,11 @@ func TestGatePassesHooksItCannotPlace(t *testing.T) {
 			}
 		})
 	}
-	// Nothing pinned and outside the session: as before the gate.
 	if h := newGateHarness(); !h.hook(t, 70) {
 		t.Fatal("dropped a hook with nothing to place it against")
 	}
 }
 
-// Through the real lifecycle and store: a nested claude's hooks change
-// neither the session's activity nor its transcript path.
 func TestGateKeepsAnotherClaudeFromTheSession(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlitetest.Open(t.TempDir())
@@ -246,11 +233,6 @@ func TestGateKeepsAnotherClaudeFromTheSession(t *testing.T) {
 	}
 }
 
-// Through the real lifecycle and store: a Stop from another Claude process,
-// even a malformed one with no prompt id, never reaches the session's native
-// checkpoint evidence, so it cannot invalidate a later Chat switch. The same
-// promptless Stop from the terminal's own process still fails the journal
-// closed: that is the terminal itself misreporting its turn.
 func TestGateKeepsForeignStopsOutOfTheNativeCheckpointEvidence(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlitetest.Open(t.TempDir())
@@ -301,9 +283,6 @@ func TestGateKeepsForeignStopsOutOfTheNativeCheckpointEvidence(t *testing.T) {
 	if journal := evidence(); journal.Invalid || len(journal.Events) != 1 {
 		t.Fatalf("evidence after the terminal's prompt = %+v", journal)
 	}
-	// A nested claude, another pane's claude, one outside the session, and a
-	// process gone before its hook arrived, each posting the session's launch id
-	// and nothing else, as a hand-made hook does.
 	for i, pid := range []int{40, 50, 70, 999} {
 		apply(pid, ports.ActivitySignal{State: domain.ActivityIdle, Event: "stop"}, time.Duration(2+i)*time.Second)
 	}

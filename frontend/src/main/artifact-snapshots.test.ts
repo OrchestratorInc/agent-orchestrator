@@ -120,9 +120,6 @@ describe("artifact snapshot store", () => {
 		const store = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
 		const first = store.request(job({ path: "first.html" }));
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
-		// Each request reads the disk cache before it joins the queue: let both
-		// reads settle and both requests join before the first render ends, so
-		// the queue holds both when it picks the next one.
 		const reads = vi.spyOn(fs, "readFile");
 		const older = store.request(job({ path: "older.html" }));
 		const newest = store.request(job({ path: "newest.html" }));
@@ -133,10 +130,8 @@ describe("artifact snapshot store", () => {
 		await first;
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(2));
 		expect(order[1]).toBe("newest.html");
-		// A queue over its limit drops its oldest request, and says so.
 		const fillers = Array.from({ length: SNAPSHOT_MAX_QUEUED + 1 }, (_, n) => store.request(job({ path: `fill-${n}.html` })));
 		expect(await older).toBe(SNAPSHOT_DROPPED);
-		// Let every remaining render finish, so nothing is still writing when the directory goes.
 		const settled = Promise.all([newest, ...fillers]);
 		const opener = setInterval(() => gates.splice(0).forEach((open) => open()), 2);
 		await settled;
@@ -153,15 +148,12 @@ describe("artifact snapshot store", () => {
 		const first = store.request(job({ path: "first.html" }));
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
 		const waitingRequests = [1, 2, 3].map((n) => store.request(job({ path: `later-${n}.html` })));
-		// A request reads the disk cache before it joins the queue; let all three get there.
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		store.cancel();
 		expect(await Promise.all(waitingRequests)).toEqual([SNAPSHOT_DROPPED, SNAPSHOT_DROPPED, SNAPSHOT_DROPPED]);
 		gates.shift()?.();
 		expect(await first).not.toBeNull();
-		// Nothing waiting was started after the render under way ended.
 		expect(render).toHaveBeenCalledTimes(1);
-		// A render that was cancelled is not retried only after the delay: the file asks again at once.
 		expect(await store.request(job({ path: "cancelled.html" }))).toBeNull();
 		expect(await store.request(job({ path: "cancelled.html" }))).toBeNull();
 		expect(render.mock.calls.filter(([request]) => request.path === "cancelled.html")).toHaveLength(2);
@@ -195,16 +187,13 @@ describe("artifact snapshot store", () => {
 			const first = store();
 			await first.bindCloudAccount("user-1");
 			await first.request(cloudJob);
-			// The same account again keeps them, across a restart too.
 			const second = store();
 			await second.bindCloudAccount("user-1");
 			expect(await second.get(cloudJob)).not.toBeNull();
-			// Another account clears them before it can be served any.
 			const third = store();
 			await third.bindCloudAccount("user-2");
 			expect(await third.get(cloudJob)).toBeNull();
 			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
-			// No account at all (a session that expired for good) clears them as well.
 			await third.request(cloudJob);
 			const fourth = store();
 			await fourth.bindCloudAccount(null);
@@ -221,7 +210,6 @@ describe("artifact snapshot store", () => {
 			await cache.bindCloudAccount("user-1");
 			const pending = cache.request(cloudJob);
 			await vi.waitFor(() => expect(render).toHaveBeenCalled());
-			// A session refresh tells main the same account is still signed in.
 			await cache.bindCloudAccount("user-1");
 			finish?.();
 			expect(await pending).not.toBeNull();
@@ -237,7 +225,6 @@ describe("artifact snapshot store", () => {
 			await expect(second.bindCloudAccount("user-2")).rejects.toThrow("busy");
 			remove.mockRestore();
 			expect(await second.get(cloudJob)).toBeNull();
-			// The old owner is still on record, so the next bind deletes them.
 			await second.bindCloudAccount("user-2");
 			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
 			expect(await second.request(cloudJob)).not.toBeNull();
@@ -303,7 +290,6 @@ describe("registerArtifactSnapshotIpc", () => {
 		registerArtifactSnapshotIpc({ ipcMain: { handle: (channel, handler) => void handlers.set(channel, handler as never) }, store });
 		const request = handlers.get("artifactSnapshot:request")!;
 		expect(await request({}, { nope: true })).toBe(false);
-		// Main refuses another host's artifact whatever the renderer decided.
 		expect(await request({}, job({ hostId: "host-2" }))).toBe(false);
 		expect(store.request).not.toHaveBeenCalled();
 		expect(await request({}, job())).toBe(true);

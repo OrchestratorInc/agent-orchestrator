@@ -4,10 +4,6 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-/**
- * Search behind an icon for a page's filter row; the field shows while
- * focused or holding a query. Escape clears it and returns focus to the icon.
- */
 export function ToolbarSearch({ label, query, onQueryChange }: { label: string; query: string; onQueryChange: (query: string) => void }) {
 	const [open, setOpen] = useState(false);
 	const toggleRef = useRef<HTMLButtonElement>(null);
@@ -23,7 +19,6 @@ export function ToolbarSearch({ label, query, onQueryChange }: { label: string; 
 					onChange={(event) => onQueryChange(event.target.value)}
 					onKeyDown={(event) => {
 						if (event.key !== "Escape") return;
-						// Escape clears search first; a later one reaches the page.
 						event.preventDefault();
 						onQueryChange("");
 						setOpen(false);
@@ -48,7 +43,6 @@ export function ToolbarSearch({ label, query, onQueryChange }: { label: string; 
 	);
 }
 
-/** One active filter from a page's Filter menu, removable in place. */
 export function FilterChip({ label, value, removeLabel, onRemove }: { label: string; value: string; removeLabel: string; onRemove: () => void }) {
 	return (
 		<Button

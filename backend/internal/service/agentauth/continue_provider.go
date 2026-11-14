@@ -23,11 +23,6 @@ var continueProviders = map[string]string{
 	"DEEPSEEK_API_KEY":   "deepseek",
 }
 
-// saveContinueProviderUndoable adds a model to Continue's native config and
-// stores the key in its global .env. Continue's IDE extension does not read
-// a shell env; both the CLI and IDE resolve ${{ secrets.NAME }} from this
-// file. The returned function restores Continue's .env and config.yaml as
-// they were, for a caller whose later step fails.
 func saveContinueProviderUndoable(ctx context.Context, envName, modelID, secret string) (func(), error) {
 	provider, ok := continueProviders[envName]
 	if !ok {
@@ -50,9 +45,6 @@ func saveContinueProviderUndoable(ctx context.Context, envName, modelID, secret 
 		return nil, err
 	}
 	if configData == nil {
-		// Continue loads config.yaml whenever it exists and falls back to the
-		// legacy config.json only without it, so creating one would hide
-		// every model, context provider and rule configured there.
 		if _, err := os.Lstat(filepath.Join(dir, "config.json")); err == nil {
 			return nil, apierr.Invalid("AGENT_AUTH_STORE_LEGACY", "Continue is set up with config.json. Move to config.yaml in Continue first, then save the key here.", nil)
 		} else if !os.IsNotExist(err) {
@@ -148,8 +140,6 @@ func saveContinueProviderUndoable(ctx context.Context, envName, modelID, secret 
 	if !replaced {
 		lines = append(lines, envName+"="+secret)
 	}
-	// Restoring puts each file back as it was, or removes one this save
-	// created, so a failed save leaves the earlier credential in place.
 	restore := func(path string, original []byte) {
 		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
@@ -172,9 +162,6 @@ func saveContinueProviderUndoable(ctx context.Context, envName, modelID, secret 
 	}, nil
 }
 
-// continueGlobalDir is the folder Continue reads its global config.yaml and
-// .env from: CONTINUE_GLOBAL_DIR when set, as the Continue CLI and AO's model
-// catalog honour it, else ~/.continue.
 func continueGlobalDir() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("CONTINUE_GLOBAL_DIR")); dir != "" {
 		if !filepath.IsAbs(dir) {

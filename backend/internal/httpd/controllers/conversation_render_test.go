@@ -60,7 +60,6 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	// The bootstrap is added as the page is served; the stored file stays raw.
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `<style id="ao-theme">`) || !strings.HasSuffix(string(body), "<p>chart</p>") {
 		t.Fatalf("status=%d body=%.200q", resp.StatusCode, body)
 	}
@@ -84,14 +83,10 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 			t.Errorf("%s = %q, want %q", header, got, want)
 		}
 	}
-	// A stored render never changes, so the ETag names the bootstrap and the
-	// render: a daemon upgrade revalidates, and nothing else needs to.
 	etag := resp.Header.Get("ETag")
 	if want := `"` + renderpage.Version + `-r1"`; etag != want {
 		t.Fatalf("ETag = %q, want %s", etag, want)
 	}
-	// A revalidation never reads the file: it is answered, with the sandbox
-	// headers, even once the file is gone.
 	if err := store.RemoveRender(context.Background(), "proj-1", "r1"); err != nil {
 		t.Fatal(err)
 	}
@@ -106,8 +101,6 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 		t.Fatalf("If-None-Match: %s = %d (CSP %q), want 304 with the sandbox", etag, notModified.StatusCode, notModified.Header.Get("Content-Security-Policy"))
 	}
 
-	// The page's own scripts run with an opaque origin; the daemon refuses it,
-	// even for a "simple" no-cors POST that would otherwise reach a handler.
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/sessions/proj-1/renders",
 		strings.NewReader(`{"html":"<p>x</p>","title":"x"}`))
 	req.Header.Set("Origin", "null")
@@ -131,7 +124,6 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	}
 }
 
-// A page made by an agent with no network is served with no network either.
 func TestRenderRouteServesAnOfflinePageWithNoNetwork(t *testing.T) {
 	dir := t.TempDir()
 	store := attachmentstore.New(dir)
@@ -171,7 +163,6 @@ func TestRenderRouteServesTheStoredSourceAsPlainText(t *testing.T) {
 	}
 
 	source, body := get("?source=1")
-	// The raw stored bytes, with no bootstrap.
 	if source.StatusCode != http.StatusOK || body != page {
 		t.Fatalf("status=%d body=%q, want the stored page", source.StatusCode, body)
 	}
@@ -187,7 +178,6 @@ func TestRenderRouteServesTheStoredSourceAsPlainText(t *testing.T) {
 		}
 	}
 
-	// Any other value serves the page, under a tag the source's never matches.
 	for _, query := range []string{"", "?source=0", "?source=true"} {
 		doc, docBody := get(query)
 		if doc.Header.Get("Content-Type") != "text/html; charset=utf-8" || !strings.Contains(docBody, `<style id="ao-theme">`) {
@@ -209,7 +199,6 @@ func TestRenderRouteServesTheStoredSourceAsPlainText(t *testing.T) {
 	}
 }
 
-// A terminal session has no chat thread; the agent is pointed at ao preview instead.
 const renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
 
 func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
@@ -258,11 +247,7 @@ func TestPublishRenderRouteMapsOutcomes(t *testing.T) {
 	}
 }
 
-// A page with its local images inlined runs to 25 MiB, and its JSON body must
-// reach the service whole on both routes.
 func TestRenderRoutesAcceptA25MiBPage(t *testing.T) {
-	// Markup is the worst case for the body: encoding/json writes each < as
-	// \u003c, and the CLI accepts at most 1 MiB of it.
 	page := strings.Repeat("<", 1<<20) + strings.Repeat("A", 24<<20)
 	svc := &renderCheckStub{renderStub: &renderStub{fakeConversationService: &fakeConversationService{}}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -433,7 +418,6 @@ func TestPublishRenderRouteReportsTheArtifact(t *testing.T) {
 		want   string
 	}{
 		{"kept", chatsvc.RenderResult{RenderID: "r1", ArtifactPath: "/ao/artifacts/proj-1/Chart.html"}, `"artifactPath":"/ao/artifacts/proj-1/Chart.html"`},
-		// The page is in the thread either way, so a failed save is still a 201.
 		{"not kept", chatsvc.RenderResult{RenderID: "r1", ArtifactError: "save render artifact: disk full"}, `"artifactError":"save render artifact: disk full"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

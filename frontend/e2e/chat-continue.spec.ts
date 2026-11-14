@@ -1,10 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// Stop and Continue on one button, like pause and play: stop the agent mid-turn,
-// then either continue it with the same button or type a new question, which
-// turns the button back into Send.
-
 const sessionId = "chat-continue";
 const now = "2026-10-05T12:00:00Z";
 const CONTINUE_PROMPT = "Continue from where you stopped.";
@@ -47,7 +43,6 @@ function snapshot(state: TurnState) {
 	};
 }
 
-/** A Chat session whose one turn is running until the user stops it. */
 async function installStoppableConversation(page: Page) {
 	let state: TurnState = "running";
 	const sent: string[] = [];
@@ -92,7 +87,6 @@ test("the one button stops a turn, then continues it, like pause and play @T0", 
 
 	await stop.click();
 	await expect(page.getByText("The agent was interrupted by you")).toBeVisible();
-	// The same button, now Continue.
 	const resume = page.getByRole("button", { name: "Continue turn" });
 	await expect(resume).toBeEnabled();
 	await expect(stop).toHaveCount(0);
@@ -101,7 +95,6 @@ test("the one button stops a turn, then continues it, like pause and play @T0", 
 	await resume.click();
 	await expect.poll(() => sent).toEqual([CONTINUE_PROMPT]);
 	expect(continuations).toEqual([true]);
-	// The continue shows as a quiet marker, not as a message the user wrote.
 	await expect(page.getByText("Continued", { exact: true })).toBeVisible();
 	await expect(page.getByText(CONTINUE_PROMPT)).toHaveCount(0);
 	await capture(page, "continue-3-continued");

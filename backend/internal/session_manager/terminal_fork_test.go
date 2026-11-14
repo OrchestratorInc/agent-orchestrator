@@ -105,8 +105,6 @@ type launchRecordingAgents struct{ agent launchRecordingAgent }
 
 func (r launchRecordingAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return r.agent, true }
 
-// A text-handoff terminal fork's agent starts with the copied conversation as
-// its first message, which is not saved as the session's task.
 func TestTerminalTextHandoffForkStartsWithTheNote(t *testing.T) {
 	m, _, _, _ := newManager()
 	var launched ports.LaunchConfig
@@ -133,7 +131,6 @@ func TestTerminalTextHandoffForkStartsWithTheNote(t *testing.T) {
 	}
 }
 
-// terminalTurnStore adds the terminal turns the prompt hooks recorded.
 type terminalTurnStore struct {
 	*fakeStore
 	turns map[domain.SessionID][]domain.HandoffTurn
@@ -143,9 +140,6 @@ func (s terminalTurnStore) ListTerminalTurns(_ context.Context, id domain.Sessio
 	return s.turns[id], nil
 }
 
-// A terminal fork copies the agent's conversation when it launches, after
-// setup. If the original took another turn after the fork captured its files,
-// the two would no longer match, so the launch fails and a retry forks again.
 func TestTerminalForkRefusesAnOriginalThatMovedOnDuringSetup(t *testing.T) {
 	asked := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
 	for name, moveOn := range map[string]func(st terminalTurnStore){

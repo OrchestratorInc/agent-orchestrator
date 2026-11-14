@@ -52,8 +52,6 @@ func TestLastPromptComposerState(t *testing.T) {
 		{name: "truecolor draft", output: "❯ \x1b[38;2;246;226;183mkeep this draft", want: ComposerDraft},
 		{name: "colon truecolor draft", output: "❯ \x1b[38:2::246:226:183mkeep this draft", want: ComposerDraft},
 		{
-			// A rule below the prompt ends the composer's content region;
-			// provider status chrome below that rule is not human input.
 			name:   "rule below prompt closes the footer-free scan",
 			output: "❯ \x1b[7m \x1b[0m\n" + strings.Repeat("─", 48) + "\n  glm-5.3 low 40.1k [Rate limited]",
 			want:   ComposerEmpty,
@@ -158,8 +156,6 @@ func TestLastBorderedPromptComposerStateIgnoresProviderChromeLabels(t *testing.T
 
 func TestPromptChromeLabelsAreExemptOnContinuationRows(t *testing.T) {
 	rule := strings.Repeat("─", 48)
-	// The provider can paint its label on its own row inside the bordered
-	// composer, below the marker row. That row is chrome too, not a draft.
 	bordered := rule + "\n❯ \x1b[7m \x1b[0m\n Claude Code\n" + rule + "\n⏵⏵ auto mode on"
 	if got := LastBorderedPromptComposerState(bordered, "❯"); got != ComposerDraft {
 		t.Fatalf("bordered label row without chrome list = %v, want draft (unchanged default)", got)
@@ -167,8 +163,6 @@ func TestPromptChromeLabelsAreExemptOnContinuationRows(t *testing.T) {
 	if got := LastBorderedPromptComposerState(bordered, "❯", "Claude Code"); got != ComposerEmpty {
 		t.Fatalf("bordered label row with chrome list = %v, want empty", got)
 	}
-	// Same for the footer-free fallback: a label row below the prompt is not
-	// human input.
 	footerFree := "❯ \x1b[7m \x1b[0m\nClaude Code\n"
 	if got := LastPromptComposerState(footerFree, "❯"); got != ComposerDraft {
 		t.Fatalf("footer-free label row without chrome list = %v, want draft (unchanged default)", got)
@@ -176,7 +170,6 @@ func TestPromptChromeLabelsAreExemptOnContinuationRows(t *testing.T) {
 	if got := LastPromptComposerState(footerFree, "❯", "Claude Code"); got != ComposerEmpty {
 		t.Fatalf("footer-free label row with chrome list = %v, want empty", got)
 	}
-	// A label followed by human text on the same row is still a draft.
 	mixed := rule + "\n❯ Claude Code review please\n" + rule + "\n⏵⏵ auto mode on"
 	if got := LastBorderedPromptComposerState(mixed, "❯", "Claude Code"); got != ComposerDraft {
 		t.Fatalf("label-prefixed human text = %v, want draft", got)

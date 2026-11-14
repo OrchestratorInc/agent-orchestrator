@@ -118,8 +118,6 @@ func TestUpdateAdvisoryIgnoresDerivedOwnerTheManagerDoesNotConfirm(t *testing.T)
 	}
 }
 
-// A listed formula matches a Cellar path by name alone; when the receipt names
-// another tap, the release check and the upgrade must follow that tap.
 func TestUpdateAdvisoryFollowsReceiptTapOverListedFormulaOfTheSameName(t *testing.T) {
 	cellar := filepath.Join(t.TempDir(), "homebrew", "Cellar", "opencode", "1.18.34")
 	binary := writeFileAt(t, filepath.Join(cellar, "bin", "opencode"), "")
@@ -128,7 +126,6 @@ func TestUpdateAdvisoryFollowsReceiptTapOverListedFormulaOfTheSameName(t *testin
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: binary, Output: "1.18.34"}, nil
 	})
-	// Homebrew's own check is by Cellar name, so it confirms both taps.
 	s.ownsInstallation = func(_ context.Context, _ string, method, pkg string, _ bool) (bool, error) {
 		return method == "homebrew" && filepath.Base(pkg) == "opencode", nil
 	}

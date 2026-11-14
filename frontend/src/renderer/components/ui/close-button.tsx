@@ -3,11 +3,6 @@ import { X } from "@/components/app-icons";
 import { Button, type ButtonProps } from "./button";
 import { cn } from "../../lib/utils";
 
-/**
- * The ✕ that closes a dialog, sheet or panel. Replaces the old
- * `settings-close-button` utility. Pass `floating` to pin it to the top-right
- * corner of a dialog (the old `settings-dialog-close-button`).
- */
 export const CloseButton = React.forwardRef<
 	HTMLButtonElement,
 	Omit<ButtonProps, "variant" | "children"> & { "aria-label": string; floating?: boolean }

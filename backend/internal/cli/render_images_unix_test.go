@@ -33,7 +33,6 @@ func TestInlineLocalImagesReportsAFIFOAsMissingWithoutBlocking(t *testing.T) {
 	}()
 	select {
 	case r := <-done:
-		// Opening a FIFO blocks until a writer appears, so it must never be opened.
 		if r.err != nil || !slices.Equal(r.missing, []string{pipe}) || opens != 0 {
 			t.Fatalf("err=%v missing=%q opens=%d", r.err, r.missing, opens)
 		}

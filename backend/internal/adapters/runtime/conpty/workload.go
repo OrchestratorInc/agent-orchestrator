@@ -21,10 +21,6 @@ func snapshotProcesses(ctx context.Context) ([]procmem.Process, error) {
 	return table.All(), nil
 }
 
-// RunningWorkloadCommands counts shell commands below the supervised agent for
-// ref (see ports.WorkloadCommandInspector). The PTY host starts the launch argv
-// directly, so its child is AO's supervisor, which the registry already fences
-// by launch id; the agent is the supervisor's child.
 func (r *Runtime) RunningWorkloadCommands(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (int, error) {
 	if ref.SessionID == "" || strings.TrimSpace(ref.LaunchID) == "" {
 		return 0, errors.New("conpty: exact supervisor session and launch are required")
@@ -46,11 +42,6 @@ func (r *Runtime) RunningWorkloadCommands(ctx context.Context, handle ports.Runt
 	return countWorkloadCommands(processes, sess.pid)
 }
 
-// countWorkloadCommands counts the shells the agents below hostPID's
-// supervisor spawned, with everything below them. The supervisor is found by
-// its command line where the table has one; Windows lists only executable
-// names, so there it is the host's child. ConPTY also gives the host a conhost
-// child on Windows; it has no children and is skipped naturally.
 func countWorkloadCommands(processes []procmem.Process, hostPID int) (int, error) {
 	children := map[int][]int{}
 	byPID := map[int]procmem.Process{}
@@ -71,7 +62,6 @@ func countWorkloadCommands(processes []procmem.Process, hostPID int) (int, error
 	subtree(hostPID, hostTree)
 	supervisors := children[hostPID]
 	for pid := range hostTree {
-		// A shell whose -c script starts the supervisor is not the supervisor.
 		if command := byPID[pid].Command; isSupervisorCommand(command) && !isShellCommand(command) {
 			supervisors = []int{pid}
 			break
@@ -88,7 +78,6 @@ func countWorkloadCommands(processes []procmem.Process, hostPID int) (int, error
 				if !isShellCommand(process.Command) {
 					continue
 				}
-				// Count each shell once, with its subtree, from its outermost shell.
 				if parent, ok := byPID[process.PPID]; ok && parent.PID != agent && below[parent.PID] && isShellCommand(parent.Command) {
 					continue
 				}
@@ -114,9 +103,6 @@ func isSupervisorCommand(command string) bool {
 	return false
 }
 
-// isShellCommand reports a shell, the way agents run tool commands: POSIX
-// shells, and cmd and PowerShell on Windows, where the table holds only the
-// executable name.
 func isShellCommand(command string) bool {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {

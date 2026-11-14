@@ -137,8 +137,6 @@ func (m *Manager) rollbackNativeInitialization(ctx context.Context, original dom
 	return errors.Join(destroyErr, rollbackErr)
 }
 
-// exactLaunchAlive reports whether the exact AO supervisor for launchID, and
-// its managed agent child, are still alive in handle.
 func (m *Manager) exactLaunchAlive(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) (bool, error) {
 	if strings.TrimSpace(handle.ID) == "" || id == "" || launchID == "" {
 		return false, errors.New("target runtime handle, session, and launch are required")
@@ -150,12 +148,8 @@ func (m *Manager) exactLaunchAlive(ctx context.Context, handle ports.RuntimeHand
 	return inspector.IsExactSupervisedProcessAlive(ctx, handle, ports.SupervisedProcessRef{SessionID: id, LaunchID: launchID})
 }
 
-// launchPollInterval paces the checks for a supervised launch's liveness.
 const launchPollInterval = 150 * time.Millisecond
 
-// waitForExactLaunch waits, up to launchStartWait, for the supervisor of one
-// exact launch to report its agent alive. Seeing the runtime accept the start
-// only proves the supervisor was created.
 func (m *Manager) waitForExactLaunch(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) (bool, error) {
 	if strings.TrimSpace(handle.ID) == "" || launchID == "" {
 		return false, errors.New("target runtime handle and launch are required")
@@ -184,9 +178,6 @@ func (m *Manager) waitForExactLaunch(ctx context.Context, handle ports.RuntimeHa
 	}
 }
 
-// exactLaunchPreWrite closes the final check-then-write gap: the guard calls
-// it after its durable read and immediately before the runtime write, and a
-// matching row is not enough, the exact launch must still be alive.
 func (m *Manager) exactLaunchPreWrite(id domain.SessionID, harness domain.AgentHarness, handle ports.RuntimeHandle, launchID string, ownershipErr error) func(context.Context, domain.SessionRecord) error {
 	return func(ctx context.Context, current domain.SessionRecord) error {
 		if current.ID != id || current.Harness != harness || current.Metadata.RuntimeHandleID != handle.ID || current.Metadata.RuntimeLaunchID != launchID {

@@ -17,7 +17,7 @@ func TestSteeringIsOfferedFromTheVerifiedHermesVersion(t *testing.T) {
 		{"hermes-agent", "v1.0.0", true},
 		{"hermes-agent", "0.22.4", true},
 		{"hermes-agent", "0.22.3", false},
-		{"hermes-agent", "0.0.0", true}, // Homebrew 0.22.4 reports no version
+		{"hermes-agent", "0.0.0", true},
 		{"hermes-agent", "unknown", true},
 		{"hermes-agent", "", true},
 		{"other-agent", "9.9.9", false},

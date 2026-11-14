@@ -1,20 +1,3 @@
-// Package qwen implements the Qwen Code agent adapter: launching new sessions,
-// resuming hook-tracked sessions, installing workspace-local native hooks, and
-// reading hook-derived session info.
-//
-// Qwen Code (github.com/QwenLM/qwen-code) is a fork of Google's gemini-cli, so
-// it inherits gemini-cli-shaped flags: `-p/--prompt` (or a positional prompt)
-// for the headless one-shot prompt, `--approval-mode
-// {plan,default,auto-edit,auto,yolo}` for permissions, and `-r/--resume <id>` to
-// continue a specific session. AO starts prompted worker sessions through Qwen's
-// documented `--input-file` remote-input bridge, which submits the task into the
-// interactive TUI after Qwen reports session_start; this avoids Qwen's
-// non-interactive approval behavior in `-p` mode and avoids a blind terminal
-// Enter race. Qwen also has a native Claude-Code-shaped hook system configured
-// in `.qwen/settings.json` (top-level "hooks" key, event arrays of matcher
-// groups with command hooks), and emits a `session_id` in every hook payload —
-// so AO captures native session identity and activity from those hooks rather
-// than from transcript/cache scans.
 package qwen
 
 import (
@@ -39,15 +22,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Plugin is the Qwen Code agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Qwen Code adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -58,8 +38,6 @@ var _ ports.AgentBinaryResolutionInvalidator = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 
-// GetConfigSpec reports the per-project agent config keys Qwen Code
-// understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -75,7 +53,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          "qwen",
@@ -88,12 +65,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetLaunchCommand builds the argv to start a new Qwen Code session: the
-// approval-mode flag, optional system-prompt instructions, and the initial
-// prompt. Workers use Qwen's remote-input bridge so the task is submitted into
-// the interactive TUI after startup; non-workers use `-p` so command-delivered
-// prompts keep their previous one-shot behavior. `-p` takes the prompt as an
-// argument, so a leading "-" is not read as a flag.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.qwenBinary(ctx)
 	if err != nil {
@@ -125,10 +96,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy reports that Qwen receives prompted worker tasks via
-// argv: either the Unix remote-input launcher or the Windows `-i` fallback.
-// Promptless worker launches are plain interactive sessions with no task to
-// send.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -136,10 +103,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.Launch
 	return ports.PromptDeliveryInCommand, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Qwen Code
-// session: `qwen [--approval-mode <mode>] --resume <agentSessionId>`. ok is false when
-// the hook-derived native session id has not landed yet, so callers can fall
-// back to fresh launch behavior. Note: ports.RestoreConfig carries no Prompt.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -170,8 +133,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// NativeConversationID bridges Qwen's terminal session id and ACP session id:
-// both surfaces share the chats store keyed by session UUID.
 func (p *Plugin) NativeConversationID(
 	ctx context.Context,
 	session ports.SessionRef,
@@ -189,8 +150,6 @@ func (p *Plugin) NativeConversationID(
 	return id, id != "", nil
 }
 
-// NativeConversationExists reports whether a Qwen session UUID has a
-// non-empty chats/<id>.jsonl transcript.
 func (p *Plugin) NativeConversationExists(
 	ctx context.Context,
 	_ ports.SessionRef,
@@ -259,9 +218,6 @@ func qwenTranscriptNameMatches(name, nativeConversationID string) bool {
 	return name == nativeConversationID+".jsonl"
 }
 
-// Qwen Code's append-system-prompt flag accepts inline text only. The manager
-// normally supplies both inline text and an AO-owned file; if only the file is
-// present, read it and pass the contents inline.
 func launchSystemPromptText(cfg ports.LaunchConfig) (string, error) {
 	return systemPromptTextFrom(cfg.SystemPrompt, cfg.SystemPromptFile)
 }
@@ -284,8 +240,6 @@ func systemPromptTextFrom(inline, file string) (string, error) {
 	return string(data), nil
 }
 
-// SessionInfo surfaces Qwen Code hook-derived metadata. Metadata is
-// intentionally nil for Qwen: callers get the normalized fields directly.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -307,8 +261,6 @@ var qwenBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveQwenBinary returns the path to the qwen binary, or a wrapped
-// ports.ErrAgentBinaryNotFound when it is absent.
 func ResolveQwenBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, qwenBinarySpec)
 }
@@ -329,21 +281,15 @@ func (p *Plugin) qwenBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution makes the next operation resolve Qwen again, so
-// a reinstall or upgrade that relocates the binary is picked up.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
 
-// appendApprovalFlags maps AO's four permission modes onto Qwen Code's
-// `--approval-mode` choices (plan|default|auto-edit|auto|yolo). Default emits no
-// flag so Qwen resolves its starting mode from the user's own config.
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
-		// No flag: defer to the user's Qwen Code config/default behavior.
 	case ports.PermissionModeAcceptEdits:
 		*cmd = append(*cmd, "--approval-mode", "auto-edit")
 	case ports.PermissionModeAuto:
@@ -353,32 +299,12 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	}
 }
 
-// appendModelFlag appends --model if a non-empty model is configured.
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
 	}
 }
 
-// appendToolRestrictionFlags maps AO's tool allow/deny lists onto Qwen Code's
-// repeatable restriction options.
-//
-// AllowedTools maps to `--core-tools`, Qwen's allowlist over its core tool set
-// (file, shell, search and related built-ins): a core tool the list omits is
-// disabled, not merely left unmentioned. It deliberately does not map to
-// `--allowed-tools`, which is pure auto-approval and leaves every other tool
-// registered, so an allowlist forwarded there would keep write_file, edit and
-// run_shell_command callable in a session meant to be read-only.
-//
-// DisallowedTools maps to `--exclude-tools`, which drops the named tool from the
-// registry. Qwen deliberately lets tools outside the core set (MCP and skill
-// tools, and synthetic built-ins such as task_stop, send_message, tool_search
-// and tool_call) bypass `--core-tools`, so a denylist is the only restriction
-// that still reaches them; callers that need those blocked must name them.
-//
-// Both options are repeatable in Qwen Code, so each entry becomes its own flag
-// and blank entries are dropped. Entries are still trimmed, because Qwen
-// matches tool names exactly.
 func appendToolRestrictionFlags(cmd *[]string, allowed, disallowed []string) {
 	for _, tool := range allowed {
 		if tool = strings.TrimSpace(tool); tool != "" {
@@ -392,8 +318,6 @@ func appendToolRestrictionFlags(cmd *[]string, allowed, disallowed []string) {
 	}
 }
 
-// AppendSessionFlags adds the TUI-equivalent approval and model flags so Chat
-// launches the same Qwen process the terminal adapter would, plus ACP.
 func AppendSessionFlags(cmd *[]string, permissions ports.PermissionMode, model string) {
 	appendApprovalFlags(cmd, permissions)
 	appendModelFlag(cmd, ports.AgentConfig{Model: model})
@@ -421,9 +345,6 @@ func qwenWorkerRemoteInputCommand(qwenCmd []string, cfg ports.LaunchConfig) ([]s
 	if err != nil {
 		submit = []byte(`{"type":"submit","text":""}`)
 	}
-	// Stage the task in a file: escaped into the script, a 100 KiB task passes
-	// Linux's 128 KiB per-argument exec limit. The wrapper renames it into the
-	// input file, so Qwen never reads a partly written line.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("qwen: create remote input dir: %w", err)
 	}
@@ -455,8 +376,6 @@ func qwenWorkerRemoteInputCommand(qwenCmd []string, cfg ports.LaunchConfig) ([]s
 		script.WriteString(" ")
 		script.WriteString(qwenShellQuote(arg))
 	}
-	// The daemon already selected the runtime and hook PATH. Login profiles
-	// can replace it with an older Node and send callbacks to another AO.
 	return []string{"sh", "-c", script.String()}, nil
 }
 

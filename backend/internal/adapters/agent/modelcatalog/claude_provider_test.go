@@ -9,11 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// claudeRequest builds a discovery request isolated from this machine.
-//
-// The configured-default pass reads ANTHROPIC_MODEL and ~/.claude/settings.json,
-// so without this the developer's own configured model is appended to every
-// catalog under test and the assertions drift per machine.
 func claudeRequest(t *testing.T) ports.AgentModelDiscoveryRequest {
 	t.Helper()
 	home := t.TempDir()
@@ -26,8 +21,6 @@ func claudeRequest(t *testing.T) ports.AgentModelDiscoveryRequest {
 	}
 }
 
-// The picker must show what the configured provider actually serves. On
-// Bedrock and Vertex the static aliases are simply wrong IDs.
 func TestClaudeCatalogPrefersProviderModels(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
@@ -52,11 +45,6 @@ func TestClaudeCatalogPrefersProviderModels(t *testing.T) {
 	}
 }
 
-// A settings.json alias default (e.g. "sonnet") does not match the concrete
-// snapshot IDs provider discovery returns, so it is carried as its own entry.
-// It must surface with the human label the CLI uses, not the raw alias, and
-// with the version the provider's own list resolves it to, so the picker reads
-// "Sonnet 4.5" instead of "sonnet" or "Model not reported".
 func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{
@@ -84,8 +72,6 @@ func TestClaudeConfiguredAliasDefaultCarriesHumanLabel(t *testing.T) {
 	}
 }
 
-// A configured custom alias or pinned snapshot AO does not know keeps its raw
-// id as the label — we never invent a name for it.
 func TestClaudeConfiguredUnknownDefaultKeepsRawLabel(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5"}}, nil
@@ -107,8 +93,6 @@ func TestClaudeConfiguredUnknownDefaultKeepsRawLabel(t *testing.T) {
 	t.Fatal("configured custom pin was not carried into the catalog")
 }
 
-// Failed discovery leaves cache selection to the shared service. It must not
-// replace a cached provider list with invented aliases.
 func TestClaudeCatalogReturnsNoInventedModelsWithProviderError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -218,7 +202,6 @@ func TestProviderModelsPreserveProviderLabelsAndFallBackToRawIDs(t *testing.T) {
 		return []ports.AgentModelInfo{
 			{ID: "claude-opus-5", Label: "Claude Opus 5", Efforts: []string{"low", "max"}},
 			{ID: "claude-sonnet-4-5-20250929", Label: "Claude Sonnet 4.5"},
-			// No display name: the raw provider ID is the honest fallback.
 			{ID: "claude-haiku-4-5-20251001"},
 		}, nil
 	}
@@ -241,7 +224,6 @@ func TestProviderModelsPreserveProviderLabelsAndFallBackToRawIDs(t *testing.T) {
 	}
 }
 
-// Efforts must survive normalization attached to their own model.
 func TestProviderEffortsSurviveNormalization(t *testing.T) {
 	list := func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 		return []ports.AgentModelInfo{

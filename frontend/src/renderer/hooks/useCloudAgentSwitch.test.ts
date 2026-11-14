@@ -63,8 +63,6 @@ describe("useCloudAgentSwitch", () => {
 		expect(renderHook(() => useCloudAgentSwitch(undefined)).result.current.available).toBe(false);
 	});
 
-	// The new agent runs on the creator's login for it: the control plane
-	// refuses anyone else (403), an org admin included, so nobody else is offered it.
 	it("offers the switch only to the session's creator", () => {
 		mocks.meUserId = "user-2";
 		expect(renderHook(() => useCloudAgentSwitch(session)).result.current.available).toBe(false);

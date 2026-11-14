@@ -33,7 +33,6 @@ describe("computeFeatureVersion", () => {
 
 	it("timestamp is exactly 12 numeric digits (YYYYMMDDHHMM)", () => {
 		const version = computeFeatureVersion(base, pr, sha, nowIso);
-		// prerelease[1] is the timestamp part
 		const prerelease = semver.prerelease(version);
 		const tsStr = String(prerelease[1]);
 		expect(tsStr).toMatch(/^\d{12}$/);
@@ -47,7 +46,6 @@ describe("computeFeatureVersion", () => {
 	it("orders monotonically by timestamp for the same base and pr", () => {
 		const earlier = computeFeatureVersion(base, pr, sha, "2025-07-06T12:00:00Z");
 		const later = computeFeatureVersion(base, pr, sha, "2025-07-06T13:00:00Z");
-		// semver build metadata is stripped for ordering; compare without metadata
 		const stripMeta = (v) => v.split("+")[0];
 		expect(semver.gt(stripMeta(later), stripMeta(earlier))).toBe(true);
 	});

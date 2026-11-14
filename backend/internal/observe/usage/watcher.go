@@ -18,16 +18,11 @@ const (
 	watcherErrorBuffer    = 16
 )
 
-// TranscriptEvent reports a transcript path whose contents or filesystem
-// identity may have changed.
 type TranscriptEvent struct {
 	Path      string
 	Discovery bool
 }
 
-// TranscriptWatcher watches exact registered transcript files. Exact-file
-// watches keep descriptor use proportional to active durable sources even on
-// kqueue, where watching a large directory can open every file inside it.
 type TranscriptWatcher struct {
 	mu          sync.Mutex
 	watcher     *fsnotify.Watcher
@@ -43,8 +38,6 @@ type TranscriptWatcher struct {
 	startOnce sync.Once
 }
 
-// NewTranscriptWatcher creates an empty watcher. The coordinator supplies the
-// current durable source inventory through Rebuild before ingestion begins.
 func NewTranscriptWatcher(ctx context.Context, roots []string) (*TranscriptWatcher, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -90,7 +83,6 @@ func resolveWatchRoots(ctx context.Context, roots []string) ([]string, error) {
 	return normalized, nil
 }
 
-// SetRoots refreshes the allowed provider directories before Rebuild updates exact-file watches.
 func (w *TranscriptWatcher) SetRoots(ctx context.Context, roots []string) error {
 	resolved, err := resolveWatchRoots(ctx, roots)
 	if err != nil {
@@ -105,20 +97,14 @@ func (w *TranscriptWatcher) SetRoots(ctx context.Context, roots []string) error 
 	return nil
 }
 
-// Events returns filesystem-triggered transcript changes.
 func (w *TranscriptWatcher) Events() <-chan TranscriptEvent {
 	return w.events
 }
 
-// Errors returns watcher errors, including fsnotify queue-overflow errors and
-// failures encountered while rebuilding the exact-file watch set.
 func (w *TranscriptWatcher) Errors() <-chan error {
 	return w.errors
 }
 
-// Start begins forwarding watcher events until ctx is cancelled. Start is
-// idempotent; subsequent calls return the completion channel for the original
-// run.
 func (w *TranscriptWatcher) Start(ctx context.Context) <-chan struct{} {
 	w.startOnce.Do(func() {
 		go w.run(ctx)
@@ -126,8 +112,6 @@ func (w *TranscriptWatcher) Start(ctx context.Context) <-chan struct{} {
 	return w.done
 }
 
-// Rebuild replaces the current watch set using exact durable source paths. It
-// is safe during event handling and also serves as fsnotify-overflow recovery.
 func (w *TranscriptWatcher) Rebuild(ctx context.Context, sourcePaths []string) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -89,7 +89,6 @@ describe("formatDiffSelectionMessage", () => {
 
 		const message = formatDiffSelectionMessage(payload);
 
-		// Should use new numbers (5-6) since at least one line has a newNo
 		expect(message).toContain("lines 5-6");
 	});
 
@@ -106,7 +105,6 @@ describe("formatDiffSelectionMessage", () => {
 
 		const message = formatDiffSelectionMessage(payload);
 
-		// Check that diff markers are preserved
 		expect(message).toContain(" unchanged line");
 		expect(message).toContain("+ added line");
 		expect(message).toContain("- deleted line");
@@ -177,7 +175,6 @@ describe("formatDiffSelectionMessage", () => {
 
 		const message = formatDiffSelectionMessage(payload);
 
-		// Empty line should still have the marker
 		expect(message).toContain("+");
 	});
 

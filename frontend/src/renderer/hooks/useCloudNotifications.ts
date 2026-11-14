@@ -10,11 +10,6 @@ import { cloudSessionsQueryKey } from "./useWorkspaceQuery";
 import { orchestratorChildrenQueryKey } from "./useOrchestratorChildren";
 
 type UseCloudNotificationsOptions = {
-	/**
-	 * Open this instance's own live stream. The shell's CloudNotificationRuntime
-	 * already keeps the "all" list live, so readers of that list pass false
-	 * rather than holding a duplicate stream.
-	 */
 	live?: boolean;
 };
 
@@ -25,9 +20,6 @@ export function useCloudNotifications(
 	const { client, ready, baseUrl, userId } = useCloudCp();
 	const { org } = useCloudOrg();
 	const orgId = org?.id ?? "";
-	// Normalize the base URL once so the query key and every invalidation agree.
-	// A trailing slash otherwise makes the invalidation key miss the query key,
-	// so live updates would only land on mount/focus.
 	const base = baseUrl.replace(/\/+$/, "");
 	const key = cloudNotificationsQueryKey(base, orgId, userId, status);
 	const queryClient = useQueryClient();
@@ -36,13 +28,6 @@ export function useCloudNotifications(
 		if (!live || !ready || orgId === "" || userId === "") return;
 		const notificationsKey = cloudNotificationsQueryKey(base, orgId, userId, status);
 		const controller = new AbortController();
-		// The control plane owns the authoritative list, unread count, and sequence
-		// (all paginated/server-computed), so a durable event or a pre-durable hint
-		// refreshes from the source rather than being patched into the cache — which
-		// would drift the unread badge and can't render a hint that carries no
-		// title/body. A hint arrives over the terminal WebSocket before the durable
-		// inbox row commits, so it acts as a low-latency refetch trigger; REST/SSE
-		// remain the recovery source after a reconnect.
 		const refresh = () => { void queryClient.invalidateQueries({ queryKey: notificationsKey }); };
 		const stopHints = subscribeCloudNotificationHints(refresh);
 		let after: number | undefined;
@@ -70,8 +55,6 @@ export function useCloudNotifications(
 		return () => { stopHints(); controller.abort(); };
 	}, [base, live, orgId, queryClient, ready, status, userId]);
 
-	// Cleared rows are hidden per signed-in user: notifications belong to one
-	// recipient, and an org can be shared by several accounts on this device.
 	const storageKey = clearStorageKey(base, orgId, userId);
 	const clears = useSyncExternalStore(subscribeClears, () => readClearsRaw(storageKey));
 	const items = useMemo(() => {
@@ -79,9 +62,6 @@ export function useCloudNotifications(
 		return (query.data?.items ?? []).filter((item) => !isCleared(item, state));
 	}, [clears, query.data?.items]);
 
-	// A cleared row the control plane re-raises (in place: status back to unread,
-	// updated_at bumped) is revived for good, so marking it read later cannot
-	// hide it again.
 	useEffect(() => {
 		const state = parseClears(readClearsRaw(storageKey));
 		const revived = (query.data?.items ?? []).filter((item) => isRevived(item, state));
@@ -100,8 +80,6 @@ export function useCloudNotifications(
 		await client.markNotificationsRead(orgId);
 		await invalidateAll();
 	}, [client, invalidateAll, orgId, ready]);
-	// Acknowledge concrete ids only. The control plane answers 404 for a row that
-	// is already read, which is the goal, so that is not a failure here.
 	const markRead = useCallback(async (notificationIds: string[]) => {
 		if (!ready || orgId === "" || notificationIds.length === 0) return;
 		try {
@@ -110,9 +88,6 @@ export function useCloudNotifications(
 			await invalidateAll();
 		}
 	}, [client, invalidateAll, orgId, ready]);
-	// The control plane has no delete endpoint, so clearing marks rows read
-	// server-side and hides them on this device. Markers are the server's own
-	// timestamps, so local clock skew cannot hide a newer notification.
 	const clearAll = useCallback(async () => {
 		if (!ready || orgId === "") return;
 		const loaded = query.data?.items ?? [];
@@ -138,7 +113,6 @@ export function useCloudNotifications(
 		try {
 			if (notification.status === "unread") await markRead([notification.id]);
 		} catch (error) {
-			// Put the row back so the list agrees with the error it reports.
 			restoreClears(storageKey, previous);
 			throw error;
 		}
@@ -146,16 +120,9 @@ export function useCloudNotifications(
 	return { ...query, items, markAllRead, markRead, clearAll, clearOne };
 }
 
-/**
- * `before` hides every row created at or before it (clear all). `ids` holds
- * per-row markers: the row's server `updatedAt` when it was cleared, or null
- * for a row that was re-raised after a clear and must stay visible.
- */
 export type CloudClears = { before: number; ids: Record<string, number | null> };
 type CloudNotificationRow = { id: string; createdAt: string; updatedAt: string; status: "unread" | "read" };
 
-// Keep the most recent per-row markers; older rows fall under the clear-all
-// cutoff anyway. Capped so the stored map cannot grow without bound.
 const MAX_CLEARED_IDS = 200;
 const clearListeners = new Set<() => void>();
 const clearStorageKey = (base: string, orgId: string, userId: string) =>
@@ -222,7 +189,6 @@ function restoreClears(storageKey: string, raw: string) {
 		if (raw === "") window.localStorage.removeItem(storageKey);
 		else window.localStorage.setItem(storageKey, raw);
 	} catch {
-		// Storage unavailable: rows stay visible but are still marked read.
 	}
 	for (const listener of clearListeners) listener();
 }

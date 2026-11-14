@@ -13,48 +13,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Pi (binary "pi", driver "piacp") keeps one JSONL per conversation at
-// PI_CODING_AGENT_DIR/sessions/--<cwd-dashed>--/<ISO-time>_<uuid>.jsonl. The
-// file opens with a `session` header record carrying the conversation's own
-// UUID and absolute cwd, followed by records (model_change, thinking_level_change,
-// message) linked into a tree by id/parentId. Only user and assistant message
-// text is a display message; thinking, tool calls, and tool results are noise.
-//
-// OMP and Kimchi are Pi forks with the same layout and tree. OMP adds title
-// records and Kimchi adds session_info names and context_edit records; each
-// fork simply never writes the others' records.
-//
-// The file is a tree, not a list: rewinding or branching appends new records
-// under an earlier parent, so the abandoned turns remain in the file. Only the
-// active branch is a conversation to continue, so this walks parent links back
-// from the last appended record, exactly as the Claude reader does.
-
-// piRecord is the subset of a Pi-family JSONL record this import reads. The
-// folder name dashes the cwd lossily, so cwd is taken from the header instead.
 type piRecord struct {
 	Type      string    `json:"type"`
 	ID        string    `json:"id"`
 	ParentID  string    `json:"parentId"`
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
-	// Omitted is set by the oversize-record rewriter when a record was too large
-	// to decode; the dropped parts are reported as shortened history.
-	Omitted bool `json:"aoOmitted"`
-	Message struct {
+	Omitted   bool      `json:"aoOmitted"`
+	Message   struct {
 		Role    string      `json:"role"`
 		Content contentText `json:"content"`
 	} `json:"message"`
-	Title string `json:"title"`
-	Name  string `json:"name"`
-	// context_edit replaces a message's visible content; null retracts it.
+	Title       string `json:"title"`
+	Name        string `json:"name"`
 	TargetID    string `json:"targetId"`
 	Replacement *struct {
 		Content contentText `json:"content"`
 	} `json:"replacement"`
 }
 
-// piNode keeps only display facts and the tree link, so tool payloads are not
-// retained while walking ancestry.
 type piNode struct {
 	id, parent, role, text string
 	name, editTarget       string
@@ -62,10 +39,6 @@ type piNode struct {
 	dropped                bool
 }
 
-// piFamilyNativeID is the conversation UUID encoded in a Pi, OMP or Kimchi
-// session file name, `<ISO-time>_<uuid>.jsonl`. It matches the id in the
-// file's session header. A name without the separator falls back to the whole
-// stem so grouping stays stable.
 func piFamilyNativeID(path string) string {
 	name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	if i := strings.LastIndex(name, "_"); i >= 0 {
@@ -99,9 +72,9 @@ func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, ro
 		index     = map[string]int{}
 		leaf      string
 		sawHeader bool
-		held      int // bytes of held node text
+		held      int
 		firstText = -1
-		drop      int // the oldest node whose text may still be held
+		drop      int
 	)
 	now := time.Now()
 	handle := func(line []byte) error {
@@ -118,7 +91,7 @@ func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, ro
 		switch r.Type {
 		case "session":
 			if sawHeader {
-				return nil // Later segments or forks repeat the header.
+				return nil
 			}
 			sawHeader = true
 			if r.ID != "" && !strings.EqualFold(r.ID, t.nativeID) {
@@ -132,7 +105,7 @@ func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, ro
 			}
 		}
 		if r.ID == "" {
-			return nil // Without an id a record cannot take its place in the tree.
+			return nil
 		}
 		node := piNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
 		switch r.Type {
@@ -151,7 +124,6 @@ func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, ro
 		leaf = r.ID
 		idx, seen := index[r.ID]
 		if seen {
-			// Records are rewritten in place; replace and re-account the text.
 			held -= len(nodes[idx].text)
 			nodes[idx] = node
 		} else {
@@ -215,7 +187,6 @@ func readPiFamilyTranscript(ctx context.Context, harness domain.AgentHarness, ro
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
-	// A session with no real prompt, or a non-UUID name, is not a conversation to continue.
 	if !nativeIDPattern.MatchString(t.nativeID) || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
 	}

@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// openArtifactEvents opens session ao-1's artifact change stream and returns
-// its event names as they arrive.
 func openArtifactEvents(t *testing.T, url string) <-chan string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

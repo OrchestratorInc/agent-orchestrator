@@ -1,4 +1,3 @@
-// Package kilocode adapts the Kilo Code worker agent for code-review sessions.
 package kilocode
 
 import (
@@ -16,23 +15,18 @@ import (
 
 const configAssignmentPrefix = "KILO_CONFIG_CONTENT="
 
-// Reviewer is the Kilo Code code-review adapter.
 type Reviewer struct {
 	agent ports.Agent
 }
 
-// New builds the Kilo Code reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{agent: workeragent.New()}
 }
 
-// Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerKiloCode
 }
 
-// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
-// the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
 	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
 		invalidator.InvalidateBinaryResolution()
@@ -42,10 +36,6 @@ func (r *Reviewer) InvalidateBinaryResolution() {
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
-// ReviewCommand launches Kilo Code with the same hidden system-prompt agent as
-// the worker adapter, then replaces its normal permission config with the
-// reviewer-only read/report policy. The persistent TUI form is intentional:
-// AO reuses reviewer panes and injects later review tasks into them.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config:           inv.Config,
@@ -66,8 +56,6 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	return ports.ReviewCommandSpec{Argv: argv}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Kilo Code reviewer pane by
-// relaunching with the reviewer configuration and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
@@ -159,13 +147,10 @@ func replaceAgentPrompts(config map[string]any, prompt string) {
 	}
 }
 
-// ReviewMessage returns the centrally-authored task for an existing pane.
 func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel stops the active Kilo Code reviewer turn while preserving the
-// terminal pane for inspection.
 func (r *Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInterrupt, Interrupts: 2}, nil
 }

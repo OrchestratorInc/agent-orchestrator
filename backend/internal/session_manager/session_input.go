@@ -30,10 +30,6 @@ var errAgentOperationInProgress = errors.New("session: another exclusive operati
 
 var _ sessionguard.InputLease = (*Manager)(nil)
 
-// AcquireSessionInput atomically admits one pane write unless an exclusive
-// operation already owns the AO session. The returned release is idempotent;
-// callers hold it through the underlying pane write so a later mutation can
-// close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
@@ -73,11 +69,6 @@ func (m *Manager) releaseSessionInput(id domain.SessionID) {
 	m.inputLeases[id] = count - 1
 }
 
-// SessionMutationInProgress is consumed by observation-driven lifecycle paths
-// that must not independently terminate a session while AO is replacing or
-// relaunching its provider process. A live interface or account transition is
-// one: between its source stop and the target's spawn the session's runtime is
-// dead by design, and a same-mode move stays probeable all through it.
 func (m *Manager) SessionMutationInProgress(id domain.SessionID) bool {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
 	m.agentOpMu.Lock()
@@ -98,11 +89,6 @@ func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
 	return ok || deferred
 }
 
-// beginAgentOperation closes input admission before waiting for already-issued
-// leases. Because both actions share agentOpMu, a pane write is either fully
-// admitted before the operation (and drained) or rejected after it; there is
-// no interval in which it can pass a boolean check and write into the new
-// provider generation.
 func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -116,8 +102,6 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 			if current != agentOperationHibernate || kind == agentOperationHibernate {
 				return errAgentOperationInProgress
 			}
-			// Background cleanup yields to every explicit operation once its
-			// bounded shutdown completes; it must not make Kill/Switch fail.
 			select {
 			case <-ctx.Done():
 				m.agentWaitLogger().Warn("agent operation gave up waiting for hibernation to finish",
@@ -140,9 +124,6 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	case <-drained:
 		return nil
 	case <-ctx.Done():
-		// A lease that outlives the whole wait usually belongs to a write that
-		// is itself waiting on this operation, such as a relay into a sleeping
-		// Chat session that has to wake it first.
 		m.agentOpMu.Lock()
 		leases := m.inputLeases[id]
 		var heldFor time.Duration
@@ -158,7 +139,6 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	}
 }
 
-// Some tests build a Manager without New, so the logger may be unset.
 func (m *Manager) agentWaitLogger() *slog.Logger {
 	if m.logger == nil {
 		return slog.Default()
@@ -166,10 +146,6 @@ func (m *Manager) agentWaitLogger() *slog.Logger {
 	return m.logger
 }
 
-// beginAgentOperations reserves every currently-unowned session before waiting
-// for any admitted input to drain. Startup reconciliation uses this batch form
-// so candidates queued behind its worker limit are fenced just as early as the
-// candidates already being probed.
 func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.SessionID, kind agentOperationKind) ([]domain.SessionID, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -219,15 +195,13 @@ func (m *Manager) endAgentOperation(id domain.SessionID, kind agentOperationKind
 	}
 }
 
-// The deferred fence survives the foreign operation's release. Recovery, not
-// that operation, is responsible for reopening input after its durable commit.
 func (m *Manager) resumeDeferredInterfaceRecoveryLocked(id domain.SessionID) {
 	transitionID, deferred := m.deferredInterfaceRecovery[id]
 	if !deferred {
 		return
 	}
 	if err := m.beginAgentSwitchAttempt(); err != nil {
-		return // Preserve the fence for the next boot after shutdown admission closes.
+		return
 	}
 	go func() {
 		defer m.agentSwitchWorkers.Done()
@@ -235,7 +209,6 @@ func (m *Manager) resumeDeferredInterfaceRecoveryLocked(id domain.SessionID) {
 		if err != nil {
 			m.logger.Error("interface transition: deferred recovery failed", "sessionID", id, "error", err)
 		} else if len(recovered) == 0 {
-			// The exact obligation was cancelled/settled before the worker read it.
 			m.agentOpMu.Lock()
 			if m.deferredInterfaceRecovery[id] == transitionID {
 				delete(m.deferredInterfaceRecovery, id)

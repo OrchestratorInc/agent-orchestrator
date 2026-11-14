@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 
-/** Local navigation for pages whose sections live outside router history. */
 export function useSectionHistory<T extends string>(initial: T) {
 	const [history, setHistory] = useState<{ past: T[]; current: T; future: T[] }>({ past: [], current: initial, future: [] });
 	const reset = useCallback((current: T) => setHistory({ past: [], current, future: [] }), []);

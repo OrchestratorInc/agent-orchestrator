@@ -1,12 +1,5 @@
-// Pure, platform-parameterized shortcut matchers shared by the main process
-// (Electron `before-input-event`) and any renderer code. Kept free of Electron
-// and DOM types so it is trivially unit-testable and usable on both sides.
-
 export type ShortcutChord = {
 	key: string;
-	// Physical key (KeyboardEvent.code / Electron input.code), independent of
-	// layout and modifiers. Needed for chords whose character shifts — e.g.
-	// Ctrl+Shift+` reports key "~" on a US layout but code "Backquote".
 	code?: string;
 	ctrl: boolean;
 	meta: boolean;
@@ -29,16 +22,10 @@ export function terminalFontSizeDelta(chord: ShortcutChord, isMac: boolean): -1 
 	return 0;
 }
 
-/** The renderer reports whether an artifact viewer that can zoom is under the pointer or holds focus. */
 export const SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL = "artifactZoom:setEngaged";
-/** Main sends the zoom chord it claimed for an engaged artifact viewer. */
 export const ARTIFACT_ZOOM_SHORTCUT_CHANNEL = "artifactZoom:shortcut";
 export type ArtifactZoomAction = "in" | "out" | "reset";
 
-/**
- * The artifact zoom a chord asks for: Cmd+= / Cmd+- / Cmd+0 on macOS, Ctrl
- * elsewhere, the same chords as the app's View zoom.
- */
 export function artifactZoomAction(chord: Pick<ShortcutChord, "alt" | "code" | "ctrl" | "key" | "meta">, isMac: boolean): ArtifactZoomAction | undefined {
 	const hasPrimaryModifier = isMac ? chord.meta && !chord.ctrl : chord.ctrl && !chord.meta;
 	if (!hasPrimaryModifier || chord.alt) return undefined;
@@ -99,19 +86,15 @@ export type ShortcutDefinition = {
 	id: AppShortcutId;
 	label: string;
 	category: ShortcutCategory;
-	/** Indexed project selection is a family of nine bindings, not one command. */
 	customizable?: boolean;
 };
 
 export const SHORTCUT_CATEGORIES: readonly ShortcutCategory[] = ["General", "Navigation", "Session", "Panels"];
 
-/** Shortcuts that only act, and are only listed, while split panes are on. */
 export function isSplitPaneShortcut(id: AppShortcutId): boolean {
 	return id === "split-shell-terminal" || id === "split-shell-terminal-down";
 }
 
-// The user-facing shortcut catalog. Bindings live exclusively in
-// defaultShortcutBindings so runtime matching and displayed labels cannot drift.
 export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 	{ id: "find-in-chat", label: "Find in chat", category: "Session" },
 	{ id: "add-selection-to-chat", label: "Add selection to chat", category: "Session" },
@@ -168,9 +151,6 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [binding("l", primary)];
 		case "new-session":
 			return [isMac ? binding("n", { meta: true }) : binding("n", { ctrl: true, shift: true })];
-		// Plain Ctrl+T/W/B are readline/fzf/tmux keys, so on Windows/Linux they
-		// yield to a focused terminal (see app-shortcuts.ts). The Shift variants
-		// are never terminal input and work from anywhere.
 		case "new-shell-terminal":
 			return isMac
 				? [binding("t", { meta: true })]
@@ -201,9 +181,6 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return isMac
 				? [binding("`", { ctrl: true, code: "Backquote" }), binding("j", { meta: true })]
 				: [binding("`", { ctrl: true, code: "Backquote" })];
-		// ⌘⇧D splits a terminal below on macOS, so the diff takes ⌥⇧D there.
-		// Option+letter types a character on macOS (⌥⇧D is "Î"), so the
-		// binding also matches the physical key.
 		case "toggle-diff":
 			return [isMac ? binding("d", { alt: true, shift: true, code: "KeyD" }) : binding("d", { ctrl: true, shift: true })];
 		case "jump-to-session":
@@ -240,19 +217,12 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [isMac ? binding("c", { meta: true, shift: true }) : binding("l", { ctrl: true, shift: true })];
 		case "model-picker":
 			return [binding("m", { ...primary, shift: true })];
-		// ⌘D splits a new terminal to the right and ⌘⇧D one below, as in macOS
-		// terminals. Elsewhere Ctrl+D is end-of-input in a terminal and
-		// Alt+Shift switches keyboard layouts, so they take Ctrl+Alt+Shift.
 		case "split-shell-terminal":
 			return [isMac ? binding("d", { meta: true }) : binding("d", { ctrl: true, alt: true, shift: true })];
 		case "split-shell-terminal-down":
 			return [isMac ? binding("d", { meta: true, shift: true }) : binding("_", { ctrl: true, alt: true, shift: true })];
-		// ⌥D on macOS (it types "∂", so the physical key matches too). Plain
-		// Ctrl+D is end-of-input in a terminal, so other platforms add Alt.
 		case "dictate":
 			return [isMac ? binding("d", { alt: true, code: "KeyD" }) : binding("d", { ctrl: true, alt: true })];
-		// Ctrl+Shift+O is Open in editor on Windows/Linux (plain Ctrl+O is
-		// readline), so that platform takes G for "go to orchestrator".
 		case "open-orchestrator":
 			return [isMac ? binding("o", { meta: true, shift: true }) : binding("g", { ctrl: true, shift: true })];
 		case "toggle-browser-devtools":
@@ -274,15 +244,8 @@ function normalizedKey(key: string): string {
 	return key.toLowerCase();
 }
 
-// What the same physical key types with Shift on a US layout.
 const SHIFTED_KEY: Record<string, string> = { "[": "{", "]": "}", "`": "~" };
 
-// `code` is a physical position, so honoring it for an ordinary printable key
-// would fire on whatever another layout puts there (Dvorak's physical "[" types
-// "/", and ⌘/ must stay ⌘/). Fall back to the physical key only when the logical
-// key cannot be compared to the binding: it is not one printable ASCII character
-// (⌥B -> "∫", German "Ü", "Dead", "Unidentified"), or it is the US-shifted form
-// of the bound key ("{" for "[").
 function codeFallbackApplies(chordKey: string, candidateKey: string): boolean {
 	if (!/^[\x21-\x7e]$/.test(chordKey)) return true;
 	return SHIFTED_KEY[normalizedKey(candidateKey)] === chordKey;
@@ -307,11 +270,6 @@ export function matchesShortcutBinding(chord: ShortcutChord, candidate: Shortcut
 	);
 }
 
-/**
- * Application shortcuts are intercepted before the focused terminal or text
- * field sees them. Reject bindings that would consume ordinary input, terminal
- * control sequences, or common OS editing/window commands.
- */
 export function shortcutBindingValidationError(binding: ShortcutBinding, isMac: boolean): string | null {
 	if (
 		["alt", "altgraph", "capslock", "control", "dead", "meta", "numlock", "process", "scrolllock", "shift", "unidentified"].includes(
@@ -347,25 +305,17 @@ export function shortcutBindingValidationError(binding: ShortcutBinding, isMac: 
 	return null;
 }
 
-// Plain Ctrl+letter chords on Windows/Linux are live terminal keystrokes
-// (readline: Ctrl+K kill-line, Ctrl+P previous history). While a terminal has
-// focus these commands yield to it; Cmd chords on macOS never reach the shell.
-// Alt+←/→ (history) is readline/TUI word-jump, so it yields the same way.
-// Only the bare Ctrl or bare Alt form yields: Shift variants (Ctrl+Shift+P/W/E,
-// Ctrl+Shift+`) and AltGr (reported as Ctrl+Alt) are never readline input, so
-// they stay live as the terminal-safe way to run the same command.
 const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortcutId>([
-	"command-palette", // Ctrl+K kill-line
-	"quick-open-file", // Ctrl+P previous history
-	"history-back", // Alt+Left word jump
-	"history-forward", // Alt+Right word jump
-	"new-shell-terminal", // Ctrl+T transpose-chars / fzf file picker
-	"close-shell-terminal", // Ctrl+W unix-word-rubout
-	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
-	"keyboard-shortcuts", // Ctrl+/ readline undo
+	"command-palette",
+	"quick-open-file",
+	"history-back",
+	"history-forward",
+	"new-shell-terminal",
+	"close-shell-terminal",
+	"toggle-sidebar",
+	"keyboard-shortcuts",
 ]);
 
-/** True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only). */
 export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord): boolean {
 	if (id === "find-in-chat" || id === "add-selection-to-chat") return true;
 	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
@@ -382,7 +332,6 @@ export function matchesAppShortcut(
 
 export function shortcutBindingKeys(binding: ShortcutBinding, isMac: boolean): readonly string[] {
 	const keys: string[] = [];
-	// macOS lists modifiers in Apple's order (⌃⌥⇧⌘); other platforms spell them out.
 	if (isMac) {
 		if (binding.ctrl) keys.push("⌃");
 		if (binding.alt) keys.push("⌥");
@@ -437,11 +386,9 @@ function acceleratorKey(binding: ShortcutBinding): string | undefined {
 	if (named) return named;
 	if (/^[\x21-\x7e]$/.test(binding.key)) return binding.key.toUpperCase();
 	if (/^F([1-9]|1[0-9]|2[0-4])$/.test(binding.key)) return binding.key;
-	// ⌥-letter bindings record the typed character ("∫"); the physical key names it.
 	return binding.code?.match(/^(?:Key|Digit)([A-Z0-9])$/)?.[1];
 }
 
-/** The Electron accelerator for a binding, or undefined when it has none (the 1-9 family). */
 export function shortcutBindingAccelerator(binding: ShortcutBinding): string | undefined {
 	const key = acceleratorKey(binding);
 	if (!key) return undefined;
@@ -450,8 +397,6 @@ export function shortcutBindingAccelerator(binding: ShortcutBinding): string | u
 		.join("+");
 }
 
-// Top bar commands that have a native menu item (macOS). Most are shortcuts and
-// travel on their shortcut channel; the two with no chord use the action channel.
 export const APP_MENU_COMMAND_IDS = [
 	"new-session",
 	"new-shell-terminal",
@@ -473,20 +418,12 @@ export function isAppMenuActionId(id: AppMenuCommandId): id is AppMenuActionId {
 	return id === "open-in-file-manager" || id === "toggle-notifications";
 }
 
-/** The renderer reports which menu commands apply to what is on screen. */
 export const SET_APP_MENU_AVAILABILITY_CHANNEL = "app:set-menu-availability";
-/** Main delivers a menu command that has no shortcut. */
 export const APP_MENU_ACTION_CHANNEL = "app:menu-action";
 
-// IPC channel the main process uses to tell the renderer shell to open the New
-// Task flow. Lives here (not in main/) so the main process, preload, and
-// renderer can all reference one constant without crossing bundle boundaries.
 export const NEW_SESSION_SHORTCUT_CHANNEL = "app:new-session";
 export const KEYBOARD_SHORTCUTS_HELP_CHANNEL = "app:keyboard-shortcuts-help";
-// ⌘Q on macOS: main asks the shell to show the quit confirm, and the shell
-// answers on the result channel with true (quit) or false (cancelled).
 export const QUIT_CONFIRM_REQUEST_CHANNEL = "app:quit-confirm-request";
-/** keepsRunning: quitting only closes the window; AO stays in the menu bar. */
 export type QuitConfirmRequest = { keepsRunning: boolean };
 export const QUIT_CONFIRM_RESULT_CHANNEL = "app:quit-confirm-result";
 export const NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:new-shell-terminal";
@@ -496,30 +433,17 @@ export const PREVIOUS_SESSION_SHORTCUT_CHANNEL = "app:previous-session";
 export const NEXT_SESSION_SHORTCUT_CHANNEL = "app:next-session";
 export const PREVIOUS_TAB_SHORTCUT_CHANNEL = "app:previous-tab";
 export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
-// Every other application shortcut travels on one channel as `{ id, index? }`
-// so adding a command never needs a new preload method. `index` is the zero-based
-// digit for indexed commands (jump-to-session).
 export const APP_SHORTCUT_CHANNEL = "app:shortcut";
 export type AppShortcutEvent = { id: AppShortcutId; index?: number };
 
-// New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a
-// live terminal keystroke (readline/vim "next line"), so the non-mac binding
-// adds Shift to stay clear of the shell. Handled at the application level
-// (main-process before-input-event) so it fires even when focus is inside
-// xterm's helper textarea or a native Browser-preview WebContentsView.
 export function matchesNewSessionShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("new-session", chord, isMac);
 }
 
-// Terminal tabs follow the desktop tab convention: ⌘T on macOS and Ctrl+T on
-// Windows/Linux. Handled in the main process so xterm cannot swallow it.
 export function matchesNewShellTerminalShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("new-shell-terminal", chord, isMac);
 }
 
-// Keyboard shortcut help: ⌘/ on macOS, Ctrl+/ on Windows/Linux. This is also
-// handled at the application level so the terminal and Browser preview cannot
-// swallow the command before the shell sees it.
 export function matchesKeyboardShortcutsHelpShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("keyboard-shortcuts", chord, isMac);
 }

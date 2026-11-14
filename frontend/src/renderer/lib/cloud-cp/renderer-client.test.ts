@@ -19,7 +19,6 @@ describe("openUpgradeAfterPlanRefusal", () => {
 		await appI18n.changeLanguage("en");
 		queryClient.clear();
 		useUiStore.setState({ settingsModal: null, globalToasts: [] });
-		// Each case starts past the previous one's cooldown.
 		now += 10 * 60_000;
 	});
 
@@ -46,8 +45,6 @@ describe("openUpgradeAfterPlanRefusal", () => {
 });
 
 describe("cloudCpFetch", () => {
-	// The main process cannot be told to stop, but the caller stops waiting
-	// when its signal fires, as with fetch.
 	it("gives up when the caller's signal fires", async () => {
 		const w = window as unknown as { ao?: { cloudCp?: { request: () => Promise<never> } } };
 		const before = w.ao;

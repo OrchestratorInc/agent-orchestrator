@@ -10,13 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestWorkspaceIntegrationForceDestroyDirtyWorktree is the RED/GREEN test for
-// ForceDestroy. It creates a real git worktree, dirties it with an uncommitted
-// file (which normal Destroy refuses via ErrWorkspaceDirty), then calls
-// ForceDestroy and asserts:
-//
-//	(a) the worktree path no longer exists on disk.
-//	(b) the worktree is deregistered from `git worktree list`.
 func TestWorkspaceIntegrationForceDestroyDirtyWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -34,33 +27,26 @@ func TestWorkspaceIntegrationForceDestroyDirtyWorktree(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Dirty the worktree with uncommitted work: normal Destroy must refuse this.
 	wip := filepath.Join(info.Path, "wip.txt")
 	if err := os.WriteFile(wip, []byte("uncommitted work\n"), 0o600); err != nil {
 		t.Fatalf("write wip: %v", err)
 	}
 
-	// Confirm that safe Destroy refuses the dirty worktree (guard: this is the
-	// contract we must NOT break).
 	if destroyErr := ws.Destroy(ctx, info); !errors.Is(destroyErr, ports.ErrWorkspaceDirty) {
 		t.Fatalf("Destroy dirty error = %v, want ports.ErrWorkspaceDirty", destroyErr)
 	}
-	// Path must still be intact after refused Destroy.
 	if _, err := os.Stat(wip); err != nil {
 		t.Fatalf("dirty worktree was removed by Destroy: %v", err)
 	}
 
-	// ForceDestroy must succeed even though the worktree is dirty.
 	if err := ws.ForceDestroy(ctx, info); err != nil {
 		t.Fatalf("ForceDestroy: %v", err)
 	}
 
-	// (a) Path no longer exists on disk.
 	if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("path after ForceDestroy stat err = %v, want not exist", err)
 	}
 
-	// (b) Worktree is deregistered from git worktree list.
 	records, err := ws.listRecords(ctx, repo)
 	if err != nil {
 		t.Fatalf("listRecords after ForceDestroy: %v", err)
@@ -70,8 +56,6 @@ func TestWorkspaceIntegrationForceDestroyDirtyWorktree(t *testing.T) {
 	}
 }
 
-// TestForceDestroyArgs verifies the new force arg builder emits --force
-// and leaves worktreeRemoveArgs byte-for-byte unchanged (review item RA guard).
 func TestForceDestroyArgs(t *testing.T) {
 	repo := "/repo"
 	path := "/managed/proj/sess"

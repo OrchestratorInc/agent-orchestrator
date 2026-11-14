@@ -53,7 +53,6 @@ func TestConfiguredProvidersOpenCodeScopeAndMalformedStore(t *testing.T) {
 	if got := configuredProviders(context.Background(), "opencode", env); !reflect.DeepEqual(got, []string{"custom"}) {
 		t.Fatalf("providers = %v", got)
 	}
-	// OpenCode 2 must not reuse potentially stale OpenCode 1 credentials.
 	if got := configuredProviders(context.Background(), "opencode-v2", env); len(got) != 0 {
 		t.Fatalf("v2 providers = %v", got)
 	}

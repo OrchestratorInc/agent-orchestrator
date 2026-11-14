@@ -25,122 +25,77 @@ import (
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 )
 
-// APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
-	// SessionForks serves the experimental fork routes. Nil refuses them.
-	SessionForks       controllers.SessionForkService
-	UsageFlush         func(context.Context)
-	Awake              controllers.AwakeService
-	Agents             controllers.AgentCatalog
-	CodexAccounts      controllers.CodexAccountService
-	AgentAccounts      controllers.AgentAccountService
-	Projects           projectsvc.Manager
-	Sessions           controllers.SessionService
-	ArtifactVersions   controllers.ArtifactVersionService
-	Automations        controllers.AutomationService
-	DesktopWorkspaces  controllers.DesktopWorkspaceService
-	Activity           controllers.ActivityRecorder
-	PRRefresh          controllers.PRRefresher
-	NativeSessions     ports.AgentNativeSessionResolver
-	UsageHooks         controllers.UsageHookRecorder
-	UsageSummary       controllers.UsageSummaryService
-	UsageReport        controllers.UsageReportService
-	UsageLimitHistory  controllers.UsageLimitHistoryService
-	UsageLimitSetting  controllers.UsageLimitHistorySetting
-	UsagePrices        controllers.UsagePriceService
-	SessionMemory      controllers.SessionMemoryService
-	SessionSteps       controllers.SessionStepsReader
-	PRs                prsvc.ActionManager
-	Reviews            reviewsvc.Manager
-	Notifications      controllers.NotificationService
-	Reports            controllers.ReportService
-	NotificationStream controllers.NotificationStream
-	Push               controllers.PushRegistry
-	Import             controllers.ImportService
-	SessionImport      controllers.SessionImportService
-	Directories        controllers.DirectoryBrowserService
-	ShellTerminals     controllers.ShellTerminalService
-	Cues               controllers.CueService
-	// Conversations is nil until a Chat driver is wired; the controller then
-	// answers 501 rather than panicking, matching the other optional surfaces.
-	Conversations controllers.ConversationService
-	// ConversationSearch is the chat full-text index; nil answers 501.
-	ConversationSearch controllers.ConversationSearch
-	// Settings is the daemon-owned preference surface.
-	Settings  controllers.SettingsService
-	DevImport controllers.DevImportService
-	CDC       cdc.Source
-	Events    cdcSubscriber
-	Telemetry ports.EventSink
-	// TelemetryIdentity is the live telemetry identity, served to the phone by
-	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
-	TelemetryIdentity ports.TelemetryIdentityStore
-	LifetimeSessions  func(context.Context) (int64, error)
-	Mobile            *controllers.MobileController
-	BrowserLive       *BrowserLiveHub
-	Browser           controllers.BrowserService
-	BrowserChrome     controllers.BrowserChromeService
-	// Panes relays split-pane requests from agents to the desktop window.
-	Panes controllers.PaneService
-	// PaneTerminals lets an agent type into and read its session's shell terminals.
+	SessionForks             controllers.SessionForkService
+	UsageFlush               func(context.Context)
+	Awake                    controllers.AwakeService
+	Agents                   controllers.AgentCatalog
+	CodexAccounts            controllers.CodexAccountService
+	AgentAccounts            controllers.AgentAccountService
+	Projects                 projectsvc.Manager
+	Sessions                 controllers.SessionService
+	ArtifactVersions         controllers.ArtifactVersionService
+	Automations              controllers.AutomationService
+	DesktopWorkspaces        controllers.DesktopWorkspaceService
+	Activity                 controllers.ActivityRecorder
+	PRRefresh                controllers.PRRefresher
+	NativeSessions           ports.AgentNativeSessionResolver
+	UsageHooks               controllers.UsageHookRecorder
+	UsageSummary             controllers.UsageSummaryService
+	UsageReport              controllers.UsageReportService
+	UsageLimitHistory        controllers.UsageLimitHistoryService
+	UsageLimitSetting        controllers.UsageLimitHistorySetting
+	UsagePrices              controllers.UsagePriceService
+	SessionMemory            controllers.SessionMemoryService
+	SessionSteps             controllers.SessionStepsReader
+	PRs                      prsvc.ActionManager
+	Reviews                  reviewsvc.Manager
+	Notifications            controllers.NotificationService
+	Reports                  controllers.ReportService
+	NotificationStream       controllers.NotificationStream
+	Push                     controllers.PushRegistry
+	Import                   controllers.ImportService
+	SessionImport            controllers.SessionImportService
+	Directories              controllers.DirectoryBrowserService
+	ShellTerminals           controllers.ShellTerminalService
+	Cues                     controllers.CueService
+	Conversations            controllers.ConversationService
+	ConversationSearch       controllers.ConversationSearch
+	Settings                 controllers.SettingsService
+	DevImport                controllers.DevImportService
+	CDC                      cdc.Source
+	Events                   cdcSubscriber
+	Telemetry                ports.EventSink
+	TelemetryIdentity        ports.TelemetryIdentityStore
+	LifetimeSessions         func(context.Context) (int64, error)
+	Mobile                   *controllers.MobileController
+	BrowserLive              *BrowserLiveHub
+	Browser                  controllers.BrowserService
+	BrowserChrome            controllers.BrowserChromeService
+	Panes                    controllers.PaneService
 	PaneTerminals            controllers.PaneTerminalService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
 	SystemChecks             controllers.SystemChecker
-	// HostID is this machine's stable, machine-bound identity, served by the
-	// unauthenticated GET /api/v1/identity probe so a phone can confirm which
-	// machine answered before presenting a credential.
-	HostID string
-	// Endpoints reports how this daemon can currently be reached, for the
-	// phone's endpoint-refresh route.
-	Endpoints controllers.EndpointSource
-	Installer controllers.Installer
-	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
-	ComputerUse controllers.ComputerUse
-	AgentAuth   controllers.AgentAuthService
-	// GitHub is the local GitHub PAT + repos surface.
-	GitHub controllers.GitHubPATService
-	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
-	// leaves the route answering 501.
-	LinkPreview controllers.LinkPreviewService
-	// SessionSearch answers the ranked search over past sessions. Nil leaves
-	// the route answering 501; the index itself is built by the daemon.
-	SessionSearch controllers.SessionSearchService
+	HostID                   string
+	Endpoints                controllers.EndpointSource
+	Installer                controllers.Installer
+	ComputerUse              controllers.ComputerUse
+	AgentAuth                controllers.AgentAuthService
+	GitHub                   controllers.GitHubPATService
+	LinkPreview              controllers.LinkPreviewService
+	SessionSearch            controllers.SessionSearchService
 
-	// Presence tracks which mobile devices are currently running the app.
-	// Nil disables presence tracking (the roster then reports every device offline).
-	Presence *presence.Tracker
-	// ClientTimeZone records the time zone the desktop app reports, which
-	// agent prompts prefer over this daemon's own. Nil disables recording.
+	Presence       *presence.Tracker
 	ClientTimeZone *clienttz.Recorder
 
-	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
-	DeviceRoster controllers.DeviceRoster
-	DeviceLive   controllers.LiveSet
-	// DeviceAccess adds device tokens and the account to the device list. Nil skips them.
-	DeviceAccess controllers.DeviceAccess
-	// AccessDevices links push registrations to device tokens.
+	DeviceRoster  controllers.DeviceRoster
+	DeviceLive    controllers.LiveSet
+	DeviceAccess  controllers.DeviceAccess
 	AccessDevices *mobilebridge.AccessDevices
 }
 
-// normalizeAPIDeps closes the Presence/DeviceLive duplication trap structurally.
-// Liveness enters APIDeps twice — Presence drives the heartbeat middleware that
-// touches it, DeviceLive is what the device roster reads — and nothing enforces
-// they stay the same tracker. If a future edit set Presence but left DeviceLive
-// nil (or re-split them), the roster would silently and permanently report
-// every device offline: no error, no log, no test failure short of a live
-// phone. Defaulting DeviceLive to Presence here, at the one place APIDeps is
-// consumed to build the API, makes that trap unreachable rather than merely
-// currently avoided by careful call-site wiring.
-//
-// A nil Presence on its own is not an error: the roster must keep listing and
-// managing devices with every device simply reporting offline (see
-// MobileDevicesController.List's own nil-Presence fallback) — that decision
-// stands. What IS a real mis-wiring is a live DeviceRoster with no liveness
-// source at all after the fallback above; that gets exactly one startup
-// warning, because a silent-forever-offline roster is precisely what a
-// startup log is for.
 func normalizeAPIDeps(deps APIDeps, log *slog.Logger) APIDeps {
 	if deps.DeviceLive == nil && deps.Presence != nil {
 		deps.DeviceLive = deps.Presence
@@ -151,8 +106,6 @@ func normalizeAPIDeps(deps APIDeps, log *slog.Logger) APIDeps {
 	return deps
 }
 
-// API owns one controller per resource and is the single Register call the
-// router invokes to mount the /api/v1 surface.
 type API struct {
 	cfg           config.Config
 	deps          APIDeps
@@ -193,15 +146,10 @@ type API struct {
 	events        *EventsController
 }
 
-// NewAPI constructs the API surface from its dependencies. cfg carries the
-// per-request timeout so the REST group can apply it without re-reading the
-// environment.
 func NewAPI(cfg config.Config, deps APIDeps) *API {
 	return newAPIWithLogger(cfg, deps, loggerOrDefault(nil))
 }
 
-// newAPIWithLogger carries the daemon logger to controllers that emit service
-// errors, so their logs use the same configured handler as the rest of HTTP.
 func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 	return &API{
 		cfg:  cfg,
@@ -265,32 +213,21 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
-// setupRoute reports a request that may run the project's Setup steps.
 func setupRoute(req *http.Request) bool {
 	if req.Method != http.MethodPost {
 		return false
 	}
 	switch chi.RouteContext(req.Context()).RoutePattern() {
 	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
-		// The first open of an imported chat runs Setup in its new workspace.
 		"/api/v1/sessions/{sessionId}/resume-agent",
-		// A fork spawns a session, whose Setup runs in its new worktree.
 		"/api/v1/sessions/{sessionId}/fork":
 		return true
 	}
 	return false
 }
 
-// setupRequestBudget is the base budget of a Setup route before its Setup
-// steps extend it. A cold spawn fetches the default branch, creates a worktree
-// and starts the agent inside one request, which can outlast the general
-// REST timeout on a slow machine or a large repository.
-// A var only so tests can shorten it.
 var setupRequestBudget = 120 * time.Second
 
-// serveWithSetupBudget serves a Setup route under budget, like
-// middleware.Timeout, except that the operation may extend the deadline
-// (ports.ExtendSpawnRequestBudget) once it knows its Setup steps.
 func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Request, budget time.Duration) {
 	ctx, timedOut, release := ports.NewSpawnRequestContext(req.Context(), budget)
 	defer release()
@@ -300,21 +237,15 @@ func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Re
 	}
 }
 
-// Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
-// as muxed terminal streams stay outside this timeout group.
 func (a *API) Register(root chi.Router) {
 	timeout := a.cfg.RequestTimeout
 	if timeout <= 0 {
 		timeout = config.DefaultRequestTimeout
 	}
 	root.Route("/api/v1", func(r chi.Router) {
-		// Serve the OpenAPI document from the same origin as the routes it describes.
 		r.Get("/openapi.yaml", apispec.ServeYAML)
 
 		r.Group(func(r chi.Router) {
-			// Large base64 bodies can spend longer than the ordinary REST budget
-			// uploading over a phone connection. Only attachment-bearing requests
-			// opt in; ordinary calls to the same routes keep the configured timeout.
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
@@ -322,35 +253,21 @@ func (a *API) Register(root chi.Router) {
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-					// A clone downloads the whole repository inside the request,
-					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
 						pattern == "/api/v1/projects/clone/prepare" || pattern == "/api/v1/projects/clone/prepare/stream" {
 						clone.ServeHTTP(w, req)
 						return
 					}
-					// A run_steps batch may run for the driver's full 60 s before
-					// its step report and closing window read, and an action is
-					// followed by its own read: either outlasts the REST budget.
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
 						computerUse.ServeHTTP(w, req)
 						return
 					}
-					// A stack merge waits up to two minutes for the provider to land
-					// it (stackMergeWait in the GitHub adapter), after the layers'
-					// own readiness reads.
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/prs/{id}/stack/merge" {
 						stackMerge.ServeHTTP(w, req)
 						return
 					}
-					// A spawn, an orchestrator start or a restore runs the project's
-					// Setup inside the request, and a Setup step may take far longer
-					// than one REST request: the operation extends this budget by its
-					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
 						budget := max(timeout, setupRequestBudget)
-						// Resuming an agent reads its whole native history, which takes
-						// over a minute for a large imported Codex thread.
 						if attachmentUploadRoute(req) ||
 							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" {
 							budget = max(timeout, 10*time.Minute)
@@ -358,14 +275,10 @@ func (a *API) Register(root chi.Router) {
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					// An import scan reads every local history.
 					if attachmentUploadRoute(req) || sessionImportRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
-					// A managed preview carries the dev server's HMR socket and event
-					// streams, and the agent browser its stream socket: both stay open
-					// as long as the page does.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
 						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" {
 						next.ServeHTTP(w, req)
@@ -410,9 +323,7 @@ func (a *API) Register(root chi.Router) {
 			a.linkPreview.Register(r)
 			a.sessionSearch.Register(r)
 			a.github.Register(r)
-			// Sibling REST controllers plug in here.
 		})
-		// Long-lived streams intentionally bypass the REST timeout middleware.
 		a.notifications.RegisterStream(r)
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
@@ -420,7 +331,6 @@ func (a *API) Register(root chi.Router) {
 	})
 }
 
-// sessionImportRoute covers the scan and the import: both read every chosen history.
 func sessionImportRoute(req *http.Request) bool {
 	return chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/session-import"
 }
@@ -430,7 +340,6 @@ func attachmentUploadRoute(req *http.Request) bool {
 		return false
 	}
 	route := chi.RouteContext(req.Context()).RoutePattern()
-	// This route only accepts attachments, including from older clients.
 	if route == "/api/v1/sessions/{sessionId}/attachments" {
 		return true
 	}
@@ -454,24 +363,16 @@ func attachmentUploadRoute(req *http.Request) bool {
 	}
 }
 
-// notFoundJSON returns the locked envelope for unmatched routes. Chi's default
-// 404 is a text/plain body; the API surface must answer JSON so consumers can
-// parse it uniformly.
 func notFoundJSON(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ROUTE_NOT_FOUND",
 		r.Method+" "+r.URL.Path+" has no handler", nil)
 }
 
-// methodNotAllowedJSON returns the locked envelope when a method probes a
-// known path without a matching verb (e.g. PUT /projects/{id} after we drop
-// the legacy PUT alias).
 func methodNotAllowedJSON(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "METHOD_NOT_ALLOWED",
 		r.Method+" not allowed on "+r.URL.Path, nil)
 }
 
-// memoryPressure is the memory service's cheap pressure read when it offers
-// one; nil leaves the route at 501.
 func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPressureReader {
 	if p, ok := svc.(controllers.MemoryPressureReader); ok {
 		return p
@@ -479,8 +380,6 @@ func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPres
 	return nil
 }
 
-// newAgentAccountsController moves sessions through the session service when
-// it can, so a move maps errors like every other session command.
 func newAgentAccountsController(deps APIDeps) *controllers.AgentAccountsController {
 	c := &controllers.AgentAccountsController{Svc: deps.AgentAccounts}
 	if mover, ok := deps.Sessions.(controllers.AgentAccountSessionMover); ok {
@@ -489,8 +388,6 @@ func newAgentAccountsController(deps APIDeps) *controllers.AgentAccountsControll
 	return c
 }
 
-// agentBrowserURL is the host's agent browser, or nil when it has none.
-// config.Load already accepted only a loopback http URL.
 func agentBrowserURL(raw string) *url.URL {
 	u, err := url.Parse(raw)
 	if raw == "" || err != nil {
@@ -499,8 +396,6 @@ func agentBrowserURL(raw string) *url.URL {
 	return u
 }
 
-// userMessageRecorder reuses the session service, which owns session telemetry,
-// to report human chat sends. Nil when the service cannot record.
 func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
 	recorder, _ := sessions.(controllers.UserMessageRecorder)
 	return recorder

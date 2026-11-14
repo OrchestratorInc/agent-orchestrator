@@ -17,10 +17,6 @@ import (
 
 const kimchiTestSession = "019fe4d5-24c5-77ac-a0e3-d3c18b37dcef"
 
-// TestEncodeKimchiCwdDir pins the folder encoder against kimchi 1.24.3's
-// encodeCwdDir: strip one leading slash/backslash, map '/', '\\' and ':' to
-// '-', wrap in '--'. Kimchi does NOT strip the home directory (unlike OMP), so
-// a home-based AO worktree keeps its full path form.
 func TestEncodeKimchiCwdDir(t *testing.T) {
 	cases := map[string]string{
 		"/Users/me/.ao/data/worktrees/proj/x": "--Users-me-.ao-data-worktrees-proj-x--",
@@ -53,9 +49,6 @@ func sourcePath(root, folder string) string {
 	return filepath.Join(root, "sessions", folder, "2026-08-09T04-43-21-669Z_"+kimchiTestSession+".jsonl")
 }
 
-// TestRelocateKimchiFirstOpenCopiesAndRewritesCwd checks the first-open copy:
-// the transcript is placed at the launch cwd's folder, its header cwd rewritten
-// to the exact launch cwd, and the original is left untouched.
 func TestRelocateKimchiFirstOpenCopiesAndRewritesCwd(t *testing.T) {
 	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
@@ -90,7 +83,6 @@ func TestRelocateKimchiFirstOpenCopiesAndRewritesCwd(t *testing.T) {
 	if !kimchiHasConversation(got) {
 		t.Fatal("copy has no conversation")
 	}
-	// The original must be byte-for-byte unchanged.
 	original, err := readKimchiHeader(src)
 	if err != nil || original == nil {
 		t.Fatalf("read original header: %v", err)
@@ -100,9 +92,6 @@ func TestRelocateKimchiFirstOpenCopiesAndRewritesCwd(t *testing.T) {
 	}
 }
 
-// TestRelocateKimchiNeverOverwritesExistingCopy checks the idempotent, first-
-// open-only contract: a copy already at the launch cwd (which may hold turns AO
-// appended after the import) is returned as-is, never overwritten.
 func TestRelocateKimchiNeverOverwritesExistingCopy(t *testing.T) {
 	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
@@ -116,7 +105,6 @@ func TestRelocateKimchiNeverOverwritesExistingCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate AO appending a turn to the copy after the first resume.
 	appended := "\n" + `{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-08-09T05:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"a turn added in AO"}]}}` + "\n"
 	f, err := os.OpenFile(first, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -150,13 +138,6 @@ func TestRelocateKimchiNeverOverwritesExistingCopy(t *testing.T) {
 	}
 }
 
-// TestRelocateKimchiEncodesRawSymlinkedLaunchCWD pins the behavior 496 proved
-// live over ACP: Kimchi names the session folder (and compares header.cwd) from
-// the RAW launch cwd AO's driver sends, with no EvalSymlinks. Encoding the
-// resolved path instead places the copy where the loader never looks and
-// reintroduces the silent-empty load. The launch cwd here is a symlink whose
-// target differs from the link path; the copy must land under the link-named
-// folder, not the target-named one.
 func TestRelocateKimchiEncodesRawSymlinkedLaunchCWD(t *testing.T) {
 	configDir := kimchiTestRoot(t)
 	src := sourcePath(configDir, "--work-repo--")
@@ -413,9 +394,6 @@ func TestRelocateKimchiRejectsExistingInvalidOrAmbiguousDestination(t *testing.T
 	}
 }
 
-// readKimchiHeader returns the first session header record, or nil when the
-// file has none. It reads only the first non-empty line, which is always the
-// header in a Kimchi transcript.
 type kimchiSessionHeader struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
@@ -447,9 +425,6 @@ func readKimchiHeader(path string) (*kimchiSessionHeader, error) {
 	}
 }
 
-// kimchiHasConversation reports whether path holds at least one user or
-// assistant message record, so an empty or header-only file is not mistaken
-// for replayable history.
 func kimchiHasConversation(path string) bool {
 	f, err := os.Open(path) //nolint:gosec // provider-owned path resolved from the configured root
 	if err != nil {

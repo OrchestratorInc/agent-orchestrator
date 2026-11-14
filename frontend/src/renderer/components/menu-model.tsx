@@ -21,25 +21,16 @@ import {
 } from "./ui/dropdown-menu";
 import { useShortcutKeys } from "./ui/tooltip";
 
-/**
- * One row of an action menu, independent of the menu that shows it. A menu's
- * rows are built once as entries and rendered by `MenuEntries` inside either a
- * right-click ContextMenu or a DropdownMenu, so the two cannot drift apart.
- */
 export type MenuEntry =
 	| {
 			kind: "item";
 			id: string;
 			label: string;
 			icon?: ReactNode;
-			/** A literal key hint, such as F2. */
 			shortcut?: string;
-			/** An app shortcut's key hint, honouring custom keybindings. */
 			shortcutId?: AppShortcutId;
-			/** A muted trailing count in the hint column; give `ariaLabel` the spoken form. */
 			count?: number;
 			disabled?: boolean;
-			/** A muted line under the label, such as why the item is disabled. */
 			description?: string;
 			destructive?: boolean;
 			title?: string;
@@ -55,7 +46,6 @@ export type MenuEntry =
 			onOpenChange?: (open: boolean) => void;
 	  }
 	| { kind: "separator"; id: string }
-	/** A row with its own controls (the terminal agent picker); `label` names it in tests. */
 	| { kind: "custom"; id: string; label: string; render: () => ReactNode };
 
 type ItemProps = {
@@ -67,7 +57,6 @@ type ItemProps = {
 	children?: ReactNode;
 };
 
-/** The menu primitives a menu's entries render with. */
 export type MenuKit = {
 	kind: "context" | "dropdown";
 	Item: ComponentType<ItemProps>;
@@ -92,17 +81,14 @@ export const dropdownMenuKit: MenuKit = {
 	kind: "dropdown",
 	Item: DropdownMenuItem,
 	Separator: DropdownMenuSeparator,
-	// The context menu's hint keeps a gap from the label; match it.
 	Shortcut: ({ children, ...props }) => <DropdownMenuShortcut className="pl-4" {...props}>{children}</DropdownMenuShortcut>,
 	Sub: DropdownMenuSub,
 	SubTrigger: DropdownMenuSubTrigger,
 	SubContent: DropdownMenuSubContent,
 };
 
-/** Right-click menus are the default, for rows mounted inside a bare ContextMenu. */
 export const MenuKitContext = createContext<MenuKit>(contextMenuKit);
 
-/** Closes the menu that shows the entries, for a custom row that finishes its own work. */
 export const MenuCloseContext = createContext<() => void>(() => {});
 
 export function useMenuKit() {
@@ -113,7 +99,6 @@ export function useCloseMenu() {
 	return useContext(MenuCloseContext);
 }
 
-/** Separators only between groups: none leading, trailing or doubled. */
 export function tidyMenuEntries(entries: MenuEntry[]): MenuEntry[] {
 	const out: MenuEntry[] = [];
 	for (const entry of entries) {
@@ -130,7 +115,6 @@ function AppShortcutHint({ id }: { id: AppShortcutId }) {
 	return keys ? <Shortcut aria-hidden="true">{keys.join(isMacPlatform() ? "" : "+")}</Shortcut> : null;
 }
 
-/** Renders entries with the surrounding menu's primitives. */
 export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 	const kit = useMenuKit();
 	return (

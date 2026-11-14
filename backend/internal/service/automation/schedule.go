@@ -1,4 +1,3 @@
-// Package automation owns durable recurring-automation behavior.
 package automation
 
 import (
@@ -10,9 +9,6 @@ import (
 	rrule "github.com/teambition/rrule-go"
 )
 
-// ScheduleInput is the user-facing schedule choice. Exactly one source is set.
-// AnchorTimezone is set only when RRule is a persisted rule being moved to a
-// new Timezone, and names the zone its DTSTART anchor was stored in.
 type ScheduleInput struct {
 	RRule          string
 	Cron           string
@@ -20,15 +16,12 @@ type ScheduleInput struct {
 	AnchorTimezone string
 }
 
-// Schedule is the canonical durable rule and its first future occurrence.
 type Schedule struct {
 	RRuleText string
 	Timezone  string
 	NextRunAt time.Time
 }
 
-// CanonicalizeSchedule validates one schedule input and persists its DTSTART
-// anchor with the RRULE so interval semantics survive daemon restarts.
 func CanonicalizeSchedule(input ScheduleInput, now time.Time) (Schedule, error) {
 	rruleText := strings.TrimSpace(input.RRule)
 	cronText := strings.TrimSpace(input.Cron)
@@ -100,11 +93,6 @@ func CanonicalizeSchedule(input ScheduleInput, now time.Time) (Schedule, error) 
 	return Schedule{RRuleText: option.String(), Timezone: zone, NextRunAt: next.UTC()}, nil
 }
 
-// rebaseRRule moves a persisted rule's DTSTART anchor into a new timezone.
-// Hourly and minutely rules keep the anchor's instant so the cadence continues
-// unbroken. Slower rules keep the anchor's local wall-clock time; when that
-// pushes an already-started daily or weekly anchor past now, it steps back by
-// whole intervals so the first occurrences in the new zone are not skipped.
 func rebaseRRule(rruleText, anchorZone string, loc *time.Location, now time.Time) (string, error) {
 	anchorLoc, err := time.LoadLocation(anchorZone)
 	if err != nil {
@@ -151,8 +139,6 @@ func embeddedTimezone(value string) string {
 	return value[start : start+end]
 }
 
-// NextOccurrence calculates the first logical occurrence strictly after the
-// supplied instant using the persisted anchor and named timezone.
 func NextOccurrence(rruleText, timezone string, after time.Time) (time.Time, error) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
@@ -173,9 +159,6 @@ func NextOccurrence(rruleText, timezone string, after time.Time) (time.Time, err
 	return next.UTC(), nil
 }
 
-// cronToRRule intentionally accepts the unambiguous minute/hour + optional
-// weekday subset used by the desktop presets. Other valid cron constructs are
-// rejected instead of being translated with different semantics.
 func cronToRRule(value string) (string, error) {
 	fields := strings.Fields(value)
 	if len(fields) != 5 {
@@ -244,7 +227,6 @@ func cronWeekdays(value string) ([]string, error) {
 	}
 	names := []string{"SU", "MO", "TU", "WE", "TH", "FR", "SA"}
 	days := make([]string, 0, len(seen))
-	// RFC output is stable Monday through Sunday.
 	for _, day := range []int{1, 2, 3, 4, 5, 6, 0} {
 		if seen[day] {
 			days = append(days, names[day])

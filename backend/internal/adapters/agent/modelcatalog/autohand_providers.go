@@ -7,16 +7,10 @@ import (
 
 func init() { browseProviderCredentials["autohand"] = autohandConfiguredProviders }
 
-// autohandKeyedProviders are the config.json provider sections Autohand reads
-// an apiKey from. Its local providers (Ollama, llama.cpp, MLX) need no key, so
-// nothing on disk shows whether they are ready, and they are not marked.
 var autohandKeyedProviders = []string{
 	"openrouter", "openai", "llmgateway", "azure", "zai", "vertexai", "xai", "cerebras", "nvidia", "deepseek", "bedrock",
 }
 
-// autohandConfiguredProviders reports the provider sections of
-// ~/.autohand/config.json holding an apiKey, and Azure when
-// AZURE_OPENAI_KEY is set, which Autohand reads ahead of its config.
 func autohandConfiguredProviders(_ string, env map[string]string) []string {
 	var providers []string
 	for _, path := range modelConfigPaths("autohand", "", env) {

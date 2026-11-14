@@ -8,9 +8,6 @@ function render(ui: ReactNode) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-// Drives the real useWorkspaceQuery + SessionsBoard end to end for a normal
-// project, mocking only the HTTP client and the router. Proves PR facts carried
-// on the session list flow through the shared workspace cache into the board.
 const { getMock, navigateMock } = vi.hoisted(() => ({ getMock: vi.fn(), navigateMock: vi.fn() }));
 
 vi.mock("../../lib/api-client", () => ({
@@ -28,7 +25,6 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 import { SessionsBoard } from "../../components/SessionsBoard";
 
-// One ordinary project with one worker session that has multiple PRs.
 function respondWithProjectAndPRs() {
 	getMock.mockImplementation(async (url: string) => {
 		if (url === "/api/v1/projects") {

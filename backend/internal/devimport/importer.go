@@ -1,6 +1,3 @@
-// Package devimport copies the native rewrite project registry between AO data
-// directories. It is intentionally narrower than legacy import: only active
-// project rows and workspace child repo registry are copied.
 package devimport
 
 import (
@@ -12,7 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Store is the storage slice required by the dev project importer.
 type Store interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
@@ -20,15 +16,12 @@ type Store interface {
 	ImportWorkspaceProject(ctx context.Context, row domain.ProjectRecord, repos []domain.WorkspaceRepoRecord) error
 }
 
-// Options configure a project registry copy.
 type Options struct {
 	SourceDataDir string
 	TargetDataDir string
 	DryRun        bool
 }
 
-// Conflict describes a target project that prevented a source project from
-// being copied.
 type Conflict struct {
 	ProjectID  string `json:"projectId"`
 	Path       string `json:"path"`
@@ -37,7 +30,6 @@ type Conflict struct {
 	TargetPath string `json:"targetPath,omitempty"`
 }
 
-// Report is the structured outcome of one copy run.
 type Report struct {
 	SourceDataDir string     `json:"sourceDataDir"`
 	TargetDataDir string     `json:"targetDataDir"`
@@ -48,8 +40,6 @@ type Report struct {
 	Conflicts     []Conflict `json:"conflicts,omitempty"`
 }
 
-// Run copies active source projects into target. It never archives or deletes
-// target projects, and dry-run mode performs all conflict checks without writes.
 func Run(ctx context.Context, source, target Store, opts Options) (Report, error) {
 	rep := Report{
 		SourceDataDir: opts.SourceDataDir,

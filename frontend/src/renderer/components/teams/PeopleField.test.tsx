@@ -154,7 +154,6 @@ describe("PeopleField", () => {
 		fireEvent.focus(input);
 		await type(input, "riya");
 		fireEvent.click(await screen.findByText("New team…"));
-		// What was typed goes along, for the new team's name.
 		expect(onNewTeam).toHaveBeenCalledWith([{ kind: "person", email: "dana@northwind.dev", name: "Dana Kim" }], "riya");
 	});
 
@@ -164,7 +163,6 @@ describe("PeopleField", () => {
 		fireEvent.focus(input);
 		await type(input, "a");
 		await screen.findByText("Dana Kim");
-		// Typed on, with no time for the next answer: only matches stay.
 		fireEvent.change(input, { target: { value: "riya" } });
 		expect(screen.queryByText("Dana Kim")).toBeNull();
 		expect(screen.queryByText("Platform")).toBeNull();
@@ -178,7 +176,6 @@ describe("PeopleField", () => {
 		fireEvent.focus(input);
 		await type(input, "tiwari@gmail.com");
 		const options = await screen.findAllByRole("option");
-		// The look-alike is offered, but it isn't what Enter picks.
 		expect(options.some((option) => option.textContent?.includes("Vaibhaav Tiwari"))).toBe(true);
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(value()).toEqual([{ kind: "person", email: "tiwari@gmail.com" }]);
@@ -217,7 +214,6 @@ describe("PeopleField", () => {
 		fireEvent.focus(input);
 		await type(input, "dana");
 		await screen.findByText("Dana Kim");
-		// Pasted and entered before the suggestions for it arrive.
 		fireEvent.change(input, { target: { value: "riya@acme.co" } });
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(value()).toEqual([{ kind: "person", email: "riya@acme.co" }]);
@@ -238,7 +234,6 @@ describe("PeopleField", () => {
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(value().map((recipient) => (recipient.kind === "team" ? recipient.teamId : recipient.email))).toEqual(["dana@northwind.dev", "t-platform"]);
 		expect(onSubmit).not.toHaveBeenCalled();
-		// With the list shut and nothing typed, Enter shares.
 		fireEvent.keyDown(input, { key: "Enter" });
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 	});

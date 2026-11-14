@@ -35,7 +35,6 @@ func (s channelSink) ApplyActivitySignal(ctx context.Context, id domain.SessionI
 
 func socketDataDir(t *testing.T) string {
 	t.Helper()
-	// macOS's sockaddr_un is too short for long testing.T TempDir names.
 	dir, err := os.MkdirTemp("/tmp", "ao-herdr-")
 	if err != nil {
 		t.Fatal(err)
@@ -292,8 +291,6 @@ func TestSocketCleanupPreservesReplacementPath(t *testing.T) {
 func TestSocketBoundsConnectionCount(t *testing.T) {
 	dir := socketDataDir(t)
 	server, _, _ := startTestServer(t, dir)
-	// Synchronize on accepted idle clients so kernel backlog scheduling cannot
-	// make the overload assertion accidentally target one of the first clients.
 	for i := 0; i < 32; i++ {
 		conn, err := net.Dial("unix", SocketPath(dir))
 		if err != nil {

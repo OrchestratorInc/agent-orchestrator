@@ -19,8 +19,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// HostAdapter uses a distinct lease from mobile. Ending desktop wake cannot
-// withdraw mobile's lease, or another daemon's native ownership.
 type HostAdapter struct {
 	control            *mobilebridge.KeepAwake
 	binary             string
@@ -29,7 +27,7 @@ type HostAdapter struct {
 	observed           time.Time
 	native             *mobilebridge.LidAwake
 	nativeGuard        bool
-	nativeDegraded     atomic.Bool // registered helper needs an upgrade; idle wake uses caffeinate
+	nativeDegraded     atomic.Bool
 	lowPowerControl    bool
 	lowPowerAuthorized bool
 	lid                bool
@@ -42,7 +40,6 @@ type HostAdapter struct {
 	knownNetworks      []string
 }
 
-// NewHost creates a desktop adapter with ownership separate from mobile.
 func NewHost(pid int, binary, dataDir string) *HostAdapter {
 	control := mobilebridge.NewKeepAwake(pid)
 	native := mobilebridge.NewLidAwake(pid, binary, dataDir)
@@ -51,10 +48,8 @@ func NewHost(pid int, binary, dataDir string) *HostAdapter {
 	return &HostAdapter{control: control, binary: binary, native: native, nativeGuard: supported}
 }
 
-// Supported reports desktop wake availability.
 func (h *HostAdapter) Supported() bool { return runtime.GOOS == "darwin" }
 
-// Active reports current native wake ownership.
 func (h *HostAdapter) Active() bool {
 	if h.useNative() {
 		return h.native.WakeActive()
@@ -62,7 +57,6 @@ func (h *HostAdapter) Active() bool {
 	return h.control.Active()
 }
 
-// Start starts a wake request.
 func (h *HostAdapter) Start() error {
 	if h.useNative() {
 		return h.native.Start(false)
@@ -70,10 +64,8 @@ func (h *HostAdapter) Start() error {
 	return h.control.Start()
 }
 
-// Stop releases this adapter's wake ownership.
 func (h *HostAdapter) Stop() { h.control.Stop() }
 
-// ConfigureLid updates this owner's closed-lid policy.
 func (h *HostAdapter) ConfigureLid(on, setup bool) error {
 	if h.useNative() {
 		h.lid = on
@@ -82,16 +74,10 @@ func (h *HostAdapter) ConfigureLid(on, setup bool) error {
 	return h.control.ConfigureLid(on, setup)
 }
 
-// useNative reports whether wake requests go through the native coordinator.
 func (h *HostAdapter) useNative() bool { return h.nativeGuard && !h.nativeDegraded.Load() }
 
-// ErrLidHelperUpgrade marks a registered wake helper that must be upgraded
-// before the native coordinator can be used.
 var ErrLidHelperUpgrade = errors.New("registered wake helper needs an upgrade")
 
-// SetupLid registers the supported native coordinator. When an older helper is
-// registered, idle-only requests fall back to the unprivileged assertion path
-// until setup succeeds again; the returned error wraps ErrLidHelperUpgrade.
 func (h *HostAdapter) SetupLid() error {
 	err := h.control.SetupLid()
 	if mobilebridge.IsLidHelperUpgrade(err) {
@@ -104,10 +90,8 @@ func (h *HostAdapter) SetupLid() error {
 	return err
 }
 
-// LidStatus reports lid support, ownership, and failure reason.
 func (h *HostAdapter) LidStatus() (bool, bool, string) { return h.control.LidStatus() }
 
-// ConfigureIdle updates idle and display wake policy.
 func (h *HostAdapter) ConfigureIdle(deadline time.Time, display bool) error {
 	h.display = display
 	if h.useNative() {
@@ -116,10 +100,8 @@ func (h *HostAdapter) ConfigureIdle(deadline time.Time, display bool) error {
 	return h.control.ConfigureIdle(deadline, display)
 }
 
-// SetDeadline bounds native ownership by a policy deadline.
 func (h *HostAdapter) SetDeadline(deadline time.Time) error { return h.control.SetDeadline(deadline) }
 
-// Capabilities reports host operation availability.
 func (h *HostAdapter) Capabilities() []domain.AwakeCapability {
 	lid, _, reason := h.LidStatus()
 	core := h.Supported()
@@ -149,7 +131,6 @@ func (h *HostAdapter) Capabilities() []domain.AwakeCapability {
 	}
 }
 
-// Observe reads fresh host conditions.
 func (h *HostAdapter) Observe(ctx context.Context) (domain.AwakeObservation, error) {
 	var result domain.AwakeObservation
 	if runtime.GOOS != "darwin" || !filepath.IsAbs(h.binary) {
@@ -196,7 +177,6 @@ func (h *HostAdapter) Observe(ctx context.Context) (domain.AwakeObservation, err
 	return result, nil
 }
 
-// AppAlive checks the observed process identity.
 func (h *HostAdapter) AppAlive(_ context.Context, id, identity string) (bool, string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -211,7 +191,6 @@ func (h *HostAdapter) AppAlive(_ context.Context, id, identity string) (bool, st
 	return false, "", nil
 }
 
-// BindingFuncs adapts daemon lifecycle callbacks.
 type BindingFuncs struct {
 	Interrupted func() []domain.AwakeAgentTarget
 	Reconnect   func(context.Context, domain.AwakeAgentTarget) error
@@ -220,7 +199,6 @@ type BindingFuncs struct {
 	App         func(context.Context, string, string) (bool, string, error)
 }
 
-// Alive resolves a session or application lifetime.
 func (b BindingFuncs) Alive(ctx context.Context, kind, id, identity string) (bool, string, error) {
 	if kind == "session" {
 		alive, err := b.Session(ctx, id)
@@ -229,13 +207,10 @@ func (b BindingFuncs) Alive(ctx context.Context, kind, id, identity string) (boo
 	return b.App(ctx, id, identity)
 }
 
-// AgentActive reports whether an AO agent is working.
 func (b BindingFuncs) AgentActive(ctx context.Context) (bool, error) { return b.Agent(ctx) }
 
-// SetProtection sets the minimum battery level for native policy.
 func (h *HostAdapter) SetProtection(percent int) error { return h.native.SetProtection(percent) }
 
-// ConfigureEffects sets optional journaled native effects.
 func (h *HostAdapter) ConfigureEffects(settings domain.AwakeSettings) error {
 	if err := h.native.ConfigureLowPower(settings.LowPowerBatteryPercent, settings.LowPowerOnSeriousHeat); err != nil {
 		return err
@@ -243,13 +218,10 @@ func (h *HostAdapter) ConfigureEffects(settings domain.AwakeSettings) error {
 	return h.native.ConfigureEffects(settings.MuteAudio, settings.PauseApps, settings.RestoreDisplay, settings.DarkenKeyboard)
 }
 
-// RequestRecovery requests restoration of AO-owned native effects.
 func (h *HostAdapter) RequestRecovery() error { return h.native.RequestRecovery() }
 
-// RecoveryReason reports pending restoration failures.
 func (h *HostAdapter) RecoveryReason() string { return h.native.RecoveryReason() }
 
-// RelaunchBrowser invokes the native supported-browser relaunch action.
 func (h *HostAdapter) RelaunchBrowser(ctx context.Context, id string) error {
 	if !h.nativeGuard {
 		return errors.New("browser actions are disabled for custom or unsupported installations")
@@ -259,7 +231,6 @@ func (h *HostAdapter) RelaunchBrowser(ctx context.Context, id string) error {
 	}{id})
 }
 
-// JoinNetwork attempts association with a saved macOS Wi-Fi profile.
 func (h *HostAdapter) JoinNetwork(ctx context.Context, ssid string) error {
 	if !h.nativeGuard {
 		return errors.New("network actions are disabled for isolated or unsupported installations")
@@ -269,7 +240,6 @@ func (h *HostAdapter) JoinNetwork(ctx context.Context, ssid string) error {
 	}{ssid})
 }
 
-// AuthorizeLowPower opens an explicit macOS approval for fixed power commands.
 func (h *HostAdapter) AuthorizeLowPower(ctx context.Context) error {
 	if !h.nativeGuard {
 		return errors.New("low power mode authorization requires the default desktop installation")
@@ -277,7 +247,6 @@ func (h *HostAdapter) AuthorizeLowPower(ctx context.Context) error {
 	return h.runActionTimeout(ctx, "authorize-low-power", struct{}{}, 120*time.Second)
 }
 
-// RevokeLowPower ensures the coordinator participates in the permission lock.
 func (h *HostAdapter) RevokeLowPower(ctx context.Context) error {
 	if !h.nativeGuard {
 		return errors.New("revocation requires the default desktop installation")
@@ -319,12 +288,10 @@ func (h *HostAdapter) runActionTimeout(ctx context.Context, action string, reque
 	return nil
 }
 
-// AgentRecoverySupported reports guarded reconnect callback availability.
 func (b BindingFuncs) AgentRecoverySupported() bool {
 	return b.Interrupted != nil && b.Reconnect != nil
 }
 
-// InterruptedAgents returns transport-loss recovery candidates.
 func (b BindingFuncs) InterruptedAgents() []domain.AwakeAgentTarget {
 	if b.Interrupted == nil {
 		return nil
@@ -332,7 +299,6 @@ func (b BindingFuncs) InterruptedAgents() []domain.AwakeAgentTarget {
 	return b.Interrupted()
 }
 
-// ReconnectAgent delegates a guarded controller reconnect.
 func (b BindingFuncs) ReconnectAgent(ctx context.Context, target domain.AwakeAgentTarget) error {
 	return b.Reconnect(ctx, target)
 }

@@ -12,37 +12,23 @@ import (
 	"strings"
 )
 
-// Browser is one Chrome channel AO can register its native host with.
 type Browser struct {
-	// Name is the user-facing channel name, for example "Google Chrome".
-	Name string
-	// UserDataDir is Chrome's per-user directory. Registration is only
-	// written for channels whose directory exists (the channel is in use).
+	Name        string
 	UserDataDir string
 }
 
-// ManifestPath is where this channel looks for AO's host manifest.
 func (b Browser) ManifestPath() string {
 	return filepath.Join(b.UserDataDir, "NativeMessagingHosts", HostName+".json")
 }
 
-// Installer writes and removes Chrome-mode registration.
 type Installer struct {
-	Paths Paths
-	// Executable is the ao binary the host wrapper runs. The daemon pins
-	// connecting hosts to this same file.
-	Executable string
-	// ExtensionSource is the bundled unpacked extension shipped with AO.
+	Paths           Paths
+	Executable      string
 	ExtensionSource string
-	// Browsers lists the Chrome channels to register with. Defaults to the
-	// platform's channels under the user's home directory.
-	Browsers []Browser
-	// registry abstracts the Windows registry for tests; nil uses the
-	// platform implementation.
-	registry hostRegistry
+	Browsers        []Browser
+	registry        hostRegistry
 }
 
-// ChannelStatus reports registration for one Chrome channel.
 type ChannelStatus struct {
 	Name         string `json:"name"`
 	Available    bool   `json:"available"`
@@ -50,7 +36,6 @@ type ChannelStatus struct {
 	ManifestPath string `json:"manifestPath"`
 }
 
-// Status is Chrome mode's installation state.
 type Status struct {
 	Enabled          bool            `json:"enabled"`
 	ExtensionID      string          `json:"extensionId"`
@@ -69,11 +54,8 @@ type hostManifest struct {
 	AllowedOrigins []string `json:"allowed_origins"`
 }
 
-// ErrChromeNotFound means no Chrome channel's user data directory exists.
 var ErrChromeNotFound = errors.New("google Chrome user data was not found; open Chrome once, then retry")
 
-// DefaultExtensionSource locates the extension bundled next to the daemon:
-// <resources>/daemon/ao → <resources>/browser-extension.
 func DefaultExtensionSource(executable string) string {
 	return filepath.Join(filepath.Dir(filepath.Dir(executable)), "browser-extension")
 }
@@ -96,7 +78,6 @@ func (i Installer) reg() hostRegistry {
 	return platformRegistry()
 }
 
-// HostPath is the wrapper Chrome launches.
 func (i Installer) HostPath() string {
 	if runtime.GOOS == "windows" {
 		return filepath.Join(i.Paths.Root, "ao-browser-host.bat")
@@ -104,8 +85,6 @@ func (i Installer) HostPath() string {
 	return filepath.Join(i.Paths.Root, "ao-browser-host")
 }
 
-// Setup installs the host wrapper and extension under the data directory and
-// registers the host with every Chrome channel in use.
 func (i Installer) Setup() (Status, error) {
 	if i.Executable == "" {
 		return Status{}, errors.New("ao executable is unknown")
@@ -139,7 +118,6 @@ func (i Installer) Setup() (Status, error) {
 		if !dirExists(browser.UserDataDir) {
 			continue
 		}
-		// The single file AO writes outside ~/.ao (see package doc).
 		if err := writeFileAtomic(browser.ManifestPath(), manifest, 0o600); err != nil {
 			return i.Status(), fmt.Errorf("register native host with %s: %w", browser.Name, err)
 		}
@@ -147,8 +125,6 @@ func (i Installer) Setup() (Status, error) {
 	return i.Status(), nil
 }
 
-// Refresh re-points an existing registration at the current executable and
-// extension bundle. It does nothing when Chrome mode is not enabled.
 func (i Installer) Refresh() error {
 	if !i.Status().Enabled {
 		return nil
@@ -157,11 +133,8 @@ func (i Installer) Refresh() error {
 	return err
 }
 
-// Remove unregisters the host and deletes AO's Chrome-mode files.
 func (i Installer) Remove() (Status, error) {
 	var errs []error
-	// Only unregister a registration that points at this data directory's
-	// manifest: the Windows name is shared by every AO install.
 	if reg := i.reg(); reg != nil && i.ownsRegistration(reg) {
 		errs = append(errs, reg.Unregister(HostName))
 	}
@@ -183,7 +156,6 @@ func (i Installer) Remove() (Status, error) {
 	return i.Status(), errors.Join(errs...)
 }
 
-// Status reports the current registration without changing anything.
 func (i Installer) Status() Status {
 	status := Status{
 		ExtensionID:   ExtensionID,
@@ -221,8 +193,6 @@ func (i Installer) Status() Status {
 	return status
 }
 
-// ownsRegistration reports whether the registry's AO host entry points at
-// this data directory's manifest.
 func (i Installer) ownsRegistration(reg hostRegistry) bool {
 	path, err := reg.Lookup(HostName)
 	if err != nil || path == "" {
@@ -232,8 +202,6 @@ func (i Installer) ownsRegistration(reg hostRegistry) bool {
 	return sameFile(path, want) || strings.EqualFold(filepath.Clean(path), filepath.Clean(want))
 }
 
-// ownsManifest reports whether path is AO's manifest pointing at this data
-// directory's host, so Remove never deletes a manifest it did not write.
 func (i Installer) ownsManifest(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -268,7 +236,6 @@ func (i Installer) install() error {
 		return fmt.Errorf("write host wrapper: %w", err)
 	}
 	if !i.extensionBundled() {
-		// Registration still works; the status reports the missing bundle.
 		return nil
 	}
 	if err := replaceDir(i.ExtensionSource, i.Paths.Extension()); err != nil {
@@ -307,8 +274,6 @@ func extensionVersion(dir string) (string, error) {
 	return manifest.Version, nil
 }
 
-// replaceDir copies src to dst through a sibling staging directory so Chrome
-// never loads a half-written extension.
 func replaceDir(src, dst string) error {
 	parent := filepath.Dir(dst)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -377,7 +342,6 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// hostRegistry is the Windows registry's native-host registration.
 type hostRegistry interface {
 	Register(name, manifestPath string) error
 	Unregister(name string) error

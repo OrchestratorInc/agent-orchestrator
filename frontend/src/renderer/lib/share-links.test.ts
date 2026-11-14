@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { isShareCode, parseShareLink, shareCodeLinkUrl, shareLinkUrl } from "./share-links";
 
 const ORG = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
-// Share codes are exactly 22 letters or digits.
 const CODE = "k7Hq2x9PmB4wR5tY8uI0oP";
 const SHORT_CODE = "k7Hq2x9PmB4w";
 const LONG_CODE = `${CODE}Z`;

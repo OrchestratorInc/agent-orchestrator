@@ -15,14 +15,14 @@ func TestDA1ScannerFindsQueries(t *testing.T) {
 		{"\x1b[00c", 1},
 		{"prompt> \x1b[c tail", 1},
 		{"\x1b[c\x1b[0c", 2},
-		{"\x1b[>c", 0},    // DA2
-		{"\x1b[=c", 0},    // DA3
-		{"\x1b[1c", 0},    // not a DA1 query
-		{"\x1b[?1;2c", 0}, // a reply, not a query
-		{"\x1bc", 0},      // RIS
+		{"\x1b[>c", 0},
+		{"\x1b[=c", 0},
+		{"\x1b[1c", 0},
+		{"\x1b[?1;2c", 0},
+		{"\x1bc", 0},
 		{"[c", 0},
 		{"\x1b\x1b[c", 1},
-		{"\x1b[?u\x1b[c", 1}, // fish: kitty keyboard query, then DA1
+		{"\x1b[?u\x1b[c", 1},
 	} {
 		var s da1Scanner
 		if got := s.scan([]byte(tc.in)); got != tc.want {
@@ -49,7 +49,6 @@ func TestDA1ScannerJoinsSplitReads(t *testing.T) {
 		}
 	}
 
-	// A split that turns into something else must not match.
 	var s da1Scanner
 	if got := s.scan([]byte("\x1b[")) + s.scan([]byte(">c")); got != 0 {
 		t.Errorf("split DA2 matched %d times", got)
@@ -69,7 +68,6 @@ func TestDA1RepliesMatchesOnlyReplies(t *testing.T) {
 	}
 }
 
-// readPTYInput reads what the host wrote to the fake PTY, or fails after 2 s.
 func readPTYInput(t *testing.T, f *serveFixture) string {
 	t.Helper()
 	got := make(chan string, 1)
@@ -87,8 +85,6 @@ func readPTYInput(t *testing.T, f *serveFixture) string {
 	}
 }
 
-// A shell starting with no client attached still gets its DA1 answer, even
-// when the query arrives split across two reads.
 func TestHostAnswersDA1WithNoClient(t *testing.T) {
 	if !answersDeviceAttributes {
 		t.Skip("ConPTY answers DA1 itself on Windows")
@@ -105,8 +101,6 @@ func TestHostAnswersDA1WithNoClient(t *testing.T) {
 	}
 }
 
-// A client's own DA1 reply is dropped so the program never reads two answers;
-// typed input still reaches the PTY.
 func TestHostDropsClientDA1Reply(t *testing.T) {
 	if !answersDeviceAttributes {
 		t.Skip("ConPTY answers DA1 itself on Windows")

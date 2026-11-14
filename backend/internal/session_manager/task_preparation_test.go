@@ -528,8 +528,6 @@ func TestCancelTaskPreparationPreservesCommittedBranchButDoesNotReuseIt(t *testi
 	runManagerGit(t, rec.Metadata.WorkspacePath, "add", "user-work.txt")
 	runManagerGit(t, rec.Metadata.WorkspacePath, "commit", "-m", "user commit")
 	committed := runManagerGit(t, rec.Metadata.WorkspacePath, "rev-parse", "HEAD")
-	// Even if main later contains this commit, it was not part of the branch
-	// when the preparation started and must not be pruned by cleanup.
 	runManagerGit(t, repo, "merge", "--ff-only", rec.Metadata.Branch)
 	if err := m.CancelTaskPreparation(context.Background(), token); err != nil {
 		t.Fatal(err)
@@ -537,7 +535,6 @@ func TestCancelTaskPreparationPreservesCommittedBranchButDoesNotReuseIt(t *testi
 	if got := runManagerGit(t, repo, "rev-parse", "refs/heads/"+rec.Metadata.Branch); got != committed {
 		t.Fatalf("committed branch moved or deleted: got %q, want %q", got, committed)
 	}
-	// SQLite assigns MAX(num)+1, so a deleted hidden row can reuse this ID.
 	st.num = 0
 	next, err := m.PrepareTaskWorkspace(context.Background(), project)
 	if err != nil {
@@ -638,7 +635,6 @@ func TestStartupCleanupPreservesUnrecordedDirtyChildWorktree(t *testing.T) {
 	if err := os.WriteFile(file, []byte("keep me\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a crash after Git created the child but before its DB upsert.
 	st.worktrees[domain.SessionID(token)] = rows[:1]
 	prep := m.taskPreparations[token]
 	prep.timer.Stop()
@@ -708,8 +704,6 @@ func TestStartupCleanupPreservesUnregisteredRecoveredChildWithUnknownCreationSHA
 	if len(rows) != 2 || rows[1].BaseSHA == "" {
 		t.Fatalf("prepared rows = %+v, want root and child comparison base", rows)
 	}
-	// A recovered branch has no trusted creation SHA. Then Git loses the
-	// child registration while an unregistered, nonempty path remains.
 	rows[1].CreationSHA = ""
 	st.worktrees[domain.SessionID(token)] = rows
 	runManagerGit(t, childPath, "worktree", "remove", "--force", rows[1].WorktreePath)
@@ -946,8 +940,6 @@ func TestStartupSafetyDefersInterruptedPreparationGitCleanup(t *testing.T) {
 	if rec, ok := st.sessions["mer-1"]; !ok || rec.ProvisionState != domain.SessionProvisionProvisioning {
 		t.Fatalf("startup safety touched interrupted preparation: %+v, exists=%v", rec, ok)
 	}
-	// A preparation opened after the listener binds belongs to this daemon,
-	// not the interrupted set captured by startup safety.
 	st.sessions["mer-2"] = domain.SessionRecord{
 		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker,
 		IsTaskPreparation: true, ProvisionState: domain.SessionProvisionProvisioning,
@@ -974,8 +966,6 @@ func TestStartupSafetyDefersInterruptedPreparationGitCleanup(t *testing.T) {
 	}
 }
 
-// A preparation that failed on its own is not the spawn's failure: the spawn
-// creates a fresh worktree, and the step that then ends it is reported.
 func TestFailedPreparationFallbackReportsTheStepThatEndedTheSpawn(t *testing.T) {
 	m, st, _, ws := newManager()
 	m.runBackground = func(work func()) { work() }

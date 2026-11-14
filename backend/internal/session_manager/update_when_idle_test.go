@@ -16,10 +16,9 @@ func TestBusyHarnessSessionsNamesWhyEachMustWait(t *testing.T) {
 	seedChatResumeSession(store, domain.ActivityIdle)
 	idle := store.sessions["mer-1"]
 	for id, change := range map[domain.SessionID]func(*domain.SessionRecord){
-		"working":  func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityActive },
-		"approval": func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityWaitingInput },
-		"starting": func(r *domain.SessionRecord) { r.ProvisionState = domain.SessionProvisionProvisioning },
-		// Sessions without a process never hold the update back.
+		"working":    func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityActive },
+		"approval":   func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityWaitingInput },
+		"starting":   func(r *domain.SessionRecord) { r.ProvisionState = domain.SessionProvisionProvisioning },
 		"asleep":     func(r *domain.SessionRecord) { r.HibernatedAt = &now },
 		"exited":     func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityExited },
 		"terminated": func(r *domain.SessionRecord) { r.IsTerminated = true },
@@ -54,7 +53,6 @@ func TestBusyHarnessSessionsNamesWhyEachMustWait(t *testing.T) {
 	}
 }
 
-// idleWorkloadRuntime reports that no terminal runs a command.
 type idleWorkloadRuntime struct{ *fakeRuntime }
 
 func (idleWorkloadRuntime) RunningWorkloadCommands(context.Context, ports.RuntimeHandle, ports.SupervisedProcessRef) (int, error) {
@@ -72,7 +70,6 @@ func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
 				RuntimeHandleID: "pane-" + string(id), AgentSessionID: agentSessionID}}
 	}
 	store.sessions["resumable"] = terminal("resumable", "native-1")
-	// No native conversation id: stopping it would leave nothing to resume.
 	store.sessions["fresh-only"] = terminal("fresh-only", "")
 
 	busy, err := mgr.BusyHarnessSessions(context.Background(), domain.HarnessCodex)
@@ -117,7 +114,6 @@ func TestFailedResumeAfterUpdateIsRetriedWithoutTheUser(t *testing.T) {
 	if pending := mgr.versionRetries.pending(); len(pending) != 1 || pending[0] != rec.ID {
 		t.Fatalf("retries = %v, want the session enrolled", pending)
 	}
-	// The provider recovers; the retry sweep starts it again.
 	launcher.startErr = nil
 	if err := mgr.RetryVersionMoves(context.Background()); err != nil {
 		t.Fatal(err)
@@ -132,7 +128,6 @@ func TestRetryAfterUpdateNeverFallsBackToFreshTerminal(t *testing.T) {
 	agent := lostConversationAgent{recordingAgent: &recordingAgent{}}
 	mgr, store, _ := newExitedResumeManager(t, rt, agent)
 	rec := store.sessions["mer-1"]
-	// An in-place update stopped this launch before marking live sessions stale.
 	rec.StaleBinary = nil
 	store.sessions[rec.ID] = rec
 	ctx := context.Background()

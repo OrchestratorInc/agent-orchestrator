@@ -8,8 +8,6 @@ import (
 
 func modelJSON(model string) string { return `{"model": "` + model + `"}` }
 
-// openCodeFixture is a git repository with the session working directory at
-// repo/pkg and a global config selecting "global/a".
 func newOpenCodeFixture(t *testing.T) (repo gitRepo, pkg string) {
 	t.Helper()
 	home := isolateHome(t)
@@ -29,12 +27,10 @@ func TestOpenCodeV1DefaultUsesUserConfigOnly(t *testing.T) {
 			if got := configuredDefaultModel("opencode", pkg, nil); got != "global/a" {
 				t.Fatalf("global only = %q, want global/a", got)
 			}
-			// Any repository project config may differ in the launch worktree.
 			writeConfig(t, filepath.Join(repo.dir, filepath.FromSlash(file)), modelJSON("repo/c"))
 			if got := configuredDefaultModel("opencode", pkg, nil); got != "" {
 				t.Errorf("repository config %s = %q, want unresolved", file, got)
 			}
-			// Inline content and managed config outrank every project file.
 			if got := configuredDefaultModel("opencode", pkg, map[string]string{"OPENCODE_CONFIG_CONTENT": modelJSON("inline/e")}); got != "inline/e" {
 				t.Errorf("OPENCODE_CONFIG_CONTENT = %q, want inline/e", got)
 			}
@@ -42,9 +38,6 @@ func TestOpenCodeV1DefaultUsesUserConfigOnly(t *testing.T) {
 	}
 }
 
-// v2 also reads the launch worktree's ancestors above its git root (e.g.
-// <AO_DATA_DIR>/opencode.json), which discovery cannot see, so only layers
-// that outrank project config are trusted.
 func TestOpenCodeV2DefaultTrustsOnlyLayersAboveProjectConfig(t *testing.T) {
 	_, pkg := newOpenCodeFixture(t)
 	if got := configuredDefaultModel("opencode-v2", pkg, nil); got != "" {
@@ -64,7 +57,6 @@ func TestOpenCodeV2DefaultTrustsOnlyLayersAboveProjectConfig(t *testing.T) {
 func TestOpenCodeDefaultLeavesUncertainWinnersUnresolved(t *testing.T) {
 	_, pkg := newOpenCodeFixture(t)
 
-	// AO replaces OPENCODE_CONFIG at TUI launch but keeps it for ACP.
 	custom := filepath.Join(t.TempDir(), "custom.json")
 	writeConfig(t, custom, modelJSON("custom/g"))
 	if got := configuredDefaultModel("opencode", pkg, map[string]string{"OPENCODE_CONFIG": custom}); got != "" {
@@ -77,7 +69,6 @@ func TestOpenCodeDefaultLeavesUncertainWinnersUnresolved(t *testing.T) {
 		t.Errorf("OPENCODE_CONFIG_DIR model = %q, want unresolved", got)
 	}
 
-	// Sibling global files that disagree have no documented merge order.
 	home, _ := os.UserHomeDir()
 	writeConfig(t, filepath.Join(home, ".config", "opencode", "opencode.jsonc"), modelJSON("global/other"))
 	if got := configuredDefaultModel("opencode", pkg, nil); got != "" {

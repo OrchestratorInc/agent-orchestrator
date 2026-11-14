@@ -73,8 +73,6 @@ test("@P0 browser address stays centered, clear of the tabs, and drops below the
 	await expectAddressBelowInspectorTabs(page);
 });
 
-// Exercise the CSS with future tab counts as well as today's tabs. Clones only
-// change the occupied space; no tab navigation behavior is under test here.
 test("@P0 browser address re-centers as inspector tabs are added", async ({ page }) => {
 	await page.setViewportSize({ width: 1800, height: 900 });
 	await page.goto("/#/projects/ao-demo/sessions/demo-working");

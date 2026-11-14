@@ -13,37 +13,25 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Store is the narrow slice of the rewrite's native storage layer the importer
-// writes through. *sqlite.Store satisfies it. Idempotency lives here: a project
-// whose id already exists is skipped, never overwritten, so a re-run is safe
-// and legacy files stay the sole source of truth.
 type Store interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	UpsertProject(ctx context.Context, r domain.ProjectRecord) error
 }
 
-// Options configure one import run.
 type Options struct {
-	// Root is the legacy state root to read (default ~/.agent-orchestrator).
-	Root string
-	// DryRun parses + plans every row but writes nothing.
-	DryRun bool
-	// Now is the fallback registered_at timestamp. Zero -> time.Now().UTC().
-	Now time.Time
-	// RepoOriginURL resolves a repo's git origin. Nil -> the real git resolver.
+	Root          string
+	DryRun        bool
+	Now           time.Time
 	RepoOriginURL func(path string) string
 }
 
-// Report is the structured outcome of an import run.
 type Report struct {
 	DryRun           bool     `json:"dryRun"`
 	ProjectsImported int      `json:"projectsImported"`
-	ProjectsSkipped  int      `json:"projectsSkipped"` // already present
+	ProjectsSkipped  int      `json:"projectsSkipped"`
 	Notes            []string `json:"notes,omitempty"`
 }
 
-// HasLegacyData reports whether root holds an importable legacy store: a
-// config.yaml with at least one project. Used for the first-boot opt-in check.
 func HasLegacyData(root string) bool {
 	if root == "" {
 		return false
@@ -55,11 +43,6 @@ func HasLegacyData(root string) bool {
 	return len(cfg.Projects) > 0
 }
 
-// LegacyConfigError returns the parse error for root's legacy config.yaml, or
-// nil if the store is absent or parsed cleanly. The CLI import path uses it to
-// surface a parse failure instead of swallowing it as "no data" (issue #2186);
-// HasLegacyData stays a bool for the migration-probe service layer, which must
-// not error on a missing or broken store.
 func LegacyConfigError(ctx context.Context, root string) error {
 	if root == "" {
 		return nil
@@ -68,9 +51,6 @@ func LegacyConfigError(ctx context.Context, root string) error {
 	return err
 }
 
-// rewriteProjectID gates the rewrite project-id charset (validateProjectID,
-// service.go). Legacy ids are a strict subset, so this all but always passes;
-// it guards against a hand-edited legacy config carrying an illegal id.
 var rewriteProjectID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func isValidRewriteProjectID(id string) bool {
@@ -78,10 +58,6 @@ func isValidRewriteProjectID(id string) bool {
 		!strings.ContainsAny(id, `/\`) && rewriteProjectID.MatchString(id)
 }
 
-// Run reads the legacy store and writes projects into store. It never modifies
-// legacy files. It is idempotent: existing rows are skipped. A per-project
-// parse or write failure is recorded as a note and does not abort the whole
-// run, except a store write error, which is returned.
 func Run(ctx context.Context, store Store, opts Options) (Report, error) {
 	root := opts.Root
 	if root == "" {
@@ -114,7 +90,6 @@ func Run(ctx context.Context, store Store, opts Options) (Report, error) {
 	prefs := loadPreferences(root)
 	reg := loadRegistered(root)
 
-	// Deterministic order: ids sorted.
 	ids := make([]string, 0, len(cfg.Projects))
 	for id := range cfg.Projects {
 		ids = append(ids, id)
@@ -167,8 +142,6 @@ func appendPrefixed(dst []string, id string, notes []string) []string {
 	return dst
 }
 
-// quote wraps s in double quotes for note messages, rendering an empty string as
-// "?" so a missing value is still legible.
 func quote(s string) string {
 	if s == "" {
 		return `"?"`
@@ -176,8 +149,6 @@ func quote(s string) string {
 	return `"` + s + `"`
 }
 
-// defaultRepoOriginURL resolves a repo's git origin URL, "" when the repo is
-// absent or has no origin. Matches the rewrite's resolveGitOriginURL.
 func defaultRepoOriginURL(path string) string {
 	if path == "" {
 		return ""

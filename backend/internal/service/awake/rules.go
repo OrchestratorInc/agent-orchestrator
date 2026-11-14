@@ -66,7 +66,6 @@ func validateRule(r domain.AwakeRule) error {
 	return nil
 }
 
-// Three-valued conditions: unknown cannot activate a rule or clear suppression.
 func truth(value bool) int {
 	if value {
 		return 1
@@ -79,8 +78,6 @@ func (s *Service) matchRule(ctx context.Context, r domain.AwakeRule) int {
 func (s *Service) matchRuleActive(ctx context.Context, r domain.AwakeRule, active bool) int {
 	unknown := false
 	for _, c := range r.Conditions {
-		// Three percentage points of hysteresis apply only to an already
-		// active rule. Critical/battery safety stops remain independent.
 		if c.Kind == "battery" && active {
 			c.Threshold = max(10, c.Threshold-3)
 		}
@@ -184,8 +181,6 @@ func (s *Service) condition(ctx context.Context, c domain.AwakeCondition) int {
 	return -1
 }
 
-// Require matching observations across a five-second interval. Missing or stale
-// observations withdraw ownership immediately and restart the settling window.
 type ruleMatch struct{ since, last time.Time }
 
 func (s *Service) stableRule(id string, match int, active bool, now time.Time) bool {

@@ -9,7 +9,6 @@ import {
 	type CommandStep,
 } from "./activity-step";
 
-/** The finished row's text, as it reads: verb, then target. */
 function done(command: string): string {
 	return text(describeCommandStep(command), "done");
 }
@@ -70,7 +69,6 @@ describe("describeCommandStep", () => {
 		expect(done("grep -rn -e 'needle' src")).toBe("Searched for needle");
 		expect(done('grep ">" notes.md')).toBe("Searched for >");
 		expect(done("rg --files src")).toBe("Listed src");
-		// A depth or an ignore pattern is the option's value, not the folder.
 		expect(done("tree -L 2")).toBe("Listed files");
 		expect(done("tree -L 2 -I node_modules src")).toBe("Listed src");
 		expect(done("eza --level 3 docs")).toBe("Listed docs");
@@ -118,7 +116,6 @@ describe("describeCommandStep", () => {
 		expect(done("touch activity-demo/notes.md")).toBe("Created notes.md");
 		expect(done("mv activity-demo/hello.js activity-demo/greet.js")).toBe("Renamed hello.js → greet.js");
 		expect(done("mv notes.md archive/")).toBe("Moved notes.md → archive");
-		// Without the slash `archive` may be a folder: only a clear rename says Renamed.
 		expect(done("mv notes.md archive")).toBe("Moved notes.md → archive");
 		expect(done("cp a.txt b.txt")).toBe("Copied a.txt → b.txt");
 		expect(done("rm -rf activity-demo")).toBe("Deleted activity-demo");
@@ -131,13 +128,11 @@ describe("describeCommandStep", () => {
 		expect(done("cat <<EOF > notes.md\nhello\nEOF")).toBe("Wrote notes.md");
 		expect(done("echo hello >> log.txt")).toBe("Appended to log.txt");
 		expect(done("tee out.txt")).toBe("Wrote out.txt");
-		// `tee` writes the file wherever it sits in the pipeline.
 		expect(done("printf 'a\\n' | tee out.txt")).toBe("Wrote out.txt");
 		expect(done("echo hi | tee notes.md")).toBe("Wrote notes.md");
 		expect(done("cat <<EOF | tee notes.md\nhello\nEOF")).toBe("Wrote notes.md");
 		expect(done("echo 127.0.0.1 | sudo tee /etc/hosts")).toBe("Wrote hosts");
 		expect(done("echo hi | tee -a log.txt")).toBe("Appended to log.txt");
-		// Routing a stream is not writing a file.
 		expect(done("rg TODO 2>/dev/null")).toBe("Searched for TODO");
 		expect(done("ls missing 2>&1")).toBe("Listed missing");
 	});
@@ -154,10 +149,8 @@ describe("describeCommandStep", () => {
 		expect(done("npm ci && npm test")).toBe("Ran tests");
 		expect(done("sleep 30 && gh pr checks 12")).toBe("Checked CI #12");
 		expect(done("cat a.ts && rm -rf src")).toBe("Deleted src");
-		// A trailing look or report does not take the name from the work before it.
 		expect(done("npm test && echo done")).toBe("Ran tests");
 		expect(done("git add . && git status")).toBe("Staged changes");
-		// With nothing but looking, the first one names it.
 		expect(done("git status && git diff")).toBe("Checked git status");
 	});
 
@@ -205,11 +198,9 @@ describe("describeCommandStep", () => {
 		expect(done("npm run seed")).toBe("Ran seed");
 		expect(done("make test")).toBe("Ran tests");
 		expect(done("make release")).toBe("Ran make release");
-		// make's folder, file and job count are option values, not the target.
 		expect(done("make -C frontend test")).toBe("Ran tests");
 		expect(done("make -f ci.mk -j 4 release")).toBe("Ran make release");
 		expect(done("make -j test")).toBe("Ran tests");
-		// `go run` names a file, and a package as typed.
 		expect(done("go run main.go")).toBe("Ran main.go");
 		expect(done("go run .")).toBe("Ran go run .");
 		expect(done("go run ./cmd/server")).toBe("Ran go run ./cmd/server");
@@ -237,7 +228,6 @@ describe("describeCommandStep", () => {
 		expect(done("CI=1 npm test")).toBe("Ran tests");
 		expect(done("timeout 30 npm test")).toBe("Ran tests");
 		expect(done("bash -lc 'git status'")).toBe("Checked git status");
-		// A wrapper's option values are not the program.
 		expect(done("sudo -u postgres psql")).toBe("Ran psql");
 		expect(done("timeout -s KILL 30 npm test")).toBe("Ran tests");
 		expect(done("env -u DEBUG node server.js")).toBe("Ran server.js");
@@ -267,7 +257,6 @@ describe("describeCommandStep", () => {
 		expect(done("docker compose up -d")).toBe("Ran docker");
 		expect(live("docker compose up -d")).toBe("Running docker");
 		expect(done("node -e 'console.log(1)'")).toBe("Ran node");
-		// `-` is stdin, usually a heredoc, not a script named "-".
 		expect(done("python3 - <<'PY'\nprint(1)\nPY")).toBe("Ran python3");
 		expect(done("bash - <<'SH'\necho hi\nSH")).toBe("Ran bash");
 		expect(done("sh -")).toBe("Ran sh");
@@ -283,7 +272,6 @@ describe("describeCommandStep", () => {
 		expect(done("source .env")).toBe("Loaded .env");
 		expect(done("test -f a.ts")).toBe("Checked condition");
 		expect(done("[ -f a.ts ]")).toBe("Checked condition");
-		// Setup in front of real work does not name it.
 		expect(done("cd frontend && npm test")).toBe("Ran tests");
 	});
 });
@@ -359,7 +347,6 @@ describe("activityCommandStep", () => {
 
 	it("shows a provider's title as written when there is no command line", () => {
 		expect(text(activityCommandStep(commandActivity({ summary: "List files in the folder" })), "done")).toBe("List files in the folder");
-		// Prose can start with a program's name; only a backticked title is a command.
 		expect(text(activityCommandStep(commandActivity({ summary: "make the build pass" })), "done")).toBe("make the build pass");
 		expect(text(activityCommandStep(commandActivity({ summary: "touch up README" })), "done")).toBe("touch up README");
 		expect(text(activityCommandStep(commandActivity({ summary: "`touch README`" })), "done")).toBe("Created README");
@@ -373,7 +360,6 @@ describe("activityCommandStep", () => {
 	});
 });
 
-/** Claude Code's built-in tools over ACP, with the detail its driver records. */
 function toolActivity(providerToolName: string | undefined, toolKind: string, input: unknown, summary = ""): ConversationActivity {
 	return commandActivity({
 		activityKind: "mcp_tool",
@@ -411,10 +397,8 @@ describe("activityToolStep", () => {
 		const mcp = commandActivity({ activityKind: "mcp_tool", summary: "search_issues", detail: { server: "linear", toolName: "search_issues" } });
 		expect(activityToolStep(mcp)).toBeUndefined();
 		expect(activityToolStep(toolActivity("SubagentHandback", "other", {}, "SubagentHandback"))).toBeUndefined();
-		// Claude Code names an MCP tool in full, with no separate server field.
 		expect(activityToolStep(toolActivity("mcp__linear__get_issue", "read", {}, "mcp__linear__get_issue"))).toBeUndefined();
 		expect(isExploratoryTool(toolActivity("mcp__linear__get_issue", "read", {}, "mcp__linear__get_issue"))).toBe(false);
-		// Another ACP agent's read keeps its own title and gains only the icon.
 		expect(activityToolStep(toolActivity(undefined, "read", {}, "ReadFile src/app.ts"))).toMatchObject({ done: "ReadFile src/app.ts", icon: "read" });
 	});
 

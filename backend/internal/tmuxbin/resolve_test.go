@@ -126,8 +126,6 @@ func TestResolveWithReturnsErrorWhenTmuxIsUnavailable(t *testing.T) {
 	}
 }
 
-// A daemon started by launchd, cron, or a minimal-env shell inherits a PATH
-// without the package manager's bin directory, so PATH finds no tmux.
 func TestResolveWithFindsMacOSPackageManagerTmuxOutsidePATH(t *testing.T) {
 	for _, installed := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux"} {
 		t.Run(installed, func(t *testing.T) {
@@ -202,8 +200,6 @@ func TestResolveWithProbesInstallPathsOnlyOnMacOS(t *testing.T) {
 	}
 }
 
-// The install-path probe goes through exec.LookPath in production, which must
-// accept an executable absolute path and skip one that cannot be run.
 func TestResolveWithInstallPathsUseRealLookPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits decide executability")

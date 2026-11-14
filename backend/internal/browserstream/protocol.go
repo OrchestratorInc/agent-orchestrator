@@ -1,5 +1,3 @@
-// Package browserstream carries live browser frames and remote input between
-// the loopback daemon and the Electron process that owns AO's WebContentsViews.
 package browserstream
 
 import (
@@ -13,24 +11,17 @@ import (
 )
 
 const (
-	// ProtocolVersion identifies the private daemon-to-Electron wire format.
-	ProtocolVersion = 1
-	// RuntimeAddressEnv carries the private listener address to Electron.
-	RuntimeAddressEnv = "AO_BROWSER_STREAM_ADDRESS"
-	// KindControl identifies a JSON control packet.
-	KindControl byte = 1
-	// KindJPEG identifies a binary JPEG frame packet.
-	KindJPEG byte = 2
+	ProtocolVersion        = 1
+	RuntimeAddressEnv      = "AO_BROWSER_STREAM_ADDRESS"
+	KindControl       byte = 1
+	KindJPEG          byte = 2
 
-	// MaxControlBytes bounds one JSON control packet.
 	MaxControlBytes = 64 << 10
-	// MaxFrameBytes bounds one encoded browser frame.
 	MaxFrameBytes   = 2 << 20
 	maxPacketBytes  = MaxFrameBytes + 64
-	frameHeaderSize = 25 // kind + stream id + seq + captured ms + width + height
+	frameHeaderSize = 25
 )
 
-// Control is the versioned JSON envelope exchanged on the private stream link.
 type Control struct {
 	Type      string          `json:"type"`
 	Version   int             `json:"version,omitempty"`
@@ -42,7 +33,6 @@ type Control struct {
 	Message   string          `json:"message,omitempty"`
 }
 
-// Frame is one encoded browser image. Data is immutable after publication.
 type Frame struct {
 	StreamID uint32
 	Sequence uint64
@@ -127,7 +117,6 @@ func decodeControl(body []byte) (Control, error) {
 }
 
 func decodeFrame(body []byte) (Frame, error) {
-	// readPacket strips the kind byte, leaving 24 bytes of metadata.
 	if len(body) < frameHeaderSize-1 {
 		return Frame{}, errors.New("browser stream frame header is truncated")
 	}

@@ -13,13 +13,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// testPlugin skips binary resolution and the version probe.
 func testPlugin() *Plugin {
 	return &Plugin{resolvedBinary: "openhands", verifiedBinary: "openhands"}
 }
 
 func TestLaunchAndRestore(t *testing.T) {
-	// An exported LLM_API_KEY would add --override-with-envs.
 	t.Setenv("LLM_API_KEY", "")
 	p := testPlugin()
 	ctx := context.Background()
@@ -86,7 +84,6 @@ func TestProviderKeyEnablesOpenHandsEnvironmentOverride(t *testing.T) {
 }
 
 func TestPermissions(t *testing.T) {
-	// An exported LLM_API_KEY would add --override-with-envs.
 	t.Setenv("LLM_API_KEY", "")
 	for _, tc := range []struct {
 		mode ports.PermissionMode
@@ -173,7 +170,6 @@ func TestSupportedVersion(t *testing.T) {
 		{"OpenHands CLI 2.0.0", true},
 		{"OpenHands CLI 1.11.9", false},
 		{"OpenHands CLI 0.99.0", false},
-		// The SDK banner carries its own, higher version; it must not count.
 		{"OpenHands SDK v1.21.0", false},
 		{"1.16.0", false},
 		{"", false},
@@ -267,8 +263,6 @@ func TestHooksInstallIdempotentAndUninstall(t *testing.T) {
 	}
 }
 
-// OpenHands' own repo ships a direct-format file. Adding a "hooks" wrapper next
-// to it would make OpenHands drop the user's "stop" hook.
 func TestHooksMigrateDirectFormat(t *testing.T) {
 	ws := t.TempDir()
 	path := writeHooks(t, ws, `{"stop":[{"matcher":"*","hooks":[{"type":"command","command":"user-stop.sh","timeout":300}]}],"extra":true}`)
@@ -290,7 +284,6 @@ func TestHooksMigrateDirectFormat(t *testing.T) {
 		t.Fatalf("AO stop hook = %+v", stop[1])
 	}
 
-	// Uninstall leaves the user's hook in the migrated form.
 	if err := New().UninstallHooks(context.Background(), ws); err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +293,6 @@ func TestHooksMigrateDirectFormat(t *testing.T) {
 	}
 }
 
-// OpenHands rejects a file that spells one event twice, disabling every hook.
 func TestHooksMergeMixedSpellingsInsideWrapper(t *testing.T) {
 	ws := t.TempDir()
 	path := writeHooks(t, ws, `{"hooks":{"session_start":[{"hooks":[{"type":"command","command":"user-start"}]}],"Custom":[1]}}`)
@@ -388,8 +380,6 @@ func TestSettingsPathHonorsPersistenceDir(t *testing.T) {
 	}
 }
 
-// The flag follows the key the session will see, not the daemon's: a project
-// key enables it, and a project that blanks the key keeps the saved settings.
 func TestOpenHandsEnvironmentOverrideFollowsTheSessionEnvironment(t *testing.T) {
 	t.Setenv("LLM_API_KEY", "")
 	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: map[string]string{"LLM_API_KEY": "project-key"}})

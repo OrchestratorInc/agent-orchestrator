@@ -115,7 +115,6 @@ func TestAuthStatusVerificationHasSeparateBudget(t *testing.T) {
 			detectionCtx = ctx
 			return []byte("1 credential\n"), nil
 		}
-		// Verification must remain usable after the detection budget expires.
 		<-detectionCtx.Done()
 		if err := ctx.Err(); err != nil {
 			t.Fatalf("verification inherited detection deadline: %v", err)

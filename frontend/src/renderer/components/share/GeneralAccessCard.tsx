@@ -11,22 +11,13 @@ import type { ShareModeCap, ShareScope } from "./accessLabels";
 import { actualLinkCap, anyoneSentence, expiryText, isTrustedLink, type LinkAccess } from "./linkAccess";
 
 const LINK_CAPS: readonly ShareModeCap[] = ["read-only", "standard"];
-/** A link made before links stopped offering Trusted shows it, checked; choosing another cap replaces the link. */
 const TRUSTED_LINK_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "trusted"];
 
-/**
- * General access: who the link lets in, as one sentence under the choice.
- * "Only people with access" or "Anyone with the link"; with a link, what it
- * lets people do, when it ends, and how many other links are live. The icon
- * stays neutral: the sentence carries the risk, and color is for state.
- */
 export function GeneralAccessCard({ scope, access, restricted, locale, label = true, onTurnOn, onTurnOff, onChangeRole, onOpenSettings }: {
 	scope: ShareScope;
 	access: LinkAccess;
-	/** The sentence for "Only people with access" in this workspace. */
 	restricted: string;
 	locale: string;
-	/** "General access" over the card; off where a section heading says it. */
 	label?: boolean;
 	onTurnOn: () => void;
 	onTurnOff: () => void;
@@ -40,7 +31,6 @@ export function GeneralAccessCard({ scope, access, restricted, locale, label = t
 	const others = access.links.length - 1;
 	const Icon = link ? Globe : Lock;
 	const sentence = link ? anyoneSentence(t, scope, link.role) : restricted;
-	// A whole-project link opens this session too, whatever this session's own setting says.
 	const viaProject = !link && access.projectLinks.length > 0;
 	return (
 		<section className="flex flex-col gap-1.5" aria-label={t("share.generalAccess")} data-share-general-access={link ? "anyone" : "restricted"}>

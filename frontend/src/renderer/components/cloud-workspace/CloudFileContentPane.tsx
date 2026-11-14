@@ -26,7 +26,6 @@ export function CloudFileContentPane({
 	active = true, annotation, baseUrl, client, commitSha, initialEditing = false, initialLine, initialMode = "diff", initialRequestKey = 0,
 	onDirtyChange, orgId, path, scope = "combined", sessionId, split,
 }: {
-	/** False while the view is kept mounted behind another tab: its save shortcut stays off. */
 	active?: boolean;
 	annotation: FileAnnotationModel;
 	baseUrl: string;

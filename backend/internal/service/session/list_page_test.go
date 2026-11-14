@@ -12,7 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// recordingStore notes which sessions a list read loaded PR facts for.
 type recordingStore struct {
 	*fakeStore
 	prFactIDs []domain.SessionID
@@ -37,8 +36,6 @@ func pageIDs(page ListPage) []string {
 
 func boolPtr(v bool) *bool { return &v }
 
-// The archive pages pinned first, then most recently updated (desktop's
-// archive order), with the id breaking ties, whatever order the store returns.
 func TestListPageOrdersTheArchiveAndResumesAfterTheCursor(t *testing.T) {
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	st := newFakeStore()
@@ -46,7 +43,7 @@ func TestListPageOrdersTheArchiveAndResumesAfterTheCursor(t *testing.T) {
 		rec := archivedRecord(fmt.Sprintf("a-%d", i), "ao", base.Add(time.Duration(i)*time.Hour))
 		st.sessions[rec.ID] = rec
 	}
-	tie := archivedRecord("a-9", "ao", base.Add(4*time.Hour)) // same updatedAt as a-4
+	tie := archivedRecord("a-9", "ao", base.Add(4*time.Hour))
 	st.sessions[tie.ID] = tie
 	pinned := archivedRecord("a-0", "ao", base)
 	pinned.IsPinned = true
@@ -79,8 +76,6 @@ func TestListPageOrdersTheArchiveAndResumesAfterTheCursor(t *testing.T) {
 	}
 }
 
-// A cursor is a position, not an offset: a session archived between two page
-// reads lands at the top and neither repeats nor pushes a row out of page two.
 func TestListPageCursorSurvivesNewArchiveRowsBetweenPages(t *testing.T) {
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	st := newFakeStore()
@@ -110,8 +105,6 @@ func TestListPageCursorSurvivesNewArchiveRowsBetweenPages(t *testing.T) {
 	}
 }
 
-// Paging happens before the read model is built, so a page of a big archive
-// loads PR facts for that page only.
 func TestListPageLoadsFactsForThePageOnly(t *testing.T) {
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	st := &recordingStore{fakeStore: newFakeStore()}
@@ -128,14 +121,11 @@ func TestListPageLoadsFactsForThePageOnly(t *testing.T) {
 	}
 }
 
-// The live list says how big the archive it left out is, per project and
-// under the same kind filter, so a phone can show Archive's count without
-// downloading it.
 func TestListPageSummarisesTheArchiveBehindAnActiveList(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	st := newFakeStore()
 	st.sessions["live"] = domain.SessionRecord{ID: "live", ProjectID: "ao", Kind: domain.KindWorker}
-	st.sessions["legacy-live"] = domain.SessionRecord{ID: "legacy-live", ProjectID: "ao"} // written before kinds
+	st.sessions["legacy-live"] = domain.SessionRecord{ID: "legacy-live", ProjectID: "ao"}
 	st.sessions["ao-1"] = archivedRecord("ao-1", "ao", now)
 	st.sessions["ao-2"] = archivedRecord("ao-2", "ao", now)
 	st.sessions["web-1"] = archivedRecord("web-1", "web", now)
@@ -197,7 +187,6 @@ func TestListPageRejectsBadPagingInput(t *testing.T) {
 	}
 }
 
-// An unpaged list is unchanged: every match, no cursor.
 func TestListWithoutLimitReturnsEveryMatch(t *testing.T) {
 	st := newFakeStore()
 	for i := 0; i < MaxListLimit+5; i++ {

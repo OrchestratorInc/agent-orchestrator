@@ -31,13 +31,11 @@ func TestRecorderPersistsLatestValidZone(t *testing.T) {
 		t.Fatalf("Read = %q, want America/Los_Angeles", got)
 	}
 
-	// A client really set to UTC is the user's own setting.
 	r.Observe(context.Background(), "UTC")
 	if got := Read(context.Background(), dir); got != "UTC" {
 		t.Fatalf("Read = %q, want UTC", got)
 	}
 
-	// A new recorder (daemon restart) starts from the persisted value.
 	if got := NewRecorder(context.Background(), dir).last; got != "UTC" {
 		t.Fatalf("restarted recorder last = %q, want UTC", got)
 	}

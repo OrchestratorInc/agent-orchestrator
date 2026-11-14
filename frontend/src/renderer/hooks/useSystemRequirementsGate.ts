@@ -30,9 +30,6 @@ export const systemRequirementsQueryOptions = {
 	queryKey: systemRequirementsQueryKey,
 	queryFn: fetchSystemRequirements,
 	refetchOnWindowFocus: false,
-	// The preview build (VITE_NO_ELECTRON) has no real daemon behind it, so
-	// there is nothing to probe — mirrors isDaemonReady's short-circuit for
-	// the same flag in SessionsBoard.
 	enabled: !usesPreviewWorkspaceData,
 };
 
@@ -43,14 +40,9 @@ export const githubAuthRequirementQueryOptions = {
 	enabled: !usesPreviewWorkspaceData,
 };
 
-/** Advisory authentication probe. Kept separate from the startup gate because
- * credential-store access can be slow or interactive on some machines. */
 export function useGitHubAuthRequirement(loginActive = false) {
 	return useQuery({
 		...githubAuthRequirementQueryOptions,
-		// The browser/device flow can finish before its PTY exit reaches the
-		// renderer. Probe only while AO owns an active login terminal so the card
-		// closes promptly after authorization without permanent background polling.
 		refetchInterval: loginActive ? GITHUB_AUTH_POLL_INTERVAL_MS : false,
 	});
 }
@@ -59,8 +51,6 @@ export function useStartGitHubAuthTerminal() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async (): Promise<ShellTerminal> => {
-			// Renderer state is lost on reload, while daemon-owned login PTYs survive.
-			// Reconcile before every start and fail without spawning if the list fails.
 			const terminals = await queryClient.fetchQuery({ ...shellTerminalsQueryOptions, staleTime: 0 });
 			const existing = terminals.find((terminal) => terminal.title === "Connect GitHub" && !terminal.sessionId && !terminal.projectId);
 			if (existing) return existing;
@@ -80,9 +70,6 @@ export function useStartGitHubAuthTerminal() {
 	});
 }
 
-/** The login PTY is intentionally app-owned rather than notice-owned. Keeping
- * its handle in query state lets the inline panel reattach after navigation
- * while the browser-based device flow is still in progress. */
 export function useGitHubAuthTerminal() {
 	const queryClient = useQueryClient();
 	const query = useQuery<ShellTerminal | null>({
@@ -90,11 +77,6 @@ export function useGitHubAuthTerminal() {
 		queryFn: async () => null,
 		enabled: false,
 		initialData: null,
-		// The notice renders only on the home page and the empty board, so opening
-		// a project drops this query's last observer. A device-code login easily
-		// outlives the default five-minute gcTime, and collecting the handle would
-		// both break reattach and strand the PTY with no way to close it from the
-		// notice. This entry holds a single handle and is cleared explicitly.
 		gcTime: Number.POSITIVE_INFINITY,
 	});
 	const clear = useCallback(() => {
@@ -103,8 +85,6 @@ export function useGitHubAuthTerminal() {
 	return { ...query, clear };
 }
 
-/** Remember an automatic login offer for the lifetime of this renderer so
- * dismissing its PTY remains respected across home/board remounts. */
 export function useGitHubAuthAutoLoginOffered() {
 	const queryClient = useQueryClient();
 	const query = useQuery<boolean>({
@@ -120,30 +100,19 @@ export function useGitHubAuthAutoLoginOffered() {
 	return { offered: query.data, markOffered };
 }
 
-/** Single source of truth for whether the machine satisfies AO's startup
- *  requirements. Shared by SessionsBoard (which must keep the startup screen
- *  mounted while blocked) and DaemonStartupLoader (which renders the gate) so
- *  both read the same react-query cache entry and never disagree. */
 export function useSystemRequirementsGate() {
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const query = useQuery({
 		...systemRequirementsQueryOptions,
 		queryKey: [...systemRequirementsQueryKey, baseUrl],
-		// The preview build has no daemon, and the desktop must wait for its
-		// trusted URL before making the first requirements request.
 		enabled: !usesPreviewWorkspaceData && Boolean(baseUrl),
 	});
 	const requirements = query.data?.requirements ?? [];
 	const requirementsBlocked =
 		!usesPreviewWorkspaceData && query.isSuccess && requirements.some((r) => r.required && !r.satisfied);
 	const checking = !usesPreviewWorkspaceData && query.isPending;
-	// The board must stay behind the startup loader until the probe resolves.
-	// `blocked` is the mount gate; `requirementsBlocked` is narrower and only
-	// controls the dependency dialog once there is real missing-item data.
 	const blocked = checking || requirementsBlocked;
 	const ready = usesPreviewWorkspaceData || (query.isSuccess && !requirementsBlocked);
-	// Once the daemon URL is trusted, fail open if its requirements probe errors
-	// rather than wedging the user on the checking state forever.
 	const probeFailed = query.isError;
 	return { query, requirements, blocked, requirementsBlocked, checking, ready, probeFailed };
 }

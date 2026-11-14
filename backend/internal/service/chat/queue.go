@@ -14,17 +14,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// ErrQueuedTurnTextRequired refuses an empty rewrite of a queued prompt.
 var ErrQueuedTurnTextRequired = errors.New("queued message text is required")
 
-// ErrQueuedContentInvalid refuses invalid retained indices or oversized content.
 var ErrQueuedContentInvalid = errors.New("queued message attachments are invalid")
 
-// ErrQueuedEditConflict refuses an edit based on an outdated message revision.
 var ErrQueuedEditConflict = errors.New("queued message changed during editing")
 
-// QueuedMessageEdit retains server-owned content by public summary index and
-// appends newly uploaded blocks. Nil RetainedContent preserves existing content.
 type QueuedMessageEdit struct {
 	ClientMessageID  string
 	Text             string
@@ -33,12 +28,8 @@ type QueuedMessageEdit struct {
 	ExpectedRevision *int64
 }
 
-// ErrInvalidQueuedTurnOrder refuses a queue reorder that does not match the
-// current undispatched queue exactly.
 var ErrInvalidQueuedTurnOrder = errors.New("invalid queued turn order")
 
-// CancelQueuedTurn removes one undispatched queue item without stopping the
-// running turn or cancelling later queue items.
 func (s *Service) CancelQueuedTurn(
 	ctx context.Context,
 	id domain.SessionID,
@@ -54,8 +45,6 @@ func (s *Service) CancelQueuedTurn(
 	return controller.CancelQueuedTurn(ctx, turnID)
 }
 
-// EditQueuedTurn rewrites the durable human prompt for a turn that has not yet
-// dispatched. This is not a branch edit: the turn has never reached the provider.
 func (s *Service) EditQueuedTurn(
 	ctx context.Context,
 	id domain.SessionID,
@@ -92,7 +81,6 @@ func (s *Service) EditQueuedTurn(
 	return controller.EditQueuedTurn(ctx, turnID, edit)
 }
 
-// ReorderQueuedTurns rewrites the durable queue order for undispatched turns.
 func (s *Service) ReorderQueuedTurns(
 	ctx context.Context,
 	id domain.SessionID,
@@ -108,7 +96,6 @@ func (s *Service) ReorderQueuedTurns(
 	return controller.ReorderQueuedTurns(ctx, turnIDs)
 }
 
-// CancelQueuedTurn drops one queue row that has not yet dispatched.
 func (c *Controller) CancelQueuedTurn(ctx context.Context, turnID string) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -118,7 +105,6 @@ func (c *Controller) CancelQueuedTurn(ctx context.Context, turnID string) error 
 	return c.store.CancelQueuedTurnByID(ctx, c.conversation.ID, turnID, c.now())
 }
 
-// EditQueuedTurn rewrites the durable human prompt for a queued turn.
 func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit QueuedMessageEdit) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -158,8 +144,6 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		if edit.ExpectedRevision == nil {
 			return ErrQueuedContentInvalid
 		}
-		// Match conversationContentSummary: text and internal replay context are
-		// not exposed as user attachments and must survive attachment removal.
 		retained := *edit.RetainedContent
 		selected := make([]ports.ChatContent, 0, len(content))
 		index, next := 0, 0
@@ -180,7 +164,6 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		content = selected
 	}
 	content = append(content, edit.Content...)
-	// Match the native chat upload limits across repeated edits as well as a single request.
 	images, imageBytes := 0, 0
 	for _, block := range content {
 		if block.Type != "image" {
@@ -225,7 +208,6 @@ func queuedEditDelivery(turnID string, edit QueuedMessageEdit) (domain.Conversat
 	return domain.ConversationQueuedEditDelivery{ClientMessageID: edit.ClientMessageID, RequestHash: fmt.Sprintf("%x", sha256.Sum256(data))}, nil
 }
 
-// ReorderQueuedTurns permutes undispatched queue rows without changing their text.
 func (c *Controller) ReorderQueuedTurns(ctx context.Context, turnIDs []string) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()

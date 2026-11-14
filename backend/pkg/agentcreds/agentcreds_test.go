@@ -9,9 +9,6 @@ import (
 	"testing"
 )
 
-// The classification table is the core of the package. First-party 429 proves
-// authentication, while permission failures and unrecognized statuses remain
-// unknown rather than locking out a potentially valid principal.
 func TestClassification(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -59,9 +56,6 @@ func TestGatewayRateLimitDoesNotProveAuthentication(t *testing.T) {
 	}
 }
 
-// The header must follow the credential's Kind. A token sent under the wrong
-// header is rejected for the wrong reason, and that rejection is
-// indistinguishable from a revoked credential.
 func TestHeaderFollowsCredentialKind(t *testing.T) {
 	tests := []struct {
 		kind       Kind
@@ -100,9 +94,6 @@ func TestHeaderFollowsCredentialKind(t *testing.T) {
 	}
 }
 
-// I2: an empty secret must never reach the provider. Sending one produces
-// "x-api-key header is required", which reads exactly like a rejection and
-// would tell a user with working credentials to sign in again.
 func TestEmptySecretIsNeverProbed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("an empty credential must not produce a request")
@@ -117,8 +108,6 @@ func TestEmptySecretIsNeverProbed(t *testing.T) {
 	}
 }
 
-// The provider's own message is what makes an error actionable: Anthropic
-// returns a distinct one per credential class.
 func TestRejectionCarriesTheProviderMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -155,7 +144,6 @@ func TestRejectionDetailRedactsTheSubmittedCredential(t *testing.T) {
 	}
 }
 
-// A resolver bug must be recognizable so it can be downgraded to unknown.
 func TestIsResolverBug(t *testing.T) {
 	bugs := []string{
 		"Anthropic rejected the credential: x-api-key header is required",
@@ -220,9 +208,6 @@ func TestCredentialFingerprintScopesCacheIdentityToProviderConfiguration(t *test
 	}
 }
 
-// A 200 with a body we cannot parse is still an acceptance. The model list is
-// a bonus for the surfaces that do not gate on entitlement, so failing to read
-// it must not retract the answer the status code already gave.
 func TestUnparsableBodyDoesNotRetractAnAcceptance(t *testing.T) {
 	for _, body := range []string{"", "not json at all", "<html>proxy interstitial</html>"} {
 		t.Run(body, func(t *testing.T) {

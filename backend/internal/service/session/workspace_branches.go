@@ -13,33 +13,21 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// maxWorkspaceBranches caps the branch list, checked-out row included.
 const maxWorkspaceBranches = 200
 
-// WorkspaceBranchKind says how a listed branch is read.
 type WorkspaceBranchKind string
 
 const (
-	// WorkspaceBranchRemote is a known remote-tracking ref, read without fetching or checkout.
-	WorkspaceBranchRemote WorkspaceBranchKind = "remote"
-	// WorkspaceBranchLocal is a local branch, read as a branch view (or as the
-	// checked-out worktree when it is checked out).
-	WorkspaceBranchLocal WorkspaceBranchKind = "local"
-	// WorkspaceBranchPullRequest is a pull request whose source branch is not
-	// local, read as a pull request view.
+	WorkspaceBranchRemote      WorkspaceBranchKind = "remote"
+	WorkspaceBranchLocal       WorkspaceBranchKind = "local"
 	WorkspaceBranchPullRequest WorkspaceBranchKind = "pull_request"
 )
 
-// WorkspaceBranch is one row of the branch list. A local row that is a pull
-// request's own branch carries that PR's number, URL and title; any other PR
-// gets a row of its own.
 type WorkspaceBranch struct {
-	Kind WorkspaceBranchKind
-	// Name is the branch, the PR's source branch, or empty for a detached HEAD.
-	Name      string
-	TipSHA    string
-	UpdatedAt time.Time
-	// CheckedOut marks the session worktree's own row, which is always first.
+	Kind       WorkspaceBranchKind
+	Name       string
+	TipSHA     string
+	UpdatedAt  time.Time
 	CheckedOut bool
 	Detached   bool
 	IsDefault  bool
@@ -48,8 +36,6 @@ type WorkspaceBranch struct {
 	PRTitle    string
 }
 
-// WorkspaceBranches lists the branches a session's review can read.
-// Supported is false for scratch sessions, which have no Git history.
 type WorkspaceBranches struct {
 	SessionID     domain.SessionID
 	Supported     bool
@@ -58,12 +44,6 @@ type WorkspaceBranches struct {
 	Truncated     bool
 }
 
-// ListWorkspaceBranches lists the checked-out branch first, then the other
-// local branches and the session's pull requests whose source branch is not
-// local, newest first, capped at maxWorkspaceBranches. A workspace project
-// lists only its checked-out branch and its pull requests, since only a
-// single repository can review another branch. Everything is read, nothing
-// is checked out.
 func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID) (WorkspaceBranches, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -93,8 +73,6 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 		return nil
 	})
 	if !projectOK || project.Kind.WithDefault() == domain.ProjectKindSingleRepo {
-		// HEAD is read from the files git reads; the recorded branch stands in
-		// only when they cannot be read.
 		if _, branch, head, ok := readGitHead(root); ok {
 			checkedOut.Name, checkedOut.TipSHA, checkedOut.Detached = branch, head, branch == ""
 		}
@@ -119,10 +97,6 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 	return result, nil
 }
 
-// prBranchOwners reports, by PR URL, which pull requests are a listed local
-// branch's own: the PR's head is that branch's tip, either here or on a remote
-// of the PR's repository. A fork's PR, or another repository's, that only
-// shares the branch name never matches, so it keeps a row of its own.
 func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch, locals []WorkspaceBranch, prs []domain.PullRequest) map[string]bool {
 	owners := map[string]bool{}
 	if len(prs) == 0 {
@@ -141,8 +115,6 @@ func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch
 	}
 	var pending []domain.PullRequest
 	for _, pr := range prs {
-		// Equal commits can exist in unrelated repositories and forks. Only
-		// the workspace repository's PRs can own one of its local branches.
 		if requireSameRepo(pr.URL, remotes["origin"]) != nil {
 			continue
 		}
@@ -189,8 +161,6 @@ func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch
 	return owners
 }
 
-// gitRemoteURLs maps each remote's name to its fetch URL; empty when there are
-// none or they cannot be read.
 func gitRemoteURLs(ctx context.Context, root string) map[string]string {
 	out, err := gitWorkspaceOutput(ctx, root, "config", "--get-regexp", `^remote\..*\.url$`)
 	if err != nil {
@@ -209,8 +179,6 @@ func gitRemoteURLs(ctx context.Context, root string) map[string]string {
 	return remotes
 }
 
-// readableWorkspacePRs returns the session's pull requests a pull request view
-// can read, one per alias group, most recently updated first.
 func (s *Service) readableWorkspacePRs(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
 	prs, err := s.store.ListPRsBySession(ctx, id)
 	if err != nil {
@@ -236,10 +204,6 @@ func pullRequestUpdatedAt(pr domain.PullRequest) time.Time {
 	return pr.UpdatedAt
 }
 
-// listLocalBranches lists the newest local branches, one more than the cap so
-// a longer list is known to be truncated. When it is, the checked-out branch
-// and the PR source branches that were left out are looked up by exact name
-// in one more process, so a local PR branch never gets a pull request row.
 func listLocalBranches(ctx context.Context, root, checkedOut string, prs []domain.PullRequest) ([]WorkspaceBranch, bool, error) {
 	locals, truncated, err := readLocalBranches(ctx, root, "--sort=-committerdate", "--count="+strconv.Itoa(maxWorkspaceBranches+1), "refs/heads/", "refs/remotes/")
 	if err != nil || !truncated {
@@ -259,8 +223,6 @@ func listLocalBranches(ctx context.Context, root, checkedOut string, prs []domai
 	var patterns []string
 	want := map[string]bool{}
 	for _, name := range names {
-		// A valid branch name has no glob characters, so the pattern matches
-		// it literally (and its children, which are filtered out below).
 		if !listed[name] && !want[name] && validWorkspaceBranchName(name) {
 			want[name] = true
 			patterns = append(patterns, "refs/heads/"+name)
@@ -281,8 +243,6 @@ func listLocalBranches(ctx context.Context, root, checkedOut string, prs []domai
 	return locals, truncated, nil
 }
 
-// readLocalBranches runs for-each-ref over refs/heads with args and parses
-// each branch's name, tip and committer time.
 func readLocalBranches(ctx context.Context, root string, args ...string) ([]WorkspaceBranch, bool, error) {
 	out, err := gitWorkspaceOutput(ctx, root, append([]string{"for-each-ref", "--format=%(refname)%00%(objectname)%00%(committerdate:unix)"}, args...)...)
 	if err != nil {
@@ -319,7 +279,6 @@ func readLocalBranches(ctx context.Context, root string, args ...string) ([]Work
 	return rows, limit > 0 && rawCount >= limit, nil
 }
 
-// gitCommitTime is a commit's committer time, or zero when it cannot be read.
 func gitCommitTime(ctx context.Context, root, sha string) time.Time {
 	if !fullCommitSHA.MatchString(sha) {
 		return time.Time{}
@@ -339,10 +298,6 @@ func unixTime(raw string) time.Time {
 	return time.Unix(seconds, 0).UTC()
 }
 
-// workspaceBranchRows puts the checked-out row first and the rest newest
-// first. A pull request that owns a listed branch annotates its row (the most
-// recently updated PR wins); any other gets a row of its own, so no PR is
-// dropped. The cap always keeps the checked-out row.
 func workspaceBranchRows(checkedOut WorkspaceBranch, locals []WorkspaceBranch, prs []domain.PullRequest, owners map[string]bool, defaultBranch string) ([]WorkspaceBranch, bool) {
 	rows := make([]WorkspaceBranch, 0, 1+len(locals)+len(prs))
 	rows = append(rows, checkedOut)
@@ -356,7 +311,6 @@ func workspaceBranchRows(checkedOut WorkspaceBranch, locals []WorkspaceBranch, p
 			continue
 		}
 		if _, ok := byName[row.Name]; ok {
-			// The checked-out branch keeps its first row, now with its tip.
 			if row.Name == checkedOut.Name {
 				rows[0].TipSHA, rows[0].UpdatedAt = row.TipSHA, row.UpdatedAt
 			}

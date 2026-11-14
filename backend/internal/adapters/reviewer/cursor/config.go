@@ -170,12 +170,6 @@ func reviewerAllowList(taskPromptRoot string) []string {
 	return allow
 }
 
-// applyReviewerMCPDisable records every MCP server Cursor would load for this
-// review as disabled inside the isolated reviewer profile. Cursor only asks
-// about MCP approval interactively, and a reviewer pane is unattended, so an
-// unanswered approval screen would stall the review forever. The servers are
-// also never spawned during review, which keeps checkout-controlled MCP
-// processes out of the reviewer.
 func applyReviewerMCPDisable(ctx context.Context, inv ports.ReviewInvocation) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -184,10 +178,6 @@ func applyReviewerMCPDisable(ctx context.Context, inv ports.ReviewInvocation) er
 	if err != nil {
 		return err
 	}
-	// Validate here, ahead of the disableMCPServers seam, so a hostile id
-	// fails the review closed even where process execution is substituted.
-	// execMCPServerDisable re-checks at the spawn boundary as defense in
-	// depth.
 	if err := validateMCPServerIDs(ids); err != nil {
 		return err
 	}
@@ -197,18 +187,12 @@ func applyReviewerMCPDisable(ctx context.Context, inv ports.ReviewInvocation) er
 	return disableMCPServers(ctx, inv, ids)
 }
 
-// disableMCPServers runs `cursor-agent mcp disable` for each declared server
-// id against the AO-owned reviewer profile. It is a variable so tests can
-// stub process execution.
 var disableMCPServers = execMCPServerDisable
 
 func execMCPServerDisable(ctx context.Context, inv ports.ReviewInvocation, ids []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Reject before resolving the binary or spawning anything: an
-	// option-shaped id must never reach the CLI, where `-h`/`--help` would
-	// exit 0 having disabled nothing and silently leave the server enabled.
 	if err := validateMCPServerIDs(ids); err != nil {
 		return err
 	}
@@ -236,17 +220,6 @@ func execMCPServerDisable(ctx context.Context, inv ports.ReviewInvocation, ids [
 	return nil
 }
 
-// validateMCPServerIDs rejects server ids that cannot be passed to
-// `cursor-agent mcp disable` unambiguously as a positional argument. Ids
-// beginning with `-` would be parsed as CLI options instead of the server id:
-// `-h`/`--help` exit 0 having disabled nothing (a silent bypass that leaves
-// the server enabled to stall the unattended review on approval), while other
-// option-shaped ids fail the disable outright. End-of-options `--` does not
-// help — verified against cursor-agent 2026.09.10, `mcp disable --
-// "--evil-flag"` still errors with `unknown option '--evil-flag'`. Rejecting
-// fails the review closed so the operator sees the misdeclared server instead
-// of a pane stuck forever on an approval screen. Empty ids cannot name a
-// server and are rejected for the same reason.
 func validateMCPServerIDs(ids []string) error {
 	for _, id := range ids {
 		switch {
@@ -259,13 +232,6 @@ func validateMCPServerIDs(ids []string) error {
 	return nil
 }
 
-// mcpDisableCommand builds the Cursor CLI invocation that records one server
-// id as disabled in the reviewer profile for the review workspace. The
-// workspace working directory makes Cursor write the disable list under the
-// same project slug the reviewer pane will read. The id is passed bare (no
-// `--` separator): ids that would need one are rejected by
-// validateMCPServerIDs because this CLI does not honor end-of-options for
-// them, and everything reaching this point is a safe positional argument.
 func mcpDisableCommand(ctx context.Context, binary, id, workspacePath, profileDir string) *exec.Cmd {
 	cmd := aoprocess.CommandContext(ctx, binary, "mcp", "disable", id) //nolint:gosec // binary is adapter-resolved, args are static.
 	cmd.Dir = workspacePath
@@ -282,10 +248,6 @@ func mcpDisableCommand(ctx context.Context, binary, id, workspacePath, profileDi
 	return cmd
 }
 
-// reviewerMCPConfigIDs lists the MCP server ids Cursor would load for a
-// review: the workspace's .cursor/mcp.json and the host user's
-// .cursor/mcp.json, the two locations the Cursor CLI reads. Ids within each
-// file are sorted and de-duplicated so the disable order is stable.
 func reviewerMCPConfigIDs(workspacePath string) ([]string, error) {
 	paths := make([]string, 0, 2)
 	if strings.TrimSpace(workspacePath) != "" {

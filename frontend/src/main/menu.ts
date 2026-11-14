@@ -1,7 +1,6 @@
 import type { MenuItemConstructorOptions } from "electron";
 import { APP_MENU_COMMAND_IDS, type AppMenuAvailability, type AppMenuCommandId } from "../shared/shortcuts";
 
-/** Top bar commands for the macOS menu bar; the renderer owns what each one does. */
 export type AppMenuCommands = {
 	accelerator: (id: AppMenuCommandId) => string | undefined;
 	isEnabled: (id: AppMenuCommandId) => boolean;
@@ -14,7 +13,6 @@ type AppMenuOptions = {
 	commands?: AppMenuCommands;
 };
 
-/** Keeps only known commands, each as a strict boolean. Input comes over IPC. */
 export function coerceAppMenuAvailability(raw: unknown): AppMenuAvailability {
 	const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 	return Object.fromEntries(APP_MENU_COMMAND_IDS.map((id) => [id, source[id] === true]));
@@ -88,17 +86,6 @@ function reloadItems(options: AppMenuOptions, isMac: boolean): MenuItemConstruct
 	];
 }
 
-// Electron's built-in toggleDevTools role assumes the focused surface belongs
-// to a BrowserWindow. AO uses BaseWindow with WebContentsView children, so the
-// role can receive no focused window and crash the main process. Keep Electron's
-// complete standard menus through their top-level roles, but replace View so
-// DevTools routes through AO's guarded handler. Similarly, Electron's default
-// fileMenu role binds Cmd+W to "Close Window", which kills the entire application
-// window whenever a tab or terminal close races the native menu. Multi-tab
-// macOS applications (Safari, Chrome, VS Code) bind Shift+Command+W to "Close Window"
-// so Command+W remains scoped to tabs and terminals. Quit is a plain item, not
-// the quit role (which maps straight to NSApp terminate:), so a ⌘Q press can ask
-// for confirmation while choosing Quit from the menu still quits at once.
 export function buildMacAppMenuTemplate(
 	onToggleDevTools: () => void,
 	quit: { appName: string; onQuit: (fromShortcut: boolean) => void },

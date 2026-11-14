@@ -6,8 +6,6 @@ import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import type { clientForSessionHost } from "../../../lib/host-clients";
 import type { HarnessDetails } from "./describe-harness";
 
-// The copied reports stay in English: they are read by whoever fixes the bug.
-
 export function diagnosticsText(agentId: AgentId, job: InstallJob): string {
 	return [
 		`${agentLabel(agentId)} installation diagnostics`,
@@ -18,12 +16,6 @@ export function diagnosticsText(agentId: AgentId, job: InstallJob): string {
 	].filter(Boolean).join("\n");
 }
 
-/**
-	* What the machine looked like when the diagnostics were copied: an install
-	* that dies on a host with no memory left reads very differently from one
-	* that dies on an idle laptop. Fetched once on the click rather than polled,
-	* and left out entirely where the daemon cannot measure the host.
-	*/
 export async function machineText(queryClient: QueryClient, remoteClient?: ReturnType<typeof clientForSessionHost>): Promise<string> {
 	let reading: Pick<Awaited<ReturnType<typeof fetchSessionMemory>>, "app" | "system" | "sessions">;
 	try {
@@ -40,8 +32,6 @@ export async function machineText(queryClient: QueryClient, remoteClient?: Retur
 		lines.push(`Memory: Orchestrator ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
-		// Windows has no load average and reports the sentinel -1 rather than a
-		// fabricated 0; leave the figure out of the report entirely there.
 		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
 		lines.push(`CPU: ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping: ${formatMemory(system.swapBytesPerSec)}/s`);
@@ -52,18 +42,12 @@ export async function machineText(queryClient: QueryClient, remoteClient?: Retur
 	return lines.join("\n");
 }
 
-/** A remote install's diagnostics describe that host, so its numbers come
-	* from its own daemon. Fetched directly: the shared query and the CPU graph
-	* hold this computer's readings only. */
 async function fetchRemoteMachine(client: ReturnType<typeof clientForSessionHost>) {
 	const { data, error } = await client.GET("/api/v1/usage/sessions/memory", { params: { query: {} } });
 	if (error) throw error;
 	return { sessions: data?.sessions ?? [], system: data?.system, app: data?.app };
 }
 
-/** Where the harness's credential was found, for display: never a CLI
-	* executable or a missing file that was merely checked. Current probe
-	* evidence precedes cached identity. */
 export function detectedCredential(details: HarnessDetails, t: TFunction): string | undefined {
 	const auth = details.readinessAgent?.authentication;
 	const source = auth?.diagnostics?.find((step) => step.source && step.method === "provider_validation" && step.code !== "credential_missing")?.source

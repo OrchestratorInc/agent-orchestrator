@@ -79,9 +79,6 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 					}
 				}
 			}
-			// A shell usually starts in a second or two, but the first one on a
-			// cold CI runner can stall far longer. This test checks the readiness
-			// hook, not how fast the runner starts a process.
 			readyBy := time.Now().Add(30 * time.Second)
 			for time.Now().Before(readyBy) {
 				if data, err := os.ReadFile(ready.file); err == nil && strings.TrimSpace(string(data)) == "ready" {
@@ -96,7 +93,6 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 					if _, err := io.WriteString(cp, delivery.input+"\r"); err != nil {
 						t.Fatal(err)
 					}
-					// Delivery gets the app's own budget, not whatever startup left.
 					deliveredBy := time.Now().Add(cueCommandConsumeTimeout)
 					for time.Now().Before(deliveredBy) {
 						if data, err := os.ReadFile(filepath.Join(cmd.Dir, "output")); err == nil && string(data) == want {

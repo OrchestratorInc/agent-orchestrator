@@ -16,8 +16,6 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
-// deferredBackground captures the asynchronous half so a test can inspect the
-// state the API answered with before the background work runs.
 func deferredBackground(m *Manager) *[]func() {
 	deferred := &[]func(){}
 	m.runBackground = func(work func()) { *deferred = append(*deferred, work) }
@@ -54,8 +52,6 @@ func (s *failReadyProvisionStore) SetSessionProvisionState(ctx context.Context, 
 	return s.fakeStore.SetSessionProvisionState(ctx, id, state, message, now)
 }
 
-// seedRecordingStore keeps the provision state each session row was first
-// inserted with.
 type seedRecordingStore struct {
 	*fakeStore
 	seeded []domain.SessionProvisionState
@@ -84,9 +80,6 @@ func (s *blockingWorkspacePublishStore) SetSessionProvisionedWorkspace(
 	return s.fakeStore.SetSessionProvisionedWorkspace(ctx, id, branch, workspacePath, workspaceRepoPath, now)
 }
 
-// The point of the asynchronous path: the caller gets an addressable session
-// before the expensive work starts, and the opening prompt is already in the
-// durable queue rather than waiting on a controller that does not exist.
 func TestSpawnAsyncChat_AnswersBeforeWorkspaceAndController(t *testing.T) {
 	testAsyncChatAnswersBeforeWorkspaceAndController(t, domain.KindWorker)
 }
@@ -140,8 +133,6 @@ func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.
 	if got := launcher.drained; len(got) != 1 || got[0] != rec.ID {
 		t.Fatalf("drained = %v, want %q", got, rec.ID)
 	}
-	// The queue owns delivery. Sending the prompt again here would run the
-	// user's brief twice.
 	if len(launcher.turns) != 0 {
 		t.Fatalf("prompt was also sent directly: %v", launcher.turns)
 	}
@@ -150,8 +141,6 @@ func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.
 	}
 }
 
-// A view can open the session the moment its row exists. That first row must
-// already read as starting: a ready row with no controller looks stopped.
 func TestSpawnAsyncChat_FirstRowIsProvisioning(t *testing.T) {
 	m, st, _ := newChatManager(&recordingLauncher{})
 	store := &seedRecordingStore{fakeStore: st}
@@ -231,8 +220,6 @@ func TestAsyncChatSpawnHoldsHarnessGateThroughControllerStart(t *testing.T) {
 	}
 }
 
-// A start that fails after the API answered must leave the session — and the
-// messages queued into it — in place, with a reason the user can read.
 func TestSpawnAsyncChat_FailedStartKeepsSessionAndReason(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
@@ -440,7 +427,6 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 			ws.createErr = nil
 			_, err = m.ResumeAgentWithMode(context.Background(), rec.ID)
 			if tc.catalogError {
-				// An unreadable catalog no longer blocks the retry: the CLI decides.
 				if err != nil || len(*deferred) != 2 {
 					t.Fatalf("catalog error = %v, deferred starts = %d, want the retry to go ahead", err, len(*deferred))
 				}
@@ -464,8 +450,6 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 				t.Fatalf("catalog reads = %v, want validation against the saved catalog", refreshes)
 			}
 			if tc.catalogDrift {
-				// Drift is answered from the saved catalog; the rediscovery runs
-				// in the background rather than inside the retry.
 				waitForBackgroundRefresh(t, refreshed)
 			}
 			if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
@@ -764,9 +748,6 @@ func TestCancelAsyncChatSpawnClearsStaleStartingState(t *testing.T) {
 	}
 }
 
-// An empty brief queues no turn, so the row still matches the seed-state
-// predicate that spawn rollback deletes on. Once the id has been handed to a
-// client, deleting it would turn an open session into a 404.
 func TestSpawnAsyncChat_PublishedSessionIsNeverDeleted(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("provider refused the session")}
 	m, st, _ := newChatManager(launcher)
@@ -791,10 +772,6 @@ func TestSpawnAsyncChat_PublishedSessionIsNeverDeleted(t *testing.T) {
 	}
 }
 
-// Every workspace-scoped read answers SESSION_WORKSPACE_NOT_FOUND while the row
-// claims no worktree. Waiting for the controller commit to publish it leaves the
-// session lying about itself for the whole provider start, which is long enough
-// for the desktop's bounded readiness poll to give up on a healthy session.
 func TestSpawnAsyncChat_PublishesTheWorktreeBeforeTheController(t *testing.T) {
 	launcher := &recordingLauncher{startErr: errors.New("provider is slow today")}
 	m, st, _ := newChatManager(launcher)
@@ -811,8 +788,6 @@ func TestSpawnAsyncChat_PublishesTheWorktreeBeforeTheController(t *testing.T) {
 	}
 	(*deferred)[0]()
 
-	// The controller never started, so only the early publish can have made the
-	// path visible to StartChat — exactly the window the desktop polls through.
 	if publishedPath == "" {
 		t.Fatal("the worktree was not published before controller startup")
 	}
@@ -1040,8 +1015,6 @@ func TestSpawnAsyncChat_PreparedProvisionFailureClearsRemovedWorkspace(t *testin
 	}
 }
 
-// A restart leaves nothing behind that could finish a background start, so a
-// row left mid-start must not read as "still starting" forever.
 func TestFailInterruptedProvisioning(t *testing.T) {
 	m, st, _ := newChatManager(&recordingLauncher{})
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -1067,11 +1040,6 @@ func TestFailInterruptedProvisioning(t *testing.T) {
 	}
 }
 
-// A session whose asynchronous start was interrupted has no workspace path —
-// the same shape as the phantom seed rows reconcile now cleans up. It must not
-// be cleaned up: the user can see it, its failure explains itself, and its
-// queued messages are still in it. An empty brief makes this sharpest, because
-// that row also still matches the seed-state predicate that rollback deletes on.
 func TestReconcileLive_KeepsAnInterruptedAsyncSpawn(t *testing.T) {
 	m, st, _ := newChatManager(&recordingLauncher{})
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -1093,10 +1061,6 @@ func TestReconcileLive_KeepsAnInterruptedAsyncSpawn(t *testing.T) {
 	}
 }
 
-// A session is on screen and typeable before its worktree exists, so a file
-// attached to a message typed in that window has nowhere to be written. It goes
-// to canonical storage and must be in the worktree before the agent can read
-// the turn that names it.
 func TestStageAttachments_DuringProvisioningLandsInTheWorktree(t *testing.T) {
 	dataDir := t.TempDir()
 	workspaceDir := t.TempDir()
@@ -1124,7 +1088,6 @@ func TestStageAttachments_DuringProvisioningLandsInTheWorktree(t *testing.T) {
 		t.Fatalf("spawn: %v", err)
 	}
 
-	// The worktree does not exist yet — this is the window the old code refused.
 	refs, err := m.StageAttachments(context.Background(), rec.ID, []ports.SpawnAttachment{
 		{Ext: ".png", Data: []byte("not really a png")},
 	})
@@ -1186,7 +1149,6 @@ func TestStageAttachments_AtWorkspacePublicationLandsInTheWorktree(t *testing.T)
 	}
 }
 
-// recordingProvisionStepsStore keeps every checklist the start publishes.
 type recordingProvisionStepsStore struct {
 	*fakeStore
 	published [][]domain.SessionProvisionStep
@@ -1214,8 +1176,6 @@ func runningProvisionStep(steps []domain.SessionProvisionStep) domain.SessionPro
 	return ""
 }
 
-// The chat surface draws a start as a checklist. Each stage must run in order,
-// hand over to the next in the same write, and end done with both times set.
 func TestSpawnAsyncChat_PublishesStartChecklist(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
@@ -1259,8 +1219,6 @@ func TestSpawnAsyncChat_PublishesStartChecklist(t *testing.T) {
 	}
 }
 
-// A failed start leaves the stage it stopped in running; the session's failed
-// state is what marks that stage as the one that failed.
 func TestSpawnAsyncChat_FailedStartLeavesItsStageRunning(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
@@ -1286,8 +1244,6 @@ func TestSpawnAsyncChat_FailedStartLeavesItsStageRunning(t *testing.T) {
 	}
 }
 
-// A worktree prepared while the task was written has no fetch of its own, and
-// a project without post-create commands has no setup stage.
 func TestSpawnAsyncChat_PreparedWorktreeChecklistSkipsFetch(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
@@ -1340,9 +1296,6 @@ func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindOrchestrator)
 }
 
-// The provision observer is how ao.sessions.spawned learns when an
-// asynchronous start became usable or failed: it must see provisioning while
-// the request is live, then exactly the settled state, with the failure cause.
 func TestAsyncChatSpawnReportsProvisionStatesToTheObserver(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -1382,8 +1335,6 @@ func TestAsyncChatSpawnReportsProvisionStatesToTheObserver(t *testing.T) {
 	}
 }
 
-// Killing a session mid-start cancels its background start. The provision
-// observer must see that as a cancellation, not a launch failure.
 func TestKillDuringAsyncChatStartReportsCancellationToTheObserver(t *testing.T) {
 	m, _, _ := newChatManager(&recordingLauncher{})
 	m.browserCapabilities = browsersvc.NewAuthority()
@@ -1398,8 +1349,6 @@ func TestKillDuringAsyncChatStartReportsCancellationToTheObserver(t *testing.T) 
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	// Kill cancels the background start (cancelAsyncChatSpawn) and waits for
-	// it; cancel it the same way, let the start observe that, then kill.
 	m.asyncChatSpawnsMu.Lock()
 	run := m.asyncChatSpawns[rec.ID]
 	m.asyncChatSpawnsMu.Unlock()
@@ -1421,8 +1370,6 @@ func TestKillDuringAsyncChatStartReportsCancellationToTheObserver(t *testing.T) 
 	}
 }
 
-// A start left provisioning with no background run (cancelled before it began)
-// is marked failed as a cancellation too.
 func TestCancelWithoutBackgroundRunReportsCancellation(t *testing.T) {
 	m, st, _ := newChatManager(&recordingLauncher{})
 	var cause error

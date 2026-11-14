@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// RecordSessionCreatedBy stores who caused the session to exist.
 func (s *Store) RecordSessionCreatedBy(ctx context.Context, id domain.SessionID, createdBy domain.SessionCreator) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -20,7 +19,6 @@ func (s *Store) RecordSessionCreatedBy(ctx context.Context, id domain.SessionID,
 	return nil
 }
 
-// IncrementSessionWaitingInputCount counts one more stop to wait on the user.
 func (s *Store) IncrementSessionWaitingInputCount(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -30,8 +28,6 @@ func (s *Store) IncrementSessionWaitingInputCount(ctx context.Context, id domain
 	return nil
 }
 
-// GetSessionTelemetry reads the session's analytics facts. A session without a
-// row reports zero values, which readers treat as unknown.
 func (s *Store) GetSessionTelemetry(ctx context.Context, id domain.SessionID) (domain.SessionTelemetryFacts, error) {
 	row, err := s.qr.GetSessionTelemetry(ctx, string(id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -43,8 +39,6 @@ func (s *Store) GetSessionTelemetry(ctx context.Context, id domain.SessionID) (d
 	return domain.SessionTelemetryFacts{CreatedBy: domain.SessionCreator(row.CreatedBy), WaitingInputCount: row.WaitingInputCount}, nil
 }
 
-// ClaimSessionEndTelemetry reserves the single outcome event for a session.
-// The unique session row makes concurrent end paths and later retries no-ops.
 func (s *Store) ClaimSessionEndTelemetry(ctx context.Context, id domain.SessionID) (bool, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return false, err

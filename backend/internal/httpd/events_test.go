@@ -172,10 +172,6 @@ func (s *resetEventSource) EventsAfter(_ context.Context, after int64, _ int) ([
 
 func (*resetEventSource) LatestSeq(context.Context) (int64, error) { return 1, nil }
 
-// A cursor ahead of head means the change_log was truncated or replaced. Such a
-// client is sent to head, not to zero: replaying from zero costs it the entire
-// backlog, and because every connected client is reset at the same moment, they
-// stampede together. The gap is recovered from the next snapshot fetch instead.
 func TestEventsStreamClampsCursorAheadOfCurrentDatabaseToHead(t *testing.T) {
 	live := &fakeEventSubscriber{}
 	src := &resetEventSource{}
@@ -198,13 +194,10 @@ func TestEventsStreamClampsCursorAheadOfCurrentDatabaseToHead(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// resetEventSource reports a head of 1, so a cursor of 100 lands on 1.
 	if got := resp.Header.Get("X-AO-Event-After"); got != "1" {
 		t.Fatalf("X-AO-Event-After = %q, want 1 (head, not a replay from zero)", got)
 	}
 
-	// The replayed event (seq 1) is at the cursor, so it is not re-sent. Only a
-	// genuinely newer event reaches the client — proving no backlog was replayed.
 	live.publish(testCDCEvent(2))
 	if ids := readSSEIDs(t, resp.Body, 1); ids[0] != "2" {
 		t.Fatalf("id = %q, want 2 (history before head must not be replayed)", ids[0])
@@ -318,16 +311,11 @@ func readSSEEventTypes(t *testing.T, r io.Reader, want int) []string {
 	return nil
 }
 
-// dedupeEventSource publishes a duplicate of its replay event plus a new event
-// into the live channel so the dedupe path in writeSSEEvent can be exercised.
 type dedupeEventSource struct {
 	live *fakeEventSubscriber
 }
 
 func (s *dedupeEventSource) EventsAfter(_ context.Context, _ int64, _ int) ([]cdc.Event, error) {
-	// Both published before replay returns: seq=5 duplicates the replay event;
-	// seq=6 is genuinely new. After replay sentSeq=5, so seq=5 must be dropped
-	// and seq=6 sent.
 	s.live.publish(testCDCEvent(5))
 	s.live.publish(testCDCEvent(6))
 	return []cdc.Event{testCDCEvent(5)}, nil
@@ -335,9 +323,6 @@ func (s *dedupeEventSource) EventsAfter(_ context.Context, _ int64, _ int) ([]cd
 
 func (*dedupeEventSource) LatestSeq(context.Context) (int64, error) { return 0, nil }
 
-// TestEventsStreamDeduplicatesLiveEventOverlappingReplay verifies that a live
-// event whose seq falls within the already-replayed range is silently dropped,
-// so the client sees each seq exactly once.
 func TestEventsStreamDeduplicatesLiveEventOverlappingReplay(t *testing.T) {
 	live := &fakeEventSubscriber{}
 	src := &dedupeEventSource{live: live}
@@ -360,18 +345,12 @@ func TestEventsStreamDeduplicatesLiveEventOverlappingReplay(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Replay emits seq=5; live buffer holds seq=5 (dup) then seq=6 (new).
-	// writeSSEEvent must drop seq=5 from the live drain (5 <= sentSeq=5).
-	// The client must see exactly [5, 6], not [5, 5, 6].
 	ids := readSSEIDs(t, resp.Body, 2)
 	if got, want := strings.Join(ids, ","), "5,6"; got != want {
 		t.Fatalf("ids = %s, want %s (duplicate seq was not deduped)", got, want)
 	}
 }
 
-// lastEventIDSource returns a single event whose seq is calledAfter+1, letting
-// the test prove EventsAfter received the cursor from Last-Event-ID by checking
-// the event seq the client receives.
 type lastEventIDSource struct {
 	live *fakeEventSubscriber
 }
@@ -382,10 +361,6 @@ func (s *lastEventIDSource) EventsAfter(_ context.Context, after int64, _ int) (
 
 func (*lastEventIDSource) LatestSeq(context.Context) (int64, error) { return 8, nil }
 
-// TestEventsStreamParsesLastEventIDHeader verifies that the Last-Event-ID
-// request header is used as the replay cursor when the after query param is
-// absent. The source returns after+1, so receiving seq=8 proves the cursor
-// was parsed as 7.
 func TestEventsStreamParsesLastEventIDHeader(t *testing.T) {
 	live := &fakeEventSubscriber{}
 	src := &lastEventIDSource{live: live}
@@ -409,9 +384,6 @@ func TestEventsStreamParsesLastEventIDHeader(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// EventsAfter(after=7) returns seq=8. Receiving seq=8 proves the header
-	// was parsed correctly. If the header were ignored (after=0 default),
-	// EventsAfter would return seq=1 and this assertion would fail.
 	ids := readSSEIDs(t, resp.Body, 1)
 	if got, want := ids[0], "8"; got != want {
 		t.Fatalf("id = %q, want %q (Last-Event-ID header was not used as cursor)", got, want)
@@ -475,14 +447,6 @@ func testCDCEventWithType(seq int64, typ cdc.EventType) cdc.Event {
 	}
 }
 
-// An idle stream sent nothing at all, which is fine on a LAN and broken behind
-// a proxy: Cloudflare buffers a lone small write and has nothing to push it
-// through, so a single agent reply sat unseen for over a minute while the same
-// stream worked instantly over the LAN. The bulk replay always arrived because
-// it is large enough to flush on its own.
-//
-// A periodic comment frame keeps the pipe moving and carries any buffered event
-// out with it. Named heartbeats are observable to clients without changing the cursor.
 func TestEventsStreamHeartbeatsWhileIdle(t *testing.T) {
 	restore := eventsHeartbeatInterval
 	eventsHeartbeatInterval = 50 * time.Millisecond
@@ -499,8 +463,6 @@ func TestEventsStreamHeartbeatsWhileIdle(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// Past head, so the server clamps to head and replays nothing: the stream is
-	// genuinely idle and anything that arrives can only be a heartbeat.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events?after=999999", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

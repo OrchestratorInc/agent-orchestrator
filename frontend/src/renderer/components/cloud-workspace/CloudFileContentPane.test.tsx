@@ -48,8 +48,6 @@ describe("CloudFileContentPane", () => {
 	});
 
 	it("saves only the file on screen when ⌘S is pressed with several Cloud file tabs kept open", async () => {
-		// The session view keeps every open Cloud file tab mounted, hidden behind
-		// the one on screen; ⌘S must not also save an edit in a hidden tab.
 		const file = (path: string) => ({ ...detail, path, content: `old ${path}`, fileFingerprint: `fp-${path}` });
 		const getWorkspaceReviewFile = vi.fn(async (_org: string, _session: string, query: { path: string }) => file(query.path));
 		const updateWorkspaceReviewFile = vi.fn(async (_org: string, _session: string, body: { path: string }) => file(body.path));

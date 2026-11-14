@@ -104,8 +104,6 @@ describe("render activity", () => {
 	});
 
 	it("shows a note instead of a frame in a remote host's chat", () => {
-		// The local daemon has no copy of a remote host's render, and the remote
-		// proxy URL carries a capability token the page could read.
 		render(
 			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
 				<ActivityRow activity={renderActivity()} />
@@ -233,8 +231,6 @@ describe("render activity", () => {
 		const frames = await screen.findAllByTitle("Turns by day");
 		expect(frames).toHaveLength(2);
 		const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
-		// The dialog is a reading column wide, with no border and no fixed height;
-		// the frame fits the page, up to the window, and the page centers itself.
 		const dialog = expanded.parentElement!;
 		expect(dialog.getAttribute("role")).toBe("dialog");
 		expect(dialog.className).toContain("w-[min(64rem,calc(100vw-4rem))]");
@@ -290,7 +286,6 @@ describe("render activity", () => {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).getByRole("button", { name: "View source" })).toHaveAttribute("aria-pressed", "false");
-		// Focus starts on the dialog itself, so no action's tooltip opens with it.
 		expect(document.activeElement).toBe(dialog);
 		expect(screen.queryByRole("tooltip")).toBeNull();
 	});
@@ -340,7 +335,6 @@ describe("render activity", () => {
 			const { user, dialog } = await expand();
 			await user.click(within(dialog).getByRole("button", { name: "Save page" }));
 			await waitFor(() => expect(revoked).toHaveBeenCalledWith("blob:render"));
-			// The page as served, bootstrap included; no fragment.
 			expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1", expect.anything());
 			expect(await created.mock.calls[0]![0].text()).toBe("<html>page</html>");
 			expect(clicked).toHaveLength(1);
@@ -387,7 +381,6 @@ describe("render activity", () => {
 			await user.click(keep);
 			expect(keep).toBeDisabled();
 			expect(fetch).toHaveBeenCalledTimes(1);
-			// The API client hands fetch a Request, or a rebased URL and init.
 			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
 			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/renders/r1/artifact");
 			expect(request.method).toBe("POST");
@@ -494,7 +487,6 @@ describe("artifact activity", () => {
 	});
 
 	it("never frames an inline URL off the inline-artifact origin with allow-same-origin", () => {
-		// allow-same-origin on the app's own origin would let the page script the app.
 		for (const inlineUrl of ["http://localhost:5173/q3/x.html", "app://renderer/x.html", "http://ao-inline-artifact.x.example/x.html"]) {
 			const { unmount } = renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl }]);
 			expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
@@ -533,7 +525,6 @@ describe("artifact activity", () => {
 		renderArtifact();
 		const fragment = JSON.parse(decodeURIComponent(artifactFrame().getAttribute("src")!.split("#ao-theme=")[1]!));
 		expect(fragment).toMatchObject({ displayMode: "inline", scrollable: true });
-		// A min-height:100vh page reports the frame height plus its padding, again and again.
 		for (const height of [448, 496, 688, 1_200, 2_000]) {
 			post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height } }, artifactFrame().contentWindow);
 		}
@@ -565,8 +556,6 @@ describe("artifact activity", () => {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
-		// The session lists no preview for this path, so it opens nowhere outside the chat:
-		// its artifact-files route serves only the app's own frames.
 		expect(within(dialog).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
 		expect(within(dialog).queryByRole("button", { name: "Open in external browser" })).toBeNull();
 	});
@@ -576,7 +565,6 @@ describe("artifact activity", () => {
 		try {
 			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
 			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
-			// No #ao-theme: that fragment is the chat frame's own hand-off.
 			expect(open).toHaveBeenCalledExactlyOnceWith(previewUrl, "_blank", "noopener,noreferrer");
 		} finally {
 			open.mockRestore();
@@ -618,7 +606,6 @@ describe("artifact activity", () => {
 		const header = screen.getByTestId("artifact-card-header");
 		expect(header).toHaveTextContent("Artifact");
 		expect(header).toHaveTextContent("Q3 (final).html");
-		// The session lists no preview for this artifact, so there is nothing to open.
 		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
 	});
 

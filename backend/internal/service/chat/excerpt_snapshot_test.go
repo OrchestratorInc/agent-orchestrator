@@ -11,7 +11,6 @@ import (
 )
 
 func TestCapturedExcerptDoesNotReadSource(t *testing.T) {
-	// A nil store panics if hydration tries to resolve the deleted source.
 	c := &Controller{conversation: domain.ConversationRecord{ID: "conversation"}}
 	ref := ports.ChatExcerptReference{ConversationID: "conversation", MessageID: "deleted", Revision: 10, Text: "bold\n\tcode();", Snapshot: &domain.ChatExcerptSnapshot{Version: 1, RawText: "**bold**\n\tcode();", CaptureMode: "exact"}}
 	msg := ports.ChatUserMessage{Excerpts: []ports.ChatExcerptReference{ref}}
@@ -154,7 +153,6 @@ func TestNumberedCapturedAnnotationsAndLegacyDelivery(t *testing.T) {
 	if first, file, last := strings.Index(text, "Annotation 1 — Selected text:"), strings.Index(text, "Annotation 2 — File:"), strings.Index(text, "Annotation 3 — Selected text:"); first < 0 || file <= first || last <= file {
 		t.Fatal(text)
 	}
-	// An already-prepared snapshot without the opt-in marker keeps its old prompt.
 	legacy := *snapshot
 	legacy.ReferenceFormat = ""
 	ref.Snapshot = &legacy

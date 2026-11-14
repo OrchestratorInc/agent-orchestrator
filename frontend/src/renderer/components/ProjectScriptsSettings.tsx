@@ -48,8 +48,6 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 	const project = query.data;
 	const scratch = project.kind === "scratch";
 	const save = async (steps: ScriptSteps) => {
-		// A local step always runs in the project's own workspace; its own time
-		// limit is stored with it, as a Cloud step's is.
 		const scripts = {
 			postCreate: steps.postCreate.map(serializeLocalScriptStep),
 			...(steps.preRemove && { preRemove: steps.preRemove.map(serializeLocalScriptStep) }),
@@ -71,22 +69,12 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 		}} />;
 }
 
-/**
- * A Cloud project's Setup and Cleanup commands: the same settings and editor as
- * a local project, stored on the Cloud project (config.postCreate and
- * config.preRemove) and run by the session's worker. Setup runs once per
- * session after the checkout; Cleanup runs before the workspace is deleted,
- * which today only a Coder workspace supports.
- */
 export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState }: { projectId: string; cloudOrgId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl } = useCloudCp();
 	const offering = useCloudOffering();
 	const { org } = useCloudOrg();
-	// Setup and Cleanup run in every member's later sessions, so only owners and
-	// admins change them (the control plane enforces it too). A role the
-	// renderer does not know yet leaves the decision to the server.
 	const readOnly = org?.id === cloudOrgId && org.role !== undefined && !canManageBilling(org);
 	const queryKey = cloudProjectSettingsQueryKey(baseUrl, cloudOrgId, projectId);
 	const query = useQuery({
@@ -97,13 +85,8 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 	if (query.isLoading) return <p className="px-(--settings-row-inset) text-sm text-settings-muted">{t("settings.project.loading")}</p>;
 	if (query.isError || !query.data) return <p role="alert" className="px-(--settings-row-inset) text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	const project: CloudCpProject = query.data;
-	// A step can run in any of the project's repositories: the main one (the
-	// default) or one of the additional ones checked out beside it, named by the
-	// folder it checks out into.
 	const repositories = projectAdditionalRepos(project.config).map((repo) => ({ folder: repoDirName(repo.url), label: gitHubFullName(repo.url) ?? repo.url }));
 	const save = async (steps: ScriptSteps) => {
-		// Settings merge objects but replace arrays, so only the two lists are sent;
-		// an empty list clears it. Every other config key stays as stored.
 		const response = await client.updateProjectSettings(project.orgId, project.id, {
 			config: { postCreate: serializeScriptSteps(steps.postCreate), preRemove: serializeScriptSteps(steps.preRemove ?? []) },
 		});
@@ -116,10 +99,8 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 		save={save} onSaveState={onSaveState} onSaved={() => { void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey }); }} />;
 }
 
-/** The cloud providers that run a project's Cleanup before deleting a session's workspace. */
 const CLEANUP_PROVIDERS = new Set([CODER_PROVIDER, FREESTYLE_PROVIDER, "docker"]);
 
-/** Whether Cleanup runs on provider; an unresolved provider ("") is not said not to. */
 function cleanupRunsOn(provider: string): boolean {
 	return provider === "" || CLEANUP_PROVIDERS.has(provider);
 }
@@ -132,27 +113,14 @@ function localSteps(commands: string[] | undefined): ScriptStepDraft[] | undefin
 
 const emptyStep = (): ScriptStepDraft => ({ command: "", folder: "", timeout: "" });
 
-/**
- * A step whose time limit keeps the form from saving: one with a command (an
- * empty step is dropped on save) and a limit that is not 1 to 120 minutes.
- */
 const stepTimeoutInvalid = (step: ScriptStepDraft) => step.command.trim() !== "" && scriptStepTimeoutMinutes(step.timeout) === null;
 
-/**
- * A step's own time limit: a compact minutes field beside the step's other
- * controls. Empty is the default (placeholder); a value outside 1 to 120 is
- * marked invalid at once and keeps the form from saving. Its hint (the range
- * and what empty means) shows in a tooltip on hover and keyboard focus, beside
- * the field, and is the field's description.
- */
 function StepTimeoutField({ id, number, value, disabled, invalid, defaultMinutes, onChange }: {
 	id: string;
 	number: number;
 	value: string;
 	disabled: boolean;
-	/** The form will not save this limit (see stepTimeoutInvalid). */
 	invalid: boolean;
-	/** The limit an empty field means; undefined (Cleanup of a local project) is no limit at all. */
 	defaultMinutes: number | undefined;
 	onChange: (value: string) => void;
 }) {
@@ -162,8 +130,6 @@ function StepTimeoutField({ id, number, value, disabled, invalid, defaultMinutes
 	const hint = noDefault
 		? t("settings.project.stepTimeoutNoLimitHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES })
 		: t("settings.project.stepTimeoutHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES, default: defaultMinutes });
-	// "none" in the field stands for no limit, not a number of minutes; the unit
-	// keeps its room so the row does not shift once a number is typed.
 	const showsNoLimit = noDefault && value === "";
 	return <label className="flex shrink-0 items-center gap-1 text-xs text-settings-muted" htmlFor={id}>
 		<Tooltip>
@@ -173,7 +139,6 @@ function StepTimeoutField({ id, number, value, disabled, invalid, defaultMinutes
 					aria-invalid={invalid || undefined}
 					aria-label={t("settings.project.stepTimeout", { number })}
 					autoComplete="off"
-					// A no-limit field is wider: its placeholder is a word ("none").
 					className={cn("h-7 px-2 text-right text-xs tabular-nums", noDefault ? "w-16" : "w-12")}
 					disabled={disabled}
 					id={id}
@@ -192,8 +157,6 @@ function StepTimeoutField({ id, number, value, disabled, invalid, defaultMinutes
 					value={value}
 				/>
 			</TooltipTrigger>
-			{/* Beside the field: above it, it covered the end of the Scripts
-			    description, and below it, the step's command. */}
 			<TooltipContent side="left" className="max-w-64">{hint}</TooltipContent>
 		</Tooltip>
 		<span aria-hidden="true" className={cn(showsNoLimit && "invisible")}>{t("settings.project.stepTimeoutUnit")}</span>
@@ -201,7 +164,6 @@ function StepTimeoutField({ id, number, value, disabled, invalid, defaultMinutes
 	</label>;
 }
 
-/** The variables a Cloud project's Setup and Cleanup steps can use. */
 const cloudScriptVariables = [
 	["AO_WORKTREE_PATH", "settings.project.cloudVarFolder"],
 	["AO_SESSION_ID", "settings.project.cloudVarSessionId"],
@@ -211,7 +173,6 @@ const cloudScriptVariables = [
 	["AO_REPOSITORY_URL", "settings.project.cloudVarRepository"],
 ] as const;
 
-/** A quiet copy icon beside a variable name; it confirms only a copy that worked. */
 function CopyVariableButton({ text, label }: { text: string; label: string }) {
 	const [copied, setCopied] = useState(false);
 	useEffect(() => {
@@ -225,14 +186,11 @@ function CopyVariableButton({ text, label }: { text: string; label: string }) {
 }
 
 function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
-	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
 	scratch: boolean;
 	postCreate?: ScriptStepDraft[];
 	preRemove?: ScriptStepDraft[];
-	/** A Cloud project's additional repositories, by the folder each checks out into, which a step may run in instead of the main one. */
 	repositories?: { folder: string; label: string }[];
-	/** Set for a Cloud project: the hints describe its session workspace, and cleanupRuns says whether Cleanup runs on its provider. */
 	cloud?: { cleanupRuns: boolean; readOnly?: boolean };
 	save: (scripts: ScriptSteps) => Promise<void>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
@@ -245,15 +203,11 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 		setup: postCreate?.length ? postCreate.map((step) => ({ ...step })) : [emptyStep()],
 		cleanup: preRemove?.length ? preRemove.map((step) => ({ ...step })) : [emptyStep()],
 	}));
-	// A step keeps its folder as stored, even one that is not among the project's
-	// repositories any more (it is listed by folder name), so saving never moves
-	// a step into another repository on its own.
 	const kept = (steps: ScriptStepDraft[]) => steps.filter((step) => step.command.trim()).map((step) => ({ command: step.command, folder: step.folder, timeout: (step.timeout ?? "").trim() }));
 	const commands: ScriptSteps = {
 		postCreate: kept(drafts.setup),
 		...(!scratch && { preRemove: kept(drafts.cleanup) }),
 	};
-	// The first step whose time limit is not a whole number of minutes in range.
 	const invalidTimeout = (["setup", "cleanup"] as const).flatMap((kind) => kind === "cleanup" && scratch ? [] : drafts[kind]
 		.map((step, index) => ({ kind, number: index + 1, invalid: stepTimeoutInvalid(step) })))
 		.find((step) => step.invalid);
@@ -295,9 +249,6 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 	});
 	useEffect(() => {
 		onSaveState?.({
-			// This form saves only on "Save changes", so unsaved edits are reported as
-			// dirty but never as the autosave "pending" phase, which the settings
-			// sidebar shows as an endless "Saving" spinner.
 			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : savedAt && !dirty ? "saved" : "idle",
 			dirty,
 			requestPending: mutation.isPending,
@@ -330,11 +281,9 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 						</div>}
 						{!scratch && <details className="text-xs text-settings-muted">
 							<summary className="cursor-pointer font-medium text-settings-label">{t(cloud ? "settings.project.cloudVariables" : `settings.project.${kind}Paths`)}</summary>
-							{/* The page is unselectable by default; these names are meant to be copied into a step. */}
 							{cloud ? <dl className="mt-2 grid select-text grid-cols-[max-content_1fr] items-center gap-x-3 gap-y-1">
 								{[
 									...cloudScriptVariables.map(([name, key]) => ({ name, description: t(key) })),
-									// Each additional repository is checked out in its own folder beside the main one.
 									...(repositories.length > 0 ? [{ name: "AO_REPOS_ROOT", description: t("settings.project.cloudVarReposRoot", { defaultValue: "the folder that holds every repository's folder" }) }] : []),
 								].map(({ name, description }) => <Fragment key={name}>
 									<dt className="flex items-center gap-1"><code>{"$" + name}</code><CopyVariableButton label={t("settings.project.copyVariable", { defaultValue: "Copy {{name}}", name: "$" + name })} text={"$" + name} /></dt>
@@ -345,8 +294,6 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 								<p><code>{"AO_WORKTREE_PATH"}</code>: {t(`settings.project.${kind}WorktreePath`)}</p>
 							</div>}
 						</details>}
-						{/* One provider for the list's time limit tooltips, so moving from one
-						    field to the next shows its tooltip at once. */}
 						<TooltipProvider><div className="space-y-4">
 							{drafts[kind].map((step, index) => <div key={index}>
 								<div className="mb-1 flex items-center justify-between gap-2">

@@ -16,8 +16,6 @@ func (r *recordedInstallCommands) RunInstall(_ context.Context, command ports.In
 	return nil
 }
 
-// `droid update` exits 0 without updating when Droid's own auto-update switch
-// is off, so the update the user asked for turns it back on.
 func TestDroidUpdateTurnsDroidsAutoUpdateBackOn(t *testing.T) {
 	s := newTestService("darwin")
 	recorder := &recordedInstallCommands{}

@@ -2,12 +2,8 @@ import { writeFile } from "node:fs/promises";
 import { expect, test, type Locator } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// Platform detection can prefer Chromium's client hints over navigator.platform.
-// Use a macOS user agent so transparency is enabled on Linux CI too.
 test.use({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
 
-// Check actual paint with production components/CSS. A transparent sticky
-// header or archive can still pass visibility and geometry assertions.
 async function expectSurfaceTransparency(target: Locator, transparent: boolean) {
 	const alpha = await target.evaluate((element) => {
 		const context = document.createElement("canvas").getContext("2d")!;
@@ -18,7 +14,6 @@ async function expectSurfaceTransparency(target: Locator, transparent: boolean) 
 	expect(alpha).toBe(transparent ? 0 : 255);
 }
 
-// Keep captures in test-results, which CI uploads on failure.
 async function saveCaptures(captures: [name: string, image: Buffer][]) {
 	for (const [name, image] of captures) {
 		const path = test.info().outputPath(`${name}.png`);
@@ -34,11 +29,6 @@ const setVisibility = (underneath: Locator, hidden: boolean) => underneath.evalu
 	}
 }, hidden);
 
-// Bracket the capture with the content hidden between two captures with it
-// shown. If those two differ, the surface changed on its own (still settling
-// after it opened, for example), so the attempt says nothing about what is
-// underneath and is retried. If they match but the hidden capture differs, the
-// content underneath shows through.
 async function expectOccludes(surface: Locator, underneath: Locator, occludes = true) {
 	const bounds = await surface.boundingBox();
 	expect(bounds).not.toBeNull();
@@ -77,8 +67,6 @@ async function expectOccludes(surface: Locator, underneath: Locator, occludes = 
 					if (before.width !== after.width || before.height !== after.height) throw new Error("surface dimensions changed");
 					let changed = 0;
 					for (let i = 0; i < before.data.length; i += 4) {
-						// Repainting the hidden layer can change icon/edge antialiasing by
-						// up to 5/255 per channel (under 2%). Every pixel must stay within that tolerance.
 						if ([0, 1, 2, 3].some((channel) => Math.abs(before.data[i + channel] - after.data[i + channel]) > 5)) changed++;
 					}
 					return changed;
@@ -123,7 +111,6 @@ for (const theme of ["dark", "light"]) {
 			await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 			if (transparency) await expect(page.locator("html")).toHaveAttribute("data-window-translucent", "true");
 
-			// The archive is a modal now, not a sheet over the lanes.
 			await page.getByRole("button", { name: "Archived sessions, 8", exact: true }).click();
 			const archive = page.getByRole("dialog", { name: "Archived sessions" });
 			await expect(archive).toBeVisible();
@@ -137,7 +124,6 @@ for (const theme of ["dark", "light"]) {
 			const project = page.locator('[data-project-drag-row][data-project-id="fake-proj"]');
 			await expectSurfaceTransparency(project, transparency);
 			await expectOccludes(project, scroller.locator("[data-session-row]"));
-			// The shell itself must still let the native vibrancy show through.
 			if (transparency) await expect(page.locator("body")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 		});
 	}

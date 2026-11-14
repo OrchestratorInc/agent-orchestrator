@@ -24,19 +24,12 @@ const (
 	cursorTrustStateDir = "cursor-trust"
 	cursorTrustedFile   = ".workspace-trusted"
 
-	// cursorHooksSchemaVersion is the version Cursor's hooks.json declares. AO
-	// only sets it when creating a fresh file; an existing version is preserved.
 	cursorHooksSchemaVersion = 1
 
-	// cursorHookCommandPrefix identifies the hook commands AO owns, so
-	// install skips duplicates and uninstall recognizes AO entries by
-	// prefix without an embedded template to diff against.
 	cursorHookCommandPrefix           = "ao hooks cursor "
 	cursorLegacyPermissionHookCommand = cursorHookCommandPrefix + "permission-request"
 )
 
-// cursorHookFile is the on-disk shape of .cursor/hooks.json. It is used by tests
-// to decode the written file. Cursor keys hooks by camelCase native event name.
 type cursorHookFile struct {
 	Version int                          `json:"version"`
 	Hooks   map[string][]cursorHookEntry `json:"hooks"`
@@ -101,18 +94,12 @@ func (e *cursorHookEntry) setFailClosed(failClosed bool) error {
 	return nil
 }
 
-// cursorHookSpec describes one hook AO installs, defined in code rather than
-// read from an embedded hooks file. Event is Cursor's native camelCase event
-// name; Command is the AO sub-command dispatched when the hook fires.
 type cursorHookSpec struct {
 	Event      string
 	Command    string
 	FailClosed bool
 }
 
-// cursorManagedHooks is the source of truth for the hooks AO installs. The
-// native-event → AO-subcommand contract is FIXED: the orchestrator's CLI hook
-// dispatch and activity.go agree on the sub-command names.
 var cursorManagedHooks = []cursorHookSpec{
 	{Event: "sessionStart", Command: cursorHookCommandPrefix + "session-start"},
 	{Event: "beforeSubmitPrompt", Command: cursorHookCommandPrefix + "user-prompt-submit"},
@@ -125,9 +112,6 @@ var cursorManagedHooks = []cursorHookSpec{
 	{Event: "postToolUseFailure", Command: cursorHookCommandPrefix + "post-tool-use-failure"},
 }
 
-// GetAgentHooks installs AO's Cursor hooks into the worktree-local
-// .cursor/hooks.json file. Existing hook entries are preserved and duplicate
-// AO commands are not appended.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -179,8 +163,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// InstallWorkspaceTrust seeds Cursor's workspace trust marker for callers that
-// manage their own Cursor profile and do not install worker hooks.
 func (p *Plugin) InstallWorkspaceTrust(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -194,9 +176,6 @@ func (p *Plugin) InstallWorkspaceTrust(ctx context.Context, cfg ports.WorkspaceH
 	return nil
 }
 
-// UninstallHooks removes AO's Cursor hooks from the workspace-local
-// .cursor/hooks.json file, leaving user-defined hooks untouched. A missing file
-// is a no-op.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -231,9 +210,6 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	return nil
 }
 
-// CleanupWorkspace removes durable Cursor trust state that AO created after the
-// corresponding session workspace was actually torn down. User-created trust
-// decisions are preserved.
 func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -247,8 +223,6 @@ func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookCo
 	return nil
 }
 
-// AreHooksInstalled reports whether any AO Cursor hook is present in the
-// workspace-local hooks file. A missing file means none are installed.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -464,9 +438,6 @@ func cursorWorkspaceProjectName(workspacePath string) string {
 	return strings.Trim(cursorProjectNamePattern.ReplaceAllString(slashed, "-"), "-")
 }
 
-// readCursorHooks loads the hooks file into a top-level raw map plus the decoded
-// "hooks" sub-map, preserving keys AO doesn't manage (e.g. "version"). A missing
-// or empty file yields empty maps.
 func readCursorHooks(hooksPath string) (topLevel, rawHooks map[string]json.RawMessage, err error) {
 	topLevel = map[string]json.RawMessage{}
 	rawHooks = map[string]json.RawMessage{}
@@ -492,10 +463,6 @@ func readCursorHooks(hooksPath string) (topLevel, rawHooks map[string]json.RawMe
 	return topLevel, rawHooks, nil
 }
 
-// writeCursorHooks folds rawHooks back into topLevel and writes the file. An
-// empty hooks map drops the "hooks" key entirely. A "version" key is ensured so
-// a freshly created file declares the schema version Cursor expects, while an
-// existing version (preserved in topLevel) is left untouched.
 func writeCursorHooks(hooksPath string, topLevel, rawHooks map[string]json.RawMessage) error {
 	if len(rawHooks) == 0 {
 		delete(topLevel, "hooks")
@@ -528,8 +495,6 @@ func writeCursorHooks(hooksPath string, topLevel, rawHooks map[string]json.RawMe
 	return nil
 }
 
-// groupCursorHooksByEvent groups the managed hook specs by their Cursor event so
-// each event's array is rewritten once.
 func groupCursorHooksByEvent() map[string][]cursorHookSpec {
 	byEvent := map[string][]cursorHookSpec{}
 	for _, spec := range cursorManagedHooks {
@@ -538,8 +503,6 @@ func groupCursorHooksByEvent() map[string][]cursorHookSpec {
 	return byEvent
 }
 
-// cursorManagedEvents returns the distinct Cursor events AO manages, in the
-// order they first appear in cursorManagedHooks.
 func cursorManagedEvents() []string {
 	seen := map[string]bool{}
 	events := make([]string, 0, len(cursorManagedHooks))
@@ -564,8 +527,6 @@ func isCursorManagedHook(command string) bool {
 	return false
 }
 
-// removeCursorManagedHooks strips AO hook entries from an event's array,
-// preserving user-defined entries.
 func removeCursorManagedHooks(entries []cursorHookEntry) []cursorHookEntry {
 	kept := make([]cursorHookEntry, 0, len(entries))
 	for _, hook := range entries {

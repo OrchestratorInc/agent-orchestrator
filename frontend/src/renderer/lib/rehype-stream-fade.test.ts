@@ -58,7 +58,6 @@ describe("rehypeStreamFade", () => {
 	it("never splits a grapheme at the settled offset", () => {
 		const settled = (text: string, settledOffset: number) =>
 			renderToStaticMarkup(createElement(Markdown, { rehypePlugins: [[rehypeStreamFade, { settledOffset }]] }, text));
-		// The offset lands inside "é" (e + combining accent): the whole cluster fades.
 		const out = settled("caf\u0065\u0301 ok", 4);
 		expect(out).toContain("<p>caf<span");
 		expect(out).not.toMatch(/<p>cafe<span/);

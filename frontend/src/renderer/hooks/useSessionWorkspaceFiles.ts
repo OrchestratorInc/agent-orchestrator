@@ -31,7 +31,6 @@ export type WorkspaceFileSections = components["schemas"]["WorkspaceFileSections
 export type WorkspaceCommitSummary = components["schemas"]["WorkspaceCommitSummary"];
 export type WorkspaceViewInfo = components["schemas"]["WorkspaceViewResponse"];
 export type WorkspaceHistoryResponse = Omit<components["schemas"]["WorkspaceHistoryResponse"], "view"> & {
-	/** Absent from an older daemon. */
 	view?: WorkspaceViewInfo;
 };
 export type WorkspaceSummary = components["schemas"]["WorkspaceSummary"];
@@ -45,7 +44,6 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	compareMode?: WorkspaceCompareMode;
 	files: WorkspaceFileSummary[];
 	sections: {
-		/** Absent from an older daemon. */
 		uncommitted?: WorkspaceFileSummary[];
 		committed: WorkspaceFileSummary[];
 		staged: WorkspaceFileSummary[];
@@ -59,7 +57,6 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	refreshing?: boolean;
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
-	/** HTTP validator for streamed artifacts, so an unchanged refetch keeps playing. */
 	mediaVersion?: string;
 	editable?: boolean;
 	previousPath?: string;
@@ -75,33 +72,18 @@ export type FilesSource =
 	| { kind: "workspace" }
  | { kind: "snapshot"; view?: WorkspaceViewParams; commitShas?: readonly string[]; label: string }
 	| { kind: "pull_request"; number: number; url: string; label: string; snapshot?: string }
-	/**
-	 * `readOnly` hides the edit action, as for a cloud session's artifacts.
-	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
-	 * `artifactRoot` is the URL relative links resolve against.
-	 */
 	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave; savedVersion?: number };
 
-/** Saves an edit of an artifact file somewhere other than the local daemon, as a cloud session's control plane. */
 export type ArtifactSave = (input: { path: string; content: string; expectedFileFingerprint: string }) => Promise<{ fileFingerprint: string; size: number }>;
 
-/** The branch the Files review reads. Only the checked-out branch reads the worktree; the others read revisions. */
 export type FilesBranchTarget =
 	| { kind: "checked_out" }
-	/** `tipSha` is the tip the branch list showed when it was picked. */
 	| { kind: "branch"; name: string; tipSha?: string }
 	| { kind: "pull_request"; number: number; url: string; branch: string; tipSha?: string };
-/**
- * The changes the Files review shows. `combined` is the "Changes" scope an
- * older daemon has instead of `uncommitted`. `commits` lists ticked SHAs newest
- * first; none is All commits.
- */
 export type FilesChanges =
 	| { kind: "uncommitted" | "staged" | "unstaged" | "combined" }
 	| { kind: "commits"; shas: readonly string[] };
-/** `changes: null` follows the default until the user picks. */
 export type FilesSelection = { branch: FilesBranchTarget; changes: FilesChanges | null };
-/** Selects another branch or a PR on a read; none reads the worktree. The expected SHAs fence it to what its history listed. */
 export type WorkspaceViewParams = {
 	branch?: string;
 	prNumber?: number;
@@ -109,27 +91,18 @@ export type WorkspaceViewParams = {
 	expectedTipSha?: string;
 	expectedBaseSha?: string;
 };
-/** What the review pane reads for the picked branch and changes. */
 export type ReviewTarget = {
-	/** Viewed marks are stored under it, and the pane resets when it changes. */
 	key: string;
 	branch: FilesBranchTarget;
 	changes: FilesChanges;
 	scope: WorkspaceDiffScope;
-	/** Undefined reads the whole range (or a working scope). */
 	commitShas?: readonly string[];
-	/** Undefined reads the checked-out branch. */
 	view?: WorkspaceViewParams;
-	/** The manifest's version, which fences checked-out reads. */
 	workspaceVersion?: string;
-	/** "" for the worktree's scopes and its whole range; see workspaceSelectionKey. */
 	selectionKey: string;
-	/** Undefined until known. */
 	files?: WorkspaceFileSummary[];
-	/** Set when exactly one commit is picked. */
 	sha?: string;
 	subject?: string;
-	/** Historical targets carry their source when opening a file. */
 	openable: boolean;
 	source?: FilesSource;
 	state: "ready" | "pending" | "error" | "not_combinable";
@@ -137,7 +110,6 @@ export type ReviewTarget = {
 	error?: Error;
 };
 
-/** A failed workspace read that keeps the daemon's error code, for callers that act on it. */
 export class WorkspaceRequestError extends Error {
 	constructor(
 		message: string,
@@ -199,11 +171,6 @@ export function recordWorkspaceResult(sessionId: string, hostId: string | undefi
 	return typed;
 }
 
-/**
- * Retries a failed read up to three times, except a 4xx answer: it comes back
- * the same every time, and the recovery keyed on its code (a moved tip, a gone
- * branch) would wait out the backoff.
- */
 export function retryWorkspaceRead(failureCount: number, error: Error): boolean {
 	const status = error instanceof WorkspaceRequestError ? error.status : undefined;
 	return failureCount < 3 && !(status !== undefined && status >= 400 && status < 500);
@@ -292,7 +259,6 @@ async function fetchWorkspaceCommitSelection({
 	return { ...data, files: data.files ?? [] } as WorkspaceCommitSelection;
 }
 
-// One SHA travels as commitSha, which every daemon reads; several need commitShas.
 function commitParams(commitSha: string | undefined, commitShas: readonly string[] | undefined): { commitSha?: string; commitShas?: string[] } {
 	if (commitShas && commitShas.length > 1) return { commitShas: [...commitShas] };
 	return { commitSha: commitShas?.[0] ?? commitSha };
@@ -317,11 +283,6 @@ async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope:
 
 export type WorkspacePathResolution = components["schemas"]["WorkspacePathResolutionResponse"];
 
-/**
- * Ask the daemon which session root owns a path. Resolves undefined when the
- * daemon cannot say (network failure, or a remote host running a build without
- * this route), so a caller always has a defined fallback.
- */
 export async function resolveSessionWorkspacePath(sessionId: string, path: string, hostId?: string): Promise<WorkspacePathResolution | undefined> {
 	try {
 		const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/resolve", {
@@ -342,28 +303,16 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 	return data as WorkspaceFileDetail;
 }
 
-/** Cloud artifact files read as text at once; any other cloud file is read as text when it is small UTF-8 (cloudArtifactText). */
 export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|diff|patch|html?)$/i;
 
-/** A cloud artifact read refused because the access prefix expired or the user lost access. */
 export class CloudArtifactAccessError extends Error {}
 
-// Artifact files live in the session's artifact directory, outside the git
-// workspace, so they have no diff/status and aren't reachable through the
-// workspace-files endpoint. Local preview hostnames can resolve to ::1, where
-// another app may own the daemon's port. Read through the trusted daemon API
-// instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
-// already identify their content endpoint and must keep their original routing.
-// A cloud file is read through the cloud bridge, which carries the whole body
-// as text; media and other non-text files are asked for with HEAD only, and a
-// small one is then read as bytes and kept as text when it is UTF-8.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string, cloud = false): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
 	const contentUrl = cloud ? rawUrl : artifactContentUrl(sessionId, path, rawUrl);
 	if (!contentUrl) throw new Error(errorMessage);
 	const media = fileMediaKind(path);
 	const headOnly = cloud && (media !== undefined || !CLOUD_TEXT_ARTIFACT.test(path));
-	// The artifact route only supports GET; media elements stream their own body.
 	const response = cloud ? await cloudCpFetch(contentUrl, { method: headOnly ? "HEAD" : "GET" }) : await fetch(contentUrl);
 	if (media && !cloud) void response.body?.cancel();
 	if (cloud && (response.status === 401 || response.status === 403)) throw new CloudArtifactAccessError(appI18n.t("artifacts.accessError"));
@@ -375,7 +324,6 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		?? (media || headOnly
 			? { binary: true, bytes: new Uint8Array(), content: "", size: headSize, truncated: false }
 			: await readArtifactTextResponse(response));
-	// Only a complete text file can be edited: the save sends it back whole.
 	const editable = !binary && !truncated;
 	return {
 		additions: 0,
@@ -398,10 +346,6 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 	};
 }
 
-/**
- * A cloud file without a text extension, read as bytes when it is small and
- * kept as text when they are UTF-8; undefined leaves it binary.
- */
 async function cloudArtifactText(url: string, size: number): Promise<{ binary: boolean; bytes: Uint8Array; content: string; size: number; truncated: boolean } | undefined> {
 	if (size <= 0 || size > MAX_ARTIFACT_TEXT_BYTES) return undefined;
 	let bytes: Uint8Array;
@@ -424,7 +368,6 @@ async function readArtifactTextResponse(response: Response): Promise<{ binary: b
 	return { ...decoded, bytes, size, truncated };
 }
 
-/** The hex SHA-256 of an artifact's bytes, the fingerprint its write endpoint checks. */
 async function artifactFingerprint(bytes: Uint8Array): Promise<string> {
 	const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -476,7 +419,6 @@ function decodeArtifactText(bytes: Uint8Array, truncated: boolean): { binary: bo
 				try {
 					return { binary: false, content: new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(0, bytes.byteLength - trim)) };
 				} catch {
-					// Invalid UTF-8 away from the bounded suffix is handled below as binary.
 				}
 			}
 		}
@@ -488,15 +430,10 @@ export function sessionArtifactFileQueryOptions(sessionId: string, path: string,
 	return {
 		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
 		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage, cloud),
-		// A missing cloud file or a refused link does not change on retry. A
-		// cloud file's URL changes with the file, so a read never goes stale
-		// (and window focus does not carry the file over IPC again).
 		...(cloud ? { retry: false, staleTime: Infinity } : {}),
 	};
 }
 
-// Shared so the diff view (expand-on-demand) and the plain read-only viewer
-// always resolve to the same cache entry for a given (session, path).
 export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string, errorMessage = "Unable to load workspace file", scope: WorkspaceDiffScope = "combined", commitSha?: string, hostId?: string) {
 	return {
 		queryKey: sessionWorkspaceFileQueryKey(sessionId, path, scope, commitSha, hostId),
@@ -541,8 +478,6 @@ export function sessionSourceFileQueryOptions(
 	};
 }
 
-/** `selectionKey` names the view and commits read (workspaceSelectionKey); "" is the worktree's own scope or range. */
-
 export const sessionWorkspaceDiffsQueryKey = (
 	sessionId: string,
 	scope: WorkspaceDiffScope,
@@ -555,10 +490,6 @@ export const sessionWorkspaceDiffsQueryKey = (
 ) => hostId ? ["session-workspace-diffs", hostId, sessionId, scope, selectionKey ?? "", paths, contextLines, ignoreWhitespace, workspaceVersion ?? ""] as const
 	: ["session-workspace-diffs", sessionId, scope, selectionKey ?? "", paths, contextLines, ignoreWhitespace, workspaceVersion ?? ""] as const;
 
-/**
- * Patches for `paths`. `view` reads another branch or a PR; `commitShas` (or
- * the single `commitSha`) narrows the committed scope to those commits.
- */
 export function sessionWorkspaceDiffsQueryOptions({
 	contextLines = 3,
 	errorMessage = "Unable to load workspace changes",
@@ -677,7 +608,6 @@ export function sessionWorkspaceFileRevisionQueryOptions({
 	};
 }
 
-/** The full contents the review pane loads up front for a file whose patch ends on its last hunk. */
 export const filesReviewEndOfFileQueryKey = (
 	sessionId: string,
 	scope: WorkspaceDiffScope,
@@ -717,12 +647,6 @@ export function sessionSourceFileRevisionQueryOptions({
 			queryFn: () => fetchPRFileRevision(sessionId, source.number, source.url, path, side, commitSha, hostId),
 		};
 	}
-	// Artifacts have no split before/after comparison — they're not diffed
-	// against anything, just standalone output files. Callers gate this query
-	// with `enabled: detail.deleted || detail.contentTruncated`, neither of
-	// which an artifact ever sets, so the queryFn below never actually runs;
-	// it still needs to type-check and exist, since options are constructed
-	// unconditionally before `enabled` is evaluated.
 	return {
 		queryKey: ["session-source-file-revision", sessionId, "artifact", side, path] as const,
 		queryFn: (): Promise<WorkspaceFileRevision> => {
@@ -753,10 +677,6 @@ export async function updateSessionWorkspaceFile({
 	return data as WorkspaceFileDetail;
 }
 
-/**
- * Replaces the content of one listed artifact file, provided it still holds
- * the content the edit started from, and returns its new fingerprint.
- */
 export async function updateSessionArtifactFile({
 	content,
 	expectedFileFingerprint,
@@ -779,7 +699,6 @@ export async function updateSessionArtifactFile({
 	return data;
 }
 
-/** Deletes one listed file from the session's artifact directory. */
 export async function deleteSessionArtifactFile({ path, sessionId, hostId }: { path: string; sessionId: string; hostId?: string }): Promise<void> {
 	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/sessions/{sessionId}/artifact-files", {
 		params: { path: { sessionId }, query: { path } },
@@ -808,8 +727,6 @@ export function sessionWorkspaceSearchQueryOptions(
 	};
 }
 
-// Shared so SessionFileExplorer and SessionInspector resolve to the same cache
-// entry while SSE invalidation remains the normal refresh path.
 export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files", hostId?: string) {
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
@@ -824,11 +741,6 @@ const historyKeyPrefix = (sessionId: string, hostId?: string) =>
 const branchesQueryKey = (sessionId: string, hostId?: string) =>
 	hostId ? ["session-workspace-branches", hostId, sessionId] as const : ["session-workspace-branches", sessionId] as const;
 
-/**
- * The commits a branch lists. The checked-out branch keeps its original key;
- * another branch or a PR is keyed by the tip the branch list shows, so a moved
- * tip reads a new history.
- */
 export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMessage = "Unable to load workspace history", hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH) {
 	const prefix = historyKeyPrefix(sessionId, hostId);
 	return {
@@ -841,7 +753,6 @@ export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMess
 	};
 }
 
-/** The branches and PRs the review can read. Refetched when the branch menu opens, since nothing watches other branches. */
 export function sessionWorkspaceBranchesQueryOptions(sessionId: string, errorMessage = "Unable to load branches", hostId?: string) {
 	return {
 		queryKey: branchesQueryKey(sessionId, hostId),
@@ -851,11 +762,6 @@ export function sessionWorkspaceBranchesQueryOptions(sessionId: string, errorMes
 	};
 }
 
-/**
- * The files changed by ticked commits taken together, or by a view's whole
- * range. Its inputs are immutable SHAs (and the checked-out manifest version),
- * so a result never goes stale.
- */
 export function sessionWorkspaceCommitSelectionQueryOptions({
 	commitShas,
 	errorMessage = "Unable to combine commits",
@@ -882,7 +788,6 @@ export function sessionWorkspaceCommitSelectionQueryOptions({
 	};
 }
 
-/** A moved tip or base: refetch the branch list and the views' histories, whose new tips key new reads. */
 export function invalidateWorkspaceViews(queryClient: QueryClient, sessionId: string, hostId?: string) {
 	const prefix = historyKeyPrefix(sessionId, hostId);
 	void queryClient.invalidateQueries({ queryKey: branchesQueryKey(sessionId, hostId) });
@@ -906,18 +811,11 @@ export function isChangedWorkspaceFile(file: WorkspaceFileSummary): boolean {
 	return file.status !== "unmodified";
 }
 
-// Keep the lightweight summary query warm while the inspector is open. The
-// Files view then mounts against current cache data instead of flashing a
-// misleading zero while its first request starts. The same moment also
-// preloads the default review's diffs, because that view is unmounted until
-// the Files tab is selected.
 export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefined, hostId?: string): number | undefined {
 	const queryClient = useQueryClient();
 	const query = useQuery({
 		...sessionWorkspaceFilesQueryOptions(sessionId ?? "", "Unable to load workspace files", hostId),
 		enabled: Boolean(sessionId),
-		// Live invalidations keep the inactive tab fresh; polling starts only
-		// when the full Files view is visible.
 		refetchInterval: false,
 		select: (data: WorkspaceFilesResponse) => data.files.filter(isChangedWorkspaceFile).length,
 	});
@@ -927,7 +825,6 @@ export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefin
 	}, [queryClient, sessionId, hostId]);
 	useEffect(() => {
 		if (!sessionId || query.data === undefined) return;
-		// A picked branch or set of changes is not what the default would warm.
 		if (!followsDefaultSelection(useUiStore.getState().inspectorSessions[sessionUiKey(sessionId, hostId)]?.filesSelection)) return;
 		const data = queryClient.getQueryData<WorkspaceFilesResponse>(sessionWorkspaceFilesQueryKey(sessionId, hostId));
 		if (!data) return;
@@ -936,9 +833,6 @@ export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefin
 	return sessionId ? query.data : undefined;
 }
 
-// Must match WorkspaceReviewPane: the Files tab requests these batches, with
-// this context size, and then full contents for files whose patch ends on the
-// last hunk. A mismatch leaves the tab on "Loading diff…".
 const REVIEW_PREFETCH_EOF_MAX = 40;
 const REVIEW_PREFETCH_EOF_MAX_BYTES = 128 * 1024;
 const lastPrefetchedReview = new Map<string, string>();
@@ -949,19 +843,12 @@ function isDeferredReviewFile(file: WorkspaceFileSummary) {
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
 
-/**
- * What the Files review opens on while nothing is picked: the uncommitted
- * changes, else the branch's commits (Changes, on an older daemon). Built
- * through the same helper as the pane's own target, so the keys match.
- */
 export function defaultWorkspaceReviewTarget(data: WorkspaceFilesResponse): ReviewTarget {
 	const legacy = isLegacyManifest(data);
 	return buildReviewTarget({ branch: CHECKED_OUT_BRANCH, changes: defaultChanges(CHECKED_OUT_BRANCH, data, legacy), manifest: data, legacy });
 }
 
 export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClient, sessionId: string, data: WorkspaceFilesResponse, hostId?: string) {
-	// The Files tab count can be seeded from a files array alone. Prefetch only
-	// runs against a full workspace response.
 	if (!data.sections) return;
 	const target = defaultWorkspaceReviewTarget(data);
 	const files = (target.files ?? []).slice(0, WORKSPACE_REVIEW_PAGE_SIZE).filter((file) => !isDeferredReviewFile(file));
@@ -974,8 +861,6 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 		const batches: WorkspaceFileSummary[][] = [];
 		for (let index = 0; index < files.length; index += WORKSPACE_REVIEW_BATCH_SIZE) batches.push(files.slice(index, index + WORKSPACE_REVIEW_BATCH_SIZE));
 		const cacheKey = sessionUiKey(sessionId, hostId);
-		// An existing entry can be invalidated by a file edit without its summary
-		// version changing. Skip only if every batch is still present and fresh.
 		if (lastPrefetchedReview.get(cacheKey) === token && batches.every((batch) => {
 			const state = queryClient.getQueryState(sessionWorkspaceDiffsQueryKey(sessionId, target.scope, batch.map((file) => file.path), REVIEW_CONTEXT_LINES, false, target.workspaceVersion, target.selectionKey, hostId));
 			return state?.data !== undefined && !state.isInvalidated;
@@ -992,7 +877,6 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 				view: target.view,
 				hostId,
 			}),
-			// A prefetch never retries, as fetchQuery's own default.
 			retry: false,
 			staleTime: Infinity,
 			gcTime: 30 * 60 * 1000,
@@ -1032,7 +916,6 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 				};
 				await queryClient.prefetchQuery({ queryKey, queryFn: () => loaded, retry: false, staleTime: Infinity, gcTime: 30 * 60 * 1000 });
 			} catch {
-				// Leave the cache empty so the review pane can fetch this file itself.
 			}
 		}));
 	} catch {
@@ -1041,7 +924,6 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 	}
 }
 
-/** Shared by file, directory and passive-media reads: no live-worktree fallback. */
 export function snapshotQuery(source: Extract<FilesSource, { kind: "snapshot" }>) {
 	return { snapshot: true as const, ...source.view, commitShas: source.commitShas?.join(",") };
 }

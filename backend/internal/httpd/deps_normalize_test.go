@@ -11,12 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 )
 
-// TestNormalizeAPIDepsDefaultsDeviceLiveToPresence pins finding 2(a): a caller
-// that wires Presence but leaves DeviceLive nil must not silently produce a
-// roster that reports every device offline forever. normalizeAPIDeps is the
-// single choke point (called once, from NewRouterWithControl) that closes
-// this, so the trap is structurally unreachable rather than merely avoided by
-// today's daemon.go wiring happening to set both fields to the same tracker.
 func TestNormalizeAPIDepsDefaultsDeviceLiveToPresence(t *testing.T) {
 	tracker := presence.NewTracker()
 	tracker.Touch("inst-1")
@@ -33,9 +27,6 @@ func TestNormalizeAPIDepsDefaultsDeviceLiveToPresence(t *testing.T) {
 	}
 }
 
-// TestNormalizeAPIDepsDoesNotOverrideExplicitDeviceLive confirms the fallback
-// only fires when DeviceLive is nil — an explicitly wired DeviceLive (e.g. a
-// test double) is left alone even if it differs from Presence.
 func TestNormalizeAPIDepsDoesNotOverrideExplicitDeviceLive(t *testing.T) {
 	explicit := fakeLiveSet{"only-explicit": true}
 	tracker := presence.NewTracker()
@@ -49,10 +40,6 @@ func TestNormalizeAPIDepsDoesNotOverrideExplicitDeviceLive(t *testing.T) {
 	}
 }
 
-// TestNormalizeAPIDepsWarnsWhenRosterHasNoLiveness pins finding 2(b): a live
-// DeviceRoster with no liveness source at all (Presence nil, DeviceLive nil)
-// after the fallback is a real mis-wiring — every device will silently report
-// offline forever — and gets exactly one startup warning.
 func TestNormalizeAPIDepsWarnsWhenRosterHasNoLiveness(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
@@ -65,10 +52,6 @@ func TestNormalizeAPIDepsWarnsWhenRosterHasNoLiveness(t *testing.T) {
 	}
 }
 
-// TestNormalizeAPIDepsNoWarnWhenPresenceCoversRoster confirms the warning does
-// NOT fire once the (a) fallback has supplied a DeviceLive from Presence — the
-// warning is for the case nothing at all is wired, not merely
-// two-different-fields-but-effectively-fine.
 func TestNormalizeAPIDepsNoWarnWhenPresenceCoversRoster(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
@@ -81,11 +64,6 @@ func TestNormalizeAPIDepsNoWarnWhenPresenceCoversRoster(t *testing.T) {
 	}
 }
 
-// TestNormalizeAPIDepsNoWarnWithoutRoster confirms a nil Presence/DeviceLive is
-// not, on its own, an error: only a live DeviceRoster with no liveness source
-// triggers the warning. This mirrors the explicit ruling that a missing
-// liveness column must not take away a working device list — it also must not
-// spam a warning when there's no roster to mislead in the first place.
 func TestNormalizeAPIDepsNoWarnWithoutRoster(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))

@@ -46,8 +46,6 @@ func TestSetTurnAutoResumeRefusalPreservesConsumedConsent(t *testing.T) {
 	}
 }
 
-// ACP history replays a failed turn without its error. The live refusal is what
-// classifies a usage limit, so the replay must not erase it.
 func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
@@ -68,8 +66,6 @@ func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
 	}
 }
 
-// A resumed Codex thread replays a turn the dead controller left in progress as
-// interrupted, with no error. Nobody interrupted it, so the failure must stay.
 func TestSettleTurnInterruptedReplayKeepsStoredFailure(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)

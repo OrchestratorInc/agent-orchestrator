@@ -9,15 +9,11 @@ export type HarnessTone = "ok" | "error" | "off";
 const SPLIT_LAYOUT_MIN_WIDTH = 720;
 export const FOCUS_HIGHLIGHT_MS = 2_000;
 
-/** True once the element is wide enough to show the harness list beside the open harness. */
 export function useWideLayout(ref: { current: HTMLElement | null }): boolean {
 	const [wide, setWide] = useState(false);
-	// Layout effect: the first width is read before paint, so the page never shows
-	// the narrow list for a few frames and then jumps to the split layout.
 	useLayoutEffect(() => {
 		const element = ref.current;
 		if (!element) return;
-		// The content box, as the observer reports it: clientWidth less the padding.
 		const style = getComputedStyle(element);
 		const content = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
 		setWide(content >= SPLIT_LAYOUT_MIN_WIDTH);
@@ -29,11 +25,9 @@ export function useWideLayout(ref: { current: HTMLElement | null }): boolean {
 	return wide;
 }
 
-// Page tabs underline the active section instead of nesting a pill inside a pill.
 export const HARNESS_TABS_CLASS = "shrink-0 h-auto w-full justify-start gap-5 rounded-none border-b border-border bg-transparent p-0";
 export const HARNESS_TAB_CLASS = "-mb-px h-9 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0.5 shadow-none data-[state=active]:border-foreground data-[state=active]:bg-transparent dark:data-[state=active]:border-foreground dark:data-[state=active]:bg-transparent";
 
-// Harness page sections: one bordered, tonal card per section, rows divided by hairlines.
 export const HARNESS_CARD_CLASS = "flex w-full min-w-0 max-w-full flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-(--color-bg-secondary)";
 export const HARNESS_CARD_ROW_CLASS = "flex min-h-12 items-center px-3 py-2.5";
 
@@ -51,8 +45,6 @@ export function HarnessDetailGroup({ title, action, children }: { title: string;
 	</section>;
 }
 
-/** A row of a harness page card. `secondary` is a second, full-width line of
- * the same row (AO Cloud's side of the harness), not a row of its own. */
 export function HarnessDetailRow({ label, description, children, secondary }: { label: ReactNode; description?: string; children?: ReactNode; secondary?: ReactNode }) {
 	return <div className={cn(HARNESS_CARD_ROW_CLASS, "min-w-0 flex-wrap gap-x-4 gap-y-1 [overflow-wrap:anywhere]")}>
 		<span className="min-w-0 flex-1">
@@ -71,7 +63,6 @@ export function HarnessStateText({ tone, children }: { tone: HarnessTone; childr
 	</span>;
 }
 
-/** A short local date and time; the full one shows on hover. Nothing for a missing or invalid value. */
 export function HarnessTimestamp({ value }: { value?: string | null }) {
 	const { i18n } = useTranslation();
 	if (!value || !Number.isFinite(Date.parse(value))) return null;

@@ -1,21 +1,11 @@
-// One `/sessions/{id}/events` stream per Cloud session, shared by everything
-// on screen that follows the session: its chat, its live state (who has it
-// open, who holds the composer), its pull requests, its workspace review, its
-// Setup log and its startup loader. Each used to open its own stream, so one
-// open session held three or more, out of the eight a window may have. The
-// stream opens with the first subscriber and closes with the last.
-
 import { subscribeSessionEventsBridged, type CloudCpStreamBridge } from "./stream-bridge";
 import type { CloudCpClientEvent, CloudCpSessionLive } from "./types";
 
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
-/** How often a connect looks again for a subscriber still loading what it holds. */
 const RESUME_WAIT_STEP_MS = 250;
-/** How long a connect waits for such a subscriber before it starts without it. */
 const RESUME_WAIT_MAX_MS = 5_000;
 
-/** Whether the session's stream is up, and its latest live state (live streams only). */
 export interface CloudSessionEventsState {
 	open: boolean;
 	live: CloudCpSessionLive | undefined;
@@ -23,22 +13,12 @@ export interface CloudSessionEventsState {
 
 export const CLOSED_CLOUD_SESSION_EVENTS: CloudSessionEventsState = Object.freeze({ open: false, live: undefined });
 
-/**
- * Where a subscriber's events start: the newest sequence it already holds, so
- * the stream replays nothing older; "loading" while it is still reading what
- * it holds (the stream waits a little for it); undefined when it takes
- * whatever the stream sends.
- */
 export type CloudSessionEventsResume = number | "loading" | undefined;
 
 export interface CloudSessionEventsSubscriber {
-	/** Each client event, in stream order. It may repeat one already held. */
 	onEvent?: (event: CloudCpClientEvent) => void;
-	/** Lists this person as a viewer of the session while subscribed, and fills the state's `live`. */
 	live?: boolean;
-	/** Read when the stream (re)connects with nothing to resume from yet. */
 	resumeAfter?: () => CloudSessionEventsResume;
-	/** The stream opened, dropped or sent new live state. */
 	onStateChange?: (state: CloudSessionEventsState) => void;
 }
 
@@ -66,10 +46,8 @@ interface Hub {
 	connection?: Connection;
 	timer?: ReturnType<typeof setTimeout>;
 	delay: number;
-	/** The newest sequence the stream delivered: a reconnect resumes after it. */
 	lastSequence?: number;
 	waitingSince?: number;
-	/** Subscribers that joined since the connection was last brought in line. */
 	joined: CloudSessionEventsSubscriber[];
 }
 
@@ -100,7 +78,6 @@ function clearTimer(hub: Hub): void {
 	hub.timer = undefined;
 }
 
-/** Where a new connection starts: after the newest delivered event, else after what every subscriber holds. */
 function resumePoint(hub: Hub, from: number | undefined): { after: number | undefined } | "wait" {
 	if (from !== undefined) return { after: from };
 	if (hub.lastSequence !== undefined) return { after: hub.lastSequence };
@@ -124,8 +101,6 @@ function connect(hub: Hub, from?: number): void {
 	hub.joined = [];
 	const live = wantsLive(hub);
 	const events = wantsEvents(hub);
-	// Nobody left wants a stream, so none is open: a listener that only reads
-	// the state must not be told one still is.
 	if (!live && !events) {
 		publish(hub, CLOSED_CLOUD_SESSION_EVENTS);
 		return;
@@ -145,7 +120,6 @@ function connect(hub: Hub, from?: number): void {
 		sessionId,
 		after: resume.after,
 		live,
-		// A stream only for live state asks for no client events, so nothing is replayed.
 		types: events ? undefined : ["session.live"],
 		signal: connection.controller.signal,
 		bridge: hub.bridge,
@@ -166,19 +140,15 @@ function connect(hub: Hub, from?: number): void {
 		},
 	}).then(() => {
 		if (connection.controller.signal.aborted || hub.connection !== connection) return;
-		// The ended stream's signal is spent; nothing it started outlives it.
 		connection.controller.abort();
 		hub.connection = undefined;
 		publish(hub, CLOSED_CLOUD_SESSION_EVENTS);
-		// A stream that delivered something, or stayed open a while, was
-		// healthy: reconnect soon. One refused or cut at once backs off.
 		const healthy = connection.received || (connection.openedAt !== undefined && Date.now() - connection.openedAt >= RECONNECT_MAX_MS);
 		hub.delay = healthy ? RECONNECT_MIN_MS : Math.min(hub.delay * 2, RECONNECT_MAX_MS);
 		hub.timer = setTimeout(() => connect(hub), hub.delay);
 	});
 }
 
-/** Closes the open connection and opens one that fits the current subscribers. */
 function restart(hub: Hub, from?: number): void {
 	const previous = hub.connection;
 	hub.connection = undefined;
@@ -187,7 +157,6 @@ function restart(hub: Hub, from?: number): void {
 	connect(hub, from);
 }
 
-/** Brings the connection in line with the current subscribers. */
 function settle(hub: Hub): void {
 	const connection = hub.connection;
 	const joined = hub.joined;
@@ -200,7 +169,6 @@ function settle(hub: Hub): void {
 		restart(hub);
 		return;
 	}
-	// One that needs events older than the open stream started from restarts it from there.
 	let need: number | undefined;
 	for (const subscriber of joined) {
 		const resume = subscriber.onEvent && hub.subscribers.has(subscriber) ? subscriber.resumeAfter?.() : undefined;
@@ -209,12 +177,6 @@ function settle(hub: Hub): void {
 	if (need !== undefined && connection.after !== undefined && need < connection.after) restart(hub, need);
 }
 
-/**
- * Settles the connection once the components mounting or unmounting together
- * have all joined or left, so a session view that mounts its chat, header and
- * inspector at once opens one stream rather than one and then another. A
- * pending reconnect or resume wait settles with the subscribers it finds.
- */
 function scheduleSettle(hub: Hub): void {
 	if (hub.timer !== undefined) return;
 	hub.timer = setTimeout(() => {
@@ -223,12 +185,6 @@ function scheduleSettle(hub: Hub): void {
 	}, 0);
 }
 
-/**
- * Follows a Cloud session's event stream, sharing one connection with every
- * other subscriber to the same session. It resumes after the newest event it
- * delivered when it reconnects, and reconnects with backoff when it drops.
- * Returns the unsubscribe; the last one out closes the stream.
- */
 export function subscribeCloudSessionEvents(
 	target: CloudSessionEventsTarget,
 	subscriber: CloudSessionEventsSubscriber,
@@ -260,7 +216,6 @@ export function subscribeCloudSessionEvents(
 	};
 }
 
-/** The session stream's current state, for a subscriber that joins an open stream. */
 export function cloudSessionEventsState(target: CloudSessionEventsTarget): CloudSessionEventsState {
 	return hubs.get(hubKey(target))?.state ?? CLOSED_CLOUD_SESSION_EVENTS;
 }

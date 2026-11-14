@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// startShellTerminals restores durable user shells and cleans up expired command
-// terminals before accepting clients. A different app launch alone never ends
-// a user shell's lifetime.
 func startShellTerminals(
 	ctx context.Context,
 	cfg config.Config,
@@ -36,27 +33,17 @@ func startShellTerminals(
 		cfg.AppRunID,
 		log,
 	)
-	// Shell tabs are destroyed here, not by Session Manager, so the terminal
-	// mux's input timestamps for them are forgotten from this side (#5691).
 	svc.SetTerminalInputForgetter(inputForgetter)
-	// Best-effort: a failed sweep must never block boot. The rows survive and
-	// the next boot retries.
 	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil {
 		log.Warn("reaping shell terminals from previous app runs failed", "err", err)
 	}
 	return svc
 }
 
-// projectRootLocator adapts the project service to the narrow lookup the shell
-// terminal service needs: an id in, a directory out.
 type projectRootLocator struct {
 	projects projectsvc.Manager
 }
 
-// ProjectRoot returns the project's path, or "" when no such project exists so
-// the caller can answer 404. A degraded project (its config failed to load)
-// still has a usable path on disk, and a shell in it is exactly the tool a user
-// would want to fix it with — so degraded is resolved, not rejected.
 func (l *projectRootLocator) ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error) {
 	if l.projects == nil {
 		return "", nil
@@ -89,32 +76,14 @@ func (l *projectRootLocator) ProjectEnv(ctx context.Context, id domain.ProjectID
 	return res.Project.Config.Env, nil
 }
 
-// sessionGetter is the narrow slice of the session service the workspace
-// locator needs. *sessionsvc.Service satisfies it; tests substitute a fake so
-// this adapter's validation logic doesn't need a real session stack.
 type sessionGetter interface {
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 }
 
-// sessionWorkspaceLocator adapts the session service to the narrow lookup the
-// shell terminal service needs: a session id in, its live workspace path and
-// owning project id out.
 type sessionWorkspaceLocator struct {
 	sessions sessionGetter
 }
 
-// SessionWorkspace returns the session's current workspace path (its
-// worktree) and project id. An unknown session propagates the session
-// service's own NotFound apierr unchanged, so the shell terminal open request
-// answers the same 404 shape an unknown project does.
-//
-// Kill and Cleanup can remove a session's worktree without clearing its
-// durable Metadata.WorkspacePath — that field doubles as "what to recreate on
-// restore", so it deliberately survives a clean teardown and only a dirty,
-// preserved worktree keeps a directory that still exists. A recorded path
-// that no longer exists on disk is therefore treated as no workspace, so the
-// caller falls back to the project root instead of trying to chdir into a
-// directory that is gone.
 func (l *sessionWorkspaceLocator) SessionWorkspace(ctx context.Context, id domain.SessionID) (string, domain.ProjectID, error) {
 	if l.sessions == nil {
 		return "", "", nil
@@ -132,9 +101,6 @@ func (l *sessionWorkspaceLocator) SessionWorkspace(ctx context.Context, id domai
 	return path, sess.ProjectID, nil
 }
 
-// CueCommandSessionTarget preserves the exact recorded worktree and lifecycle
-// facts so command Cues can fail closed instead of falling back to a project
-// root or using a session that can no longer accept work.
 func (l *sessionWorkspaceLocator) CueCommandSessionTarget(ctx context.Context, id domain.SessionID) (shelltermsvc.CueCommandSessionTarget, error) {
 	if l.sessions == nil {
 		return shelltermsvc.CueCommandSessionTarget{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")

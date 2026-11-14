@@ -15,22 +15,10 @@ import (
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
-// oauthPersonal is Antigravity's "Log in with Google" ACP auth method.
 const oauthPersonal = "oauth-personal"
 
-// authTimeout bounds the one-time authenticate call. With an existing Google
-// sign-in it completes in a few seconds; Zed users report the interactive flow
-// hanging, so AO never waits on it indefinitely.
 const authTimeout = 20 * time.Second
 
-// authBootstrap selects Antigravity's Google sign-in for the ACP server when
-// the user is already signed in but the server has no auth method configured.
-//
-// Without a configured method, session/new answers "Authentication required".
-// ACP authenticate can start a browser OAuth flow, so AO calls it only when
-// GEMINI_HOME already records an active Google account; the agent then reuses
-// that sign-in and persists the choice to its own settings. In every other
-// case AO leaves auth to the user and surfaces the ordinary sign-in error.
 type authBootstrap struct {
 	geminiHome func(map[string]string) (string, error)
 	timeout    time.Duration
@@ -47,8 +35,6 @@ func (b authBootstrap) run(ctx context.Context, conn *acpsdk.ClientSideConnectio
 	})
 }
 
-// bootstrap decides whether to authenticate and, if so, calls authenticate
-// with a bounded context.
 func (b authBootstrap) bootstrap(
 	ctx context.Context,
 	init acpsdk.InitializeResponse,
@@ -82,7 +68,6 @@ func advertises(init acpsdk.InitializeResponse, methodID string) bool {
 	return false
 }
 
-// authMethodID reads the id of any auth-method variant the SDK decodes.
 func authMethodID(method acpsdk.AuthMethod) string {
 	raw, err := json.Marshal(method)
 	if err != nil {
@@ -97,8 +82,6 @@ func authMethodID(method acpsdk.AuthMethod) string {
 	return shape.ID
 }
 
-// authConfigured reports whether Antigravity's ACP settings already name an
-// auth method, in which case the agent authenticates on its own.
 func authConfigured(geminiHome string) bool {
 	var settings struct {
 		Auth struct {
@@ -111,8 +94,6 @@ func authConfigured(geminiHome string) bool {
 	return strings.TrimSpace(settings.Auth.Type) != ""
 }
 
-// googleSignedIn reports whether GEMINI_HOME records an active Google account,
-// which the Antigravity CLI and IDE write after a completed sign-in.
 func googleSignedIn(geminiHome string) bool {
 	var accounts struct {
 		Active string `json:"active"`

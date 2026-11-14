@@ -35,12 +35,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// emptyGetManager returns a GetResult that sets neither Project nor Degraded —
-
-// a Manager-contract violation — so the test can prove the handler answers a
-
-// clean 500 before writing the 200 status.
-
 type emptyGetManager struct{ projectsvc.Manager }
 
 func (emptyGetManager) Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error) {
@@ -48,12 +42,6 @@ func (emptyGetManager) Get(context.Context, domain.ProjectID) (projectsvc.GetRes
 	return projectsvc.GetResult{}, nil
 
 }
-
-// TestProjectsAPI_GetEmptyResultIs500 locks the fix for the discriminated-union
-
-// invariant: a degenerate GetResult must surface as a parseable 500 envelope,
-
-// not a 200 with truncated JSON.
 
 func TestProjectsAPI_GetEmptyResultIs500(t *testing.T) {
 
@@ -410,10 +398,6 @@ func TestProjectsAPI_Delete(t *testing.T) {
 
 }
 
-// TestProjectsAPI_RejectsUnknownConfigKeys locks the strict-decoder gate on the
-// project config endpoints: a misspelled or removed field surfaces as a clear
-// 400 instead of being silently dropped, so the API cannot accumulate dead
-// config the daemon never reads.
 func TestProjectsAPI_RejectsUnknownConfigKeys(t *testing.T) {
 	srv := newTestServer(t)
 	repo := gitRepo(t, "rejects-unknown")
@@ -422,22 +406,17 @@ func TestProjectsAPI_RejectsUnknownConfigKeys(t *testing.T) {
 		t.Fatalf("seed create = %d, want 201; body=%s", status, body)
 	}
 
-	// PUT settings with an extraneous top-level key.
 	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/rej", `{"displayName":"Rejects unknown","config":{"defaultBranch":"develop"},"surprise":"!"}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 
-	// Prompt rules are now modeled and accepted in project config.
 	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/rej", `{"displayName":"Rejects unknown","config":{"agentRules":"x"}}`)
 	if status != http.StatusOK {
 		t.Fatalf("agentRules settings = %d, want 200; body=%s", status, body)
 	}
 
-	// A still-unknown nested config field is rejected, so misspellings cannot be
-	// silently persisted.
 	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/rej", `{"displayName":"Rejects unknown","config":{"tracker":{"plugin":"github"}}}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
 
-	// POST /projects gets the same gate, so add-time config rides the same rail.
 	otherRepo := gitRepo(t, "rejects-unknown-add")
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/projects", `{"path":`+quote(otherRepo)+`,"projectId":"rej2","config":{"orchestratorRules":"x"}}`)
 	if status != http.StatusCreated {

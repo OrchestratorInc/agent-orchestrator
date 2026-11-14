@@ -16,14 +16,11 @@ import (
 
 const usageFlushInterval = 30 * time.Minute
 
-// usageTelemetryFlusher only exports bounded, durable local counts. Emission
-// reserves each summary before handing it to the existing best-effort sink.
 type usageTelemetryFlusher struct {
-	mu       sync.Mutex
-	store    *sqlite.Store
-	sink     ports.EventSink
-	identity ports.TelemetryIdentityStore
-	// milestones backs first_for_install on new PR outcomes. Nil omits it.
+	mu         sync.Mutex
+	store      *sqlite.Store
+	sink       ports.EventSink
+	identity   ports.TelemetryIdentityStore
 	milestones ports.InstallMilestones
 	log        *slog.Logger
 	archive    chan struct{}
@@ -95,17 +92,14 @@ func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) 
 				Payload: map[string]any{
 					"project_telemetry_id": b.ProjectTelemetryID,
 					"session_telemetry_id": deliverytelemetry.SessionTelemetryID(b.ProjectTelemetryID, b.SessionID),
-					// count keeps its first meaning (direct human Chat
-					// messages); the rest add the other human sends and split
-					// all of them by client.
-					"count":         b.Count,
-					"steer_count":   b.SteerCount,
-					"send_count":    b.SendCount,
-					"desktop_count": b.DesktopCount,
-					"mobile_count":  b.MobileCount,
-					"cli_count":     b.CLICount,
-					"kind":          telemetrymeta.SessionKind(domain.SessionKind(b.Kind), domain.ProjectID(b.ProjectID)),
-					"harness":       b.Harness,
+					"count":                b.Count,
+					"steer_count":          b.SteerCount,
+					"send_count":           b.SendCount,
+					"desktop_count":        b.DesktopCount,
+					"mobile_count":         b.MobileCount,
+					"cli_count":            b.CLICount,
+					"kind":                 telemetrymeta.SessionKind(domain.SessionKind(b.Kind), domain.ProjectID(b.ProjectID)),
+					"harness":              b.Harness,
 				},
 			})
 		}
@@ -119,8 +113,6 @@ func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) 
 }
 
 func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) {
-	// Whether anything was measured before this flush decides first_for_install.
-	// The flusher holds f.mu, so no other report can interleave.
 	associatedBefore, mergedBefore, err := f.store.WorkerPRUsageHistory(ctx)
 	historyKnown := err == nil
 	if err != nil {
@@ -138,9 +130,6 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 			historical bool
 			kind       string
 		}
-		// Historical backfill stays grouped: it has no meaningful timing. New
-		// outcomes go out one per PR with their detail and count 1, so summing
-		// count still gives the same totals.
 		counts := make(map[group]int64)
 		var detailed []ports.TelemetryEvent
 		projectIDs := make(map[string]string)
@@ -225,9 +214,6 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 	}
 }
 
-// firstForInstall claims a PR milestone once per install. noPrior is whether
-// nothing was measured before; with an unreadable history the flag is omitted
-// and the marker left unclaimed.
 func (f *usageTelemetryFlusher) firstForInstall(name string, historyKnown, noPrior bool) (first, known bool) {
 	if !historyKnown {
 		return false, false
@@ -239,8 +225,6 @@ func usageEvent(name string, payload map[string]any) ports.TelemetryEvent {
 	return ports.TelemetryEvent{Name: name, Source: "daemon", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo, Payload: payload}
 }
 
-// workerPRDetail is the shared payload of a new (non-historical) worker PR
-// outcome: counts, enums and the owning worker's harness, never PR text.
 func workerPRDetail(projectTelemetryID string, fact sqlitestore.UsagePRFact) map[string]any {
 	payload := map[string]any{"project_telemetry_id": projectTelemetryID, "count": 1, "historical": false}
 	if kind := workerPRKind(fact); kind != "" {
@@ -262,7 +246,6 @@ func workerPRKind(fact sqlitestore.UsagePRFact) string {
 	return telemetrymeta.SessionKind(domain.SessionKind(fact.SessionKind), domain.ProjectID(fact.ProjectID))
 }
 
-// workerPROutcome adds timing and review facts for a merge or close at at.
 func workerPROutcome(projectTelemetryID string, fact sqlitestore.UsagePRFact, at time.Time) map[string]any {
 	payload := workerPRDetail(projectTelemetryID, fact)
 	payload["review_rounds"] = fact.ReviewRounds
@@ -276,8 +259,6 @@ func workerPROutcome(projectTelemetryID string, fact sqlitestore.UsagePRFact, at
 	return payload
 }
 
-// elapsedMs is to-from in milliseconds when both are known; a negative span
-// (clock skew between AO and the provider) reads as zero.
 func elapsedMs(from, to time.Time) (int64, bool) {
 	if from.IsZero() || to.IsZero() {
 		return 0, false

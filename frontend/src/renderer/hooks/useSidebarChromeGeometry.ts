@@ -6,9 +6,6 @@ export type SidebarChromeGeometry = { width: number; progress: number };
 const WIDTH_VAR = "--ao-sidebar-layout-width";
 const PROGRESS_VAR = "--ao-sidebar-collapse-progress";
 
-// The sidebar animates its layout width every frame. Publishing that on <html>
-// restyled the whole document each frame, so the value lives in this tiny store
-// and only the session headers that consume it write it onto themselves.
 let current: SidebarChromeGeometry | null = null;
 const listeners = new Set<(geometry: SidebarChromeGeometry | null) => void>();
 
@@ -34,15 +31,12 @@ function collapseProgress(width: number, expandedWidth: number): number {
 	return expandedWidth > 0 ? Math.max(0, Math.min(1, 1 - width / expandedWidth)) : 1;
 }
 
-/** Share the sidebar's actual animated layout with the fixed native chrome. */
 export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLDivElement | null>, containerRef: RefObject<HTMLDivElement | null>): void {
 	useLayoutEffect(() => {
 		if (!ready || !isMacPlatform()) return;
 		const gap = gapRef.current;
 		const container = containerRef.current;
 		if (!gap || !container) return;
-		// One synchronous read so the first paint is already correct. Every later
-		// update comes from ResizeObserver entry sizes, which carry no forced layout.
 		let width = gap.getBoundingClientRect().width;
 		let expandedWidth = container.getBoundingClientRect().width;
 		const publish = () => setSidebarChromeGeometry({ width, progress: collapseProgress(width, expandedWidth) });
@@ -64,12 +58,6 @@ export function useSidebarChromeGeometry(ready: boolean, gapRef: RefObject<HTMLD
 	}, [ready, gapRef, containerRef]);
 }
 
-/**
- * Callback ref for a session header that clears the native macOS chrome. It
- * writes the sidebar geometry variables onto that one element (no React state,
- * no re-render per frame) and drops them when the header unmounts. Pass
- * `enabled: false` where the header does not use the clearance class.
- */
 export function useSidebarChromeClearanceRef<T extends HTMLElement>(enabled = true): RefCallback<T> {
 	const cleanup = useRef<(() => void) | null>(null);
 	return useCallback(

@@ -9,16 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// searchConversationMessagesSQL orders finished chat messages matching ?1
-// (conversation_messages_fts) by relevance (FTS5 bm25, with messages holding
-// the query as typed, phrase ?3, first) or, when a query is too common to rank
-// cheaply, newest first. It keeps the ones the transcript shows:
-// the SelectConversationMessages rule (active branch path; rolled-back,
-// promoted and cancelled turns hidden), and only the conversation currently
-// selected for a session/reviewer can produce a navigable hit. Snippets have
-// matches wrapped in \x02 and \x03. Visibility is checked before the candidate
-// limit; each match walks only its own conversation lineage. Hand-written:
-// sqlc cannot parse rowid or FTS5.
 const searchConversationMessagesSQL = `
 WITH hits AS MATERIALIZED (
     SELECT conversation_messages_fts.rowid AS message_rowid, %[1]s AS score
@@ -78,23 +68,15 @@ ORDER BY hits.score`
 var (
 	searchMessagesByRelevanceSQL = fmt.Sprintf(searchConversationMessagesSQL,
 		"conversation_messages_fts.rank - 1e6 * (conversation_messages_fts.rowid IN (SELECT rowid FROM conversation_messages_fts WHERE conversation_messages_fts MATCH ?3))", "score")
-	// FTS5 walks rowids in reverse and stops at the limit; bm25 would score
-	// every match first.
 	searchMessagesByRecencySQL = fmt.Sprintf(searchConversationMessagesSQL, "-conversation_messages_fts.rowid", "conversation_messages_fts.rowid DESC")
 )
 
 const (
-	// Past this many matches a query is too common to rank by relevance.
-	chatSearchRankLimit = 2000
-	chatSearchResults   = 8
-	// Matches read past the page: providers may repeat the same passage.
+	chatSearchRankLimit  = 2000
+	chatSearchResults    = 8
 	chatSearchCandidates = 4 * chatSearchResults
 )
 
-// SearchConversationMessages returns visible chat messages matching query,
-// best first. Every word must match (by word form; the last also by prefix,
-// as it may be half typed); when none does, any word may, so one misspelled
-// word does not hide the message.
 func (s *Store) SearchConversationMessages(ctx context.Context, query string) ([]domain.ChatSearchHit, error) {
 	words := ftsWords(strings.Join(domain.SearchTerms(query), " "))
 	if len(words) == 0 {
@@ -105,7 +87,6 @@ func (s *Store) SearchConversationMessages(ctx context.Context, query string) ([
 		terms[i] = `"` + word + `"`
 	}
 	terms[len(terms)-1] += "*"
-	// Every word, filler included, in the order typed.
 	phrase := `"` + strings.Join(ftsWords(query), " ") + `"*`
 	hits, err := s.searchConversationMessages(ctx, strings.Join(terms, " "), phrase)
 	if err != nil || len(hits) > 0 || len(terms) == 1 {
@@ -114,8 +95,6 @@ func (s *Store) SearchConversationMessages(ctx context.Context, query string) ([
 	return s.searchConversationMessages(ctx, strings.Join(terms, " OR "), phrase)
 }
 
-// ftsWords keeps the letters and digits of text as words, so punctuation and
-// FTS5 operators are never parsed as query syntax.
 func ftsWords(text string) []string {
 	return strings.FieldsFunc(text, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
 }
@@ -135,7 +114,6 @@ func (s *Store) searchConversationMessages(ctx context.Context, match, phrase st
 	}
 	defer func() { _ = rows.Close() }()
 	var hits []domain.ChatSearchHit
-	// A provider can record one reply twice in a turn; one row per passage.
 	seen := map[[3]string]bool{}
 	for rows.Next() && len(hits) < chatSearchResults {
 		var hit domain.ChatSearchHit

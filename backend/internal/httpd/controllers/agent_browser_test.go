@@ -16,9 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 )
 
-// The agent browser reaches the desktop through the daemon: the browser's
-// token is added on the way, AO's credential and the desktop's origin are not
-// passed on, the stream socket works, and only the viewer's routes are open.
 func TestSessionsAPI_AgentBrowserProxy(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string
@@ -27,7 +24,7 @@ func TestSessionsAPI_AgentBrowserProxy(t *testing.T) {
 		seen = append(seen, r.URL.RequestURI()+" auth="+r.Header.Get("Authorization")+" origin="+r.Header.Get("Origin")+" cookie="+r.Header.Get("Cookie"))
 		mu.Unlock()
 		if r.URL.Path == "/ws/cdp" {
-			conn, err := websocket.Accept(w, r, nil) // refuses a foreign Origin, as rbhost does
+			conn, err := websocket.Accept(w, r, nil)
 			if err != nil {
 				t.Errorf("accept: %v", err)
 				return
@@ -107,9 +104,6 @@ func TestSessionsAPI_AgentBrowserAbsent(t *testing.T) {
 	}
 }
 
-// The browser's mux cleans "." and ".." with a redirect that repeats the query,
-// the browser's token with it. Such a download never reaches the browser, and
-// a redirect the browser does send comes back without the token.
 func TestSessionsAPI_AgentBrowserKeepsItsTokenOnTheHost(t *testing.T) {
 	var mu sync.Mutex
 	var reached []string

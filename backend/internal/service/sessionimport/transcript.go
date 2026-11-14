@@ -1,4 +1,3 @@
-// Package sessionimport reads local provider history without starting or modifying a provider.
 package sessionimport
 
 import (
@@ -21,24 +20,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Tool output and images dominate provider files, so whole files stream while
-// oversized records keep only their short top-level fields.
 const (
 	maxTranscriptBytes = 4 << 30
 	maxVisibleBytes    = 32 << 20
 	maxSkimMember      = 4 << 10
 )
 
-// Variables so tests can use small limits. A string over maxSkimString in an
-// oversized record is omitted; it would exceed maxVisibleBytes on its own.
 var (
-	maxRecordBytes = 64 << 20
-	maxSkimString  = maxVisibleBytes
-	// Text a reader holds before it can trim, such as while the active branch
-	// is still unknown, across all branches.
-	maxHeldText     = 2 * maxVisibleBytes
-	nativeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	// Codex injects these as separate user-role items; they are not prompts.
+	maxRecordBytes       = 64 << 20
+	maxSkimString        = maxVisibleBytes
+	maxHeldText          = 2 * maxVisibleBytes
+	nativeIDPattern      = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	codexContextPrefixes = []string{"# AGENTS.md instructions", "<environment_context", "<user_instructions", "<INSTRUCTIONS>", "<external_codex_apps_open_page", "<recommended_plugins", "<skill>", "<codex_internal_context", "<turn_aborted"}
 )
 
@@ -48,7 +40,6 @@ var (
 	errRelativeCWD            = errors.New("transcript working directory must be absolute")
 )
 
-// Message is the readable archive; tool payloads and provider internal state are not display messages.
 type Message = domain.ImportedMessage
 
 type transcript struct {
@@ -58,15 +49,11 @@ type transcript struct {
 	title                     string
 	messages                  []Message
 	last                      time.Time
-	// shortened reports visible text that was too large to keep.
-	shortened bool
-	// fingerprint is the optional native-input evidence captured by discovery.
-	fingerprint string
-	// placeAt is the checkout a chat belongs to once its own folder is gone.
-	placeAt string
+	shortened                 bool
+	fingerprint               string
+	placeAt                   string
 }
 
-// folder is where a chat belongs: its own folder, or placeAt once that is gone.
 func (t transcript) folder() string {
 	if t.placeAt != "" {
 		if info, err := os.Stat(t.cwd); err != nil || !info.IsDir() {
@@ -78,8 +65,6 @@ func (t transcript) folder() string {
 
 type textBlock struct{ Type, Text string }
 
-// contentText decodes message content straight to its visible text, so large
-// tool results are parsed but never retained.
 type contentText string
 
 func (c *contentText) UnmarshalJSON(raw []byte) error {
@@ -147,7 +132,6 @@ func blockText(blocks []textBlock) string {
 	return strings.Join(parts, "\n")
 }
 
-// codexPrompt removes Codex Desktop's ambient wrapper and drops injected context.
 func codexPrompt(text string) string {
 	if i := strings.LastIndex(text, "## My request:"); i >= 0 {
 		return strings.TrimSpace(text[i+len("## My request:"):])
@@ -161,7 +145,6 @@ func codexPrompt(text string) string {
 	return text
 }
 
-// claudePrompt shows a slash command as typed and drops its local output.
 func claudePrompt(text string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "<local-command-stdout>") || strings.HasPrefix(trimmed, "<local-command-stderr>") {
@@ -175,8 +158,6 @@ func claudePrompt(text string) (string, bool) {
 		}
 		return strings.TrimSpace(value)
 	}
-	// Claude writes a command record that starts with its tags; a prompt that
-	// merely quotes them is still a prompt.
 	if !strings.HasPrefix(trimmed, "<command-name>") && !strings.HasPrefix(trimmed, "<command-message>") {
 		return text, false
 	}
@@ -190,9 +171,6 @@ func claudePrompt(text string) (string, bool) {
 	return name, true
 }
 
-// eachRecord streams JSONL. A record too large to decode is rewritten as it
-// streams past, so a huge tool result neither hides the text beside it nor
-// breaks the parent link that joins the history before it.
 func eachRecord(r io.Reader, fn func([]byte) error) error {
 	br := bufio.NewReaderSize(r, 256<<10)
 	var (
@@ -235,9 +213,6 @@ func eachRecord(r io.Reader, fn func([]byte) error) error {
 	}
 }
 
-// recordSkim rewrites one oversized JSON record: a string over maxSkimString
-// becomes omittedText. If the rest is still over maxRecordBytes, only the
-// short top-level scalars are kept, marked aoOmitted.
 type recordSkim struct {
 	full, top, member  []byte
 	stringStart, depth int
@@ -299,7 +274,6 @@ func (s *recordSkim) write(p []byte) {
 	}
 }
 
-// copyFull runs before write updates the string state for c.
 func (s *recordSkim) copyFull(c byte) {
 	if s.overflow {
 		return
@@ -333,7 +307,6 @@ func (s *recordSkim) keep() {
 	s.member, s.drop = s.member[:0], false
 }
 
-// record is nil for a torn object, as a torn small record fails to decode.
 func (s *recordSkim) record() []byte {
 	switch {
 	case !s.closed:
@@ -352,14 +325,12 @@ type tagged struct {
 	id   string
 }
 
-// claudeNode keeps only display facts, so tool payloads are not retained while walking ancestry.
 type claudeNode struct {
 	typ, role, id, uuid, parent, logicalParent, cwd, text string
 	at                                                    time.Time
 	hidden, omitted, dropped                              bool
 }
 
-// readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
 	if read := harnessImporters[harness].read; read != nil {
 		return read(ctx, root, paths...)
@@ -391,7 +362,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	case domain.HarnessClaudeCode:
 		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	case domain.HarnessCodex:
-		// The rollout's own identity; copied fork ancestry never replaces it.
 		t.nativeID = nativeconfig.CodexRolloutThread(paths[0])
 	}
 	var (
@@ -400,9 +370,9 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 		claude      []claudeNode
 		claudeIndex = map[string]int{}
 		claudeLeaf  string
-		claudeHeld  int // bytes of Claude text held
+		claudeHeld  int
 		claudeFirst = -1
-		claudeDrop  int // the oldest node whose text may still be held
+		claudeDrop  int
 		customTitle string
 		prompted    bool
 		sawMeta     bool
@@ -424,10 +394,8 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 		}
 		msg := tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: kind, id: id}
 		if id != "" {
-			// Streaming providers rewrite one message under the same id; keep its first position.
 			if index, ok := ids[kind+"\x00"+id]; ok {
 				if kind == "claude" {
-					// Claude writes each content block of one reply as its own record.
 					msg.Text, msg.At = items[index].Text+"\n\n"+text, items[index].At
 				}
 				visible += len(msg.Text) - len(items[index].Text)
@@ -451,7 +419,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	}
 	trim := func() {
 		if harness == domain.HarnessCodex {
-			// Budget each message once and keep the typed opening prompt.
 			items = codexVisible(items)
 		}
 		n := len(items)
@@ -473,10 +440,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 			if r.Sidechain {
 				return nil
 			}
-			// A forked or resumed conversation (--fork-session, older --resume)
-			// opens its own file with copies of the ancestor's records, which
-			// keep the ancestor's sessionId. They are this conversation's history
-			// too; only its own records name it.
 			own := r.SessionID == "" || r.SessionID == t.nativeID
 			if title := strings.TrimSpace(r.CustomTitle); title != "" && own {
 				customTitle = title
@@ -498,7 +461,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 				}
 			}
 			if index < len(claude) {
-				// Claude rewrites some records in place, for example after a cwd change.
 				claudeHeld -= len(claude[index].text)
 				claude[index] = node
 			} else {
@@ -515,12 +477,12 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 			return nil
 		}
 		if r.Omitted && (r.Type == "response_item" || r.Type == "event_msg") {
-			t.shortened = true // The dropped payload may have held visible text.
+			t.shortened = true
 		}
 		switch r.Type {
 		case "session_meta":
 			if sawMeta {
-				return nil // Forks and later segments repeat ancestor metadata.
+				return nil
 			}
 			sawMeta = true
 			if !strings.EqualFold(r.Payload.ID, t.nativeID) {
@@ -574,7 +536,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	chain := claude
 	if claudeLeaf != "" {
 		chain = activeBranch(claude, claudeIndex, claudeLeaf, func(n claudeNode) string {
-			// Compaction starts a new root; its logical parent continues the visible history.
 			if _, found := claudeIndex[n.logicalParent]; n.parent == "" && found {
 				return n.logicalParent
 			}
@@ -615,7 +576,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
-	// A session of only slash commands, such as /login, is not a conversation to continue.
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
 	}
@@ -623,9 +583,6 @@ func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root 
 	return t, finishErr
 }
 
-// finishTranscript rejects a relative working directory, dates
-// undated messages by the newest record or else the file's mtime, and titles an
-// untitled conversation by its opening prompt.
 func finishTranscript(t *transcript) error {
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
 		return errRelativeCWD
@@ -652,9 +609,6 @@ func finishTranscript(t *transcript) error {
 	return nil
 }
 
-// activeBranch follows parent links back from leaf and returns the branch root
-// first, so rewound or abandoned turns are not shown as history. A missing link
-// or a cycle ends the walk: a dangling parent must not hide the conversation.
 func activeBranch[N any](nodes []N, index map[string]int, leaf string, parent func(N) string) []N {
 	var chain []N
 	visited := map[string]bool{}
@@ -671,10 +625,6 @@ func activeBranch[N any](nodes []N, index map[string]int, leaf string, parent fu
 	return chain
 }
 
-// dropOldestHeld clears held text oldest first, as trimVisible would, until at
-// most maxHeldText remains, keeping the opening text at index first. drop is
-// the oldest node whose text may still be held; fields names a node's text and
-// the flag that marks it dropped.
 func dropOldestHeld[N any](nodes []N, held, drop *int, first int, fields func(*N) (text *string, dropped *bool)) {
 	for ; *held > maxHeldText && *drop < len(nodes); *drop++ {
 		if text, dropped := fields(&nodes[*drop]); *drop != first && *text != "" {
@@ -684,14 +634,6 @@ func dropOldestHeld[N any](nodes []N, held, drop *int, first int, fields func(*N
 	}
 }
 
-// codexVisible keeps one representation of each message. Codex writes a prompt
-// as an event and/or a response item (only events exclude injected context),
-// and a reply as a response item and/or an event. Which ones it writes depends
-// on the client and version, and a thread continued elsewhere mixes them, so
-// the choice is made per run of consecutive same-role messages, one turn's
-// prompt or replies: the run's most preferred representation stands for it,
-// and a run with no preferred one keeps what it has. Prompts are already
-// unwrapped, so running it again changes nothing.
 func codexVisible(items []tagged) []tagged {
 	preference := map[string]int{
 		"event-user": 0, "item-user": 1, "response-user": 2,
@@ -709,7 +651,6 @@ func codexVisible(items []tagged) []tagged {
 				best = rank
 			}
 		}
-		// Writes trail reads, so filtering in place is safe.
 		for _, item := range items[start:end] {
 			if rank, ok := preference[item.kind]; ok && rank == best {
 				out = append(out, item)
@@ -720,8 +661,6 @@ func codexVisible(items []tagged) []tagged {
 	return out
 }
 
-// Codex rollbacks retract complete user turns, including each turn's replies.
-// Collapse duplicate event/response/item representations before counting users.
 func codexRollback(items []tagged, turns uint64) []tagged {
 	items = codexVisible(items)
 	for i := len(items) - 1; i >= 0; i-- {
@@ -735,7 +674,6 @@ func codexRollback(items []tagged, turns uint64) []tagged {
 	return nil
 }
 
-// trimVisible keeps the opening prompt and the newest messages within budget.
 func trimVisible(items []tagged) []tagged {
 	total := 0
 	for _, item := range items {
@@ -752,13 +690,11 @@ func trimVisible(items []tagged) []tagged {
 	return slices.Delete(items, 1, cut)
 }
 
-// readOne reads a file as it was when opened; appended records belong to the next scan.
 func readOne(providerRoot *os.Root, root, path string, fn func([]byte) error) error {
 	leaf, err := os.Lstat(path)
 	if err != nil || !leaf.Mode().IsRegular() {
 		return errors.New("transcript is not a regular file")
 	}
-	// Never follow a provider-file symlink out of the explicitly scanned root.
 	physical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return err

@@ -22,8 +22,6 @@ func TestUpdateStopsAnIdleOrchestrator(t *testing.T) {
 	if err := h.st.UpdateSession(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
-	// Idle hibernation keeps it running; an update that cannot replace a
-	// running executable must still be able to stop it.
 	stopped, err := h.svc.HibernateChatForUpdate(ctx, testSession)
 	if err != nil || !stopped || conv.calls.Load() != 1 {
 		t.Fatalf("update stop of an idle orchestrator: stopped=%v err=%v provider stops=%d", stopped, err, conv.calls.Load())
@@ -43,7 +41,6 @@ func TestMessageSentDuringAnUpdateWaitsForItsResume(t *testing.T) {
 	if stopped, err := h.svc.HibernateChatForUpdate(ctx, testSession); err != nil || !stopped {
 		t.Fatalf("update stop = %v, %v", stopped, err)
 	}
-	// The installer still holds the harness: the message's wake gives up.
 	wakeDone := make(chan struct{})
 	h.svc.SetWakeCallback(func(context.Context, domain.SessionID) error {
 		defer close(wakeDone)
@@ -67,8 +64,6 @@ func TestMessageSentDuringAnUpdateWaitsForItsResume(t *testing.T) {
 		t.Fatalf("message after the failed wake = %s (%s), want still queued", last.State, last.ErrorMessage)
 	}
 
-	// The update finishes and starts the session again, as Session Manager's
-	// resume does, then delivers what queued.
 	rec, _, err := h.st.GetSession(ctx, testSession)
 	if err != nil {
 		t.Fatal(err)

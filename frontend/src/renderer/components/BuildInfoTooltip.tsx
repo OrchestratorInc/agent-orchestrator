@@ -17,8 +17,6 @@ function readPreviewChannel(): string | null {
   }
 }
 
-// Channel is identity: derived from the running build, not the update-channel
-// setting. Dev wins over the version string because dev runs report Electron's.
 function useBuildChannel(): { channel: BuildChannel; version: string | undefined } {
   const [version, setVersion] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -34,8 +32,6 @@ function useBuildChannel(): { channel: BuildChannel; version: string | undefined
     };
   }, []);
   if (IS_DEV) {
-    // Dev-only preview of the other channels: localStorage.setItem("ao.dev.buildChannel", "nightly" | "stable"),
-    // then reload. Stripped from production builds with the IS_DEV gate.
     const preview = readPreviewChannel();
     if (preview === "nightly") return { channel: "nightly", version: version ?? "0.0.0-nightly.preview" };
     if (preview === "stable") return { channel: "stable", version };
@@ -50,8 +46,6 @@ const DOT_CLASS: Record<BuildChannel, string> = {
   stable: "bg-emerald-500",
 };
 
-// Wraps the brand label. It opts out of the window-drag region on purpose:
-// macOS swallows hover over drag regions, so the tooltip could never open.
 export function BuildInfoTooltip({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
   const { channel, version } = useBuildChannel();
@@ -85,8 +79,6 @@ export function BuildInfoTooltip({ children }: { children: React.ReactNode }) {
         sideOffset={6}
       >
         <div className="relative flex flex-col gap-2 text-xs" data-testid="build-info">
-          {/* Baseline-align the label and the mono version (different fonts and
-              sizes drift apart when only their boxes are centered); the dot opts out. */}
           <div className="flex items-baseline justify-between gap-4">
             <span className="flex items-baseline gap-2 font-medium capitalize">
               <span aria-hidden="true" className={cn("size-1.5 shrink-0 self-center rounded-full", DOT_CLASS[channel])} />

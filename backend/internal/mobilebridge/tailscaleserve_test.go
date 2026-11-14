@@ -52,10 +52,6 @@ func TestServeClearIssuesOff(t *testing.T) {
 	}
 }
 
-// serveStatusMultiSiteJSON simulates a tailnet where the user also runs an
-// unrelated `tailscale serve --https=8443 ...` alongside AO's :443 proxy.
-// Target must key off the ":443" suffix, not just "some Web entry", or Go's
-// randomized map iteration could return the unrelated handler's port instead.
 const serveStatusMultiSiteJSON = `{
   "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}},
   "Web": {
@@ -82,8 +78,6 @@ func TestServeTargetParsesProxyPort(t *testing.T) {
 	}
 }
 
-// An unset proxy, a failed call, and unparseable output are all "no target",
-// which the caller renders as "proxy not active" rather than as an error.
 func TestServeTargetZeroWhenUnset(t *testing.T) {
 	for name, r := range map[string]*recordingRunner{
 		"empty config": {out: `{"TCP":{},"Web":{}}`},
@@ -99,8 +93,6 @@ func TestServeTargetZeroWhenUnset(t *testing.T) {
 	}
 }
 
-// Apply must surface CLI failure so the caller can report serve_failed rather
-// than advertising a proxy that was never created.
 func TestServeApplyPropagatesError(t *testing.T) {
 	r := &recordingRunner{err: errors.New("exit status 1")}
 	s := &Serve{Run: r.run}

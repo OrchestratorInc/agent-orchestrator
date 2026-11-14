@@ -143,8 +143,6 @@ describe("cloud control-plane new-task model catalogs", () => {
 		);
 	});
 
-	// The composer tells an older control plane (no route, no envelope) from a
-	// handler's own 404 and from an agent with no Cloud catalog by these fields.
 	it.each([
 		{ status: 409, body: JSON.stringify({ error: "Conflict", code: "MODEL_CATALOG_UNAVAILABLE", message: "No catalog" }), code: "MODEL_CATALOG_UNAVAILABLE" },
 		{ status: 404, body: JSON.stringify({ error: "Not Found", code: "not_found", message: "Organization not found" }), code: "not_found" },
@@ -640,7 +638,6 @@ describe("Cloud control-plane share links", () => {
 		const { fetchImpl, client: cp } = client(() => new Response(null, { status: 204 }));
 		expect(await cp.revokeShareLink(ORG, "project", LINK)).toEqual({});
 		expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).body).toBeUndefined();
-		// An older control plane ignores removeJoined and answers the same way.
 		expect(await cp.revokeShareLink(ORG, "project", LINK, { removeJoined: true })).toEqual({});
 	});
 

@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A forked or resumed Claude conversation starts its own file with copies of
-// the ancestor's records, which keep the ancestor's sessionId. The file is
-// still one readable conversation, titled by its own records only.
 func TestClaudeTranscriptKeepsForkedAncestorRecords(t *testing.T) {
 	parent := "1a842f77-b1fe-49f3-8585-8946df267bae"
 	id := "2b842f77-b1fe-49f3-8585-8946df267bae"

@@ -52,8 +52,6 @@ func tarGz(t *testing.T, name string, body []byte) []byte {
 	return buf.Bytes()
 }
 
-// The daemon resolves the connector at mobilebridge.ManagedCloudflaredPath; a
-// download that lands anywhere else would never be found.
 func TestInstallManagedBinaryLandsAnExecutableAtTheManagedPath(t *testing.T) {
 	t.Parallel()
 	binary := []byte("#!/bin/sh\necho cloudflared version 2026.10.3\n")
@@ -91,8 +89,6 @@ func TestInstallManagedBinaryLandsAnExecutableAtTheManagedPath(t *testing.T) {
 	}
 }
 
-// A tampered or corrupted download must never become runnable: no file at the
-// managed path, and no executable temp file left beside it.
 func TestInstallManagedBinaryRefusesAChecksumMismatch(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewTLSServer(httpHandler("#!/bin/sh\necho tampered\n"))
@@ -111,8 +107,6 @@ func TestInstallManagedBinaryRefusesAChecksumMismatch(t *testing.T) {
 	assertOnlyManagedBinary(t, filepath.Join(dataDir, "bin"), "")
 }
 
-// A transfer that stops sending fails within the stall timeout, so the caller
-// can try again inside its install time.
 func TestInstallManagedBinaryGivesUpAStalledTransfer(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})

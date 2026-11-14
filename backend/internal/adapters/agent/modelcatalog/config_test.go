@@ -100,8 +100,6 @@ func TestQwenSharedCatalogMarksConfiguredProviders(t *testing.T) {
 	if err := os.MkdirAll(qwenHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The key lives in settings.json's env map under the entry's envKey; Gemini
-	// has a model entry but no key, and nothing configures Anthropic.
 	if err := os.WriteFile(filepath.Join(qwenHome, "settings.json"), []byte(`{
 		"model":{"name":"GLM-5.2"},
 		"env":{"ZAI_API_KEY":"zai-test"},
@@ -125,7 +123,6 @@ func TestQwenSharedCatalogMarksConfiguredProviders(t *testing.T) {
 		t.Fatalf("models = %#v", got.Models)
 	}
 
-	// A stored Qwen OAuth login and a key in Qwen's global .env count too.
 	if err := os.WriteFile(filepath.Join(qwenHome, "oauth_creds.json"), []byte(`{"access_token":"x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +245,6 @@ func TestDiscoverHermesCatalogListsConfiguredProviderModels(t *testing.T) {
 		t.Fatalf("models = %+v, want glm-4.6 and default glm-5.2 only", catalog.Models)
 	}
 
-	// With provider auto, Hermes chooses at run time, so only the default is listed.
 	write("config.yaml", "model:\n  default: glm-5.2\n  provider: auto\n")
 	catalog, err = discoverConfigCatalog("hermes", "", map[string]string{"HERMES_HOME": home})
 	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "glm-5.2" {

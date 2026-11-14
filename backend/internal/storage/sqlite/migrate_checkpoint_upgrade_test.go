@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Exercise both direct upgrade paths with independent databases, but pay for
-// the shared historical schema only once. VACUUM INTO snapshots real migrations
-// (including WAL contents), not a hand-maintained or globally cached fixture.
 func TestMigrateCheckpointProvenance(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 109)
 	snapshotPath := filepath.Join(t.TempDir(), "version-109.db")
@@ -55,8 +52,6 @@ func TestMigrateCheckpointProvenance(t *testing.T) {
 	})
 
 	t.Run("from_populated_main_140", func(t *testing.T) {
-		// The original remains at 109 after the clone's upgrade. Advancing it
-		// to main proves 141–145 upgrade an actual pre-PR populated database.
 		var sourceVersion int
 		if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&sourceVersion); err != nil {
 			t.Fatal(err)

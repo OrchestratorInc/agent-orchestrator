@@ -16,18 +16,11 @@ import (
 	"golang.org/x/text/language"
 )
 
-// Python's Unicode whitespace (str.isspace, and \s in a str pattern), which
-// both Hermes's .env sanitizer and python-dotenv use. pyBlank excludes the
-// line breaks, as python-dotenv's [^\S\r\n] does.
 const (
 	pyBlank      = `\t\x{0B}\f\x{1C}-\x{1F} \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}`
 	pyWhitespace = `\n\r` + pyBlank
 )
 
-// The grammar of the python-dotenv release Hermes bundles to load
-// <HERMES_HOME>/.env (dotenv/parser.py), so AO sees exactly the assignments
-// Hermes applies: quoted keys, `export` followed by any blank, and quoted
-// values that span lines. Each pattern is anchored at the reader position.
 var (
 	dotenvMultilineSpace    = regexp.MustCompile(`^[` + pyWhitespace + `]*`)
 	dotenvExport            = regexp.MustCompile(`^(?:export[` + pyBlank + `]+)?`)
@@ -45,18 +38,11 @@ var (
 )
 
 type dotenvBinding struct {
-	key   string
-	value string
-	// assigned is false for a bare name without "=", which python-dotenv
-	// parses with value None and load_dotenv never sets.
+	key      string
+	value    string
 	assigned bool
 }
 
-// dotenvBindings parses a dotenv file the way Hermes loads it: normalized by
-// its sanitizer first, then parsed by python-dotenv. A missing file has no
-// bindings; an unreadable or ambiguously encoded one is an error, because
-// Hermes may still load assignments from it. Values are returned only so
-// callers can test emptiness, never to log.
 func dotenvBindings(path string) ([]dotenvBinding, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -80,13 +66,6 @@ func dotenvBindings(path string) ([]dotenvBinding, error) {
 	return bindings, nil
 }
 
-// hermesDotenvText mirrors _sanitize_env_file_if_needed followed by the
-// loader's decode for files that decode cleanly: UTF-8 (optionally with a
-// BOM) and UTF-16 through its BOM (Notepad "Unicode"). The sanitizer strips
-// NULs and trims every non-blank, non-comment line. Anything else (UTF-32,
-// malformed UTF-8 or UTF-16) is ambiguous: Hermes's replacement-character
-// and latin-1 fallbacks can still apply assignments AO cannot predict, so it
-// is reported as undecodable rather than as having no assignments.
 func hermesDotenvText(raw []byte) (string, bool) {
 	var text string
 	switch {
@@ -105,7 +84,6 @@ func hermesDotenvText(raw []byte) (string, bool) {
 			}
 		}
 		for i := 0; i < len(units); i++ {
-			// A lone surrogate fails Python's strict UTF-16 decode.
 			if utf16.IsSurrogate(rune(units[i])) {
 				if i+1 >= len(units) || utf16.DecodeRune(rune(units[i]), rune(units[i+1])) == utf8.RuneError {
 					return "", false
@@ -113,8 +91,6 @@ func hermesDotenvText(raw []byte) (string, bool) {
 				i++
 			}
 		}
-		// Hermes rewrites the decoded text as UTF-8 and its loader then reads
-		// it as utf-8-sig, which drops a U+FEFF that survived the decode.
 		text = strings.TrimPrefix(string(utf16.Decode(units)), "\ufeff")
 	default:
 		raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
@@ -139,10 +115,6 @@ func hermesDotenvText(raw []byte) (string, bool) {
 	return b.String(), true
 }
 
-// dotenvEnvironment is the environment the bindings leave behind when Hermes
-// loads them with override: each value's ${VAR} and ${VAR:-default}
-// references resolve against base overlaid with earlier assignments, and
-// the last assignment of a name wins. Names are keyed by processEnvName.
 func dotenvEnvironment(bindings []dotenvBinding, base envLookup) map[string]string {
 	env := make(map[string]string, len(bindings))
 	lookup := func(name string) (string, bool) {
@@ -162,11 +134,8 @@ func dotenvEnvironment(bindings []dotenvBinding, base envLookup) map[string]stri
 	return env
 }
 
-// dotenvVariable is python-dotenv's POSIX variable reference.
 var dotenvVariable = regexp.MustCompile(`\$\{([^}:]*)(?::-([^}]*))?\}`)
 
-// interpolateDotenv mirrors python-dotenv's Variable.resolve: a defined name
-// keeps its value even when empty, else the default (or empty) applies.
 func interpolateDotenv(value string, lookup envLookup) string {
 	return dotenvVariable.ReplaceAllStringFunc(value, func(ref string) string {
 		m := dotenvVariable.FindStringSubmatch(ref)
@@ -177,12 +146,8 @@ func interpolateDotenv(value string, lookup envLookup) string {
 	})
 }
 
-// dotenvEscapes are the control characters python-dotenv's unicode-escape
-// decoding produces for a double-quoted value.
 var dotenvEscapes = map[byte]byte{'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v'}
 
-// decodeDotenvEscapes applies python-dotenv's decode_escapes to a quoted
-// value: a backslash followed by one of allowed is decoded.
 func decodeDotenvEscapes(value, allowed string) string {
 	var b strings.Builder
 	for i := 0; i < len(value); i++ {
@@ -200,9 +165,6 @@ func decodeDotenvEscapes(value, allowed string) string {
 	return b.String()
 }
 
-// processEnvName is the variable a dotenv key sets in Hermes's process:
-// Windows os.environ applies Python's full str.upper to names, which also
-// expands ligatures such as U+FB06 to "ST".
 func processEnvName(key string) string {
 	if runtime.GOOS == "windows" {
 		return cases.Upper(language.Und).String(key)
@@ -210,26 +172,18 @@ func processEnvName(key string) string {
 	return key
 }
 
-// guardedEnvName is processEnvName for a refusal check: a leading U+FEFF is
-// dropped too, since a later utf-8-sig read can strip it once Hermes rewrites
-// the file. Never use it as positive evidence.
 func guardedEnvName(key string) string {
 	return processEnvName(strings.TrimLeft(key, "\ufeff"))
 }
 
-// pyStrip is Python's str.strip().
 func pyStrip(s string) string {
 	return strings.TrimFunc(s, pyIsSpace)
 }
 
-// pyIsSpace is Python's str.isspace: Unicode White_Space plus the ASCII
-// separators U+001C..U+001F.
 func pyIsSpace(r rune) bool {
 	return unicode.IsSpace(r) || r >= 0x1C && r <= 0x1F
 }
 
-// parseDotenvBinding mirrors parse_binding: on a syntax error it discards the
-// rest of the current line, as python-dotenv does.
 func parseDotenvBinding(text string) (string, dotenvBinding, bool) {
 	read := func(re *regexp.Regexp) ([]string, bool) {
 		m := re.FindStringSubmatch(text)

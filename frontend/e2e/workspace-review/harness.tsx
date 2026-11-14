@@ -1,6 +1,4 @@
 /// <reference path="../../src/renderer/global.d.ts" />
-// Real review pane and Pierre virtualizer with deterministic query data. No
-// daemon or filesystem writes; image responses are supplied by the browser test.
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

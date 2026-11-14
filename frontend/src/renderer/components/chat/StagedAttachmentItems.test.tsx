@@ -8,9 +8,6 @@ const API = "http://127.0.0.1:4000";
 const IMAGE = ".ao/attachments/attachment-shot.png";
 const NOTES = ".ao/attachments/attachment-notes.txt";
 
-// A just-sent file's tile draws from the composer's object URL. The packaged app's
-// CSP once blocked those, and the tile stopped on "Image 1" instead of reading the
-// daemon's copy, which was there all along.
 describe("StagedAttachmentItems with a just-sent local copy", () => {
 	const originalCreate = URL.createObjectURL;
 	const originalRevoke = URL.revokeObjectURL;

@@ -11,13 +11,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// saveOpenCodeAPIKey writes OpenCode 1's native auth.json format. OpenCode 2
-// owns a separate SQLite credential store and must use its native login flow.
 func saveOpenCodeAPIKey(ctx context.Context, method, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	provider := strings.TrimSuffix(method, "_key") // method was checked by loginArgs
+	provider := strings.TrimSuffix(method, "_key")
 	root := strings.TrimSpace(os.Getenv("OPENCODE_DATA_DIR"))
 	if root == "" {
 		if dataHome := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); dataHome != "" {
@@ -33,8 +31,6 @@ func saveOpenCodeAPIKey(ctx context.Context, method, key string) error {
 	return saveModelsDevAuth(ctx, root, "OpenCode", provider, key)
 }
 
-// saveModelsDevAuth writes {"type":"api","key"} under provider in root's
-// auth.json, the format OpenCode and its forks (Kilo Code, MiMo Code) share.
 func saveModelsDevAuth(ctx context.Context, root, harness, provider, key string) error {
 	if !filepath.IsAbs(root) {
 		return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", harness+"'s credential home must be absolute.", nil)

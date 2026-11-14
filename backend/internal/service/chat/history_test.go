@@ -21,10 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// historyRecorder is a provider double that CAN do the history operations, so a test
-// can tell "the driver refuses" from "the driver does not offer this at all". The
-// plain fakeConversation implements none of the three, which is what the unsupported
-// paths exercise.
 type historyRecorder struct {
 	*fakeConversation
 
@@ -82,8 +78,6 @@ func (h *historyRecorder) lastForkAnchor() *string {
 	return &anchorCopy
 }
 
-// SetTitle records the name and, like the real provider, reports it back on the event
-// stream. That echo is the only path by which a title reaches AO's rows.
 func (h *historyRecorder) SetTitle(_ context.Context, title string) error {
 	h.mu.Lock()
 	if h.setTitleErr != nil {
@@ -114,15 +108,11 @@ func (h *historyRecorder) setTitles() []string {
 	return append([]string(nil), h.titles...)
 }
 
-// refusedError is what a driver returns when the provider itself declined. The
-// service classifies it structurally, which is what keeps an ordinary "not right now"
-// from surfacing as an internal failure.
 type refusedError struct{ msg string }
 
 func (e refusedError) Error() string     { return e.msg }
 func (e refusedError) ChatRefusal() bool { return true }
 
-// completeTurn sends a message and drives it to completion, leaving one settled turn.
 func completeTurn(t *testing.T, h *harness, text, providerTurn string) string {
 	t.Helper()
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
@@ -176,8 +166,6 @@ func requireBranchPoint(
 	t.Fatalf("snapshot has no branch point for turn %s: %+v", turnID, snapshot.BranchPoints)
 }
 
-// The end-to-end shape of an undo: the provider is asked to forget, and AO's timeline
-// stops showing what it forgot.
 func TestRollbackDiscardsTheTurnAndEverythingAfterIt(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -196,8 +184,6 @@ func TestRollbackDiscardsTheTurnAndEverythingAfterIt(t *testing.T) {
 		t.Errorf("discarded = %d, want 1", discarded)
 	}
 
-	// The provider is named by ITS turn id, not AO's: they are different namespaces
-	// and sending AO's would roll back nothing.
 	if targets := recorder.rollbackTargets(); len(targets) != 1 || targets[0] != "provider-turn-2" {
 		t.Fatalf("provider rollback targets = %v, want [provider-turn-2]", targets)
 	}
@@ -226,8 +212,6 @@ func TestRollbackRemovesLaterLegacyCompactionState(t *testing.T) {
 	second := completeTurn(t, h, "second", "provider-turn-2")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
 
-	// Builds before compaction turn correlation shipped stored this boundary with
-	// no turn_id. It still belongs to the history after the second prompt.
 	compactedAt := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	if err := h.st.UpsertActivity(ctx, h.ctrl.ConversationID(), "", domain.ConversationActivity{
 		ID: "legacy-compaction", Kind: domain.ActivityKindSystem,
@@ -257,9 +241,6 @@ func TestRollbackRemovesLaterLegacyCompactionState(t *testing.T) {
 	}
 }
 
-// Refused, not raced. A rollback while the agent is mid-turn would leave AO hiding
-// rows the agent is still writing into, so the check happens before the provider is
-// asked at all.
 func TestRollbackIsRefusedWhileATurnIsRunning(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -268,7 +249,6 @@ func TestRollbackIsRefusedWhileATurnIsRunning(t *testing.T) {
 	turnID := completeTurn(t, h, "first", "provider-turn-1")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
 
-	// A second turn that never completes: the agent is working.
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "still going", Origin: domain.MessageOriginHuman,
 	}); err != nil {
@@ -283,7 +263,6 @@ func TestRollbackIsRefusedWhileATurnIsRunning(t *testing.T) {
 		t.Fatalf("provider was asked to roll back mid-turn: %v", targets)
 	}
 
-	// Nothing was hidden either. A refused rollback must leave the timeline alone.
 	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
 	if err != nil {
 		t.Fatalf("load snapshot: %v", err)
@@ -295,8 +274,6 @@ func TestRollbackIsRefusedWhileATurnIsRunning(t *testing.T) {
 	}
 }
 
-// A provider without the capability gets a typed answer the client can render as an
-// absent affordance, following the Models precedent.
 func TestRollbackReportsAnUnsupportedDriver(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -309,9 +286,6 @@ func TestRollbackReportsAnUnsupportedDriver(t *testing.T) {
 	}
 }
 
-// A turn the provider never accepted holds no provider history. Hiding AO's rows for
-// it would leave the agent remembering more than the timeline shows, which is the
-// exact disagreement rollback exists to prevent.
 func TestRollbackRefusesATurnTheProviderNeverAccepted(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -320,7 +294,6 @@ func TestRollbackRefusesATurnTheProviderNeverAccepted(t *testing.T) {
 	completeTurn(t, h, "first", "provider-turn-1")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
 
-	// Busy, so this one is recorded and queued rather than dispatched.
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "running", Origin: domain.MessageOriginHuman,
 	}); err != nil {
@@ -337,14 +310,11 @@ func TestRollbackRefusesATurnTheProviderNeverAccepted(t *testing.T) {
 	}
 
 	_, err = h.svc.Rollback(ctx, testSession, queued.ID, "")
-	// It is refused, though which refusal depends on whether the running turn is
-	// noticed first; both are honest and neither is a 500.
 	if !errors.Is(err, chatsvc.ErrTurnNotRollbackable) && !errors.Is(err, chatsvc.ErrTurnRunning) {
 		t.Fatalf("err = %v, want ErrTurnNotRollbackable or ErrTurnRunning", err)
 	}
 }
 
-// A turn id from nowhere is a 404-shaped answer, not a conflict.
 func TestRollbackReportsAnUnknownTurn(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -355,8 +325,6 @@ func TestRollbackReportsAnUnknownTurn(t *testing.T) {
 	}
 }
 
-// The provider's own refusal must arrive as a conflict carrying its explanation. A
-// generic failure would tell the user nothing they could act on.
 func TestRollbackClassifiesAProviderRefusal(t *testing.T) {
 	recorder := newHistoryRecorder()
 	recorder.rollbackErr = refusedError{msg: "Cannot rollback while a turn is in progress."}
@@ -374,7 +342,6 @@ func TestRollbackClassifiesAProviderRefusal(t *testing.T) {
 		t.Errorf("err = %v, want the provider's explanation carried through", err)
 	}
 
-	// And AO hid nothing: the provider still remembers the turn.
 	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
 	if err != nil {
 		t.Fatalf("load snapshot: %v", err)
@@ -385,7 +352,6 @@ func TestRollbackClassifiesAProviderRefusal(t *testing.T) {
 	}
 }
 
-// The title round trip: the provider accepts AO's request before the label moves.
 func TestSetTitleFlowsThroughTheProviderIntoTheSessionName(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -395,8 +361,6 @@ func TestSetTitleFlowsThroughTheProviderIntoTheSessionName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetTitle: %v", err)
 	}
-	// Normalized before it ever reaches the provider: heading markers, wrapper
-	// quotes and trailing punctuation are model habits, not part of the title.
 	if title != "Fix OAuth Return URL Loss" {
 		t.Fatalf("normalized title = %q", title)
 	}
@@ -415,8 +379,6 @@ func TestSetTitleFlowsThroughTheProviderIntoTheSessionName(t *testing.T) {
 	}
 }
 
-// A title AO never asked for still lands: another client naming the thread is how a
-// provider-derived title arrives at all.
 func TestAProviderRenameFromElsewhereNamesTheSession(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -428,7 +390,6 @@ func TestAProviderRenameFromElsewhereNamesTheSession(t *testing.T) {
 	awaitSessionName(t, h, "Restore Canvas Renderer Fallback")
 }
 
-// The rule the user cares about: their own name is never taken away by a model.
 func TestAProviderTitleDoesNotOverwriteAUserRename(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -442,7 +403,6 @@ func TestAProviderTitleDoesNotOverwriteAUserRename(t *testing.T) {
 		t.Fatalf("SetTitle: %v", err)
 	}
 
-	// The provider title is still recorded; only the label is left alone.
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return s.Conversation.ProviderTitle == "Something Else Entirely"
 	})
@@ -455,7 +415,6 @@ func TestAProviderTitleDoesNotOverwriteAUserRename(t *testing.T) {
 	}
 }
 
-// Clearing the thread name is not a reason to strip AO's label.
 func TestAClearedProviderTitleLeavesTheSessionNameAlone(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -479,8 +438,6 @@ func TestAClearedProviderTitleLeavesTheSessionNameAlone(t *testing.T) {
 	}
 }
 
-// The project orchestrator keeps AO's fixed label: neither its own agent naming the
-// thread nor a title request renames it.
 func TestAProjectOrchestratorKeepsItsNameWhenItsThreadIsNamed(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := &harness{st: openStore(t), conv: recorder.fakeConversation, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
@@ -581,16 +538,12 @@ type editDriverState struct {
 	startErr     error
 	resumeErr    error
 	beforeResume func(ports.ChatResumeConfig) error
-	// beforeStart runs, unlocked, before every start after the first.
-	beforeStart func(ports.ChatStartConfig)
-	// target, when set, is what the second start returns, wrapping fresh.
-	target  func(*fakeConversation) ports.ChatConversation
-	fresh   *fakeConversation
-	resumed map[string]*fakeConversation
-	// refusedMode is a permission mode the agent will not run in; onlyMode, when
-	// set, is the one mode it runs in.
-	refusedMode ports.PermissionMode
-	onlyMode    ports.PermissionMode
+	beforeStart  func(ports.ChatStartConfig)
+	target       func(*fakeConversation) ports.ChatConversation
+	fresh        *fakeConversation
+	resumed      map[string]*fakeConversation
+	refusedMode  ports.PermissionMode
+	onlyMode     ports.PermissionMode
 }
 
 func newEditHarness(t *testing.T, supportsPromptReplay bool) (*harness, *historyRecorder, *editDriverState) {
@@ -665,8 +618,6 @@ func newEditHarnessWithOptions(
 	}
 	initial := ports.ChatConversation(source)
 	if supportsPromptReplay {
-		// Use the plain conversation for this scenario: historyRecorder implements
-		// native fork, while the real Claude path does not.
 		initial = source.fakeConversation
 	}
 	driver := fakeDriver{conv: initial}
@@ -859,11 +810,6 @@ func TestEditAndBranchActivationRotateControllerCredentialsAfterStoppingSource(t
 	}
 }
 
-// A branch install rewrites the session's durable controller owner, including
-// its agent-session identity (ActivateConversationBranchSession). The owner the
-// next credential rotation expects must match it, or Session Manager's fence
-// refuses the rotation and a second edit of the same prompt is reported
-// uncertain while the source restore fails the same way and stops the session.
 func TestRepeatedEditRotatesCredentialsAgainstDurableControllerOwner(t *testing.T) {
 	var mu sync.Mutex
 	var st *store.Store
@@ -1797,8 +1743,6 @@ func TestEditMessageRestoresSourceAfterRequestCancellationDuringClose(t *testing
 		close(closeRelease)
 		t.Fatal("source close did not start")
 	}
-	// Leave the provider stream open long enough for the canceled request to win
-	// on the buggy path. The corrected path is detached and remains in recovery.
 	time.Sleep(75 * time.Millisecond)
 	close(closeRelease)
 	editErr := <-editDone
@@ -1901,7 +1845,6 @@ func TestEditMessageForksBeforeMiddlePromptAndReusesStoredContent(t *testing.T) 
 		len(starts) != 1 || resumes[0].ProviderScopeID != starts[0].ProviderScopeID {
 		t.Fatalf("resume config = %#v", resumes)
 	}
-	// The forked thread keeps the session's tool servers, such as AO's own ao server.
 	if got := resumes[0].MCPServers; len(got) != 1 || got[0].Name != "ao" || got[0].Command != "/opt/ao/bin/ao" ||
 		len(got[0].Args) != 1 || got[0].Args[0] != "mcp" {
 		t.Fatalf("fork resume MCPServers = %+v, want the start's ao server", got)
@@ -2975,8 +2918,6 @@ func TestProviderBoundaryRejectsSourceProviderBranchAndEdit(t *testing.T) {
 	}
 }
 
-// The contract from the automatic-semantic-task-titles design, applied to whatever
-// the provider says rather than trusted.
 func TestNormalizeTitle(t *testing.T) {
 	cases := []struct {
 		name string
@@ -3009,8 +2950,6 @@ func TestNormalizeTitle(t *testing.T) {
 	}
 }
 
-// awaitSessionName polls until the label moves, because the title arrives on the
-// projection goroutine rather than on the caller's.
 func awaitSessionName(t *testing.T, h *harness, want string) {
 	t.Helper()
 	h.awaitSnapshot(t, func(store.ConversationSnapshot) bool {

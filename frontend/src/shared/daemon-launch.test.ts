@@ -95,7 +95,6 @@ describe("resolveDaemonLaunch", () => {
 describe("bundledDaemonIdentityError", () => {
 	const samePath = (a: string, b: string): boolean => a === b;
 	const appImage = "/home/user/Apps/agent-orchestrator.AppImage";
-	// The bundled command under AppImage: a random FUSE mount, different per launch.
 	const launchCommand = "/tmp/.mount_agent-mDQfUL/resources/daemon/ao";
 
 	it("accepts the same install across two AppImage mounts (relaunch-to-update)", () => {

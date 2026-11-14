@@ -11,8 +11,6 @@ import (
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 )
 
-// TestUsagePipelineWatchRootsIncludesKimiWrites catches daemon wiring that
-// registers Kimi sources but omits their managed root from the file watcher.
 func TestUsagePipelineWatchRootsIncludesKimiWrites(t *testing.T) {
 	kimiHome := filepath.Join(t.TempDir(), "kimi")
 	wireDir := filepath.Join(kimiHome, "sessions", "native-1", "agents", "main")

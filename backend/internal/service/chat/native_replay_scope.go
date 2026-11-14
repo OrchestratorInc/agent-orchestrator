@@ -7,13 +7,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// nativeReplayRows excludes predecessor providers from reconciliation, including
-// on ordinary restarts after a handoff. Identical text and opaque IDs from two
-// independent native contexts must never cause one to be deduplicated as the
-// other. Same-scope edit branches still share reconciliation history.
 func (s *Service) nativeReplayRows(ctx context.Context, active domain.ConversationBranch, rows ConversationRows) (ConversationRows, error) {
 	if active.ProviderScopeID == "" {
-		return rows, nil // legacy unscoped conversation
+		return rows, nil
 	}
 	branches := map[string]bool{active.ID: true}
 	turns := make(map[string]bool)

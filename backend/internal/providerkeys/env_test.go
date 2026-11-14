@@ -23,7 +23,6 @@ func TestExportForProbesRemembersAndRestoresTheInheritedValue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The value recorded is the one from before AO's first export.
 	if value, set, was := Inherited(exported); !was || !set || value != "user-value" || os.Getenv(exported) != "ao-second" {
 		t.Fatalf("inherited=%q set=%v exported=%v env=%q", value, set, was, os.Getenv(exported))
 	}
@@ -43,7 +42,6 @@ func TestExportForProbesRemembersAndRestoresTheInheritedValue(t *testing.T) {
 	if _, ok := os.LookupEnv(absent); ok {
 		t.Fatal("restoring a variable the user never set left AO's value behind")
 	}
-	// Restoring one AO never exported leaves the environment alone.
 	t.Setenv(absent, "set-later")
 	if err := RestoreInherited(absent); err != nil || os.Getenv(absent) != "set-later" {
 		t.Fatalf("untouched variable changed: env=%q err=%v", os.Getenv(absent), err)
@@ -53,8 +51,6 @@ func TestExportForProbesRemembersAndRestoresTheInheritedValue(t *testing.T) {
 func TestExportForProbesTreatsAOsOwnPublicationAsUnset(t *testing.T) {
 	const name = "AO_TEST_PROVIDER_KEY_PUBLISHED"
 	const other = "AO_TEST_PROVIDER_KEY_USER_OVERRIDE"
-	// After a restart AO inherits the key it published to the OS user
-	// environment itself.
 	t.Setenv(name, "ao-published")
 	t.Setenv(other, "user-own")
 	t.Cleanup(func() { _ = RestoreInherited(name); _ = RestoreInherited(other) })
@@ -72,7 +68,6 @@ func TestExportForProbesTreatsAOsOwnPublicationAsUnset(t *testing.T) {
 		t.Fatal("removing the key put AO's published copy back")
 	}
 
-	// A different value the user exported over AO's publication stays theirs.
 	if err := ExportForProbes(other, "ao-published", "ao-published"); err != nil {
 		t.Fatal(err)
 	}

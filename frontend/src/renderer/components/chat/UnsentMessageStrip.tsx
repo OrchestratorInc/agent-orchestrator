@@ -4,17 +4,11 @@ import { Check, ChevronDown, CircleAlert, Copy, Loader2, RotateCw, Trash2 } from
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
-/**
- * A sent message whose delivery was never confirmed, shown above the composer.
- * It keeps the box free: the person sees exactly what Retry would send, retries
- * it with the same delivery id, or discards it (with a short undo).
- */
 export function UnsentMessageStrip(props:
 	| {
 		discarded?: false;
 		text: string;
 		attachmentCount: number;
-		/** The retry is in flight. */
 		sending: boolean;
 		retryDisabled: boolean;
 		onRetry: () => void;

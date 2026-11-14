@@ -1,15 +1,6 @@
 import { generateKeyPairSync, randomBytes, sign, X509Certificate } from "node:crypto";
 import type { Session } from "electron";
 
-// Remote previews reach the browser panel over HTTPS on loopback so Chromium
-// speaks HTTP/2 to them. Over HTTP/1.1 it opens at most six connections per
-// host, and a dev server's hundreds of modules then cost a round trip to the
-// remote host for every six requests.
-//
-// The certificate is self-signed, made once per process, and trusted only for
-// preview hosts and only when it is exactly this certificate. Node can sign
-// but has no certificate builder, so the DER is assembled here.
-
 export type PreviewCertificate = { cert: string; key: string };
 
 const PREVIEW_HOST = /^ao-preview-[0-9a-f]{32}\.localhost$/;
@@ -24,8 +15,6 @@ export function previewCertificate(): PreviewCertificate {
 type CertificateVerifier = Pick<Session, "setCertificateVerifyProc">;
 const trusted = new WeakSet<CertificateVerifier>();
 
-// Trusts the preview certificate in one browser session. Every other host and
-// certificate keeps Chromium's own verification (-3).
 export function trustPreviewCertificate(session: CertificateVerifier): void {
 	if (trusted.has(session)) return;
 	trusted.add(session);
@@ -50,9 +39,9 @@ function createPreviewCertificate(): PreviewCertificate {
 		tlv(0x04, sequence(tlv(0x82, Buffer.from("localhost")), tlv(0x82, Buffer.from("*.localhost")))),
 	);
 	const serial = randomBytes(16);
-	serial[0] = (serial[0] & 0x7f) | 0x40; // positive INTEGER in minimal DER: the first byte is never 00
+	serial[0] = (serial[0] & 0x7f) | 0x40;
 	const tbs = sequence(
-		tlv(0xa0, tlv(0x02, Buffer.from([2]))), // v3
+		tlv(0xa0, tlv(0x02, Buffer.from([2]))),
 		tlv(0x02, serial),
 		ecdsaWithSha256,
 		name,

@@ -11,18 +11,11 @@ import (
 )
 
 const (
-	// Hook facts are refreshed by child lifecycle/tool events. If no such event
-	// arrives for this long, a terminal-idle signal can safely recover the
-	// parent from a lost child stop/start hook.
-	subagentFactTTL = 5 * time.Minute
-	// Keep delayed-event tombstones useful without allowing Codex's unbounded
-	// child history to grow the session row forever.
+	subagentFactTTL            = 5 * time.Minute
 	maxSubagentChildTombstones = 128
 	maxSubagentPendingSpawns   = 128
 )
 
-// These are native hook facts, not a second display status. A stopped child id
-// remains to guard against delayed hooks; Claude snapshots can prune it.
 type subagentChildFact struct {
 	Running bool  `json:"running"`
 	At      int64 `json:"at"`
@@ -39,8 +32,6 @@ type subagentActivityFacts struct {
 	PendingSpawns   map[string]int64             `json:"pendingSpawns,omitempty"`
 }
 
-// reduceSubagentActivity combines the parent turn with native child
-// lifetimes before the existing permission/tool precedence rule runs.
 func reduceSubagentActivity(
 	rec domain.SessionRecord, s ports.ActivitySignal, now time.Time,
 ) (ports.ActivitySignal, string, error) {
@@ -64,8 +55,6 @@ func reduceSubagentActivity(
 	var facts subagentActivityFacts
 	if stored != "" {
 		if err := json.Unmarshal([]byte(stored), &facts); err != nil {
-			// Hook facts are derived from the provider stream. A damaged blob
-			// cannot be allowed to reject every subsequent lifecycle signal.
 			facts = subagentActivityFacts{}
 		}
 	}
@@ -91,8 +80,6 @@ func reduceSubagentActivity(
 		}
 		for _, child := range facts.Children {
 			if child.Running {
-				// The parent's idle composer does not prove its background child
-				// stopped. Suppress this observer signal without rewriting facts.
 				s.Valid = false
 				return s, stored, nil
 			}
@@ -124,7 +111,6 @@ func reduceSubagentActivity(
 			}
 		case "subagent-start", "pre-tool-use", "post-tool-use", "post-tool-use-failure", "permission-request", "user-prompt-submit":
 			if !known && at <= facts.SnapshotAt {
-				// A later parent snapshot already proved this child was absent.
 				s.Valid = false
 				return s, stored, nil
 			} else if !known || child.Running ||
@@ -132,22 +118,15 @@ func reduceSubagentActivity(
 				if rec.Harness == domain.HarnessCodex && s.Event == "subagent-start" && (!known || !child.Running) {
 					consumePendingSpawn(&facts)
 				}
-				// Codex's SubagentStop ends a child turn, not its reusable thread.
-				// A later child prompt can start another turn with the same agent_id.
 				if at > child.At {
 					facts.Children[s.SubagentID] = subagentChildFact{Running: true, At: at}
 				}
 			} else {
-				// A delayed child event cannot revive a stopped turn.
 				s.Valid = false
 				return s, stored, nil
 			}
 		}
 	} else if s.Valid && at >= facts.ParentAt {
-		// Claude's permission notification has no agent_id. When children are
-		// running it can describe a child's dialog, not the parent turn.
-		// Keep the displayed block, but leave the parent state for the child's
-		// correlated post-tool-use to reveal when the dialog is resolved.
 		childRunning := false
 		for _, child := range facts.Children {
 			if child.Running {
@@ -178,8 +157,6 @@ func reduceSubagentActivity(
 				facts.Children[id] = subagentChildFact{At: at}
 			}
 		}
-		// The snapshot watermark rejects delayed starts for removed ids, so
-		// tombstones at or before it no longer need to occupy the session row.
 		for id, child := range facts.Children {
 			if !child.Running && child.At <= facts.SnapshotAt {
 				delete(facts.Children, id)
@@ -199,9 +176,6 @@ func reduceSubagentActivity(
 			}
 		}
 	}
-	// A child permission hook must still enter blocked, even while its parent
-	// is active. Correlated tool posts retain their raw active signal so the
-	// existing precedence rule can release an approved dialog.
 	childRunning := hasRunningChild(facts.Children)
 	if s.State.NeedsInput() &&
 		(s.SubagentID != "" || s.Event != "notification" || childRunning || facts.ParentAt >= facts.LastChildAt) {
@@ -284,8 +258,6 @@ func pruneSubagentFacts(facts *subagentActivityFacts, at int64) {
 	}
 }
 
-// A successful Codex spawn tool result can precede the child's start hook.
-// Replace one provisional spawn with the native child identity when it arrives.
 func consumePendingSpawn(facts *subagentActivityFacts) {
 	var oldestID string
 	var oldestAt int64

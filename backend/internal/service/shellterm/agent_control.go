@@ -11,16 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Agents drive their session's shell terminals with `ao pane run|send|read|
-// interrupt`. Each call is scoped to one session: a session can only reach
-// the shells opened in its own tab strip, never another session's shells or
-// AO's command terminals (logins, setup).
-
-// MaxSessionTerminalOutputLines bounds one read of a terminal's screen.
 const MaxSessionTerminalOutputLines = 2000
 
-// findSessionShell returns sessionID's shell terminal with handleID, live or
-// not.
 func (s *Service) findSessionShell(ctx context.Context, sessionID domain.SessionID, handleID string) (ports.RuntimeHandle, error) {
 	handleID = strings.TrimSpace(handleID)
 	if sessionID == "" || handleID == "" {
@@ -39,7 +31,6 @@ func (s *Service) findSessionShell(ctx context.Context, sessionID domain.Session
 		fmt.Sprintf("This session has no terminal %q. Run `ao pane` to list its terminal tab keys.", handleID))
 }
 
-// sessionShell returns sessionID's live shell terminal with handleID.
 func (s *Service) sessionShell(ctx context.Context, sessionID domain.SessionID, handleID string) (ports.RuntimeHandle, error) {
 	handle, err := s.findSessionShell(ctx, sessionID, handleID)
 	if err != nil {
@@ -51,8 +42,6 @@ func (s *Service) sessionShell(ctx context.Context, sessionID domain.SessionID, 
 	return handle, nil
 }
 
-// CloseSessionTerminal closes one of the session's shell terminals, running or
-// exited, as closing its tab does.
 func (s *Service) CloseSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error {
 	handle, err := s.findSessionShell(ctx, sessionID, handleID)
 	if err != nil {
@@ -61,8 +50,6 @@ func (s *Service) CloseSessionTerminal(ctx context.Context, sessionID domain.Ses
 	return s.CloseShellTerminal(ctx, handle.ID)
 }
 
-// TypeIntoSessionTerminal types text into one of the session's shell
-// terminals, followed by Enter when enter is true.
 func (s *Service) TypeIntoSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID, text string, enter bool) error {
 	handle, err := s.sessionShell(ctx, sessionID, handleID)
 	if err != nil {
@@ -77,7 +64,6 @@ func (s *Service) TypeIntoSessionTerminal(ctx context.Context, sessionID domain.
 	return s.runtime.SendInput(ctx, handle, text)
 }
 
-// InterruptSessionTerminal sends Ctrl-C to one of the session's shell terminals.
 func (s *Service) InterruptSessionTerminal(ctx context.Context, sessionID domain.SessionID, handleID string) error {
 	handle, err := s.sessionShell(ctx, sessionID, handleID)
 	if err != nil {
@@ -86,9 +72,6 @@ func (s *Service) InterruptSessionTerminal(ctx context.Context, sessionID domain
 	return s.runtime.SendInput(ctx, handle, "\x03")
 }
 
-// SessionTerminalOutput returns the last lines one of the session's shell
-// terminals shows, as plain text: the rendered screen when the runtime keeps
-// one, else its raw output with control sequences removed.
 func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.SessionID, handleID string, lines int) (string, error) {
 	if lines <= 0 {
 		lines = 200
@@ -99,9 +82,6 @@ func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.Se
 		return "", err
 	}
 	var output string
-	// A rendered screen that reads back empty is a real answer (the terminal
-	// shows nothing); raw output is only for a runtime with no rendered screen,
-	// or one whose rendered read failed.
 	renderedRead := false
 	if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
 		if rendered, styledErr := styled.GetStyledOutput(ctx, handle, lines); styledErr == nil {
@@ -120,8 +100,6 @@ func (s *Service) SessionTerminalOutput(ctx context.Context, sessionID domain.Se
 	for i, line := range trimmed {
 		trimmed[i] = strings.TrimRight(line, " \t\r")
 	}
-	// A rendered screen ends with a newline after its last row; that empty
-	// entry is not a row, and must not use up one of the requested lines.
 	for len(trimmed) > 0 && trimmed[len(trimmed)-1] == "" {
 		trimmed = trimmed[:len(trimmed)-1]
 	}

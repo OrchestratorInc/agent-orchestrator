@@ -16,20 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// requestLogger emits one structured access-log line per request via the
-// daemon's slog logger. Chi's built-in middleware.Logger writes to stdout
-// using stdlib log; reusing the daemon's slog keeps every line on stderr in
-// the same key=value shape as the rest of the daemon (one stream for the
-// Electron supervisor to capture, one format to grep).
-//
-// Status, bytes, and duration come from a wrapped ResponseWriter so the log
-// is accurate even when the handler returns without calling WriteHeader. The
-// request id is read off the context populated by middleware.RequestID, so
-// this middleware must be mounted after it.
-//
-// A 5xx line additionally carries the raw service error recorded by
-// envelope.WriteError: the wire envelope hides internals ("Internal server
-// error"), so without this the cause of a 500 was lost entirely.
 func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) http.Handler {
 	return requestLoggerWithCapture(log, sink, sentryobs.CaptureErrorAsync)
 }
@@ -72,15 +58,9 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 						errorCode = captured.Code
 					}
 					errorType := telemetrymeta.ErrorType(capErr)
-					// Codex account management is absent for this process. The
-					// renderer holds one quiet stream instead of treating that
-					// expected condition as a fault. Other 5xx still go to
-					// PostHog and, when ShouldCaptureStatus allows, to Sentry once.
 					if errorCode == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" {
 						return
 					}
-					// Group the same code or bounded cause type at a registered
-					// route together without using request or error text.
 					groupCode := errorCode
 					if groupCode == "" {
 						if errorType != "unknown" {
@@ -135,12 +115,6 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							Payload:    payload,
 						})
 					}
-					// Sentry keeps safe diagnostic fields and stack frames, but
-					// replaces error text before sending.
-					// A plain 503 (transient contention) is excluded by
-					// ShouldCaptureStatus. A 503 is still captured when its code is
-					// a registered fault or its cause is a server-side deadline,
-					// because those are faults and hangs, not contention.
 					category := "http_5xx"
 					captureSentry := sentryobs.ShouldCaptureStatus(ww.Status())
 					if !captureSentry {
@@ -154,8 +128,6 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					if capErr != nil && errorCode == "LINK_PREVIEW_FETCH_FAILED" && ww.Status() == http.StatusBadGateway {
 						captureSentry = false
 					}
-					// An unfinished Codex sign-in is user setup state, even when
-					// its staging step hit a deadline.
 					if errorCode == "CODEX_ACCOUNT_SETUP_INCOMPLETE" {
 						captureSentry = false
 					}
@@ -184,10 +156,6 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 	}
 }
 
-// captureFaultCode sends a registered daemon fault that answered with a 4xx to
-// Sentry. Ordinary 4xx (bad input, not found, expected conflicts) stay out:
-// only codes listed in sentryobs.IsFaultCode qualify. PostHog's ao.http.5xx is
-// untouched; these requests already carry their own product events.
 func captureFaultCode(r *http.Request, status int, captured envelope.CapturedError, captureHTTPError captureHTTPErrorFunc) {
 	errorKind, errorCode := "", captured.Code
 	if captured.Err != nil {

@@ -39,15 +39,12 @@ func (s *Service) trackerIDForIssue(cfg ports.SpawnConfig, project domain.Projec
 	if issue == "" {
 		return domain.TrackerID{}, false
 	}
-	// 1. Try GitHub URL or owner/repo#N native form.
 	if native, ok := canonicalGitHubIssueNative(issue); ok {
 		return domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: native}, true
 	}
-	// 2. Try GitLab issue URL (/-/issues/<iid> pattern).
 	if native, host, ok := canonicalGitLabIssueURL(issue); ok {
 		return domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: native, Host: host}, true
 	}
-	// 3. Plain issue number — resolve repo from SCM origin or tracker-provider hint.
 	n, err := strconv.Atoi(issue)
 	if err != nil || n <= 0 {
 		return domain.TrackerID{}, false
@@ -63,18 +60,9 @@ func (s *Service) repoForTracker(project domain.ProjectRecord, fallbackProvider 
 	if s.scm != nil {
 		repo, ok := s.scm.ParseRepository(project.RepoOriginURL)
 		if ok && repo.Provider != "" && repo.Repo != "" {
-			// SCM classified the origin (e.g. "github" or "gitlab"). Use the
-			// resolved provider so the multi-tracker dispatches to the
-			// correct adapter. The host is resolved from the SCM origin so
-			// self-managed GitLab instances route correctly; gitlab.com and
-			// GitHub always produce "" (zero value).
 			return domain.TrackerProvider(repo.Provider), normalizeTrackerHost(repo.Provider, repo.Host), repo.Repo, true
 		}
-		// SCM could not classify the origin (ok == false), or classified it
-		// with an empty repo; fall through to the URL-based heuristic below.
 	}
-	// SCM not available or couldn't resolve — use the tracker-provider hint
-	// from the CLI flag (defaults to "github" for backward compat).
 	host, owner, repo, err := repoFromURL(project.RepoOriginURL)
 	if err != nil {
 		return "", "", "", false
@@ -86,11 +74,6 @@ func (s *Service) repoForTracker(project domain.ProjectRecord, fallbackProvider 
 	return provider, normalizeTrackerHost(string(provider), host), owner + "/" + repo, true
 }
 
-// normalizeTrackerHost returns the host to set on a TrackerID/TrackerRepo.
-// For GitHub, the host is always "" — GitHub tracker IDs don't use Host.
-// For GitLab, "gitlab.com" and "www.gitlab.com" normalize to "" (the zero
-// value meaning gitlab.com) so that callers don't need to special-case the
-// default host. Self-managed hosts pass through unchanged.
 func normalizeTrackerHost(provider, host string) string {
 	if provider != string(domain.TrackerProviderGitLab) {
 		return ""
@@ -148,20 +131,6 @@ func canonicalGitHubIssueURL(raw string) (string, bool) {
 	return fmt.Sprintf("%s/%s#%d", parts[0], strings.TrimSuffix(parts[1], ".git"), n), true
 }
 
-// canonicalGitLabIssueURL parses a GitLab issue URL into the native
-// "project-path#iid" form and extracts the host. GitLab issue URLs use
-// the /-/issues/ separator:
-//
-//   - https://gitlab.com/owner/repo/-/issues/123
-//   - https://gitlab.com/group/subgroup/repo/-/issues/123
-//   - https://gitlab.internal/owner/repo/-/issues/123  (self-managed)
-//
-// Any host is accepted because self-managed GitLab instances use arbitrary
-// hostnames; the /-/issues/ path pattern is distinctive to GitLab.
-//
-// The returned host is the URL hostname for self-managed instances (e.g.
-// "gitlab.internal") and "" for gitlab.com (the zero value, meaning the
-// default host) so that callers can set TrackerID.Host without special-casing.
 func canonicalGitLabIssueURL(raw string) (native, host string, ok bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -175,7 +144,7 @@ func canonicalGitLabIssueURL(raw string) (native, host string, ok bool) {
 	if idx <= 0 {
 		return "", "", false
 	}
-	projectPath := path[:idx] // "owner/repo" or "group/subgroup/repo"
+	projectPath := path[:idx]
 	rest := path[idx+len("/-/issues/"):]
 	if rest == "" {
 		return "", "", false
@@ -194,11 +163,9 @@ func canonicalGitLabIssueURL(raw string) (native, host string, ok bool) {
 		return "", "", false
 	}
 	parts[len(parts)-1] = strings.TrimSuffix(parts[len(parts)-1], ".git")
-	// u.Host preserves the port (e.g. "gitlab.internal:8443") so that
-	// self-managed hosts with non-default ports match AllowedHosts entries.
 	host = u.Host
 	if strings.EqualFold(host, "gitlab.com") || strings.EqualFold(host, "www.gitlab.com") {
-		host = "" // zero value means gitlab.com
+		host = ""
 	}
 	return fmt.Sprintf("%s#%d", strings.Join(parts, "/"), n), host, true
 }

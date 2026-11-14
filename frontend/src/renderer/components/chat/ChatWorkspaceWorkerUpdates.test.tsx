@@ -1,9 +1,3 @@
-/**
- * The orchestrator chat draws worker traffic as rows. These pin what a reader
- * keeps when it does: a quiet reply still copies and rolls back, a reply that asks
- * something stays a full reply, and a turn with no reply still shows its work.
- */
-
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -88,7 +82,6 @@ describe("orchestrator worker updates", () => {
 		};
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
 
-		// The agents a turn spawned fold with its work.
 		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
 		const group = screen.getByRole("button", { name: "Spawned 1 agent" });
 		expect(group).toHaveAttribute("aria-expanded", "false");
@@ -289,7 +282,6 @@ describe("orchestrator worker updates", () => {
 			summary: "Steer", createdAt: at(1), detail: { event: "steer", senderSessionId: "proj-7", senderDisplayName: "Menus", text: "Rebased." },
 		};
 		const carried = report("t-report", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?");
-		// Work before the steer, so the steer arrives mid-turn rather than with the prompt.
 		const items: ConversationItem[] = [prompt, { ...command("run", 1, "ao status"), sequence: 11 }, steer, { ...carried, sequence: 13 }, reply("run", 2, "Both moved.")];
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(workspaceQueryKey, []);
@@ -299,7 +291,6 @@ describe("orchestrator worker updates", () => {
 					<ChatWorkspace
 						snapshot={{
 							...chatFixtureEmpty, latestSequence: 22, items,
-							// The batched report turn is not among the snapshot's turns, as the daemon sends it.
 							turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(1), completedAt: at(2) }],
 							batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
 						}}
@@ -375,7 +366,6 @@ describe("agent messages in a worker chat", () => {
 	it("shares one plugin list until the set of sessions changes, so session events do not re-parse messages", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(workspaceQueryKey, workspaces);
-		// A chat reads its link workspaces once, in its link provider.
 		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}><ChatLinkProvider>{children}</ChatLinkProvider></QueryClientProvider>;
 		const { result } = renderHook(() => ({ plugins: usePlainReferences(), workspaces: useChatLinkWorkspaces() }), { wrapper });
 		const first = result.current.plugins;
@@ -416,7 +406,6 @@ describe("messages an outside tool relayed", () => {
 		expect(message).not.toHaveTextContent("[via");
 		expect(message).not.toHaveTextContent("191450");
 		expect(screen.queryByText("automation")).not.toBeInTheDocument();
-		// The orchestrator's answer stays a full reply: the tool asked, not a worker.
 		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
 	});
 

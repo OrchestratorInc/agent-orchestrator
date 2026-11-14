@@ -96,7 +96,6 @@ it("opens an imported chat from the result line and from its row", async () => {
 	fireEvent.click(await screen.findByRole("checkbox", { name: "Import Fix parser" }));
 	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
 	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
-	// A Standalone chat has no project to show.
 	expect(screen.queryByRole("button", { name: "Show project" })).not.toBeInTheDocument();
 	fireEvent.click(screen.getByRole("button", { name: "Open chat" }));
 	expect(openSession).toHaveBeenLastCalledWith(undefined, "standalone-1");

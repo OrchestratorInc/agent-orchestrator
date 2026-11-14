@@ -9,12 +9,10 @@ import type { WorkspaceShareSource, WorkspaceSummary } from "../../types/workspa
 
 const STORAGE_PREFIX = "ao.cloud.seenShares.v1:";
 const MAX_TOASTS = 3;
-/** The sidebar's shared-projects query (useSharedCloudWorkspacesQuery), watched rather than run again. */
 const SHARED_WORKSPACES_KEY = "cloud-shared-workspaces";
 
 type ShareArrival = { key: string; workspace: WorkspaceSummary; sessionId?: string; source: WorkspaceShareSource };
 
-/** Every share in the list, one per project or session, keyed by its grant. */
 export function shareArrivals(workspaces: WorkspaceSummary[]): ShareArrival[] {
 	const arrivals: ShareArrival[] = [];
 	for (const workspace of workspaces) {
@@ -41,22 +39,12 @@ function writeSeen(storageKey: string, keys: Iterable<string>) {
 	try {
 		window.localStorage.setItem(storageKey, JSON.stringify([...keys].slice(-2000)));
 	} catch {
-		// A full or blocked store only means a share may be announced again.
 	}
 }
 
-/**
- * Says once when someone shares a session or project with this person while
- * AO is open, with a way to open it. The first list after signing in is
- * remembered silently, so nothing old is announced, and a link the person
- * redeemed themselves is never announced.
- */
 export function SharedWithYouNotifier() {
 	const { t } = useTranslation();
 	const { baseUrl, userId, ready } = useCloudCp();
-	// Shares from people and teams are part of Teams: a build without it
-	// announces nothing (and keeps no record, so turning Teams on later
-	// starts silently, as at sign-in).
 	const teams = useTeamsEnabled();
 	const queryClient = useQueryClient();
 	const navigateToSession = useNavigateToSession();
@@ -76,8 +64,6 @@ export function SharedWithYouNotifier() {
 			}
 			const fresh = arrivals.filter((arrival) => !seen.has(arrival.key));
 			if (fresh.length === 0) return;
-			// A link the person opened themselves isn't news to them; only a
-			// share someone else made (directly or through a team) is announced.
 			const announced = fresh.filter((arrival) => arrival.source.source === "direct" || arrival.source.source === "team");
 			for (const arrival of announced.slice(0, MAX_TOASTS)) {
 				const session = arrival.sessionId ? arrival.workspace.sessions.find((candidate) => candidate.id === arrival.sessionId) : undefined;

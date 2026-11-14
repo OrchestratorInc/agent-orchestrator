@@ -10,8 +10,6 @@ import (
 
 func init() { browseProviderCredentials["crush"] = crushConfiguredProviders }
 
-// crushProviderKeyEnv is the key variable of Crush's bundled provider list, for
-// when its cached providers.json is missing.
 var crushProviderKeyEnv = map[string]string{
 	"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY",
 	"xai": "XAI_API_KEY", "zai": "ZAI_API_KEY", "kimi-coding": "KIMI_CODING_API_KEY",
@@ -38,13 +36,6 @@ type crushProviderConfig struct {
 
 var crushEnvRefPattern = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
 
-// crushConfiguredProviders reports the providers Crush can authenticate: a
-// provider in crush.json (global config, global data, then the workspace's)
-// with a literal api_key, an api_key whose $VAR references are all set, or a
-// stored OAuth token; and a provider from Crush's provider list whose key
-// variable is set, or, for Bedrock and Vertex AI, whose cloud credentials
-// Crush itself requires are present. A disabled provider never counts, and an
-// api_key that runs a $(command) is not run, so it is not counted.
 func crushConfiguredProviders(workingDir string, env map[string]string) []string {
 	home := credentialPresence(envValue(env, "HOME"))
 	if home == "" {
@@ -71,7 +62,6 @@ func crushConfiguredProviders(workingDir string, env map[string]string) []string
 		paths = append(paths, filepath.Join(workingDir, "crush.json"), filepath.Join(workingDir, ".crush.json"))
 	}
 
-	// Later files override earlier ones field by field, as Crush merges them.
 	configured := map[string]*crushProviderConfig{}
 	for _, path := range paths {
 		raw, err := readModelConfig(path)
@@ -159,8 +149,6 @@ func crushConfiguredProviders(workingDir string, env map[string]string) []string
 	return providers
 }
 
-// crushKeyResolves reports whether an api_key setting yields a key without
-// running anything: a literal value, or $VAR references that are all set.
 func crushKeyResolves(value string, present func(string) bool) bool {
 	value = strings.TrimSpace(value)
 	if value == "" || strings.Contains(value, "$(") {
@@ -175,8 +163,6 @@ func crushKeyResolves(value string, present func(string) bool) bool {
 	return len(refs) > 0 || credentialPresence(value) != ""
 }
 
-// crushCloudCredentials mirrors the credentials Crush requires before it
-// offers Bedrock or Vertex AI, which have no API key of their own.
 func crushCloudCredentials(providerType string, present func(string) bool) bool {
 	switch providerType {
 	case "bedrock":

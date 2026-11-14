@@ -7,7 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Frames captured from Copilot CLI 1.0.93 in a 120-column terminal.
 var (
 	fixtureRule = strings.Repeat("─", 120)
 	fixtureIdle = strings.Join([]string{
@@ -44,7 +43,6 @@ var (
 	}, "\n")
 )
 
-// Idle footers Copilot truncates in 80- and 45-column panes.
 var fixtureNarrowIdle = []string{
 	strings.Join([]string{strings.Repeat("─", 80), "❯", strings.Repeat("─", 80),
 		" ← open sidebar · Interactive · Allow All · / commands          ao-probe · Auto"}, "\n"),
@@ -52,8 +50,6 @@ var fixtureNarrowIdle = []string{
 		" Interactive · Allow All · / ao-probe · Auto"}, "\n"),
 }
 
-// Block-style frames as Copilot CLI 1.0.96 renders them in AO's own terminal,
-// taken from GetStyledOutput of a live pty-host (width shortened).
 var (
 	blockTop     = "\x1b[38;2;129;139;152m╻\x1b[38;2;20;27;34m" + strings.Repeat("▄", 60) + "\x1b[m"
 	blockBottom  = "\x1b[38;2;129;139;152m╹\x1b[38;2;20;27;34m" + strings.Repeat("▀", 60) + "\x1b[m"
@@ -104,9 +100,6 @@ func TestInspectTerminalSurfaceNarrowIdle(t *testing.T) {
 	}
 }
 
-// Message delivery and the activity observer feed these capabilities the raw
-// output stream, which never shows Copilot's composer. Declaring them would
-// stall delivery to a Copilot terminal.
 func TestPluginDoesNotDeclareRawOutputDetectors(t *testing.T) {
 	var plugin any = New()
 	if _, ok := plugin.(ports.TerminalActivityDetector); ok {

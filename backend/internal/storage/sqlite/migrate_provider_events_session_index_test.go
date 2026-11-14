@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Break caught: a session delete's cascade into conversation_provider_events
-// full-scanned the table, holding the writer for ~30s on large databases.
 func TestProviderEventsSessionLookupUsesIndex(t *testing.T) {
 	db := openMigratedTestDB(t)
 	rows, err := db.Query(`EXPLAIN QUERY PLAN SELECT 1 FROM conversation_provider_events WHERE session_id = ?`, "s-1")

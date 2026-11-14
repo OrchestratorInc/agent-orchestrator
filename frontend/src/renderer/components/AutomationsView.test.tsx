@@ -69,9 +69,7 @@ function renderView(ui: ReactNode = <AutomationsView />) {
 	return render(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}><TooltipProvider>{children}</TooltipProvider></QueryClientProvider> });
 }
 
-/** Opens a blank create form through the page's New automation menu. */
 async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
-	// With automations the toolbar's menu holds the action; the empty state has a single plain button.
 	const trigger = screen.getByRole("button", { name: "New automation" });
 	await user.click(trigger);
 	if (trigger.getAttribute("aria-haspopup") === "menu") await user.click(await screen.findByRole("menuitem", { name: "Start from scratch" }));
@@ -84,12 +82,10 @@ describe("AutomationsView", () => {
 		renderView();
 		expect(screen.getByRole("heading", { name: "Automations" })).toBeInTheDocument();
 		expect(screen.getByText("No automations yet")).toBeInTheDocument();
-		// The empty state owns the only create action; the toolbar waits for a list.
 		expect(screen.getAllByRole("button", { name: "New automation" })).toHaveLength(1);
 		expect(screen.queryByRole("button", { name: "Search automations" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Filter automations" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Sort" })).not.toBeInTheDocument();
-		// Starters lead the page; the empty message sits below them.
 		const starters = screen.getByRole("heading", { name: "Start with a template" });
 		expect(starters.compareDocumentPosition(screen.getByText("No automations yet")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
@@ -136,7 +132,6 @@ describe("AutomationsView", () => {
 		const row = screen.getByRole("heading", { name: "Morning triage" });
 		const starters = screen.getByRole("heading", { name: "Start with a template" });
 		expect(screen.getByRole("button", { name: "PR review inbox" })).toBeInTheDocument();
-		// Starters stay first; the list and its toolbar follow them.
 		expect(starters.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(starters.compareDocumentPosition(screen.getByRole("group", { name: "Status" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByText("No automations yet")).not.toBeInTheDocument();
@@ -154,7 +149,6 @@ describe("AutomationsView", () => {
 	});
 
 	it("offers no Cloud project or Cloud standalone agent as an automation's project", async () => {
-		// The local daemon runs automations and answers "Unknown project" for a Cloud one.
 		mocks.workspaces = [
 			{ id: "demo", name: "Demo" },
 			{ id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1", sessions: [] },
@@ -388,7 +382,6 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("combobox", { name: "Project" })).toHaveTextContent("missing");
 		expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeDisabled();
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), " renamed");
-		// A settled error provides no defaults; the fallback and saved tuning remain.
 		mocks.defaultsLoaded = true;
 		view.rerender(<AutomationsView />);
 		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled());
@@ -740,7 +733,6 @@ describe("AutomationsView", () => {
 		expect(within(status).getByRole("button", { name: "Paused 1" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.queryByRole("heading", { name: "Friday review" })).not.toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Paused review" })).toBeInTheDocument();
-		// The pressed pill is the status cue, so no status chip repeats it.
 		expect(screen.queryByRole("button", { name: /Remove filter Status/ })).not.toBeInTheDocument();
 		await userEvent.click(within(status).getByRole("button", { name: "Enabled 1" }));
 		expect(screen.getByRole("heading", { name: "Friday review" })).toBeInTheDocument();

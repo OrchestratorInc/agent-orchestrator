@@ -18,83 +18,29 @@ import (
 
 const nativeEditHandoffLimit = 45 * time.Second
 
-// Conversation history operations: rollback, fork, and the thread title.
-//
-// The three share one property that shapes everything here: they change the
-// provider's own record of the conversation, not AO's view of it. Rollback is the
-// sharp one — it changes what the agent REMEMBERS — so AO's durable rows have to
-// follow, or the timeline goes on showing prose the agent cannot recall.
-//
-// Each is optional on the driver and feature-detected, following the Models
-// precedent: a provider that cannot do one of these gets a typed refusal the client
-// can render as an absent affordance rather than a failed request.
-
-// Typed outcomes for the history operations. Each one distinguishes a permanent
-// answer from something worth retrying, because "this agent cannot undo" and "stop
-// the agent first" ask completely different things of the person reading it.
 var (
-	// ErrRollbackUnsupported reports a provider that cannot discard history.
-	ErrRollbackUnsupported = errors.New("chat driver cannot roll back history")
-	// ErrForkUnsupported reports a provider that cannot branch a conversation.
-	ErrForkUnsupported = errors.New("chat driver cannot fork a conversation")
-	// ErrRenameUnsupported reports a provider whose thread carries no title.
-	ErrRenameUnsupported = errors.New("chat driver cannot set a thread title")
-	// ErrOrchestratorRename refuses a title for the project orchestrator's
-	// conversation: the orchestrator is never renamed.
-	ErrOrchestratorRename = errors.New("the project orchestrator cannot be renamed")
-	// ErrTurnRunning refuses a rollback while the agent is working. Retryable once
-	// the turn ends, which is why it is separate from every other refusal here.
-	ErrTurnRunning = errors.New("cannot roll back while a turn is running")
-	// ErrTurnNotRollbackable reports a turn the provider never accepted. There is
-	// no provider history to discard, so an undo would only hide AO's own rows and
-	// leave the agent remembering more than the timeline shows.
-	ErrTurnNotRollbackable = errors.New("turn was never dispatched to the provider")
-	// ErrTurnProviderMismatch reports a durable turn owned by an earlier agent
-	// provider. Its opaque provider turn id is invalid in the current controller.
-	ErrTurnProviderMismatch = errors.New("conversation turn belongs to a different agent provider")
-	// ErrFilesNotRestorable refuses a rollback asked to restore files AO has no
-	// way to put back. Nothing was changed; a conversation-only rollback still works.
-	ErrFilesNotRestorable = errors.New("chat rollback cannot restore files")
-	// ErrFilesChanged refuses a file restore whose preview no longer matches the
-	// worktree: files changed after the user was shown the list. Nothing was
-	// changed; a fresh preview lists what a restore would do now.
-	ErrFilesChanged = errors.New("the worktree changed since the rollback preview")
-	// ErrTitleRequired refuses a blank thread title. The provider refuses one too,
-	// and reporting it here keeps the error about the caller's input.
-	ErrTitleRequired = errors.New("thread title is required")
-	// ErrProviderRefused reports something the provider declined on its own terms
-	// while the conversation stayed healthy. It is a conflict, never an internal
-	// failure: the message it carries is the provider's own explanation.
-	ErrProviderRefused = errors.New("the agent refused the request")
-	// ErrEditTurnInvalid reports a prompt that cannot be safely reconstructed from
-	// durable history, including malformed legacy structured content.
-	ErrEditTurnInvalid = errors.New("conversation turn cannot be edited")
-	// ErrEditDeliveryUncertain means AO reserved the edit handle but cannot prove
-	// whether provider delivery and the durable branch result committed together.
-	ErrEditDeliveryUncertain = errors.New("edit delivery is uncertain")
-	// ErrEditIdempotencyConflict refuses reuse of one edit handle for a different
-	// source prompt or replacement payload.
+	ErrRollbackUnsupported     = errors.New("chat driver cannot roll back history")
+	ErrForkUnsupported         = errors.New("chat driver cannot fork a conversation")
+	ErrRenameUnsupported       = errors.New("chat driver cannot set a thread title")
+	ErrOrchestratorRename      = errors.New("the project orchestrator cannot be renamed")
+	ErrTurnRunning             = errors.New("cannot roll back while a turn is running")
+	ErrTurnNotRollbackable     = errors.New("turn was never dispatched to the provider")
+	ErrTurnProviderMismatch    = errors.New("conversation turn belongs to a different agent provider")
+	ErrFilesNotRestorable      = errors.New("chat rollback cannot restore files")
+	ErrFilesChanged            = errors.New("the worktree changed since the rollback preview")
+	ErrTitleRequired           = errors.New("thread title is required")
+	ErrProviderRefused         = errors.New("the agent refused the request")
+	ErrEditTurnInvalid         = errors.New("conversation turn cannot be edited")
+	ErrEditDeliveryUncertain   = errors.New("edit delivery is uncertain")
 	ErrEditIdempotencyConflict = errors.New("edit idempotency handle belongs to a different request")
-	// ErrEditDeliveryRejected reports a durably rejected generic failure, including
-	// local preparation failures that prove the replacement prompt was not sent.
-	// Ambiguous failures after provider dispatch remain reserved.
-	ErrEditDeliveryRejected = errors.New("edit delivery was rejected")
-	// ErrBranchProviderMismatch refuses a historical branch whose opaque provider
-	// conversation id belongs to an earlier agent ownership epoch.
-	ErrBranchProviderMismatch = errors.New("conversation branch belongs to a different agent provider")
+	ErrEditDeliveryRejected    = errors.New("edit delivery was rejected")
+	ErrBranchProviderMismatch  = errors.New("conversation branch belongs to a different agent provider")
 )
 
-// providerRefusal is satisfied by driver errors that mean "the provider said no"
-// rather than "the call did not get through".
-//
-// Declared here and satisfied structurally, so this package needs no import of any
-// adapter and no adapter needs to know this package's vocabulary. Without the
-// distinction every ordinary refusal would surface as a 500.
 type providerRefusal interface {
 	ChatRefusal() bool
 }
 
-// classify folds a driver error into the typed vocabulary above.
 func classify(err error) error {
 	if err == nil {
 		return nil
@@ -106,21 +52,8 @@ func classify(err error) error {
 	return err
 }
 
-// maxTitleRunes bounds a thread title, matching the automatic-semantic-task-titles
-// design's contract. Longer output is treated as generation failure rather than
-// truncated into something that reads like a sentence someone cut off.
 const maxTitleRunes = 80
 
-// Rollback discards a turn and everything after it, from the agent's memory and
-// from AO's timeline. With filePlanID, the PlanID of the RollbackPreview the user
-// confirmed, it also puts the session's worktree back to the snapshot taken when
-// that turn was sent, and refuses with ErrFilesChanged if the files changed since.
-//
-// Refused while a turn is running, and refused BEFORE the provider is asked. The
-// provider refuses this too, but relying on that alone would make the outcome a
-// race: AO would have already decided to hide rows by the time it learned it could
-// not. The controller holds its dispatch lock across the check and the call, so
-// within AO the answer cannot change underneath.
 func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID, filePlanID string) (int, error) {
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -133,21 +66,6 @@ func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID, fil
 	return controller.Rollback(ctx, turnID, filePlanID)
 }
 
-// ForkConversation branches this session's provider conversation and returns the
-// new provider handle.
-//
-// Deliberately not reachable over HTTP yet, and the reason is not effort. AO's
-// schema allows one conversation per session, so a fork has to become a second AO
-// session — and a second session gets a fresh worktree, while the provider's own
-// documentation is explicit that a fork copies conversation history and does NOT
-// revert or copy the file changes the agent made. The forked agent would remember
-// editing files that are not in its tree, which is a worse failure than the absent
-// feature: it would look like it worked.
-//
-// Landing a fork therefore needs the spawn path to adopt the source session's
-// worktree state, which is a workspace decision and not a chat one. Until then this
-// exists so the provider call is written, tested, and honest about what it returns,
-// rather than half-wired into a UI that cannot be correct.
 func (s *Service) ForkConversation(ctx context.Context, id domain.SessionID) (string, error) {
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -165,9 +83,6 @@ func (s *Service) ForkConversation(ctx context.Context, id domain.SessionID) (st
 	return forked, nil
 }
 
-// EditMessage forks immediately before one durable human prompt, swaps the live
-// controller to that provider branch, then sends the edited text with the exact
-// structured content stored for the original prompt.
 func (s *Service) EditMessage(
 	ctx context.Context,
 	id domain.SessionID,
@@ -314,16 +229,11 @@ func (s *Service) EditMessage(
 		forkAnchor := anchor.PreviousProviderTurnID
 		providerConversationID, err = forker.Fork(ctx, &forkAnchor)
 		if err == nil {
-			// Fork succeeded, so closing the source writer is now irreversible.
-			// Finish or recover this boundary independently of request cancellation.
 			detachedCtx, cancel := context.WithTimeout(
 				context.WithoutCancel(ctx), nativeEditHandoffLimit)
 			defer cancel()
 			operationCtx = detachedCtx
 			sourceStopInitiated = true
-			// Codex loads a fork into the source app-server, which remains that
-			// child's active writer until the process exits. Close the fenced, idle
-			// source before another driver process resumes the child.
 			if closeErr := source.closeForBranchHandoff(operationCtx); closeErr != nil {
 				err = fmt.Errorf("close source writer after fork: %w", closeErr)
 			} else {
@@ -344,8 +254,6 @@ func (s *Service) EditMessage(
 			}
 		}
 	} else {
-		// Every Start owns a fresh namespace for provider-issued turn/item IDs,
-		// even when editing the first prompt requires no replay payload.
 		providerScopeID = s.newID()
 		if needsReplay {
 			var replayErr error
@@ -357,8 +265,6 @@ func (s *Service) EditMessage(
 					fmt.Errorf("prepare edited conversation: %w", replayErr))
 			}
 		}
-		// A fresh replay process is also a controller replacement. Stop the old
-		// bearer holder before rotating its verifier and launching the child.
 		detachedCtx, cancel := context.WithTimeout(
 			context.WithoutCancel(ctx), nativeEditHandoffLimit)
 		defer cancel()
@@ -435,8 +341,7 @@ func (s *Service) EditMessage(
 		CreatedAt: s.now(), Strategy: domain.ConversationBranchStrategyNative,
 		ProviderScopeID:   providerScopeID,
 		ProviderIDsScoped: providerScopeID != "" || sourceBranch.ProviderIDsScoped,
-		// An edit after a switch is still on the agent the switch brought in.
-		HandoffNote: sourceBranch.HandoffNote,
+		HandoffNote:       sourceBranch.HandoffNote,
 	}
 	if replayContent.Type != "" {
 		branch.Strategy = domain.ConversationBranchStrategyApproximateContext
@@ -462,9 +367,6 @@ func (s *Service) EditMessage(
 		}
 		return reject(EditMessageResult{}, activateErr)
 	}
-	// Consume the replacement privately while its bootstrap prompt is recorded.
-	// The source remains the registry owner with its intake fence installed, so a
-	// concurrent ordinary send cannot become the first turn on the new branch.
 	replacement.start()
 	if replayContent.Type != "" {
 		msg.Content = append([]ports.ChatContent{replayContent}, msg.Content...)
@@ -475,8 +377,6 @@ func (s *Service) EditMessage(
 		if err := s.store.ActivateConversationBranch(operationCtx, id, source.conversation.ID,
 			anchor.SourceBranchID, source.ProviderConversationID(), source.generation, s.now()); err != nil {
 			sendErr = errors.Join(sendErr, fmt.Errorf("restore source after rejected edit: %w", err))
-			// The durable head still belongs to the child. Publish its controller
-			// rather than reopening a source generation the store just rejected.
 			if installErr := s.installStartedBranchController(
 				operationCtx, id, source, replacement, anchor.SourceBranchID); installErr != nil {
 				return result, errors.Join(sendErr, installErr)
@@ -505,10 +405,6 @@ func (s *Service) EditMessage(
 	return result, sendErr
 }
 
-// approximateReplayContent renders only the durable textual transcript before the
-// edited prompt. Tool calls, approvals, and file changes are intentionally not
-// replayed: doing so could repeat side effects. Providers that support native
-// fork remain on that exact-history path instead.
 const approximateReplayBudget = 24 * 1024
 
 func (s *Service) approximateReplayContent(
@@ -617,9 +513,6 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 	if err != nil {
 		return "", false, fmt.Errorf("encode replay context: %w", err)
 	}
-	// The all-messages envelope uses `false`, which is one byte larger than the
-	// pessimistic `true` admission check above. Drop oldest context if that final
-	// byte crosses the hard wire budget.
 	for len(encoded) > approximateReplayBudget && len(selected) > 0 {
 		selected = selected[1:]
 		truncated = true
@@ -642,12 +535,6 @@ func withoutInternalReplayContent(content []ports.ChatContent) []ports.ChatConte
 	return filtered
 }
 
-// sendEditedMessage always attaches the attempted replacement to its branch. A
-// transport error is ambiguous: the provider may have accepted the prompt before
-// the connection failed, so deleting and blindly retrying it could execute the
-// work twice. Keeping the failed turn makes that uncertainty durable and leaves
-// both alternatives navigable after restart. A provider-declared refusal is
-// conclusive, so AO safely returns the user to the source branch.
 func (s *Service) sendEditedMessage(
 	ctx context.Context,
 	sourceBranchID, activeBranchID string,
@@ -662,9 +549,6 @@ func (s *Service) sendEditedMessage(
 		Turn:           turn,
 	}
 	if turn.ID == "" {
-		// Nothing durable was created, so the provider was never dispatched. This
-		// includes a duplicate client-message id: treating the controller's empty
-		// no-op result as a successful edit would leave an invisible active child.
 		if sendErr == nil {
 			sendErr = errors.New("edited message was not dispatched")
 		}
@@ -701,7 +585,6 @@ func (s *Service) sendEditedMessage(
 	return result, nil
 }
 
-// EditMessageResult identifies the source, selected child, and replacement turn.
 type EditMessageResult struct {
 	SourceBranchID string
 	ActiveBranchID string
@@ -786,9 +669,6 @@ func replayEditRejection(delivery domain.ConversationEditDelivery) error {
 	return storedEditRejection{message: delivery.RejectionMessage, cause: cause}
 }
 
-// classifyEditRejection separates facts that prove no provider delivery occurred
-// from generic errors whose delivery outcome the Controller.Send contract cannot
-// establish. Only the former may settle a reservation as rejected.
 func classifyEditRejection(
 	err error,
 ) (domain.ConversationEditRejectionKind, bool, error) {
@@ -828,11 +708,6 @@ func (s *Service) rejectEditDelivery(
 		ctx, conversationID, clientMessageID, result, kind, classified)
 }
 
-// rejectUndispatchedEditDelivery settles a reserved edit after local preparation
-// proves that the edited prompt never reached Controller.Send. Generic provider
-// and transport errors after Send remain uncertain; local replay/capability
-// failures are safe to record as rejected so the same delivery ID cannot become
-// permanently reserved after a lost response or restart.
 func (s *Service) rejectUndispatchedEditDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID string,
@@ -870,8 +745,6 @@ func (s *Service) persistRejectedEditDelivery(
 	return result, cause
 }
 
-// ActivateBranch resumes a durable provider branch in the same worktree and
-// swaps controllers without sending a new prompt.
 func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
 	_, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -911,9 +784,6 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 		return "", err
 	}
 	if branch.ProviderBindingID != activeBranch.ProviderBindingID {
-		// Provider scopes may differ between approximate siblings, but their
-		// durable binding epoch must match. Crossing it could hand an opaque
-		// conversation handle to a different adapter/configuration owner.
 		return "", ErrBranchProviderMismatch
 	}
 	if err := source.BeginIdleBranchHandoff(ctx); err != nil {
@@ -997,12 +867,6 @@ func (s *Service) branchLaunchConfig(
 ) (StartConfig, ports.ChatDriver, error) {
 	s.mu.RLock()
 	cfg, ok := s.startConfigs[source.owner()]
-	// Controllers are registered by typed owner. Session history operations still
-	// address the worker by session id, so use the source's owner here rather
-	// than treating the legacy session index as the authority. In particular, a
-	// branch replacement must update the typed entry before the old controller's
-	// cleanup goroutine runs, otherwise that goroutine can remove the new
-	// session controller.
 	current := s.ownerControllers[source.owner()]
 	s.mu.RUnlock()
 	if !ok || current != source {
@@ -1026,9 +890,6 @@ func (s *Service) prepareBranchControllerEnv(ctx context.Context, cfg StartConfi
 	return env, nil
 }
 
-// restoreClosedSourceController reopens the original provider branch when a
-// native edit had to release its writer but the replacement could not be kept.
-// The new generation fences any late events from the process that was closed.
 func (s *Service) restoreClosedSourceController(
 	ctx context.Context,
 	id domain.SessionID,
@@ -1045,8 +906,6 @@ func (s *Service) restoreClosedSourceController(
 	recoveryCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx), nativeEditHandoffLimit)
 	defer cancel()
-	// A closed event stream can project "stopped" before host termination
-	// succeeds. Preserve any termination error before rotating its credentials.
 	if err := source.closeForBranchHandoff(recoveryCtx); err != nil {
 		return fmt.Errorf("confirm source stopped before failed native edit recovery: %w", err)
 	}
@@ -1055,13 +914,10 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("rotate source browser capability after failed native edit: %w", err)
 	}
-	// The source comes back with the settings it had when it stopped, not the
-	// ones it was launched with: the user may have changed them since.
 	conversation := source.conversation
 	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
-		// A branch whose agent never answered may have no native session to resume.
 		FreshIfMissing: s.branchUnanswered(recoveryCtx, id, conversation.ID, branch),
 		DataDir:        cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort,
@@ -1074,8 +930,6 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("resume source after failed native edit: %w", err)
 	}
-	// A fresh start in place of the missing session has its own id, and the
-	// branch must name it before it can be activated.
 	if fresh := provider.ProviderConversationID(); fresh != "" && fresh != providerConversationID {
 		if rebinder, ok := s.store.(branchProviderRebinder); ok {
 			if err := rebinder.RebindUnansweredBranchProvider(recoveryCtx, conversation.ID, branch.ID, providerConversationID, fresh); err != nil {
@@ -1111,10 +965,6 @@ func (s *Service) installBranchController(
 	return s.installStartedBranchController(ctx, id, source, replacement, sourceBranchID)
 }
 
-// installStartedBranchController publishes a controller whose provider event
-// stream is already being consumed. Edit bootstraps use this after recording the
-// replacement prompt privately; ordinary branch activation starts and delegates
-// through installBranchController above.
 func (s *Service) installStartedBranchController(
 	ctx context.Context,
 	id domain.SessionID,
@@ -1134,17 +984,10 @@ func (s *Service) installStartedBranchController(
 	}
 	source.prepareBranchHandoffStop()
 	s.ownerControllers[owner] = replacement
-	// Keep the session index as the backwards-compatible lookup path used by
-	// worker chat commands. Review owners never share this index, so replacing a
-	// worker controller cannot affect a reviewer controller for the same session.
 	if owner.Kind == domain.ConversationOwnerSession {
 		s.controllers[id] = replacement
 	}
 	if cfg, ok := s.startConfigs[owner]; ok {
-		// Mirror the owner ActivateConversationBranchSession just made durable,
-		// agent-session identity included. A stale field here fails the next
-		// credential rotation's ownership fence, so a second edit or activation
-		// would report an uncertain delivery and stop the session.
 		cfg.ExpectedControllerOwner.Harness = cfg.Harness
 		cfg.ExpectedControllerOwner.Mode = domain.SessionModeChat
 		cfg.ExpectedControllerOwner.IsTerminated = false
@@ -1176,12 +1019,6 @@ func (s *Service) installStartedBranchController(
 	return nil
 }
 
-// SetTitle names the provider's thread and returns the normalized title.
-//
-// Nothing is written to AO's rows here. The provider answers, then emits its own
-// rename notification, and the projection applies it — so the title AO stores is
-// always one the provider confirmed. Writing it optimistically as well would give
-// one fact two authors and no way to tell which lost.
 func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title string) (string, error) {
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return "", err
@@ -1211,17 +1048,6 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 	return normalized, nil
 }
 
-// NormalizeTitle reduces a title to the one-line label AO is willing to show.
-//
-// The rules come from the automatic-semantic-task-titles design: one line, no
-// wrapper punctuation, no trailing punctuation, and a hard length bound. They are
-// applied to whatever the provider says rather than trusted, because a title is
-// model output and arrives with heading markers, surrounding quotes, and full stops
-// often enough that a client would otherwise render them.
-//
-// Over-length input is truncated at a word boundary rather than rejected: the
-// provider already accepted the name, and refusing to display a title AO's own
-// session is now carrying would leave the two disagreeing.
 func NormalizeTitle(raw string) string {
 	title := raw
 	if idx := strings.IndexAny(title, "\r\n"); idx >= 0 {
@@ -1229,11 +1055,7 @@ func NormalizeTitle(raw string) string {
 	}
 	title = strings.TrimSpace(title)
 
-	// Markdown heading and list markers, which a model reaches for when asked for a
-	// title and told nothing else.
 	title = strings.TrimLeft(title, "#*->+ \t")
-	// Wrapper punctuation, stripped from both ends so a quoted title is not shown
-	// quoted and a backticked one is not shown as code.
 	title = strings.Trim(title, "\"'`“”‘’ \t")
 	title = strings.Join(strings.Fields(title), " ")
 	title = strings.TrimRight(title, ".,;:!。 \t")
@@ -1241,7 +1063,6 @@ func NormalizeTitle(raw string) string {
 	if utf8.RuneCountInString(title) > maxTitleRunes {
 		title = truncateAtWord(title, maxTitleRunes)
 	}
-	// A title made entirely of punctuation is not a title.
 	if strings.IndexFunc(title, func(r rune) bool {
 		return unicode.IsLetter(r) || unicode.IsDigit(r)
 	}) < 0 {
@@ -1250,8 +1071,6 @@ func NormalizeTitle(raw string) string {
 	return title
 }
 
-// truncateAtWord cuts at the last space inside the limit, falling back to a hard cut
-// for a language that does not put spaces between words.
 func truncateAtWord(title string, limit int) string {
 	runes := []rune(title)
 	if len(runes) <= limit {
@@ -1264,9 +1083,6 @@ func truncateAtWord(title string, limit int) string {
 	return strings.TrimRight(cut, " ")
 }
 
-// Explicit JSON names freeze the durable request identity independently of the
-// provider port's Go field names. A later refactor must not turn a safe retry into
-// an idempotency conflict after an app upgrade.
 type deliveryRequestSettings struct {
 	Model    string               `json:"model,omitempty"`
 	Effort   string               `json:"effort,omitempty"`

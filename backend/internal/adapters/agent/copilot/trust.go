@@ -14,22 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 )
 
-// Copilot CLI shows an interactive "Confirm folder trust" dialog on first
-// launch in an untrusted directory. That dialog would swallow input injected
-// into the TUI, so AO pre-records trust the same way Copilot does when the user
-// picks "Yes, and remember this folder for future sessions".
-//
-// Trust layout (verified against Copilot CLI 1.0.93): the absolute,
-// symlink-resolved folder path is appended to the "trustedFolders" array in
-// $COPILOT_HOME/config.json (default ~/.copilot/config.json). Copilot manages
-// that file itself and prefixes it with "//" comment lines, which are kept.
 const copilotTrustedFoldersKey = "trustedFolders"
 
-// EnsureWorkspaceTrusted records workspacePath as trusted in the Copilot home
-// the current process environment points at (COPILOT_HOME, else ~/.copilot).
-// The daemon-owned authentication terminal runs Copilot against that real home
-// so login credentials land where the user's own Copilot reads them; seeding
-// trust there keeps the trust dialog from blocking the injected /login.
 func EnsureWorkspaceTrusted(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -44,13 +30,11 @@ func EnsureWorkspaceTrusted(ctx context.Context, workspacePath string) error {
 	return ensureCopilotFolderTrusted(filepath.Join(copilotHomeDir(home), "config.json"), workspacePath)
 }
 
-// copilotTrustMu keeps concurrent spawns from each dropping the others' entry.
 var copilotTrustMu sync.Mutex
 
 func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
 	copilotTrustMu.Lock()
 	defer copilotTrustMu.Unlock()
-	// A config linked from a dotfiles repo is updated there, not replaced.
 	if target, err := filepath.EvalSymlinks(configPath); err == nil {
 		configPath = target
 	}
@@ -58,7 +42,6 @@ func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
 	if err != nil {
 		return fmt.Errorf("copilot: resolve workspace: %w", err)
 	}
-	// Copilot compares against the real path (macOS /tmp is /private/tmp).
 	if resolved, err := filepath.EvalSymlinks(folder); err == nil {
 		folder = resolved
 	}
@@ -70,9 +53,6 @@ func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
 	header, body := splitCopilotConfigHeader(data)
 	config := map[string]json.RawMessage{}
 	if len(bytes.TrimSpace(body)) > 0 {
-		// Never rewrite a config AO cannot round-trip; Copilot then just asks
-		// for folder trust interactively. A top-level null decodes without
-		// error but leaves config nil, so it is rejected the same way.
 		if err := json.Unmarshal(body, &config); err != nil || config == nil {
 			return nil //nolint:nilerr // Leave unsupported config untouched; Copilot owns the fallback prompt.
 		}
@@ -110,8 +90,6 @@ func ensureCopilotFolderTrusted(configPath, workspacePath string) error {
 	return nil
 }
 
-// splitCopilotConfigHeader separates the leading "//" comment lines Copilot
-// writes at the top of config.json from the JSON document that follows.
 func splitCopilotConfigHeader(data []byte) (header, body []byte) {
 	rest := data
 	for len(rest) > 0 {

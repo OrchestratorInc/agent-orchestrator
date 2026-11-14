@@ -69,7 +69,6 @@ export function StandaloneArchiveView() {
 			const result = await restoreSessionById(session.id);
 			if (!isStillMounted()) return;
 			if (result.status === "success") {
-				// A Cloud standalone agent opens on its own project's route.
 				void navigate(sessionNavigateTarget(session.cloud ? session.workspaceId : undefined, session.id));
 				return;
 			}

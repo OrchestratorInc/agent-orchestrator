@@ -109,7 +109,6 @@ describe("useOrchestratorChildren", () => {
 		await waitFor(() => expect(result.current.data).toBeDefined());
 		const children = result.current.data!;
 		expect(children).toHaveLength(2);
-		// Live worker first, terminated history last.
 		expect(children[0].title).toBe("Fix CI");
 		expect(children[1].isTerminated).toBe(true);
 		expect(children[0].prs).toEqual([

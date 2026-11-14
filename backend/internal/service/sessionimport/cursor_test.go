@@ -107,8 +107,6 @@ func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 	if err := os.Remove(target); err != nil {
 		t.Fatal(err)
 	}
-	// The original still exists in another bucket. A restored import must
-	// validate its AO copy rather than accepting that unrelated lookup.
 	if err := adapter.PrepareRuntimeLaunch(context.Background(), cfg); err == nil {
 		t.Fatal("accepted a missing copied native store")
 	}
@@ -118,8 +116,6 @@ func TestCursorImportUsesTerminalWithoutChatCapability(t *testing.T) {
 	}
 }
 
-// ACP's session/load reads only acp-sessions/<id>, so a Chat import is copied
-// there and the terminal CLI's chat folder is left to the original.
 func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	path := cursorFixture(t, root, cwd)
@@ -178,7 +174,6 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
 		t.Fatalf("source changed: %v", err)
 	}
-	// A retry reuses the published copy instead of making another.
 	again, err := cursor.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{
 		NativeSessionID: rec.Metadata.AgentSessionID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd,
 		LaunchCWD: launch, Chat: true, SourceFingerprint: rec.Metadata.ImportSource.Fingerprint,
@@ -186,8 +181,6 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	if err != nil || again.TranscriptPath != want || again.NativeSessionID != copyID {
 		t.Fatalf("retry = %#v, %v", again, err)
 	}
-	// Importing the same chat again, into another workspace or AO data
-	// directory, gets its own copy instead of colliding with the first one.
 	other := t.TempDir()
 	second, err := cursor.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{
 		NativeSessionID: rec.Metadata.AgentSessionID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd,
@@ -199,7 +192,6 @@ func TestCursorImportPreparesACPCopyForChat(t *testing.T) {
 	if err := cursorstore.Verify(context.Background(), root, second.TranscriptPath, second.NativeSessionID); err != nil {
 		t.Fatalf("second copy: %v", err)
 	}
-	// The ACP copy is not a terminal chat, so it is never offered for import.
 	files, err := discoverCursor(context.Background(), root)
 	if err != nil || len(files) != 1 {
 		t.Fatalf("native buckets = %#v, %v", files, err)

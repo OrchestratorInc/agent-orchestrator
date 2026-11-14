@@ -15,8 +15,6 @@ func workspaceStepCommand(ctx context.Context, command string) *exec.Cmd {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	// cmd.exe needs shell text, not Go's Windows argv escaping. /s removes
-	// the enclosing quotes even when the command starts with a quoted path.
 	cmd.SysProcAttr.CmdLine = syscall.EscapeArg(cmd.Path) + ` /d /s /c "` + command + `"`
 	return cmd
 }

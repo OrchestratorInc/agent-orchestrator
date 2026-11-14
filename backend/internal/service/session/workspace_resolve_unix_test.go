@@ -9,12 +9,8 @@ import (
 	"testing"
 )
 
-// On a Unix daemon a Windows path is not absolute to filepath, so without an
-// explicit check it would be cleaned into a relative path and reported as a
-// workspace file.
 func TestResolveWorkspacePathTreatsWindowsAbsolutePathsAsOutside(t *testing.T) {
 	svc, workspace, _ := resolveFixture(t)
-	// A real relative file that a mis-classified drive path would land on.
 	if err := os.MkdirAll(filepath.Join(workspace, "C:", "repo"), 0o755); err != nil {
 		t.Fatal(err)
 	}

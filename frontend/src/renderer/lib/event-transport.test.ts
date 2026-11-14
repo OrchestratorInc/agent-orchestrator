@@ -36,7 +36,6 @@ vi.mock("./bridge", () => ({
 
 vi.mock("./api-client", () => ({
 	apiErrorCode: () => undefined,
-	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
 	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	getApiBaseUrl: getApiBaseUrlMock,
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
@@ -57,7 +56,7 @@ class EventSourceStub {
 	static instances: EventSourceStub[] = [];
 	url: string;
 	closed = false;
-	readyState = 0; // CONNECTING
+	readyState = 0;
 	onopen: (() => void) | null = null;
 	onerror: (() => void) | null = null;
 	onmessage: (() => void) | null = null;
@@ -76,11 +75,10 @@ class EventSourceStub {
 	}
 	close() {
 		this.closed = true;
-		this.readyState = 2; // CLOSED
+		this.readyState = 2;
 	}
 }
 
-/** openChats are the remote chats a view is showing: [hostId, sessionId]. */
 function fakeQueryClient(openChats: Array<[string, string]> = []) {
 	const open = openChats.map(([hostId, sessionId]) => ({ queryKey: ["remote-conversation", hostId, sessionId] }));
 	const matches = (key: readonly unknown[], prefix: readonly unknown[]) => prefix.every((part, index) => key[index] === part);
@@ -102,7 +100,6 @@ const remoteLivePage = (sessionId: string) => ({
 });
 
 function cdcSources() {
-	// The local stream has no path prefix; remote hosts are mounted under /<host>/.
 	return EventSourceStub.instances.filter((source) => /^http:\/\/127\.0\.0\.1:\d+\/api\/v1\/events\?after=latest$/.test(source.url));
 }
 
@@ -145,7 +142,6 @@ describe("createEventTransport", () => {
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "tunnel"] }, { cancelRefetch: false });
 			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "tunnel"] }, { cancelRefetch: false });
-			// Without a stream, the open chat's live page is part of the poll.
 			expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("open-chat"));
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
 			EventSourceStub.instances.find((source) => source.url.includes("/direct/"))!.emit("cursor", "0");
@@ -171,7 +167,6 @@ describe("createEventTransport", () => {
 		expect(remoteA.url).toBe("http://127.0.0.1:4000/box-a/api/v1/events?after=latest");
 		expect(remoteB.url).toBe("http://127.0.0.1:4000/box-b/api/v1/events?after=latest");
 		await Promise.resolve();
-		// The first frame proves the stream is live, which refreshes everything once.
 		remoteA.emit("cursor", "0");
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a"] }, { cancelRefetch: false });
@@ -181,7 +176,6 @@ describe("createEventTransport", () => {
 		remoteA.emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
 		remoteA.emit("session_updated", JSON.stringify({ sessionId: "closed", payload: { conversationId: "closed-conversation" } }));
 		remoteA.emit("review_run_updated", JSON.stringify({ sessionId: "same", payload: { reviewId: "review-1", conversationId: "review-conversation" } }));
-		// Conversation events refresh only the open chat, not the host's lists.
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
 		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("same")));
@@ -241,9 +235,7 @@ describe("createEventTransport", () => {
 			const idOnly = JSON.stringify({ type: "session_updated", sessionId: "waking", payload: { id: "waking" } });
 			remote.emit("session_updated", idOnly);
 			remote.emit("session_updated", idOnly);
-			// The stream opening refreshed the lists just now, so the id-only updates wait.
 			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
-			// The chat has no ready controller in the cache, so it reads its page.
 			expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("waking"));
 			await vi.advanceTimersByTimeAsync(5_000);
 			const listRefreshes = vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters) === JSON.stringify({ queryKey: ["remote-workspaces", "box-a"] }));
@@ -281,7 +273,6 @@ describe("createEventTransport", () => {
 			const disconnect = createEventTransport(client).connect();
 			const streams = () => EventSourceStub.instances.filter((source) => source.url.includes("/box-a/"));
 			const listPolled = async () => {
-				// A refresh still settling queues one catch-up; let it land first.
 				await vi.advanceTimersByTimeAsync(0);
 				vi.mocked(client.invalidateQueries).mockClear();
 				await vi.advanceTimersByTimeAsync(2_000);
@@ -290,7 +281,6 @@ describe("createEventTransport", () => {
 			streams()[0].emit("cursor", "0");
 			expect(await listPolled()).toBe(false);
 
-			// The host stays connected, so nothing else would ever reopen the stream.
 			streams()[0].onerror?.();
 			expect(await listPolled()).toBe(true);
 			await vi.advanceTimersByTimeAsync(5_000);
@@ -298,7 +288,6 @@ describe("createEventTransport", () => {
 			streams()[1].emit("cursor", "0");
 			expect(await listPolled()).toBe(false);
 
-			// A host that leaves cancels the pending reopen.
 			streams()[1].onerror?.();
 			connectedHostsMock.mockReturnValue([]);
 			(subscribeConnectedHostsMock.mock.calls[0][0] as () => void)();
@@ -325,7 +314,6 @@ describe("createEventTransport", () => {
 		connectedHostsMock.mockReturnValue(["box-a"]);
 		hostsChanged();
 		vi.mocked(client.setQueryData).mockClear();
-		// The stream answers at once, so the fallback poll never ticks.
 		stream().emit("cursor", "0");
 		await vi.waitFor(() => expect(client.setQueryData).toHaveBeenCalledWith(refreshFailed, false));
 		disconnect();
@@ -408,7 +396,6 @@ describe("createEventTransport", () => {
 		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(cdcSources()).toHaveLength(1);
 		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
-		// All CDC event types plus onmessage are wired up.
 		expect(cdcSources()[0].listeners).toContain("session_updated");
 		expect(cdcSources()[0].listeners).toContain("review_run_created");
 		expect(cdcSources()[0].listeners).toContain("review_run_updated");
@@ -443,7 +430,6 @@ describe("createEventTransport", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
 
-		// Fail the old port repeatedly so the delay grows well past the initial step.
 		for (let failure = 1; failure <= 4; failure += 1) {
 			const source = EventSourceStub.instances.at(-1)!;
 			source.readyState = 2;
@@ -452,7 +438,6 @@ describe("createEventTransport", () => {
 		}
 		const beforeCdcMove = cdcSources().length;
 
-		// The daemon comes back on a different port: a fresh target.
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:3099");
 		onStatusHandler();
 		expect(cdcSources()).toHaveLength(beforeCdcMove + 1);
@@ -490,8 +475,6 @@ describe("createEventTransport", () => {
 			const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
 
 			onStatusHandler();
-			// The first refresh after a quiet period does not wait out the window:
-			// it flushes on the leading edge so a reconnect recovers immediately.
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] }, { cancelRefetch: false });
@@ -501,11 +484,6 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	// A reconnect resumes via Last-Event-ID. When the event log has been truncated
-	// or replaced, that cursor is ahead of head and the daemon starts the client at
-	// head instead of replaying — correct, but it means no conversation CDC arrives
-	// to invalidate an open chat. EventSource cannot read the response header that
-	// reports the clamp, so reopening must refresh conversations unconditionally.
 	it("refreshes open conversations on reopen, not just workspaces", () => {
 		vi.useFakeTimers();
 		try {
@@ -577,9 +555,6 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	// An agent can start a review with `ao review trigger`, and a reviewer can
-	// finish one, without this window asking. The session's reviews must refresh
-	// or the inspector keeps showing the previous verdict.
 	it("refreshes the session's reviews when a review run starts or changes", () => {
 		vi.useFakeTimers();
 		try {
@@ -739,18 +714,13 @@ describe("createEventTransport", () => {
 			const emit = (payload: object) => cdcSources()[0].emit("session_updated", JSON.stringify({
 				type: "session_updated", sessionId: "slow-setup", payload,
 			}));
-			// Usage bookkeeping cannot reopen the spent readiness window.
 			emit({ id: "slow-setup" });
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(queryFn).toHaveBeenCalledTimes(11);
-			// A row update can still precede the native hook. It rechecks once,
-			// but the unchanged reason does not replenish the polling budget.
 			emit({ id: "slow-setup", activity: "active", provisionState: "ready" });
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(queryFn).toHaveBeenCalledTimes(12);
 			expect(queryClient.getQueryData(queryKey)).toEqual(waiting);
-			// Native identity changes emit the same row payload, even if activity
-			// did not change. That event must clear the stale disabled switch.
 			queryFn.mockResolvedValue({ supported: true, targetMode: "chat" });
 			emit({ id: "slow-setup", activity: "active", provisionState: "ready" });
 			await vi.advanceTimersByTimeAsync(200);
@@ -816,11 +786,11 @@ describe("createEventTransport", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		const source = cdcSources()[0];
 
-		source.readyState = 1; // OPEN
+		source.readyState = 1;
 		source.onopen?.();
 		expect(getEventsConnectionState()).toBe("connected");
 
-		source.readyState = 0; // CONNECTING — browser is auto-retrying
+		source.readyState = 0;
 		source.onerror?.();
 		expect(getEventsConnectionState()).toBe("disconnected");
 
@@ -865,7 +835,7 @@ describe("createEventTransport", () => {
 			createEventTransport(fakeQueryClient()).connect();
 			const source = cdcSources()[0];
 
-			source.readyState = 2; // CLOSED — EventSource gave up for good
+			source.readyState = 2;
 			source.onerror?.();
 
 			expect(cdcSources()).toHaveLength(1);
@@ -886,7 +856,6 @@ describe("createEventTransport", () => {
 			createEventTransport(fakeQueryClient()).connect();
 			const source = cdcSources()[0];
 
-			// An older daemon answers 400, so the stream closes without ever opening.
 			source.readyState = 2;
 			source.onerror?.();
 			expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/events?after=latest", expect.anything());
@@ -954,8 +923,6 @@ describe("bounded live refresh", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
-		// The first event flushes immediately (leading edge); the rest are paced
-		// to one flush per window, so a busy stream keeps updating throughout.
 		emit();
 		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
 		for (let elapsed = 100; elapsed < 2_000; elapsed += 100) {
@@ -972,11 +939,10 @@ describe("bounded live refresh", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
-		emit("a"); // leading edge flushes immediately
+		emit("a");
 		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
-		emit("a"); emit("b"); // coalesced into the trailing window
+		emit("a"); emit("b");
 		await vi.advanceTimersByTimeAsync(150);
-		// Within the window the repeated "a" and the new "b" flush once each.
 		expect(client.invalidateQueries).toHaveBeenCalledTimes(3);
 		emit("c");
 		disconnect();
@@ -1027,11 +993,8 @@ describe("bounded live refresh", () => {
 });
 
 describe("id-only session updates", () => {
-	// Usage bookkeeping (and, rarely, agent switches, cleanup facts and reported
-	// PRs) emits session_updated with nothing but the session id.
 	const idOnly = (sessionId: string) =>
 		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId, type: "session_updated", payload: { id: sessionId } }));
-	// The sessions-row trigger's payload, as backend migration 0191 builds it.
 	const sessionRow = (sessionId: string, activity: string) =>
 		cdcSources()[0].emit("session_updated", JSON.stringify({
 			sessionId,
@@ -1049,14 +1012,11 @@ describe("id-only session updates", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
-		// Three running agents whose usage is recorded every 100 ms for 12 s.
 		for (let elapsed = 0; elapsed < 12_000; elapsed += 100) {
 			for (const sessionId of ["a", "b", "c"]) idOnly(sessionId);
 			await vi.advanceTimersByTimeAsync(100);
 		}
-		// The first update refreshes at once (t=0), then one refresh at 5 s and 10 s.
 		expect(workspaceRefreshes(client)).toBe(3);
-		// While the workspace waits, the editor handoff still refreshes at once.
 		idOnly("d");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "d"] }, { cancelRefetch: false });
@@ -1073,7 +1033,6 @@ describe("id-only session updates", () => {
 		const disconnect = createEventTransport(client).connect();
 		const conversationRefreshes = () =>
 			vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","a"]').length;
-		// Still starting up: any session update may be the one that says it is ready.
 		idOnly("a");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(conversationRefreshes()).toBe(1);
@@ -1101,16 +1060,12 @@ describe("id-only session updates", () => {
 		sessionRow("a", "active");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(2);
-		// The sessions-row trigger also fires for columns its payload omits (title,
-		// start-up checklist, branch state), so carried fields that did not change
-		// do not mean the board did not.
 		sessionRow("a", "active");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(3);
 		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(4);
-		// Those refreshes already covered the waiting id-only update.
 		await vi.advanceTimersByTimeAsync(6_000);
 		expect(workspaceRefreshes(client)).toBe(4);
 		disconnect();
@@ -1120,13 +1075,13 @@ describe("id-only session updates", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
-		idOnly("a"); // 0 s: refreshes at once.
+		idOnly("a");
 		await vi.advanceTimersByTimeAsync(1_000);
-		idOnly("a"); // 1 s: waits until 5 s.
+		idOnly("a");
 		await vi.advanceTimersByTimeAsync(1_000);
-		sessionRow("b", "active"); // 2 s: refreshes at once, covering the 1 s update.
+		sessionRow("b", "active");
 		await vi.advanceTimersByTimeAsync(1_000);
-		idOnly("a"); // 3 s: now waits until 7 s, 5 s after the newer refresh.
+		idOnly("a");
 		expect(workspaceRefreshes(client)).toBe(2);
 		await vi.advanceTimersByTimeAsync(2_100);
 		expect(workspaceRefreshes(client)).toBe(2);
@@ -1253,11 +1208,9 @@ it("refreshes again when a root catch-up joins an older targeted conversation fe
 		finishes.a[0](1);
 		await vi.advanceTimersByTimeAsync(0);
 
-		// A targeted fetch starts while B keeps the original root refresh open.
 		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "a", payload: { conversationId: "conv-a" } }));
 		await vi.advanceTimersByTimeAsync(150);
 		expect(finishes.a).toHaveLength(2);
-		// A reconnect now requires a snapshot newer than that targeted fetch.
 		cdcSources()[0].onopen?.();
 		await vi.advanceTimersByTimeAsync(150);
 		finishes.b[0](1);

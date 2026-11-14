@@ -57,7 +57,6 @@ it.each([true, false])("marks the group tab's frame as the selected tab only whi
 		</TooltipProvider>,
 	);
 	const frame = container.querySelector("[data-terminal-tab-frame]");
-	// The floating top bar draws the selected pill from data-active.
 	expect(frame?.hasAttribute("data-active")).toBe(active);
 });
 
@@ -71,7 +70,6 @@ it("names a grouped shell by the agent running in it and keeps the agent watch o
 	);
 	expect(getByText("Claude Code")).toBeInTheDocument();
 	expect(container.querySelector("[data-shell-agent-state='working']")).not.toBeNull();
-	// The member's aria-label would hide the badge's text, so it carries the state.
 	expect(getByRole("tab", { name: "Claude Code · Claude Code is working" })).toBeInTheDocument();
 	expect(useShellAgentStream).toHaveBeenLastCalledWith(true);
 	useShellAgentStore.setState({ agents: {} });

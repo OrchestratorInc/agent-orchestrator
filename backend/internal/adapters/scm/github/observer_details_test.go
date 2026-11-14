@@ -25,7 +25,6 @@ func TestSCMBatchQueryRequestsPullRequestDetails(t *testing.T) {
 		"labels(first:20)",
 		"reviewRequests(first:20)",
 		"... on Team { name }",
-		// Aliased so it does not collide with the check-rollup commits(last:1).
 		"commitList: commits(last:50)",
 		"commits(last:1)",
 	} {
@@ -60,7 +59,6 @@ func TestPullRequestDetailsFromGraphQL(t *testing.T) {
 			}},
 			map[string]any{"commit": map[string]any{
 				"oid": "bbb222", "messageHeadline": "test: cover queue", "committedDate": "2026-10-20T11:00:00Z",
-				// A commit made with an email GitHub cannot link has no user.
 				"author": map[string]any{"name": "Unlinked Dev", "user": nil},
 			}},
 		}}
@@ -93,8 +91,6 @@ func TestPullRequestDetailsFromGraphQL(t *testing.T) {
 	}
 }
 
-// A PR with no labels, reviewers or commits listed still reports details, with
-// empty lists, so the stored copy is replaced and the wire shape stays [].
 func TestSCMObservationDetailsDefaultToEmptyLists(t *testing.T) {
 	details := pullRequestDetailsFromGraphQL(map[string]any{})
 	if details == nil || details.Labels == nil || details.RequestedReviewers == nil || details.Commits == nil {
@@ -110,7 +106,6 @@ func TestTruncateDescriptionDoesNotSplitACharacter(t *testing.T) {
 	if short != "hello" || truncated {
 		t.Fatalf("short body = %q (truncated %v)", short, truncated)
 	}
-	// "é" is two bytes; a body of cap-1 ASCII bytes followed by it straddles the cap.
 	body := strings.Repeat("a", domain.MaxPullRequestDescriptionBytes-1) + "é" + "tail"
 	cut, truncated := truncateDescription(body)
 	if !truncated {
@@ -134,7 +129,6 @@ func TestCommitCountNeverBelowTheListedCommits(t *testing.T) {
 	}
 }
 
-// detailsFieldMarkers are the selections only the details read makes.
 var detailsFieldMarkers = []string{"body", "labels(first:", "reviewRequests(first:", "commitList:", "conversation:"}
 
 func assertRequestsDetails(t *testing.T, what, fields string, want bool) {
@@ -148,7 +142,6 @@ func assertRequestsDetails(t *testing.T, what, fields string, want bool) {
 
 var nextAlias = regexp.MustCompile(`\npr[0-9]+: `)
 
-// aliasFields returns the part of a batch query that selects alias's PR.
 func aliasFields(t *testing.T, query, alias string) string {
 	t.Helper()
 	start := strings.Index(query, alias+": repository(")
@@ -162,8 +155,6 @@ func aliasFields(t *testing.T, query, alias string) string {
 	return rest
 }
 
-// recordGraphQL answers the n-th GraphQL request with {"data": replies[n]},
-// or a 502 when replies[n] is nil, and returns the queries it was sent.
 func recordGraphQL(t *testing.T, fake *fakeGH, replies ...map[string]any) func() []string {
 	t.Helper()
 	var mu sync.Mutex
@@ -198,7 +189,6 @@ func recordGraphQL(t *testing.T, fake *fakeGH, replies ...map[string]any) func()
 	}
 }
 
-// batchPRNode is a batch-query PR node with the light fields only.
 func batchPRNode(number int, updatedAt string) map[string]any {
 	var pr map[string]any
 	basePRFixture().prData(func(m map[string]any) { pr = m })
@@ -210,8 +200,6 @@ func batchPRNode(number int, updatedAt string) map[string]any {
 
 var detailsTestRepo = ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}
 
-// A ref whose stored details are as new as the PR asks only for the light
-// fields: the same selection the batch query made before PRs had details.
 func TestSCMBatchQueryLeavesOutDetailsTheCallerAlreadyHas(t *testing.T) {
 	stored := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
 	query, _ := buildSCMBatchQuery([]ports.SCMPRRef{{Repo: detailsTestRepo, Number: 42, DetailsUpdatedAt: stored}})
@@ -233,8 +221,6 @@ func TestSCMBatchQueryLeavesOutDetailsTheCallerAlreadyHas(t *testing.T) {
 	}
 }
 
-// An unchanged PR costs one light query and leaves Details nil, so the
-// stored details are kept.
 func TestFetchPullRequestsSkipsTheDetailsOfAnUnchangedPR(t *testing.T) {
 	fake := newFakeGH(t)
 	queries := recordGraphQL(t, fake, map[string]any{
@@ -259,9 +245,6 @@ func TestFetchPullRequestsSkipsTheDetailsOfAnUnchangedPR(t *testing.T) {
 	}
 }
 
-// One batch with an unchanged PR, a PR whose updatedAt moved and a PR with
-// no stored details: the new PR's details come in the batch query, the moved
-// PR's in one follow-up query, and the unchanged PR's not at all.
 func TestFetchPullRequestsReadsDetailsOnlyForNewOrChangedPRs(t *testing.T) {
 	stored := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
 	newPR := batchPRNode(3, "2026-11-10T09:00:00Z")
@@ -322,8 +305,6 @@ func TestFetchPullRequestsReadsDetailsOnlyForNewOrChangedPRs(t *testing.T) {
 	}
 }
 
-// Details are view-only: a failed details read keeps the PR's state and CI
-// and leaves Details nil, so the stored ones are kept and read again next poll.
 func TestFetchPullRequestsKeepsTheObservationWhenTheDetailsReadFails(t *testing.T) {
 	fake := newFakeGH(t)
 	queries := recordGraphQL(t, fake,
@@ -342,7 +323,6 @@ func TestFetchPullRequestsKeepsTheObservationWhenTheDetailsReadFails(t *testing.
 	if len(obs) != 1 || !obs[0].Fetched || obs[0].PR.Details != nil || len(obs[0].CI.Checks) != 1 {
 		t.Fatalf("observation = %+v, want fetched state and CI with Details nil", obs)
 	}
-	// The details are still owed, so the observer retries them.
 	if !obs[0].PR.DetailsPending {
 		t.Fatal("details read failed, but the observation isn't marked pending")
 	}

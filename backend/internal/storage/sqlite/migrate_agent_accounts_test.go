@@ -5,11 +5,6 @@ import (
 	"time"
 )
 
-// TestMigrationAgentAccountsKeepsExistingSessionsOnTheComputersLogin upgrades a
-// database from before accounts. Sessions that already existed ran on the
-// computer's own login, so they are bound to it rather than reading as whatever
-// default is picked later; an interface switch recorded before the account
-// columns still reads back, and a same-mode row must now name an account.
 func TestMigrationAgentAccountsKeepsExistingSessionsOnTheComputersLogin(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 200)
 	created := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)

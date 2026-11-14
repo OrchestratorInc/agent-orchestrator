@@ -10,16 +10,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Authority issues and verifies unguessable per-session browser capabilities.
-// It is intentionally stateless so daemon replacement does not invalidate
-// capabilities held by surviving workers.
 type Authority struct{}
 
-// NewAuthority returns a stateless browser capability authority.
 func NewAuthority() *Authority { return &Authority{} }
 
-// Issue mints a fresh capability for one worker launch. Relaunching a worker
-// rotates the token and its persisted verifier.
 func (a *Authority) Issue(sessionID domain.SessionID) (token, verifier string, err error) {
 	if a == nil || sessionID == "" {
 		return "", "", fmt.Errorf("issue browser capability: session id is required")
@@ -32,9 +26,6 @@ func (a *Authority) Issue(sessionID domain.SessionID) (token, verifier string, e
 	return token, capabilityVerifier(sessionID, token), nil
 }
 
-// Valid compares the presented token with a durable verifier in constant time.
-// Binding the digest to the session id prevents a verifier copied between rows
-// from authorizing the copied-to session.
 func (a *Authority) Valid(sessionID domain.SessionID, token, verifier string) bool {
 	if a == nil || sessionID == "" || token == "" || verifier == "" {
 		return false

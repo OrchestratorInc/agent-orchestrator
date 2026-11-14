@@ -5,20 +5,13 @@ import (
 	"sync"
 )
 
-// maxPipeBuffered bounds output buffered between the host connection and the
-// attach stream's reader; past it the writer waits, so back-pressure still
-// reaches the pty-host.
 const maxPipeBuffered = 1 << 20
 
-// bytePipe is an in-memory pipe whose Read returns all output buffered so far
-// (up to len(p)). io.Pipe hands the reader one Write at a time, so every small
-// pty-host frame became its own read and, downstream, its own WebSocket
-// message; under a burst that is thousands of tiny messages.
 type bytePipe struct {
 	mu      sync.Mutex
 	changed *sync.Cond
 	buf     []byte
-	err     error // set once closed; Read returns it after the buffer drains
+	err     error
 }
 
 func newBytePipe() *bytePipe {
@@ -59,7 +52,6 @@ func (p *bytePipe) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-// CloseWithError ends the pipe; buffered output is still delivered before err.
 func (p *bytePipe) CloseWithError(err error) error {
 	if err == nil {
 		err = io.EOF

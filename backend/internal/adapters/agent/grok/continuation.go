@@ -19,7 +19,6 @@ import (
 
 var importSessionID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// NativeSessionConfigDir resolves the provider state root used by a launch.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -44,7 +43,6 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return filepath.Join(home, ".grok"), nil
 }
 
-// LocateTranscript finds a confined native update log for the conversation.
 func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if !importSessionID.MatchString(ref.NativeSessionID) {
 		return "", false, nil
@@ -63,8 +61,6 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 			return ctx.Err()
 		}
 		if walkErr != nil {
-			// As in discovery, an unreadable sibling is ineligible; errors
-			// on the sessions root still prevent an authoritative lookup.
 			if name != "sessions" && errors.Is(walkErr, fs.ErrPermission) {
 				if d != nil && d.IsDir() {
 					return fs.SkipDir
@@ -85,7 +81,6 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	return path, path != "", err
 }
 
-// ProbeNativeSession reports local backing state without modifying it.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	_, ok, err := p.LocateTranscript(ctx, ref)
 	if err != nil {
@@ -97,13 +92,10 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// Grok percent-encodes every non-alphanumeric byte of getcwd. A staging
-// directory is renamed as a unit, so a failed copy never becomes resumable.
 func grokImportBucket(cwd string) string {
 	return strings.ReplaceAll(url.QueryEscape(cwd), "+", "%20")
 }
 
-// RelocateImportedSession prepares a private copy for the first native resume.
 func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSessionRelocation) error {
 	if !importSessionID.MatchString(cfg.NativeSessionID) || !filepath.IsAbs(cfg.LaunchCWD) {
 		return errors.New("invalid grok import identity or launch directory")
@@ -128,7 +120,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSe
 	parent := filepath.Join("sessions", bucket)
 	dest := filepath.Join(parent, cfg.NativeSessionID)
 	if _, err := r.Stat(dest); err == nil {
-		return nil // it may already contain AO's subsequent turns
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -169,7 +161,6 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSe
 			var summary map[string]json.RawMessage
 			err = json.NewDecoder(io.LimitReader(in, 4<<20)).Decode(&summary)
 			if err == nil {
-				// Only cwd changes; every other info key is kept as Grok wrote it.
 				var info map[string]json.RawMessage
 				err = json.Unmarshal(summary["info"], &info)
 				var id string
@@ -207,7 +198,6 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, cfg ports.ImportedSe
 	return r.Rename(stage, dest)
 }
 
-// Checkpoints may hold the compacted context required by the next native load.
 func copyGrokImportCheckpoints(ctx context.Context, root *os.Root, src, stage string) error {
 	base := filepath.Join(src, "compaction_checkpoints")
 	return fs.WalkDir(root.FS(), base, func(path string, entry fs.DirEntry, walkErr error) error {

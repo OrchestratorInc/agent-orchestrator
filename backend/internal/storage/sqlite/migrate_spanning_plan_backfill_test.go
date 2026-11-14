@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-// Plan copies written before the daemon marked superseded ones carry no
-// spansTurns flag, so it could never mark them: standalone-26 kept two turnless
-// 8/8 cards beside its turn's card. The migration flags Claude's copies from
-// durable evidence and leaves each conversation's latest copy as the only one
-// not superseded. Other agents' plans, and a switched chat's plans written after
-// it left Claude, are per-turn plans and stay as they were.
 func TestMigrationBackfillsSpanningPlanCopies(t *testing.T) {
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261102164353715)
 	at := func(minute int) time.Time { return time.Date(2026, time.October, 26, 22, minute, 0, 0, time.UTC) }
@@ -46,11 +40,6 @@ INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kin
 			conversation, conversation, at(9), at(9), conversation)
 	}
 
-	// The turn rows above were touched at minute 30, after the late rows, as settling
-	// a turn or recovering a controller does. The late rows are still the newest
-	// content: the turn's copy could only change until the turn ended, at minute 2.
-
-	// Claude until the switch at sequence 10, Codex after it.
 	mustExec(t, db, `
 INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kind, status, summary, detail_json, provider_item_id, created_at, updated_at, branch_id) VALUES
     ('switched-claude', 'switched', NULL, 5, 'plan', 'completed', '', '{"event":"plan","steps":`+steps+`}', '', ?, ?, 'switched:root'),
@@ -58,8 +47,6 @@ INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kin
     ('switched-codex', 'switched', NULL, 15, 'plan', 'completed', '', '{"event":"plan","steps":`+steps+`}', '', ?, ?, 'switched:root');`,
 		at(1), at(1), at(3), at(3), at(4), at(4))
 
-	// A Claude chat on its root branch, with an edited branch it left that holds a
-	// newer copy. Only the active path is settled: the root's copy stays current.
 	mustExec(t, db, `
 INSERT INTO sessions (id, project_id, num, harness, session_mode, activity_last_at, created_at, updated_at)
 VALUES ('forked-1', 'p', 4, 'claude-code', 'chat', ?, ?, ?);`, at(0), at(0), at(0))
@@ -108,7 +95,6 @@ INSERT INTO conversation_activities (id, conversation_id, turn_id, sequence, kin
 	}
 }
 
-// readPlanFlags reads the spansTurns and superseded marks on one stored plan.
 func readPlanFlags(t *testing.T, db *sql.DB, table, column, id string) (spans, superseded bool) {
 	t.Helper()
 	var spansValue, supersededValue sql.NullBool

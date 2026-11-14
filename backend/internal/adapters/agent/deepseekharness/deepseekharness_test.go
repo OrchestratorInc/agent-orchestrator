@@ -19,9 +19,6 @@ func TestManifestUsesConciseDeepSeekDisplayName(t *testing.T) {
 	}
 }
 
-// TestGetConfigSpecReportsTheModelOverride pins the config contract every
-// shipped adapter must hold: AO's agent settings need one configurable field, and
-// for Harness that field is the Chat model override.
 func TestGetConfigSpecReportsTheModelOverride(t *testing.T) {
 	spec, err := (&Plugin{}).GetConfigSpec(context.Background())
 	if err != nil {
@@ -57,10 +54,6 @@ func TestGetLaunchCommandRunsOneHeadlessTask(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandPrependsSystemPrompt documents that AO standing
-// instructions reach the headless profile by prepending them to the positional
-// task: there is no system-prompt flag or hook file, so the task is the only
-// channel that reaches the model.
 func TestGetLaunchCommandPrependsSystemPrompt(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -79,8 +72,6 @@ func TestGetLaunchCommandPrependsSystemPrompt(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandPrefersInlineSystemPromptOverFile pins inline-wins when
-// both are present.
 func TestGetLaunchCommandPrefersInlineSystemPromptOverFile(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -96,7 +87,6 @@ func TestGetLaunchCommandPrefersInlineSystemPromptOverFile(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandReadsSystemPromptFile covers the file fallback.
 func TestGetLaunchCommandReadsSystemPromptFile(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "system.md")
 	if err := os.WriteFile(file, []byte("  file rules\n"), 0o600); err != nil {
@@ -115,9 +105,6 @@ func TestGetLaunchCommandReadsSystemPromptFile(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandRejectsStdinTaskLiteral covers the one task value Harness
-// treats as a flag: "-" reads the task from stdin, which AO never supplies, so
-// the launch must fail loudly instead of blocking.
 func TestGetLaunchCommandRejectsStdinTaskLiteral(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Prompt: "-"})
@@ -126,10 +113,6 @@ func TestGetLaunchCommandRejectsStdinTaskLiteral(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandOmitsTheAOSessionID pins the flag's meaning: --session-id
-// adopts a session Harness has already persisted and is rejected for an id it
-// has not seen, while cfg.SessionID is AO's own id. Passing it would fail every
-// fresh spawn, because AO always supplies that id.
 func TestGetLaunchCommandOmitsTheAOSessionID(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -146,10 +129,6 @@ func TestGetLaunchCommandOmitsTheAOSessionID(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandRejectsAPromptlessTask covers the reachable half of the
-// stdin trap: AO's --prompt is optional, and Harness reads stdin when the
-// headless profile gets no task at all, so such a session would hang instead of
-// doing work.
 func TestGetLaunchCommandRejectsAPromptlessTask(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	for _, prompt := range []string{"", "   \n"} {
@@ -178,9 +157,6 @@ func TestGetRestoreCommandRequiresNativeSessionID(t *testing.T) {
 	}
 }
 
-// TestGetRestoreCommandRejectsAPromptlessTask holds the same stdin guarantee on
-// the resume path: continuing a persisted session still runs one headless task,
-// so an empty turn would block exactly as a promptless launch does.
 func TestGetRestoreCommandRejectsAPromptlessTask(t *testing.T) {
 	p := &Plugin{resolvedBinary: "dsh"}
 	cfg := ports.RestoreConfig{}
@@ -215,9 +191,6 @@ func TestAuthStatusWithoutEvidenceStaysUnknown(t *testing.T) {
 	}
 }
 
-// TestAuthStatusScopesEvidenceToTheDeepSeekRecord is the failure that matters:
-// the store also holds credentials for other providers, and one of those must
-// not read as DeepSeek Harness being ready.
 func TestAuthStatusScopesEvidenceToTheDeepSeekRecord(t *testing.T) {
 	t.Setenv(deepseekCredentialKey, "")
 	cases := []struct {
@@ -226,12 +199,6 @@ func TestAuthStatusScopesEvidenceToTheDeepSeekRecord(t *testing.T) {
 		want    ports.AgentAuthStatus
 		wantErr bool
 	}{
-		// The fixtures below are the layout a current DeepSeek Harness writes and
-		// reads: `version: 1` with credentials under `refs:`, mapping each
-		// addressable name straight to its secret. A document without `version`
-		// is the pre-release flat layout, which Harness now refuses to load
-		// ("uses the pre-release flat layout. Add `version: 1` …"), so it is
-		// covered as a rejected document rather than as evidence.
 		{
 			name: "deepseek ref carries the key",
 			store: `
@@ -270,9 +237,6 @@ refs:
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
-			// A scoped api-key record is a valid store that carries no
-			// DEEPSEEK_API_KEY ref. AO cannot tell which route it serves, so it
-			// stays unknown rather than claiming authorization it has not seen.
 			name: "scoped record without a deepseek ref",
 			store: `
 version: 1
@@ -284,10 +248,6 @@ records:
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
-			// The pre-release flat layout. Harness refuses to load a document
-			// with no `version: 1`, and the failure takes its whole credentials
-			// service down, so reading this as authorization would badge the
-			// harness ready for a session that cannot start.
 			name: "pre-release flat layout is not evidence",
 			store: `
 DEEPSEEK_API_KEY: sk-live
@@ -295,8 +255,6 @@ DEEPSEEK_API_KEY: sk-live
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
-			// A version this build does not read is refused by Harness the same
-			// way, so it is not evidence either.
 			name: "unsupported store version",
 			store: `
 version: 2
@@ -306,11 +264,8 @@ refs:
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
-			name:  "malformed store is reported",
-			store: "records: [",
-			// An unreadable store is surfaced rather than silently reported as
-			// unauthenticated, matching how the other adapters treat a corrupt
-			// credential file.
+			name:    "malformed store is reported",
+			store:   "records: [",
 			want:    ports.AgentAuthStatusUnknown,
 			wantErr: true,
 		},

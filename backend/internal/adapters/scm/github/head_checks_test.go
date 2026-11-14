@@ -12,12 +12,9 @@ func TestHeadChecks_ReadsSuitesStatusesAndWhenChecksCouldStart(t *testing.T) {
 	pushed := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
 	f.on(http.MethodGet, "/repos/octocat/hello/commits/"+stackHead+"/check-suites", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 4, "check_suites": []map[string]any{
-			// Apps installed on the repository that never run here.
 			{"status": "queued", "conclusion": nil, "latest_check_runs_count": 0, "created_at": pushed.Add(time.Second)},
 			{"status": "queued", "conclusion": nil, "latest_check_runs_count": 0, "created_at": pushed},
-			// A workflow that matched nothing.
 			{"status": "completed", "conclusion": "skipped", "latest_check_runs_count": 0, "created_at": pushed.Add(2 * time.Second)},
-			// A run waiting for a maintainer's approval checks nothing yet, but will.
 			{"status": "completed", "conclusion": "action_required", "latest_check_runs_count": 0, "created_at": pushed.Add(3 * time.Second)},
 		}})
 	})
@@ -33,7 +30,6 @@ func TestHeadChecks_ReadsSuitesStatusesAndWhenChecksCouldStart(t *testing.T) {
 	}
 }
 
-// With no suites at all, the commit's own date is the earliest checks could start.
 func TestHeadChecks_UsesTheCommitDateWithoutSuites(t *testing.T) {
 	f := newFakeGH(t)
 	committed := time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)

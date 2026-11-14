@@ -1,5 +1,3 @@
-// Package droid adapts Factory Droid as an experimental host-trusted AO
-// reviewer. It always runs Droid's visible, long-lived interactive TUI.
 package droid
 
 import (
@@ -20,22 +18,16 @@ import (
 
 const settingsFilename = "droid-reviewer-settings.json"
 
-// HostTrustWarning describes the authority retained by Droid's interactive
-// terminal. Reviewer runs need autonomous execution, so AO cannot rely on Droid
-// settings as an isolation boundary.
 const HostTrustWarning = "experimental host-trusted reviewer: Droid has no OS isolation; terminal users can invoke Bash mode, change interaction/autonomy settings, or enable additional integrations"
 
-// Reviewer builds Droid's persistent interactive reviewer command.
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 }
 
-// New returns the production Droid reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{resolveBinary: workerdroid.ResolveDroidBinary}
 }
 
-// Harness returns Droid's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerDroid }
 
 var _ ports.Reviewer = (*Reviewer)(nil)
@@ -43,9 +35,6 @@ var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)
 var _ ports.ReviewerReusePolicy = (*Reviewer)(nil)
 
-// ReviewCommand starts only Droid's normal interactive TUI. It never uses
-// `droid exec`, output formats, prompt files, or unsafe permission bypasses.
-// AO injects the task after the pane starts and keeps the pane for later passes.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ReviewCommandSpec{}, err
@@ -57,7 +46,6 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if !filepath.IsAbs(binary) {
 		return ports.ReviewCommandSpec{}, errors.New("droid reviewer: resolved binary must be absolute")
 	}
-	// Preflight only needs a resolvable interactive executable.
 	if strings.TrimSpace(inv.TaskPromptRoot) == "" {
 		return ports.ReviewCommandSpec{Argv: []string{binary}}, nil
 	}
@@ -80,20 +68,13 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Droid reviewer pane by relaunching
-// with the reviewer settings and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// ReviewProcessReusable returns false because Droid reviewer tasks are supplied
-// as the launch-time prompt. A later task must start a fresh process instead of
-// relying on typed injection into an old TUI.
 func (*Reviewer) ReviewProcessReusable() bool { return false }
 
-// ReviewPromptReadinessHints gives Droid's startup screen enough time to accept
-// pasted task input before AO submits the initial review reference.
 func (*Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -127,7 +108,6 @@ func writeReviewerSettings(promptRoot string) (string, error) {
 	return path, nil
 }
 
-// ReviewMessage reuses the same Droid TUI for subsequent review passes.
 func (*Reviewer) ReviewMessage(ctx context.Context, inv ports.ReviewInvocation) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -135,7 +115,6 @@ func (*Reviewer) ReviewMessage(ctx context.Context, inv ports.ReviewInvocation) 
 	return inv.Prompt, nil
 }
 
-// ReviewCancel sends Droid's active-operation Ctrl-C once, preserving the pane.
 func (*Reviewer) ReviewCancel(ctx context.Context) (ports.ReviewCancelSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ReviewCancelSpec{}, err

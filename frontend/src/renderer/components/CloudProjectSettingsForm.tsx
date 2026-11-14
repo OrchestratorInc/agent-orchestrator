@@ -59,18 +59,11 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	const opencodeCredential = connectedCredentialType(connections.data, "opencode");
 	const queryClient = useQueryClient();
 	const saved = useRef(cloudProjectSettingsDraft(project));
-	// Coder settings belong only to a project that runs on Coder: the provider
-	// stored on the project, else the org's default, and only while the org's
-	// offering includes coder. Any other project (and every B2C org) sees none.
 	const offering = useCloudOffering();
 	const usesCoder = offering.hasCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER;
 	const standalone = isStandaloneCloudProject(project);
 	const additionalRepos = projectAdditionalRepos(project.config);
-	// A workspace lists its repositories as equals, the way a local workspace lists its own.
 	const workspace = isCloudWorkspaceProject(project);
-	// The control plane runs issue intake for every Cloud project with a
-	// repository (the local daemon's AO_TRACKER_INTAKE gate is about its own
-	// poller); a project without a repository has no issues.
 	const intakeVisible = !standalone;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const save = async (values: ProjectSettingsDraft) => {
@@ -79,8 +72,6 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		try {
 			updated = (await client.updateProjectSettings(project.orgId, project.id, patch)).project;
 		} catch (error) {
-			// A control plane from before the co-author setting rejects it. Save the
-			// rest and put the switch back, so later saves do not keep failing on it.
 			if (patch.config?.coAuthorCommits === undefined || !coAuthorCommitsUnsupported(error)) throw error;
 			const { coAuthorCommits: _unsupported, ...config } = patch.config;
 			const rest: CloudCpProjectSettingsRequest = { ...patch };
@@ -97,13 +88,11 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		return { values: toEditorDraft(saved.current) };
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
-		// A standalone project has no repository, so no branches or pull requests to configure.
 		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, requiredAgents: true, workersRequestReview: !standalone, coAuthorCommits: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
 		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },
 			{ label: t("settings.project.kind"), value: standalone ? t("settings.project.kind.cloudStandalone", { defaultValue: "Cloud, without a repository" }) : workspace ? t("settings.project.kind.cloudWorkspace", { defaultValue: "Cloud workspace" }) : t("settings.project.kind.cloud") },
-			// A standalone project's repository URL is only a placeholder.
 			...(workspace ? [] : [standalone
 				? { label: t("settings.project.repo"), value: t("settings.cloudProject.noRepository", { defaultValue: "No repository" }) }
 				: { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl },
@@ -115,46 +104,30 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}
 		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
-		// The models offered are Cloud's for the account, so a saved model is one its sessions run.
 		cloudOrgId={project.orgId}
-		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
 		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}
-		// The control plane takes only issues from the repository's owners, members and collaborators.
 		intakeDescription={t("settings.cloudProject.intakeDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
 }
 
-/**
- * A control plane that predates the co-author setting rejects it as an unknown
- * one, with exactly this answer. Any other failure, even one that names the
- * setting, is a failure to save and is reported as one.
- */
 function coAuthorCommitsUnsupported(error: unknown): boolean {
 	return error instanceof CloudCpError && error.status === 422 && error.code === "validation_error" &&
 		error.message === "unsupported or null config.coAuthorCommits";
 }
 
-/** The coder config the control plane stores on a project (config.coder). */
 function coderConfigOf(project: CloudCpProject): CloudCpProjectCoderConfig | undefined {
 	const coder = project.config?.coder;
 	return coder && typeof coder === "object" ? (coder as CloudCpProjectCoderConfig) : undefined;
 }
 
-/** The project's Coder template, fixed at creation and shown read-only. Rendered only for a Coder project. */
 export function CloudProjectCoderSettings({ project }: { project: CloudCpProject }) {
 	const { t } = useTranslation();
 	const coder = coderConfigOf(project);
 	const templateId = coder?.templateId?.trim() ?? "";
 	const { templates, isLoading: templatesLoading } = useCoderTemplates(project.orgId, templateId !== "");
 	const template = templates.find((candidate) => candidate.id === templateId);
-	// The template's name, with its id secondary; the bare id when the list
-	// can't load or no longer has it.
 	const templateName = template ? template.displayName || template.name : "";
-	// No project template only blocks sessions for a bring-your-own-Coder org
-	// without an org-default template (the control plane's
-	// coder_template_required). Otherwise the deployment or org default applies,
-	// and non-Coder providers need no template at all.
 	const orgCoder = useOrgCoderConfig(true, project.orgId);
 	const orgCoderConfig = orgCoder.data as { templateId?: string; defaultTemplateId?: string } | null | undefined;
 	const orgDefaultTemplateId = (orgCoderConfig?.templateId ?? orgCoderConfig?.defaultTemplateId ?? "").trim();
@@ -180,8 +153,6 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 			)}
 		</ProjectSettingsRow>
 		{coder?.size ? <ProjectSettingsValueRow label={t("settings.project.coderSize")} value={coder.size} /> : null}
-		{/* Workspace naming is a bring-your-own-Coder control; an existing
-		    prefix stays visible so it can still be cleared. */}
 		{orgCoderConfig != null || (coder?.workspaceNamePrefix?.trim() ?? "") !== "" ? (
 			<CoderWorkspaceNamePrefixRow project={project} />
 		) : null}
@@ -189,21 +160,12 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 	</SettingsGroup>;
 }
 
-/**
- * The project's "Template options": its saved `coder.parameters` over the
- * template's defaults. Autosaves like the other inline fields, sending the whole
- * map (the endpoint replaces it, so a key reset to its default or no longer
- * declared is simply left out). Only new sessions pick the values up. Hidden
- * when the template has no parameters or the control plane predates the route.
- */
 function CoderTemplateParametersSettings({ project, templateId }: { project: CloudCpProject; templateId: string }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const { parameters } = useCoderTemplateParameters(project.orgId, templateId);
 	const saved = useRef<Record<string, string>>(coderConfigOf(project)?.parameters ?? {});
-	// null until the first edit: the controls show the saved values over the
-	// template defaults, and nothing is sent until the user changes one.
 	const [draft, setDraft] = useState<Record<string, string> | null>(null);
 	const shown = draft ?? changedParameterOverrides(parameters, saved.current);
 	const save = useMutation({
@@ -220,11 +182,9 @@ function CoderTemplateParametersSettings({ project, templateId }: { project: Clo
 	const patchKey = patch ? JSON.stringify(patch) : "";
 	const failedKey = isError && save.variables ? JSON.stringify(save.variables) : "";
 	useEffect(() => {
-		// Only send a change, once; a failed patch waits for another edit.
 		if (!patch || isPending || patchKey === failedKey) return;
 		const timeout = window.setTimeout(() => mutate(patch), 650);
 		return () => window.clearTimeout(timeout);
-		// patchKey stands in for patch, which is a fresh object every render.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [patchKey, failedKey, isPending, mutate]);
 	return (
@@ -248,11 +208,6 @@ function CoderTemplateParametersSettings({ project, templateId }: { project: Clo
 	);
 }
 
-/**
- * The project's Coder workspace name prefix, the one Coder setting editable
- * after creation. Autosaves like the other inline settings fields; only new
- * sessions pick it up. Shown when the project runs on Coder (its parent is).
- */
 function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
@@ -274,18 +229,15 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 	const { mutate, isPending, isError, reset } = save;
 	const failedValue = isError ? save.variables : undefined;
 	useEffect(() => {
-		// Editing back to the saved value clears a stale save error.
 		if (trimmed === savedPrefix.current) {
 			if (isError) reset();
 			return;
 		}
-		// Only send a valid change, once; a failed value waits for an edit.
 		if (invalid || isPending || trimmed === failedValue) return;
 		const timeout = window.setTimeout(() => mutate(trimmed), 650);
 		return () => window.clearTimeout(timeout);
 	}, [failedValue, invalid, isError, isPending, mutate, reset, trimmed]);
 	const label = t("coder.workspacePrefix.label");
-	// The hint, or the reason the value cannot be saved, is the row's description.
 	const description = invalid ? (
 		<span className="text-error" role="alert">{t("coder.workspacePrefix.invalid")}</span>
 	) : save.isError ? (
@@ -300,14 +252,11 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 
 function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAgentPickerProps) {
 	const { t } = useTranslation();
-	// Show the agent a reviewer actually runs with when none is chosen.
 	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent, true) : "");
 	const agents = CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }));
 	const label = role === "orchestrator" ? t("settings.project.defaultOrchestrator") : role === "worker" ? t("settings.project.defaultWorker") : `${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`;
 	return <SettingsOptionMenu aria-label={label}
 		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
-		// The worker and orchestrator need an agent, as on local projects; a
-		// reviewer can follow the worker agent's default.
 		options={role === "reviewer" ? [{ value: "", label: t("settings.cloudProject.sessionAgent") }, ...agents] : agents}
 		triggerClassName="w-fit" menuClassName="settings-agent-menu-surface" menuItemClassName="settings-agent-menu-item"
 		renderMenuItem={(option, selected) => <AgentSelectMenuItem agentId={option.value || undefined} label={option.label} selected={selected} />}
@@ -350,7 +299,6 @@ function toCloudDraft(values: ProjectSettingsDraft): CloudProjectSettingsDraft {
 	};
 }
 
-/** When issue intake last looked for issues, or why it could not. */
 function CloudIntakeStatus({ project }: { project: CloudCpProject }) {
 	const { t } = useTranslation();
 	const { client, ready, baseUrl } = useCloudCp();

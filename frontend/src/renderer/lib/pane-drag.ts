@@ -1,35 +1,18 @@
 import type { ClientRect } from "./pane-split";
 
-/**
- * Dragging a tab out of a tab strip to split the center pane.
- *
- * A tab press starts its strip's own reorder drag. Once the pointer leaves the
- * strip vertically, or the press is held still for a moment, the tab lifts
- * out (so a held tab can also be moved sideways onto another tab to merge): the strip's reorder stops, a ghost of
- * the tab follows the pointer and the drop target (the session view) shows
- * where the tab would land. Everything during the drag is imperative DOM work
- * batched to one write per frame: the ghost moves by transform, the preview
- * box only moves when the zone under the pointer changes, and React renders
- * nothing until the drop commits.
- */
-
 export type PaneDropResolution = {
-	/** Viewport box the tab would occupy. */
 	rect: ClientRect;
-	/** A short line shown inside the preview, naming what releasing here does. */
 	label?: string;
 	commit: () => void;
 };
 
 export type PaneDropTarget = {
-	/** Whether this tab can leave its strip at all. */
 	canDrag: (key: string) => boolean;
 	resolve: (key: string, x: number, y: number) => PaneDropResolution | null;
 };
 
 let dropTarget: PaneDropTarget | null = null;
 
-/** The session view registers itself while it can take dropped tabs. */
 export function registerPaneDropTarget(target: PaneDropTarget): () => void {
 	dropTarget = target;
 	return () => {
@@ -37,15 +20,10 @@ export function registerPaneDropTarget(target: PaneDropTarget): () => void {
 	};
 }
 
-/** Distance past the strip's edge before a tab lifts out of it. */
 const DETACH_DISTANCE_PX = 14;
-/** A press held this long without moving lifts the tab out in place. */
 const HOLD_MS = 320;
-/** Movement within this distance still counts as holding still. */
 const HOLD_SLOP_PX = 5;
-/** How far a pane header moves before it lifts. */
 const LIFT_DISTANCE_PX = 4;
-/** Matches the preview's CSS fade so the nodes leave after it. */
 const FADE_MS = 150;
 
 type ActiveDrag = {
@@ -60,7 +38,6 @@ type ActiveDrag = {
 	y: number;
 	startX: number;
 	startY: number;
-	/** What the press landed on; a slow click is replayed there. */
 	pressTarget: EventTarget | null;
 	holdTimer: number | null;
 	frame: number | null;
@@ -69,7 +46,6 @@ type ActiveDrag = {
 	previewShown: boolean;
 	resolution: PaneDropResolution | null;
 	onDetach?: () => void;
-	/** A pane header lifts on the first real movement, not at the strip's edge. */
 	immediate: boolean;
 	cleanup: () => void;
 };
@@ -80,10 +56,6 @@ export function isPaneTabDragging(): boolean {
 	return Boolean(active?.detached);
 }
 
-/**
- * Call from a tab's pointerdown. `source` is the element that looks like the
- * tab (it is cloned for the ghost). `onDetach` stops the strip's own drag.
- */
 export function beginPaneTabDrag(
 	event: { pointerId: number; clientX: number; clientY: number; button: number; target?: EventTarget | null },
 	key: string,
@@ -122,7 +94,6 @@ export function beginPaneTabDrag(
 		drag.x = moveEvent.clientX;
 		drag.y = moveEvent.clientY;
 		if (!drag.detached) {
-			// Moving off the spot first makes this a reorder, not a hold.
 			if (drag.holdTimer !== null && Math.hypot(drag.x - drag.startX, drag.y - drag.startY) > HOLD_SLOP_PX) {
 				window.clearTimeout(drag.holdTimer);
 				drag.holdTimer = null;
@@ -164,7 +135,6 @@ export function beginPaneTabDrag(
 		window.removeEventListener("keydown", onKey, true);
 		window.removeEventListener("blur", onBlur);
 	};
-	// A pane header lifts by moving; a press that stays put is just a click.
 	if (!drag.immediate) drag.holdTimer = window.setTimeout(() => {
 		drag.holdTimer = null;
 		if (active !== drag || drag.detached) return;
@@ -177,8 +147,6 @@ export function beginPaneTabDrag(
 function detach(drag: ActiveDrag): void {
 	drag.detached = true;
 	drag.onDetach?.();
-	// The ghost is a copy of the tab itself at its exact size, measured from
-	// the tab's frame rather than the wrapper the press landed on.
 	const frameSelector = "[data-terminal-tab-frame], [data-pane-drag-chip]";
 	const frame = (drag.source.matches(frameSelector)
 		? drag.source
@@ -186,16 +154,12 @@ function detach(drag: ActiveDrag): void {
 	const box = frame.getBoundingClientRect();
 	drag.grabX = Math.min(Math.max(drag.x - box.left, 0), box.width);
 	drag.grabY = Math.min(Math.max(drag.y - box.top, 0), box.height);
-	// Keep the pointer stream even over iframes and native-feeling surfaces.
 	try {
 		drag.source.setPointerCapture(drag.pointerId);
 	} catch {
-		// The pointer may already be released; pointerup ends the drag anyway.
 	}
 	const ghost = document.createElement("div");
 	ghost.className = "pane-drag-ghost";
-	// Tabs in the floating top bar are styled by that bar; carry it over so
-	// the ghost looks like the tab it lifted.
 	if (drag.source.closest(".center-panel-shell--floating-topbar")) ghost.classList.add("center-panel-shell--floating-topbar");
 	ghost.setAttribute("aria-hidden", "true");
 	ghost.style.width = `${box.width}px`;
@@ -215,7 +179,6 @@ function detach(drag: ActiveDrag): void {
 	drag.preview = preview;
 	drag.source.setAttribute("data-pane-drag-source", "");
 	document.body.classList.add("is-pane-dragging");
-	// Lift on the next frame so the ghost fades and scales in from the tab.
 	requestAnimationFrame(() => ghost.setAttribute("data-lifted", ""));
 }
 
@@ -243,7 +206,6 @@ function paint(drag: ActiveDrag): void {
 		drag.previewShown = false;
 		return;
 	}
-	// The label can change while the box stays (a pane header over its own strip).
 	if ((preview.dataset.label ?? "") !== (resolution.label ?? "")) {
 		if (resolution.label) preview.dataset.label = resolution.label;
 		else delete preview.dataset.label;
@@ -252,7 +214,6 @@ function paint(drag: ActiveDrag): void {
 	const next = `${left}|${top}|${width}|${height}`;
 	if (preview.dataset.box === next && drag.previewShown) return;
 	if (!drag.previewShown) {
-		// Appear in place: no slide in from wherever the box last was.
 		preview.setAttribute("data-instant", "");
 		placePreview(preview, resolution.rect);
 		void preview.offsetWidth;
@@ -265,7 +226,6 @@ function paint(drag: ActiveDrag): void {
 	preview.dataset.box = next;
 }
 
-/** The preview floats a little inside the pane it stands for. */
 const PREVIEW_INSET_PX = 4;
 
 function placePreview(preview: HTMLElement, rect: ClientRect): void {
@@ -282,22 +242,16 @@ function finish(drag: ActiveDrag, commit: boolean): void {
 	if (drag.holdTimer !== null) window.clearTimeout(drag.holdTimer);
 	if (drag.frame !== null) cancelAnimationFrame(drag.frame);
 	if (!drag.detached) return;
-	// The release lands on the captured tab, not what was pressed; that click
-	// must not act.
 	const swallowClick = (clickEvent: MouseEvent) => {
 		clickEvent.stopPropagation();
 		clickEvent.preventDefault();
 	};
 	window.addEventListener("click", swallowClick, true);
-	// A tab lifted by holding and released where it was pressed was a slow
-	// click: put it down and replay the click on what was pressed, so it still
-	// selects the tab.
 	const stayedPut = Math.hypot(drag.x - drag.startX, drag.y - drag.startY) <= HOLD_SLOP_PX;
 	window.setTimeout(() => {
 		window.removeEventListener("click", swallowClick, true);
 		if (commit && stayedPut && drag.pressTarget instanceof HTMLElement && drag.pressTarget.isConnected) drag.pressTarget.click();
 	}, 0);
-	// Resolve against the final pointer position, not the last painted frame.
 	const resolution = commit && !stayedPut ? (dropTarget?.resolve(drag.key, drag.x, drag.y) ?? null) : null;
 	drag.source.removeAttribute("data-pane-drag-source");
 	document.body.classList.remove("is-pane-dragging");

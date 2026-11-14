@@ -58,7 +58,6 @@ func TestFinalAssistantMessageReadsTheTurnTheStopEnded(t *testing.T) {
 			`{"type":"assistant.turn_end","data":{"turnId":"1"}}`,
 			copilotStopLine,
 		}},
-		// A log that never records the hook call still yields the answer once the wait is over.
 		{name: "no stop record", want: "answer", lines: []string{
 			`{"type":"user.message","data":{"content":"only"}}`,
 			`{"type":"assistant.message","data":{"content":"answer"}}`,
@@ -71,8 +70,6 @@ func TestFinalAssistantMessageReadsTheTurnTheStopEnded(t *testing.T) {
 	}
 }
 
-// Copilot flushes its log in batches, so the turn's last lines usually land
-// after the stop hook has started.
 func TestFinalAssistantMessageWaitsForTheLogToCatchUp(t *testing.T) {
 	shortenCopilotTranscriptWait(t)
 	path, payload := writeCopilotTranscript(t,

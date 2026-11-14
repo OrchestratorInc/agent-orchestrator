@@ -15,9 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Cline 3 stores a manifest and a messages document in one globally indexed
-// session directory. --id reuses that id and loads its messages with the
-// current cwd/workspace config; no cwd-keyed copy is necessary.
 var clineImportID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$`)
 
 func clineRoot(home string) string {
@@ -67,11 +64,6 @@ func discoverCline(ctx context.Context, root string) ([]sourceFiles, error) {
 	return out, nil
 }
 
-// clineDocument streams JSON objects from a document's top-level array. The
-// shared recordSkim bounds each message separately, including enormous tool
-// payloads. The top-level scalar skim validates document identity without
-// holding the messages array a second time. Complete messages survive a torn
-// final append, just as the shared JSONL reader does.
 func clineDocument(ctx context.Context, root *os.Root, home, path string, message func([]byte)) ([]byte, error) {
 	rel, err := filepath.Rel(home, canonical(path))
 	if err != nil || !filepath.IsLocal(rel) {
@@ -240,9 +232,6 @@ func readClineTranscript(ctx context.Context, root string, paths ...string) (tra
 	return t, finishErr
 }
 
-// clineUserText is a user turn's typed text. Cline appends the context it
-// injects as separate blocks of the same turn, so each block is filtered on
-// its own; filtering the joined text would let a trailing block through.
 func clineUserText(content json.RawMessage) string {
 	var text string
 	if json.Unmarshal(content, &text) == nil {

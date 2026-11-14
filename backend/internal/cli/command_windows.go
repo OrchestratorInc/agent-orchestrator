@@ -11,8 +11,6 @@ import (
 	"syscall"
 )
 
-// Expand arguments after cmd's syntax parsing so percent signs, newlines and
-// shell punctuation in prompts remain data. Batch shims forward argv via %*.
 func configureCLIBatch(cmd *exec.Cmd) {
 	ext := filepath.Ext(cmd.Path)
 	if !strings.EqualFold(ext, ".cmd") && !strings.EqualFold(ext, ".bat") {

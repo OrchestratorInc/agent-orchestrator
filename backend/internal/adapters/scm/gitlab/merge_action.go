@@ -16,11 +16,6 @@ var mergeHeadSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 var _ ports.SCMMerger = (*Provider)(nil)
 
-// MergePullRequest performs a GitLab merge guarded by the reviewed head SHA.
-// GitLab's sha query parameter is a compare-and-swap precondition: if the live
-// head has advanced, GitLab responds 409 and the merge is rejected. Squash maps
-// to squash=true and merge to squash=false (the project's configured merge
-// method); GitLab has no single-call rebase merge, so rebase is unsupported.
 func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeRequest) (ports.SCMMergeResult, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMMergeResult{}, fmt.Errorf("gitlab scm: merge provider is not configured")
@@ -79,8 +74,6 @@ func (p *Provider) MergePullRequest(ctx context.Context, request ports.SCMMergeR
 	if err := json.Unmarshal(resp.Body, &result); err != nil {
 		return ports.SCMMergeResult{}, fmt.Errorf("gitlab scm: decode merge response: %w", err)
 	}
-	// GitLab returns merge_commit_sha on success. Fall back to sha for
-	// self-managed instances that return a different field name.
 	mergeSHA := result.MergeCommitSHA
 	if mergeSHA == "" {
 		mergeSHA = result.SHA

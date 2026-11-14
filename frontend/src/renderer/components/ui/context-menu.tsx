@@ -28,8 +28,6 @@ export function ContextMenuContent({
 				onCloseAutoFocus={composeMenuCloseAutoFocus(onCloseAutoFocus)}
 				onContextMenu={(event) => {
 					onContextMenu?.(event);
-					// Portals bubble React events up the component tree, so a right-click on
-					// this menu would otherwise open the menu of a trigger that contains it.
 					event.stopPropagation();
 				}}
 				className={cn(
@@ -85,14 +83,12 @@ export function ContextMenuSeparator({
 	return <ContextMenuPrimitive.Separator className={cn(actionMenuSeparatorClass, className)} {...props} />;
 }
 
-/** Trailing key hint on a menu row; same look as DropdownMenuShortcut. */
 export function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
 	return <span className={cn("ml-auto pl-4 text-micro tracking-wide-md text-passive", className)} {...props} />;
 }
 
 export const ContextMenuSub = ContextMenuPrimitive.Sub;
 
-/** A row that opens a side submenu; same row styling as ContextMenuItem. */
 export function ContextMenuSubTrigger({
 	className,
 	children,
@@ -109,10 +105,8 @@ export function ContextMenuSubTrigger({
 	);
 }
 
-/** The side panel a ContextMenuSubTrigger opens; same surface as ContextMenuContent. */
 export function ContextMenuSubContent({
 	className,
-	// Matches DropdownMenuSubContent: a 4px gap, first row level with the trigger.
 	sideOffset = 9,
 	alignOffset = -5,
 	...props

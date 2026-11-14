@@ -9,9 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Dropping or mis-mapping any definition field in the SQLite boundary must
-// make this test fail; the scheduler must restart from the same durable rule
-// and timezone the user created.
 func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -60,7 +57,7 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 	if err != nil || !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("updated automation = %#v, want %#v; ok=%v err=%v", got, want, ok, err)
 	}
-	got.TemplateID = "custom" // Store updates must never rewrite origin.
+	got.TemplateID = "custom"
 	got.UseCase = "ci_triage"
 	if ok, err := store.UpdateAutomation(ctx, got); err != nil || !ok {
 		t.Fatalf("update: %v %v", ok, err)
@@ -71,9 +68,6 @@ func TestAutomationCreateAndGetRoundTripsDefinition(t *testing.T) {
 	}
 }
 
-// Removing the occurrence conflict handling must make this test fail: a
-// repeated materialization pass must return the first durable run rather than
-// manufacture a second execution identity.
 func TestAutomationRunCreateIsIdempotentByOccurrence(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -107,8 +101,6 @@ func TestAutomationRunCreateIsIdempotentByOccurrence(t *testing.T) {
 	}
 }
 
-// Removing the session-origin mapping must make this test fail: restart
-// reconciliation relies on reading the exact session already created for a run.
 func TestSessionPersistsAutomationRunOrigin(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -145,8 +137,6 @@ func TestSessionPersistsAutomationRunOrigin(t *testing.T) {
 	}
 }
 
-// A retry after the scheduler's post-spawn crash window must adopt the first
-// durable session instead of creating a second agent execution.
 func TestSessionCreateIsIdempotentByAutomationRun(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -176,8 +166,6 @@ func TestSessionCreateIsIdempotentByAutomationRun(t *testing.T) {
 	}
 }
 
-// If this created flag is lost, Session Manager cannot distinguish a fresh
-// seed from a crash-surviving seed and may launch the same occurrence twice.
 func TestAutomationSessionCreateReportsWhetherSeedWasNew(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -209,9 +197,6 @@ func TestAutomationSessionCreateReportsWhetherSeedWasNew(t *testing.T) {
 	}
 }
 
-// Removing either project/enabled filtering or stable page ordering must make
-// this test fail; the API must not leak definitions across projects or reshuffle
-// rows between pages.
 func TestAutomationListFiltersAndPaginatesDefinitions(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "alpha")
@@ -241,8 +226,6 @@ func TestAutomationListFiltersAndPaginatesDefinitions(t *testing.T) {
 	}
 }
 
-// Omitting any mutable field from the update statement must make this test
-// fail; schedule edits are persisted as one complete validated definition.
 func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -282,8 +265,6 @@ func TestAutomationUpdatePersistsAllMutableFields(t *testing.T) {
 	}
 }
 
-// Reversing history order or ignoring the status filter must make this test
-// fail; users and reconciliation both depend on deterministic run selection.
 func TestAutomationRunHistoryFiltersNewestFirst(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -317,8 +298,6 @@ func TestAutomationRunHistoryFiltersNewestFirst(t *testing.T) {
 	}
 }
 
-// Materialization must atomically advance the definition with its occurrence
-// inserts; a stale scheduler pass must not append a second batch.
 func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -353,8 +332,6 @@ func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 	}
 }
 
-// The claim transaction is the non-overlap boundary. Once one occurrence is
-// spawning, later pending work for that definition cannot be leased.
 func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")
@@ -388,8 +365,6 @@ func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
 	}
 }
 
-// Deleting a definition removes history while preserving linked sessions and
-// clearing their origin link through ON DELETE SET NULL.
 func TestAutomationDeleteCascadesRunsButPreservesSession(t *testing.T) {
 	store := newTestStore(t)
 	seedProject(t, store, "scheduled")

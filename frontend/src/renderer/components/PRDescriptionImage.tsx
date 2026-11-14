@@ -6,7 +6,6 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { Button } from "./ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
 
-/** Only web images open in place; anything else stays a plain label. */
 export function isWebImageUrl(src: string | undefined): src is string {
 	if (!src) return false;
 	try {
@@ -17,14 +16,8 @@ export function isWebImageUrl(src: string | undefined): src is string {
 	}
 }
 
-/** The hast node react-markdown hands a link renderer, as far as this check reads it. */
 type LinkNode = { children?: Array<{ type: string; tagName?: string; value?: string }> } | undefined;
 
-/**
- * Whether a link only wraps images ([![shot](src)](href)). Such a link renders
- * as just its image: the image is a button, which cannot sit inside a link,
- * and one click should not both open the image and follow the link.
- */
 export function linksOnlyImages(node: LinkNode): boolean {
 	const children = node?.children ?? [];
 	const elements = children.filter((child) => child.type === "element");
@@ -33,12 +26,6 @@ export function linksOnlyImages(node: LinkNode): boolean {
 		&& children.every((child) => child.type === "element" || (child.type === "text" && !child.value?.trim()));
 }
 
-/**
- * An image in the PR body as a small placeholder in the text. It loads nothing
- * until it is opened; then the picture shows centred over the app, with a
- * link to the original for images the provider only serves to a signed-in
- * browser (attachments on a private repository).
- */
 export function PRDescriptionImage({ alt, src }: { alt?: string; src?: string }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);

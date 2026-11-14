@@ -12,9 +12,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// NativeJSONSessionExists runs a read-only local export/list command and requires
-// an exact identity in its JSON response. CLIs which create a new conversation
-// for an unknown resume ID must pass this check before AO stops the old process.
 func NativeJSONSessionExists(ctx context.Context, binary string, args []string, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
 	if strings.TrimSpace(nativeID) == "" {
 		return false, nil

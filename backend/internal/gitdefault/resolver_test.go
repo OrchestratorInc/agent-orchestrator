@@ -25,7 +25,6 @@ func TestResolveUsesLiveRemoteHeadInsteadOfCheckedOutBranch(t *testing.T) {
 	runGit(t, updater, "push", "origin", "dev")
 	wantSHA := gitOutput(t, origin, "rev-parse", "refs/heads/dev")
 
-	// Make the local cache stale. The live bare repository still advertises dev.
 	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "HEAD")
 	runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	resolution, err := New("", nil).Resolve(context.Background(), context.Background(), repo)

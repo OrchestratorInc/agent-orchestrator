@@ -22,12 +22,6 @@ export function isLinuxPlatform(): boolean {
 	return navigatorPlatform().toLowerCase().includes("linux");
 }
 
-/**
- * macOS only: the window reserves a traffic-light band above a full-height
- * sidebar, so windowed overlays (browser/files pop-outs) clear it. Every page
- * renders its own PageTopbar inside the framed center panel on all platforms;
- * the fixed TitlebarNav cluster carries the sidebar toggle and history arrows.
- */
 export function hidesShellTopbar(): boolean {
 	return isMacPlatform();
 }

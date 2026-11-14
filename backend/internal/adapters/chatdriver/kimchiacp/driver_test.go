@@ -84,7 +84,6 @@ func TestConfigureAppendsSystemPromptWhenProvided(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	// Kimchi reads a path given to the flag as a file, which keeps the command line short.
 	file := filepath.Join(data, "prompts", "s1", "kimchi", "system-prompt.md")
 	if got, err := os.ReadFile(file); err != nil || string(got) != "Follow AO worker rules." {
 		t.Fatalf("system prompt file = %q, %v", got, err)

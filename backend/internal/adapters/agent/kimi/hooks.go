@@ -17,8 +17,7 @@ import (
 var kimiAPIKeyLineRE = regexp.MustCompile(`(?m)^\s*api_key\s*=\s*("([^"]*)"|'([^']*)'|([^\s#]+))`)
 
 const (
-	kimiInstructionsDirName = ".kimi"
-	// kimiCodeInstructionsDirName is where Kimi Code looks for project AGENTS.md.
+	kimiInstructionsDirName     = ".kimi"
 	kimiCodeInstructionsDirName = ".kimi-code"
 	kimiInstructionsFileName    = "AGENTS.md"
 	kimiInstructionsSentinel    = "<!-- managed by agent-orchestrator: kimi system prompt -->"
@@ -28,13 +27,6 @@ const (
 	kimiHooksSentinelEnd   = "# /managed by agent-orchestrator: kimi hooks"
 )
 
-// GetAgentHooks installs AO's standing system prompt through Kimi's
-// project-level instruction file. Kimi has no system-prompt argv flag, and its
-// user-level config lives outside AO's data dir, so a gitignored worktree-local
-// instruction file is the least invasive session-scoped injection point. It
-// also installs Kimi lifecycle hooks into the AO-managed Kimi config so AO can
-// capture Kimi's native session id for true resume without mutating the user's
-// global Kimi profile.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -57,10 +49,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// PrepareACPInstructions installs AO's standing instructions where Kimi Code
-// discovers project-level AGENTS.md files. Chat sessions call this immediately
-// before launching `kimi acp`; unlike TUI sessions, they do not run
-// GetAgentHooks during workspace preparation.
 func PrepareACPInstructions(ctx context.Context, workspacePath, systemPrompt string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -71,11 +59,9 @@ func PrepareACPInstructions(ctx context.Context, workspacePath, systemPrompt str
 	if strings.TrimSpace(workspacePath) == "" {
 		return errors.New("kimi: workspace path is required for ACP instructions")
 	}
-	// Kimi Code reads <project>/.kimi-code/AGENTS.md; the older Kimi CLI read
-	// .kimi/AGENTS.md. Both are written, so either finds AO's instructions.
 	for _, dir := range []string{kimiCodeInstructionsDirName, kimiInstructionsDirName} {
 		if projectOwnsInstructions(ctx, workspacePath, dir) {
-			continue // The chat driver sends them with the first prompt instead.
+			continue
 		}
 		path := filepath.Join(workspacePath, dir, kimiInstructionsFileName)
 		if err := writeKimiInstructions(ctx, path, systemPrompt); err != nil {
@@ -146,8 +132,6 @@ func installKimiConfigHooks(cfg ports.WorkspaceHookConfig) error {
 	return nil
 }
 
-// ShareCredentials gives the Kimi home AO runs Kimi chats in the user's own
-// Kimi login, as a terminal session's hooks do.
 func ShareCredentials(dataDir string) error {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil
@@ -169,8 +153,6 @@ func seedKimiCredentials(targetHome string) error {
 		return fmt.Errorf("read source Kimi config %s: %w", sourceConfigPath, err)
 	}
 	if len(sourcePaths) == 0 {
-		// Preserve the legacy credential-only seed path for profiles created by
-		// Kimi versions that did not persist an OAuth reference in config.toml.
 		sourcePaths = []string{filepath.Join(sourceHome, "credentials", "kimi-code.json")}
 	}
 	for _, sourcePath := range sourcePaths {
@@ -182,10 +164,6 @@ func seedKimiCredentials(targetHome string) error {
 	return nil
 }
 
-// shareKimiCredentialStore links AO's Kimi home's credentials to the user's
-// own: Kimi rotates its refresh token, so a copy goes stale and two copies can
-// sign each other out. It reports false where the user has no Kimi login or a
-// link cannot be made (Windows without the privilege), leaving the copy below.
 func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
 	source := filepath.Join(sourceHome, "credentials")
 	target := filepath.Join(targetHome, "credentials")
@@ -201,7 +179,6 @@ func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
 	if err := os.MkdirAll(targetHome, 0o700); err != nil {
 		return false, fmt.Errorf("create Orchestrator Kimi home: %w", err)
 	}
-	// AO's folder only held seeded copies; it is restored if the link fails.
 	aside := target + ".seeded"
 	_ = os.RemoveAll(aside)
 	if err := os.Rename(target, aside); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -219,7 +196,6 @@ func seedKimiCredential(sourcePath, targetPath string) error {
 	if sameKimiConfigPath(sourcePath, targetPath) {
 		return nil
 	}
-	// A newer login replaces the copy, which went stale once Kimi renewed it.
 	if target, err := os.Stat(targetPath); err == nil {
 		if source, err := os.Stat(sourcePath); err != nil || !source.ModTime().After(target.ModTime()) {
 			return nil //nolint:nilerr // No newer login to copy; the existing one stays.
@@ -279,9 +255,6 @@ func kimiSeedConfig(targetPath string, existing []byte) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("read source Kimi config %s: %w", sourcePath, err)
 	}
 	if !kimiConfigHasAPIKey(source) {
-		// Device-code logins leave api_key empty and keep their tokens in the
-		// credential file. The full config is still required for default_model,
-		// the provider/OAuth mapping, model aliases, services, and permissions.
 		authorized, err := kimiSourceOAuthAuthorized(sourceHome)
 		if err != nil {
 			return nil, false, err
@@ -458,8 +431,6 @@ func mergeKimiInstructionFile(existing, systemPrompt string) string {
 	afterStart := existing[start+len(kimiInstructionsSentinel):]
 	endRel := strings.Index(afterStart, kimiInstructionsEnd)
 	if endRel < 0 {
-		// Older AO-managed files did not have an end marker. Treat the marker as
-		// owning the rest of the file so stale AO instructions are replaced.
 		return joinKimiInstructionParts(existing[:start], block, "")
 	}
 
@@ -483,16 +454,10 @@ func joinKimiInstructionParts(prefix, block, suffix string) string {
 	return b.String()
 }
 
-// CodeInstructionsOwnedByProject reports whether AO must leave Kimi Code's
-// project instructions file alone, so its standing instructions need another
-// way in.
 func CodeInstructionsOwnedByProject(ctx context.Context, workspacePath string) bool {
 	return projectOwnsInstructions(ctx, workspacePath, kimiCodeInstructionsDirName)
 }
 
-// projectOwnsInstructions: a committed file would carry AO's block into the
-// project's commits, and a linked folder would take the write outside the
-// workspace.
 func projectOwnsInstructions(ctx context.Context, workspacePath, dir string) bool {
 	if info, err := os.Lstat(filepath.Join(workspacePath, dir)); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return true
@@ -500,8 +465,6 @@ func projectOwnsInstructions(ctx context.Context, workspacePath, dir string) boo
 	return gitTracked(ctx, filepath.Join(workspacePath, dir, kimiInstructionsFileName))
 }
 
-// gitTracked reports whether git tracks path. Any failure (no git, no
-// repository) reads as untracked.
 func gitTracked(ctx context.Context, path string) bool {
 	cmd := aoprocess.CommandContext(ctx, "git", "--no-optional-locks", "-C", filepath.Dir(path), "ls-files", "--error-unmatch", "--", filepath.Base(path))
 	return cmd.Run() == nil

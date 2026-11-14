@@ -200,7 +200,6 @@ func TestReadinessCoordinatorEnsureNormalizesInstalledAndAuthorized(t *testing.T
 
 func TestReadinessCoordinatorKeepsUnsupportedInstallationChecksDistinct(t *testing.T) {
 	t.Parallel()
-	// Expose the core agent contract without its optional binary resolver.
 	agent := struct{ ports.Agent }{&readinessTestAgent{}}
 	item := readinessHarness("custom", "Custom", agent)
 	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
@@ -618,9 +617,7 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 		version, binaryPath string
 		wantReasonHas       string
 	}{
-		// OpenCode 2 at OpenCode 1's default location replaced it; say so and how to repair it.
 		{"opencode", "OpenCode", 1, 2, "2.0.0", "/usr/local/bin/opencode", "/usr/local/bin/opencode is OpenCode 2 (2.0.0), which replaced OpenCode 1"},
-		// OpenCode 2 only where AO keeps it apart: OpenCode 1 simply is not installed.
 		{"opencode", "OpenCode", 1, 2, "2.0.0", "/opt/homebrew/opt/opencode-v2/bin/opencode", ""},
 		{"opencode-v2", "OpenCode 2", 2, 1, "1.18.33", "/opt/homebrew/bin/opencode", ""},
 	} {
@@ -1265,10 +1262,6 @@ func TestReadinessCoordinatorRejectsInvalidPurposeAndUnknownAgent(t *testing.T) 
 	}
 }
 
-// A credential AO could not validate must sit between the two definite
-// answers: it is not ready, so nothing renders green, and it is not not_ready,
-// so nothing is blocked. The old behaviour collapsed it into authorized, which
-// is how a revoked key rendered as a working agent.
 func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 	t.Parallel()
 	agent := &readinessTestAgent{
@@ -1294,7 +1287,6 @@ func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 	if got := items[0].EffectiveReadiness; got != domain.AgentReadinessUnknown {
 		t.Fatalf("effective readiness = %q, want %q — an unverified credential is neither ready nor blocked", got, domain.AgentReadinessUnknown)
 	}
-	// Recorded as an observation, not a failure, so it is not retried as one.
 	if items[0].Authentication.CheckedAt == nil {
 		t.Fatal("a configured verdict is a definite observation and must be marked checked")
 	}
@@ -1319,9 +1311,6 @@ func (a *readinessClaudeTokenAgent) AuthStatusForRuntime(_ context.Context, data
 	return a.status, domain.AgentAccountIdentity{}, []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("setup token probe", "token_probe_completed")}, nil
 }
 
-// The adapter owns which credential a launch uses (see claudecode's local
-// credential tests); readiness only has to route the check through it with the
-// daemon's data directory.
 func TestReadinessChecksAuthenticationWithRuntimeCredentials(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1385,7 +1374,6 @@ func TestEnsureInstallationReadinessSeesExternalInstallWithoutAuthChecks(t *test
 	if got := state(); got != domain.AgentInstallationNotInstalled {
 		t.Fatalf("first pass = %q, want not_installed", got)
 	}
-	// The user installs Codex outside AO; the next periodic pass is hours later.
 	mu.Lock()
 	installed = true
 	now = now.Add(6 * time.Hour)

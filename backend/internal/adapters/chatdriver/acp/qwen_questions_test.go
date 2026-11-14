@@ -217,7 +217,6 @@ func TestQwenUserQuestion_YOLOShouldNotBypass(t *testing.T) {
 		return "proceed_once", true
 	}
 
-	// 1. Regular tool is auto-approved in YOLO mode
 	regular := acpsdk.RequestPermissionRequest{
 		ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "exec-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute)},
 		Options:  []acpsdk.PermissionOption{{OptionId: "proceed_once", Kind: acpsdk.PermissionOptionKindAllowOnce}},
@@ -227,7 +226,6 @@ func TestQwenUserQuestion_YOLOShouldNotBypass(t *testing.T) {
 		t.Fatalf("regular tool not auto-approved: %+v, err: %v", resp.Outcome, err)
 	}
 
-	// 2. Qwen question MUST NOT be bypassed; must wait for user input
 	qwenTool := acpsdk.RequestPermissionRequest{
 		ToolCall: acpsdk.ToolCallUpdate{
 			ToolCallId: "qwen-1",

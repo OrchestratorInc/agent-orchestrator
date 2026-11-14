@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// The app's markdown-code.test.ts runs the same cases against its copy.
 func TestMarkdownCodeRanges(t *testing.T) {
 	cases := []struct {
 		name string

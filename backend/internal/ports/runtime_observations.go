@@ -6,19 +6,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// ProbeResult is a single liveness reading. "failed" means the probe errored
-// or timed out and is never treated as a death conclusion.
 type ProbeResult string
 
-// Probe readings. Alive/Dead are conclusions; Failed is ignored by lifecycle
-// because it is not a reliable death decision.
 const (
 	ProbeAlive  ProbeResult = "alive"
 	ProbeDead   ProbeResult = "dead"
 	ProbeFailed ProbeResult = "failed"
 )
 
-// RuntimeFacts is what the reaper reports each probe of a session runtime.
 type RuntimeFacts struct {
 	ObservedAt time.Time
 	Runtime    ProbeResult
@@ -26,78 +21,29 @@ type RuntimeFacts struct {
 	LaunchID   string
 }
 
-// ActivitySignal is pushed by the agent hooks. Only a Valid activity state is
-// authoritative; a stale/absent one is ignored rather than read as idleness.
-// AgentSessionID may be supplied independently by metadata-only hooks such as
-// SessionStart, allowing lifecycle to persist the native resume handle without
-// inventing an activity transition.
-//
-// Event/ToolName/ToolUseID are optional correlation facts used by lifecycle's
-// tool-flight reducer. AgentSessionID is optional native metadata discovered by
-// a hook and persisted for later restore. A signal without these fields keeps
-// plain state-only semantics.
 type ActivitySignal struct {
-	Valid     bool
-	State     domain.ActivityState
-	Timestamp time.Time
-	// ExpectedRevision fences a daemon observer's pre-probe snapshot. nil is an
-	// unversioned hook, while a pointer to zero is a valid initial revision.
-	ExpectedRevision *int64
-	// ExpectedHarness fences native reports to their provider. Empty preserves
-	// the existing generic hook contract; socket reporters always set it.
-	ExpectedHarness domain.AgentHarness
-	Event           string
-	ToolName        string
-	ToolUseID       string
-	SubagentID      string
-	// RunningSubagentIDs is Claude's authoritative parent task snapshot.
-	// Codex provides child start/stop events instead and leaves this nil.
-	RunningSubagentIDs *[]string
-	AgentSessionID     string
-	// LatestUserPrompt and LatestAssistantUpdate are provider hook facts used
-	// to build a deterministic handoff. Lifecycle accepts them only from their
-	// main-turn event boundaries (UserPromptSubmit and Stop) under the current
-	// runtime/controller generation. They are never promoted to system instructions,
-	// and internal <ao-...> coordination turns are filtered by the hook client.
-	LatestUserPrompt      string
-	LatestAssistantUpdate string
-	// FinalAssistantMessage and TurnUserRequest are a main turn's final message
-	// and request as the agent's hooks reported them. They only feed the terminal
-	// turn history and are never a replay checkpoint, so every agent may send them.
-	FinalAssistantMessage string
-	TurnUserRequest       string
-	// ConversationCheckpointOrigin distinguishes real human turns from AO's
-	// own coordination. Lifecycle persists coordination provenance across the
-	// prompt-submit/Stop boundary; an empty value is an older hook client.
+	Valid                        bool
+	State                        domain.ActivityState
+	Timestamp                    time.Time
+	ExpectedRevision             *int64
+	ExpectedHarness              domain.AgentHarness
+	Event                        string
+	ToolName                     string
+	ToolUseID                    string
+	SubagentID                   string
+	RunningSubagentIDs           *[]string
+	AgentSessionID               string
+	LatestUserPrompt             string
+	LatestAssistantUpdate        string
+	FinalAssistantMessage        string
+	TurnUserRequest              string
 	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin
-	// CoordinationID identifies an AO-authored semantic prompt. Native hooks
-	// derive it from AO's prompt envelope; raw terminal writes cannot set it.
-	CoordinationID string
-	// ProviderTurnID identifies the main turn reported by a native hook.
-	ProviderTurnID string
-	// SubmissionID identifies AO's per-invocation prompt-hook context attachment.
-	SubmissionID string
-	// TranscriptPath is a read-only provider-native transcript reference when
-	// the hook exposes one. AO stores the path, never rewrites the transcript.
-	TranscriptPath string
-	// LaunchID is set by AO's process supervisor. Lifecycle rejects a signal
-	// from an older process generation of the same session.
-	LaunchID string
-	// NativeEntrypoint is the provider's own process-kind marker reported by
-	// the hook (Claude's CLAUDE_CODE_ENTRYPOINT). A side `claude -p` run in the
-	// session worktree inherits AO_SESSION_ID and the current LaunchID, so the
-	// generation fence cannot tell it apart from the interactive TUI process AO
-	// launched; this field can. Empty means an older hook client or a provider
-	// that exposes no such marker.
-	NativeEntrypoint string
-	// ProcessID is the pid of the provider process that ran the hook
-	// (Claude's CLAUDE_PID), zero when unknown. A Claude process the agent or
-	// the user starts under the session inherits its env and launch id; the
-	// hook process gate (service/hookprocess) tells it from the terminal's.
-	ProcessID int
-	// ControllerGeneration is the required ownership fence for a runtime-less
-	// Chat controller. It is intentionally internal (provider events never call
-	// the public hook endpoint): lifecycle rejects a Chat signal without the
-	// current generation, as well as one received after a handoff or replacement.
-	ControllerGeneration string
+	CoordinationID               string
+	ProviderTurnID               string
+	SubmissionID                 string
+	TranscriptPath               string
+	LaunchID                     string
+	NativeEntrypoint             string
+	ProcessID                    int
+	ControllerGeneration         string
 }

@@ -27,9 +27,6 @@ func copilotRoot(home string) string {
 	return filepath.Join(home, ".copilot")
 }
 
-// Copilot's CLI and ACP server use the same UUID-addressed event store.
-// Only the immediate session-state/<uuid>/events.jsonl is a conversation;
-// session.db, model snapshots and nested subagent files are not transcripts.
 func discoverCopilot(ctx context.Context, root string) ([]sourceFiles, error) {
 	dir := filepath.Join(root, "session-state")
 	var out []sourceFiles
@@ -109,10 +106,6 @@ type copilotNode struct {
 	shortened bool
 }
 
-// readCopilotTranscript reads timeline text, not transformed model inputs,
-// streamed deltas, model snapshots, tool output, reasoning or skill injection.
-// Context truncation/compaction changes the model window, not the readable
-// timeline. Explicit context clears and snapshot rewinds retract display turns.
 func readCopilotTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessCopilot, root: canonical(root)}
 	if err := ctx.Err(); err != nil {
@@ -208,7 +201,6 @@ func readCopilotTranscript(ctx context.Context, root string, paths ...string) (t
 			recount()
 			return nil
 		case "user.message", "assistant.message":
-			// A subagent's events carry a top-level agentId; parentToolCallId is optional and deprecated.
 			if !started || r.Data.Source != "" && r.Data.Source != "user" || r.Data.IsAutopilotContinuation || r.Data.ParentToolCallID != "" || r.AgentID != "" {
 				return nil
 			}

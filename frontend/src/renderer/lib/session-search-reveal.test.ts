@@ -21,8 +21,6 @@ describe("revealSessionSearchMatch", () => {
 		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
 	});
 
-	// Find in chat searches user and assistant text; a word matched in tool or
-	// command output, a path or the name would open it on "No results".
 	it("asks for find in chat only for a match in a message's words", () => {
 		for (const [matchKind, find] of [["user", true], ["assistant", true], ["tool", false], ["command", false], ["path", false], [undefined, false]] as const) {
 			revealSessionSearchMatch({ sessionId: "s1", messageId: "m1", snippet: "flaky", matchKind });
@@ -30,8 +28,6 @@ describe("revealSessionSearchMatch", () => {
 		}
 	});
 
-	// A match in a tool call, command or file change opens at its own row, so its
-	// folds open on it; a match in a message's words opens at the message.
 	it("carries the activity's sequence only for a match in an activity row", () => {
 		for (const [matchKind, activitySequence] of [["command", 42], ["tool", 42], ["path", 42], ["user", undefined], ["assistant", undefined], ["title", undefined]] as const) {
 			revealSessionSearchMatch({ sessionId: "s1", messageId: "m1", snippet: "flaky", matchKind, seq: 42 });
@@ -41,8 +37,6 @@ describe("revealSessionSearchMatch", () => {
 
 	it("opens a reviewer-chat match through the reviewer chat's focus request", () => {
 		revealSessionSearchMatch({ sessionId: "s1", messageId: "m9", snippet: "…flagged a regression…", reviewId: "r1" });
-		// The same request the palette's chat search makes, which is what brings
-		// the reviewer chat forward; the session's own reveal stays untouched.
 		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({
 			sessionId: "s1", messageId: "m9", reviewId: "r1", text: "flagged a regression",
 		});
@@ -50,8 +44,6 @@ describe("revealSessionSearchMatch", () => {
 	});
 
 	it("highlights the matched word rather than the whole snippet", () => {
-		// A snippet is cut and whitespace-collapsed, so it rarely matches the
-		// rendered message; the matched word does, and the timeline marks it.
 		revealSessionSearchMatch({
 			sessionId: "s1", messageId: "m1", snippet: "…retry backoff  never resets…",
 			highlights: [{ start: 7, end: 14 }],
@@ -75,7 +67,6 @@ describe("session search reveal", () => {
 		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky login" });
 		expect(peekSessionSearchReveal("sess-1")).toEqual({ messageId: "msg-1", text: "flaky login" });
 		expect(takeSessionSearchReveal("sess-1")).toEqual({ messageId: "msg-1", text: "flaky login" });
-		// Consumed: returning to the session later must not jump again.
 		expect(takeSessionSearchReveal("sess-1")).toBeUndefined();
 	});
 

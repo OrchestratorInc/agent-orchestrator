@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A switch target that never had a turn left Codex an empty rollout. Waking it
-// must start a new thread when the caller proves it never started, and must
-// still refuse otherwise.
 func TestCodexResumeOfAThreadThatNeverStarted(t *testing.T) {
 	const empty = "failed to read thread: thread-store internal error: failed to read session metadata /x/rollout.jsonl: rollout at /x/rollout.jsonl is empty"
 	for _, tt := range []struct {

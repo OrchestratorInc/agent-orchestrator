@@ -36,7 +36,6 @@ describe("cloud message attachments", () => {
 	const requestText = `Is this right?\n\nAttached files (read these files in the workspace):\n- ${cloudAttachmentReference({ id: "id-1", fileName: "notes.txt" })}`;
 
 	it("takes the files off a message whose code captures follow them", () => {
-		// The composer appends the captures after its "Attached files" list.
 		const message = cloudMessageAttachments(formatCapturedFileReferences(requestText, [capture]), requestText, [capture]);
 		expect(message.attachmentIds).toEqual(["id-1"]);
 		expect(message.displayText).toBe("Is this right?");
@@ -81,7 +80,6 @@ describe("cloud attachment transport", () => {
 });
 
 describe("cloud attachment errors and cancellation", () => {
-	// The control plane's refusals, each shown in its own words.
 	it.each([
 		[409, "ATTACHMENTS_UNSUPPORTED", "This session's worker can't take files yet. Restart the session to update it."],
 		[429, "too_many_attachments", "A session can hold at most 200 attachments."],
@@ -107,7 +105,6 @@ describe("cloud attachment errors and cancellation", () => {
 		expect(init.requestId).toMatch(/^[\w-]{1,64}$/);
 		expect(init.timeoutMs).toBe(uploadTimeoutMs(1024));
 		controller.abort();
-		// The caller stops waiting at once, whatever main does.
 		await expect(upload).rejects.toThrow();
 		expect(cancelBinary).toHaveBeenCalledWith(init.requestId);
 	});

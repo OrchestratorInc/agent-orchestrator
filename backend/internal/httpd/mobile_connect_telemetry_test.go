@@ -38,8 +38,6 @@ func TestTransportForSource(t *testing.T) {
 		"10.0.0.5":     "lan",
 		"172.16.4.4":   "lan",
 		"fe80::1":      "lan",
-		// Tailscale's CGNAT range must not be reported as an ordinary LAN
-		// address: which transport works is the reason this dimension exists.
 		"100.64.0.1":   "tailscale",
 		"100.101.5.20": "tailscale",
 		"127.0.0.1":    "loopback",
@@ -55,8 +53,6 @@ func TestTransportForSource(t *testing.T) {
 	}
 }
 
-// 100.64.0.0/10 ends at 100.127.255.255. An address just past it is a public
-// address that happens to start with 100, and must not be called tailscale.
 func TestTransportForSourceCGNATBoundary(t *testing.T) {
 	if got := transportForSource("100.127.255.255"); got != "tailscale" {
 		t.Errorf("last CGNAT address = %q, want tailscale", got)
@@ -69,9 +65,6 @@ func TestTransportForSourceCGNATBoundary(t *testing.T) {
 	}
 }
 
-// The reason this type exists. Every request from a paired phone authenticates,
-// including a preview page's images and stylesheets, so a per-request emit would
-// be thousands of events per minute.
 func TestReporterEmitsOncePerWindow(t *testing.T) {
 	sink := &capturingSink{}
 	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
@@ -91,7 +84,6 @@ func TestReporterEmitsOncePerWindow(t *testing.T) {
 	if ev.Payload["transport"] != "lan" {
 		t.Errorf("transport = %v, want lan", ev.Payload["transport"])
 	}
-	// No address, no port, no password may reach the payload.
 	if len(ev.Payload) != 1 {
 		t.Errorf("payload = %v, want transport only", ev.Payload)
 	}
@@ -115,16 +107,13 @@ func TestReporterEmitsAgainAfterWindow(t *testing.T) {
 	}
 }
 
-// Dedup is per transport so switching from LAN to Tailscale is still visible,
-// while staying bounded: the vocabulary is closed, so the map cannot grow with
-// the number of phones or addresses seen.
 func TestReporterDedupesPerTransport(t *testing.T) {
 	sink := &capturingSink{}
 	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
 	r := newMobileConnectReporter(sink, func() time.Time { return now })
 
 	r.report("192.168.1.20")
-	r.report("192.168.1.55") // different phone, same transport
+	r.report("192.168.1.55")
 	r.report("100.64.0.9")
 
 	got := []string{}
@@ -136,10 +125,9 @@ func TestReporterDedupesPerTransport(t *testing.T) {
 	}
 }
 
-// A nil sink is the telemetry-disabled path, and callers must not have to guard.
 func TestNilReporterIsInert(t *testing.T) {
 	var r *mobileConnectReporter
-	r.report("192.168.1.20") // must not panic
+	r.report("192.168.1.20")
 	if newMobileConnectReporter(nil, nil) != nil {
 		t.Error("newMobileConnectReporter(nil, nil) should be nil so report() is a no-op")
 	}
@@ -164,9 +152,6 @@ func TestReporterIsConcurrencySafe(t *testing.T) {
 	}
 }
 
-// End-to-end through the real listener: an authenticated request reports a
-// connection, an unauthenticated one does not. This is the path a phone takes,
-// so it is what proves the wiring rather than the reporter in isolation.
 func TestLANListenerReportsOnlyAuthenticatedRequests(t *testing.T) {
 	sink := &capturingSink{}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -181,7 +166,6 @@ func TestLANListenerReportsOnlyAuthenticatedRequests(t *testing.T) {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions", port)
 
-	// A wrong password must not look like a connected phone.
 	bad, _ := http.NewRequest(http.MethodGet, url, nil)
 	bad.Header.Set("Authorization", "Bearer wrongpass")
 	if resp, err := http.DefaultClient.Do(bad); err == nil {
@@ -191,8 +175,6 @@ func TestLANListenerReportsOnlyAuthenticatedRequests(t *testing.T) {
 		t.Fatalf("failed auth emitted %d events, want 0", got)
 	}
 
-	// The pairing handshake: the phone's pingServer call, GET /api/v1/sessions
-	// with the connection password as a bearer token.
 	ok, _ := http.NewRequest(http.MethodGet, url, nil)
 	ok.Header.Set("Authorization", "Bearer secret12")
 	resp, err := http.DefaultClient.Do(ok)
@@ -211,7 +193,6 @@ func TestLANListenerReportsOnlyAuthenticatedRequests(t *testing.T) {
 	if events[0].Name != mobileDeviceConnectedEvent {
 		t.Errorf("name = %q, want %q", events[0].Name, mobileDeviceConnectedEvent)
 	}
-	// The request came from 127.0.0.1, so loopback is the honest classification.
 	if events[0].Payload["transport"] != "loopback" {
 		t.Errorf("transport = %v, want loopback", events[0].Payload["transport"])
 	}

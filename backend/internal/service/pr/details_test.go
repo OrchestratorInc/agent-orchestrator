@@ -27,7 +27,6 @@ func (f *fakeDetailsStore) SavePRDetails(_ context.Context, prURL string, provid
 	return nil
 }
 
-// A reader that records the refs it was asked for.
 type detailsReader struct {
 	observation ports.SCMObservation
 	refs        []ports.SCMPRRef
@@ -59,8 +58,6 @@ func detailsFixture(merged bool) (*ActionService, *fakeDetailsStore, *detailsRea
 	return svc, store, reader, tracked
 }
 
-// The observer follows open PRs only, so a PR merged before its details were
-// read gets them here, once, without its row changing.
 func TestLoadDetails_ReadsAMergedPRsDetailsOnce(t *testing.T) {
 	svc, store, reader, tracked := detailsFixture(true)
 	if err := svc.LoadDetails(context.Background(), "7", tracked.URL); err != nil {
@@ -72,7 +69,6 @@ func TestLoadDetails_ReadsAMergedPRsDetailsOnce(t *testing.T) {
 	if len(store.saved) != 1 || store.saved[0].Description != "Split panes" || store.savedURL != tracked.URL || !store.updatedAt.Equal(time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("saved = %#v url = %q updatedAt = %v", store.saved, store.savedURL, store.updatedAt)
 	}
-	// Views treat details with no time as not read yet.
 	if !store.saved[0].ObservedAt.Equal(loadedAt) {
 		t.Fatalf("details observedAt = %v, want %v", store.saved[0].ObservedAt, loadedAt)
 	}
@@ -107,7 +103,6 @@ func TestLoadDetails_RefusesAnUntrackedPR(t *testing.T) {
 	}
 }
 
-// A miss keeps the provider's reason: only a PR that is gone is "not found".
 func TestLoadDetails_KeepsTheProvidersReasonForAMiss(t *testing.T) {
 	limited := errors.New("github: rate limited")
 	for _, tc := range []struct {

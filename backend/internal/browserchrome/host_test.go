@@ -17,8 +17,8 @@ import (
 
 type extensionSide struct {
 	t   *testing.T
-	in  *io.PipeWriter // extension → host
-	out *io.PipeReader // host → extension
+	in  *io.PipeWriter
+	out *io.PipeReader
 }
 
 func (e extensionSide) send(frame interface{}) {

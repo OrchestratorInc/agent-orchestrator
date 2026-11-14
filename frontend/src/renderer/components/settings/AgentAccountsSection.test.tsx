@@ -57,7 +57,6 @@ it("signs a signed-out saved account in again in its own folder", async () => {
 
 	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } });
 	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
-	// Only the signed-out saved account offers it; it cannot be made default while signed out.
 	expect(screen.getAllByRole("button", { name: "Sign in again" })).toHaveLength(1);
 	expect(screen.queryByRole("button", { name: "Make default" })).not.toBeInTheDocument();
 
@@ -100,7 +99,6 @@ it("does not check a closed sign-in, and the remove dialog starts without an old
 	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
 	const exited = terminalState.value;
 	await user.click(await screen.findByRole("button", { name: "Close sign-in" }));
-	// The closed terminal still reports its exit.
 	exited?.("exited");
 	await user.click(screen.getAllByRole("button", { name: "Remove account" })[0]);
 
@@ -133,7 +131,6 @@ it("checks a sign-in once when the CLI exits during a check", async () => {
 	renderPanel();
 	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
 	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
-	// The CLI exits while that check is still running.
 	terminalState.value?.("exited");
 	finish({ data: { status: "complete", account: { ...saved, signedIn: true, loggedIn: true } } });
 
@@ -142,8 +139,6 @@ it("checks a sign-in once when the CLI exits during a check", async () => {
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-// A chat turn refused for its login sent the user here: the account that signs
-// in takes them back to it.
 it("returns to the chat turn waiting on a Claude login once its account signs in", async () => {
 	const user = userEvent.setup();
 	useUiStore.setState({
@@ -164,7 +159,6 @@ it("returns to the chat turn waiting on a Claude login once its account signs in
 	useUiStore.setState({ loginReturn: null });
 });
 
-// The session runs on its own account; signing another one in does not fix it.
 it("keeps the chat waiting when a different account signs in", async () => {
 	const user = userEvent.setup();
 	useUiStore.setState({
@@ -187,8 +181,6 @@ it("keeps the chat waiting when a different account signs in", async () => {
 	useUiStore.setState({ loginReturn: null, settingsModal: null });
 });
 
-// The CLI's own login has no card of its own: its row signs it in again and
-// out through the harness's login terminal, and has no folder to remove.
 it("signs the CLI login in again and out from its own row", async () => {
 	const user = userEvent.setup();
 	const cliLogin = { disabled: false, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() };
@@ -213,8 +205,6 @@ it("offers only a sign-in on a signed-out CLI login, held while a login terminal
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
 });
 
-// An API key launches the CLI but is not a subscription: the row says so
-// instead of signed out, and the login can still be logged out.
 it("shows an API-key CLI login as logged in without a subscription and keeps its Log out", async () => {
 	const user = userEvent.setup();
 	getMock.mockImplementation((path: string) => Promise.resolve({
@@ -251,7 +241,6 @@ it("says a slow check plainly, keeps the old numbers' age, and puts the CLI's er
 	expect(note).not.toHaveTextContent("context deadline exceeded");
 	expect(note).toHaveClass("text-muted-foreground");
 	expect(note.querySelector("svg")).toBeNull();
-	// The numbers from the last good check stay.
 	expect(screen.getByRole("progressbar", { name: /Session \(5h\)/ })).toBeInTheDocument();
 
 	await userEvent.setup().hover(within(note).getByRole("button", { name: "Details" }));

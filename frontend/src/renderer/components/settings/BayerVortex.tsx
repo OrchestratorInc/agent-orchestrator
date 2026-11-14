@@ -1,6 +1,3 @@
-// Bayer Vortex, adapted from Originkit: an ordered-dither spiral drawn on a small
-// canvas and scaled up with nearest-neighbour sampling. Only the lit dither level
-// is drawn; the rest stays transparent, so it sits on whatever surface is behind it.
 import { useLayoutEffect, useRef } from "react";
 import type { CSSProperties } from "react";
 
@@ -12,15 +9,10 @@ const BAYER8 = [
 ];
 
 export interface BayerVortexProps {
-	/** The lit dither level. The unlit level is transparent. */
 	color: string;
-	/** Dither pixel size, 1 (fine) to 20 (coarse). */
 	pixel?: number;
-	/** Spiral arm count, 1 to 20. */
 	arms?: number;
-	/** Rotation speed, 0 (still) to 20. */
 	speed?: number;
-	/** Where the spiral turns, as fractions of the width and height: [0.5, 0] is the middle of the top edge. */
 	center?: readonly [number, number];
 	style?: CSSProperties;
 }
@@ -40,13 +32,11 @@ function parseHex(hex: string): [number, number, number] {
 	return [128, 128, 128];
 }
 
-/** A one-color dithered spiral turning at `speed`; a still frame when speed is 0. */
 export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = [0.5, 0.5], style }: BayerVortexProps) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const colorRef = useRef(color);
 	colorRef.current = color;
 
-	// Layout effect: the first frame is painted before the browser paints, so the vortex never pops in.
 	useLayoutEffect(() => {
 		const container = containerRef.current;
 		if (!container) return;
@@ -89,7 +79,6 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 			try {
 				paint();
 			} catch {
-				// No usable 2d canvas: stop animating and leave the surface plain.
 				cancelAnimationFrame(frame);
 				rate = 0;
 			}
@@ -136,8 +125,6 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 			draw();
 		};
 
-		// Everything that can throw runs before the loop starts, and any failure
-		// removes the canvas: a decorative effect leaves the surface plain.
 		let observer: ResizeObserver | null = null;
 		try {
 			resize();
@@ -158,15 +145,12 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 			canvas.remove();
 			return;
 		}
-		// A still frame needs no animation loop.
 		if (rate > 0) loop();
 		return () => {
 			cancelAnimationFrame(frame);
 			observer?.disconnect();
 			canvas.remove();
 		};
-		// The color is read per frame through a ref. Key the component on it so a
-		// theme change redraws a still frame too.
 	}, [pixel, arms, speed, center[0], center[1]]);
 
 	return (

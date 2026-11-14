@@ -27,10 +27,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// These run against a real SQLite store rather than a mock, because the point is
-// that provider events actually land as durable rows in the right order — which a
-// mock store cannot demonstrate.
-
 const (
 	testProject = domain.ProjectID("p1")
 	testSession = domain.SessionID("p1-1")
@@ -85,12 +81,8 @@ func boundedSnapshotReader(st *sqlite.Store) chatsvc.SnapshotPageReader {
 	})
 }
 
-/* ---- a fake conversation the controller can drive ---------------------- */
-
 type fakeConversation struct {
-	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
-	noNetwork bool
-	// networkMode, when set, is the one approval mode whose sandbox has network.
+	noNetwork              bool
 	networkMode            ports.PermissionMode
 	events                 chan ports.ChatEvent
 	providerConversationID string
@@ -118,8 +110,6 @@ type nativeHistoryConversation struct {
 	onRead func(int)
 }
 
-// rejectedHistoryConversation is an ACP-like reader whose provider refuses
-// every session/load replay after an unsettled first observation.
 type rejectedHistoryConversation struct {
 	*fakeConversation
 	refreshes atomic.Int32
@@ -134,8 +124,6 @@ func (c *rejectedHistoryConversation) RefreshHistory(context.Context) ([]ports.C
 	return nil, fmt.Errorf("refresh ACP session history: %w", ports.ErrChatHistoryLoadFailed)
 }
 
-// stalledHistoryConversation is an ACP-like reader whose provider never answers
-// the session/load refresh; only context cancellation ends the call.
 type stalledHistoryConversation struct {
 	*fakeConversation
 	refreshes      atomic.Int32
@@ -271,8 +259,6 @@ func newFakeConversation() *fakeConversation {
 
 func (f *fakeConversation) ProviderConversationID() string { return f.providerConversationID }
 
-// SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
-// noNetwork plays a Codex thread in accept-edits or auto.
 func (f *fakeConversation) SandboxAllowsNetwork(mode ports.PermissionMode) bool {
 	if f.networkMode != "" {
 		return mode == f.networkMode
@@ -312,8 +298,6 @@ func (f *fakeConversation) SendTurn(_ context.Context, msg ports.ChatUserMessage
 	return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
 }
 
-// sentTexts is what actually reached the provider, in order. Queuing is only real
-// if a message the user typed mid-turn is absent from this until the turn ends.
 func (f *fakeConversation) sentTexts() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -384,9 +368,6 @@ func (f *fakeConversation) decisionFor(id string) (ports.ChatDecision, bool) {
 	return d, ok
 }
 
-// fakeDriver hands back whatever conversation double the test supplied, so a
-// scenario can replace how the provider ANSWERS without reimplementing how it
-// streams.
 type fakeDriver struct {
 	conv      ports.ChatConversation
 	startCfg  *ports.ChatStartConfig
@@ -395,8 +376,7 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
-	// supports, when set, is the agent's answer to which permission modes it runs in.
-	supports func(ports.PermissionMode) bool
+	supports  func(ports.PermissionMode) bool
 }
 
 func (d fakeDriver) SupportsPermissionMode(mode ports.PermissionMode) bool {
@@ -1461,12 +1441,6 @@ func TestResumeImportsNativeHistoryBeforeTheChatControllerStarts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot: %v", err)
 	}
-	// The turn already existed from an earlier Chat interval. Codex can omit its
-	// persisted item ids, so the replay uses synthetic item ids even though the
-	// live assistant message used native-answer-1. Stable turn identity and the
-	// settled content keep the replay from duplicating either message, while the
-	// command AO already knew is deduplicated too, while the new command that AO
-	// had not seen yet is still imported.
 	if len(snapshot.Messages) != 2 || snapshot.Messages[0].Text != "What changed?" || snapshot.Messages[1].Text != "Nothing is dirty." {
 		t.Fatalf("imported messages = %#v", snapshot.Messages)
 	}
@@ -1568,9 +1542,7 @@ func TestInterfaceHandoffRefreshesNativeHistoryUntilItReachesTheCheckpoint(t *te
 	conv := &convergingHistoryConversation{
 		fakeConversation: newFakeConversation(),
 		initialSettled:   true,
-		// The first authoritative observation is internally settled but stale.
-		// RefreshHistory performs the provider read that reaches AO's checkpoint.
-		initialEvents: nil,
+		initialEvents:    nil,
 		events: []ports.ChatEvent{
 			{Kind: ports.ChatEventTurnStarted, ProviderEventID: "history-start", ProviderTurnID: "native-turn-1"},
 			{
@@ -1619,8 +1591,6 @@ func TestInterfaceHandoffRefreshesNativeHistoryUntilItReachesTheCheckpoint(t *te
 	}
 }
 
-// A provider that rejects the replay outright must end the settle wait on the
-// first refresh instead of polling until nativeHistorySettleLimit.
 func TestInterfaceHandoffStopsPollingWhenProviderRejectsHistoryLoad(t *testing.T) {
 	st := openStore(t)
 	conv := &rejectedHistoryConversation{fakeConversation: newFakeConversation()}
@@ -1648,9 +1618,6 @@ func TestInterfaceHandoffStopsPollingWhenProviderRejectsHistoryLoad(t *testing.T
 	}
 }
 
-// A session/load that never returns must be cut off by the per-attempt bound
-// and reported as a load failure while the settle budget is still live, instead
-// of holding the transition for the whole nativeHistorySettleLimit.
 func TestInterfaceHandoffBoundsStalledHistoryLoadAttempt(t *testing.T) {
 	restore := chatsvc.SetNativeHistoryLoadAttemptLimit(200 * time.Millisecond)
 	t.Cleanup(restore)
@@ -1837,10 +1804,7 @@ func TestInterfaceHandoffReportsUnsettledHistoryWhenContextEndsBeforeRefresh(t *
 	defer cancel()
 	conv := &convergingHistoryConversation{
 		fakeConversation: newFakeConversation(),
-		// End the request only after native history import is reached. A tiny
-		// wall-clock deadline here used to expire during SQLite setup under the
-		// race runner and test ClaimChatControllerGeneration instead.
-		onRead: cancel,
+		onRead:           cancel,
 	}
 	svc := chatsvc.New(chatsvc.Options{
 		Store: st, Sessions: st,
@@ -1872,8 +1836,6 @@ func TestInterfaceHandoffRejectsUnsettledImmutableHistoryWithoutRereading(t *tes
 	conv := &nativeHistoryConversation{
 		fakeConversation: newFakeConversation(),
 		err:              ports.ErrChatHistoryUnsettled,
-		// Cancel a forbidden second read so the test fails quickly instead of
-		// waiting the full 45s settle limit on a regression.
 		onRead: func(reads int) {
 			if reads == 2 {
 				cancel()
@@ -1914,12 +1876,7 @@ func TestInterfaceHandoffRejectsSettledReplayBeforeLatestSessionCheckpoint(t *te
 	defer cancel()
 	conv := &nativeHistoryConversation{
 		fakeConversation: newFakeConversation(),
-		// A provider may report a syntactically settled but stale prefix while its
-		// on-disk transcript is still being flushed. Empty is the strongest form of
-		// that failure: no replay event reaches the hook facts AO already observed.
-		events: nil,
-		// Cancel a forbidden second read so the test fails quickly instead of
-		// waiting the full 45s settle limit on a regression.
+		events:           nil,
 		onRead: func(reads int) {
 			if reads == 2 {
 				cancel()
@@ -2044,9 +2001,6 @@ func TestInterfaceHandoffTrustedCheckpointMayPrecedeLaterCompletedTurn(t *testin
 			if err != nil || !found {
 				t.Fatalf("load session: found=%v err=%v", found, err)
 			}
-			// AO may have no hook evidence at all for a later provider turn. In that case
-			// the earlier coherent checkpoint still need not be the replay's final turn.
-			// A later scoped Stop is covered separately and becomes a latest-turn gate.
 			rec.Metadata.LatestUserPrompt = "trusted checkpoint user"
 			if tt.emptyPrompt {
 				rec.Metadata.LatestUserPrompt = ""
@@ -2136,9 +2090,6 @@ func TestInterfaceHandoffPanePromptWithMissedHookCannotAcceptHistoryBeforeObserv
 		t.Fatalf("record pane-delivered prompt: changed=%v err=%v", changed, err)
 	}
 
-	// AO delivered another pane turn, but its UserPromptSubmit hook was missed.
-	// The Stop still proves there is an unresolved completed boundary that
-	// provider-history recovery must not waive.
 	lifecycleManager := lifecycle.New(st, nil)
 	if err := lifecycleManager.ApplyActivitySignal(context.Background(), testSession, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityIdle, Event: "stop",
@@ -2147,8 +2098,6 @@ func TestInterfaceHandoffPanePromptWithMissedHookCannotAcceptHistoryBeforeObserv
 	}); err != nil {
 		t.Fatalf("apply later Stop: %v", err)
 	}
-	// Another pane send is not a canonical provider prompt boundary. If its hook
-	// is missed too, it must not erase the hard evidence established by Stop.
 	if changed, err := st.RecordSessionLatestUserPrompt(
 		context.Background(), testSession, "third prompt whose hook was also lost", time.Now().UTC(),
 	); err != nil || !changed {
@@ -2548,9 +2497,6 @@ func TestInterfaceHandoffRoundTripRetiresTrustedTerminalCheckpointAfterChatTurn(
 	if err != nil || !found {
 		t.Fatalf("load session: found=%v err=%v", found, err)
 	}
-	// Terminal turn A was the trusted checkpoint used for the first TUI -> Chat
-	// admission. It must not remain the text gate after Chat completes turn B and
-	// hands the same native conversation back to Terminal.
 	rec.Metadata.AgentSessionID = "thread-1"
 	rec.Metadata.ProviderConversationID = "thread-1"
 	rec.Metadata.LatestUserPrompt = "Terminal turn A"
@@ -2648,7 +2594,6 @@ func TestInterfaceHandoffDoesNotAnchorReplayCheckpointOnFailedTurn(t *testing.T)
 	if err := st.ClaimChatControllerGeneration(context.Background(), testSession, "old-generation"); err != nil {
 		t.Fatalf("ClaimChatControllerGeneration: %v", err)
 	}
-	// An older completed Chat round trip that the provider will replay.
 	created, err := st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
 			ID: "settled-user", Text: "What changed?", Origin: domain.MessageOriginHuman,
@@ -2668,9 +2613,6 @@ func TestInterfaceHandoffDoesNotAnchorReplayCheckpointOnFailedTurn(t *testing.T)
 		domain.TurnStateCompleted, "", now); err != nil {
 		t.Fatalf("SettleTurn settled: %v", err)
 	}
-	// A newer failed Chat turn. Its synthetic auth-error answer lives on a dead
-	// transcript branch: the provider forked the next TUI prompt from the entry
-	// before this turn, so session/load never replays these items.
 	later := now.Add(time.Minute)
 	created, err = st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
@@ -2693,8 +2635,6 @@ func TestInterfaceHandoffDoesNotAnchorReplayCheckpointOnFailedTurn(t *testing.T)
 		t.Fatalf("SettleTurn failed turn: %v", err)
 	}
 
-	// The user re-ran the request in the terminal after fixing auth; hooks
-	// captured that newest round trip, and the provider replays it.
 	rec, found, err := st.GetSession(context.Background(), testSession)
 	if err != nil || !found {
 		t.Fatalf("load session: found=%v err=%v", found, err)
@@ -2775,8 +2715,6 @@ func TestInterfaceHandoffDoesNotAnchorReplayCheckpointOnFailedTurn(t *testing.T)
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot: %v", err)
 	}
-	// The failed turn stays durable in AO's projection even though the provider
-	// never replays it.
 	var failedState domain.TurnState
 	for _, turn := range snapshot.Turns {
 		if turn.ProviderTurnID == "native-turn-2" {
@@ -2801,9 +2739,6 @@ func TestInterfaceHandoffDoesNotAnchorReplayBeforeProviderCoordinationBoundary(t
 		t.Fatalf("ClaimChatControllerGeneration: %v", err)
 	}
 
-	// This completed turn belongs to the provider that owned the session before
-	// the provider handoff. The new provider receives it through hidden handoff
-	// instructions, so its native thread cannot replay the old provider IDs.
 	created, err := st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
 			ID: "old-provider-user", Text: "Finish the earlier task.", Origin: domain.MessageOriginHuman,
@@ -2824,8 +2759,6 @@ func TestInterfaceHandoffDoesNotAnchorReplayBeforeProviderCoordinationBoundary(t
 		t.Fatalf("SettleTurn old provider: %v", err)
 	}
 
-	// The first native turn in the replacement provider is AO's handoff marker.
-	// It is a durable boundary even when the provider rejected that turn.
 	boundaryAt := now.Add(time.Minute)
 	created, err = st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
@@ -3163,32 +3096,24 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 	}
 }
 
-/* ---- harness ----------------------------------------------------------- */
-
 type harness struct {
-	svc       *chatsvc.Service
-	st        *sqlite.Store
-	conv      *fakeConversation
-	ctrl      *chatsvc.Controller
-	activity  *recordingActivity
-	hostStops atomic.Int32
-	// accountChanges counts refusals and account updates; accountRechecks counts
-	// turns asking to read the session's account again.
+	svc             *chatsvc.Service
+	st              *sqlite.Store
+	conv            *fakeConversation
+	ctrl            *chatsvc.Controller
+	activity        *recordingActivity
+	hostStops       atomic.Int32
 	accountChanges  atomic.Int32
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
-	// reconciled lists the sessions whose output type a save asked to update;
-	// reconcileErr is what that update returns.
-	reconciled   []domain.SessionID
-	reconcileErr error
+	reconciled      []domain.SessionID
+	reconcileErr    error
 
 	clockMu sync.Mutex
 	clock   time.Time
 }
 
-// advance moves the injected clock. Needed where an ordering rule is expressed in
-// timestamps — the queue cancellation cutoff — rather than in call order.
 func (h *harness) advance(d time.Duration) {
 	h.clockMu.Lock()
 	defer h.clockMu.Unlock()
@@ -3206,9 +3131,6 @@ func newHarness(t *testing.T) *harness {
 	return newHarnessWithConversation(t, nil)
 }
 
-// newHarnessWithConversation lets a test supply its own provider double, for the
-// cases where the interesting behavior is how the provider answers rather than
-// what it streams. A nil conv gets the plain fake.
 func newHarnessWithConversation(t *testing.T, conv ports.ChatConversation) *harness {
 	return newHarnessWithConversationAndStore(t, conv, func(st *sqlite.Store) chatsvc.Store { return st })
 }
@@ -3272,9 +3194,6 @@ func newHarnessInWorkspace(
 	h.rendersDir = t.TempDir()
 	h.renders = attachmentstore.New(h.rendersDir)
 
-	// Guarded because the id factory is called from both the projection goroutine and
-	// whichever goroutine a test drives commands from, and an unsynchronized counter
-	// is a data race the -race build fails on rather than a harmless test detail.
 	var (
 		counterMu sync.Mutex
 		counter   int
@@ -3328,7 +3247,6 @@ func newHarnessInWorkspace(
 	return h
 }
 
-// awaitSnapshot polls until pred holds, so a test does not race the projector.
 func (h *harness) awaitSnapshot(t *testing.T, pred func(store.ConversationSnapshot) bool) store.ConversationSnapshot {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -3376,8 +3294,6 @@ func TestStaleControllerEventsDoNotReachTheTimeline(t *testing.T) {
 		}
 	}
 }
-
-/* ---- tests ------------------------------------------------------------- */
 
 func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 	for _, tt := range []struct{ name, source, selected string }{
@@ -3447,8 +3363,6 @@ func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 	}
 }
 
-// Claude Code can answer on its own after a background task finishes. That
-// message has no AO turn, but it is settled transcript the user can select.
 func TestSendAcceptsExcerptFromMessageOutsideAnyTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -3502,7 +3416,6 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h.conv.emit(
 		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.ProviderTurnID},
 		completion,
-		// A daemon restart can replay the terminal event with the same identity.
 		completion,
 	)
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
@@ -3525,9 +3438,6 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	}
 }
 
-// Claude's adapter sends "Not logged in · Please run /login" as a typed login
-// failure. The chat turns that into a sign-in button, so the turn carries the
-// code; a failure that is not about the login carries none.
 func TestRefusedLoginTurnCarriesAuthRequiredCode(t *testing.T) {
 	h := newHarness(t)
 	signedOut, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
@@ -3674,8 +3584,6 @@ func TestTerminalFailureSettlesOnlyActiveRetry(t *testing.T) {
 	}
 }
 
-// The whole point: a message goes out, provider events come back, and the durable
-// timeline reflects them in sequence order.
 func TestProjectsAFullTurnIntoDurableRows(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -3699,7 +3607,6 @@ func TestProjectsAFullTurnIntoDurableRows(t *testing.T) {
 			ProviderItemID: "exec-1", ActivityKind: domain.ActivityKindCommand,
 			ActivityStatus: domain.ActivityStatusCompleted, Summary: "git status --short",
 		},
-		// Streaming arrives in pieces and must fold into one message.
 		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "provider-turn-1", ProviderItemID: "msg-1", Delta: "Two "},
 		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "provider-turn-1", ProviderItemID: "msg-1", Delta: "files "},
 		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "provider-turn-1", ProviderItemID: "msg-1", Delta: "changed."},
@@ -3722,7 +3629,6 @@ func TestProjectsAFullTurnIntoDurableRows(t *testing.T) {
 	if user.Origin != domain.MessageOriginHuman {
 		t.Errorf("user origin = %q", user.Origin)
 	}
-	// Three deltas folded into one message, not three timeline entries.
 	if assistant.Role != domain.MessageRoleAssistant || assistant.Text != "Two files changed." {
 		t.Errorf("assistant message = %+v", assistant)
 	}
@@ -3733,7 +3639,6 @@ func TestProjectsAFullTurnIntoDurableRows(t *testing.T) {
 		t.Error("assistant revision never advanced despite streaming rewrites")
 	}
 
-	// Sequence is conversation-scoped and strictly increasing across both tables.
 	var sequences []int64
 	for _, m := range snapshot.Messages {
 		sequences = append(sequences, m.Sequence)
@@ -3805,12 +3710,10 @@ func TestControllerCloseHonorsContextWhenProviderStreamStaysOpen(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, providerErr) {
 		t.Fatalf("Close error = %v, want provider error joined with deadline", err)
 	}
-	// Let the projection goroutine exit so the harness cleanup remains bounded.
 	close(conv.events)
 	h.ctrl.Wait()
 }
 
-// A retried send under the same client message id must not create a second turn.
 func TestDuplicateSendDoesNotCreateASecondTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -3863,8 +3766,6 @@ func TestDeferredDriverStartsOnlyAfterProviderTurnIDIsDurable(t *testing.T) {
 	}
 }
 
-// An approval must be stored pending, carry the provider's own decision list, and
-// only resolve through a typed action.
 func TestApprovalIsStoredPendingWithProviderDecisions(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -3873,7 +3774,6 @@ func TestApprovalIsStoredPendingWithProviderDecisions(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// The real captured shape: no decline on offer, plus a structured decision.
 	h.conv.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventApprovalRequested,
 		ProviderTurnID: "provider-turn-1",
@@ -3923,7 +3823,6 @@ func TestApprovalIsStoredPendingWithProviderDecisions(t *testing.T) {
 		}
 	}
 
-	// Resolving reaches the provider and then updates the row.
 	if err := h.svc.Resolve(ctx, testSession, "0", ports.ChatDecision{ID: "accept"}); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -4028,8 +3927,6 @@ func TestProviderResolutionKeepsWaitingInputUntilFinalApproval(t *testing.T) {
 		countActivitySignals(h.activity.snapshot(), domain.ActivityActive, "chat.approval.resolved"))
 }
 
-// A controller that dies mid-turn must not leave the turn looking like it is still
-// working, and must not leave an approval the user can never answer.
 func TestControllerDeathSettlesInFlightWork(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4051,7 +3948,6 @@ func TestControllerDeathSettlesInFlightWork(t *testing.T) {
 	)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 2 })
 
-	// The provider process dies: the stream closes with the turn still open.
 	_ = h.conv.Close()
 	h.ctrl.Wait()
 	if err := h.svc.Stop(ctx, testSession); err != nil {
@@ -4078,8 +3974,6 @@ func TestControllerDeathSettlesInFlightWork(t *testing.T) {
 func TestControllerStreamClosureReportsSessionExited(t *testing.T) {
 	h := newHarness(t)
 
-	// A provider can disappear without emitting a final controller-state event.
-	// Closing the stream is still authoritative proof that this controller ended.
 	if err := h.conv.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -4247,9 +4141,6 @@ func TestControllerReadyDurableSettingsRefreshBeforeFirstDispatch(t *testing.T) 
 	}
 }
 
-// configOptionConversation models a provider that owns its own session config
-// (e.g. Claude Code's model picker), so SetConfigOption has a real surface to
-// drive.
 type configOptionConversation struct {
 	*fakeConversation
 	mu      sync.Mutex
@@ -4267,8 +4158,6 @@ func (c *configOptionConversation) SetConfigOption(_ context.Context, _ string, 
 	return c.catalog(), nil
 }
 
-// catalog reflects the most recently applied model select, the way a provider
-// reports the post-change state back.
 func (c *configOptionConversation) catalog() []ports.ChatConfigOption {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -4283,11 +4172,6 @@ func (c *configOptionConversation) catalog() []ports.ChatConfigOption {
 	}}
 }
 
-// TestSetConfigOptionPersistsModelBeforeRouting covers the other model-change
-// route: provider-owned pickers like Claude Code's model menu go through the
-// config-options PATCH, which calls SetSettings directly. The pick must land on
-// the session's durable metadata the same way a turn-settings model change does
-// (#4893 follow-up), or a later TUI rebuild resumes with the stale model.
 func TestSetConfigOptionPersistsModelBeforeRouting(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -4315,7 +4199,6 @@ func TestSetConfigOptionPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Picking a model through the config-options route persists it.
 	options, err := svc.SetConfigOption(ctx, testSession, "model", ports.ChatConfigOptionValue{Select: "5.6-haiku"})
 	if err != nil {
 		t.Fatalf("SetConfigOption: %v", err)
@@ -4327,7 +4210,6 @@ func TestSetConfigOptionPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("model persistence log = %v, want [%s:5.6-haiku]", log, testSession)
 	}
 
-	// Re-applying the same selection is a no-op.
 	if _, err := svc.SetConfigOption(ctx, testSession, "model", ports.ChatConfigOptionValue{Select: "5.6-haiku"}); err != nil {
 		t.Fatalf("SetConfigOption (same): %v", err)
 	}
@@ -4335,7 +4217,6 @@ func TestSetConfigOptionPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("model persistence log after no-op = %v, want unchanged", log)
 	}
 
-	// A later pick through the same route supersedes the earlier one.
 	if _, err := svc.SetConfigOption(ctx, testSession, "model", ports.ChatConfigOptionValue{Select: "5.6-sonnet"}); err != nil {
 		t.Fatalf("SetConfigOption (sonnet): %v", err)
 	}
@@ -4344,13 +4225,6 @@ func TestSetConfigOptionPersistsModelBeforeRouting(t *testing.T) {
 	}
 }
 
-// TestSetTurnSettingsPersistsModelBeforeRouting is the regression for the
-// ChatUI ↔ TUI model-persistence bug (#4893). A model the user picks in ChatUI
-// must be recorded on the session BEFORE the next prompt routes, so that when
-// ChatUI later hands off to TUI, the rebuilt terminal resumes with the same
-// model instead of reverting to the project default. The conversation row is
-// the chat-side source of truth already; this pins the extra session metadata
-// write that makes the choice visible to the TUI rebuild.
 func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -4364,8 +4238,6 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
 		Log:     slog.New(slog.DiscardHandler),
 		NewID:   func() string { return "persist-model-id" },
-		// Production wires this to the session manager, which writes the model onto
-		// the session's durable metadata before the next turn routes.
 		OnModelChanged: func(id domain.SessionID, model string) {
 			logMu.Lock()
 			defer logMu.Unlock()
@@ -4380,7 +4252,6 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// A model change is persisted immediately (before the next prompt routes).
 	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{Model: "5.6-luna"}); err != nil {
 		t.Fatalf("SetTurnSettings (luna): %v", err)
 	}
@@ -4388,7 +4259,6 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("model persistence log = %v, want [%s:5.6-luna]", log, testSession)
 	}
 
-	// Re-selecting the same model is a no-op: no redundant session write.
 	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{Model: "5.6-luna"}); err != nil {
 		t.Fatalf("SetTurnSettings (same): %v", err)
 	}
@@ -4396,8 +4266,6 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("model persistence log after no-op = %v, want unchanged", log)
 	}
 
-	// A later change to another model lands too, so the TUI rebuild picks up the
-	// most recent choice rather than the first one.
 	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{Model: "5.6-full"}); err != nil {
 		t.Fatalf("SetTurnSettings (full): %v", err)
 	}
@@ -4405,7 +4273,6 @@ func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
 		t.Fatalf("model persistence log = %v, want luna then full", log)
 	}
 
-	// Clearing the override must clear session metadata for a later TUI rebuild.
 	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{}); err != nil {
 		t.Fatalf("SetTurnSettings (clear): %v", err)
 	}
@@ -4488,8 +4355,6 @@ func TestControllerReadyDoesNotDependOnAFalliblePostCommitRead(t *testing.T) {
 	}
 }
 
-// Dispatch reads the persisted mode. A TUI session must be refused even if a
-// controller somehow exists, because the mode is the authority.
 func TestSendRefusedForTUISession(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4516,8 +4381,6 @@ func TestSendRefusedForTUISession(t *testing.T) {
 	}
 }
 
-// Every projected event is also archived, so a wrong projection can be repaired
-// from the raw record instead of being the only surviving account.
 func TestProviderEventsAreArchived(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4543,10 +4406,6 @@ func TestProviderEventsAreArchived(t *testing.T) {
 	}
 }
 
-/* ---- the send queue ---------------------------------------------------- */
-
-// turnStateByText is how the queue tests read the timeline: a turn matters here
-// only as the fate of one message the user typed.
 func turnStateByText(t *testing.T, s store.ConversationSnapshot) map[string]domain.TurnState {
 	t.Helper()
 	turns := map[string]domain.ConversationTurn{}
@@ -4565,9 +4424,6 @@ func turnStateByText(t *testing.T, s store.ConversationSnapshot) map[string]doma
 	return states
 }
 
-// The composer tells the user a mid-turn message is queued until the agent
-// finishes. That has to be true of the daemon, not just of the placeholder: a
-// second turn/start against a busy provider is not a thing the agent can run.
 func TestSendWhileBusyQueuesUntilTheTurnEnds(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4598,7 +4454,6 @@ func TestSendWhileBusyQueuesUntilTheTurnEnds(t *testing.T) {
 		t.Fatalf("provider received %v; the second message must wait", got)
 	}
 
-	// The running turn ends, so the queued message goes out on its own.
 	h.conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
 		TurnState: domain.TurnStateCompleted,
@@ -4616,10 +4471,6 @@ func TestSendWhileBusyQueuesUntilTheTurnEnds(t *testing.T) {
 	}
 }
 
-// Codex can start nested turns while the root turn is still working. A child
-// completion is not conversation quiescence: dispatching queued automation at
-// that point injects it into the still-running root and leaves the AO turn minted
-// for that automation with no matching provider lifecycle.
 func TestNestedTurnCompletionDoesNotDrainQueueWhilePrimaryTurnRuns(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4656,8 +4507,6 @@ func TestNestedTurnCompletionDoesNotDrainQueueWhilePrimaryTurnRuns(t *testing.T)
 			Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-child-1",
 			ProviderConversationID: "child-thread-1", TurnState: domain.TurnStateCompleted,
 		},
-		// This later root event is a deterministic barrier: once projected, the
-		// child's afterProject hook (including any incorrect drain) has finished.
 		ports.ChatEvent{
 			Kind: ports.ChatEventActivityCompleted, ProviderTurnID: "provider-turn-1",
 			ProviderItemID: "root-still-working", ActivityKind: domain.ActivityKindCommand,
@@ -4708,9 +4557,6 @@ func TestNestedTurnCompletionDoesNotDrainQueueWhilePrimaryTurnRuns(t *testing.T)
 	}
 }
 
-// A Chat -> TUI handoff waits for the root turn and everything already queued
-// behind it. Nested Codex lifecycle must not make that drain look complete, nor
-// may it release the accepted queue into a root turn that is still running.
 func TestChatHandoffDrainWaitsForRootAfterNestedTurnCompletes(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4798,8 +4644,6 @@ func TestChatHandoffDrainWaitsForRootAfterNestedTurnCompletes(t *testing.T) {
 	}
 }
 
-// Stop is a brake. Releasing the queue when the user presses it would be the
-// opposite of what the button says, so anything waiting is cancelled with the turn.
 func TestInterruptCancelsWhatIsQueuedBehindTheTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -4864,8 +4708,6 @@ func TestChatHandoffDrainFinishesAcceptedQueueAndClosesNewIntake(t *testing.T) {
 	go func() {
 		done <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain)
 	}()
-	// Completion of the first accepted turn must dispatch the accepted queue,
-	// rather than declaring the source quiescent early.
 	h.conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
 		TurnState: domain.TurnStateCompleted,
@@ -4917,14 +4759,8 @@ func TestChatHandoffInterruptArmBlocksCompletionFromPromotingQueue(t *testing.T)
 	}); err != nil {
 		t.Fatalf("queue second turn: %v", err)
 	}
-	// Once intake is fenced, eventual cancellation must cover the whole queue
-	// rather than trusting wall-clock ordering. A host clock correction cannot
-	// make an older accepted command look newer than the handoff cutoff.
 	h.advance(-time.Hour)
 
-	// Session Manager performs this fast step before returning the accepted
-	// transition and before target preflight. It is a reversible dispatch fence:
-	// the active turn can finish, but its completion must not release the queue.
 	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		t.Fatalf("arm interrupt handoff: %v", err)
 	}
@@ -4943,8 +4779,6 @@ func TestChatHandoffInterruptArmBlocksCompletionFromPromotingQueue(t *testing.T)
 		t.Fatalf("provider received %v before handoff preparation; armed completion released the queue", got)
 	}
 
-	// Target preflight has now succeeded. Preparation makes the fence durable
-	// before touching the provider and remains independent of clock movement.
 	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		t.Fatalf("prepare armed handoff: %v", err)
 	}
@@ -4986,7 +4820,6 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 		t.Fatalf("arm interrupt handoff: %v", err)
 	}
 
-	// Completion while target preflight is running cannot dispatch the queue.
 	h.conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
 		TurnState: domain.TurnStateCompleted,
@@ -5000,8 +4833,6 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 		t.Fatalf("provider received %v while target preflight was fenced", got)
 	}
 
-	// A failed target preflight reopens the source and explicitly resumes the
-	// queue; there may be no later completion event to trigger this drain.
 	h.svc.AbortChatHandoff(testSession)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning
@@ -5014,8 +4845,6 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 type completionOnInterruptConversation struct{ *fakeConversation }
 
 func (c *completionOnInterruptConversation) Interrupt(_ context.Context, turn string) error {
-	// ACP completes its prompt goroutine from the same cancellation handshake;
-	// this event can therefore be queued before session/cancel returns.
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn,
 		TurnState: domain.TurnStateInterrupted,
@@ -5083,8 +4912,6 @@ func TestChatHandoffInterruptDoesNotWaitForTurnCompletion(t *testing.T) {
 			t.Fatalf("prepare interrupt handoff: %v", err)
 		}
 	case <-time.After(250 * time.Millisecond):
-		// Unblock the old implementation before failing so the test leaves no
-		// handoff goroutine behind. A force switch must not need this completion.
 		h.conv.emit(ports.ChatEvent{
 			Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
 			TurnState: domain.TurnStateInterrupted,
@@ -5099,9 +4926,6 @@ func TestChatHandoffInterruptDoesNotWaitForTurnCompletion(t *testing.T) {
 	if got := turnStateByText(t, snapshot)["queued behind it"]; got != domain.TurnStateInterrupted {
 		t.Fatalf("queued turn = %q, want interrupted before the source controller stops", got)
 	}
-	// Codex may deliver turn/completed after turn/interrupt has already answered.
-	// The armed dispatch gate must still make that late completion a no-op for the
-	// queue.
 	h.conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
 		TurnState: domain.TurnStateInterrupted,
@@ -5180,9 +5004,6 @@ func TestChatHandoffInterruptDoesNotReachProviderUntilQueueCancellationSucceeds(
 		t.Fatalf("provider interrupt attempts = %d before durable queue cancellation, want 0", got)
 	}
 
-	// Preparation aborts the reversible fence after a local-store failure. A
-	// caller may re-arm and retry; provider I/O begins only after the durable queue
-	// is terminal.
 	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		t.Fatalf("re-arm handoff after preparation failure: %v", err)
 	}
@@ -5665,10 +5486,6 @@ func TestServiceLiveReconnectKeepsDurableRunningTurnBusy(t *testing.T) {
 	if after.Metadata.ControllerGeneration == before.Metadata.ControllerGeneration {
 		t.Fatal("generation did not rotate")
 	}
-	// ACP adapters emit their initialized ready state before live reconnect
-	// restores ownership of the durable turn. The queued notification is stale
-	// once that ownership has been restored and must not make the controller
-	// claim it is ready while the durable turn is still running.
 	secondProvider.emit(ports.ChatEvent{
 		Kind: ports.ChatEventControllerState, ProviderEventID: "reconnect-ready",
 		ControllerState: ports.ChatControllerReady,
@@ -5853,8 +5670,6 @@ func TestConcurrentReconcileAndResumeShareOneCredentialedControllerLaunch(t *tes
 	}
 }
 
-// The cancellation belongs to the moment stop was pressed. A message typed after
-// that is the user asking for new work, and must not be swept up by it.
 func TestMessageTypedAfterStopIsStillDelivered(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -5878,7 +5693,6 @@ func TestMessageTypedAfterStopIsStillDelivered(t *testing.T) {
 		t.Fatalf("Interrupt: %v", err)
 	}
 
-	// The user changes their mind and types again while the interrupt lands.
 	h.advance(time.Second)
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "after stop", ClientMessageID: "c3",
@@ -5916,9 +5730,6 @@ func errorsIs(err, target error) bool {
 	return false
 }
 
-// The initial prompt is the user's task brief, so it must render as their message
-// rather than as a system notice. Origin records who authored a message, not who
-// delivered it to the provider.
 func TestInitialPromptIsAttributedToTheUser(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -5940,10 +5751,6 @@ func TestInitialPromptIsAttributedToTheUser(t *testing.T) {
 	}
 }
 
-// A relayed message is AO carrying someone else's words: `ao send`, or an
-// orchestrator writing to a worker. It must be attributed to automation, not
-// passed off as something the user typed here — the timeline distinguishes the
-// two structurally, and a reader should never have to infer it from a prefix.
 func TestRelayedMessageIsAttributedToAutomation(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -5998,8 +5805,6 @@ func TestUserAuthoredRelayAdvancesUserActivityWithoutChangingOrigin(t *testing.T
 	}
 }
 
-// interruptRecorder answers turn/interrupt the way the provider does: it refuses
-// any turn it has not been told to consider active.
 type interruptRecorder struct {
 	*fakeConversation
 	activeMu sync.Mutex
@@ -6007,9 +5812,6 @@ type interruptRecorder struct {
 	attempts []string
 }
 
-// blockingDispatchConversation exposes the interval in which Send owns sendMu
-// but has not yet published pendingTurnID. Stop must wait for dispatch and then
-// retain the normal provider-ack grace period.
 type blockingDispatchConversation struct {
 	*interruptRecorder
 	sendStarted chan struct{}
@@ -6046,8 +5848,6 @@ func (c *blockingDispatchConversation) Interrupt(ctx context.Context, turn strin
 	return c.interruptRecorder.Interrupt(ctx, turn)
 }
 
-// blockingInterruptRefusalConversation holds the provider refusal open so a
-// message can arrive after Stop began but before reconciliation runs.
 type blockingInterruptRefusalConversation struct {
 	*fakeConversation
 	started     chan struct{}
@@ -6078,8 +5878,6 @@ func (c *blockingInterruptRefusalConversation) unblock() {
 	c.releaseOnce.Do(func() { close(c.release) })
 }
 
-// completionBeforeRefusalConversation lets the committed completion win the
-// controller's send lock before the provider's stale refusal reaches Interrupt.
 type completionBeforeRefusalConversation struct {
 	*fakeConversation
 	emitted     chan struct{}
@@ -6142,10 +5940,6 @@ func (r *interruptRecorder) attemptCount() int {
 	return len(r.attempts)
 }
 
-// Stop appears the moment a message is sent, so a user can press it before the
-// provider has acknowledged the turn — and a provider refuses to cancel a turn it
-// does not yet consider active. Interrupt waits out that gap rather than handing
-// back a failure in the exact moment someone realizes they sent the wrong thing.
 func TestInterruptWaitsForTheProviderToAcknowledgeTheTurn(t *testing.T) {
 	conv := newInterruptRecorder()
 	h := newHarnessWithConversation(t, conv)
@@ -6155,7 +5949,6 @@ func TestInterruptWaitsForTheProviderToAcknowledgeTheTurn(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// The acknowledgement lands while Interrupt is already waiting.
 	go func() {
 		time.Sleep(150 * time.Millisecond)
 		conv.markActive("provider-turn-1")
@@ -6170,9 +5963,6 @@ func TestInterruptWaitsForTheProviderToAcknowledgeTheTurn(t *testing.T) {
 	}
 }
 
-// Interrupt can begin while Send still owns the dispatch lock. Once dispatch
-// finishes, Stop must still wait for turn-started rather than treating the
-// provider's early refusal as proof that the new turn is stale.
 func TestInterruptWaitsForAcknowledgementAfterRacingDispatch(t *testing.T) {
 	conv := newBlockingDispatchConversation()
 	h := newHarnessWithConversation(t, conv)
@@ -6210,12 +6000,8 @@ func TestInterruptWaitsForAcknowledgementAfterRacingDispatch(t *testing.T) {
 	}
 }
 
-// A provider that refuses because the turn is genuinely gone must not strand the
-// user: the durable row still says running — that is what the UI renders — so
-// Interrupt reconciles it as interrupted instead of answering "nothing to stop"
-// while the Working bar stays up.
 func TestProviderRefusalReconcilesTheDurableTurnAsInterrupted(t *testing.T) {
-	conv := newInterruptRecorder() // never marks anything active
+	conv := newInterruptRecorder()
 	h := newHarnessWithConversation(t, conv)
 	ctx := context.Background()
 
@@ -6241,9 +6027,6 @@ func TestProviderRefusalReconcilesTheDurableTurnAsInterrupted(t *testing.T) {
 	}
 }
 
-// The recovery path must keep the same cutoff as the Stop request. The composer
-// remains available while provider cancellation is pending, and a later prompt
-// is new user intent rather than part of the queue that Stop was asked to clear.
 func TestProviderRefusalPreservesMessageQueuedAfterStop(t *testing.T) {
 	conv := newBlockingInterruptRefusalConversation()
 	t.Cleanup(conv.unblock)
@@ -6298,9 +6081,6 @@ func TestProviderRefusalPreservesMessageQueuedAfterStop(t *testing.T) {
 	}
 }
 
-// A provider can publish completion just before its interrupt call reports that
-// no active turn remains. If that completion commits first, reconciliation must
-// not overwrite it or the queue transition it already performed.
 func TestProviderRefusalDoesNotOverwriteCommittedCompletion(t *testing.T) {
 	conv := newCompletionBeforeRefusalConversation()
 	t.Cleanup(conv.unblock)
@@ -6366,16 +6146,10 @@ func countActivitySignals(signals []ports.ActivitySignal, state domain.ActivityS
 	return count
 }
 
-// The #3749 desync: a turn is 'running' on disk while the in-memory controller
-// has no pendingTurnID (a completed projection failed, or the daemon restarted
-// mid-turn). The UI reads disk and shows "Working"; Stop must act on what the
-// user sees rather than refuse with CHAT_NO_ACTIVE_TURN.
 func TestInterruptReconcilesStaleRunningTurnOnDisk(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	// Create the running turn directly in the store, bypassing the controller so
-	// its pendingTurnID stays empty — the desynced state.
 	const providerTurnID = "stale-running-turn"
 	if err := h.st.AdoptProviderTurn(ctx, h.ctrl.ConversationID(), testSession,
 		h.ctrl.Generation(), "stale-turn-id", providerTurnID, h.now()); err != nil {
@@ -6397,10 +6171,6 @@ func TestInterruptReconcilesStaleRunningTurnOnDisk(t *testing.T) {
 	}
 }
 
-// A root and a nested provider turn can both be durably running. The UI renders
-// the oldest visible row first, but clearing only that row would merely reveal a
-// second Working bar. Recovery cancels the visible root and settles the full
-// visible running set.
 func TestInterruptReconcilesAllVisibleRunningTurns(t *testing.T) {
 	conv := newInterruptRecorder()
 	h := newHarnessWithConversation(t, conv)
@@ -6439,9 +6209,6 @@ func TestInterruptReconcilesAllVisibleRunningTurns(t *testing.T) {
 	}
 }
 
-// In the no-memory recovery path, provider cancellation happens under sendMu.
-// A prompt submitted after Stop therefore waits for stale settlement and then
-// starts as new work instead of replacing the recovery target.
 func TestInterruptDurableFallbackPreservesPostStopSend(t *testing.T) {
 	conv := newBlockingInterruptRefusalConversation()
 	t.Cleanup(conv.unblock)
@@ -6497,8 +6264,6 @@ func TestInterruptDurableFallbackPreservesPostStopSend(t *testing.T) {
 	}
 }
 
-// When memory and disk agree there is nothing running, Interrupt must still
-// answer ErrNoActiveTurn — the disk fallback must not invent work to stop.
 func TestInterruptReturnsNoActiveTurnWhenNoRunningTurnAnywhere(t *testing.T) {
 	h := newHarness(t)
 
@@ -6508,10 +6273,8 @@ func TestInterruptReturnsNoActiveTurnWhenNoRunningTurnAnywhere(t *testing.T) {
 	}
 }
 
-// Reconciliation is still the user's brake: anything queued behind the stale
-// turn is cancelled, not released into the provider.
 func TestInterruptReconciliationCancelsQueuedTurns(t *testing.T) {
-	conv := newInterruptRecorder() // never marks anything active
+	conv := newInterruptRecorder()
 	h := newHarnessWithConversation(t, conv)
 	ctx := context.Background()
 
@@ -6547,11 +6310,6 @@ func TestInterruptReconciliationCancelsQueuedTurns(t *testing.T) {
 	}
 }
 
-// A daemon that is killed never runs its own cleanup, so whatever the dead
-// controller left in flight is still marked live on disk. The next controller to
-// come up has to close it out: nothing else ever will, and until then the timeline
-// claims a turn is running and a queued message is waiting to be sent behind a
-// controller that no longer exists.
 func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 	testStartSettlesWorkLeftByAKilledController(t, false)
 }
@@ -6564,7 +6322,6 @@ func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) 
 	h := newHarness(t)
 	ctx := context.Background()
 
-	// A turn in flight and a message queued behind it, exactly as a crash leaves them.
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "running", ClientMessageID: "c1"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -6587,10 +6344,6 @@ func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) 
 		}
 	}
 
-	// A killed daemon leaves the rows mid-flight and takes its service with it, so
-	// the next controller comes up in a NEW service over the SAME store. Building
-	// it that way rather than reusing this one is the point: nothing in the old
-	// process gets a chance to clean up.
 	next := chatsvc.New(chatsvc.Options{
 		Store:    h.st,
 		Sessions: h.st,
@@ -6600,8 +6353,6 @@ func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) 
 		Now:      h.now,
 	})
 	t.Cleanup(func() { _ = next.Stop(context.Background(), testSession) })
-	// Retry moves an interrupted async start back to provisioning. That state
-	// must not hide the running turn left by its previous controller.
 	if !queuedOnly {
 		if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
 			t.Fatal(err)
@@ -6639,9 +6390,6 @@ func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) 
 	}
 }
 
-// Usage is current state, not history. The provider reports it after every tool
-// call, so the projection must overwrite: a row per report is what buried the
-// conversation, and the conversation is only ever one amount full.
 func TestUsageProjectionKeepsOnlyTheLatest(t *testing.T) {
 	h := newHarness(t)
 
@@ -6667,13 +6415,10 @@ func TestUsageProjectionKeepsOnlyTheLatest(t *testing.T) {
 	if usage.TotalTokens != 60155 {
 		t.Errorf("cumulative total = %d, want the later 60155", usage.TotalTokens)
 	}
-	// The readout is only meaningful as a fraction; without the window it is a
-	// number with no scale, which is what the header used to show.
 	if got := usage.ContextFraction(); got < 0.16 || got > 0.17 {
 		t.Errorf("context fraction = %v, want roughly 0.163", got)
 	}
 
-	// Usage must not become a timeline entry, under any kind.
 	for _, activity := range snapshot.Activities {
 		if activity.Kind == domain.ActivityKindUsage {
 			t.Fatalf("usage was projected as an activity: %+v", activity)
@@ -6681,8 +6426,6 @@ func TestUsageProjectionKeepsOnlyTheLatest(t *testing.T) {
 	}
 }
 
-// ACP reports context fullness and cumulative token totals in separate messages.
-// A later totals update must not erase the context window received just before it.
 func TestUsageProjectionMergesIndependentProviderUpdates(t *testing.T) {
 	h := newHarness(t)
 
@@ -6708,9 +6451,6 @@ func TestUsageProjectionMergesIndependentProviderUpdates(t *testing.T) {
 	}
 }
 
-// A model the provider states no window for still reports its tokens. The meter
-// has to say "unknown" rather than draw an empty bar for a conversation that may
-// be nearly full.
 func TestUsageProjectionWithoutContextWindow(t *testing.T) {
 	h := newHarness(t)
 
@@ -6726,8 +6466,6 @@ func TestUsageProjectionWithoutContextWindow(t *testing.T) {
 	}
 }
 
-// Rate limits are current state too, and an unreported window must survive a round
-// trip through the database as unreported rather than as a reassuring zero.
 func TestRateLimitProjectionKeepsOnlyTheLatest(t *testing.T) {
 	h := newHarnessForHarness(t, domain.HarnessClaudeCode)
 
@@ -6812,7 +6550,6 @@ func TestCodexRateLimitsUpdateActiveAccountCapacityWithoutConversationPersistenc
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The capacity callback fires before the event reaches the archive.
 	for deadline := time.Now().Add(5 * time.Second); len(events) == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		if events, err = st.ProviderEventsSince(context.Background(), ctrl.ConversationID(), 0, 10); err != nil {
 			t.Fatal(err)
@@ -6824,8 +6561,6 @@ func TestCodexRateLimitsUpdateActiveAccountCapacityWithoutConversationPersistenc
 	}
 }
 
-// Nothing reported yet is distinct from a conversation using nothing: the snapshot
-// leaves both nil so a client can withhold the meter rather than draw an empty one.
 func TestSnapshotOmitsUsageUntilTheProviderReports(t *testing.T) {
 	h := newHarness(t)
 
@@ -6842,10 +6577,6 @@ func TestSnapshotOmitsUsageUntilTheProviderReports(t *testing.T) {
 	}
 }
 
-/* ---- compaction --------------------------------------------------------- */
-
-// compactingConversation is a provider that can reclaim context. The plain fake
-// deliberately cannot, so the unsupported path stays exercised by every other test.
 type compactingConversation struct {
 	*fakeConversation
 
@@ -6865,8 +6596,6 @@ func (c *compactingConversation) Compact(context.Context) (ports.ChatCompactionR
 	c.compactMu.Lock()
 	defer c.compactMu.Unlock()
 	c.calls++
-	// What is about to be reclaimed, not what was: the real provider accepts the
-	// request and does the work as its own turn afterwards.
 	return ports.ChatCompactionResult{TokensBefore: 15650}, nil
 }
 
@@ -6876,9 +6605,6 @@ func (c *compactingConversation) compactCalls() int {
 	return c.calls
 }
 
-// A compaction has to survive a restart, which means it has to be a row. Without
-// one, a conversation that quietly lost half its history has nothing in the
-// timeline to explain the gap, and reads as if the agent simply forgot.
 func TestCompactionIsProjectedAsATimelineFact(t *testing.T) {
 	conv := newCompactingConversation()
 	h := newHarnessWithConversation(t, conv)
@@ -6891,8 +6617,6 @@ func TestCompactionIsProjectedAsATimelineFact(t *testing.T) {
 		Detail:         []byte(`{"tokensBefore":15650,"tokensAfter":4632,"tokensReclaimed":11018}`),
 	})
 
-	// Both writes, because the row and the conversation flag are two statements and
-	// this test asserts on both: waiting only on the row races the flag.
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return len(s.Activities) == 1 && s.Conversation.CompactedAt != nil
 	})
@@ -6909,9 +6633,6 @@ func TestCompactionIsProjectedAsATimelineFact(t *testing.T) {
 	if activity.ProviderItemID != "cc-1" {
 		t.Errorf("provider item id = %q, want cc-1 so a replay updates this row", activity.ProviderItemID)
 	}
-	// Not attached to a turn: the provider ran the compaction in a turn AO never
-	// dispatched, so filing the row under it would attribute the entry to work the
-	// user never asked for.
 	if activity.TurnID != "" {
 		t.Errorf("turn id = %q, want none", activity.TurnID)
 	}
@@ -6923,16 +6644,11 @@ func TestCompactionIsProjectedAsATimelineFact(t *testing.T) {
 		t.Errorf("reclaimed = %d, want 11018", detail.TokensReclaimed)
 	}
 
-	// The conversation itself records that compaction has run, so a client does not
-	// have to scan an unbounded timeline to find out.
 	if snapshot.Conversation.CompactedAt == nil {
 		t.Error("conversation was not marked compacted")
 	}
 }
 
-// A compaction replayed across a reconnect updates the row it already has. Two
-// entries for one compaction would read as two, and the reclaim would look twice
-// as large as it was.
 func TestCompactionReplayDoesNotDuplicateTheRow(t *testing.T) {
 	conv := newCompactingConversation()
 	h := newHarnessWithConversation(t, conv)
@@ -6944,7 +6660,6 @@ func TestCompactionReplayDoesNotDuplicateTheRow(t *testing.T) {
 			Summary:        "Compacted the conversation history",
 		})
 	}
-	// A marker after both, so this waits on an event rather than on a timeout.
 	conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventActivityCompleted, ProviderItemID: "exec-1",
 		ActivityKind: domain.ActivityKindCommand, ActivityStatus: domain.ActivityStatusCompleted,
@@ -6981,8 +6696,6 @@ func TestCompactReportsWhatIsAboutToBeReclaimed(t *testing.T) {
 	if result.TokensBefore != 15650 {
 		t.Errorf("tokensBefore = %d, want 15650", result.TokensBefore)
 	}
-	// Zero means "not yet known", not "reclaimed everything". The settled figures
-	// reach the client on the timeline.
 	if result.TokensAfter != 0 {
 		t.Errorf("tokensAfter = %d, want 0 while the reclaim is in flight", result.TokensAfter)
 	}
@@ -7009,8 +6722,6 @@ func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
 			})
-			// Claiming a queued turn publishes Running before SendTurn crosses
-			// the provider boundary. Wait for that boundary, not just the row.
 			select {
 			case <-sent:
 			case <-time.After(5 * time.Second):
@@ -7023,9 +6734,6 @@ func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
 	}
 }
 
-// A provider with no way to reclaim context gets a typed answer, so the client can
-// stop offering the control instead of surfacing an internal failure the user
-// cannot act on. The plain fake conversation does not implement ChatCompactor.
 func TestCompactOnAProviderThatCannotIsTyped(t *testing.T) {
 	h := newHarness(t)
 
@@ -7035,8 +6743,6 @@ func TestCompactOnAProviderThatCannotIsTyped(t *testing.T) {
 	}
 }
 
-// An agent might implement ChatCompactor statically (e.g. ACP conversation),
-// but if the agent has not advertised the capability, Compact must return ErrCompactionUnsupported.
 func TestCompactRefusesWhenProviderImplementsCompactorWithoutCapability(t *testing.T) {
 	conv := newCompactingConversation()
 	caps := productionCaps()
@@ -7050,10 +6756,6 @@ func TestCompactRefusesWhenProviderImplementsCompactorWithoutCapability(t *testi
 	}
 }
 
-// Measured twice against a live app-server: thread/compact/start mid-turn silently
-// interrupts the running turn and reports it as interrupted, then compacts. Losing
-// work the user is waiting on as a side effect of housekeeping is not something to
-// discover afterwards from the timeline, so AO refuses and makes them stop it.
 func TestCompactRefusesWhileATurnIsInFlight(t *testing.T) {
 	conv := newCompactingConversation()
 	h := newHarnessWithConversation(t, conv)
@@ -7072,7 +6774,6 @@ func TestCompactRefusesWhileATurnIsInFlight(t *testing.T) {
 		t.Error("the provider was asked to compact anyway; the running turn would have been discarded")
 	}
 
-	// Once the turn settles it is allowed again.
 	conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
 		TurnState: domain.TurnStateCompleted,
@@ -7085,15 +6786,9 @@ func TestCompactRefusesWhileATurnIsInFlight(t *testing.T) {
 	}
 }
 
-// A provider can start a turn AO never dispatched: a compaction runs as its own
-// turn, and so does work the provider resumes from its own history. Without a row
-// for it, every item that turn emits correlates to no turn — the activities arrive
-// with an empty turn id and the timeline silently stops grouping them, which reads
-// to a user as the conversation falling apart.
 func TestProviderStartedTurnIsAdoptedSoItsItemsCorrelate(t *testing.T) {
 	h := newHarness(t)
 
-	// No Send: this turn is entirely the provider's doing.
 	h.conv.emit(
 		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-owned-1"},
 		ports.ChatEvent{
@@ -7125,8 +6820,6 @@ func TestProviderStartedTurnIsAdoptedSoItsItemsCorrelate(t *testing.T) {
 	}
 }
 
-// failingProjectStore injects a projection failure for one event kind,
-// simulating a SettleTurn error or tx.Commit failure without corrupting SQLite.
 type failingProjectStore struct {
 	chatsvc.Store
 	failMethod string
@@ -7163,21 +6856,14 @@ func (s *failingProjectStore) ProjectProviderEvent(
 			if err := project(txCtx); err != nil {
 				return err
 			}
-			// Fail after the projection callback so its SQLite writes roll back. This
-			// is the exact boundary that used to leak volatile state out of the tx.
 			return errors.New("injected projection failure")
 		})
 	s.failOnce.Do(func() { close(s.failed) })
 	return projected, err
 }
 
-// The exact #3749 sequence: the turn/completed projection fails (so the durable
-// row stays 'running' and the UI keeps showing "Working"), then the user presses
-// Stop and the provider refuses because the turn already ended on its side.
-// Interrupt must settle the durable row as interrupted, cancel the queue behind
-// it, and report idle — not answer CHAT_NO_ACTIVE_TURN and strand the user.
 func TestProjectionFailureThenStopStillStopsTheTurn(t *testing.T) {
-	conv := newInterruptRecorder() // never marks anything active -> always refuses
+	conv := newInterruptRecorder()
 	st := openStore(t)
 
 	var counterMu sync.Mutex
@@ -7230,8 +6916,6 @@ func TestProjectionFailureThenStopStillStopsTheTurn(t *testing.T) {
 		t.Fatalf("Send queued: %v", err)
 	}
 
-	// The completion's projection fails: the durable row stays 'running' and
-	// afterProject never runs, so nothing drains and nothing reports idle.
 	conv.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: "provider-turn-1",
@@ -7267,9 +6951,6 @@ func TestProjectionFailureThenStopStillStopsTheTurn(t *testing.T) {
 	}
 }
 
-// Controller-state notifications perform durable cleanup before they change the
-// volatile controller state. If that transaction rolls back, memory must continue
-// reporting the last committed state rather than claiming the controller stopped.
 func TestControllerStateChangesOnlyAfterProjectionCommits(t *testing.T) {
 	var failingStore *failingProjectStore
 	h := newHarnessWithConversationAndStore(t, nil, func(st *sqlite.Store) chatsvc.Store {
@@ -7310,8 +6991,6 @@ func TestControllerStoppedEventUsesGenerationOwnedCleanup(t *testing.T) {
 	}
 }
 
-// awaitStoreSnapshot is awaitSnapshot for tests that build their own service
-// rather than using the harness.
 func awaitStoreSnapshot(t *testing.T, st *sqlite.Store, conversationID string,
 	pred func(store.ConversationSnapshot) bool) store.ConversationSnapshot {
 	t.Helper()
@@ -7333,7 +7012,6 @@ func awaitStoreSnapshot(t *testing.T, st *sqlite.Store, conversationID string,
 	return last
 }
 
-// Publishing a reserved provider branch preserves its predecessor's ownership.
 func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -7408,7 +7086,6 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 	}
 }
 
-// No real executable is started by capability discovery or admission.
 type kimiCapabilityPlugin struct{}
 
 func (kimiCapabilityPlugin) ResolveBinary(context.Context) (string, error) { return "/fake/kimi", nil }

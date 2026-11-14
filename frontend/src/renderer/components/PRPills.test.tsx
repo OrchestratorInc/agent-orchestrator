@@ -50,10 +50,8 @@ describe("PR pills", () => {
 		expect(chip).toHaveTextContent("landing-site#12");
 		expect(chip).not.toHaveTextContent("acme-platform");
 		expect(chip.getAttribute("title")).toContain("acme-platform/landing-site");
-		// The repository can shrink and truncate; the number never does.
 		expect(within(chip).getByText("landing-site")).toHaveClass("min-w-0", "truncate");
 		expect(within(chip).getByText("#12")).toHaveClass("shrink-0");
-		// The three other merged PRs stay one click away.
 		expect(pills.getByTestId("pr-pills-earlier")).toHaveTextContent("+3 earlier");
 	});
 

@@ -40,10 +40,6 @@ func absent(t *testing.T, path string) {
 	}
 }
 
-// TestClaudePrepareSharesHistoryNotLogin pins what makes a native resume work
-// across accounts without one account's login leaking into another: history is
-// a link, the settings copy loses login-picking keys, and the global config
-// carries MCP servers but never the device's own account.
 func TestClaudePrepareSharesHistoryNotLogin(t *testing.T) {
 	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
 	write(t, filepath.Join(device, "projects", "-repo", "s1.jsonl"), "{}\n")
@@ -52,13 +48,12 @@ func TestClaudePrepareSharesHistoryNotLogin(t *testing.T) {
 	write(t, filepath.Join(device, ".credentials.json"), `{"secret":true}`)
 	config := filepath.Join(t.TempDir(), ".claude.json")
 	write(t, config, `{"mcpServers":{"m":{"command":"x"}},"theme":"light","oauthAccount":{"emailAddress":"a@example.com"}}`)
-	// The CLI made an empty folder before the link did.
 	if err := os.MkdirAll(filepath.Join(home, "todos"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	c := &Claude{DeviceHome: device, DeviceConfig: config}
-	for range 2 { // idempotent: every launch runs it
+	for range 2 {
 		if err := c.Prepare(home); err != nil {
 			t.Fatal(err)
 		}
@@ -91,9 +86,6 @@ func TestClaudePrepareSharesHistoryNotLogin(t *testing.T) {
 	}
 }
 
-// TestClaudePrepareKeepsChangesMadeOnTheAccount pins the ledger rule: a shared
-// key follows the computer until it is changed on the account, and then it is
-// the account's. Entries of env and mcpServers are shared one by one.
 func TestClaudePrepareKeepsChangesMadeOnTheAccount(t *testing.T) {
 	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
 	config := filepath.Join(t.TempDir(), ".claude.json")
@@ -104,11 +96,8 @@ func TestClaudePrepareKeepsChangesMadeOnTheAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// On the account: the model and one env entry change, an MCP server is
-	// added with `claude mcp add --scope user`, and the sign-in is saved.
 	write(t, filepath.Join(home, "settings.json"), `{"model":"haiku","verbose":false,"cleanupPeriodDays":30,"env":{"FOO":"1","BAR":"mine"},"statusLine":"s"}`)
 	write(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"m":{"command":"x"},"mine":{"command":"y"}},"theme":"light","oauthAccount":{"emailAddress":"b@example.com"},"hasCompletedOnboarding":true}`)
-	// On the computer: every shared value changes, one key goes, a server is added.
 	write(t, filepath.Join(device, "settings.json"), `{"model":"sonnet","verbose":true,"env":{"FOO":"2","BAR":"2"}}`)
 	write(t, config, `{"mcpServers":{"m":{"command":"x2"},"new":{"command":"z"}},"theme":"dark"}`)
 	if err := c.Prepare(home); err != nil {
@@ -144,8 +133,6 @@ func TestClaudePrepareKeepsChangesMadeOnTheAccount(t *testing.T) {
 		t.Fatalf("global config = %s", data)
 	}
 
-	// A change set back to the computer's value, and a shared key deleted on
-	// the account, follow the computer again.
 	write(t, filepath.Join(home, "settings.json"), `{"model":"sonnet","env":{"FOO":"2","BAR":"mine"}}`)
 	if err := c.Prepare(home); err != nil {
 		t.Fatal(err)
@@ -164,8 +151,6 @@ func TestClaudePrepareKeepsChangesMadeOnTheAccount(t *testing.T) {
 	}
 }
 
-// TestPrepareRefusesWhenItCannotLink pins that a folder whose history cannot be
-// linked is refused, not run with history of its own.
 func TestPrepareRefusesWhenItCannotLink(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a folder this user cannot write")
@@ -185,9 +170,6 @@ func TestPrepareRefusesWhenItCannotLink(t *testing.T) {
 	}
 }
 
-// TestCodexPrepareKeepsLoginAndDaemonPrivate pins the shadow home: everything
-// is shared except the login and the app-server daemon's control files, so a
-// terminal on one account cannot attach to a daemon running as another.
 func TestCodexPrepareKeepsLoginAndDaemonPrivate(t *testing.T) {
 	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
 	write(t, filepath.Join(device, "auth.json"), `{"secret":true}`)
@@ -195,7 +177,6 @@ func TestCodexPrepareKeepsLoginAndDaemonPrivate(t *testing.T) {
 	write(t, filepath.Join(device, "sessions", "2026", "r.jsonl"), "{}\n")
 	write(t, filepath.Join(device, "app-server-daemon", "pid"), "1")
 	write(t, filepath.Join(device, "state_5.sqlite"), "")
-	// Codex made its own lock folder in the fresh home first.
 	write(t, filepath.Join(home, "mcp-oauth-locks", "l"), "")
 
 	c := &Codex{DeviceHome: device}
@@ -211,9 +192,6 @@ func TestCodexPrepareKeepsLoginAndDaemonPrivate(t *testing.T) {
 	absent(t, filepath.Join(home, "app-server-daemon"))
 }
 
-// A fresh computer may not have the files Codex writes on its first run. The
-// account's first launch must still share them, and an account that already
-// made its own (before they were shared) gives its copy to the computer.
 func TestCodexPrepareSharesFilesTheComputerDoesNotHaveYet(t *testing.T) {
 	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
 	write(t, filepath.Join(home, "history.jsonl"), "{\"text\":\"asked on the account\"}\n")
@@ -230,8 +208,6 @@ func TestCodexPrepareSharesFilesTheComputerDoesNotHaveYet(t *testing.T) {
 	}
 }
 
-// A link to an entry the user deleted from the computer's own folder is
-// removed; a link to an entry AO always shares is restored.
 func TestPrepareDropsLinksToDeletedEntries(t *testing.T) {
 	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
 	write(t, filepath.Join(device, "rules", "r.md"), "x")
@@ -258,8 +234,6 @@ func TestPrepareDropsLinksToDeletedEntries(t *testing.T) {
 	}
 }
 
-// TestLaunchEnvOverridesCredentialEnv pins the right-account guarantee: a key
-// in the daemon's environment cannot outrank the account's own login.
 func TestLaunchEnvOverridesCredentialEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "device-key")
 	t.Setenv("OPENAI_API_KEY", "device-key")
@@ -282,10 +256,6 @@ func TestLaunchEnvOverridesCredentialEnv(t *testing.T) {
 	}
 }
 
-// TestClaudeDeviceIdentitySeesSavedSetupToken pins that the computer's own
-// account is checked with the setup token AO gives its sessions: on a computer
-// with no native Claude login that token is the only sign-in, and reading the
-// account as signed out would refuse every new Claude session.
 func TestClaudeDeviceIdentitySeesSavedSetupToken(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as the CLI")
@@ -306,17 +276,12 @@ func TestClaudeDeviceIdentitySeesSavedSetupToken(t *testing.T) {
 	if err != nil || !device.SignedIn {
 		t.Fatalf("device identity = %+v, %v, want signed in with the saved token", device, err)
 	}
-	// An account folder signs in with its own login only.
 	account, err := c.Identity(context.Background(), t.TempDir())
 	if err != nil || account.LoggedIn {
 		t.Fatalf("account identity = %+v, %v, want the folder's own (signed-out) login", account, err)
 	}
 }
 
-// TestClaudeIdentityCountsSubscriptionLogins pins which `claude auth status`
-// reports are signed in: a claude.ai login, and a CLAUDE_CODE_OAUTH_TOKEN login
-// (the long-lived subscription token from `claude setup-token`), which carries
-// no email. An API key is not a subscription sign-in.
 func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as the CLI")
@@ -334,7 +299,6 @@ func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 	}{
 		{"claude.ai", `{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.com","subscriptionType":"max","orgId":"org-1","orgName":"Team"}`, true, true, "a@example.com", "org-1", "Team"},
 		{"token", `{"loggedIn":true,"authMethod":"oauth_token"}`, true, true, "", "", ""},
-		// Not a subscription, but the CLI can launch with it.
 		{"api key", `{"loggedIn":true,"authMethod":"api_key"}`, false, true, "", "", ""},
 		{"signed out", `{"loggedIn":false,"authMethod":"none"}`, false, false, "", "", ""},
 	} {
@@ -346,9 +310,6 @@ func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 	}
 }
 
-// TestClaudeSlowCheckReportsTheDeadline: a CLI killed at the deadline says
-// "signal: killed"; the check reports the deadline, so the app can say the CLI
-// was slow rather than that it failed.
 func TestClaudeSlowCheckReportsTheDeadline(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a shell script as the CLI")

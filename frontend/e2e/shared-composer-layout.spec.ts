@@ -36,7 +36,6 @@ test("open queue keeps a solid fill over a translucent window @T0", async ({ pag
 	const queue = page.getByTestId("queued-message-dock");
 	await expect(queue).toHaveAttribute("data-expanded", "true");
 	await page.evaluate(() => document.documentElement.setAttribute("data-window-translucent", "true"));
-	// The open queue floats over the transcript's last rows; a see-through fill lets them show through it.
 	const alpha = await queue.evaluate(el => {
 		const color = getComputedStyle(el).backgroundColor;
 		const match = color.match(/\/\s*([\d.]+)(%?)\s*\)$/) ?? color.match(/^rgba\(.*,\s*([\d.]+)()\s*\)$/);

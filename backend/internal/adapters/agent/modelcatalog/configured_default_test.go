@@ -21,7 +21,6 @@ func writeConfig(t *testing.T, path, content string) {
 	}
 }
 
-// isolateHome points every config root discovery consults at an empty temp dir.
 func isolateHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -37,7 +36,6 @@ func isolateHome(t *testing.T) string {
 	return home
 }
 
-// gitRepo is a real git repository with one empty commit, so HEAD resolves.
 type gitRepo struct {
 	t   *testing.T
 	dir string
@@ -101,9 +99,6 @@ func TestOpenCodeDiscoveryMarksUserConfiguredModelAsDefault(t *testing.T) {
 	}
 }
 
-// A session can be attached to an existing local branch or seeded from a
-// remote branch or tag, so config that exists only on such a ref, not in the
-// checkout or at HEAD, must still leave the default unresolved.
 func TestConfiguredDefaultUnresolvedWhenAnySeedRefHoldsConfig(t *testing.T) {
 	setup := func(t *testing.T) (gitRepo, string) {
 		t.Helper()
@@ -113,8 +108,6 @@ func TestConfiguredDefaultUnresolvedWhenAnySeedRefHoldsConfig(t *testing.T) {
 		repo.git("branch", "-M", "main")
 		return repo, filepath.Join(repo.dir, ".github", "copilot", "settings.json")
 	}
-	// commitOnBranch commits the config on branch and returns to main, whose
-	// tree and working copy have none.
 	commitOnBranch := func(repo gitRepo, config, branch string) {
 		repo.git("checkout", "-q", "-b", branch)
 		writeConfig(repo.t, config, `{"model": "branch"}`)
@@ -221,7 +214,6 @@ func TestConfiguredDefaultModelSources(t *testing.T) {
 
 	copilotHome := t.TempDir()
 	copilotEnv := map[string]string{"COPILOT_HOME": copilotHome}
-	// Legacy config.json is managed state, not the user's model choice.
 	writeConfig(t, filepath.Join(copilotHome, "config.json"), `{"model": "stale-legacy-model"}`)
 	if got := configuredDefaultModel("copilot", workDir, copilotEnv); got != "" {
 		t.Errorf("copilot must ignore legacy config.json, got %q", got)
@@ -240,9 +232,6 @@ func TestConfiguredDefaultModelSources(t *testing.T) {
 	}
 }
 
-// Repository config is never read: the launch worktree's copy is chosen per
-// session and can differ from the checkout's. Wherever the repository may
-// hold one, the default stays unresolved; an env override still wins.
 func TestConfiguredDefaultUnresolvedWhenRepositoryMayHoldConfig(t *testing.T) {
 	for _, tc := range []struct {
 		agentID, file, content string
@@ -290,8 +279,6 @@ func TestConfiguredDefaultUnresolvedWhenRepositoryMayHoldConfig(t *testing.T) {
 				t.Fatalf("no repository config = %q, want user", got)
 			}
 
-			// Untracked, staged, or committed: the checkout copy may not be the
-			// launch worktree's, so the default is unresolved in every state.
 			repoFile := filepath.Join(repo.dir, filepath.FromSlash(tc.file))
 			writeConfig(t, repoFile, tc.content)
 			if got := configuredDefaultModel(tc.agentID, sub, nil); got != "" {
@@ -302,8 +289,6 @@ func TestConfiguredDefaultUnresolvedWhenRepositoryMayHoldConfig(t *testing.T) {
 				t.Errorf("staged repository config = %q, want unresolved", got)
 			}
 			repo.commit("config")
-			// Deleted locally but still committed: a worktree seeded from HEAD
-			// would contain it.
 			if err := os.Remove(repoFile); err != nil {
 				t.Fatal(err)
 			}
@@ -319,9 +304,6 @@ func TestConfiguredDefaultUnresolvedWhenRepositoryMayHoldConfig(t *testing.T) {
 	}
 }
 
-// A repository config file present only in a launch worktree (committed on
-// the seed commit) must not be missed: an actual `git worktree add` from HEAD
-// carries it even when the checkout has deleted it.
 func TestConfiguredDefaultMatchesActualWorktree(t *testing.T) {
 	home := isolateHome(t)
 	writeConfig(t, filepath.Join(home, ".copilot", "settings.json"), `{"model": "user"}`)
@@ -337,7 +319,6 @@ func TestConfiguredDefaultMatchesActualWorktree(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(worktree, ".github", "copilot", "settings.json")); err != nil {
 		t.Fatalf("worktree should contain the committed config: %v", err)
 	}
-	// The session would run "repo", so "user" must not be shown as default.
 	if got := configuredDefaultModel("copilot", repo.dir, nil); got != "" {
 		t.Errorf("default with config in the launch worktree = %q, want unresolved", got)
 	}

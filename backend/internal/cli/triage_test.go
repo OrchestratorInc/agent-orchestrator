@@ -138,7 +138,6 @@ func TestTriageWithNoAgentWritesAPromptThatCanPost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The program has exited, so nothing is left to take the agent's text to GitHub.
 	if strings.Contains(string(prompt), "Terminal mode") || !strings.Contains(string(prompt), "In-app mode") {
 		t.Fatalf("prompt.md hands off to a program that already exited:\n%s", prompt)
 	}

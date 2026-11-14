@@ -22,8 +22,6 @@ import (
 
 const v2DataHomeDirName = "opencode-v2-home"
 
-// V2DataHome returns the XDG_DATA_HOME OpenCode 2 runs with: a sibling of the
-// user's own data home, so OpenCode 1 and 2 never share a database.
 func V2DataHome() (string, error) {
 	parent := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
 	if parent != "" && !filepath.IsAbs(parent) {
@@ -45,8 +43,6 @@ func V2DataHome() (string, error) {
 	return filepath.Join(parent, v2DataHomeDirName), nil
 }
 
-// V2NPMPrefix is the private npm prefix OpenCode 2 installs into so its
-// `opencode` executable never replaces the OpenCode 1 one on PATH.
 func V2NPMPrefix() (string, error) {
 	home, err := V2DataHome()
 	if err != nil {
@@ -55,7 +51,6 @@ func V2NPMPrefix() (string, error) {
 	return filepath.Join(home, "npm"), nil
 }
 
-// V2NPMBinDir is where npm places executables for V2NPMPrefix.
 func V2NPMBinDir() (string, error) {
 	prefix, err := V2NPMPrefix()
 	if err != nil {
@@ -67,9 +62,6 @@ func V2NPMBinDir() (string, error) {
 	return filepath.Join(prefix, "bin"), nil
 }
 
-// V2InstallerHome is the HOME the official OpenCode 2 installer runs with. The
-// installer always writes $HOME/.opencode/bin/opencode, which is where OpenCode
-// 1's installer puts its own executable, so AO gives it a private home instead.
 func V2InstallerHome() (string, error) {
 	home, err := V2DataHome()
 	if err != nil {
@@ -78,8 +70,6 @@ func V2InstallerHome() (string, error) {
 	return filepath.Join(home, "installer"), nil
 }
 
-// V2InstallerBinDir is where the official installer places executables for
-// V2InstallerHome.
 func V2InstallerBinDir() (string, error) {
 	home, err := V2InstallerHome()
 	if err != nil {
@@ -88,17 +78,11 @@ func V2InstallerBinDir() (string, error) {
 	return filepath.Join(home, ".opencode", "bin"), nil
 }
 
-// homebrewDefaultPrefixes are Homebrew's standard install prefixes.
 var homebrewDefaultPrefixes = []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"}
 
-// homebrewOptBinaries returns formula's opt link to its opencode executable
-// (<prefix>/opt/<formula>/bin/opencode) under the default prefixes and a
-// custom one, taken from HOMEBREW_PREFIX or the brew on PATH
-// (<prefix>/bin/brew). The opt link exists whether or not the formula is
-// linked into <prefix>/bin.
 func homebrewOptBinaries(formula string) []string {
 	if runtime.GOOS == "windows" {
-		return nil // Homebrew does not run on Windows.
+		return nil
 	}
 	var candidates []string
 	add := func(prefix string) {
@@ -120,21 +104,12 @@ func homebrewOptBinaries(formula string) []string {
 	return candidates
 }
 
-// v2HomebrewCandidates are the opencode-v2 formula's opt links. AO unlinks the
-// formula after installing it, so its executable never takes over
-// <prefix>/bin/opencode, and resolves it through the opt link instead.
 func v2HomebrewCandidates() []string { return homebrewOptBinaries("opencode-v2") }
 
-// v1HomebrewCandidates are the opencode formula's opt links. They keep
-// OpenCode 1 resolvable while its <prefix>/bin link is briefly removed so the
-// opencode-v2 formula (which conflicts with it) can be installed.
 func v1HomebrewCandidates() []string { return homebrewOptBinaries("opencode") }
 
 var v2DataMigrationLock = make(chan struct{}, 1)
 
-// PrepareV2DataHome returns the isolated OpenCode 2 data home after copying a
-// pre-isolation OpenCode store into it once. The legacy store is left intact
-// for OpenCode 1; an existing isolated store is never overwritten.
 func PrepareV2DataHome(ctx context.Context) (string, error) {
 	select {
 	case v2DataMigrationLock <- struct{}{}:
@@ -190,8 +165,6 @@ func PrepareV2DataHome(ctx context.Context) (string, error) {
 	return destinationHome, nil
 }
 
-// legacyToolCacheDir is the data-store subdirectory opencode downloads tools
-// into; the migration leaves it behind.
 const legacyToolCacheDir = "bin"
 
 func copyTree(ctx context.Context, source, destination string) error {
@@ -223,7 +196,6 @@ func copyTree(ctx context.Context, source, destination string) error {
 			if relative == "." {
 				return nil
 			}
-			// Full of node_modules/.bin symlinks, and OpenCode 2 downloads it again.
 			if relative == legacyToolCacheDir {
 				return filepath.SkipDir
 			}
@@ -264,8 +236,6 @@ func copyTree(ctx context.Context, source, destination string) error {
 	if walkErr != nil || closeErr != nil {
 		return errors.Join(walkErr, closeErr)
 	}
-	// Every entry of a store deleted mid-walk is skipped as vanished. Don't let
-	// that near-empty copy become the permanent OpenCode 2 store.
 	if _, err := os.Stat(source); err != nil {
 		return fmt.Errorf("legacy data store vanished during migration: %w", err)
 	}
@@ -278,14 +248,8 @@ func copyTree(ctx context.Context, source, destination string) error {
 	return snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db"))
 }
 
-// maxVanishedLegacyExamples bounds the paths in the summary: OpenCode can prune
-// thousands of expired shell output files during one copy.
 const maxVanishedLegacyExamples = 5
 
-// vanishedLegacyEntries tallies entries that disappeared after they were listed.
-// The legacy store stays live during the migration: OpenCode prunes its own shell
-// output, so one deleted file must not abort the copy and block every OpenCode 2
-// start. The migration runs once, so a skipped entry stays out of the new store.
 type vanishedLegacyEntries struct {
 	count    int
 	examples []string
@@ -355,9 +319,6 @@ func snapshotSQLiteDatabase(ctx context.Context, source, destination string) err
 	}
 }
 
-// ReadOnlyDSN is the SQLite URI that opens path read-only. The path is escaped,
-// so a "?", "#" or "%" in a data directory cannot end it early and drop
-// mode=ro, which would open the user's store writable.
 func ReadOnlyDSN(path string, busyTimeoutMillis int) string {
 	u := url.URL{Path: filepath.ToSlash(path)}
 	return fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(%d)", u.EscapedPath(), busyTimeoutMillis)

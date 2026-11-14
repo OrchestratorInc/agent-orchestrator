@@ -5,8 +5,6 @@ import { toggleAppDevTools } from "./app-devtools";
 
 type InputEvent = {
 	key: string;
-	// Physical key (Electron input.code), needed for chords whose character is
-	// layout-shifted, e.g. Ctrl+Shift+` reports key "~" but code "Backquote".
 	code?: string;
 	control: boolean;
 	meta: boolean;
@@ -180,8 +178,6 @@ describe("attachAppShortcuts", () => {
 		const event = source.emit({ key: "w", control: true });
 
 		expect(target.send).not.toHaveBeenCalled();
-		// Still preventDefault so a racing listener cannot open/close a terminal,
-		// and so Chromium does not treat the chord as an unhandled accelerator.
 		expect(event.preventDefault).toHaveBeenCalledOnce();
 	});
 
@@ -364,7 +360,6 @@ describe("attachAppShortcuts", () => {
 				const event = source.emit({ ...input, control: true, alt: true });
 				expect(event.preventDefault).not.toHaveBeenCalled();
 			}
-			// Ctrl+ArrowLeft (word jump) is not Alt+Left.
 			source.emit({ key: "ArrowLeft", control: true });
 			expect(target.send).not.toHaveBeenCalled();
 		}
@@ -471,7 +466,6 @@ describe("attachAppShortcuts", () => {
 			expect(target.send).toHaveBeenLastCalledWith(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, action);
 		}
 
-		// Not engaged, the chord is the app's View zoom again.
 		target.send.mockClear();
 		engaged = false;
 		const appZoomEvent = source.emit({ key: "=", code: "Equal", ...primary });

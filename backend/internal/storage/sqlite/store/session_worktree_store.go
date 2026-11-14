@@ -10,16 +10,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// UpsertSessionWorktree records or updates one repo worktree for a session.
 func (s *Store) UpsertSessionWorktree(ctx context.Context, row domain.SessionWorktreeRecord) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	// ponytail: session_worktrees.state is unused multi-repo scaffolding; no
-	// live code path sets domain.SessionWorktreeRecord.State, so it arrives
-	// here as "". The generated upsert includes state in the INSERT column list
-	// and the CHECK constraint rejects "". Default to 'active' (the column
-	// default) so the row stays valid without touching the schema or gen code.
-	// Wire a real value when multi-repo worktree lifecycle states ship.
 	state := row.State
 	if state == "" {
 		state = "active"
@@ -37,7 +30,6 @@ func (s *Store) UpsertSessionWorktree(ctx context.Context, row domain.SessionWor
 	})
 }
 
-// GetSessionWorktree returns one session worktree row.
 func (s *Store) GetSessionWorktree(ctx context.Context, sessionID domain.SessionID, repoName string) (domain.SessionWorktreeRecord, bool, error) {
 	row, err := s.qr.GetSessionWorktree(ctx, gen.GetSessionWorktreeParams{SessionID: sessionID, RepoName: repoName})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -49,7 +41,6 @@ func (s *Store) GetSessionWorktree(ctx context.Context, sessionID domain.Session
 	return sessionWorktreeFromGen(row), true, nil
 }
 
-// ListSessionWorktrees returns every repo worktree for a session, root first.
 func (s *Store) ListSessionWorktrees(ctx context.Context, sessionID domain.SessionID) ([]domain.SessionWorktreeRecord, error) {
 	rows, err := s.qr.ListSessionWorktrees(ctx, sessionID)
 	if err != nil {
@@ -62,7 +53,6 @@ func (s *Store) ListSessionWorktrees(ctx context.Context, sessionID domain.Sessi
 	return out, nil
 }
 
-// DeleteSessionWorktrees deletes the per-repo worktree rows for a session.
 func (s *Store) DeleteSessionWorktrees(ctx context.Context, sessionID domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -79,8 +69,6 @@ func sessionWorktreeFromGen(row gen.SessionWorktree) domain.SessionWorktreeRecor
 		CreationSHA:  row.CreationSha,
 		WorktreePath: row.WorktreePath,
 		PreservedRef: row.PreservedRef,
-		// ponytail: state is read back from the DB but no caller uses it;
-		// it is unused multi-repo scaffolding (see UpsertSessionWorktree above).
-		State: row.State,
+		State:        row.State,
 	}
 }

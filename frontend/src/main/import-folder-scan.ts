@@ -94,7 +94,6 @@ export async function ancestorRepositorySetupWarning(repoPath: string, options: 
 			return `Selected folder is inside an existing Git repository at ${top}. Orchestrator will initialize this folder as a separate repository.`;
 		}
 	} catch {
-		// No ancestor repository.
 	}
 	return undefined;
 }
@@ -115,15 +114,12 @@ async function resolveDefaultBranch(repoPath: string, options: ScanOptions = {})
 		const ref = await gitOutput(repoPath, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], options);
 		if (ref) return ref.replace(/^origin\//, "");
 	} catch {
-		// The current checkout may be temporary and is not a repository default.
 	}
 	return "auto";
 }
 
 export async function resolveCheckedOutBranch(repoPath: string, options: ScanOptions = {}): Promise<string | undefined> {
 	try {
-		// Git walks up to an ancestor repository for plain nested folders. AO
-		// initializes those workspace roots separately, so do not inherit its branch.
 		if (await gitOutput(repoPath, ["rev-parse", "--show-prefix"], options)) return undefined;
 		const branch = await gitOutput(repoPath, ["symbolic-ref", "--short", "HEAD"], options);
 		return branch || undefined;
@@ -172,7 +168,6 @@ async function scanGitRepo(
 				};
 			}
 		} catch {
-			// Not a git repository — surface as needs-init.
 		}
 		return {
 			name,

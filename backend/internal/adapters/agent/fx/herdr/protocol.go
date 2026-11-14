@@ -52,13 +52,9 @@ func (s *Server) handle(ctx context.Context, line []byte) response {
 	signal := ports.ActivitySignal{LaunchID: launchID, ExpectedHarness: domain.HarnessFX, Timestamp: time.Now()}
 	switch req.Method {
 	case "pane.rename", "agent.rename":
-		// fx omits source and agent on rename. These methods only receive an
-		// acknowledgement; AO display names and lifecycle facts are untouched.
 		reply.OK = true
 		return reply
 	case "pane.clear_agent_authority":
-		// Native clear carries source only. Runtime liveness observation owns
-		// process exit, so clear must never terminate a session.
 		reply.OK = req.Params.Source == "custom:fx"
 		if !reply.OK {
 			reply.Error = "invalid source"
@@ -84,8 +80,6 @@ func (s *Server) handle(ctx context.Context, line []byte) response {
 		case "working":
 			signal.State = domain.ActivityActive
 		case "idle":
-			// End of turn, like every other harness. Waiting-input would mark
-			// the session as needing the user and suppress automated nudges.
 			signal.State = domain.ActivityIdle
 		case "blocked":
 			signal.State = domain.ActivityBlocked

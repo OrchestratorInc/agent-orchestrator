@@ -6,25 +6,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { capLabel, roleLabel, type ShareScope } from "./accessLabels";
 import { actualLinkCap, expiryText, type LinkAccess, type ShareExpiry } from "./linkAccess";
 
-/**
- * The link settings behind the gear: how long a new link lasts, and every
- * live link of this session or project, each revocable. A session can have
- * several, made at different times with different access; general access
- * describes the broadest.
- */
 export function LinkSettings({ scope, access, expiry, onExpiryChange, onRevoke, busy, locale }: {
 	scope: ShareScope;
 	access: LinkAccess;
 	expiry: ShareExpiry;
 	onExpiryChange: (expiry: ShareExpiry) => void;
-	/** The link and its row's place, so focus can move to the next row once it is gone. */
 	onRevoke: (link: CloudCpShareLink, index: number) => void;
-	/** A revoke is running or being checked: Revoke waits, but keeps focus. */
 	busy: boolean;
 	locale: string;
 }) {
 	const { t } = useTranslation();
-	// Standard is what writing means; another cap (a Trusted link made before links stopped offering it) is named.
 	const accessText = (link: CloudCpShareLink) => {
 		const cap = actualLinkCap(link.role, link.modeCap);
 		const level = roleLabel(t, link.role, scope);

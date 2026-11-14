@@ -71,7 +71,6 @@ describe("sent attachment previews", () => {
 		expect(revoked).toEqual(["blob:test/1"]);
 	});
 
-	// The packaged app once blocked blob: images by CSP and the tile was left on its alt text.
 	it("hands a tile whose local copy fails to the daemon's copy, once", () => {
 		rememberSentAttachments([{ path: PATH, mimeType: "image/png", bytes: 3, file: new Blob(["png"]) }]);
 		const tile = renderHook(() => useSentAttachmentPreview(PATH));
@@ -99,7 +98,6 @@ describe("sent attachment previews", () => {
 		let retired = false;
 		const tile = renderHook(() => {
 			const preview = useSentAttachmentPreview(PATH);
-			// The handout ends after this render read the URL but before its effect held it.
 			if (!retired) {
 				retired = true;
 				vi.advanceTimersByTime(5 * 60_000);

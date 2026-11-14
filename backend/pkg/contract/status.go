@@ -2,10 +2,8 @@ package contract
 
 import "time"
 
-// ActivityState is the latest observed state of an agent.
 type ActivityState string
 
-// ActivityState values reported by an agent runtime.
 const (
 	ActivityActive       ActivityState = "active"
 	ActivityIdle         ActivityState = "idle"
@@ -14,10 +12,8 @@ const (
 	ActivityExited       ActivityState = "exited"
 )
 
-// SessionStatus is the derived display status of a session.
 type SessionStatus string
 
-// SessionStatus values shown by AO clients.
 const (
 	StatusWorking          SessionStatus = "working"
 	StatusPROpen           SessionStatus = "pr_open"
@@ -25,22 +21,17 @@ const (
 	StatusCIFailed         SessionStatus = "ci_failed"
 	StatusReviewPending    SessionStatus = "review_pending"
 	StatusChangesRequested SessionStatus = "changes_requested"
-	// StatusCommented marks a pull request with an unresolved comment
-	// thread from a review that did not formally request changes (e.g. a
-	// GitHub COMMENTED review). It is distinct from StatusChangesRequested,
-	// which is reserved for a formal provider decision.
-	StatusCommented  SessionStatus = "commented"
-	StatusApproved   SessionStatus = "approved"
-	StatusMergeable  SessionStatus = "mergeable"
-	StatusMerged     SessionStatus = "merged"
-	StatusNeedsInput SessionStatus = "needs_input"
-	StatusExited     SessionStatus = "exited"
-	StatusIdle       SessionStatus = "idle"
-	StatusTerminated SessionStatus = "terminated"
-	StatusNoSignal   SessionStatus = "no_signal"
+	StatusCommented        SessionStatus = "commented"
+	StatusApproved         SessionStatus = "approved"
+	StatusMergeable        SessionStatus = "mergeable"
+	StatusMerged           SessionStatus = "merged"
+	StatusNeedsInput       SessionStatus = "needs_input"
+	StatusExited           SessionStatus = "exited"
+	StatusIdle             SessionStatus = "idle"
+	StatusTerminated       SessionStatus = "terminated"
+	StatusNoSignal         SessionStatus = "no_signal"
 )
 
-// SessionFacts are the durable-agnostic facts used to derive session status.
 type SessionFacts struct {
 	Activity       ActivityState
 	LastActivityAt time.Time
@@ -49,10 +40,8 @@ type SessionFacts struct {
 	IsTerminated   bool
 }
 
-// CIState is the aggregate CI state of a pull request.
 type CIState string
 
-// CIState values aggregate all checks for a pull request.
 const (
 	CIUnknown CIState = "unknown"
 	CIPending CIState = "pending"
@@ -60,10 +49,8 @@ const (
 	CIFailing CIState = "failing"
 )
 
-// ReviewDecision is the aggregate human-review verdict on a pull request.
 type ReviewDecision string
 
-// ReviewDecision values aggregate human review state.
 const (
 	ReviewNone           ReviewDecision = "none"
 	ReviewApproved       ReviewDecision = "approved"
@@ -71,10 +58,8 @@ const (
 	ReviewRequired       ReviewDecision = "review_required"
 )
 
-// Mergeability is whether a pull request can currently be merged.
 type Mergeability string
 
-// Mergeability values describe the current pull-request merge state.
 const (
 	MergeUnknown     Mergeability = "unknown"
 	MergeMergeable   Mergeability = "mergeable"
@@ -83,7 +68,6 @@ const (
 	MergeUnstable    Mergeability = "unstable"
 )
 
-// PRFacts are the pull-request facts used to derive session and stack status.
 type PRFacts struct {
 	URL            string
 	Draft          bool
@@ -97,13 +81,11 @@ type PRFacts struct {
 	TargetBranch   string
 }
 
-// StackPosition is the derived position of a pull request in its stack.
 type StackPosition struct {
 	Blocked       bool
 	BottomOfStack bool
 }
 
-// DeriveStatus derives the display status from session and pull-request facts.
 func DeriveStatus(
 	session SessionFacts,
 	prs []PRFacts,
@@ -136,14 +118,11 @@ func DeriveStatus(
 	return StatusIdle
 }
 
-// silentPastGrace reports whether a session that should be reporting hook
-// activity has never reported and has been quiet longer than the grace period.
 func silentPastGrace(session SessionFacts, now time.Time, noSignalGrace time.Duration) bool {
 	return session.SignalExpected && !session.HasSignal &&
 		now.Sub(session.LastActivityAt) > noSignalGrace
 }
 
-// DeriveSCMStatus derives stack-aware pull-request status independently of activity.
 func DeriveSCMStatus(prs []PRFacts) SessionStatus {
 	open := openPRs(prs)
 	if len(open) > 0 {
@@ -155,7 +134,6 @@ func DeriveSCMStatus(prs []PRFacts) SessionStatus {
 	return ""
 }
 
-// BuildStacks derives stack positions from open source and target branches.
 func BuildStacks(prs []PRFacts) map[string]StackPosition {
 	openSources := make(map[string]bool, len(prs))
 	for _, pr := range prs {
@@ -257,10 +235,6 @@ func prPipelineStatus(pr PRFacts) SessionStatus {
 		return StatusCIFailed
 	case pr.Draft:
 		return StatusDraft
-	// Reserve StatusChangesRequested for the provider's own formal decision.
-	// An unresolved comment thread (pr.ReviewComments) from a COMMENTED review
-	// is real feedback, but it is not a blocking review, so it gets its own
-	// status instead of being reported under the same one -- see issue #5765.
 	case pr.Review == ReviewChangesRequest:
 		return StatusChangesRequested
 	case pr.ReviewComments:

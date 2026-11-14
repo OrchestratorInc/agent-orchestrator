@@ -14,13 +14,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus reports whether OpenHands has a usable LLM configuration.
-//
-// Without agent_settings.json the TUI opens its first-run settings wizard
-// instead of working, so a missing or model-less file is unauthorized. A
-// configured model is authorized: local models legitimately have no API key,
-// and AO does not launch with --override-with-envs, so LLM_* environment
-// variables are not consulted.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -33,8 +26,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return status, err
 }
 
-// settingsPath mirrors OpenHands' persistence dir: OPENHANDS_PERSISTENCE_DIR,
-// else ~/.openhands.
 func settingsPath() string {
 	dir := strings.TrimSpace(os.Getenv("OPENHANDS_PERSISTENCE_DIR"))
 	if dir == "" {
@@ -64,8 +55,6 @@ func settingsAuthStatus(path string) (ports.AgentAuthStatus, error) {
 		} `json:"llm"`
 	}
 	if err := json.Unmarshal(data, &settings); err != nil {
-		// OpenHands treats a corrupt file as needing setup too, but the user
-		// may be mid-edit; do not claim a definite state.
 		return ports.AgentAuthStatusUnknown, nil //nolint:nilerr // malformed settings → can't determine auth status
 	}
 	if strings.TrimSpace(settings.LLM.Model) == "" {

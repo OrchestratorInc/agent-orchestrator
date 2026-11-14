@@ -95,7 +95,6 @@ test("typing hides the suggestion and clearing the draft restores it for Tab acc
 		await composer.pressSequentially(draft);
 		await expect(composer).toHaveText(draft);
 		await expect(suggestion).toBeHidden();
-		// Use editor keyboard commands so Lexical owns both selection and deletion.
 		await composer.press("ControlOrMeta+a");
 		await composer.press("Backspace");
 		await expect(composer).toHaveText("");

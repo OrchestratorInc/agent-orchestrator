@@ -1,5 +1,3 @@
-// Package browserruntime brokers browser commands between the loopback daemon
-// and the Electron process that owns AO's per-session WebContentsView targets.
 package browserruntime
 
 import (
@@ -24,28 +22,16 @@ import (
 )
 
 const (
-	// ProtocolVersion identifies the daemon-to-Electron browser bridge contract.
-	// v3 adds broker-issued ping frames answered by pong; v2 peers (desktop
-	// builds older than the heartbeat) are still accepted and simply not probed.
-	ProtocolVersion = 3
-	// minSupportedProtocolVersion is the oldest hello the broker accepts, so a
-	// freshly built daemon keeps working against a not-yet-upgraded desktop app.
+	ProtocolVersion             = 3
 	minSupportedProtocolVersion = 2
-	// RuntimeTokenStdinEnv tells an app-spawned daemon to read its token once
-	// from the inherited private stdin pipe instead of an environment variable.
-	RuntimeTokenStdinEnv = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
-	// RuntimeAddressEnv carries the exact listener address into running.json so
-	// Electron never has to duplicate the backend's platform-specific naming.
-	RuntimeAddressEnv     = "AO_BROWSER_RUNTIME_ADDRESS"
-	helloTimeout          = 5 * time.Second
-	helloReplyTimeout     = time.Second
-	runtimeReconnectGrace = 2 * time.Second
-	maxRuntimeFrameBytes  = 8 << 20
+	RuntimeTokenStdinEnv        = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
+	RuntimeAddressEnv           = "AO_BROWSER_RUNTIME_ADDRESS"
+	helloTimeout                = 5 * time.Second
+	helloReplyTimeout           = time.Second
+	runtimeReconnectGrace       = 2 * time.Second
+	maxRuntimeFrameBytes        = 8 << 20
 )
 
-// ReadRuntimeToken reads the one-line token handoff used by the desktop app.
-// The token is never placed in a file, command line, or daemon environment, and
-// the daemon does not pass the consumed stdin handle to worker processes.
 func ReadRuntimeToken(r io.Reader) (string, error) {
 	const maxTokenBytes = 256
 	line, err := bufio.NewReader(io.LimitReader(r, maxTokenBytes+1)).ReadString('\n')
@@ -62,22 +48,12 @@ func ReadRuntimeToken(r io.Reader) (string, error) {
 	return token, nil
 }
 
-// ErrUnavailable indicates that no Electron browser runtime can accept a command.
 var ErrUnavailable = errors.New("browser runtime is unavailable")
 
-// ErrReconnecting indicates that the desktop runtime is temporarily between
-// connections. It wraps ErrUnavailable so existing callers retain the
-// unavailable classification while newer callers can offer a retry action.
 var ErrReconnecting = errors.New("browser runtime is reconnecting")
 
-// ErrUnresponsive is the disconnect cause recorded when the runtime stops
-// answering liveness pings.
 var ErrUnresponsive = errors.New("browser runtime is unresponsive")
 
-// livenessConfig tunes the broker heartbeat. A runtime whose desktop process
-// wedged (busy event loop, system sleep, wedged network stack) keeps its
-// socket open but stops answering pings, so the stall check — not the socket
-// state — is what actually detects a dead bridge.
 type livenessConfig struct {
 	interval   time.Duration
 	stallLimit time.Duration
@@ -85,21 +61,15 @@ type livenessConfig struct {
 
 var defaultLiveness = livenessConfig{interval: 5 * time.Second, stallLimit: 15 * time.Second}
 
-// Status describes whether a runtime is connected to the browser command broker.
 type Status struct {
-	Connected   bool
-	ConnectedAt time.Time
-	// Transport names the runtime kind this broker serves.
-	Transport string
-	// Client and ClientVersion are what the connected runtime reported in its
-	// hello, for example the AO Chrome extension and its version.
+	Connected     bool
+	ConnectedAt   time.Time
+	Transport     string
 	Client        string
 	ClientVersion string
-	// Target is set by the session router: which browser the session uses.
-	Target string
+	Target        string
 }
 
-// Command is one session-scoped operation sent to the Electron browser runtime.
 type Command struct {
 	RequestID string                 `json:"requestId"`
 	SessionID domain.SessionID       `json:"sessionId"`
@@ -107,7 +77,6 @@ type Command struct {
 	Args      map[string]interface{} `json:"args,omitempty"`
 }
 
-// CommandError is a stable browser failure returned by the Electron runtime.
 type CommandError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -120,17 +89,15 @@ func (e CommandError) Error() string {
 	return fmt.Sprintf("%s (%s)", e.Message, e.Code)
 }
 
-// Result contains the correlated response to a browser command.
 type Result struct {
 	RequestID string
 	Value     interface{}
 }
 
 type wireMessage struct {
-	Type    string `json:"type"`
-	Version int    `json:"version,omitempty"`
-	Token   string `json:"token,omitempty"`
-	// Client and ClientVersion are optional hello metadata.
+	Type          string                 `json:"type"`
+	Version       int                    `json:"version,omitempty"`
+	Token         string                 `json:"token,omitempty"`
 	Client        string                 `json:"client,omitempty"`
 	ClientVersion string                 `json:"clientVersion,omitempty"`
 	RequestID     string                 `json:"requestId,omitempty"`
@@ -147,9 +114,6 @@ type pendingResult struct {
 	err   error
 }
 
-// Broker owns the single active Electron runtime connection. Commands are
-// correlated by request id, so independent AO sessions may use the bridge
-// concurrently without sharing browser targets or results.
 type Broker struct {
 	log *slog.Logger
 
@@ -170,7 +134,6 @@ type Broker struct {
 	liveness livenessConfig
 }
 
-// New creates an empty browser command broker.
 func New(log *slog.Logger, token ...string) *Broker {
 	if log == nil {
 		log = slog.Default()
@@ -184,37 +147,26 @@ func New(log *slog.Logger, token ...string) *Broker {
 	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken, transport: TransportElectron, liveness: defaultLiveness}
 }
 
-// TransportElectron is the desktop app's WebContentsView runtime.
 const TransportElectron = "electron-webcontents-debugger"
 
-// SetTransport names the runtime kind this broker serves. Call before Serve.
 func (b *Broker) SetTransport(name string) {
 	b.mu.Lock()
 	b.transport = name
 	b.mu.Unlock()
 }
 
-// SetExclusive makes the first connected runtime keep the bridge: a second
-// runtime is told it was rejected and closed instead of replacing the first.
-// The Chrome runtime uses this so two Chrome profiles cannot keep displacing
-// each other. Call before Serve.
 func (b *Broker) SetExclusive(exclusive bool) {
 	b.mu.Lock()
 	b.exclusive = exclusive
 	b.mu.Unlock()
 }
 
-// SetPeerVerifier installs a check that runs on every accepted connection
-// before its hello is read. A failing check closes the connection. Call
-// before Serve.
 func (b *Broker) SetPeerVerifier(verify func(net.Conn) error) {
 	b.mu.Lock()
 	b.verifyPeer = verify
 	b.mu.Unlock()
 }
 
-// NewToken returns a per-daemon-launch secret used to authenticate the desktop
-// browser runtime before it can replace the active bridge connection.
 func NewToken() (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -223,7 +175,6 @@ func NewToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// Status returns the current Electron runtime connection state.
 func (b *Broker) Status() Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -236,7 +187,6 @@ func (b *Broker) Status() Status {
 	}
 }
 
-// Execute sends one browser command to the connected Electron runtime.
 func (b *Broker) Execute(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) (Result, error) {
 	requestID := uuid.NewString()
 	resultCh := make(chan pendingResult, 1)
@@ -288,9 +238,6 @@ func (b *Broker) Execute(ctx context.Context, sessionID domain.SessionID, action
 	}
 }
 
-// DestroySession implements sessionmanager.BrowserLifecycle. It bypasses the
-// public browser action allowlist but still uses the authenticated runtime
-// transport, so session teardown does not depend on a mounted renderer panel.
 func (b *Broker) DestroySession(ctx context.Context, sessionID domain.SessionID) error {
 	_, err := b.Execute(ctx, sessionID, "__destroy-session", nil)
 	if errors.Is(err, ErrUnavailable) {
@@ -299,9 +246,6 @@ func (b *Broker) DestroySession(ctx context.Context, sessionID domain.SessionID)
 	return err
 }
 
-// Serve accepts Electron runtime connections until ctx is cancelled. A new
-// valid runtime replaces an older connection and fails its in-flight commands;
-// this makes renderer reload/restart recovery deterministic.
 func (b *Broker) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
@@ -337,9 +281,6 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	// Answer every hello explicitly, so the runtime knows whether it was accepted
-	// instead of guessing from how long the socket stays open (#6466). Older
-	// runtimes ignore both frames.
 	helloFrame := scanner.Bytes()
 	if rejection := helloRejection(helloFrame, b.token); rejection != nil {
 		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: rejection})
@@ -347,15 +288,13 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 	var hello wireMessage
-	_ = json.Unmarshal(helloFrame, &hello) // validated by helloRejection
+	_ = json.Unmarshal(helloFrame, &hello)
 	if b.busy() {
 		_ = writeHelloReply(conn, wireMessage{Type: "hello-rejected", Error: errRuntimeBusy})
 		_ = conn.Close()
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
-	// Nothing else can write to conn until it is published below, so hello-ok is
-	// always the first frame the runtime reads.
 	if err := writeHelloReply(conn, wireMessage{Type: "hello-ok"}); err != nil {
 		_ = conn.Close()
 		return
@@ -363,7 +302,6 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 
 	b.mu.Lock()
 	if b.exclusive && b.conn != nil {
-		// Another runtime connected while this one was being accepted.
 		b.mu.Unlock()
 		frame, _ := json.Marshal(wireMessage{Type: "rejected", Error: errRuntimeBusy})
 		_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
@@ -378,7 +316,6 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	b.clientVersion = hello.ClientVersion
 	b.signalConnectionChangedLocked()
 	pending := b.takePendingLocked()
-	// A v3 runtime is probed; v2 peers keep their connection but are never pinged.
 	if hello.Version >= ProtocolVersion {
 		b.pongAt = time.Now()
 	}
@@ -419,10 +356,6 @@ func (b *Broker) serveConn(ctx context.Context, conn net.Conn) {
 	b.disconnect(conn, scanner.Err())
 }
 
-// runLiveness probes a protocol v3 runtime until the connection goes away. An
-// unanswered ping does not immediately fail the peer — the stall check is what
-// declares it unresponsive — because a healthy runtime answers pings from its
-// socket read loop regardless of how busy its command pipeline is.
 func (b *Broker) runLiveness(ctx context.Context, conn net.Conn) {
 	ticker := time.NewTicker(b.liveness.interval)
 	defer ticker.Stop()
@@ -493,19 +426,9 @@ func (b *Broker) write(ctx context.Context, conn net.Conn, msg wireMessage) erro
 		<-interruptDone
 	}
 	_ = conn.SetWriteDeadline(time.Time{})
-	// Once the complete frame reached the runtime, let Execute observe a
-	// simultaneous cancellation and send the matching cancel frame. Returning
-	// ctx.Err here would make the delivered command impossible to cancel —
-	// Execute would bail out of the error path without writing the cancel
-	// frame, hanging any test/client waiting to read it.
 	if writeComplete {
 		return nil
 	}
-	// The write failed. Surface a context error when applicable rather than
-	// a raw i/o timeout. The write deadline (derived from the context
-	// deadline) and the context's own timer are independent — the write
-	// deadline can fire microseconds before the context timer, so ctx.Err()
-	// may still be nil when we reach here.
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -517,15 +440,12 @@ func (b *Broker) write(ctx context.Context, conn net.Conn, msg wireMessage) erro
 
 var errRuntimeBusy = &CommandError{Code: "BROWSER_RUNTIME_BUSY", Message: "Another browser runtime is already connected"}
 
-// busy reports whether an exclusive broker already has a runtime.
 func (b *Broker) busy() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.exclusive && b.conn != nil
 }
 
-// helloRejection reports why a runtime's first frame is not an acceptable hello,
-// or nil if it is.
 func helloRejection(frame []byte, token string) *CommandError {
 	var hello wireMessage
 	switch {

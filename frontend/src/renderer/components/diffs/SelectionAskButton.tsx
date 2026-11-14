@@ -26,8 +26,6 @@ function placement(selection: CodeSelection, button: HTMLElement, bounds = bound
 	return { bounds, connected, position: selectionToolbarPosition(anchor, bounds, button.getBoundingClientRect(), extent) };
 }
 
-// Keep highlighted code actionable in its visible pane, including tall ranges.
-// Dragging passes through the toolbar; activation preserves the captured rows.
 export function SelectionAskButton({ onAsk, onDismiss, source }: {
 	onAsk: () => boolean | void; onDismiss?: () => void; source: CodeSelectionSource;
 }) {
@@ -75,8 +73,6 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 			if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"], .xterm, webview, [data-browser-view]')) return;
 			const toolbarFocused = Boolean(target && button.contains(target));
 			const surface = selection.host?.closest("[data-selection-toolbar-scope], .ao-pierre-surface") ?? selection.host;
-			// File tabs can retain focus outside both the code and an inner clipping viewport.
-			// Accept the owning region itself, without claiming sibling controls.
 			const keyboardScope = selection.host?.closest("[data-code-selection-keyboard-scope]");
 			const onSurface = Boolean(target && (target === keyboardScope || target === selection.viewport ||
 				(surface && (surface.contains(target) || event.composedPath().includes(surface)))));
@@ -105,7 +101,6 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 			window.removeEventListener("blur", blur);
 		};
 	}, [selection, activate, onDismiss]);
-	// Geometry is independent of the code capture store and the Pierre surface.
 	useLayoutEffect(() => {
 		const button = buttonRef.current;
 		if (!button || !selection) return;
@@ -151,7 +146,6 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 			data-selection-ask=""
 			onMouseDown={(event) => event.preventDefault()}
 			ref={buttonRef}
-			// Mid-drag it sits under the pointer: let the drag pass through it.
 			style={{
 				left: selection.point.x + 6,
 				opacity: selection.dragging ? 0.85 : 1,

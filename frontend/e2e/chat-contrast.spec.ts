@@ -1,7 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
 
-// Measure the rendered paint, not class names: transparent currentColor leaves
-// SVGs present and "visible" to Playwright while their pixels disappear.
 async function contrast(target: Locator, selection = false) {
 	return target.evaluate((element, selection) => {
 		const canvas = document.createElement("canvas");
@@ -18,7 +16,6 @@ async function contrast(target: Locator, selection = false) {
 			return r! * 0.2126 + g! * 0.7152 + b! * 0.0722;
 		}
 		const style = getComputedStyle(element, selection ? "::selection" : null);
-		// An icon button is measured by its icon, a text button by its label.
 		const svg = element.querySelector("svg");
 		const ink = rgba(selection ? style.color : svg ? getComputedStyle(svg).stroke : style.color);
 		const background = rgba(style.backgroundColor);
@@ -55,7 +52,6 @@ for (const theme of ["dark", "light"]) {
 			const editor = page.getByRole("region", { name: "Send and selected text" }).getByRole("combobox");
 			await editor.selectText();
 			await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe("Selected text stays readable");
-			// Lexical renders nested spans; check the actual selected text node too.
 			for (const target of [editor, editor.locator('[data-lexical-text="true"]')]) {
 				const paint = await contrast(target, true);
 				expect(paint.alpha).toBe(1);

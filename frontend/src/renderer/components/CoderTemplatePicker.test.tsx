@@ -7,8 +7,6 @@ import { AdditionalRepositoriesPicker, CoderTemplatePicker } from "./CoderTempla
 vi.mock("../hooks/useCoderTemplates", () => ({
 	useCoderTemplates: () => ({
 		templates: [
-			// The picker lists every template the backend returns, as-is (no code
-			// filtering); curation is done by removing templates in Coder.
 			{ id: "template-1", name: "ao-devkit", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
 			{ id: "template-2", name: "ao-devkit-large", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
 		],
@@ -22,7 +20,6 @@ it("chooses a template from the dropdown", async () => {
 	const user = userEvent.setup();
 	render(<CoderTemplatePicker orgId="org-1" />);
 	await user.click(screen.getByRole("combobox", { name: "Template" }));
-	// A short list has no search box.
 	expect(screen.queryByPlaceholderText("Search templates")).not.toBeInTheDocument();
 	await user.click(screen.getByRole("option", { name: "Fast workspace" }));
 	expect(screen.getByRole("combobox", { name: "Template" })).toHaveTextContent("Fast workspace");
@@ -31,8 +28,6 @@ it("chooses a template from the dropdown", async () => {
 });
 
 it("offers no implicit organization-default option", async () => {
-	// A bring-your-own-Coder org may have no deployment-default template, so the
-	// picker must not let a project be created without an explicit choice.
 	const user = userEvent.setup();
 	render(<CoderTemplatePicker orgId="org-1" />);
 	await user.click(screen.getByRole("combobox", { name: "Template" }));
@@ -48,7 +43,6 @@ it("shows additional repositories as a carousel and moves to a newly added card"
 	await user.click(screen.getByRole("combobox", { name: "Repository 1" }));
 	expect(screen.getByRole("listbox", { name: "Repository 1" })).toHaveClass("max-h-72", "repository-picker-scrollbar");
 	await user.keyboard("{Escape}");
-	// Additional repositories clone their default branch; there is no branch to pick.
 	expect(screen.queryByRole("textbox", { name: "branch" })).not.toBeInTheDocument();
 	act(() => useCoderSessionOptionsStore.getState().setExtraRepos([
 		{ url: "https://github.com/acme/one", branch: "main" },

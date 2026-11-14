@@ -27,8 +27,6 @@ import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-// The pairing panel is a fixed 240px square (size-60) so the card stays short
-// and a code change can never move the layout. Codes are drawn at that size.
 const QR_CODE_SIZE = 240;
 const STORE_QR_SIZE = 140;
 
@@ -60,25 +58,10 @@ import {
 
 export { mobileStatusQueryKey };
 
-// One scan gives the mobile app every value required to connect. Keep the
-// secure key absent for plaintext payloads so older mobile builds can decode
-// the same bytes they already understand.
 export function pairingPayload(host: string, port: number, password: string, secure?: boolean): string {
 	return JSON.stringify(secure ? { v: 1, host, port, password, secure: true } : { v: 1, host, port, password });
 }
 
-/**
- * The value encoded into the pairing QR.
- *
- * Prefers the v2 deep link, which carries every endpoint the daemon advertises
- * so the phone can race them, and opens the app straight from the system
- * camera. The payload rides in the fragment, so the connection token never
- * reaches a server even when the link is opened in a browser.
- *
- * Falls back to the v1 payload when the daemon advertises no endpoints — an
- * older daemon, or one whose network is not up yet. Showing a dead v2 QR there
- * would be worse than the pairing that already works.
- */
 export function qrValueFor(input: {
 	hostId: string;
 	host: string;
@@ -86,11 +69,6 @@ export function qrValueFor(input: {
 	password: string;
 	endpoints: readonly PairingEndpoint[];
 }): string {
-	// v2 only. The phone no longer accepts v1: those codes predate the identity
-	// probe the race uses to verify a machine before sending it a credential, so
-	// a daemon old enough to need one could never complete a race anyway. An
-	// empty endpoint list means there is nothing to advertise yet, and the panel
-	// shows the preparing state rather than a code — see qrIsReady.
 	return pairingCodeUrl(
 		buildPairingOffer({
 			endpoints: input.endpoints,
@@ -103,17 +81,6 @@ export function qrValueFor(input: {
 	);
 }
 
-/**
- * How often to re-read mobile status, or false to stop.
- *
- * The connector takes roughly half a minute to become advertisable, and the
- * status query is otherwise fetched once on open and refetched only after a
- * mutation. Without this the modal would sit on "Preparing remote access…"
- * indefinitely while the daemon had long since finished.
- *
- * Polls only while there is a transient state to wait out, so an idle modal
- * does not keep hitting the daemon for the rest of the session.
- */
 type PairingReadinessStatus = {
 	enabled: boolean;
 	noPublicTunnel?: boolean;
@@ -133,7 +100,6 @@ function pairingIsPending(status: PairingReadinessStatus | undefined): boolean {
 	if (status.noPublicTunnel === true) return false;
 	const tunnel = status.tunnel;
 	if (!tunnel || tunnel.ready || tunnel.lastError) return false;
-	// A cloudflared download counts: the connector starts when it lands.
 	return tunnel.supported === true || tunnel.running || tunnel.installing === true;
 }
 
@@ -143,37 +109,12 @@ export function mobileStatusRefetchInterval(status: PairingReadinessStatus | und
 
 const MOBILE_STATUS_POLL_MS = 2_000;
 
-/**
- * Whether the pairing QR is safe to show.
- *
- * Pairing can start as soon as any endpoint is reachable. Remote access is
- * optional and can take up to a minute to start, so it must not block a LAN
- * code. The status query continues polling while the tunnel starts and the QR
- * is refreshed with the remote endpoint once the daemon advertises it.
- *
- * A daemon that does not report endpoints at all predates the endpoint race.
- * It has no tunnel to wait for, and its QR still works, so it is shown — the
- * absence of the field is not the same as an empty list.
- */
 export function qrIsReady(status: PairingReadinessStatus): boolean {
 	if (!status.enabled) return false;
-	// Nothing to encode: a v2 code carries the endpoint list, and there is no
-	// longer a v1 form to fall back to. An absent list is as unready as an empty
-	// one — it means the daemon has not told us where it can be reached.
 	if (!status.endpoints || status.endpoints.length === 0) return false;
 	return true;
 }
 
-/**
- * "failed" when the code on screen has no public tunnel because remote access
- * could not start, or null. Without the tunnel the code reaches this machine
- * from elsewhere only over Tailscale, if it carries a tailnet address, and a
- * LAN-only code looks identical to a complete one, so the panel says so.
- * While the tunnel is still starting nothing is said: the code refreshes by
- * itself once it is up. cloudflared being absent is stated separately
- * (remoteAccessUnavailable), and opting out of the tunnel is the user's own
- * choice, so neither is reported.
- */
 export function localOnlyReason(status: PairingReadinessStatus): "failed" | null {
 	if (!status.enabled || !status.endpoints || status.endpoints.length === 0) return null;
 	if (status.endpoints.some((e) => e.kind === "tunnel")) return null;
@@ -182,19 +123,10 @@ export function localOnlyReason(status: PairingReadinessStatus): "failed" | null
 	return null;
 }
 
-/** The Settings opening the sidebar's auto-start last ran for. Settings makes a
- * new object for every opening; kept outside the component, it survives the
- * Mobile page unmounting when the user visits another page and comes back. */
 let pairingHandledFor: unknown = null;
 
-/** The app's registered scheme (app.json `expo.scheme`), not a universal link:
- * it works today, with no association files to host and no store listing
- * required. Universal links can be added later without changing the payload. */
 const PAIRING_LINK_BASE = "aomobile://pair";
 
-/** A decoy with the same payload shape as a real pairing offer, drawn at the
- * same pinned QR version, so the blurred preview looks like the code it
- * becomes. */
 function placeholderQrValue(status?: { hostId?: string; host?: string; password?: string }): string {
 	return scramblePairingCodes(1, {
 		...(status?.hostId ? { hostIdLength: status.hostId.length } : {}),
@@ -219,38 +151,24 @@ function AndroidIcon({ className }: { className?: string }) {
 	);
 }
 
-/** One store in the segmented control: platform icon and name. */
 const STORE_SEGMENT_CLASS =
 	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)]";
 
 interface MobileStatus {
 	enabled: boolean;
-	/** An AO account holds this machine's account token, listed or not. */
 	accountLinked?: boolean;
-	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
 	browserRemoteAccess?: boolean;
-	/** This machine's stable identity, echoed into the pairing code so the phone
-	 * can verify the endpoints it races. Optional: a daemon predating the
-	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
 	hostId?: string;
-	/** Every advertised way to reach this daemon, in preference order. Optional
-	 * for the same reason as hostId. */
 	endpoints?: PairingEndpoint[];
-	/** Managed remote-access connector state, for showing progress while the
-	 * tunnel comes up. */
 	tunnel?: {
-		/** False when this machine has no connector at all — cloudflared is
-		 * absent. Distinct from "not started yet", which is running:false. */
 		supported?: boolean;
-		/** Set while no connector is installed but one is being installed. */
 		installing?: boolean;
 		running: boolean;
 		ready: boolean;
 		hostname: string;
 		location: string;
 		lastError: string;
-		/** Set while the connector serves the computer's fixed address. */
 		fixed?: boolean;
 	};
 	host: string;
@@ -267,8 +185,6 @@ interface MobileStatus {
 		port: number;
 		reason: string;
 	};
-	/** macOS-only option to hold the machine awake while the bridge is on.
-	 * Optional: a daemon predating it does not send the block. */
 	keepAwake?: {
 		supported: boolean;
 		enabled: boolean;
@@ -288,17 +204,13 @@ export async function fetchMobileStatus(): Promise<MobileStatus> {
 }
 
 const TUNNEL_POLL_MS = 2_000;
-// A tunnel usually has its address within half a minute.
 const TUNNEL_WAIT_MS = 90_000;
 
-/** The tunnel address in the form the daemon's address publisher sends, so a
- * later publish never rewrites the record and reconnects every device. */
 export function tunnelUrl(status: MobileStatus): string | null {
 	const tunnel = status.endpoints?.find((endpoint) => endpoint.kind === "tunnel" && endpoint.secure);
 	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
 }
 
-/** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
 export async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
 	let deadline = Date.now() + TUNNEL_WAIT_MS;
 	for (;;) {
@@ -306,9 +218,7 @@ export async function waitForTunnel(timeoutMessage: string): Promise<{ status: M
 		const url = tunnelUrl(status);
 		if (url) return { status, url };
 		if (status.tunnel?.supported === false) {
-			// No connector, and none on its way; one that is starts the tunnel by itself when it lands.
 			if (!status.tunnel.installing) return null;
-			// The download, tens of MB on a slow link, does not count against the tunnel's start.
 			deadline = Date.now() + TUNNEL_WAIT_MS;
 		}
 		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
@@ -319,12 +229,6 @@ export async function waitForTunnel(timeoutMessage: string): Promise<{ status: M
 
 type KeepAwakeStatus = NonNullable<MobileStatus["keepAwake"]>;
 
-/**
- * Keep awake as last seen, for the one moment nothing better is known: a cold
- * open of this page before the status has loaded (Settings prefetches it, so
- * this is rare). The row is drawn disabled in this state rather than popping
- * in, or flipping, when the status lands.
- */
 const KEEP_AWAKE_STORAGE_KEY = "ao.mobile.keepAwake";
 
 function readLastKeepAwake(): KeepAwakeStatus | null {
@@ -348,7 +252,6 @@ function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
 				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery, lidClosed: keepAwake.lidClosed, lidSupported: keepAwake.lidSupported }),
 			);
 	} catch {
-		// Storage can be unavailable; the row then waits for the status.
 	}
 }
 
@@ -358,19 +261,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const [copied, setCopied] = useState<"code" | "password" | null>(null);
 	const [passwordShown, setPasswordShown] = useState(false);
 	const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
-	// The code crossfades only after the user has generated or regenerated one
-	// on this visit; opening the page shows whatever exists without a transition.
 	const [animateQr, setAnimateQr] = useState(false);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	// Pinned to "lan" while the connection picker below is commented out.
-	// setMode is still called by the close-reset effect.
 	const [mode, setMode] = useState<SetupMode>("lan");
-	/*
-	const modeOptions = [
-		{ value: "lan", label: t("mobile.lan") },
-		{ value: "tailscale", label: t("mobile.tailscale") },
-	] satisfies SettingsOption<SetupMode>[];
-	*/
 
 	useEffect(() => {
 		return () => {
@@ -378,19 +271,14 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		};
 	}, []);
 
-	// A signed-in computer is linked, and its code carries a fixed address that
-	// survives restarts. Signed out, pairing works as it always has, with a
-	// quick tunnel whose address changes on restart.
 	const { session, status: sessionStatus, configured: signInConfigured } = useCloudSession();
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
 	const accountId = session?.user.id ?? "";
 	const signedIn = Boolean(cloudBaseUrl && accountId);
-	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
 	const reportLinkError = (cause: unknown) =>
 		setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
-	/** Returns the host id the account lists now and the one this call added, or "", and whether linking failed. */
 	const linkIfSignedIn = async (
 		password: string,
 		hostId: string,
@@ -398,34 +286,25 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	): Promise<{ linked: string; added: string; failed: boolean }> => {
 		setLinkError("");
 		if (!signedIn || !password) return { linked: "", added: "", failed: false };
-		// Not fatal: an unlinked computer still gets a quick tunnel, whose
-		// address changes on restart. Said, though: after a new password the
-		// account's devices hold the old one until a link lands. An AO Cloud
-		// without fixed addresses is not linked here, as before them.
 		return linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).then(
 			(linked) => ({ linked: linked.hostId, added: linked.added ? linked.hostId : "", failed: false }),
 			(cause: unknown) => {
-				// An account that uses all of its fixed addresses keeps this
-				// computer at its quick tunnel's address, as without them.
 				if (cause instanceof AccountHostSyncError && cause.status === 409) return { linked: "", added: "", failed: false };
 				reportLinkError(cause);
 				return { linked: "", added: "", failed: true };
 			},
 		);
 	};
-	/** Links this computer when signed in, then starts remote access, which moves a running connector to the fixed address the link gave it, so the code stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
 		const { added } = await linkIfSignedIn(password, hostId);
 		const started = await apiClient.POST("/api/v1/mobile/remote-access");
 		if (started.error) {
-			// Not left listed at an address nothing serves.
 			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
 			throw apiErrorException(started.error);
 		}
 		return started.data;
 	};
 
-	// Opened from the sidebar's Connect mobile, the user asked to pair a phone.
 	const settingsModal = useUiStore((state) => state.settingsModal);
 	const startPairing = settingsModal?.scope === "global" && settingsModal.startPairing === true;
 
@@ -433,10 +312,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		queryKey: mobileStatusQueryKey,
 		queryFn: fetchMobileStatus,
 		enabled: active,
-		// The auto-start below acts only on a fresh read.
 		refetchOnMount: startPairing ? "always" : true,
-		// Keep refreshing through every enabled-but-not-advertisable startup
-		// state — see mobileStatusRefetchInterval.
 		refetchInterval: (q) => mobileStatusRefetchInterval(q.state.data),
 	});
 
@@ -473,24 +349,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const enable = useMutation({
 		mutationFn: async () => {
-			// Signed in or not, it starts as before fixed addresses: an app that
-			// quits while the link runs leaves remote access on its quick tunnel,
-			// not a computer that only serves this network after a restart. The
-			// link usually lands before the quick tunnel's address is advertised.
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
 			if (error) throw apiErrorException(error);
 			if (!signedIn) return data;
-			invalidate(); // the code shows while the computer is linked
+			invalidate();
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
 		},
-		// The first call can turn the bridge on before the second fails, so read back what is actually on.
 		onSettled: invalidate,
 		onError: () => setOptimisticEnabled(null),
 	});
 
-	// After cloudflared is installed. A bridge that started LAN-only, signed
-	// out, is linked first, as enable links it; one already serving remote
-	// access was linked when it started.
 	const startRemoteAccess = useMutation({
 		mutationFn: async () => {
 			if (query.data?.noPublicTunnel === true) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
@@ -505,19 +373,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
 			if (error) throw apiErrorException(error);
-			invalidate(); // the new password shows at once; linking can take a minute
-			// A new password revokes the account link with the old one; link
-			// again so the fixed address survives the next restart. Only while
-			// remote access is on and the account still lists this computer:
-			// a LAN-only computer, or one removed from the account, is not
-			// listed again. A lost device signed in to the account is cut off
-			// by signing it out of the account; a new password is for
-			// password-paired devices.
+			invalidate();
 			if (data && !data.noPublicTunnel) {
 				const { linked, failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
-				// An AO Cloud without fixed addresses, or an account that uses all of them,
-				// links nothing without a url, and the account would keep the old token:
-				// it lists the tunnel's address instead.
 				if (signedIn && !linked && !failed) {
 					void waitForTunnel(t("remote.shareThisComputerTimeout"))
 						.then((ready) => ready && linkThisComputer(cloudBaseUrl, accountId, data.hostId ?? "", data.password ?? "", { ifListed: true, url: ready.url }))
@@ -529,15 +387,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	// Off is a pause: the computer stays in the account at its fixed address,
-	// and on brings it back there. Allow access is where it leaves the account.
 	const disable = useMutation({
 		mutationFn: async () => {
 			const { error } = await apiClient.POST("/api/v1/mobile/disable");
 			if (error) throw apiErrorException(error);
 		},
-		// Shutdown can finish before returning an error. Refresh the actual
-		// server state while retaining the mutation error for the user.
 		onSettled: invalidate,
 		onError: () => setOptimisticEnabled(null),
 	});
@@ -551,7 +405,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	// Share wake ownership with the sidebar; mobile also opts into lid-closed wake.
 	const stayAwake = useStayAwake(active);
 
 
@@ -573,24 +426,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSettled: invalidate,
 	});
 
-	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
-	// is deliberately not tied to the connection picker. iOS refuses cleartext
-	// to a 100.x address, so a Tailscale pairing without it works on Android and
-	// fails on iPhone with nothing on either side to say why. Keying this to a
-	// UI mode would mean hiding that picker also silently disables TLS, which is
-	// the opposite of what a hidden control should do.
-	//
-	// secureAttempted keeps it to one attempt per panel session: a tailnet with
-	// no certificates fails every time, and retrying on each status poll would
-	// hammer the daemon. secureReasonText surfaces the failure; reopening the
-	// panel is the retry.
 	const secureAttempted = useRef(false);
 	useEffect(() => {
 		if (!active) {
 			secureAttempted.current = false;
 			return;
 		}
-		// No tailnet address on this machine means nothing for TLS to serve.
 		if (!query.data?.tailscaleHost) return;
 		const secure = query.data?.securePairing;
 		if (!secure || secure.enabled || !secure.available) return;
@@ -602,7 +443,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const status = query.data;
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
 	const devices = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, enabled: active && status?.enabled === true });
-	// The QR carries this one-time code, not the password. Settings prefetches it for the first paint.
 	const pairing = useQuery({
 		queryKey: mobilePairingCodeQueryKey,
 		queryFn: fetchPairingCode,
@@ -611,7 +451,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		refetchIntervalInBackground: true,
 		staleTime: PAIRING_CODE_REFRESH_MS,
 	});
-	// A hidden window or a sleeping Mac can outlive a code, so its expiry is checked every 30 seconds.
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (!active) return;
@@ -623,32 +462,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		if (codeExpired) void queryClient.invalidateQueries({ queryKey: mobilePairingCodeQueryKey });
 	}, [codeExpired, queryClient]);
 	const pairingCode = pairing.data && !codeExpired ? pairing.data.code : "";
-	// Offered only once the QR could be drawn: before that, the address is what is missing.
 	const pairingCodeFailed = pairing.isError && pairingCode === "" && qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
-	// A code is spent when a device pairs, and a new password drops unused
-	// codes: either change fetches the next one.
 	const codeSpentBy = devices.data === undefined || !status ? null : `${status.password}|${devices.data.map((device) => device.id).join(",")}`;
 	const lastCodeSpentBy = useRef<string | null>(null);
 	useEffect(() => {
 		if (codeSpentBy === null) return;
 		if (lastCodeSpentBy.current !== null && lastCodeSpentBy.current !== codeSpentBy) {
-			// Reset, not invalidated: the spent code must not stay on screen while, or if, its replacement fails.
 			void queryClient.resetQueries({ queryKey: mobilePairingCodeQueryKey });
 		}
 		lastCodeSpentBy.current = codeSpentBy;
 	}, [codeSpentBy, queryClient]);
 	const secureActive = mode === "tailscale" && (status?.securePairing?.active ?? false);
-	// Tunnel-only hosts deliberately have no LAN address. Use the same daemon
-	// endpoint list for both the offer and the address shown beside it.
 	const activeEndpoint = status?.endpoints?.[0];
 	const activeHost = activeEndpoint?.host ?? "";
 	const activePort = activeEndpoint?.port ?? 0;
 	const noEndpointAvailable =
 		!activeEndpoint &&
 		(status?.noPublicTunnel === true || status?.tunnel?.supported === false || Boolean(status?.tunnel?.lastError));
-	// No connector on this machine at all: cloudflared is absent and nothing
-	// installs it. Pairing still works on the local network, so this is a
-	// caveat to state rather than a failure to block on.
 	const remoteAccessUnavailable = status?.tunnel ? status.tunnel.supported === false : false;
 	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
 	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
@@ -682,7 +512,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
 			copiedTimeoutRef.current = setTimeout(() => setCopied(null), 1500);
 		} catch {
-			// Clipboard can reject (permissions / non-secure context).
 		}
 	};
 
@@ -702,12 +531,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	};
 	const startBridge = () => turnOn(true);
 
-	// From the sidebar, Connect Mobile turns on without a second click, once
-	// per opening, and only if a fresh read says it is off: every enable makes
-	// a new password, so a cached "off" for a running bridge would disconnect
-	// its phones. Sign-in must have loaded, since enable links a signed-in
-	// computer. Not a toggle the user made, so not reported as one. Browsing
-	// to this page from Settings turns nothing on.
 	useEffect(() => {
 		if (!startPairing || pairingHandledFor === settingsModal) return;
 		if (!active || !query.isFetchedAfterMount || query.isFetching || query.isError || busy) return;
@@ -737,11 +560,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		});
 	};
 
-	// Each return is one or more direct children of the settings card: the
-	// pairing is a content row, keep-awake a SettingsRow, divided by the card.
-	// Loading keeps the pairing layout, and Keep awake in its last-known state,
-	// so the card does not jump from one short row to the full block when the
-	// status lands. Settings prefetches the status, so this is a cold start only.
 	if (query.isLoading) {
 		const lastKeepAwake = readLastKeepAwake();
 		return (
@@ -770,7 +588,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		!secureBlocked &&
 		pairingCode !== "" &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
-	// Computed once so the rendered v2 QR and its data attribute cannot drift.
 	const qrValue = showRealQR
 		? qrValueFor({
 				hostId: status?.hostId ?? "",
@@ -784,9 +601,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const unreachable = enabled && !qrValue && noEndpointAvailable;
 	const remoteAccessOn = qrValue !== null && (status.endpoints?.some((e) => e.kind === "tunnel") ?? false);
 
-	// One object throughout: the blurred placeholder sits at the back, the real
-	// code crossfades in over it (and over the previous code on a change), and
-	// the overlay says what is happening while there is no code.
 	const code = (
 		<QrPlaceholder value={placeholderQrValue({ ...status, host: activeHost || status.host })}>
 			<PairingQr value={qrValue} size={QR_CODE_SIZE} animate={animateQr} />
@@ -821,10 +635,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			) : null}
 		</QrPlaceholder>
 	);
-	// "Remote access on" under the code once it carries the internet address.
-	// While that address is still starting nothing is said: the code already
-	// works on this network and gains the address by itself. A tunnel that
-	// failed is a warning, stated in the details column.
 	const panel = (
 		<PairingPanel
 			code={code}
@@ -848,10 +658,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	return (
 		<>
 			<PairingLayout panel={panel}>
-				{/* No connection picker (see modeOptions above): one v2 code carries
-				    every advertised endpoint — LAN, Tailscale and tunnel — and the
-				    phone races them, so the mode never changed what a scan produces.
-				    TLS keys off the tailnet address, not this control. */}
 				<ScanIntro />
 
 				{qrValue && (
@@ -875,7 +681,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
-										{/* Span so the tooltip still opens while the button is disabled. */}
 										<span className="inline-flex">
 											<Button
 												type="button"
@@ -901,8 +706,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 								</Tooltip>
 							</span>
 						</dd>
-						{/* The password works until it is rotated, so it stays hidden until
-						    asked for. It is for an app from before pairing codes. */}
 						{!status.requireDeviceCredentials && (
 							<>
 								<dt className="text-settings-muted">{t("mobile.password")}</dt>
@@ -944,7 +747,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{/* TLS on the tailnet: shown only when it failed. */}
 				{status.tailscaleHost && secureReasonText && (
 					<p data-testid="secure-pairing-reason" className="mt-4 text-control leading-5 text-warning">
 						{secureReasonText}
@@ -952,15 +754,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 
 				{qrValue && localOnly === "failed" && (
-					// A LAN-only code looks exactly like a full one, so say what it
-					// cannot reach.
 					<p
 						className="mt-4 flex items-start gap-1.5 text-xs leading-5 text-settings-muted"
 						data-testid="mobile-local-only"
 						role="status"
 					>
-						{/* A tailnet address does reach this machine from elsewhere, once
-						    both devices are on the tailnet; only the public tunnel is missing. */}
 						{viaTailscale
 							? t(
 									"mobile.remoteAccessFailedTailscale",
@@ -980,12 +778,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 
 				{remoteAccessUnavailable && (
-					// Stated rather than hidden: pairing still works on this network,
-					// so this is a limitation of what the code can reach, not an
-					// error. Without it the QR looks entirely normal and the user
-					// discovers the gap only by being away from home.
 					<div className="mt-4">
-						{/* While the daemon downloads it, the row below says so instead. */}
 						{!status.tunnel?.installing && (
 							<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
 								{t(
@@ -994,10 +787,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 								)}
 							</p>
 						)}
-						{/* Deliberately not enable(): that mints a fresh password, so
-						    installing remote access would invalidate the phone the user
-						    had already paired. This re-checks for the binary and starts
-						    the connector, leaving the credential alone. */}
 						<InstallCloudflared onInstalled={() => void startRemoteAccess.mutate()} />
 					</div>
 				)}
@@ -1005,7 +794,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 			</PairingLayout>
 
-			{/* The mobile connection's on and off, as one switch beside the code it makes. */}
 			<SettingsRow icon={Smartphone} label={t("settings.connectMobile", "Connect mobile")} data-testid="mobile-connection">
 				<Switch
 					aria-label={t("settings.connectMobile", "Connect mobile")}
@@ -1015,7 +803,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				/>
 			</SettingsRow>
 
-			{/* macOS wake ownership is independent of the mobile connection. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
@@ -1048,8 +835,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	);
 }
 
-/** One mobile wake switch includes closed-lid mode on supported Macs.
- * Remembered status stays disabled until the daemon confirms it. */
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
@@ -1058,15 +843,11 @@ function KeepAwakeRow({
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
-	/** A wake request is in flight; the helper may not have acknowledged it yet. */
 	confirming?: boolean;
 	onCheckedChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
-	// While a request is in flight the switch already shows it, so hide the
-	// transient "starting" line. Once it settles, a lease that never armed
-	// stays visible: closing the lid would otherwise sleep the Mac silently.
 	const lidStarting = !keepAwake.lidActive && !lidUnavailable && (!keepAwake.lidReason || keepAwake.lidReason === "starting");
 	const lidNeedsAttention =
 		lidUnavailable ||
@@ -1117,15 +898,6 @@ function KeepAwakeRow({
 	);
 }
 
-/**
- * The pairing content row: details on the left, the code on the right.
- *
- * The code's offset from the card's top edge equals its offset from the right
- * edge (the row inset, 16px). The card already pads its block edges by
- * --space-1, so the row's own top padding is the inset minus that. Bottom
- * mirrors it: 16px to the divider above Keep awake, or to the card edge when
- * this row is the card's last child.
- */
 function PairingLayout({ panel, children }: { panel: ReactNode; children: ReactNode }) {
 	return (
 		<div
@@ -1138,12 +910,6 @@ function PairingLayout({ panel, children }: { panel: ReactNode; children: ReactN
 	);
 }
 
-/**
- * One instruction and where to get the app. The two stores are one compact
- * segmented control, a filled surface that stands out from the muted copy
- * around it; each segment shows its store's QR on hover or focus. Nothing here
- * changes once paired.
- */
 function ScanIntro() {
 	const { t } = useTranslation();
 	return (
@@ -1152,7 +918,6 @@ function ScanIntro() {
 			<div className="mt-2 flex flex-wrap items-center gap-3 text-control leading-5">
 				<span className="text-settings-muted">{t("mobile.getApp")}</span>
 				<div className="inline-flex h-7 items-stretch divide-x divide-(--color-border-settings-input) overflow-hidden rounded-md bg-(--color-bg-settings-input)">
-					{/* One QR glyph for the whole control: each store reveals its QR on hover. */}
 					<span className="flex items-center px-2 text-settings-muted" aria-hidden="true">
 						<QrCode className="size-3.5" />
 					</span>
@@ -1181,12 +946,6 @@ function ScanIntro() {
 	);
 }
 
-/**
- * The code column: the pairing square and an optional note beneath it. Every
- * state, loading included, renders this same element with the code first, so
- * the note coming and going never changes the code's place in the tree. A
- * different wrapper would remount the code and drop PairingQr's crossfade.
- */
 function PairingPanel({ code, note }: { code: ReactNode; note?: ReactNode }) {
 	return (
 		<div className="flex w-60 shrink-0 flex-col gap-1.5 self-start" data-testid="mobile-pairing-panel">
@@ -1196,11 +955,6 @@ function PairingPanel({ code, note }: { code: ReactNode; note?: ReactNode }) {
 	);
 }
 
-/**
- * The fixed 240px square every pairing state shares: a blurred decoy code
- * (dark on white, so Android can scan the real one that replaces it) with the
- * state's content layered over it.
- */
 function QrPlaceholder({ value, children }: { value: string; children?: ReactNode }) {
 	return (
 		<div className="relative size-60 shrink-0 self-start overflow-hidden rounded-md bg-white">

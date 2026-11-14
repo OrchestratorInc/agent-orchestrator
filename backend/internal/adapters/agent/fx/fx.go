@@ -1,8 +1,3 @@
-// Package fx implements AO's adapter for Vercel Labs' fx coding agent.
-//
-// Interactive fx has no per-session system-prompt flag. TUI launches therefore
-// have degraded standing-instruction semantics: AO does not replace either the
-// repository's AGENTS.md or the user's ~/.fx/AGENTS.md to compensate.
 package fx
 
 import (
@@ -20,7 +15,6 @@ import (
 
 const adapterID = "fx"
 
-// Plugin launches fx as an AO-managed interactive terminal process.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
@@ -29,7 +23,6 @@ type Plugin struct {
 	statusTimeout  time.Duration
 }
 
-// New returns a ready-to-register fx adapter.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -40,7 +33,6 @@ var _ ports.AgentAfterStartPromptBuilder = (*Plugin)(nil)
 var _ ports.AgentContinuationCapabilityProvider = (*Plugin)(nil)
 var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -53,13 +45,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec exposes fx's optional free-form model override.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed through `FX_MODEL`.")
 }
 
-// GetLaunchCommand starts a new interactive fx session. The task is omitted
-// because AO delivers it to the terminal after fx has started.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -71,7 +60,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return commandWithOverrides(binary, cfg.Config, cfg.Permissions), nil
 }
 
-// GetPromptDeliveryStrategy tells AO to inject the initial task after startup.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -79,8 +67,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints gives fx a short, bounded startup delay without using
-// terminal text as lifecycle or readiness evidence.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -88,9 +74,6 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	return ports.PromptReadinessHints{InitialDelay: 750 * time.Millisecond}, nil
 }
 
-// BuildAfterStartPrompt applies fx's accepted TUI degradation: because fx has
-// no per-session system-prompt interface, AO sends the standing instructions
-// and task together as one clearly marked first user turn.
 func (p *Plugin) BuildAfterStartPrompt(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -99,15 +82,12 @@ func (p *Plugin) BuildAfterStartPrompt(ctx context.Context, cfg ports.LaunchConf
 		"\n\n## Orchestrator Task\n\n" + strings.TrimSpace(cfg.Prompt), nil
 }
 
-// ContinuationCapabilities reports that fx assigns native session ids and
-// reports them through Herdr after the interactive process starts.
 func (p *Plugin) ContinuationCapabilities() ports.ContinuationCapabilities {
 	return ports.ContinuationCapabilities{
 		FreshNativeSessionID: ports.FreshNativeSessionIDProviderAssigned,
 	}
 }
 
-// NativeSessionConfigDir returns the fx state root used by the invocation.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -123,13 +103,10 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return filepath.Join(home, ".fx"), nil
 }
 
-// GetAgentHooks is intentionally a no-op. fx lifecycle integration uses its
-// socket protocol and must not write either repository or user AGENTS.md files.
 func (p *Plugin) GetAgentHooks(ctx context.Context, _ ports.WorkspaceHookConfig) error {
 	return ctx.Err()
 }
 
-// GetRestoreCommand resumes the specific native fx session captured by AO.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -146,7 +123,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return append(cmd, "--resume", agentSessionID), true, nil
 }
 
-// SessionInfo surfaces metadata reported by fx's lifecycle integration.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err

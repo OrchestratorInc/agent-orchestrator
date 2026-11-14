@@ -12,19 +12,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// startupBinaryProbeTimeout bounds the first-render prerequisite check. It
-// only resolves executable paths; it never starts an agent CLI or probes
-// authentication.
 var startupBinaryProbeTimeout = 500 * time.Millisecond
 
-// ProbeResult describes launch-fresh readiness for one supported agent.
 type ProbeResult struct {
 	Agent     Info `json:"agent"`
 	Supported bool `json:"supported"`
 	Installed bool `json:"installed"`
 }
 
-// Info is the legacy user-facing identity for an agent adapter.
 type Info struct {
 	ID         string                `json:"id"`
 	Label      string                `json:"label"`
@@ -33,19 +28,16 @@ type Info struct {
 	LastUsedAt *time.Time            `json:"lastUsedAt,omitempty" format:"date-time" description:"Creation time of the newest retained session currently attributed to this agent."`
 }
 
-// Inventory is the compatibility projection consumed by older clients.
 type Inventory struct {
 	Supported  []Info `json:"supported" description:"Agents supported by this daemon build."`
 	Installed  []Info `json:"installed" description:"Agents whose binary resolved during the latest best-effort local catalog probe."`
 	Authorized []Info `json:"authorized" description:"Compatibility list of installed agents whose local auth probe recently returned authorized. Advisory and stale-prone; spawn may still fail."`
 }
 
-// Readiness is the normalized, daemon-owned readiness response.
 type Readiness struct {
 	Agents []domain.AgentReadinessSnapshot `json:"agents"`
 }
 
-// CachedReadiness returns the current in-memory snapshots without native work.
 func (s *Service) CachedReadiness(ctx context.Context) (Readiness, error) {
 	if err := ctx.Err(); err != nil {
 		return Readiness{}, err
@@ -53,8 +45,6 @@ func (s *Service) CachedReadiness(ctx context.Context) (Readiness, error) {
 	return s.withReadinessUsage(ctx, s.readiness.Snapshot())
 }
 
-// EnsureReadiness waits for the checks required by purpose. Empty agentIDs
-// selects all supported harnesses.
 func (s *Service) EnsureReadiness(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose) (Readiness, error) {
 	items, err := s.readiness.Ensure(ctx, agentIDs, purpose)
 	if err != nil {
@@ -70,10 +60,6 @@ func (s *Service) EnsureReadiness(ctx context.Context, agentIDs []string, purpos
 	return s.withReadinessUsage(ctx, items)
 }
 
-// EnsureInstallationReadiness refreshes installation observations older than
-// the display policy, without authentication checks, and returns every
-// snapshot. Periodic work uses it so a harness installed outside AO since the
-// last observation is seen without anyone opening a page.
 func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, error) {
 	items, err := s.readiness.EnsureInstallation(ctx, nil, domain.AgentReadinessPurposeDisplay)
 	if err != nil {
@@ -82,7 +68,6 @@ func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, e
 	return s.withReadinessUsage(ctx, items)
 }
 
-// EnsureAgentReadiness is the narrow service boundary used by launch paths.
 func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	result, err := s.EnsureReadiness(ctx, []string{agentID}, purpose)
 	if err != nil {
@@ -91,7 +76,6 @@ func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purp
 	return result.Agents[0], nil
 }
 
-// InvalidateAgentInstallation marks an agent's installation observation stale.
 func (s *Service) InvalidateAgentInstallation(agentID string) {
 	s.readiness.Invalidate(agentID, readinessInvalidateInstallation)
 	if item, ok := s.agent(agentID); ok {
@@ -102,7 +86,6 @@ func (s *Service) InvalidateAgentInstallation(agentID string) {
 	s.InvalidateModelCatalogs(agentID)
 }
 
-// InvalidateAgentAuthentication marks an agent's authentication observation stale.
 func (s *Service) InvalidateAgentAuthentication(agentID string) {
 	if item, ok := s.agent(agentID); ok {
 		if cache, ok := item.Agent.(ports.AgentAuthCacheInvalidator); ok {
@@ -118,7 +101,6 @@ func (s *Service) InvalidateAgentAuthentication(agentID string) {
 	}
 }
 
-// RecheckAgent schedules a non-blocking display readiness ensure.
 func (s *Service) RecheckAgent(agentID string) {
 	go func() {
 		if _, err := s.readiness.Ensure(s.readiness.ctx, []string{agentID}, domain.AgentReadinessPurposeDisplay); err != nil {
@@ -127,9 +109,6 @@ func (s *Service) RecheckAgent(agentID string) {
 	}()
 }
 
-// WarmReadiness starts the coordinator's bounded asynchronous warm-up and
-// signals after its installation and authentication passes finish. Model
-// catalog updates wait for the first pass; the saved catalog is served before it.
 func (s *Service) WarmReadiness() <-chan struct{} {
 	done := s.readiness.Warm()
 	if s.readinessWarm == nil {
@@ -175,8 +154,6 @@ func (s *Service) withReadinessUsage(ctx context.Context, snapshots []domain.Age
 	return Readiness{Agents: snapshots}, nil
 }
 
-// List is the legacy projection of the cached readiness snapshot. It never
-// performs native work.
 func (s *Service) List(ctx context.Context) (Inventory, error) {
 	readiness, err := s.CachedReadiness(ctx)
 	if err != nil {
@@ -185,7 +162,6 @@ func (s *Service) List(ctx context.Context) (Inventory, error) {
 	return projectInventory(readiness.Agents), nil
 }
 
-// Refresh is the legacy projection of an explicit forced display refresh.
 func (s *Service) Refresh(ctx context.Context) (Inventory, error) {
 	items, err := s.readiness.Force(ctx, nil, domain.AgentReadinessPurposeDisplay)
 	if err != nil {
@@ -198,14 +174,10 @@ func (s *Service) Refresh(ctx context.Context) (Inventory, error) {
 	return projectInventory(readiness.Agents), nil
 }
 
-// RefreshFresh is retained for the system-check compatibility boundary.
 func (s *Service) RefreshFresh(ctx context.Context) (Inventory, error) {
 	return s.Refresh(ctx)
 }
 
-// FindInstalledBinary returns one installed agent CLI without running any
-// agent process or authentication probe. It is used by the desktop's startup
-// prerequisite gate.
 func (s *Service) FindInstalledBinary(ctx context.Context) (Info, bool) {
 	if ctx.Err() != nil {
 		return Info{}, false
@@ -224,9 +196,6 @@ type sessionUsage struct {
 	lastUsedAt time.Time
 }
 
-// Probe is the legacy projection of a targeted launch ensure. Explicit probes
-// always invalidate authentication first so a user checking immediately after
-// login cannot receive the cached pre-login observation.
 func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ProbeResult{}, err
@@ -245,8 +214,6 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	snapshot := readiness.Agents[0]
 	return ProbeResult{
 		Agent: readinessInfo(snapshot), Supported: true,
-		// Compatibility clients historically interpreted false as definitely
-		// missing. Unknown must remain advisory under the normalized contract.
 		Installed: snapshot.Installation.State != domain.AgentInstallationNotInstalled,
 	}, nil
 }

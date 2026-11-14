@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
 )
 
-// Every agent gets the terminal appearance hints, not only adapters that ask
-// for them: CLIs that follow the terminal theme fall back to dark without one.
 func TestAugmentAgentRuntimeEnvAppliesTerminalTheme(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dataDir, termtheme.FileName), []byte("light\n"), 0o600); err != nil {
@@ -24,7 +22,6 @@ func TestAugmentAgentRuntimeEnvAppliesTerminalTheme(t *testing.T) {
 		t.Fatalf("env = %v, want light theme hints", env)
 	}
 
-	// An explicit project value wins over the desktop's theme.
 	env = map[string]string{termtheme.EnvColorFgBg: "15;0"}
 	m.augmentAgentRuntimeEnv(envAugmentingAgent{key: "X", value: "y"}, env)
 	if env[termtheme.EnvColorFgBg] != "15;0" {
@@ -35,7 +32,6 @@ func TestAugmentAgentRuntimeEnvAppliesTerminalTheme(t *testing.T) {
 	}
 }
 
-// Without a theme file (headless daemon, no desktop) nothing is guessed.
 func TestAugmentAgentRuntimeEnvLeavesThemeUnsetWithoutHint(t *testing.T) {
 	m := &Manager{dataDir: t.TempDir()}
 	env := map[string]string{}
@@ -48,8 +44,6 @@ func TestAugmentAgentRuntimeEnvLeavesThemeUnsetWithoutHint(t *testing.T) {
 	}
 }
 
-// Windows semantics: a project override in any key case wins and is the only
-// variant left, so ConPTY's case-folding dedupe cannot drop it.
 func TestAugmentAgentRuntimeEnvWindowsKeepsCaseVariantOverride(t *testing.T) {
 	previous := envKeysCaseInsensitive
 	envKeysCaseInsensitive = true

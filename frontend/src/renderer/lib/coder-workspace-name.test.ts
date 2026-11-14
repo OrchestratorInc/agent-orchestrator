@@ -12,7 +12,6 @@ describe("isValidCoderWorkspaceNamePrefix", () => {
 });
 
 describe("coderWorkspaceNamePrefixFor", () => {
-	// Same table as the control plane's TestCoderWorkspaceNamePrefixFor.
 	it.each([
 		["alice", "alice"],
 		["Alice Backend", "alice-backend"],

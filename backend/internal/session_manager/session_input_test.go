@@ -120,11 +120,6 @@ func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool)
 	t.Fatal("condition was not met before timeout")
 }
 
-// Lifecycle's guard holds no input lease of its own. Its nudge to a TUI
-// session reaches the pane through Session Manager's send, whose guard holds
-// the lease, so an exclusive operation still keeps the write out. The refusal
-// must come back as an error, which makes the observer retry the nudge,
-// rather than as a silent drop.
 func TestLifecycleNudgeDuringExclusiveOperationIsRetryable(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})

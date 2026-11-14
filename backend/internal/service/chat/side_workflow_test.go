@@ -154,7 +154,6 @@ func TestSideCreationRetryRecoversReusedAnchorAfterMainAdvances(t *testing.T) {
 	if err != nil || accepted.ID != original.ID {
 		t.Fatalf("anchor reuse: %+v %v", accepted, err)
 	}
-	// The response is lost to the caller. The main completes another turn before retry.
 	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "advance", ClientMessageID: "advance"})
 	if err != nil {
 		t.Fatal(err)
@@ -186,14 +185,12 @@ func TestBtwRetryAfterLostSendReplyAndClosedPrimary(t *testing.T) {
 	h := newSideWorkflow(t, "")
 	h.source(t)
 	ctx := t.Context()
-	// The composer retains this ID for creation and question delivery on Retry.
 	const key = "btw-client-message"
 	first := h.side(t, key, true)
 	message := ports.ChatUserMessage{Text: "Explain this", ClientMessageID: key}
 	if _, err := h.svc.SendSideQuestion(ctx, testSession, first.ID, message); err != nil {
 		t.Fatal(err)
 	}
-	// Lose the send reply, close its destination, then retry with the frozen ID.
 	if err := h.svc.CloseIndependentSideChat(ctx, testSession, first.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -308,8 +305,6 @@ func TestSideCapturedSnapshotsSurviveReadsAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 2 })
-	// The first provider request can include one-time fork setup before the
-	// frozen question. Explicit retry must preserve the question and its context.
 	wantContext := delivered[strings.Index(delivered, "Referenced annotations."):]
 	if retried := h.provider(0).sentTexts()[1]; !strings.HasSuffix(retried, wantContext) {
 		t.Fatalf("explicit retry changed frozen context: %s", retried)
@@ -712,11 +707,9 @@ func TestSideCreationFromOlderExcerptUsesLatestCompletedAnchor(t *testing.T) {
 	if cfg.ReadOnly || cfg.Permissions != "default" || cfg.WorkspacePath == "" || len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "exploration" || cfg.Env["AO_SIDE_CONVERSATION_ID"] != side.ID {
 		t.Fatalf("side launch policy: %+v", cfg)
 	}
-	// The side's tool server acts as the side, never as the main session.
 	if env := cfg.MCPServers[0].Env; env["AO_SESSION_ID"] != cfg.Env["AO_SESSION_ID"] || env["AO_SIDE_CONVERSATION_ID"] != side.ID {
 		t.Fatalf("side tool server env = %v, side env session = %q", env, cfg.Env["AO_SESSION_ID"])
 	}
-	// Rewriting the side's copy must not touch the main session's servers.
 	h.driver.mu.Lock()
 	mainServers := h.driver.mainConfig.MCPServers
 	h.driver.mu.Unlock()
@@ -793,8 +786,6 @@ func TestSideProvidersInheritMCPAndPermissionsWithoutDispatch(t *testing.T) {
 	}
 }
 
-// Stopping a side answer must not freeze the side's queue. A provider failure
-// still holds it until retry, matching the main chat.
 func TestSideStopReleasesQueueButFailureHoldsIt(t *testing.T) {
 	h := newSideWorkflow(t, "")
 	h.source(t)
@@ -830,7 +821,6 @@ func TestSideStopReleasesQueueButFailureHoldsIt(t *testing.T) {
 		t.Fatalf("stopped turn = %q %q", state, message)
 	}
 
-	// The second turn fails on the provider side without a Stop.
 	send("third")
 	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateFailed})
 	h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool {

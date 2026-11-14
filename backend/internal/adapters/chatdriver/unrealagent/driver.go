@@ -32,7 +32,6 @@ type environmentAuthPlugin interface {
 
 type connectHostFunc func(context.Context, persistenthost.Config) (*persistenthost.Transport, error)
 
-// Driver embeds Unreal Agent as a persistent AO Chat provider.
 type Driver struct {
 	plugin       plugin
 	log          *slog.Logger
@@ -41,7 +40,6 @@ type Driver struct {
 	shutdownHost func(context.Context, string, string) error
 }
 
-// New creates the built-in Unreal Agent Chat adapter.
 func New(plugin plugin, log *slog.Logger) *Driver {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -54,7 +52,6 @@ func New(plugin plugin, log *slog.Logger) *Driver {
 
 var _ ports.ChatDriver = (*Driver)(nil)
 
-// Harness returns the domain harness owned by this driver.
 func (*Driver) Harness() domain.AgentHarness { return domain.HarnessUnreal }
 
 func capabilities() ports.ChatCapabilities {
@@ -68,7 +65,6 @@ func capabilities() ports.ChatCapabilities {
 	}
 }
 
-// Probe verifies platform support, the embedded executable, and provider auth.
 func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -86,14 +82,11 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	if err != nil {
 		d.log.Debug("Unreal Agent auth probe inconclusive; continuing", "error", err)
 	} else if status == ports.AgentAuthStatusUnauthorized {
-		// Probe has no project context. A project-scoped provider key may still
-		// make the launch valid, so defer the authoritative check to Start/Resume.
 		d.log.Debug("Unreal Agent auth unavailable in daemon environment; deferring to launch environment")
 	}
 	return capabilities(), nil
 }
 
-// Start opens a fresh persistent Unreal conversation.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories); err != nil {
 		return nil, err
@@ -118,7 +111,6 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	return conv, nil
 }
 
-// Resume reconnects to a live host or resumes Unreal's durable native session.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if strings.TrimSpace(cfg.ProviderConversationID) == "" {
 		return nil, fmt.Errorf("%w: Unreal Agent conversation id is empty", ports.ErrChatResumeFailed)
@@ -154,8 +146,6 @@ func validateStart(workspace string, permissions ports.PermissionMode, readOnly 
 	if len(additional) != 0 {
 		return errors.New("unreal agent does not support additional workspace directories")
 	}
-	// AO's own tool server is left out rather than refused: the harness takes no
-	// tool servers, and a chat switched here from another agent still carries it.
 	return nil
 }
 

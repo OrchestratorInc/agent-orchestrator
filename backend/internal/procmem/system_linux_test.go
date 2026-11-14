@@ -4,10 +4,6 @@ package procmem
 
 import "testing"
 
-// TestReadSystemDerivesSwapPageBytesFromTheHostsRealPageSize guards against
-// hardcoding 4 KiB: pswpin/pswpout in /proc/vmstat are page counts, and some
-// architectures use a larger page (16 KiB, 64 KiB). SwapPageBytes must follow
-// whatever the kernel actually reports, not a fixed constant.
 func TestReadSystemDerivesSwapPageBytesFromTheHostsRealPageSize(t *testing.T) {
 	orig := pageSize
 	defer func() { pageSize = orig }()

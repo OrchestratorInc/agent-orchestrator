@@ -1,46 +1,11 @@
 import { createContext, useCallback, type PointerEvent } from "react";
 
-/**
- * Focus hand-off between a menu that is closing and the surface its selected
- * item opened.
- *
- * Radix restores focus after a menu closes, but it defers that restore by a
- * tick (FocusScope dispatches its unmount handler from a `setTimeout`). When
- * the selected item opened a dialog, the dialog has already claimed the caret
- * by then, and the late restore yanks it back out, so the user lands in a
- * composer with no cursor in it.
- *
- * A menu that closes without opening anything leaves focus on `document.body`,
- * so "something outside the menu already holds focus" is a reliable signal that
- * another surface owns the caret. Only then is the restore skipped; Escape and
- * plain item selection keep Radix's normal return-to-trigger behaviour that
- * keyboard users depend on.
- *
- * Skipping it would stop there, except that the dialog cannot return focus for
- * us: Radix captured its return target when the dialog mounted, and that was
- * the menu item, which no longer exists. So the return target is captured when
- * the menu opens and handed back once the surface that borrowed the caret lets
- * go of it.
- */
-
-// Only one menu is open at a time, so a single slot each is enough. `pending`
-// also holds the surface that borrowed the caret, so the hand-back can tell
-// "the dialog closed and dropped focus" from "focus moved on deliberately".
 let menuReturnTarget: HTMLElement | null = null;
 let capturedForMenu: HTMLElement | null = null;
 let pending: { borrower: Element; target: HTMLElement } | null = null;
 
-/**
- * Published once a menu's teardown has genuinely finished: Presence let go of
- * the content and the FocusScope restore Radix defers by a tick has been
- * dispatched and either allowed or prevented. That is the last moment a closing
- * menu can still move the caret or emit outside-interactions, so anything that
- * opened a surface from it can stop covering for it here.
- */
 export type MenuTeardownDetail = {
-	/** The menu content node — detached from the document by the time this fires. */
 	menu: HTMLElement;
-	/** Where Radix would have restored focus, or null when there was nowhere to go. */
 	trigger: HTMLElement | null;
 };
 
@@ -56,39 +21,20 @@ export function onMenuTeardownComplete(listener: MenuTeardownListener): () => vo
 
 function publishMenuTeardownComplete(menu: HTMLElement) {
 	const detail: MenuTeardownDetail = { menu, trigger: menuReturnTarget };
-	// Copy before iterating so a listener can unsubscribe re-entrantly.
 	for (const listener of [...teardownListeners]) listener(detail);
 }
 
-/**
- * Remember, while the menu is open, where focus should end up once it is done
- * with it. A dropdown returns to its trigger, which is only discoverable by its
- * `aria-controls` link while the menu is open; a context menu has no such
- * trigger, so it falls back to whatever the user was on before right-clicking.
- * Both are the element Radix itself would have returned to.
- */
 export function useMenuReturnTarget<T extends HTMLElement>() {
 	return useCallback((menu: T | null) => {
-		// The node attaches when the menu opens and detaches when it closes. Radix
-		// recomposes its own refs on every render, so this fires repeatedly for the
-		// same element; only the first call is the moment the menu opened.
 		if (!menu || capturedForMenu === menu) return;
 		capturedForMenu = menu;
 
-		// Synchronously, because a context menu takes the caret for itself during
-		// the same commit: read it now and the element the user was actually on is
-		// still focused, read it a tick later and the menu itself is. Never accept
-		// something inside the menu, which would leave a target that is detached by
-		// the time there is anything to hand back.
 		const active = document.activeElement;
 		menuReturnTarget =
 			active instanceof HTMLElement && active !== document.body && !menu.contains(active)
 				? active
 				: null;
 
-		// A dropdown has somewhere better to go: its trigger, which is only
-		// discoverable through the `aria-controls` link while the menu is open, and
-		// only once the commit that opened it has landed.
 		queueMicrotask(() => {
 			if (capturedForMenu !== menu || !menu.id) return;
 			const trigger = menu.ownerDocument.querySelector<HTMLElement>(
@@ -99,11 +45,6 @@ export function useMenuReturnTarget<T extends HTMLElement>() {
 	}, []);
 }
 
-/**
- * Where the open menu would return focus: its trigger, or for a context menu
- * the element the user was on. A surface opened from a menu item that has no
- * trigger of its own (the archive modal) returns there when it closes.
- */
 export function menuFocusReturnTarget(): HTMLElement | null {
 	return menuReturnTarget?.isConnected ? menuReturnTarget : null;
 }
@@ -120,14 +61,10 @@ export function keepFocusOnOpenedSurface(event: Event) {
 
 function returnFocusWhenSurfaceCloses(borrower: Element) {
 	if (!menuReturnTarget) return;
-	// The overlay, not the focused field: the user tabbing between the dialog's
-	// own controls is not the caret finding a home somewhere else.
 	pending = {
 		borrower: borrower.closest("[role='dialog'], [role='alertdialog']") ?? borrower,
 		target: menuReturnTarget,
 	};
-	// Re-adding an identical listener is a no-op, so this stays a single listener
-	// that is removed again as soon as nothing is pending.
 	document.addEventListener("focusout", handleFocusRelease, true);
 }
 
@@ -143,25 +80,13 @@ function handleFocusRelease(event: FocusEvent) {
 		return;
 	}
 	if (event.relatedTarget !== null) {
-		// Focus moved to a real element. Inside the surface that borrowed it, the
-		// user is still working there; anywhere else, the caret has a home and
-		// there is nothing left to hand back.
 		if (!current.borrower.contains(event.relatedTarget as Node)) clearPending();
 		return;
 	}
-	// Two frames, not one tick: the surface the dialog was covering gets first
-	// claim on the caret through its own effects. A worker terminal, for one,
-	// re-enables input as the dialog closes and focuses itself, and it is a
-	// better landing spot than the menu trigger. This hand-back is only the
-	// fallback for focus that would otherwise be stranded on `document.body`.
 	requestAnimationFrame(() =>
 		requestAnimationFrame(() => {
 			if (pending !== current) return;
-			// Focus can also be dropped while the surface is still open, by a blur
-			// somewhere else on the page. Nothing to hand back yet, so keep waiting.
 			if (current.borrower.isConnected) return;
-			// Decided either way: never leave the target armed for an unrelated
-			// focus loss later on.
 			clearPending();
 			if (document.activeElement !== document.body) return;
 			if (current.target.isConnected) current.target.focus();
@@ -169,7 +94,6 @@ function handleFocusRelease(event: FocusEvent) {
 	);
 }
 
-/** Runs the caller's own handler first, then the hand-off guard, then reports the teardown. */
 export function composeMenuCloseAutoFocus(handler?: (event: Event) => void) {
 	return (event: Event) => {
 		handler?.(event);
@@ -179,12 +103,6 @@ export function composeMenuCloseAutoFocus(handler?: (event: Event) => void) {
 	};
 }
 
-/**
- * Pointer-leave for a menu row. Radix moves focus to the menu itself when the
- * pointer leaves a row and then on to the next row, so going from one row to the
- * next changes focus twice, and each change restyles the page. Going straight to
- * a sibling row skips the first: that row's own hover takes focus.
- */
 export function skipFocusHopToSibling(event: PointerEvent<HTMLElement>) {
 	const next = event.relatedTarget instanceof Element ? event.relatedTarget.closest('[role^="menuitem"]') : null;
 	if (next && next !== event.currentTarget && next.closest('[role="menu"]') === event.currentTarget.closest('[role="menu"]')) {
@@ -192,14 +110,8 @@ export function skipFocusHopToSibling(event: PointerEvent<HTMLElement>) {
 	}
 }
 
-/**
- * Set by a menu root that is non-modal only to spare the page a restyle, not to
- * let clicks through. Its content then makes an outside click do what a modal
- * menu's would: close the menu and nothing else.
- */
 export const ShieldOutsideClick = createContext(false);
 
-/** Swallows the click that follows an outside pointerdown which closed a menu. */
 export function swallowClickAfter(event: CustomEvent<{ originalEvent: globalThis.PointerEvent }>) {
 	if (event.defaultPrevented || event.detail.originalEvent.button !== 0) return;
 	const listening = new AbortController();
@@ -207,7 +119,6 @@ export function swallowClickAfter(event: CustomEvent<{ originalEvent: globalThis
 		click.preventDefault();
 		click.stopPropagation();
 	};
-	// The click, if any, is dispatched right after pointerup; stop listening once it has had its turn.
 	const release = () => setTimeout(() => listening.abort());
 	document.addEventListener("click", swallow, { capture: true, signal: listening.signal });
 	document.addEventListener("pointerup", release, { capture: true, once: true, signal: listening.signal });

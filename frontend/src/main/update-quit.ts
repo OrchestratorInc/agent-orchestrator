@@ -1,4 +1,3 @@
-/** Squirrel has already persisted install + relaunch before this is called. */
 export function finishUpdateQuit(
 	cleanup: Promise<unknown>,
 	actions: { quit(): void; exit(): void; log(error: unknown): void },

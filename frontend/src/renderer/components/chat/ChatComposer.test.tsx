@@ -40,9 +40,6 @@ import {
 	typeInLexicalEditor,
 } from "../../test/lexical";
 
-// Every button in the composer relies on the shared styled Tooltip, which needs
-// a TooltipProvider ancestor. `wrapper` survives `rerender`, so every render call
-// in this file — direct or through renderComposer/renderSteerable — gets one.
 function render(ui: ReactElement, options?: Parameters<typeof rtlRender>[1]) {
 	return rtlRender(ui, { wrapper: TooltipProvider, ...options });
 }
@@ -123,8 +120,6 @@ describe("send key preference", () => {
 		expect(onSteer).not.toHaveBeenCalled();
 	});
 
-	// Cmd/Ctrl is held to send in newline mode, so the send control must not flip
-	// to a steer while the user reaches for Enter.
 	it("keeps the send control queueing while a modifier is held in newline mode", async () => {
 		useUiStore.getState().setChatSendKeyMode("mod-enter");
 		const onSteer = vi.fn();
@@ -207,8 +202,6 @@ describe("send key preference", () => {
 	});
 });
 
-/* ---- the keyboard contract the composer already had ---------------------- */
-
 describe("send keys", () => {
 	it("enables the Send button for a file-only draft and sends the capture once", async () => {
 		const sessionId = "file-only-send-button";
@@ -253,7 +246,6 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: clipboardData([textFile("stalled.txt")]) });
 		expect(await screen.findByRole("status", { name: "Attaching stalled.txt" })).toBeInTheDocument();
 		await waitFor(() => expect(stage).toHaveBeenCalled());
-		// Main carries the upload: a reload must not raise a confirmation that blocks it.
 		expect(getChatDraftBoundaries(sessionId)).not.toContain("pending-attachments");
 		await userEvent.click(screen.getByRole("button", { name: "Cancel attaching stalled.txt" }));
 		expect(signals[0]?.aborted).toBe(true);
@@ -475,8 +467,6 @@ describe("send keys", () => {
 		expect(within(tools).getByRole("button", { name: "Model" })).toBeInTheDocument();
 
 		const actions = screen.getByRole("group", { name: "Send message controls" });
-		// The destination Enter is armed with rides on the send control's tooltip
-		// rather than as a line of prose beside it.
 		const send = within(actions).getByRole("button", { name: "Send message" });
 		await user.hover(send);
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Enter to send");
@@ -491,13 +481,10 @@ describe("send keys", () => {
 
 	it("insets the draft and the toolbar's ends the same from both sides", () => {
 		const { field } = renderComposer();
-		// Equal padding on both sides, and any classic scrollbar's gutter reserved on both edges.
 		expect(field).toHaveClass("px-[7px]", "[scrollbar-gutter:stable_both-edges]");
 		expect(field.className).not.toMatch(/(^|\s)(pl|pr|ps|pe)-/);
-		// The placeholder reserves the same gutter, so typing starts where it began.
 		const placeholder = field.parentElement?.querySelector<HTMLElement>(".pointer-events-none.text-muted-foreground");
 		expect(placeholder).toHaveClass("px-[7px]", "overflow-hidden", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
-		// The send circle sits on the form padding like the + does, so its right and bottom insets match.
 		expect(screen.getByRole("group", { name: "Send message controls" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
 	});
 
@@ -555,7 +542,6 @@ describe("send keys", () => {
 		expect(onContinue).toHaveBeenCalledOnce();
 		expect(onSend).not.toHaveBeenCalled();
 
-		// Asking something else instead: a draft turns the same button into Send.
 		await typeInComposer(field, "a different question");
 		expect(screen.queryByRole("button", { name: "Continue turn" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
@@ -910,7 +896,6 @@ describe("send keys", () => {
 		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
 		["validation_error", "Request was rejected"],
 		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
-		// A refused /btw or /side launch must not lock the main draft.
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
 	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
@@ -1118,8 +1103,6 @@ describe("send keys", () => {
 		await waitFor(() => expect(getChatDraftBoundaries(sessionId)).toEqual([]));
 	});
 
-	// Signed out, nothing can be sent: a restored delivery waits for the login
-	// rather than offering a retry whose send would be dropped.
 	it.each([
 		["the send button", false, "Retry message safely"],
 		["the unsent strip", true, "Retry"],
@@ -1212,9 +1195,6 @@ describe("send keys", () => {
 		fireEvent.keyDown(original, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
 
-		// Activity renders the replacement state but keeps its effects disconnected.
-		// This is the render-to-commit window: the original surface remains the sole
-		// subscriber that can observe and acknowledge settlement.
 		view.rerender(surfaces(true, "hidden"));
 		const renderedReplacement = within(
 			await screen.findByTestId("replacement-composer-surface"),
@@ -1229,8 +1209,6 @@ describe("send keys", () => {
 		await waitFor(() => expect(composerWireText(original)).toBe(""));
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
 
-		// Commit the already-rendered replacement only after the original subscriber
-		// consumed the receipt. Accepted text must not come back unlocked and resendable.
 		view.rerender(surfaces(false, "visible"));
 		const committedReplacement = within(
 			screen.getByTestId("replacement-composer-surface"),
@@ -1346,13 +1324,6 @@ describe("send keys", () => {
 	});
 });
 
-/* ---- steering -------------------------------------------------------------
-   Queueing and steering are different promises to the user: a queued message
-   waits for a cold start, a steer lands in the turn already running. The chord
-   is the only way to pick the second one now, so each path that can reach it —
-   Cmd, Ctrl, and the send control while a modifier is held — is pinned here.
---------------------------------------------------------------------------- */
-
 describe("queued message edit", () => {
 	it("saves a queued edit while the composer is busy", async () => {
 		const onSend = vi.fn().mockResolvedValue(undefined);
@@ -1373,7 +1344,6 @@ describe("queued message edit", () => {
 
 describe("sent message recall", () => {
 	const SENT = ["first question", "second question", "latest question"];
-	/** Fires one arrow key; true means the composer claimed it rather than moving the caret. */
 	const press = (field: HTMLElement, key: "ArrowUp" | "ArrowDown", init: KeyboardEventInit = {}) =>
 		!fireEvent.keyDown(field, { key, ...init });
 
@@ -1387,7 +1357,6 @@ describe("sent message recall", () => {
 		expect(composerWireText(field)).toBe("second question");
 		press(field, "ArrowUp");
 		expect(composerWireText(field)).toBe("first question");
-		// The oldest message is the end of the walk; the key falls through untouched.
 		expect(press(field, "ArrowUp")).toBe(false);
 		expect(composerWireText(field)).toBe("first question");
 
@@ -1405,7 +1374,6 @@ describe("sent message recall", () => {
 		const { field } = renderComposer({ sentMessages: SENT });
 		await typeInComposer(field, "my draft");
 
-		// Mid-text, Up is still caret movement.
 		expect(press(field, "ArrowUp")).toBe(false);
 		expect(composerWireText(field)).toBe("my draft");
 
@@ -1444,8 +1412,6 @@ describe("sent message recall", () => {
 	it("reads the caret the browser shows before Lexical has caught up with it", async () => {
 		const { field } = renderComposer({ sentMessages: SENT });
 		await typeInComposer(field, "my draft");
-		// A native Up on the only line moves the caret to its start; Lexical adopts that
-		// on a later selectionchange, which the next key can beat.
 		const text = field.querySelector("[data-lexical-text]")?.firstChild;
 		if (!text) throw new Error("Expected composer text");
 		window.getSelection()?.collapse(text, 0);
@@ -1474,7 +1440,6 @@ describe("sent message recall", () => {
 		press(field, "ArrowUp");
 		press(field, "ArrowUp");
 		expect(composerWireText(field)).toBe("older\nmultiline ask");
-		// Reading down a recalled message is caret movement; from its end, Down continues.
 		await placeLexicalCaretInLine(field, 1, 2);
 		expect(press(field, "ArrowDown")).toBe(false);
 		expect(press(field, "ArrowUp")).toBe(false);
@@ -1526,7 +1491,6 @@ describe("sent message recall", () => {
 
 		await typeInComposer(field, " again");
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("latest question again");
-		// Edited, it is the draft now: the walk is over and Down at its end is a no-op.
 		expect(press(field, "ArrowDown")).toBe(false);
 		await placeLexicalCaret(field, 0);
 		expect(press(field, "ArrowDown")).toBe(false);
@@ -1589,14 +1553,12 @@ describe("sent message recall", () => {
 		press(field, "ArrowUp");
 		expect(composerWireText(field)).toBe("ask /review");
 
-		// The caret now sits after an exact `/review`, which typing would auto-complete.
 		await placeLexicalCaretAtEnd(field);
 		await screen.findByRole("listbox");
 		expect(field.querySelector('[data-composer-token="skill"]')).toBeNull();
 		expect(composerWireText(field)).toBe("ask /review");
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("my saved draft");
 
-		// The open menu keeps the arrows; once dismissed, Down walks back to the draft.
 		fireEvent.keyDown(field, { key: "Escape" });
 		expect(press(field, "ArrowDown")).toBe(true);
 		expect(composerWireText(field)).toBe("my saved draft");
@@ -1636,7 +1598,6 @@ describe("sent message recall", () => {
 		expect(composerWireText(field)).toBe("earlier ask");
 		await userEvent.click(screen.getByLabelText("Remove removed.png"));
 		await waitFor(() => expect(screen.queryByLabelText("Remove removed.png")).toBeNull());
-		// Still browsing, and leaving now would bring back a draft without the image.
 		expect(composerWireText(field)).toBe("earlier ask");
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("compare ");
 
@@ -1700,7 +1661,6 @@ describe("sent message recall", () => {
 
 		expect(composerWireText(field)).toBe(`earlier ask ${path} `);
 		expect(readChatSessionDraft(sessionId).composer.text).toBe(`earlier ask ${path} `);
-		// The walk ended with the edit, so Down at the end no longer replaces the text.
 		expect(press(field, "ArrowDown")).toBe(false);
 	});
 });
@@ -1755,8 +1715,6 @@ describe("steering", () => {
 		expect(onSteer).not.toHaveBeenCalled();
 	});
 
-	// The modifier is a request, not a guarantee: a harness that cannot steer must
-	// still deliver the message rather than swallow the keystroke.
 	it("falls back to queueing on Cmd+Enter when the harness cannot steer", async () => {
 		const onSend = vi.fn();
 		render(<ChatComposer onSend={onSend} willQueue />);
@@ -1768,9 +1726,6 @@ describe("steering", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("no steering here"));
 	});
 
-	// The indicator beside the send control is painted from a window-level view of
-	// the modifier, so clicking has to read that same state or the button would
-	// contradict the label sitting next to it.
 	it("steers when the send control is clicked with a modifier held", async () => {
 		const { onSend, onSteer, field } = renderSteerable();
 
@@ -1803,8 +1758,6 @@ describe("steering", () => {
 		expect(onSteer).not.toHaveBeenCalled();
 	});
 
-	// A refused steer is an ordinary outcome — the turn may have ended mid-keystroke —
-	// so the draft has to survive for the user to send it the other way.
 	it("keeps the draft when the provider refuses the steer", async () => {
 		const onSend = vi.fn();
 		const onSteer = vi.fn().mockRejectedValue(new Error("the turn already finished"));
@@ -2020,7 +1973,6 @@ describe("steering", () => {
 
 	it("clears a restored send the chat already holds, without the restart notice", async () => {
 		const sessionId = "send-snapshot-reconciliation";
-		// The answer is lost, as when the app restarts mid-send.
 		const onSend = vi.fn().mockRejectedValue(new Error("response lost"));
 		const first = render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} />);
 		const field = screen.getByLabelText("Message the agent");
@@ -2038,8 +1990,6 @@ describe("steering", () => {
 		expect(onSend).toHaveBeenCalledTimes(1);
 	});
 });
-
-/* ---- slash commands ------------------------------------------------------ */
 
 describe("slash commands", () => {
 	it("opens the skill menu on a leading slash", async () => {
@@ -2067,18 +2017,14 @@ describe("slash commands", () => {
 		await typeInComposer(field, "/rev");
 		const options = screen.getAllByRole("option");
 		expect(options).toHaveLength(2);
-		// The prefix match leads; the mid-name match follows.
 		expect(options[0]?.textContent).toMatch(/^Review/);
 	});
 
-	// The whole point of gating on the provider's answer: with nothing to offer,
-	// the menu must not appear and the slash must behave like a character.
 	it("leaves the slash an ordinary character when the provider reported no skills", async () => {
 		const { onSend, field } = renderComposer({ skills: [] });
 		await typeInComposer(field, "/rev");
 		expect(screen.queryByRole("listbox")).toBeNull();
 		expect(field.textContent).toBe("/rev");
-		// And Enter still sends, rather than being consumed by a menu that is not there.
 		await userEvent.keyboard("{Enter}");
 		expect(onSend).toHaveBeenCalledWith("/rev");
 	});
@@ -2161,8 +2107,6 @@ describe("slash commands", () => {
 		expect(token).toHaveClass("text-logo-accent");
 		expect(token).not.toHaveClass("text-accent");
 		expect(field.textContent).toBe("/review ");
-		// The trigger is finished, so the menu closes rather than re-filtering what was
-		// just inserted.
 		expect(screen.queryByRole("listbox")).toBeNull();
 	});
 
@@ -2272,8 +2216,6 @@ describe("slash commands", () => {
 		expect(field.textContent).toBe("/rev");
 	});
 
-	// After a dismissal the composer must behave like a plain field again, or Enter
-	// would appear to do nothing.
 	it("sends on Enter after the menu was dismissed", async () => {
 		const { onSend, field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/rev");
@@ -2290,21 +2232,16 @@ describe("slash commands", () => {
 	});
 });
 
-/* ---- file mentions ------------------------------------------------------- */
-
 describe("file mentions", () => {
 	it("opens the file menu on an at-sign", async () => {
 		const { field } = renderComposer({ filePaths: FILES });
 		await typeInComposer(field, "@chat");
 		const options = screen.getAllByRole("option");
-		// Both files whose name starts with "chat" match; neither AGENTS.md does.
 		expect(options).toHaveLength(2);
-		// The row reads as a file name plus where it lives, not as one long path.
 		expect(options[0]?.textContent).toContain("chat.go");
 		expect(options[0]?.textContent).toContain("backend/internal/ports");
 	});
 
-	// The label is a name; what the agent has to resolve is the whole path.
 	it("inserts the full path, without the sigil", async () => {
 		const { field } = renderComposer({ filePaths: FILES });
 		await typeInComposer(field, "look at @ChatComposer");
@@ -2372,11 +2309,7 @@ describe("file mentions", () => {
 	});
 });
 
-/* ---- attachments --------------------------------------------------------- */
-
 describe("attachments", () => {
-	// A control that cannot deliver must not be drawn: the fixture preview has no
-	// worktree to write into.
 	it("offers no attach control when there is nowhere to put the bytes", () => {
 		renderComposer();
 		expect(screen.queryByLabelText("Attach a file")).toBeNull();
@@ -2407,9 +2340,6 @@ describe("attachments", () => {
 		]);
 	});
 
-	// A draft keeps its files when it moves to a chat that cannot take them (a
-	// new task's Cloud standalone agent): they stay as chips with that chat's
-	// reason, and nothing is sent until they are removed.
 	it("keeps files a chat cannot take as chips with its reason, sending nothing until they are removed", async () => {
 		const reason = "Files can't start a standalone agent. Remove them to continue.";
 		const held = renderComposer({ draftSessionId: "composer-files-refused", holdAttachments: true });
@@ -2432,10 +2362,6 @@ describe("attachments", () => {
 		expect(onSend.mock.calls[0]?.[0]).toBe("start without the file");
 	});
 
-	// A send whose answer was lost keeps its identity and its files until its
-	// outcome is known: a chat that takes no new files does not hold back its
-	// retry, which goes with the same id and the same files, and says nothing
-	// about files while that send is pending.
 	it("retries a pending send with its files even where new files are refused", async () => {
 		const reason = "Files can't start a standalone agent. Remove them to continue.";
 		const sessionId = "composer-files-pending-retry";
@@ -2523,8 +2449,6 @@ describe("attachments", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
-	// Staging can be slow: the chip holds the paste position while the user types on,
-	// and Enter during staging still sends the chip the user saw.
 	it("keeps a slow image where it was pasted and sends it when Enter beats staging", async () => {
 		let finishStaging!: (paths: string[]) => void;
 		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
@@ -2574,8 +2498,6 @@ describe("attachments", () => {
 		await waitFor(() => expect(screen.queryByRole("listitem")).toBeNull());
 	});
 
-	// The chip has to mean something: the bytes get written and the message names
-	// the path the agent can open.
 	it("stages the image and names the returned path in the message", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-ab12cd34ef.png"]);
 		const { onSend, field } = renderComposer({ onStageAttachments: stage });
@@ -2592,11 +2514,9 @@ describe("attachments", () => {
 		]);
 		await waitFor(() =>
 			expect(onSend).toHaveBeenCalledWith(
-				// Pasting into an empty draft names the image only in the attachment block.
 				"what is wrong here\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-ab12cd34ef.png",
 			),
 		);
-		// Consumed, so the next message does not silently resend them.
 		await waitFor(() => expect(screen.queryByRole("listitem")).toBeNull());
 	});
 
@@ -2606,7 +2526,6 @@ describe("attachments", () => {
 
 		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
 		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
-		// Sent from the field with no text typed at all.
 		await userEvent.keyboard("{Enter}");
 
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
@@ -2711,7 +2630,6 @@ describe("attachments", () => {
 		]);
 	});
 
-	// A message claiming an attachment the agent cannot open is worse than a refusal.
 	it("does not accept a chip when durable staging fails, and says so", async () => {
 		const stage = vi.fn().mockRejectedValue(new Error("disk full"));
 		const { onSend, field } = renderComposer({ onStageAttachments: stage });
@@ -2891,8 +2809,6 @@ describe("attachments", () => {
 		}
 	});
 
-	// Pasting an image writes its chip into the text, so a later successful write
-	// makes the whole text durable again, chip included.
 	it("makes text durable again, with the chip, when an image is pasted after a failed text save", async () => {
 		const sessionId = "composer-image-after-text-failure";
 		const durableStorage = window.localStorage;
@@ -3053,8 +2969,6 @@ describe("attachments", () => {
 				);
 				expect(onSend).not.toHaveBeenCalled();
 
-				// The error can render before the async submission releases its lock.
-				// Retry only once the user-facing send control is available again.
 				await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
 				storageAvailable = true;
 				fireEvent.keyDown(field, { key: "Enter" });
@@ -3118,8 +3032,6 @@ describe("attachments", () => {
 		}
 	});
 });
-
-/* ---- disabled and busy states ------------------------------------------- */
 
 describe("unavailable states", () => {
 	it("keeps approval actions available below an attached notice and queue", async () => {
@@ -3217,7 +3129,6 @@ describe("unavailable states", () => {
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(onSend).not.toHaveBeenCalled();
 
-		// Another surface's send gets no answer and moves to the unsent strip.
 		await act(async () => {
 			const lost = prepareChatComposerDelivery(sessionId, {
 				kind: "send",
@@ -3462,7 +3373,6 @@ it.each([
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
 		.toHaveAttribute("src", expect.stringContaining("data:image/png;base64,"));
 	view.unmount();
-	// A new renderer only has persisted descriptors, never cached image bytes.
 	purgeFileAttachmentsForSession(draftSessionId);
 	render(<ChatComposer {...props} />);
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
@@ -3528,8 +3438,6 @@ it("keeps cloud captures in shared drafts through reload and retries with the sa
 	expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
 	expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][0].match(/CLOUD_CAPTURE/g)).toHaveLength(1);
-	// The captures come along for the transcript only, with the message as typed;
-	// the text already carries them for the agent.
 	expect(onSend.mock.calls[0][5]?.map((item: { id: string })=>item.id)).toEqual([ref.id]);
 	expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
 	await waitFor(()=>expect(readChatSessionDraft(sessionId).composer.fileReferences ?? []).toHaveLength(0));
@@ -3541,7 +3449,6 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	const ref=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"LEGACY_CAPTURE"}]},sessionId);
 	writeChatComposerText(sessionId,"original question");writeChatFileReferences(sessionId,[ref]);
 	prepareChatComposerDelivery(sessionId,{kind:"send",composerText:"original question",requestText:"original question",attachments:[],fileReferences:[ref],clientMessageId:"legacy-receipt"});
-	// Model a receipt written by the previous app version, before the format marker.
 	for(let i=0;i<localStorage.length;i++){
 		const key=localStorage.key(i)!;const raw=localStorage.getItem(key)!;
 		if(raw.includes('"clientMessageId":"legacy-receipt"')){
@@ -3557,8 +3464,6 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	expect(onSend.mock.calls[0][2]).toBe("legacy-receipt");
 });
 
-// A Cloud chat's composer delivers captures as text and searches files for "@";
-// the IME guard and the send-key preference hold there as in a local chat.
 describe("Cloud delivery under the send-key preference", () => {
 	it("sends a quoted selection and a capture only on Cmd/Ctrl+Enter in newline mode, never on an IME Enter", async () => {
 		useUiStore.getState().setChatSendKeyMode("mod-enter");

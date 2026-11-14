@@ -16,8 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 )
 
-// AgentAccountService is the HTTP boundary of the Claude Code and Codex
-// subscription accounts AO launches agents with.
 type AgentAccountService interface {
 	List(context.Context, bool) ([]agentaccounts.AccountView, error)
 	StartLogin(context.Context, domain.AgentAccountProvider) (agentaccounts.LoginStart, error)
@@ -31,19 +29,15 @@ type AgentAccountService interface {
 	SessionAccounts(context.Context, domain.SessionID) (map[domain.AgentAccountProvider]string, error)
 }
 
-// AgentAccountSessionMover moves a session's agent to another account.
 type AgentAccountSessionMover interface {
 	StartAccountTransition(context.Context, domain.SessionID, string, bool) (domain.SessionInterfaceTransition, error)
 }
 
-// AgentAccountsController exposes accounts, sign-in, limits, usage, and the
-// account of each session.
 type AgentAccountsController struct {
 	Svc      AgentAccountService
 	Sessions AgentAccountSessionMover
 }
 
-// Register adds the account routes.
 func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Get("/agents/accounts", c.list)
 	r.Get("/agents/accounts/usage", c.usage)
@@ -269,8 +263,6 @@ func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.R
 	})
 }
 
-// agentAccountUnsharedMessage is shown when an account folder cannot link to
-// this computer's history; Windows allows the links only in Developer Mode.
 const agentAccountUnsharedMessage = "Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode."
 
 func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {

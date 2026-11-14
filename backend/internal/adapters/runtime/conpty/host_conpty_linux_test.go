@@ -19,8 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestMain lets the detached-spawn integration test re-exec this test binary
-// through the same hidden pty-host entrypoint used by the production AO binary.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "pty-host" {
 		os.Exit(RunHost(os.Args[2:], os.Stdout))
@@ -105,8 +103,6 @@ func TestLinuxDefaultSpawnHostEndToEnd(t *testing.T) {
 		cancel()
 		t.Fatal(err)
 	}
-	// The request context owns startup only. A host that reported READY must
-	// stay alive after that request ends so daemon restarts cannot kill agents.
 	cancel()
 	t.Cleanup(func() {
 		_ = clientKill(addr)
@@ -127,8 +123,6 @@ func TestLinuxDefaultSpawnHostEndToEnd(t *testing.T) {
 			t.Fatalf("get output: %v", outputErr)
 		}
 		text := strings.ReplaceAll(output, "\r", "")
-		// The host answers the script's DA1 query on its stdin, and nothing reads
-		// that reply before the input does, so it may arrive ahead of "hello".
 		received := strings.ReplaceAll(text, string(da1Reply), "")
 		if strings.Contains(text, "ready:works:prefix") && strings.Contains(received, "received:hello") {
 			break
@@ -274,7 +268,6 @@ func TestLinuxPTYCloseReapsDescendantWithOwnProcessGroup(t *testing.T) {
 }
 
 func TestLinuxPTYCloseDoesNotKillUnrelatedProcessAfterPIDReuse(t *testing.T) {
-	// Start an independent dummy process representing an unrelated process running on the host.
 	dummy := exec.Command("/bin/sh", "-c", "sleep 30")
 	if err := dummy.Start(); err != nil {
 		t.Fatal(err)
@@ -292,21 +285,17 @@ func TestLinuxPTYCloseDoesNotKillUnrelatedProcessAfterPIDReuse(t *testing.T) {
 		t.Fatalf("reading dummy proc info: %v", err)
 	}
 
-	// Create a simulated linuxPTYConn whose leaderPID matches dummyPID,
-	// but whose recorded leaderStartTime is from an earlier epoch (simulating a recycled PID).
 	conn := &linuxPTYConn{
 		leaderPID:       dummyPID,
-		leaderStartTime: dummyInfo.startTime - 1000, // mismatch: earlier time
+		leaderStartTime: dummyInfo.startTime - 1000,
 		doneC:           make(chan struct{}),
 	}
 	close(conn.doneC)
 
-	// Close() must detect the start-time mismatch and send NO signals to dummyPID.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Verify the dummy process is still running and unharmed.
 	if !pidAlive(dummyPID) {
 		t.Fatalf("unrelated process %d was killed by Close() despite PID identity mismatch", dummyPID)
 	}
@@ -337,20 +326,17 @@ func TestLinuxPTYCloseDelayedAfterFullSessionExit(t *testing.T) {
 		t.Fatal("process did not exit")
 	}
 
-	// Ensure the leader process has exited
 	deadline := time.Now().Add(2 * time.Second)
 	for pidAlive(leaderPID) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Delayed close on an already fully-dead session must succeed cleanly without error.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 }
 
 func TestLinuxPTYCloseFailsClosedWhenLeaderStartTimeIsZero(t *testing.T) {
-	// Start an independent dummy process representing an innocent process on the host.
 	dummy := exec.Command("/bin/sh", "-c", "sleep 30")
 	if err := dummy.Start(); err != nil {
 		t.Fatal(err)
@@ -363,21 +349,17 @@ func TestLinuxPTYCloseFailsClosedWhenLeaderStartTimeIsZero(t *testing.T) {
 		}
 	})
 
-	// Create a simulated linuxPTYConn whose leaderPID matches dummyPID,
-	// but whose recorded leaderStartTime is 0 (simulating failed identity capture).
 	conn := &linuxPTYConn{
 		leaderPID:       dummyPID,
-		leaderStartTime: 0, // identity unavailable: must fail closed
+		leaderStartTime: 0,
 		doneC:           make(chan struct{}),
 	}
 	close(conn.doneC)
 
-	// Close() must fail closed: send NO signals to dummyPID or its process group.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Verify the dummy process is still running and unharmed.
 	if !pidAlive(dummyPID) {
 		t.Fatalf("unrelated process %d was killed by Close() when leaderStartTime was zero", dummyPID)
 	}
@@ -401,7 +383,6 @@ func TestLinuxRuntimeDestroyReapsTermIgnoringProcessTreeEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for process readiness output.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		out, outErr := runtime.GetOutput(context.Background(), handle, 10)
@@ -424,19 +405,16 @@ func TestLinuxRuntimeDestroyReapsTermIgnoringProcessTreeEndToEnd(t *testing.T) {
 	}
 	hostPID := sess.pid
 
-	// Destroy the session through the runtime.
 	if err := runtime.Destroy(context.Background(), handle); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 
-	// Ensure pty-host is gone.
 	if pidAlive(hostPID) {
 		t.Fatalf("pty-host pid %d survived Destroy", hostPID)
 	}
 }
 
 func TestLinuxPTYCloseDoesNotKillRecycledPIDDuringGracePeriod(t *testing.T) {
-	// Start an independent innocent dummy process representing an unrelated process.
 	dummy := exec.Command("/bin/sh", "-c", "sleep 30")
 	if err := dummy.Start(); err != nil {
 		t.Fatal(err)
@@ -454,8 +432,6 @@ func TestLinuxPTYCloseDoesNotKillRecycledPIDDuringGracePeriod(t *testing.T) {
 		t.Fatalf("reading dummy proc info: %v", err)
 	}
 
-	// Start a real TERM-ignoring process that will keep the grace-period wait alive
-	// and force escalation to Phase 2 (SIGKILL).
 	termIgnore := exec.Command("/bin/sh", "-c", "trap '' TERM; sleep 30")
 	if err := termIgnore.Start(); err != nil {
 		t.Fatal(err)
@@ -472,39 +448,31 @@ func TestLinuxPTYCloseDoesNotKillRecycledPIDDuringGracePeriod(t *testing.T) {
 		t.Fatalf("reading termIgnore proc info: %v", err)
 	}
 
-	// Simulate a candidate list containing a recycled PID (stale start time) alongside
-	// the active TERM-ignoring process.
 	procs := []linuxProcInfo{
-		{pid: dummyPID, startTime: dummyInfo.startTime - 1000}, // recycled/mismatched identity
+		{pid: dummyPID, startTime: dummyInfo.startTime - 1000},
 		{pid: termIgnorePID, startTime: termIgnoreInfo.startTime},
 	}
 
-	// 1. Pre-signal validation must reject dummyPID on SIGTERM
 	signaled := signalProcessIfIdentityMatches(dummyPID, dummyInfo.startTime-1000, syscall.SIGTERM)
 	if signaled {
 		t.Fatal("signalProcessIfIdentityMatches signaled dummyPID despite start time mismatch")
 	}
 
-	// 2. Waiting on identities must recognize dummyPID as dead/unmatched while waiting for termIgnore
 	if waitForProcIdentitiesExit(procs, 100*time.Millisecond) {
 		t.Fatal("waitForProcIdentitiesExit returned true while termIgnore was still running")
 	}
 
-	// 3. Pre-signal validation must reject dummyPID on SIGKILL escalation
 	signaledKill := signalProcessIfIdentityMatches(dummyPID, dummyInfo.startTime-1000, syscall.SIGKILL)
 	if signaledKill {
 		t.Fatal("signalProcessIfIdentityMatches signaled dummyPID on SIGKILL escalation despite start time mismatch")
 	}
 
-	// Verify dummy is still running and unharmed
 	if !pidAlive(dummyPID) {
 		t.Fatalf("unrelated process %d was killed during grace period escalation", dummyPID)
 	}
 }
 
 func TestLinuxPTYCloseReapsLateChildSpawnedInTERMHandler(t *testing.T) {
-	// A parent process traps TERM: on receiving TERM, it spawns a background sleep job
-	// in the same session and exits immediately (0.05s).
 	conn, err := newConPTY(t.TempDir(), "/bin/bash", []string{
 		"-c", `trap 'sleep 30 & exit 0' TERM; printf 'trap-ready\n'; while true; do sleep 1; done`,
 	}, initialConPTYColumns, initialConPTYRows)
@@ -524,8 +492,6 @@ func TestLinuxPTYCloseReapsLateChildSpawnedInTERMHandler(t *testing.T) {
 		t.Fatalf("waiting for trap readiness: output=%q err=%v", ready[:n], err)
 	}
 
-	// Close() will send SIGTERM. The parent's trap handler will spawn a late child
-	// in the session and exit. Close() must discover and reap this late child.
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}

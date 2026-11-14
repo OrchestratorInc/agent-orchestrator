@@ -44,8 +44,6 @@ export function coerceKeybindingOverrides(raw: unknown, isMac = process.platform
 			.slice(0, 2)
 			.map((binding) => coerceBinding(binding, isMac))
 			.filter((candidate): candidate is ShortcutBinding => candidate !== null);
-		// Preserve an intentional empty array as "unassigned". If a non-empty
-		// persisted value contains no valid bindings, omit it so defaults recover.
 		if (rawBindings.length > 0 && bindings.length === 0) continue;
 		overrides[id] = bindings;
 	}

@@ -7,8 +7,6 @@ type ErrorWindow = Window & {
 	ao?: { telemetry?: { capture: (input: RendererTelemetryCaptureInput) => Promise<boolean> } };
 };
 
-// This function is serialized by contextBridge.executeInMainWorld. Keep every
-// runtime dependency inside its body, so it runs before renderer imports.
 export function installRendererErrorHandlers(capture?: Handler): void {
 	const root = window as ErrorWindow;
 	if (root.__aoRendererErrors) {
@@ -45,7 +43,7 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 				kind: "exception", message: "Renderer startup error", level: "error",
 				exception: { type: name, frames: filename || lineno ? [{ function: "renderer_frame", ...(filename ? { filename } : {}), ...(lineno ? { lineno } : {}), ...(colno ? { colno } : {}) }] : [] },
 			}).catch(() => undefined);
-		} catch { /* reporting must not become another uncaught error */ }
+		} catch { }
 	};
 	window.addEventListener("error", (event: Event) => {
 		if (event instanceof ErrorEvent) report(event.error ?? new Error("Renderer startup error"), "window-error", event);

@@ -103,7 +103,6 @@ func triageLogMessages(logs string) []string {
 	seen := map[string]bool{}
 	lines := strings.Split(logs, "\n")
 	for i := len(lines) - 1; i >= 0 && len(messages) < 8; i-- {
-		// Desktop marks daemon stderr as [error]; prefer the daemon's own level.
 		level := triageLevel.FindStringSubmatchIndex(lines[i])
 		if level == nil {
 			level = triagePlainLevel.FindStringSubmatchIndex(lines[i])

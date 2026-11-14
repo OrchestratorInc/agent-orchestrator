@@ -115,8 +115,6 @@ since s00000030: 1 changed
 	}
 }
 
-// A step can succeed while the read after the batch fails; the agent must
-// learn it could not see the result.
 func TestRenderCuaRunStepsWithFailedObservation(t *testing.T) {
 	response := decodeCuaResponse(t, `{"tool":"run_steps","result":{"ok":true,"executed":1,"total":1,
 		"steps":[{"index":0,"tool":"click","ok":true,"message":"✅ Performed AXPress on [2] AXButton \"\"."}],

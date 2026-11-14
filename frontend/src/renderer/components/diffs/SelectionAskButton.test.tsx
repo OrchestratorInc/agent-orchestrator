@@ -161,7 +161,7 @@ describe("SelectionAskButton", () => {
 	it("does not use a retained selection while its toolbar is offscreen or its live range changed", () => {
 		const selected = keyboardSelection(), onAsk = vi.fn();
 		render(<SelectionAskButton onAsk={onAsk} onDismiss={selected.dismiss} source={selected.store} />);
-		selected.offscreen(); // Before the queued geometry frame updates CSS.
+		selected.offscreen();
 		expect(fireEvent.keyDown(selected.host, { key: "l", ctrlKey: true })).toBe(true);
 		expect(fireEvent.keyDown(selected.host, { key: "Escape" })).toBe(true);
 		expect(onAsk).not.toHaveBeenCalled(); expect(selected.dismiss).not.toHaveBeenCalled();

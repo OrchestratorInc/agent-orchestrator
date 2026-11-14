@@ -198,8 +198,6 @@ func TestConfirmInstalledOwnerRefusesBinaryItCannotLocate(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newTestService("darwin", "npm")
-			// Even AO's own recorded install cannot say which copy an update
-			// would change without the path sessions run.
 			s.jobs[TargetCodex] = &Job{Target: TargetCodex, Status: StatusSucceeded, Method: "official-installer"}
 			s.verifier = harnessVerifierFunc(verify)
 			if _, err := s.confirmInstalledOwner(context.Background(), TargetCodex, Plan{Method: "official-installer"}); !errors.Is(err, ErrInstallOwner) {
@@ -294,8 +292,6 @@ func TestRefusedReinstallKeepsTheLastJobRecord(t *testing.T) {
 
 func TestConfirmInstalledOwnerRefusesABrokenCopyAnotherMethodInstalled(t *testing.T) {
 	s := newTestService("darwin", "uv", "pipx")
-	// AO last updated Vibe through uv; the copy sessions now resolve is a
-	// broken pipx install the user added since.
 	s.jobs[TargetVibe] = &Job{Target: TargetVibe, Status: StatusSucceeded, Method: "uv"}
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/Users/test/.local/pipx/venvs/mistral-vibe/bin/vibe"}, errors.New("exec format error")

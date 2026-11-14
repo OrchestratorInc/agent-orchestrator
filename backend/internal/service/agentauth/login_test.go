@@ -117,7 +117,6 @@ func TestGuidedNativeLoginDoesNotStartAnotherCommandAfterCleanupFailure(t *testi
 }
 
 func TestGuidedNativeLoginHidesTerminalAndCancels(t *testing.T) {
-	// No OpenCode catalog, so OpenCode keeps its fixed key methods.
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	pty := &guidedTerminalFake{output: "private credential=do-not-return\n> OpenAI\n"}
 	svc := New(foundExecutable("opencode"), pty)
@@ -178,7 +177,6 @@ func TestNativePromptRequiresFallbackForUnreviewedOutput(t *testing.T) {
 			t.Fatalf("output=%q kind=%q label=%q options=%v", output, kind, label, options)
 		}
 	}
-	// A lone numbered line is ordinary output text, not a menu.
 	if kind, _, _, _ := nativePrompt("1. Read the docs first"); kind != "waiting" {
 		t.Fatalf("lone numbered line kind=%q", kind)
 	}
@@ -214,7 +212,6 @@ func TestCopilotAndKimiLoginLinksStayOnTheirHosts(t *testing.T) {
 }
 
 func TestNativePromptReadsOnlyTheLatestMenuWithItsDigits(t *testing.T) {
-	// An earlier menu in scrollback, then the current one with a cursor line.
 	output := "1) Anthropic\n2) OpenAI\nSaved.\nSelect a provider\n\u276f 1) OpenRouter\n  2) Anthropic\n"
 	kind, _, options, digits := nativePrompt(output)
 	if kind != "menu" || !reflect.DeepEqual(options, []string{"OpenRouter", "Anthropic"}) || !reflect.DeepEqual(digits, []string{"1", "2"}) {
@@ -224,15 +221,10 @@ func TestNativePromptReadsOnlyTheLatestMenuWithItsDigits(t *testing.T) {
 
 func TestNativePromptIgnoresAnsweredMenusInScrollback(t *testing.T) {
 	for _, tc := range []struct{ output, kind string }{
-		// Answered, then a new prompt the UI can't fill: the terminal takes over.
 		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\nPaste your API key:\n", "terminal_required"},
-		// Answered, then progress: nothing to choose, and old words don't count.
 		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\nSelected OpenAI\nWaiting for authorization...\n", "waiting"},
-		// Typed but not yet submitted: still the prompt, so Enter stays on offer.
 		{"Choose a provider:\n1. Anthropic\n2. OpenAI\n> 2\n", "menu"},
 		{"Select a provider\n1) Anthropic\n2) OpenAI\n(Use number keys, Enter to confirm)\n", "menu"},
-		// A gutter-drawn picker (cliclack's Windows fallback, as in goose
-		// configure) is read past its gutter: an unreviewed label hands off.
 		{"T  goose-configure\n|\n*  What would you like to configure?\n|  > Configure Providers (Change provider or update credentials)\n|    Custom Providers\n|    goose settings\n—\n", "terminal_required"},
 		{"◆  Select provider\n│  ● OpenAI\n│  ○ Anthropic\n└\n", "menu"},
 	} {
@@ -264,8 +256,6 @@ func (f *signInProberFake) EnsureAgentReadiness(context.Context, string, domain.
 	return domain.AgentReadinessSnapshot{Authentication: domain.AgentAuthenticationObservation{State: f.state}}, nil
 }
 
-// The hidden PTY reports no exit status: Esc, Ctrl+C or a CLI error also end
-// it. Only the harness's probe may turn an exit into a sign-in.
 func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -274,7 +264,6 @@ func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
 		claimKept bool
 	}{
 		{"authorized", domain.AgentAuthenticationAuthorized, "succeeded", false},
-		// Gemini, Hermes and MiMo Code can only report their own credentials as present.
 		{"configured", domain.AgentAuthenticationConfigured, "succeeded", false},
 		{"signed out", domain.AgentAuthenticationUnauthorized, "failed", true},
 		{"inconclusive", domain.AgentAuthenticationUnknown, "failed", true},
@@ -321,8 +310,6 @@ func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
 	}
 }
 
-// claimProbeFake records whether the harness's AO-saved key was still passed
-// to it while its sign-in was being confirmed.
 type claimProbeFake struct {
 	signInProberFake
 	dataDir   string
@@ -373,7 +360,6 @@ func TestNativeSignInProbeRunsWithoutTheOldKeyClaim(t *testing.T) {
 	if !prober.probed || prober.stillSeen {
 		t.Fatalf("probed=%v, key still passed during probe=%v", prober.probed, prober.stillSeen)
 	}
-	// A failed sign-in gives the claim back.
 	if _, withhold, _ := providerkeys.ForSession(dataDir, "gemini"); len(withhold) != 0 {
 		t.Fatalf("claim was not restored after a failed sign-in: %v", withhold)
 	}
@@ -408,7 +394,6 @@ func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
 	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "3", ""); err == nil {
 		t.Fatal("accepted a digit outside the recognized options")
 	}
-	// A choice made on a menu that has since changed is refused.
 	var apiErr *apierr.Error
 	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2", "Anthropic"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_MENU_CHANGED" {
 		t.Fatalf("stale choice err=%v", err)
@@ -416,7 +401,6 @@ func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
 	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2", "OpenAI"); err != nil {
 		t.Fatal(err)
 	}
-	// A CLI that reads a line needs Enter after the digit.
 	deadline = time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if current, _ = svc.Login(t.Context(), "goose", started.ID); current.NativePrompt == "menu" {
@@ -539,7 +523,6 @@ func TestLoginOutputExposesOnlyRecognizedPrompts(t *testing.T) {
 	}
 }
 
-// The subprocess verifies stdin without touching any real harness credentials.
 func TestUILoginHelper(t *testing.T) {
 	mode := os.Getenv("AO_TEST_UI_LOGIN")
 	if mode == "" {
@@ -764,8 +747,6 @@ func TestUILoginTimeoutAndShutdownStopProcesses(t *testing.T) {
 }
 
 func TestClaudeFallbackURLsFromNativeCLIOutput(t *testing.T) {
-	// Sanitized URL forms reproduced with Claude Code 2.1.310 in review
-	// https://github.com/OrchestratorInc/agent-orchestrator/pull/7163#discussion_r4373785021.
 	for _, raw := range []string{
 		"https://claude.com/cai/oauth/authorize?code=true&client_id=redacted&state=redacted",
 		"https://claude.com/cai/oauth/authorize?code=true&state=redacted&login_method=sso",
@@ -779,8 +760,6 @@ func TestClaudeFallbackURLsFromNativeCLIOutput(t *testing.T) {
 			t.Fatalf("rejected native fallback URL %q", raw)
 		}
 	}
-	// The native browser tab may use a callback on the daemon's host. Only
-	// manual-code URLs can be reopened safely from another host's desktop.
 	svc := New(nil, nil)
 	op := &loginOperation{snapshot: LoginSnapshot{AgentID: "claude-code", Status: "running"}}
 	output := &loginOutput{service: svc, operation: op}
@@ -998,8 +977,6 @@ func TestTerminalLoginExcludesBackgroundUntilConfirmedExit(t *testing.T) {
 	if launches != 0 {
 		t.Fatalf("launched %d background commands before confirmed terminal exit", launches)
 	}
-	// A retained terminal/scrollback handle does not block a new login after
-	// the runtime confirms that its child, rather than its host, has exited.
 	opener.alive = false
 	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err != nil {
 		t.Fatalf("confirmed terminal child exit did not release exclusion: %v", err)
@@ -1043,7 +1020,6 @@ func TestUILoginSavesClaudeSetupTokenWithoutNativeCommand(t *testing.T) {
 	if err != nil || string(saved) != token {
 		t.Fatalf("saved=%q err=%v", saved, err)
 	}
-	// A finished save does not block a later sign-in or cancellation.
 	if _, err := svc.CancelLogin(t.Context(), "claude-code", started.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1084,12 +1060,9 @@ func TestUILoginNativeClaudeSignInClearsSavedSetupToken(t *testing.T) {
 	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(svc.dataDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
 	}
-	// So does an API key saved from Claude Code's panel.
 	assertClaudeKeyReleased(t, svc.dataDir)
 }
 
-// claimAnthropicKeyForClaude saves ANTHROPIC_API_KEY from Claude Code's panel,
-// as if the user had chosen the API key there before switching sign-in.
 func claimAnthropicKeyForClaude(t *testing.T, dataDir string) {
 	t.Helper()
 	if err := providerkeys.Save(t.Context(), dataDir, "ANTHROPIC_API_KEY", "sk-ant-api03-earlier"); err != nil {
@@ -1103,8 +1076,6 @@ func claimAnthropicKeyForClaude(t *testing.T, dataDir string) {
 	}
 }
 
-// assertClaudeKeyReleased checks that Claude Code no longer receives the key
-// while the key itself stays saved for other harnesses.
 func assertClaudeKeyReleased(t *testing.T, dataDir string) {
 	t.Helper()
 	inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code")
@@ -1132,21 +1103,17 @@ func TestUILoginClaudeSetupTokenKeepsTheAPIKeyWhenTheTokenCannotBeSaved(t *testi
 	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
 	t.Cleanup(svc.Close)
 	claimAnthropicKeyForClaude(t, dataDir)
-	// A non-empty directory where the token file belongs cannot be replaced.
 	if err := os.MkdirAll(filepath.Join(claudecode.LocalOAuthTokenPath(dataDir), "child"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-unsaved-setup-token"); err == nil {
 		t.Fatal("StartLogin succeeded although the setup token could not be saved")
 	}
-	// The previous sign-in, the API key saved from Claude Code's panel, stays.
 	if inject, withhold, err := providerkeys.ForSession(dataDir, "claude-code"); err != nil || len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "sk-ant-api03-earlier" {
 		t.Fatalf("Claude Code lost its API key after a failed token save: withhold=%v err=%v", withhold, err)
 	}
 }
 
-// survivingAuthTerminals models shellterm after a daemon restart in the same
-// app launch: earlier command terminals are still listed and may still run.
 type survivingAuthTerminals struct {
 	owners    map[string]string
 	terminals []shellterm.ShellTerminal
@@ -1189,7 +1156,6 @@ func TestLoginExcludesTerminalLoginSurvivingDaemonRestart(t *testing.T) {
 		alive:  map[string]bool{"github": true, "claude": true, "codex": true},
 		owners: map[string]string{"github": "github-auth", "claude": "agentauth:claude-code", "codex": "agentauth:codex"},
 	}
-	// A fresh Service discovers ownership from the surviving terminal records.
 	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, terminals, dataDir)
 	svc.commandContext = func(context.Context, string, ...string) *exec.Cmd {
 		t.Fatal("admitted a background login while the terminal login still runs")
@@ -1207,7 +1173,6 @@ func TestLoginExcludesTerminalLoginSurvivingDaemonRestart(t *testing.T) {
 	if _, err := svc.Start(t.Context(), "codex"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
 		t.Fatalf("expected the adopted terminal to exclude terminal login too: %v", err)
 	}
-	// Each harness is excluded only by its own surviving terminal.
 	if _, err := svc.StartLogin(t.Context(), "claude-code", "setup_token", "sk-ant-oat01-unrelated-harness"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
 		t.Fatalf("expected the Claude terminal to exclude Claude login: %v", err)
 	}
@@ -1250,9 +1215,6 @@ func TestLoginFailsClosedWhenSurvivingTerminalsCannotBeChecked(t *testing.T) {
 	}
 }
 
-// A sign-in that cannot release the old API-key claim is incomplete: new
-// sessions would still get, and bill, that key. Both completion paths end
-// failed and keep the claim, so the panel offers a retry.
 func TestSignInFailsWhenTheKeyClaimCannotBeReleased(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs a data directory the test user cannot write")
@@ -1330,8 +1292,6 @@ func TestSignInFailsWhenTheKeyClaimCannotBeReleased(t *testing.T) {
 	})
 }
 
-// `ao claude-login` runs Claude Code's own login in a terminal and then asks
-// the daemon to record it, so the daemon alone changes AO's key claims.
 func TestRecordSignInReleasesTheKeyClaimAndEarlierSetupToken(t *testing.T) {
 	dataDir := t.TempDir()
 	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
@@ -1356,8 +1316,6 @@ func TestRecordSignInReleasesTheKeyClaimAndEarlierSetupToken(t *testing.T) {
 	}
 }
 
-// A key save or CLI login started while a native sign-in still runs must not
-// drop that sign-in from the registry, where it could no longer be cancelled.
 func TestRunningNativeSignInBlocksAnotherLoginForTheHarness(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GEMINI_CLI_HOME", home)

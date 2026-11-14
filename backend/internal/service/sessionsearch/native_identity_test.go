@@ -13,11 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionsearch"
 )
 
-// A terminal session's transcript is named by the provider's own session id,
-// which AO records as agent_session_id, never by the AO session id. These
-// fixtures give every session an AO id that differs from its native id; the
-// others in this package name files after the AO id, which is how searching
-// by the wrong id went unseen.
 const nativeUUID = "8f3c2a1e-5b7d-4c9e-a1f0-2d6b8e4c7a90"
 
 func seedNativeTUI(t *testing.T, store interface {
@@ -52,7 +47,6 @@ func TestClaudeTranscriptIsFoundByItsNativeSessionID(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
 	seedTUIProject(t, f.store, "proj")
 	seedNativeTUI(t, f.store, domain.HarnessClaudeCode, nativeUUID, "")
-	// Claude names the file by its own session id, in the workspace's project directory.
 	writeTranscript(t, root, filepath.Join(strings.ReplaceAll("/tmp/proj", "/", "-"), nativeUUID+".jsonl"),
 		claudeLine(t, "user", "user", "the zzNativeNeedle test flakes on CI", "2026-08-09T12:00:00Z"),
 	)
@@ -81,9 +75,6 @@ func TestCodexRolloutIsFoundByItsNativeSessionID(t *testing.T) {
 	}
 }
 
-// An AO-managed account keeps its own Claude config directory under AO's state
-// directory, outside ~/.claude/projects. The path the provider's hooks reported
-// is what finds that transcript.
 func TestRecordedTranscriptUnderAnAOManagedAccountIsRead(t *testing.T) {
 	claudeRoot, stateDir := t.TempDir(), t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: claudeRoot, AOStateDir: stateDir})
@@ -101,9 +92,6 @@ func TestRecordedTranscriptUnderAnAOManagedAccountIsRead(t *testing.T) {
 	}
 }
 
-// A recorded path is a value in the database, not a licence to read anywhere:
-// outside the provider roots and AO's state directory it is ignored, and the
-// session falls back to its native id under the provider root.
 func TestRecordedTranscriptOutsideTheRootsIsNotRead(t *testing.T) {
 	claudeRoot, stateDir, elsewhere := t.TempDir(), t.TempDir(), t.TempDir()
 	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: claudeRoot, AOStateDir: stateDir})
@@ -126,18 +114,10 @@ func TestRecordedTranscriptOutsideTheRootsIsNotRead(t *testing.T) {
 	}
 }
 
-// Found in review: a continuation keeps the AO session id but starts a new
-// native session and transcript. With the old transcript still on disk, the
-// cached path won over the new one and the new conversation never became
-// searchable. Both ways the change shows up are covered: a newly recorded
-// path, and a new native id with no recorded path.
 func TestANewNativeSessionReplacesTheCachedTranscript(t *testing.T) {
 	const nextUUID = "1d2e3f40-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
 	for _, recordPath := range []bool{true, false} {
 		t.Run(map[bool]string{true: "recorded path", false: "native id only"}[recordPath], func(t *testing.T) {
-			// Resolved, as ~/.claude/projects is: macOS's temp dir is under the
-			// /var symlink, and a cached path (stored resolved) would never match
-			// an unresolved root, hiding the reuse this test is about.
 			root, err := filepath.EvalSymlinks(t.TempDir())
 			if err != nil {
 				t.Fatalf("resolve temp dir: %v", err)
@@ -160,7 +140,6 @@ func TestANewNativeSessionReplacesTheCachedTranscript(t *testing.T) {
 				t.Fatalf("the first transcript was not indexed")
 			}
 
-			// The continuation: a new native session and transcript; the old file stays.
 			next := writeTranscript(t, root, filepath.Join("-tmp-proj", nextUUID+".jsonl"),
 				claudeLine(t, "user", "user", "zzNextTranscript after the continuation", "2026-08-09T13:00:00Z"),
 			)
@@ -186,9 +165,6 @@ func TestANewNativeSessionReplacesTheCachedTranscript(t *testing.T) {
 	}
 }
 
-// Found in review: a transcript that stops growing was skipped before its
-// title was rebuilt, so renaming an idle or ended session left the old name
-// searchable and the new one unfindable.
 func TestRenamedNativeSessionIsFoundByItsNewName(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -218,9 +194,6 @@ func TestRenamedNativeSessionIsFoundByItsNewName(t *testing.T) {
 	}
 }
 
-// Found in review: OpenCode sessions were matched on their directory alone, so
-// two AO sessions in one workspace both indexed the newest provider session.
-// Each reads the provider session it recorded.
 func TestOpenCodeSessionsSharingADirectoryReadTheirOwnHistory(t *testing.T) {
 	ctx := context.Background()
 	dataHome := t.TempDir()
@@ -275,9 +248,6 @@ func TestOpenCodeSessionsSharingADirectoryReadTheirOwnHistory(t *testing.T) {
 	}
 }
 
-// Found in review: a cached miss with an unchanged identity skipped discovery
-// for good, so a transcript removed and then restored in place, with nothing
-// about the session changed, never became searchable again.
 func TestTranscriptRestoredInPlaceIsIndexedAgain(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -305,8 +275,6 @@ func TestTranscriptRestoredInPlaceIsIndexedAgain(t *testing.T) {
 	}
 }
 
-// A transcript created after a recorded miss is found once the miss is old
-// enough to look again; until then the sweep does not re-glob the tree.
 func TestTranscriptCreatedAfterAMissIsFoundOnRecheck(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -338,9 +306,6 @@ func TestTranscriptCreatedAfterAMissIsFoundOnRecheck(t *testing.T) {
 	}
 }
 
-// Found in review: the OpenCode cursor was kept when the resolved provider
-// session changed, so a recorded id replacing a directory match read the new
-// session from the old one's position and kept the old one's history.
 func TestOpenCodeSourceRestartsWhenItsProviderSessionChanges(t *testing.T) {
 	ctx := context.Background()
 	dataHome := t.TempDir()
@@ -363,8 +328,6 @@ func TestOpenCodeSourceRestartsWhenItsProviderSessionChanges(t *testing.T) {
 	exec(`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
 		type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
 		time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
-	// Session A is the only one in the directory, so the AO session, whose own
-	// provider id OpenCode does not have yet, falls back to it.
 	exec(`INSERT INTO session VALUES ('oc-a', 'A', '/tmp/proj', 1, 1)`)
 	exec(`INSERT INTO session_message VALUES ('a1', 'oc-a', 'user', 1, 1, 1, '{"text":"zzalpha from session a"}')`)
 
@@ -387,8 +350,6 @@ func TestOpenCodeSourceRestartsWhenItsProviderSessionChanges(t *testing.T) {
 		t.Fatalf("directory fallback = %s, want session a indexed", describe(got))
 	}
 
-	// The session's own provider session appears; its first message is at the
-	// position session a was read to.
 	exec(`INSERT INTO session VALUES ('oc-b', 'B', '/tmp/proj', 2, 2)`)
 	exec(`INSERT INTO session_message VALUES ('b1', 'oc-b', 'user', 1, 2, 2, '{"text":"zzbravo from session b"}')`)
 	if _, err := f.svc.Sweep(ctx); err != nil {
@@ -402,9 +363,6 @@ func TestOpenCodeSourceRestartsWhenItsProviderSessionChanges(t *testing.T) {
 	}
 }
 
-// Found in review: a legacy rollout whose item stream starts past the head
-// the format probe reads was read on with the legacy parser, which skips item
-// records, and the cursor moved past them for good.
 func TestCodexItemStreamStartingPastTheProbeIsIndexed(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -413,7 +371,6 @@ func TestCodexItemStreamStartingPastTheProbeIsIndexed(t *testing.T) {
 	seedNativeTUI(t, f.store, domain.HarnessCodex, nativeUUID, "")
 	name := filepath.Join("2026", "08", "09", "rollout-2026-08-09T12-00-00-"+nativeUUID+".jsonl")
 	lines := []string{`{"timestamp":"2026-08-09T12:00:00Z","type":"session_meta","payload":{"id":"` + nativeUUID + `"}}`}
-	// More than the probe's 256 KiB of legacy response_item records.
 	filler := strings.Repeat("legacy context ", 70)
 	lines = append(lines, `{"timestamp":"2026-08-09T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the zzLegacyNeedle flake"}]}}`)
 	for range 320 {
@@ -423,8 +380,6 @@ func TestCodexItemStreamStartingPastTheProbeIsIndexed(t *testing.T) {
 	if _, err := f.svc.IndexAll(ctx); err != nil {
 		t.Fatalf("IndexAll: %v", err)
 	}
-	// The turn in which the item stream starts writes its user message in both
-	// streams, the response_item first, as Codex does.
 	lines = append(lines,
 		`{"timestamp":"2026-08-09T12:05:00Z","type":"event_msg","payload":{"type":"task_started"}}`,
 		`{"timestamp":"2026-08-09T12:05:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"run the zzTurnNeedle suite"}]}}`,
@@ -438,18 +393,14 @@ func TestCodexItemStreamStartingPastTheProbeIsIndexed(t *testing.T) {
 	if got := search(t, f.svc, "zzLateItemNeedle").Results; len(got) != 1 {
 		t.Fatalf("item record past the probe = %s, want it indexed", describe(got))
 	}
-	// The legacy-only messages from before the item stream stay searchable.
 	if got := search(t, f.svc, "zzLegacyNeedle").Results; len(got) != 1 {
 		t.Fatalf("legacy message before the item stream = %s, want it still indexed", describe(got))
 	}
-	// The message written in both streams is indexed once.
 	if got := search(t, f.svc, "zzTurnNeedle").Results; len(got) != 1 || got[0].SessionMatches != 1 {
 		t.Fatalf("message in both streams = %s, want one match", describe(got))
 	}
 }
 
-// Found in review: the coverage note listed a harness found only on a deleted
-// session while another unsupported source remained.
 func TestCoverageNoteSkipsHarnessesOfDeletedSessions(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
@@ -475,9 +426,6 @@ func TestCoverageNoteSkipsHarnessesOfDeletedSessions(t *testing.T) {
 	}
 }
 
-// Found in review: the item-stream checks matched the text "item_completed",
-// so a legacy message that only mentioned it switched the rollout to the item
-// stream and every legacy message stopped being searchable.
 func TestCodexMessageMentioningAnItemRecordStaysLegacy(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -496,14 +444,12 @@ func TestCodexMessageMentioningAnItemRecordStaysLegacy(t *testing.T) {
 	lines := []string{
 		`{"timestamp":"2026-08-09T12:00:00Z","type":"session_meta","payload":{"id":"` + nativeUUID + `"}}`,
 		message("user", "why is zzHeadNeedle slow"),
-		// In the head the format probe reads.
 		message("assistant", "item_completed"),
 	}
 	writeTranscript(t, root, name, lines...)
 	if _, err := f.svc.IndexAll(ctx); err != nil {
 		t.Fatalf("IndexAll: %v", err)
 	}
-	// Appended to the indexed legacy rollout, where the unread part is scanned.
 	lines = append(lines, message("assistant", "item_completed"), message("user", "and zzTailNeedle too"))
 	writeTranscript(t, root, name, lines...)
 	if _, err := f.svc.Sweep(ctx); err != nil {
@@ -516,8 +462,6 @@ func TestCodexMessageMentioningAnItemRecordStaysLegacy(t *testing.T) {
 	}
 }
 
-// A source an earlier reader switched to the item stream on a message's text
-// is read again, so its legacy messages come back.
 func TestCodexSourceFalselySwitchedByAnEarlierReaderIsReadAgain(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -529,7 +473,6 @@ func TestCodexSourceFalselySwitchedByAnEarlierReaderIsReadAgain(t *testing.T) {
 		`{"timestamp":"2026-08-09T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"why is zzRecoveredNeedle slow"}]}}`,
 		`{"timestamp":"2026-08-09T12:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"item_completed"}]}}`,
 	)
-	// The indexer records the path with symlinks resolved (the temp dir is one on macOS).
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		t.Fatalf("resolve transcript path: %v", err)
@@ -538,8 +481,6 @@ func TestCodexSourceFalselySwitchedByAnEarlierReaderIsReadAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat transcript: %v", err)
 	}
-	// What the earlier reader left: an item-stream source read to the end, with
-	// none of the legacy messages indexed.
 	sourceKey := sessionsearch.NativeSourceKey(domain.HarnessCodex, string(session.ID))
 	if err := f.store.UpsertSessionSearchSource(ctx, domain.SessionSearchSource{
 		SourceKey: sourceKey, Kind: domain.SessionSearchSourceNative, SessionID: string(session.ID),
@@ -557,8 +498,6 @@ func TestCodexSourceFalselySwitchedByAnEarlierReaderIsReadAgain(t *testing.T) {
 	}
 }
 
-// Found in review: OpenCode updates a row in place while a reply is written,
-// keeping its seq, so a row read early was never read again once finished.
 func TestOpenCodeRowUpdatedInPlaceIsIndexedAgain(t *testing.T) {
 	ctx := context.Background()
 	dataHome := t.TempDir()
@@ -584,8 +523,6 @@ func TestOpenCodeRowUpdatedInPlaceIsIndexedAgain(t *testing.T) {
 	exec(`INSERT INTO session VALUES ('oc-live', 'Live', '/tmp/proj', 1, 1)`)
 	exec(`INSERT INTO session_message VALUES ('m1', 'oc-live', 'user', 1, 1, 1, '{"text":"why is the cache cold"}')`)
 	exec(`INSERT INTO session_message VALUES ('m2', 'oc-live', 'assistant', 2, 2, 2, '{"text":"zzPartialNeedle so far"}')`)
-	// A long reply whose second chunk holds a word, with a tool part, and a row
-	// that will end up producing nothing.
 	long := strings.Repeat("filler words for the first chunk ", 300) + " zzSecondChunkNeedle"
 	exec(`INSERT INTO session_message VALUES ('m3', 'oc-live', 'assistant', 3, 3, 3, '{"text":"` + long +
 		`","content":[{"type":"tool","name":"bash","state":{"input":{"command":"grep zzToolNeedle"},"content":"no match"}}]}')`)
@@ -608,8 +545,6 @@ func TestOpenCodeRowUpdatedInPlaceIsIndexedAgain(t *testing.T) {
 	if got := search(t, f.svc, "zzSecondChunkNeedle").Results; len(got) != 1 {
 		t.Fatalf("second chunk before the rewrite = %s, want it indexed", describe(got))
 	}
-	// The reply finishes: the same row, its seq unchanged. The long reply is
-	// rewritten short without its tool part, and the last row empties.
 	exec(`UPDATE session_message SET data = '{"text":"the zzFinishedNeedle answer"}', time_updated = 5 WHERE id = 'm2'`)
 	exec(`UPDATE session_message SET data = '{"text":"a short reply"}', time_updated = 6 WHERE id = 'm3'`)
 	exec(`UPDATE session_message SET data = '{"text":""}', time_updated = 7 WHERE id = 'm4'`)
@@ -627,8 +562,6 @@ func TestOpenCodeRowUpdatedInPlaceIsIndexedAgain(t *testing.T) {
 	if got := search(t, f.svc, "short reply").Results; len(got) != 1 {
 		t.Fatalf("rewritten long reply = %s, want its new text", describe(got))
 	}
-	// Update times are whole numbers: a row can change again within the latest
-	// one seen (7), and that change must be read too.
 	exec(`UPDATE session_message SET data = '{"text":"zzSameTickNeedle"}' WHERE id = 'm4'`)
 	if _, err := f.svc.Sweep(ctx); err != nil {
 		t.Fatalf("Sweep: %v", err)

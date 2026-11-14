@@ -81,7 +81,6 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	if _, ok := set["email"]; ok {
 		t.Fatal("daemon must never $set email")
 	}
-	// The key advances only after the sender receives a successful response.
 	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
 
 	second := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
@@ -97,7 +96,6 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 		}
 	}
 
-	// Sign-out drops the user but the person set is re-evaluated, not stale.
 	_ = sink.Identity().SetCloudUserID(context.Background(), "")
 	out := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
 	if _, ok := out["ao_cloud_user_id"]; ok {
@@ -184,7 +182,6 @@ func TestOptOutStopsExportAndHidesIdentity(t *testing.T) {
 		t.Fatalf("opted-out install exported %d events", hits.Load())
 	}
 
-	// Opting back in resumes export.
 	if err := os.Remove(filepath.Join(dir, OptOutFile)); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +202,6 @@ func TestFreshInstallOnlyBeforeFirstExportedEvent(t *testing.T) {
 	if !ident.FreshInstall() {
 		t.Fatal("new data dir should be a fresh install")
 	}
-	// An exported event writes the tenure file; the next start is not fresh.
 	sink := newTestSink(t, dir, nil, nil)
 	sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started"})
 	_ = sink.Close(context.Background())
@@ -214,7 +210,6 @@ func TestFreshInstallOnlyBeforeFirstExportedEvent(t *testing.T) {
 		t.Fatal("second start reported a fresh install")
 	}
 
-	// An old install ID with no tenure file (upgrade) is not a new install.
 	old := t.TempDir()
 	path := filepath.Join(old, "telemetry_install_id")
 	if err := os.WriteFile(path, []byte("ins_x\n"), 0o600); err != nil {
@@ -284,7 +279,6 @@ func TestInstalledEventIsReservedOnceEvenWithoutAnExport(t *testing.T) {
 	if err != nil || !marked {
 		t.Fatalf("first install mark = %t, %v", marked, err)
 	}
-	// No sender processed the queued event before this restart.
 	second, err := NewIdentity(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -319,8 +313,6 @@ func TestCanceledIdentityWritesLeaveStateUnchanged(t *testing.T) {
 	}
 }
 
-// Email is a person property set once by the signed-in desktop. No daemon event
-// may carry it, so it must not be an allowlisted payload key anywhere.
 func TestNoEmailInAnyPayloadAllowlist(t *testing.T) {
 	for name, allowed := range remotePayloadAllowlist {
 		for key := range allowed {
@@ -331,7 +323,6 @@ func TestNoEmailInAnyPayloadAllowlist(t *testing.T) {
 	}
 }
 
-// drainDistinct returns the distinct_id of each captured request, in order.
 func drainDistinct(t *testing.T, requests chan map[string]any, n int) []string {
 	t.Helper()
 	out := make([]string, 0, n)
@@ -358,12 +349,12 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 		sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
 	}
 
-	emit() // anonymous: the install ID
+	emit()
 	_ = ident.SetCloudUserID(context.Background(), "user_A")
-	emit() // signed in: the account, not the install ID that identify() merges into A
+	emit()
 	_ = ident.SetCloudUserID(context.Background(), "")
 	install1 := ident.AnonymousID()
-	emit() // signed out: must not resolve to A
+	emit()
 	_ = ident.SetCloudUserID(context.Background(), "user_B")
 	emit()
 
@@ -374,7 +365,6 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 	if install1 == install0 || got[2] != install1 {
 		t.Fatalf("signed-out events reused the install ID bound to A: %v (install0=%s install1=%s)", got, install0, install1)
 	}
-	// The desktop bootstrap and the phone read the same ID from disk.
 	if disk, _ := loadOrCreateInstallID(dir); disk != install0 {
 		t.Fatalf("install id on disk = %s, want %s", disk, install0)
 	}
@@ -392,8 +382,6 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 		t.Fatal("first sign-in must keep the install ID so identify() aliases it")
 	}
 
-	// Daemon restarts, A signed out while the app was closed, then the app pushes
-	// a signed-out state.
 	second, err := NewIdentity(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -427,16 +415,12 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 		t.Fatal("repeated signed-out push must not keep rotating")
 	}
 	_ = third.SetCloudUserID(context.Background(), "user_B")
-	_ = third.SetCloudUserID(context.Background(), "user_C") // account switch without a signed-out step
+	_ = third.SetCloudUserID(context.Background(), "user_C")
 	if third.AnonymousID() == rotated || third.InstallID() != original {
 		t.Fatal("direct account switch did not retire the install ID")
 	}
 }
 
-// A restarted (or CLI-started) daemon must keep exporting under the signed-in
-// Cloud ID: the desktop may not be running to hand it off again. Sign-out
-// removes the binding, so later restarts are anonymous on a rotated ID, and a
-// second sign-in is identified again. The install ID never changes.
 func TestCloudIdentitySurvivesRestartAcrossSignInSignOutSignIn(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -504,7 +488,7 @@ func TestOptOutSinkKeepsOptedOutEventsOutOfAggregateBuckets(t *testing.T) {
 	gated := NewOptOutSink(agg, func() bool { return optedOut })
 
 	gated.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.http.5xx", Payload: map[string]any{"path": "/x"}})
-	optedOut = false // opt back in before the minute flush
+	optedOut = false
 	agg.flush(context.Background())
 
 	if got := len(rec.snapshot()); got != 0 {
@@ -517,8 +501,6 @@ func TestSendRechecksOptOutBeforeRetry(t *testing.T) {
 	attempts := 0
 	sink, err := NewPostHogSink(dir, "phc_test", "https://example.test", "", "", roundTripClient(func(_ *http.Request) (*http.Response, error) {
 		attempts++
-		// The user opts out while the first request is in flight; it then fails
-		// transiently, so the retry would otherwise go out.
 		if err := os.WriteFile(filepath.Join(dir, OptOutFile), []byte("1\n"), 0o600); err != nil {
 			t.Error(err)
 		}
@@ -588,7 +570,6 @@ func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sign-out while the install ID cannot be replaced.
 	realWrite := ident.writeFile
 	ident.writeFile = func(path string, data []byte) error {
 		if filepath.Base(path) == anonymousIDFile {
@@ -613,7 +594,6 @@ func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
 		t.Fatalf("snapshot must suppress the phone after a failed rotation: %#v", snap)
 	}
 
-	// The retry succeeds once the filesystem recovers.
 	ident.writeFile = realWrite
 	if err := ident.SetCloudUserID(context.Background(), ""); err != nil {
 		t.Fatal(err)
@@ -636,7 +616,6 @@ func TestBindingWriteAndClearFailuresFailClosed(t *testing.T) {
 	}
 	realWrite, realRemove := ident.writeFile, ident.removeFile
 
-	// First sign-in: the binding cannot be recorded, so nothing may export as A.
 	ident.writeFile = func(string, []byte) error { return os.ErrPermission }
 	if err := ident.SetCloudUserID(context.Background(), "user_A"); err == nil || !ident.ExportSuppressed() {
 		t.Fatalf("unrecorded binding must fail closed (err=%v suppressed=%v)", err, ident.ExportSuppressed())
@@ -646,7 +625,6 @@ func TestBindingWriteAndClearFailuresFailClosed(t *testing.T) {
 		t.Fatalf("retry should record the binding (err=%v suppressed=%v)", err, ident.ExportSuppressed())
 	}
 
-	// Sign-out where the ID is replaced but the binding cannot be cleared.
 	ident.removeFile = func(string) error { return os.ErrPermission }
 	if err := ident.SetCloudUserID(context.Background(), ""); err == nil || !ident.ExportSuppressed() {
 		t.Fatalf("uncleared binding must fail closed (err=%v suppressed=%v)", err, ident.ExportSuppressed())
@@ -660,7 +638,6 @@ func TestBindingWriteAndClearFailuresFailClosed(t *testing.T) {
 func TestWriteFileAtomicLeavesOldFileWhenRenameFails(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
-	// A non-empty directory in the way makes the final rename fail.
 	if err := os.MkdirAll(filepath.Join(target, "x"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -686,10 +663,6 @@ func TestSinkExportsNothingWhileIdentityIsUnpersisted(t *testing.T) {
 	}
 }
 
-// The desktop retires the binding itself on sign-out, so a sign-out the daemon
-// never received (down, or the app quit) still holds: a daemon started later,
-// for example by the CLI, comes up anonymous on the rotated ID, and a running
-// daemon that later receives the hand-off adopts that ID too.
 func TestDesktopRetiredBindingHoldsWithoutTheDaemon(t *testing.T) {
 	dir := t.TempDir()
 	running, err := NewIdentity(dir)
@@ -699,7 +672,6 @@ func TestDesktopRetiredBindingHoldsWithoutTheDaemon(t *testing.T) {
 	if err := running.SetCloudUserID(context.Background(), "user_A"); err != nil {
 		t.Fatal(err)
 	}
-	// What TelemetryIdentityController.retireBinding writes.
 	if err := os.WriteFile(filepath.Join(dir, anonymousIDFile), []byte("anon_rotated_by_desktop\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

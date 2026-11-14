@@ -6,10 +6,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Every deriver key must be a known harness name except fake, whose deriver is
-// retained for test fixtures and historical callbacks even though the harness is
-// no longer user-selectable. SupportsHarness equates tokens and harnesses, so any
-// other drift would silently report a hooked harness as hook-less.
 func TestDeriverTokensAreKnownHarnesses(t *testing.T) {
 	for token := range Derivers {
 		if token == string(domain.HarnessFake) {
@@ -27,7 +23,6 @@ func TestSupportsHarness(t *testing.T) {
 			t.Errorf("SupportsHarness(%q) = false, want true", h)
 		}
 	}
-	// Harnesses with no callback pipeline must read as unsupported.
 	for _, h := range []domain.AgentHarness{domain.HarnessCrush, domain.AgentHarness("")} {
 		if SupportsHarness(h) {
 			t.Errorf("SupportsHarness(%q) = true, want false", h)
@@ -111,9 +106,6 @@ func TestCommandCodeDispatchesAvailableLifecycleSignals(t *testing.T) {
 	}
 }
 
-// Kimi's managed config installs the tool-use trio plus PermissionResult as
-// AO's canonical permission-resolved event; every sub-command it writes must
-// derive through the shared standard deriver (#2814).
 func TestKimiDerivesMidTurnToolActivity(t *testing.T) {
 	for _, tc := range []struct {
 		event string
@@ -135,9 +127,6 @@ func TestKimiDerivesMidTurnToolActivity(t *testing.T) {
 	}
 }
 
-// SessionStart fires on resume and clear as well as startup, and a native
-// restore delivers no prompt, so it must report no activity. A restored session
-// at an empty prompt would otherwise read as working until the user's next turn.
 func TestCommandCodeSessionStartCarriesMetadataOnly(t *testing.T) {
 	got, ok := Derive("command-code", "session-start", []byte(`{"session_id":"native-1"}`))
 	if ok {

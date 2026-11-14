@@ -28,9 +28,6 @@ function renderPicker() {
 	return { onChange };
 }
 
-// The picker keeps the user's own repositories in a module-level cache once a
-// load succeeds, so the empty-list case runs first and every later case shares
-// the same own-repository list.
 describe("GitHubRepoPicker", () => {
 	beforeEach(() => {
 		listGitHubRepos = vi.fn(async (query: string) => (query === "" ? own : (remote[query] ?? [])));

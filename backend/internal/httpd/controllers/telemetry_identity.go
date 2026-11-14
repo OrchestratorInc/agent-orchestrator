@@ -11,15 +11,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TelemetryIdentityController lets a paired phone adopt the desktop's telemetry
-// identity and opt-out. Like EndpointsController it sits outside /api/v1/mobile
-// (404 on the LAN socket) and is authenticated: the identity names a person.
 type TelemetryIdentityController struct {
 	Source           ports.TelemetryIdentityStore
 	LifetimeSessions func(context.Context) (int64, error)
 }
 
-// Register mounts the telemetry identity route on the supplied router.
 func (c *TelemetryIdentityController) Register(r chi.Router) {
 	r.Get("/telemetry/identity", c.get)
 }

@@ -52,7 +52,6 @@ func TestWiringLifecycleOwnsHerdrSocket(t *testing.T) {
 	if err := json.NewDecoder(conn).Decode(&reply); err != nil {
 		t.Fatal(err)
 	}
-	// A missing session must reach the real reducer and return a failed reply.
 	if reply.ID != "7" || reply.OK || reply.Error == "" {
 		t.Fatalf("report bypassed lifecycle: %+v", reply)
 	}

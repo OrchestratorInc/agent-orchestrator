@@ -1,23 +1,3 @@
-// Package devin implements the Devin ("Devin for Terminal", Cognition) agent
-// adapter.
-//
-// Devin for Terminal (binary "devin") is Cognition's terminal coding agent. It
-// has a documented Claude Code compatibility layer: it imports `.claude/`
-// configuration (commands, subagents, and Claude Code lifecycle hooks), storing
-// the converted hooks in `.devin/hooks.v1.json`. Because of this, AO reuses the
-// Claude Code hook installer (which writes .claude/settings.local.json with AO
-// hook commands) and Devin picks them up via its compat layer. This makes Devin
-// a Tier B (Claude-compat) adapter, mirroring the grok adapter.
-//
-// Launch starts interactive Devin. Prompted worker tasks are passed after `--`
-// so Devin starts in interactive implementation mode with the task already
-// loaded. AO intentionally avoids `-p/--print`, which is non-interactive.
-// Permission handling uses `--permission-mode`; Default emits no flag (defer to
-// Devin's config), AcceptEdits maps to `accept-edits`, Auto maps to `auto`, and
-// BypassPermissions maps to `dangerous`.
-//
-// Restore prefers a native session id from AO session metadata via `-r <id>`
-// when one is available.
 package devin
 
 import (
@@ -47,14 +27,12 @@ var devinBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// Plugin is the Devin for Terminal agent adapter.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Devin adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -62,7 +40,6 @@ func New() *Plugin {
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          "devin",
@@ -75,15 +52,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports Devin's optional model override.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `devin --model`.")
 }
 
-// GetLaunchCommand builds `devin [--permission-mode <mode>] [-- <prompt>]`.
-//
-// The `-- <prompt>` form starts an interactive session. Do not use `-p`, which
-// is Devin's non-interactive print mode.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.devinBinary(ctx)
 	if err != nil {
@@ -100,8 +72,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy reports that prompted Devin sessions receive the
-// initial task in argv via `-- <prompt>`.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -109,10 +79,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryInCommand, nil
 }
 
-// PreLaunch records the AO worktree as trusted before Devin starts. Devin keeps
-// its own trusted_workspaces.json for the blocking "do you trust this folder?"
-// prompt; the Claude-compatible trust bit is also written because Devin imports
-// some Claude Code configuration.
 func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -134,14 +100,10 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	return ensureDevinWorkspaceTrusted(cfgPath, cfg.WorkspacePath)
 }
 
-// GetAgentHooks installs Devin's AO-managed workspace hook configuration.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	return devinHooks.Install(ctx, cfg.WorkspacePath)
 }
 
-// GetRestoreCommand builds `devin [--permission-mode <mode>] -r <agentSessionId>`
-// when we have a hook-captured native id. ok=false otherwise (fall back to fresh
-// launch in the manager).
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -164,8 +126,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo reads metadata under AO's normalized keys
-// ("title", "summary", "agentSessionId").
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -174,7 +134,6 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// ResolveDevinBinary finds the `devin` binary (Cognition Devin for Terminal CLI).
 func ResolveDevinBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, devinBinarySpec)
 }
@@ -195,12 +154,9 @@ func (p *Plugin) devinBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// appendApprovalFlags maps AO's permission modes onto Devin's native permission
-// values.
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
-		// No flag: defer to Devin's config.
 	case ports.PermissionModeAcceptEdits:
 		*cmd = append(*cmd, "--permission-mode", "accept-edits")
 	case ports.PermissionModeAuto:
@@ -226,7 +182,6 @@ func devinTrustedWorkspacesPath() (string, error) {
 	return filepath.Join(home, ".local", "share", "devin", "cli", "trusted_workspaces.json"), nil
 }
 
-// devinTrustMu serializes trust-file writes within the daemon process.
 var devinTrustMu sync.Mutex
 
 type devinTrustedWorkspaces struct {
@@ -247,7 +202,6 @@ func ensureDevinNativeWorkspaceTrusted(configPath, workspacePath string) error {
 			}
 		}
 	case os.IsNotExist(err):
-		// Treat as empty config; we'll create it.
 	default:
 		return fmt.Errorf("devin: read %s: %w", configPath, err)
 	}
@@ -280,7 +234,6 @@ func ensureDevinWorkspaceTrusted(configPath, workspacePath string) error {
 			}
 		}
 	case os.IsNotExist(err):
-		// Treat as empty config; we'll create it.
 	default:
 		return fmt.Errorf("devin: read %s: %w", configPath, err)
 	}
@@ -335,8 +288,6 @@ func writeDevinTrustFile(configPath string, out []byte) error {
 	return nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

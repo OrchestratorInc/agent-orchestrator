@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// UpsertReview inserts the per-worker, per-harness review row, or reuses the
-// existing one by refreshing its handle/native-session state.
 func (s *Store) UpsertReview(ctx context.Context, r domain.Review) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -48,7 +46,6 @@ func (s *Store) UpsertReview(ctx context.Context, r domain.Review) error {
 	})
 }
 
-// SetReviewInterfaceMode persists the surface before its controller starts.
 func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode domain.ReviewerInterfaceMode, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -63,8 +60,6 @@ func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode doma
 	return n > 0, err
 }
 
-// RestoreReviewLaunchState puts the previous reviewer back after a replacement
-// launch fails, including the identifiers cleared while changing surfaces.
 func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Review, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -78,8 +73,6 @@ func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Revi
 	return n > 0, err
 }
 
-// GetReviewBySession returns the latest review row for a worker session,
-// ok=false if none.
 func (s *Store) GetReviewBySession(ctx context.Context, id domain.SessionID) (domain.Review, bool, error) {
 	row, err := s.qr.GetReviewBySession(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -91,8 +84,6 @@ func (s *Store) GetReviewBySession(ctx context.Context, id domain.SessionID) (do
 	return reviewFromGetReviewBySessionRow(row), true, nil
 }
 
-// GetReviewBySessionAndHarness returns the review row for one reviewer harness
-// on a worker session, ok=false if none.
 func (s *Store) GetReviewBySessionAndHarness(ctx context.Context, id domain.SessionID, harness domain.ReviewerHarness) (domain.Review, bool, error) {
 	row, err := s.qr.GetReviewBySessionAndHarness(ctx, gen.GetReviewBySessionAndHarnessParams{SessionID: id, Harness: harness})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -104,7 +95,6 @@ func (s *Store) GetReviewBySessionAndHarness(ctx context.Context, id domain.Sess
 	return reviewFromGetReviewBySessionAndHarnessRow(row), true, nil
 }
 
-// GetReviewByID returns one reviewer session row by its stable review id.
 func (s *Store) GetReviewByID(ctx context.Context, id string) (domain.Review, bool, error) {
 	row, err := s.qr.GetReviewByID(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -116,8 +106,6 @@ func (s *Store) GetReviewByID(ctx context.Context, id string) (domain.Review, bo
 	return reviewFromReview(row), true, nil
 }
 
-// ListReviewsBySession returns every harness-specific review row for a worker
-// session, newest first.
 func (s *Store) ListReviewsBySession(ctx context.Context, id domain.SessionID) ([]domain.Review, error) {
 	rows, err := s.qr.ListReviewsBySession(ctx, id)
 	if err != nil {
@@ -130,10 +118,6 @@ func (s *Store) ListReviewsBySession(ctx context.Context, id domain.SessionID) (
 	return out, nil
 }
 
-// ListLiveReviewerHandles returns every review row currently holding a live
-// TUI reviewer pane, across every project and session (including one whose
-// worker has since terminated) — the only lookup for a reviewer process that
-// has no session row of its own.
 func (s *Store) ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerHandle, error) {
 	rows, err := s.qr.ListLiveReviewerHandles(ctx)
 	if err != nil {
@@ -148,7 +132,6 @@ func (s *Store) ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerH
 	return out, nil
 }
 
-// ClaimReviewChatController records ownership of a reviewer chat controller.
 func (s *Store) ClaimReviewChatController(ctx context.Context, id, providerID, generation string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -156,7 +139,6 @@ func (s *Store) ClaimReviewChatController(ctx context.Context, id, providerID, g
 	return n > 0, err
 }
 
-// RecordReviewChatControllerError records the most recent controller failure.
 func (s *Store) RecordReviewChatControllerError(ctx context.Context, id, message string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -164,7 +146,6 @@ func (s *Store) RecordReviewChatControllerError(ctx context.Context, id, message
 	return n > 0, err
 }
 
-// ListRecoverableChatReviews returns durable reviewer chats eligible for recovery.
 func (s *Store) ListRecoverableChatReviews(ctx context.Context) ([]domain.Review, error) {
 	rows, err := s.qr.ListRecoverableChatReviews(ctx)
 	if err != nil {
@@ -177,24 +158,18 @@ func (s *Store) ListRecoverableChatReviews(ctx context.Context) ([]domain.Review
 	return out, nil
 }
 
-// ClearReviewerHandle removes all persisted terminal handles for a worker
-// after a hard reviewer pane teardown.
 func (s *Store) ClearReviewerHandle(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.ClearReviewerHandle(ctx, id)
 }
 
-// ClearReviewerHandleByHarness removes only the runtime handle for one
-// reviewer harness, preserving its native agent session id for later restore.
 func (s *Store) ClearReviewerHandleByHarness(ctx context.Context, id domain.SessionID, harness domain.ReviewerHarness) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.ClearReviewerHandleByHarness(ctx, gen.ClearReviewerHandleByHarnessParams{SessionID: id, Harness: harness})
 }
 
-// UpdateReviewAgentSessionID records engine-owned reviewer native session
-// metadata without applying the reviewer-hook launch generation fence.
 func (s *Store) UpdateReviewAgentSessionID(ctx context.Context, id, agentSessionID string) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -208,8 +183,6 @@ func (s *Store) UpdateReviewAgentSessionID(ctx context.Context, id, agentSession
 	return n > 0, nil
 }
 
-// UpdateReviewActivity records the native reviewer conversation id and/or
-// reviewer activity reported by the reviewer harness hooks.
 func (s *Store) UpdateReviewActivity(ctx context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -229,9 +202,6 @@ func (s *Store) UpdateReviewActivity(ctx context.Context, id string, state domai
 	return n > 0, nil
 }
 
-// InsertReviewRun records a new review pass. A unique-constraint hit on the
-// (session_id, pr_url, target_sha) index (migration 0020) is surfaced as the sentinel
-// domain.ErrDuplicateReviewRun so the engine can fall back to the existing run.
 func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -260,8 +230,6 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	return err
 }
 
-// UpdateReviewRunResult sets the status/verdict/body and the GitHub review id of
-// a running review pass.
 func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -279,8 +247,6 @@ func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status dom
 	return n > 0, nil
 }
 
-// SupersedeStaleRunningReviewRuns marks older running unverdicted passes for a
-// worker failed before starting a review for a newer commit.
 func (s *Store) SupersedeStaleRunningReviewRuns(ctx context.Context, sessionID domain.SessionID, prURL, targetSHA, body string) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -292,8 +258,6 @@ func (s *Store) SupersedeStaleRunningReviewRuns(ctx context.Context, sessionID d
 	})
 }
 
-// CancelRunningReviewRunsBySession marks all currently running review passes
-// for a worker cancelled.
 func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID domain.SessionID, body string) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -303,8 +267,6 @@ func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID 
 	})
 }
 
-// CancelRunningReviewRunsBySessionAndHarness marks currently running review
-// passes for a single reviewer harness as cancelled.
 func (s *Store) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context, sessionID domain.SessionID, harness domain.ReviewerHarness, body string) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -315,7 +277,6 @@ func (s *Store) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context, 
 	})
 }
 
-// GetReviewRun returns one review pass by id.
 func (s *Store) GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error) {
 	row, err := s.qr.GetReviewRun(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -327,10 +288,6 @@ func (s *Store) GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, 
 	return reviewRunFromRow(row), true, nil
 }
 
-// GetReviewRunBySessionPRAndSHA returns the most recent review pass for a
-// worker session, PR, and commit, ok=false if none. It lets a repeat trigger for
-// the same PR head short-circuit to the existing run without colliding with
-// another PR that happens to share the same head commit.
 func (s *Store) GetReviewRunBySessionPRAndSHA(ctx context.Context, id domain.SessionID, prURL, targetSHA string) (domain.ReviewRun, bool, error) {
 	row, err := s.qr.GetReviewRunBySessionPRAndSHA(ctx, gen.GetReviewRunBySessionPRAndSHAParams{SessionID: id, PRURL: prURL, TargetSha: targetSHA})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -342,8 +299,6 @@ func (s *Store) GetReviewRunBySessionPRAndSHA(ctx context.Context, id domain.Ses
 	return reviewRunFromRow(row), true, nil
 }
 
-// GetReviewRunBySessionPRSHAAndHarness returns the most recent review pass for
-// a worker session, PR, commit, and reviewer harness, ok=false if none.
 func (s *Store) GetReviewRunBySessionPRSHAAndHarness(ctx context.Context, id domain.SessionID, prURL, targetSHA string, harness domain.ReviewerHarness) (domain.ReviewRun, bool, error) {
 	row, err := s.qr.GetReviewRunBySessionPRSHAAndHarness(ctx, gen.GetReviewRunBySessionPRSHAAndHarnessParams{SessionID: id, PRURL: prURL, TargetSha: targetSHA, Harness: harness})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -355,7 +310,6 @@ func (s *Store) GetReviewRunBySessionPRSHAAndHarness(ctx context.Context, id dom
 	return reviewRunFromRow(row), true, nil
 }
 
-// ListReviewRunsBySession returns all review passes for a worker session, newest first.
 func (s *Store) ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
 	rows, err := s.qr.ListReviewRunsBySession(ctx, id)
 	if err != nil {
@@ -368,8 +322,6 @@ func (s *Store) ListReviewRunsBySession(ctx context.Context, id domain.SessionID
 	return out, nil
 }
 
-// ListRunningReviewRunsBySession returns only currently running unverdicted
-// review passes for a worker session, newest first.
 func (s *Store) ListRunningReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
 	rows, err := s.qr.ListRunningReviewRunsBySession(ctx, id)
 	if err != nil {
@@ -382,7 +334,6 @@ func (s *Store) ListRunningReviewRunsBySession(ctx context.Context, id domain.Se
 	return out, nil
 }
 
-// ListReviewRunsByBatch returns all passes in one trigger-created batch, oldest first.
 func (s *Store) ListReviewRunsByBatch(ctx context.Context, id domain.SessionID, batchID string) ([]domain.ReviewRun, error) {
 	rows, err := s.qr.ListReviewRunsByBatch(ctx, gen.ListReviewRunsByBatchParams{SessionID: id, BatchID: batchID})
 	if err != nil {
@@ -508,10 +459,6 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 	}
 }
 
-// ListCurrentHeadReviewRunsForSession returns AO's review passes against the
-// current head commit of each PR the session owns. Passes recorded for an
-// earlier head are filtered out in SQL, so callers cannot let a stale run
-// decide a derived column.
 func (s *Store) ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error) {
 	rows, err := s.qr.ListCurrentHeadReviewRunsBySession(ctx, id)
 	if err != nil {
@@ -534,9 +481,6 @@ func (s *Store) ListCurrentHeadReviewRunsForSession(ctx context.Context, id doma
 	return out, nil
 }
 
-// ListCurrentHeadReviewRunsForSessions batches
-// ListCurrentHeadReviewRunsForSession for session-list reads, returning every
-// requested session id with an empty slice when the current head has no runs.
 func (s *Store) ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error) {
 	out := make(map[domain.SessionID][]domain.CurrentHeadReviewRun, len(ids))
 	if len(ids) == 0 {
@@ -571,7 +515,6 @@ func (s *Store) ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []
 	return out, nil
 }
 
-// ArchiveReviewsBySession retires surfaces after their controllers are settled.
 func (s *Store) ArchiveReviewsBySession(ctx context.Context, workerID domain.SessionID, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

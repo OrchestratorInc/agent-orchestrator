@@ -1,24 +1,3 @@
-// Package commandcodeacp binds the user's own Command Code installation to AO's
-// reusable ACP Chat transport.
-//
-// Command Code ships a first-party ACP agent (`cmd acp`, "Run as an Agent Client
-// Protocol (ACP) agent over stdio"), verified against v1.74.0 on 2026-10-02:
-//
-//	protocolVersion 1
-//	loadSession      true            -> ChatCapabilityResume
-//	promptCapabilities{image, embeddedContext}
-//	mcpCapabilities{http}
-//	sessionCapabilities{list, resume, close}
-//
-// Its session/new advertises five modes and two config options, which is more
-// than AO needs to map: every AO permission mode has an exact Command Code
-// equivalent, and `model` plus `effort` arrive as live provider-owned config
-// options rather than launch flags.
-//
-// Like every native ACP binding, AO launches the exact binary the existing
-// Command Code agent plugin resolves. AO never downloads, packages, or
-// substitutes the CLI, and registration here adds no second answer to "is
-// Command Code installed and logged in".
 package commandcodeacp
 
 import (
@@ -35,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Command Code advertises these mode ids from session/new. They were read off a
-// live v1.74.0 handshake, not taken from documentation, so an unexpected id
-// means the provider changed its vocabulary rather than that AO guessed wrong.
 const (
 	modeDefault   = "default"
 	modeAutoAccpt = "auto-accept"
@@ -46,8 +22,6 @@ const (
 	modeBypass    = "bypass"
 )
 
-// New launches `cmd acp` from the exact binary resolved by the existing
-// Command Code agent plugin.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness: domain.HarnessCommandCode,
@@ -69,8 +43,6 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-// configure passes model/permission flags for agents that reject runtime setters.
-// Standing instructions use memory; ACP ignores mods (upstream issue #6784).
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	env, err := prepareSessionHome(cfg)
 	if err != nil {
@@ -91,7 +63,6 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	return args, env, nil
 }
 
-// prepareSessionHome shares Terminal's durable memory and native restore catalog.
 func prepareSessionHome(cfg acpdriver.LaunchConfig) (map[string]string, error) {
 	if _, err := commandcode.PrepareSessionHome(cfg.DataDir, cfg.SessionID, cfg.SystemPrompt); err != nil {
 		return nil, err
@@ -100,11 +71,6 @@ func prepareSessionHome(cfg acpdriver.LaunchConfig) (map[string]string, error) {
 	return commandcode.SessionProcessEnv(cfg.DataDir, cfg.SessionID, cfg.Env), nil
 }
 
-// sessionMode maps AO's approval vocabulary onto Command Code's advertised mode
-// ids. Every AO mode has an exact equivalent, so this never returns "" for a
-// mode Command Code actually understands and no approval change needs a turn
-// validator: the transport applies it through session/set_mode, and a provider
-// that ever answers -32601 surfaces as acpdriver.ErrACPSetterUnsupported.
 func sessionMode(mode ports.PermissionMode) string { return permissionMode(mode) }
 
 func permissionMode(mode ports.PermissionMode) string {
@@ -118,10 +84,6 @@ func permissionMode(mode ports.PermissionMode) string {
 	}
 }
 
-// sessionOptions maps AO's per-turn settings onto Command Code's live config
-// option ids. Command Code publishes `model` and `effort` (category
-// thought_level) from session/new, so both apply mid-conversation without a
-// restart.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	var options []acpdriver.SessionOption
 	if model := strings.TrimSpace(settings.Model); model != "" {
@@ -133,9 +95,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-// permissionPolicy leaves every request to the generic human-approval flow.
-// Command Code advertises distinct modes rather than resolving approvals per
-// request, so auto-approving here would contradict the mode the user selected.
 func permissionPolicy(ports.PermissionMode, acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
 	return "", false
 }

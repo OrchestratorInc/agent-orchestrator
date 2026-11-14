@@ -6,8 +6,6 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// The stale-binary columns and their change trigger apply and roll back
-// cleanly, and existing sessions read as current after the upgrade.
 func TestMigrateSessionStaleBinaryRoundTrip(t *testing.T) {
 	db := openMigratedDatabaseCopyAt(t, t.TempDir(), 212, pragmas)
 	for _, query := range []string{

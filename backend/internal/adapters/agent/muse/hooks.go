@@ -25,12 +25,6 @@ type museHooksFile struct {
 }
 
 func museManagedHooks(cfg ports.WorkspaceHookConfig) map[string][]hooksjson.MatcherGroup {
-	// Muse runs background subagents after the main turn has stopped. Their
-	// tool hooks share this managed configuration but do not emit a matching
-	// Stop, so installing PreToolUse/PostToolUse can incorrectly reactivate an
-	// otherwise idle AO session. Track the top-level turn lifecycle instead;
-	// structured input is a runtime-native TUI control and is detected from its
-	// terminal marker rather than a tool hook.
 	return map[string][]hooksjson.MatcherGroup{
 		"SessionStart":      {museHookGroup(cfg, "session-start")},
 		"UserPromptSubmit":  {museHookGroup(cfg, "user-prompt-submit")},
@@ -47,9 +41,6 @@ func museHookGroup(cfg ports.WorkspaceHookConfig, event string) hooksjson.Matche
 	}}}
 }
 
-// Muse sanitizes AO_* variables from hook subprocesses. Put the non-sensitive
-// callback route directly in AO's per-session hook command so the callback can
-// identify its AO session and, in dev mode, the exact daemon that launched it.
 func museHookCommand(cfg ports.WorkspaceHookConfig, event string) string {
 	assignments := []string{
 		"AO_SESSION_ID=" + museShellQuote(strings.TrimSpace(cfg.SessionID)),
@@ -65,9 +56,6 @@ func museShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
-// GetAgentHooks writes Muse's managed-hook configuration under AO's data
-// directory. Muse receives its path through a process-local environment
-// variable, so this does not create or modify any file in the project.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -89,8 +77,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// CleanupWorkspace removes the AO-owned managed-hook file. The method name is
-// part of the shared agent lifecycle; Muse's project workspace stays untouched.
 func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

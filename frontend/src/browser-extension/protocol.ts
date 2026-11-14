@@ -1,8 +1,3 @@
-// Frames between the AO Browser Bridge extension and `ao browser-host`
-// (Chrome native messaging). Commands and results mirror the daemon's browser
-// runtime protocol, so the extension returns the same result shapes as AO's
-// Browser panel and `ao browser` renders them unchanged.
-
 export const HOST_NAME = "dev.ao.browser_bridge";
 export const HOST_PROTOCOL = 1;
 
@@ -31,7 +26,6 @@ export type ResultFrame = {
 	error?: { code: string; message: string };
 };
 
-/** A failure with a stable code the daemon maps to an HTTP status. */
 export class BridgeError extends Error {
 	readonly code: string;
 

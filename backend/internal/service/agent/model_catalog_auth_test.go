@@ -17,8 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A login detected by any readiness check — AO's login terminal, the agent's
-// own CLI, or a renewed token — must reach caches built while signed out.
 func TestReadinessReportsRecoveredAuthenticationOnce(t *testing.T) {
 	t.Parallel()
 	var status atomic.Value
@@ -177,8 +175,6 @@ func TestSavedAccountLookupErrorStillFailsModelRevalidation(t *testing.T) {
 	}
 }
 
-// After a login, the cached rejection must disappear immediately instead of
-// lingering until the background rediscovery finishes.
 func TestInvalidateModelCatalogsClearsAuthWarningAndRediscovers(t *testing.T) {
 	cache := &fakeModelCache{}
 	discoverer := &fakeModelDiscoverer{version: "v1", err: wrapAuthError(ports.ErrAgentModelDiscoveryCredentialRejected, "Anthropic rejected the credential"), catalog: ports.AgentModelCatalog{
@@ -213,8 +209,6 @@ func TestInvalidateModelCatalogsClearsAuthWarningAndRediscovers(t *testing.T) {
 	t.Fatal("invalidation did not clear the auth warning and rediscover the catalog")
 }
 
-// Exercise the real discoverer and shared cache together: a failure supplies
-// no replacement list, so the last provider catalog must survive and persist.
 func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -240,7 +234,6 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 			t.Fatalf("refresh=%v: catalog = %#v, %v; want cached provider models and auth warning", refresh, got, err)
 		}
 	}
-	// A scope with no cache remains empty and permits manual entry.
 	emptyService := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, discoverer)
 	got, err := emptyService.Models(context.Background(), "claude-code", "", true)
 	if err != nil || len(got.Models) != 0 || !got.AllowCustom || got.WarningCode != ports.ModelCatalogWarningAuthExpired {

@@ -158,8 +158,6 @@ func TestWorkspaceFileRevisionLiveReadResolvesRegisteredChildRoot(t *testing.T) 
 	}
 }
 
-// Hold the actual Git subprocess open so cancellation happens during a shared
-// inventory read, rather than racing a fast local repository scan.
 func TestWorkspacePathsCancellationDoesNotCancelSharedInventory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Git gate uses a POSIX shell")
@@ -198,7 +196,6 @@ func TestWorkspacePathsCancellationDoesNotCancelSharedInventory(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	// A later reader also cancels its own wait while the first reader remains.
 	waiterCtx, stopWaiter := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer stopWaiter()
 	if _, err := s.workspacePaths(waiterCtx, "session", root); !errors.Is(err, context.DeadlineExceeded) {

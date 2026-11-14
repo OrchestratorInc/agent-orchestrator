@@ -16,9 +16,6 @@ const (
 	messageDeliveryReadyLines    = 80
 )
 
-// WaitForMessageDeliveryReady blocks until a session can safely accept an
-// injected message. Runtime startup only proves that the process exists; a TUI
-// can still be initializing and silently discard an otherwise-successful paste.
 func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.SessionID) error {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -93,10 +90,6 @@ func (m *Manager) WaitForMessageDeliveryReady(ctx context.Context, id domain.Ses
 					}
 				}
 			} else {
-				// MarkSpawned records idle before the TUI is necessarily ready.
-				// Capability-declaring adapters require their first startup-ready
-				// hook. Hookless adapters retain the bounded degraded fallback that
-				// existed before the startup input gate.
 				if requireFirstSignal {
 					ready = ready && !rec.FirstSignalAt.IsZero()
 				} else {

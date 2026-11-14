@@ -151,7 +151,6 @@ export function BrowserImportDialog({
 			},
 			(reason) => setError({ message: reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed"), recoverable: false }),
 		).finally(() => setLoading(false));
-		// Translation changes must not reset an active import or its outcome.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [bridge, open]);
 

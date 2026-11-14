@@ -16,27 +16,17 @@ import (
 )
 
 const (
-	envAgentBrowserURL   = "AO_AGENT_BROWSER_URL"
-	envAgentBrowserToken = "AO_AGENT_BROWSER_TOKEN"
-	remoteBrowserTimeout = 2 * time.Minute
-	// remoteBrowserMaxResponseBytes bounds one command response. The service
-	// itself allows 64 MiB per file; base64 inflates that by 4/3 (~85.4 MiB),
-	// and one response can carry several files plus output text, so the cap
-	// must exceed the encoded size of a maximum single file.
+	envAgentBrowserURL            = "AO_AGENT_BROWSER_URL"
+	envAgentBrowserToken          = "AO_AGENT_BROWSER_TOKEN"
+	remoteBrowserTimeout          = 2 * time.Minute
 	remoteBrowserMaxResponseBytes = 256 << 20
 )
 
-// remoteBrowserConfig carries the self-hosted agent-browser service endpoint.
 type remoteBrowserConfig struct {
 	baseURL string
 	token   string
 }
 
-// remoteBrowserForward reports whether args select `ao browser` while a
-// self-hosted agent browser is configured in this process's environment. The
-// returned rest holds the arguments after "browser". A non-nil error means the
-// environment names a remote browser incompletely and the command must fail
-// rather than silently fall back to the desktop bridge.
 func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBrowserConfig, []string, error) {
 	if len(args) == 0 || args[0] != "browser" {
 		return nil, nil, nil
@@ -52,25 +42,17 @@ func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBro
 	return &remoteBrowserConfig{baseURL: strings.TrimRight(baseURL, "/"), token: token}, args[1:], nil
 }
 
-// remoteBrowserRequest mirrors the agent-browser service command contract:
-// raw agent-browser args plus file contents that must travel with the command.
 type remoteBrowserRequest struct {
 	Args  []string          `json:"args"`
 	Files map[string]string `json:"files,omitempty"`
 }
 
-// remoteBrowserResponse is the service's reply: command output, an optional
-// error string, and files it wrote (screenshots and other saved artifacts).
 type remoteBrowserResponse struct {
 	Output string            `json:"output"`
 	Error  string            `json:"error,omitempty"`
 	Files  map[string]string `json:"files,omitempty"`
 }
 
-// runRemoteBrowserCommand forwards one `ao browser <args...>` invocation to
-// the configured agent-browser service and relays its output. It exists so a
-// self-hosted remote host gets the remote command interface everywhere,
-// including inside AO agent sessions whose PATH resolves to this binary first.
 func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserConfig, args []string) error {
 	files, err := remoteBrowserUploadArgs(args)
 	if err != nil {
@@ -125,10 +107,6 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 	return nil
 }
 
-// remoteBrowserUploadArgs inlines local files named by the command, mirroring
-// the agent-browser service client contract: an absolute path that exists is
-// file content, and relative paths travel only for the upload command (a word
-// typed into a page, like README.md, is not a file to copy).
 func remoteBrowserUploadArgs(args []string) (map[string]string, error) {
 	upload := false
 	for _, arg := range args {
@@ -158,8 +136,6 @@ func remoteBrowserUploadArgs(args []string) (map[string]string, error) {
 	return files, nil
 }
 
-// writeRemoteBrowserFiles saves the files the service wrote (screenshots,
-// downloads) at their reported paths.
 func writeRemoteBrowserFiles(files map[string]string) error {
 	for path, encoded := range files {
 		data, err := base64.StdEncoding.DecodeString(encoded)
@@ -178,12 +154,6 @@ func writeRemoteBrowserFiles(files map[string]string) error {
 	return nil
 }
 
-// remoteBrowserHTTPClient returns the client used for one remote browser
-// command. The CLI's default HTTP client carries a 2-second probe timeout,
-// which cannot cover healthy navigation or waits; a context deadline cannot
-// extend a client timeout, so a shorter client timeout is raised to
-// remoteBrowserTimeout. A client with no timeout is left alone, and a client
-// already allowing longer than remoteBrowserTimeout keeps its own budget.
 func remoteBrowserHTTPClient(in *http.Client) *http.Client {
 	if in == nil {
 		return &http.Client{Timeout: remoteBrowserTimeout}

@@ -6,18 +6,10 @@ import (
 	"regexp"
 )
 
-// Milestones records install-lifetime "firsts" (first session spawned, first
-// project added) as marker files in the data dir, so first_for_install is true
-// once per install rather than whenever a table happens to be empty. Markers
-// are written whether or not telemetry is exported: they describe the install,
-// and an install that opted back in must not report a later session as its
-// first.
 type Milestones struct {
 	dataDir string
 }
 
-// NewMilestones returns nil for an empty data dir; a nil Milestones claims
-// nothing.
 func NewMilestones(dataDir string) *Milestones {
 	if dataDir == "" {
 		return nil
@@ -27,10 +19,6 @@ func NewMilestones(dataDir string) *Milestones {
 
 var milestoneNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
-// Claim reports whether this call is the first ever to claim name for this
-// install. Exclusive create makes concurrent callers agree on one winner. The
-// second result is false when the marker could not be inspected or written,
-// in which case the caller should omit first_for_install rather than guess.
 func (m *Milestones) Claim(name string) (first, known bool) {
 	if m == nil || !milestoneNamePattern.MatchString(name) {
 		return false, false

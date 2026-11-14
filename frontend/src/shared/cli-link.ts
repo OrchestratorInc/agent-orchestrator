@@ -1,7 +1,3 @@
-// Developer Mode only. Links the global ao command to the CLI shipped inside the
-// installed app. It never edits shell startup files and never replaces a
-// command AO did not create.
-
 import { randomUUID } from "node:crypto";
 
 export const CLI_LINK_DIRECTORY = "/usr/local/bin";

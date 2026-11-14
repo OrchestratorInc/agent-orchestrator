@@ -121,7 +121,6 @@ function createFakeTerminal(): FakeTerminal {
 		lines: [],
 		pendingWriteCallbacks: [],
 		latestOutputRequests: 0,
-		// Mirrors xterm: the callback fires once the chunk has been parsed.
 		write: (bytes, done) => {
 			terminal.lines.push(new TextDecoder().decode(bytes));
 			if (done) {
@@ -258,8 +257,6 @@ describe("useTerminalSession", () => {
 		const { terminal, muxes } = setup();
 		act(() => muxes[0].emitOpened("handle-1"));
 		act(() => muxes[0].emitData("handle-1", "hello"));
-		// The first burst is held by the replay gate; it lands once the stream
-		// goes quiet (see REPLAY_QUIET_MS).
 		act(() => void vi.advanceTimersByTime(60));
 		expect(terminal.lines).toContain("hello");
 		terminal.typeKeys("ls\r");
@@ -295,7 +292,6 @@ describe("useTerminalSession", () => {
 	it("sends hover reports without counting them as the user acting on the session", () => {
 		const { view, terminal, muxes } = setup();
 		act(() => muxes[0].emitOpened("handle-1"));
-		// Replay is still being buffered behind the gate.
 		act(() => muxes[0].emitData("handle-1", "prompt$ "));
 		expect(view.result.current.replaySettled).toBe(false);
 		vi.mocked(recordDirectWorkerInteraction).mockClear();
@@ -304,12 +300,10 @@ describe("useTerminalSession", () => {
 		act(() => terminal.hover("\x1b[<35;4;2M"));
 		expect(muxes[0].inputs).toEqual([["handle-1", "\x1b[<35;4;2M"]]);
 		expect(recordDirectWorkerInteraction).not.toHaveBeenCalled();
-		// Hover neither ends the gate nor flushes the buffered replay.
 		expect(view.result.current.replaySettled).toBe(false);
 		expect(terminal.lines).toEqual([]);
 		expect(terminal.latestOutputRequests).toBe(revealsBefore);
 
-		// Typing is the user acting: it counts and ends the gate.
 		act(() => terminal.typeKeys("a"));
 		expect(recordDirectWorkerInteraction).toHaveBeenCalledTimes(1);
 		expect(view.result.current.replaySettled).toBe(true);
@@ -356,8 +350,6 @@ describe("useTerminalSession", () => {
 		act(() => muxes[0].emitOpened("handle-1"));
 		const initialResizes = muxes[0].resizes.length;
 
-		// A visible grid change publishes immediately. Parking then ignores later
-		// fits, including ones already measured while the pane was on screen.
 		terminal.emitResize(120, 40);
 		view.rerender({ daemonReady: true, isVisible: false });
 		terminal.typeKeys("hidden input");
@@ -367,7 +359,6 @@ describe("useTerminalSession", () => {
 		act(() => void vi.advanceTimersByTime(500));
 
 		expect(muxes[0].inputs).toEqual([]);
-		// The only frame parking sends gives the grid up; it carries no size.
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
 			["handle-1", 120, 40],
 			["handle-1", 0, 0],
@@ -376,7 +367,6 @@ describe("useTerminalSession", () => {
 		expect(muxes).toHaveLength(1);
 		expect(muxes[0].closes).toEqual([]);
 
-		// The same attachment becomes interactive again on return.
 		view.rerender({ daemonReady: true, isVisible: true });
 		terminal.typeKeys("visible\r");
 		terminal.emitResize(150, 55);
@@ -388,7 +378,6 @@ describe("useTerminalSession", () => {
 		]);
 	});
 
-	// The daemon reads a client without a grid as "not showing this terminal".
 	it("gives its grid up when hidden and claims the same grid again when shown", () => {
 		const { view, terminal, muxes } = setup();
 		act(() => muxes[0].emitOpened("handle-1"));
@@ -406,7 +395,6 @@ describe("useTerminalSession", () => {
 			["handle-1", 80, 24],
 		]);
 
-		// Rapid switching sends one frame per change and nothing else.
 		view.rerender({ daemonReady: true, isVisible: false });
 		view.rerender({ daemonReady: true, isVisible: true });
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
@@ -436,7 +424,6 @@ describe("useTerminalSession", () => {
 			["handle-1", 80, 24],
 		]);
 
-		// A pane parked behind another tab stays parked when the window returns.
 		view.rerender({ daemonReady: true, isVisible: false });
 		setWindowShown(false);
 		setWindowShown(true);
@@ -462,8 +449,6 @@ describe("useTerminalSession", () => {
 		const initialResizes = muxes[0].resizes.length;
 
 		view.rerender({ daemonReady: true, isVisible: false });
-		// prepareForActivation refits xterm while resize forwarding is suppressed.
-		// Model the resulting live getters without emitting onResize.
 		terminal.cols = 132;
 		terminal.rows = 47;
 		view.rerender({ daemonReady: true, isVisible: true });
@@ -475,9 +460,6 @@ describe("useTerminalSession", () => {
 		]);
 	});
 
-	// A tab opened and immediately covered by the next one attaches before it
-	// has measured its slot. Claiming xterm's default grid would start the shell
-	// at the wrong width; its first measurement sizes it instead.
 	it("claims no size until the terminal has measured its slot", () => {
 		const { view, muxes } = setup({ hasMeasuredGrid: false });
 		expect(muxes[0].opens).toEqual([["handle-1", 0, 0]]);
@@ -535,9 +517,6 @@ describe("useTerminalSession", () => {
 		]);
 	});
 
-	// Initial-replay gate (issue #3160). The pane must appear already drawn at
-	// the tail; writing the burst frame-by-frame paints every intermediate
-	// scroll position on the way down.
 	describe("initial replay gate", () => {
 		it("never reveals before xterm finishes parsing the buffered replay", () => {
 			const { view, terminal, muxes } = setup();
@@ -561,8 +540,6 @@ describe("useTerminalSession", () => {
 		});
 
 		it("streams a freshly created terminal's first output without the replay gate", () => {
-			// A shell this renderer just created has no history: its first bytes
-			// are the prompt, which should appear as soon as it arrives.
 			markTerminalHandleFresh("handle-1");
 			const { view, terminal, muxes } = setup();
 			expect(view.result.current.replaySettled).toBe(true);
@@ -593,7 +570,6 @@ describe("useTerminalSession", () => {
 			act(() => void vi.advanceTimersByTime(30));
 			act(() => muxes[0].emitData("handle-1", "line three\r\n"));
 
-			// Still buffered: each frame restarted the quiet window.
 			expect(terminal.lines).toEqual([]);
 			expect(view.result.current.replaySettled).toBe(false);
 
@@ -611,11 +587,11 @@ describe("useTerminalSession", () => {
 			const { view, terminal, muxes } = setup();
 			act(() => muxes[0].emitOpened("handle-1"));
 			act(() => muxes[0].emitData("handle-1", "initial replay"));
-			act(() => void vi.advanceTimersByTime(60)); // coalesced write lands
+			act(() => void vi.advanceTimersByTime(60));
 
 			act(() => void vi.advanceTimersByTime(170));
 			act(() => muxes[0].emitData("handle-1", " late tail"));
-			act(() => void vi.advanceTimersByTime(10)); // original tail deadline
+			act(() => void vi.advanceTimersByTime(10));
 			expect(view.result.current.replaySettled).toBe(false);
 			expect(terminal.lines).toEqual(["initial replay", " late tail"]);
 
@@ -636,9 +612,6 @@ describe("useTerminalSession", () => {
 			expect(terminal.lines).toEqual(["replay", "live-1", "live-2"]);
 		});
 
-		// A burst arrives as many messages; output that lands while xterm is still
-		// parsing the previous write goes in as one batch, in order, instead of a
-		// write (and parse/render cycle) per message.
 		it("joins live output that arrives while a write is being parsed", () => {
 			const { terminal, muxes } = setup({ coverInitialReplay: false });
 			terminal.autoCompleteWrites = false;
@@ -668,10 +641,6 @@ describe("useTerminalSession", () => {
 			const { view, muxes } = setup();
 			act(() => muxes[0].emitOpened("handle-1"));
 
-			// A pane that has produced nothing has no walk to hide, so the cover
-			// must come off on the first-byte grace rather than the full cap —
-			// otherwise the pane sits blank behind a "Loading latest output…"
-			// label with nothing to load.
 			act(() => void vi.advanceTimersByTime(250));
 			expect(view.result.current.replaySettled).toBe(true);
 
@@ -683,10 +652,6 @@ describe("useTerminalSession", () => {
 			const { terminal, muxes } = setup();
 			act(() => muxes[0].emitOpened("handle-1"));
 
-			// Uncovering early must NOT end the gate. Flushing an empty buffer here
-			// would clear replayBuffering and leave every later frame to go straight
-			// to xterm one at a time — the frame-by-frame walk this gate exists to
-			// remove, now with no cover over it either.
 			act(() => void vi.advanceTimersByTime(250));
 
 			act(() => muxes[0].emitData("handle-1", "late one "));
@@ -701,9 +666,6 @@ describe("useTerminalSession", () => {
 		it("flushes at the cap but keeps late replay frames covered until quiet", () => {
 			const { view, terminal, muxes } = setup();
 			act(() => muxes[0].emitOpened("handle-1"));
-			// A stream trickling faster than the first quiet window would keep the
-			// coalesced buffer growing. The cap flushes it during chunk-18's gap;
-			// chunk-19 streams into xterm but remains behind the same cover.
 			for (let i = 0; i < 20; i += 1) {
 				act(() => muxes[0].emitData("handle-1", `chunk-${i} `));
 				act(() => void vi.advanceTimersByTime(40));
@@ -711,8 +673,6 @@ describe("useTerminalSession", () => {
 			expect(view.result.current.replaySettled).toBe(false);
 			act(() => void vi.advanceTimersByTime(180));
 			expect(view.result.current.replaySettled).toBe(true);
-			// Everything buffered up to the cap goes out as one write; the late tail
-			// is a separate write, but neither intermediate state is exposed.
 			expect(terminal.lines).toHaveLength(2);
 			expect(terminal.lines[0]).toContain("chunk-0 ");
 			expect(terminal.lines[0]).toContain("chunk-18 ");
@@ -728,8 +688,6 @@ describe("useTerminalSession", () => {
 				act(() => void vi.advanceTimersByTime(40));
 			}
 
-			// The first cap ends buffering at 750ms; the tail cap reveals at
-			// 1500ms even though the worker never produced a quiet window.
 			expect(view.result.current.replaySettled).toBe(true);
 			expect(terminal.latestOutputRequests).toBe(1);
 		});
@@ -778,8 +736,6 @@ describe("useTerminalSession", () => {
 			const initial = muxes[0].resizes.length;
 			act(() => muxes[0].emitOpened("handle-1"));
 
-			// A resize during a long replay publishes once. Flushing the replay must
-			// not send that grid again.
 			terminal.emitResize(120, 40);
 			for (let elapsed = 0; elapsed < 150; elapsed += 30) {
 				act(() => muxes[0].emitData("handle-1", "x"));
@@ -787,7 +743,7 @@ describe("useTerminalSession", () => {
 			}
 			expect(muxes[0].resizes.slice(initial)).toEqual([["handle-1", 120, 40]]);
 
-			act(() => void vi.advanceTimersByTime(30)); // quiet window elapses -> flush
+			act(() => void vi.advanceTimersByTime(30));
 			expect(muxes[0].resizes.slice(initial)).toEqual([["handle-1", 120, 40]]);
 
 			act(() => void vi.advanceTimersByTime(250));
@@ -797,10 +753,6 @@ describe("useTerminalSession", () => {
 		it("keeps the gate armed when the server acks slowly, instead of spending the cap on the handshake", () => {
 			const { view, terminal, muxes } = setup();
 
-			// The daemon probes liveness and spawns the runtime client before the
-			// first byte — OPEN_TIMEOUT_MS budgets 3s for it. If the cap ran from
-			// connect() it would expire here, flush nothing, and leave the gate
-			// permanently off, so the replay would land frame-by-frame.
 			act(() => void vi.advanceTimersByTime(1200));
 			act(() => muxes[0].emitOpened("handle-1"));
 
@@ -825,7 +777,6 @@ describe("useTerminalSession", () => {
 			expect(view.result.current.replaySettled).toBe(true);
 			expect(terminal.lines).toEqual(["prompt$ "]);
 			expect(muxes[0].inputs).toEqual([["handle-1", "l"]]);
-			// Subsequent output is live, so the echo shows up immediately.
 			act(() => muxes[0].emitData("handle-1", "l"));
 			expect(terminal.lines).toEqual(["prompt$ ", "l"]);
 		});
@@ -835,7 +786,6 @@ describe("useTerminalSession", () => {
 			const initial = muxes[0].resizes.length;
 			act(() => muxes[0].emitOpened("handle-1"));
 
-			// Resize A settles while a burst is in flight.
 			terminal.emitResize(120, 40);
 			for (let elapsed = 0; elapsed < 150; elapsed += 30) {
 				act(() => muxes[0].emitData("handle-1", "x"));
@@ -843,12 +793,9 @@ describe("useTerminalSession", () => {
 			}
 			expect(muxes[0].resizes.slice(initial)).toEqual([["handle-1", 120, 40]]);
 
-			// The user keeps dragging: B must supersede A as the final grid.
 			terminal.emitResize(100, 30);
-			act(() => void vi.advanceTimersByTime(300)); // replay flushes
+			act(() => void vi.advanceTimersByTime(300));
 
-			// A's stale 120x40 must never be sent again — landing it after B would
-			// cost a SIGWINCH repaint at the wrong size just as the cover lifts.
 			expect(muxes[0].resizes.slice(initial)).toEqual([
 				["handle-1", 120, 40],
 				["handle-1", 100, 30],
@@ -859,10 +806,6 @@ describe("useTerminalSession", () => {
 			const { view, terminal, muxes } = setup();
 			act(() => muxes[0].emitOpened("handle-1"));
 
-			// Attaching to a session that is actively spewing output: frames keep
-			// restarting the quiet window, so time-based bounds alone would hold
-			// everything until the cap and then land it as one multi-MB parse —
-			// a visible main-thread freeze, worse than the scroll being fixed.
 			const chunk = "x".repeat(64 * 1024);
 			for (let i = 0; i < 24; i += 1) {
 				act(() => muxes[0].emitData("handle-1", chunk));
@@ -872,8 +815,6 @@ describe("useTerminalSession", () => {
 			expect(view.result.current.replaySettled).toBe(false);
 			act(() => void vi.advanceTimersByTime(180));
 			expect(view.result.current.replaySettled).toBe(true);
-			// Never hand xterm one unbounded parser task, even when the replay gate
-			// collected a full megabyte before flushing.
 			for (const line of terminal.lines) {
 				expect(line.length).toBeLessThanOrEqual(256 * 1024);
 			}
@@ -885,8 +826,6 @@ describe("useTerminalSession", () => {
 			const replay = "a".repeat(300 * 1024);
 			act(() => muxes[0].emitData("handle-1", replay));
 
-			// The quiet flush writes the first bounded batch and yields before the
-			// remainder. A live PTY frame arriving in that yield must queue behind it.
 			act(() => void vi.advanceTimersByTime(60));
 			expect(terminal.lines).toEqual(["a".repeat(256 * 1024)]);
 			act(() => muxes[0].emitData("handle-1", "TAIL"));
@@ -904,9 +843,6 @@ describe("useTerminalSession", () => {
 
 			act(() => muxes[0].emitData("handle-1", "\x1b[6n\x1b[?996n"));
 
-			// Exit lands while the next replay batch is waiting for its event-loop
-			// turn. The unwritten remainder must be submitted before the marker and
-			// before teardown invalidates this attachment's generation.
 			act(() => muxes[0].emitExit("handle-1"));
 			const output = terminal.lines.join("");
 			expect(output.startsWith(replay)).toBe(true);
@@ -918,23 +854,13 @@ describe("useTerminalSession", () => {
 			expect(view.result.current.replaySettled).toBe(false);
 			expect(muxes).toHaveLength(1);
 
-			// Daemon goes away before the server ever acks the open.
 		view.rerender({ daemonReady: false, isVisible: true });
 
-			// Well past REPLAY_CAP_MS and REPLAY_FIRST_BYTE_MS, and still covered:
-			// both are armed from `opened`, so neither is running. This is what
-			// fails if either one is ever moved back to connect().
 			act(() => void vi.advanceTimersByTime(2_999));
 			expect(view.result.current.replaySettled).toBe(false);
 
-			act(() => void vi.advanceTimersByTime(1)); // OPEN_TIMEOUT_MS
+			act(() => void vi.advanceTimersByTime(1));
 
-			// The cap plays no part here: it is armed from `opened`, which never
-			// fired, so no replay timer ever existed. What lifts the cover is
-			// teardownMux, which settles unconditionally — and since
-			// scheduleReattach bailed out (no daemon ready), nothing re-arms the
-			// gate afterwards. That is the whole guarantee for a pane whose server
-			// never acks, so pin the timing rather than just the end state.
 			expect(view.result.current.state).toBe("reattaching");
 			expect(view.result.current.replaySettled).toBe(true);
 		});
@@ -943,9 +869,6 @@ describe("useTerminalSession", () => {
 			const { view, muxes } = setup();
 			expect(view.result.current.replaySettled).toBe(false);
 
-			// The cap is armed from `opened`, so it never started. The `closed`
-			// handler clears the open timeout and scheduleReattach declines to
-			// retry while the daemon is down — leaving no timer to lift the cover.
 		view.rerender({ daemonReady: false, isVisible: true });
 			act(() => muxes[0].emitConnection("closed"));
 			act(() => void vi.advanceTimersByTime(120_000));
@@ -960,7 +883,7 @@ describe("useTerminalSession", () => {
 				const latest = muxes[muxes.length - 1];
 				act(() => latest.emitConnection("closed"));
 				expect(view.result.current.replaySettled).toBe(true);
-				act(() => void vi.advanceTimersByTime(10_000)); // outlast the backoff
+				act(() => void vi.advanceTimersByTime(10_000));
 			}
 			expect(muxes.length).toBeGreaterThan(1);
 		});
@@ -970,8 +893,6 @@ describe("useTerminalSession", () => {
 			act(() => muxes[0].emitOpened("handle-1"));
 			act(() => muxes[0].emitData("handle-1", "https://example.com/pr/1"));
 
-			// Socket drops mid-burst and the backoff reconnects. Bytes already
-			// received must still reach the terminal rather than being discarded.
 			act(() => muxes[0].emitConnection("closed"));
 			act(() => void vi.advanceTimersByTime(500));
 
@@ -986,8 +907,6 @@ describe("useTerminalSession", () => {
 			act(() => void vi.advanceTimersByTime(500));
 			expect(muxes).toHaveLength(2);
 
-			// A late frame from the dead socket must not be concatenated into the
-			// new attachment's replay, nor uncover it.
 			act(() => muxes[0].emitData("handle-1", "stale"));
 			act(() => muxes[1].emitData("handle-1", "fresh"));
 			act(() => void vi.advanceTimersByTime(60 + 180));
@@ -1185,47 +1104,36 @@ describe("useTerminalSession", () => {
 	});
 
 	it("has no client open timeout for a cloud pane: a slow open never storms", () => {
-		// A cloud pane opens its socket directly; readiness is server-driven (the
-		// CP holds it in "starting" until the terminal opens). There is NO client
-		// open timeout — the 3s/30s band-aids only ever tore a healthy slow open
-		// down mid-attach and rebuilt the mux, a self-sustaining storm. So however
-		// long the CP takes, the pane keeps its single mux and stays "connecting".
 		const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
 		const { view, muxes } = setup({ attachedSession: cloudSession });
 		expect(view.result.current.state).toBe("connecting");
-		// Far past any old timeout: no teardown, no rebuild, no storm.
 		act(() => void vi.advanceTimersByTime(120_000));
 		expect(muxes).toHaveLength(1);
 		expect(muxes[0].disposed).toBe(false);
 		expect(view.result.current.state).toBe("connecting");
-		// The server finally acks: one clean attach, no rebuild.
 		act(() => muxes[0].emitOpened("handle-1"));
 		expect(view.result.current.state).toBe("attached");
 		expect(muxes).toHaveLength(1);
 	});
 
 	it("recovers a stalled cloud pane only when the socket closes (server-driven)", () => {
-		// With no client timer, a stalled cloud pane is recovered by the transport,
-		// not a clock: the CP closes the socket at its own ready deadline, which
-		// reaches onConnectionChange("closed") and schedules exactly one flat
-		// reattach. No client-side timeout ever fires to rebuild the mux.
 		const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
 		const { view, muxes } = setup({ attachedSession: cloudSession });
 		act(() => void vi.advanceTimersByTime(120_000));
-		expect(muxes).toHaveLength(1); // no client teardown while the socket lives
-		act(() => muxes[0].emitConnection("closed")); // CP ready deadline closes it
-		act(() => void vi.advanceTimersByTime(1_000)); // flat cloud reconnect
-		expect(muxes).toHaveLength(2); // exactly one rebuild, not a storm
+		expect(muxes).toHaveLength(1);
+		act(() => muxes[0].emitConnection("closed"));
+		act(() => void vi.advanceTimersByTime(1_000));
+		expect(muxes).toHaveLength(2);
 		expect(view.result.current.state).not.toBe("attached");
 	});
 
 	it("backs off between failed reconnect attempts", () => {
 		const { muxes } = setup();
 		act(() => muxes[0].emitConnection("closed"));
-		act(() => void vi.advanceTimersByTime(500)); // attempt 1 after 500ms
+		act(() => void vi.advanceTimersByTime(500));
 		expect(muxes).toHaveLength(2);
 		act(() => muxes[1].emitConnection("closed"));
-		act(() => void vi.advanceTimersByTime(500)); // attempt 2 needs 1000ms
+		act(() => void vi.advanceTimersByTime(500));
 		expect(muxes).toHaveLength(2);
 		act(() => void vi.advanceTimersByTime(500));
 		expect(muxes).toHaveLength(3);
@@ -1235,9 +1143,9 @@ describe("useTerminalSession", () => {
 		const { view, muxes } = setup({ daemonReady: false });
 		expect(view.result.current.state).toBe("reattaching");
 		act(() => void vi.advanceTimersByTime(60_000));
-		expect(muxes).toHaveLength(0); // no initial attach or retries against a dead daemon
+		expect(muxes).toHaveLength(0);
 		view.rerender({ daemonReady: true, isVisible: true });
-		expect(muxes).toHaveLength(1); // connects immediately, without backoff debt
+		expect(muxes).toHaveLength(1);
 		act(() => muxes[0].emitOpened("handle-1"));
 		expect(view.result.current.state).toBe("attached");
 	});
@@ -1263,19 +1171,15 @@ describe("useTerminalSession", () => {
 			act(() => muxes[0].emitOpened("handle-1"));
 			act(() => terminal.typeKeys("a"));
 			act(() => terminal.typeKeys("b"));
-			// The draft landed locally before any server round trip…
 			expect(terminal.lines).toEqual(["\x1b[Ka", "b"]);
-			// …while nothing was streamed character by character.
 			expect(muxes[0].inputs).toEqual([]);
 			act(() => terminal.typeKeys("\r"));
 			expect(muxes[0].inputs).toEqual([
 				["handle-1", "ab"],
 				["handle-1", "\r"],
 			]);
-			// The authoritative echo of what is already on screen renders nothing.
 			act(() => muxes[0].emitData("handle-1", "ab"));
 			expect(terminal.lines).toEqual(["\x1b[Ka", "b"]);
-			// Output beyond the echo flows through verbatim.
 			act(() => muxes[0].emitData("handle-1", "$ "));
 			expect(terminal.lines).toEqual(["\x1b[Ka", "b", "$ "]);
 		});
@@ -1306,17 +1210,12 @@ describe("useTerminalSession", () => {
 	});
 });
 
-// Cloud connect-failure circuit breaker (issue #4668) with the false-positive
-// fix: only genuine post-mint socket failures ("closed") count; a worker that
-// is still provisioning (mint 409, surfaced as "waiting") must never trip it.
 describe("cloud connect breaker (issue #4668)", () => {
 	const cloudSession: WorkspaceSession = { ...session, cloud: { orgId: "org-1" } };
 
 	function latest(muxes: FakeMux[]) {
 		return muxes[muxes.length - 1];
 	}
-	// One reconnect cycle: emit a state on the current mux, then let the flat
-	// 1s retry fire so the hook builds the next mux.
 	function cycle(muxes: FakeMux[], state: MuxConnectionState) {
 		act(() => latest(muxes).emitConnection(state));
 		act(() => void vi.advanceTimersByTime(1_100));
@@ -1332,7 +1231,6 @@ describe("cloud connect breaker (issue #4668)", () => {
 
 	it("never trips while the worker is still provisioning (mint 409 -> waiting)", () => {
 		const { view, muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
-		// Far more than the threshold: a slow cold start must not false-fire.
 		for (let i = 0; i < 20; i++) cycle(muxes, "waiting");
 		expect(view.result.current.state).toBe("reattaching");
 		expect(view.result.current.error).toBeUndefined();
@@ -1340,25 +1238,21 @@ describe("cloud connect breaker (issue #4668)", () => {
 
 	it("does not count provisioning waits mixed in with socket failures", () => {
 		const { view, muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
-		// 7 real failures interleaved with waits that must not add to the count.
 		for (let i = 0; i < 7; i++) {
 			cycle(muxes, "waiting");
 			cycle(muxes, "closed");
 		}
-		// 7 closed < 8, plus 7 waits that don't count -> still retrying.
 		expect(view.result.current.state).toBe("reattaching");
 		expect(view.result.current.error).toBeUndefined();
 	});
 
 	it("polls fast while the worker starts, then falls back to the flat 1s poll", () => {
 		const { muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
-		// A mint 409 ("waiting") early in a cold start retries after 250ms.
 		act(() => latest(muxes).emitConnection("waiting"));
 		act(() => void vi.advanceTimersByTime(249));
 		expect(muxes).toHaveLength(1);
 		act(() => void vi.advanceTimersByTime(1));
 		expect(muxes).toHaveLength(2);
-		// Past the startup window the poll is the flat 1s one again.
 		act(() => void vi.advanceTimersByTime(15_000));
 		act(() => latest(muxes).emitConnection("waiting"));
 		act(() => void vi.advanceTimersByTime(999));
@@ -1382,8 +1276,6 @@ describe("cloud connect breaker (issue #4668)", () => {
 		expect(view.result.current.state).toBe("reattaching");
 		act(() => latest(muxes).emitOpened("handle-1"));
 		expect(view.result.current.state).toBe("attached");
-		// After a real attach the breaker no longer applies (hasAttachedOnce),
-		// so further drops reconnect via backoff without ever erroring.
 		for (let i = 0; i < 5; i++) {
 			act(() => latest(muxes).emitConnection("closed"));
 			act(() => void vi.advanceTimersByTime(10_000));

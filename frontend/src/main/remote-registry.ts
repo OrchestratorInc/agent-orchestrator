@@ -10,10 +10,8 @@ export type ConnectedHostView = {
 
 type StartProxy = (entry: RemoteEntry) => Promise<ActiveProxy>;
 
-/** One loopback proxy per connected host. */
 export class RemoteRegistry {
 	private readonly live = new Map<string, { view: ConnectedHostView; proxy: ActiveProxy; password: string }>();
-	// ponytail: one queue serializes five-host startup; split by host if connect latency becomes measurable.
 	private tail: Promise<void> = Promise.resolve();
 	private closing = false;
 
@@ -85,7 +83,6 @@ export class RemoteRegistry {
 		});
 	}
 
-	/** Retire all proxies on account sign-out without disabling later sign-in. */
 	disconnectAll(): Promise<void> {
 		return this.enqueue(async () => {
 			const entries = [...this.live.values()];

@@ -31,21 +31,17 @@ const (
 )
 
 type daemonStatus struct {
-	State daemonState `json:"state"`
-	PID   int         `json:"pid,omitempty"`
-	Port  int         `json:"port,omitempty"`
-	// ExecutablePath is the binary the running daemon reports for itself, read
-	// from its own /healthz. It is the authority on which `ao` the app uses,
-	// which the CLI's own os.Executable is not: `ao doctor` may itself be a
-	// different install than the daemon the app started.
-	ExecutablePath string     `json:"executablePath,omitempty"`
-	StartedAt      *time.Time `json:"startedAt,omitempty"`
-	Uptime         string     `json:"uptime,omitempty"`
-	RunFile        string     `json:"runFile"`
-	DataDir        string     `json:"dataDir"`
-	Health         string     `json:"health,omitempty"`
-	Ready          string     `json:"ready,omitempty"`
-	Error          string     `json:"error,omitempty"`
+	State          daemonState `json:"state"`
+	PID            int         `json:"pid,omitempty"`
+	Port           int         `json:"port,omitempty"`
+	ExecutablePath string      `json:"executablePath,omitempty"`
+	StartedAt      *time.Time  `json:"startedAt,omitempty"`
+	Uptime         string      `json:"uptime,omitempty"`
+	RunFile        string      `json:"runFile"`
+	DataDir        string      `json:"dataDir"`
+	Health         string      `json:"health,omitempty"`
+	Ready          string      `json:"ready,omitempty"`
+	Error          string      `json:"error,omitempty"`
 	owned          bool
 }
 

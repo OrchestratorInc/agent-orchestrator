@@ -20,79 +20,48 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// eventBuffer bounds the normalized event stream. Deltas are dropped when a
-// consumer falls this far behind; lifecycle events are not.
 const eventBuffer = 4096
 
-// approvalWait bounds how long the provider is left blocked on an unanswered
-// request. Codex holds its turn until the client replies, so an approval nobody
-// resolves would hang the session indefinitely. On expiry AO refuses rather than
-// deciding on the user's behalf.
 const approvalWait = 30 * time.Minute
 
-// errConversationClosed reports a decision arriving after the controller ended.
 var errConversationClosed = errors.New("conversation closed")
 
-// approvalMethods are the server->client requests that represent a decision the
-// user must make. Anything else the provider asks is refused: answering a request
-// AO does not model risks consenting to something on the user's behalf.
 var approvalMethods = map[string]domain.ActivityKind{
 	codexproto.MethodItemCommandExecutionRequestApproval: domain.ActivityKindCommand,
 	codexproto.MethodItemFileChangeRequestApproval:       domain.ActivityKindFileChange,
 	codexproto.MethodItemPermissionsRequestApproval:      domain.ActivityKindApproval,
 }
 
-// conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
 	conn *conn
 	proc *process
 	log  *slog.Logger
 
-	threadID        string
-	historyParentID string
-	providerScopeID string
-	readOnly        bool
-	disableNetwork  bool
-	// launchMode is the permission mode the thread started or resumed with;
-	// a turn without its own approval setting runs under it.
-	launchMode ports.PermissionMode
-	events     chan ports.ChatEvent
-	// Effective defaults returned when Codex opened or resumed this thread.
+	threadID                  string
+	historyParentID           string
+	providerScopeID           string
+	readOnly                  bool
+	disableNetwork            bool
+	launchMode                ports.PermissionMode
+	events                    chan ports.ChatEvent
 	threadModel, threadEffort string
-	// Guarded by sendMu: whether the last turn put the thread on the fast tier
-	// or in plan mode, and each model's fast tier id as last listed.
-	fastTier, planMode bool
-	// A reconnected thread may be on any tier and in either collaboration mode.
-	tierUnknown, planUnknown bool
-	fastTiers                map[string]string
+	fastTier, planMode        bool
+	tierUnknown, planUnknown  bool
+	fastTiers                 map[string]string
 
 	mu            sync.Mutex
 	pending       map[string]*parkedRequest
 	pendingInputs map[string]*parkedInput
 	closed        bool
 
-	// sendMu serializes turn dispatch so only one operation mutates the provider
-	// conversation at a time.
 	sendMu sync.Mutex
 
-	// activeTurn is the most recent provider turn id, used when a caller asks to
-	// interrupt without naming one.
 	activeTurn string
 
-	// contextTokens is the conversation's latest position in the model's context,
-	// and contextWindow the size of that context. Both come from the provider's
-	// token-usage reports; zero means it has not reported one yet.
-	contextTokens int64
-	contextWindow int64
-	// contextAtTurnStart is contextTokens as it stood when the current provider turn
-	// began. It is the "before" half of a compaction reclaim: a compaction runs as
-	// its own provider turn, so the figure captured at that turn's start is the
-	// context position the compaction is about to shrink.
+	contextTokens      int64
+	contextWindow      int64
 	contextAtTurnStart int64
-	// compactedTurn is the last turn a compaction was reported for, so a provider
-	// build that emits both the notification and the item reports one compaction
-	// once.
-	compactedTurn string
+	compactedTurn      string
 
 	pumpDone     chan struct{}
 	eventsMu     sync.RWMutex
@@ -104,22 +73,12 @@ type conversation struct {
 var _ ports.ChatConversation = (*conversation)(nil)
 var _ ports.ChatProviderHibernator = (*conversation)(nil)
 
-// Asserted here so a refactor cannot silently drop model listing: the service
-// feature-detects this interface, and a missed method would just mean "no models"
-// with nothing to notice.
 var _ ports.ChatModelLister = (*conversation)(nil)
 
-// Same reasoning for the quota read: a dropped method would silently become "this
-// account has no limits to report", which is the wrong answer to show a user
-// whose turns are about to start failing.
 var _ ports.ChatUsageReporter = (*conversation)(nil)
 
-// Same reason, for compaction. Losing this method does not break a build; it just
-// makes the control disappear and long conversations start failing again.
 var _ ports.ChatCompactor = (*conversation)(nil)
 
-// Same reason, for the MCP reload: a dropped method makes the affordance vanish and
-// leaves a session with a dead tool server no way back.
 var _ ports.ChatMCPReloader = (*conversation)(nil)
 
 func newConversation(proc *process, log *slog.Logger, providerScopeID string) *conversation {
@@ -135,9 +94,6 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 	return c
 }
 
-// start records the opened thread and begins translating notifications. It is
-// called once, after the thread is open, so no event is emitted for a
-// conversation the caller does not yet have a handle to.
 func (c *conversation) start(threadID, model, effort string) {
 	c.threadID = threadID
 	c.threadModel = model
@@ -145,25 +101,16 @@ func (c *conversation) start(threadID, model, effort string) {
 	go c.pump()
 }
 
-// ProviderConversationID is the Codex thread id AO persists for resume.
 func (c *conversation) ProviderConversationID() string { return c.threadID }
 
-// PreservesProviderOnClose tells the daemon controller that Close only detaches
-// from a host; it must not project provider death or fail in-flight work.
 func (c *conversation) PreservesProviderOnClose() bool { return c.proc.terminate != nil }
 
-// ReconnectedLive distinguishes attachment to the same initialized process from
-// native-history resume in a replacement process.
 func (c *conversation) ReconnectedLive() bool { return c.proc.reconnected }
 
-// Capabilities reports what this conversation can do.
 func (c *conversation) Capabilities() ports.ChatCapabilities { return capabilities() }
 
-// Events is the normalized stream. It closes when the conversation ends.
 func (c *conversation) Events() <-chan ports.ChatEvent { return c.events }
 
-// pump translates provider notifications into neutral events until the
-// connection ends, then reports why and closes the stream.
 func (c *conversation) pump() {
 	defer close(c.pumpDone)
 	defer func() {
@@ -177,23 +124,15 @@ func (c *conversation) pump() {
 	var usageLimits usageLimitTracker
 
 	for n := range c.conn.notifs() {
-		// Before normalizing, because a token-usage report is the only place the
-		// context position is stated and a compaction event that arrives in the same
-		// batch has to be able to read it.
 		c.trackContext(n)
 		now := time.Now()
 		usageLimits.observe(n, c.threadID, now)
-		// Some normalized output events omit their thread ID. Read the native
-		// envelope so child-thread recovery cannot settle the root's retry.
 		var scope struct {
 			ThreadID string `json:"threadId"`
 		}
 		_ = json.Unmarshal(n.Params, &scope)
 		citations.observeNotification(n, c.threadID)
 
-		// The clock is passed in rather than read inside: a rate-limit reset arrives
-		// as an absolute instant and has to become a remaining duration, and a
-		// normalizer that reads the clock itself cannot be tested deterministically.
 		for _, ev := range normalizeNotification(n, now) {
 			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
@@ -210,7 +149,6 @@ func (c *conversation) pump() {
 			}
 			key := threadID + ":" + ev.ProviderTurnID
 			if ev.Kind == ports.ChatEventError {
-				// Turn settlement will settle the running retry along with the failure.
 				delete(retries, key)
 			}
 			isRetry := ev.Kind == ports.ChatEventActivityStarted && strings.HasPrefix(ev.ProviderItemID, "codex-retry:")
@@ -218,8 +156,6 @@ func (c *conversation) pump() {
 				if active, ok := retries[key]; ok {
 					ev.ProviderItemID = active.ProviderItemID
 				} else {
-					// Live Codex errors have no item/replay ID. Keep attempts on one
-					// row, but never overwrite a recovered episode later in the turn.
 					ev.ProviderItemID += ":" + uuid.NewString()
 				}
 				retries[key] = ev
@@ -241,8 +177,6 @@ func (c *conversation) pump() {
 			if ev.Kind == ports.ChatEventTurnStarted && ev.ProviderTurnID != "" && rootConversation {
 				c.mu.Lock()
 				c.activeTurn = ev.ProviderTurnID
-				// Snapshot the context position this turn starts from. Cheap on every
-				// turn, and the only way to know what a compaction reclaimed.
 				c.contextAtTurnStart = c.contextTokens
 				c.mu.Unlock()
 			}
@@ -261,8 +195,6 @@ func (c *conversation) pump() {
 				ev = settled
 			}
 			if ev.Kind == ports.ChatEventApprovalResolved {
-				// The provider resolved it (possibly via another client), so any
-				// card AO is still showing is stale.
 				c.discardPending(ev.RequestID)
 				c.mu.Lock()
 				if input := c.pendingInputs[ev.RequestID]; input != nil {
@@ -279,8 +211,6 @@ func (c *conversation) pump() {
 			c.emit(ev)
 		}
 	}
-	// The connection ended. Say so explicitly rather than letting the stream go
-	// quiet: a silent channel close is indistinguishable from an idle agent.
 	state := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
 	if err := c.conn.err(); err != nil {
 		state.Err = err
@@ -289,8 +219,6 @@ func (c *conversation) pump() {
 	c.failPendingApprovals()
 }
 
-// emit delivers an event, preferring to drop a delta over blocking the reader. A
-// lifecycle event is never dropped silently.
 func (c *conversation) emit(ev ports.ChatEvent) {
 	c.eventsMu.RLock()
 	defer c.eventsMu.RUnlock()
@@ -306,13 +234,6 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 
 	switch ev.Kind {
 	case ports.ChatEventMessageDelta, ports.ChatEventReasoningDelta:
-		// The settled text arrives on item/completed for both of these — a message's
-		// as `text`, a reasoning item's as `summary` — so a dropped delta costs
-		// smoothness, not correctness.
-		//
-		// The other streams are deliberately NOT droppable. Command output, terminal
-		// keystrokes and tool progress have no settled restatement: the delta is the
-		// only account of them, so losing one loses the record.
 		c.log.Warn("dropped chat delta: consumer behind",
 			"kind", ev.Kind, "item", ev.ProviderItemID)
 		return
@@ -325,8 +246,6 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	}
 }
 
-// configuredServiceTier is the service_tier the user's Codex config sets, or
-// "" for none or when it cannot be read.
 func (c *conversation) configuredServiceTier(ctx context.Context) string {
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -341,14 +260,10 @@ func (c *conversation) configuredServiceTier(ctx context.Context) string {
 	return resp.Config.ServiceTier
 }
 
-// codexFastServiceTier is the fast tier's id before a model list is read.
 const codexFastServiceTier = "priority"
 
-// SendTurn delivers one message to the provider.
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	if strings.TrimSpace(msg.Text) == "" {
-		// There is no keystroke concept here: an empty message is a caller bug,
-		// not a way to nudge the agent.
 		return ports.ChatTurnRef{}, errors.New("chat message text is empty")
 	}
 
@@ -360,21 +275,15 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		"input":    []any{map[string]any{"type": "text", "text": msg.Text}},
 	}
 	if msg.ClientMessageID != "" {
-		// The provider's own idempotency handle: a retry carrying the same id
-		// must not produce a second turn.
 		params["clientUserMessageId"] = msg.ClientMessageID
 	}
 	applyTurnSettings(params, msg.Settings, c.readOnly, c.disableNetwork)
-	// A service tier sticks to the thread once set, so leaving the fast tier
-	// has to be said: an explicit null returns the thread to its default.
 	if msg.Settings.Fast {
 		params["serviceTier"] = cmp.Or(c.fastTiers[msg.Settings.Model], c.fastTiers[c.threadModel], codexFastServiceTier)
 	} else if c.fastTier || c.tierUnknown && c.configuredServiceTier(ctx) == "" {
 		params["serviceTier"] = nil
 	}
 
-	// Plan mode is a collaboration mode, sticky too, so leaving it sends the
-	// default mode. The mode names its model; with none known nothing is sent.
 	planMode := c.planMode
 	if model := cmp.Or(msg.Settings.Model, c.threadModel); (msg.Settings.Plan != c.planMode || c.planUnknown) && model != "" {
 		mode := "default"
@@ -409,11 +318,6 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	return ports.ChatTurnRef{ProviderTurnID: c.scopedID(resp.Turn.ID)}, nil
 }
 
-// applyTurnSettings folds the caller's per-turn choices into a turn/start payload.
-//
-// Only fields the caller actually chose are sent. An omitted field lets the
-// provider fall back to what the thread was started with, which is why a caller
-// that chooses nothing behaves exactly as it did before per-turn settings existed.
 func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, readOnly, disableNetwork bool) {
 	if settings.Model != "" {
 		params["model"] = settings.Model
@@ -422,28 +326,18 @@ func applyTurnSettings(params map[string]any, settings ports.ChatTurnSettings, r
 		params["effort"] = settings.Effort
 	}
 	if settings.Approval != "" {
-		// The same posture thread/start applies, so a per-turn choice and a launch
-		// choice cannot mean different things. The wire shapes differ though: a
-		// thread takes `sandbox: "workspace-write"`, a turn takes a tagged
-		// `sandboxPolicy: {type: "workspaceWrite"}`. Sending a thread's shape to a
-		// turn is rejected as a missing `type`, so the two are mapped separately
-		// rather than assumed to be interchangeable.
 		policy, sandbox := approvalSettings(settings.Approval)
 		params["approvalPolicy"] = policy
 		params["approvalsReviewer"] = approvalReviewer(settings.Approval)
 		params["sandboxPolicy"] = turnSandboxPolicy(sandbox)
 	}
 	if readOnly {
-		// Reviewers need gh and ao review submit; text-only background calls
-		// explicitly disable that tool network access.
 		params["approvalPolicy"] = "never"
 		params["approvalsReviewer"] = "user"
 		params["sandboxPolicy"] = map[string]any{"type": "readOnly", "networkAccess": !disableNetwork}
 	}
 }
 
-// turnSandboxPolicy converts a thread-level sandbox name into the tagged object
-// turn/start expects.
 func turnSandboxPolicy(sandbox string) map[string]any {
 	switch sandbox {
 	case "workspace-write":
@@ -455,11 +349,6 @@ func turnSandboxPolicy(sandbox string) map[string]any {
 	}
 }
 
-// ListModels asks the provider which models this account may use.
-//
-// The provider is the only honest source: models get added, renamed, hidden per
-// account, and gated by entitlement that AO cannot see. A table in AO would be
-// wrong within a week.
 func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error) {
 	models, err := listModels(ctx, c.conn)
 	if err != nil {
@@ -474,11 +363,7 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 	c.sendMu.Lock()
 	c.fastTiers = fastTiers
 	c.sendMu.Unlock()
-	// Thread settings include the user's config; model/list only has generic defaults.
 	for i := range models {
-		// An omitted turn model inherits thread/start (including config.toml),
-		// not model/list's generic catalog default. If the configured model is
-		// absent, leave no catalog default rather than advertise another model.
 		if c.threadModel != "" {
 			models[i].Default = models[i].ID == c.threadModel
 		}
@@ -524,8 +409,6 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 		}
 		for _, entry := range resp.Data {
 			if entry.Hidden {
-				// The provider marks a model hidden when the account should not be
-				// offered it. Showing it anyway would offer a choice that then fails.
 				continue
 			}
 			id := entry.ID
@@ -545,7 +428,6 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			if display == "" {
 				display = id
 			}
-			// The faster tier is named "Fast" and ids "priority"; the name identifies it.
 			fastTier := ""
 			for _, tier := range entry.ServiceTiers {
 				if strings.EqualFold(tier.Name, "fast") || tier.ID == "fast" {
@@ -568,12 +450,6 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 	return models, nil
 }
 
-// ReadRateLimits asks the provider where the account stands right now.
-//
-// The provider also pushes account/rateLimits/updated, but only alongside a turn.
-// That is too late for the question this answers: a user opening a conversation
-// wants to know whether they have quota BEFORE spending a turn finding out. The
-// controller reads once at startup for exactly that reason.
 func (c *conversation) ReadRateLimits(ctx context.Context) (ports.ChatRateLimits, error) {
 	var resp capacityReadEnvelope
 	if err := c.conn.request(ctx, "account/rateLimits/read", map[string]any{}, &resp); err != nil {
@@ -583,19 +459,6 @@ func (c *conversation) ReadRateLimits(ctx context.Context) (ports.ChatRateLimits
 	return chatRateLimitsFromCapacity(capacityObservationFromEnvelope(resp, observedAt, false), observedAt), nil
 }
 
-// Compact asks the provider to summarize earlier history and reclaim context.
-//
-// This is what keeps a long session usable: every turn re-sends the conversation,
-// so context fills whether or not the user is doing anything unusual, and once it
-// is full the thread cannot accept another turn at all. Compaction is the
-// difference between a session that works for an hour and one that works for a day.
-//
-// The provider accepts the request and returns an empty result immediately; the
-// work then runs as its own turn and took 9 to 15 seconds in every measured run.
-// So this reports what is about to be reclaimed rather than what was: TokensAfter
-// stays zero, and the settled figures reach the client as a ChatEventCompacted on
-// the timeline. Blocking here would hold the controller's dispatch lock for the
-// duration and make the whole conversation unresponsive while it ran.
 func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -604,9 +467,6 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	before := c.contextTokens
 	c.mu.Unlock()
 
-	// thread/compact/start takes the thread id and nothing else. Notably NOT a turn
-	// id: compaction is a property of the thread, and passing turn-shaped params
-	// here is rejected.
 	if err := c.conn.request(ctx, "thread/compact/start", map[string]any{
 		"threadId": c.threadID,
 	}, nil); err != nil {
@@ -616,8 +476,6 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	return ports.ChatCompactionResult{TokensBefore: before}, nil
 }
 
-// trackContext folds a token-usage report into the conversation's known context
-// position.
 func (c *conversation) trackContext(n notification) {
 	used, window, ok := contextPositionFrom(n)
 	if !ok {
@@ -627,20 +485,10 @@ func (c *conversation) trackContext(n notification) {
 	defer c.mu.Unlock()
 	c.contextTokens = used
 	if window > 0 {
-		// The provider omits the window on some reports; a remembered one is better
-		// than dropping the scale the used figure is measured against.
 		c.contextWindow = window
 	}
 }
 
-// settleCompaction fills in what a compaction reclaimed, or reports false for one
-// already accounted for.
-//
-// The figures are bracketed rather than read off the event because the provider
-// reports neither: `thread/compacted` carries only ids, and the contextCompaction
-// item carries only its own id. The reduced token figure arrives as an ordinary
-// token-usage report between the item starting and completing, so by the time this
-// runs the "after" side is already known.
 func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -672,11 +520,6 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	return ev, true
 }
 
-// compactionSummary labels the reclaim for a timeline row.
-//
-// It only claims a number it actually has. AO has no context figure until the
-// provider reports one, so a compaction right after a restart genuinely does not
-// know what it saved, and "reclaimed 0 tokens" would be a lie rather than a gap.
 func compactionSummary(before, after int64) string {
 	if before <= 0 || after <= 0 || after >= before {
 		return "Compacted the conversation history"
@@ -684,8 +527,6 @@ func compactionSummary(before, after int64) string {
 	return fmt.Sprintf("Compacted history, freeing %s of context", formatTokens(before-after))
 }
 
-// formatTokens renders a token count the way a reader scans it. Exact below a
-// thousand, because that is where the digits still mean something.
 func formatTokens(tokens int64) string {
 	if tokens < 1000 {
 		return fmt.Sprintf("%d tokens", tokens)
@@ -693,7 +534,6 @@ func formatTokens(tokens int64) string {
 	return fmt.Sprintf("%.1fk tokens", float64(tokens)/1000)
 }
 
-// Interrupt cancels a turn. An empty turn id targets the active one.
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {
 	providerTurnID = c.nativeID(providerTurnID)
 	if providerTurnID == "" {
@@ -708,12 +548,6 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 		"threadId": c.threadID,
 		"turnId":   providerTurnID,
 	}, nil); err != nil {
-		// The provider refuses an interrupt for a turn it does not consider
-		// active — which happens either side of the turn: pressed before it has
-		// acknowledged the start, or after it already finished. Neither is an
-		// internal failure, so it is translated here, where the provider's
-		// vocabulary is known, instead of escaping as a protocol error and
-		// reaching the user as "Internal server error".
 		if isNoActiveTurn(err) {
 			return ports.ErrChatNoActiveTurn
 		}
@@ -722,11 +556,6 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	return nil
 }
 
-// isNoActiveTurn recognizes the provider's "nothing to interrupt" refusal.
-//
-// Matched on the message because that is all app-server gives: the code is the
-// generic -32600 it uses for any invalid request, so the code alone cannot
-// distinguish this from a malformed call.
 func isNoActiveTurn(err error) bool {
 	var rpcErr *rpcError
 	if !errors.As(err, &rpcErr) {
@@ -735,13 +564,6 @@ func isNoActiveTurn(err error) bool {
 	return strings.Contains(strings.ToLower(rpcErr.Message), "no active turn")
 }
 
-// ResolveRequest answers a parked approval request.
-//
-// The decision is checked against the set the provider offered for THIS request,
-// and the request stays parked unless a valid answer is actually going through.
-// Both halves matter: forwarding an invented decision is consent AO made up, and
-// consuming the request on a bad one would leave the user's real answer with
-// nothing left to answer while the provider waits out its timeout.
 func (c *conversation) ResolveRequest(ctx context.Context, requestID string, decision ports.ChatDecision) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -760,8 +582,6 @@ func (c *conversation) ResolveRequest(ctx context.Context, requestID string, dec
 		if input {
 			return ports.ErrChatDecisionNotOffered
 		}
-		// Already resolved, superseded, or from a previous controller. Refusing is
-		// required: a stale card must never resolve a newer request.
 		return fmt.Errorf("%w: %q", ports.ErrChatRequestNotPending, requestID)
 	}
 	reply, err := parked.reply(decision)
@@ -780,27 +600,17 @@ func (c *conversation) ResolveRequest(ctx context.Context, requestID string, dec
 	}
 }
 
-// parkedRequest is one server-to-client request waiting on a person, together
-// with the decisions the provider said were valid for it.
-//
-// Keeping the provider's own payload for each decision is what makes structured
-// decisions answerable at all: some arrive as objects carrying parameters
-// (acceptWithExecpolicyAmendment), and a client that only knows the id cannot
-// reconstruct them. AO echoes what the provider sent rather than rebuilding it.
 type parkedRequest struct {
 	ch      chan ports.ChatDecision
 	offered map[string]json.RawMessage
 }
 
-// reply resolves a client decision into the payload to send back.
 func (p *parkedRequest) reply(decision ports.ChatDecision) (ports.ChatDecision, error) {
 	raw, ok := p.offered[decision.ID]
 	if !ok {
 		return ports.ChatDecision{}, fmt.Errorf("%w: %q (offered: %s)",
 			ports.ErrChatDecisionNotOffered, decision.ID, strings.Join(p.offeredIDs(), ", "))
 	}
-	// The provider's own encoding of the decision wins over whatever the client
-	// sent, so an object-shaped decision round-trips exactly.
 	decision.Raw = raw
 	return decision, nil
 }
@@ -814,11 +624,6 @@ func (p *parkedRequest) offeredIDs() []string {
 	return ids
 }
 
-// handleServerRequest parks a provider request until a decision arrives.
-//
-// The provider blocks its turn on the reply, so this deliberately waits rather
-// than answering immediately. Everything AO does not model is refused with an
-// error, never with a fabricated decision.
 func (c *conversation) handleServerRequest(ctx context.Context, req serverRequest) (any, error) {
 	switch req.Method {
 	case codexproto.MethodAccountChatgptAuthTokensRefresh:
@@ -889,22 +694,8 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 	}
 }
 
-// reportAuthRefreshRequest surfaces the provider asking for ChatGPT credentials and
-// returns the refusal to send back.
-//
-// AO does not hold provider credentials. Codex owns its own ChatGPT OAuth tokens
-// (authMode `chatgpt`) and refreshes them itself; this request belongs to authMode
-// `chatgptAuthTokens`, where an external host app supplies them, and the generated
-// schema marks that mode OpenAI-internal. So the honest answer is an error — but the
-// error alone would only reach a log, and what the user needs to know is that the
-// session has stopped working for a reason no retry will fix.
-//
-// NEVER OBSERVED live: reaching it requires the provider to take a 401 while running
-// in a mode AO does not use, which a test cannot arrange without breaking real auth.
 func (c *conversation) reportAuthRefreshRequest(params json.RawMessage) error {
 	var p codexproto.ChatgptAuthTokensRefreshParams
-	// A payload this build cannot parse still means the same thing: the provider
-	// asked for credentials AO cannot supply.
 	_ = json.Unmarshal(params, &p)
 
 	reason := string(p.Reason)
@@ -923,12 +714,6 @@ func (c *conversation) reportAuthRefreshRequest(params json.RawMessage) error {
 		ports.ErrChatAuthRequired, reason)
 }
 
-// refuseDynamicToolCall declines a request to run a tool AO never offered.
-//
-// `item/tool/call` asks the CLIENT to execute a tool the client declared during
-// initialize. AO declares none, so a well-behaved provider will never send this and
-// one that does is asking AO to run something it has no definition for. Refusing is
-// the only safe answer: inventing a result would feed the model a fabrication.
 func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 	var p codexproto.DynamicToolCallParams
 	_ = json.Unmarshal(params, &p)
@@ -937,23 +722,11 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 	return fmt.Errorf("client declares no tools; %q is not available", p.Tool)
 }
 
-// ReloadMCPServers restarts the provider's tool servers and reports their state.
-//
-// Worth a typed operation because of the failure it addresses: a server that failed
-// to start stays failed for the life of the app-server process, so without this the
-// only way to recover a tool the agent needs is to throw the conversation away. The
-// provider re-announces every server's startup state as notifications afterwards, so
-// the returned list is a convenience for the caller that asked, not the only path by
-// which AO learns the outcome.
 func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloadResult, error) {
-	// config/mcpServer/reload takes no params, verified against a live app-server.
 	if err := c.conn.request(ctx, codexproto.MethodConfigMcpServerReload, map[string]any{}, nil); err != nil {
 		return ports.ChatMCPReloadResult{}, fmt.Errorf("%s: %w", codexproto.MethodConfigMcpServerReload, err)
 	}
 
-	// toolsAndAuthOnly avoids the resource schemas from the full response while
-	// using the provider-declared enum value. "summary" was never part of the app
-	// server protocol and made an otherwise successful reload look unenumerated.
 	detail := codexproto.McpServerStatusDetailToolsAndAuthOnly
 	threadID := c.threadID
 	var cursor *string
@@ -968,17 +741,10 @@ func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloa
 			ThreadID: &threadID,
 		}
 		if err := c.conn.request(ctx, codexproto.MethodMcpServerStatusList, params, &resp); err != nil {
-			// The reload itself succeeded. Mark the inventory unavailable so the
-			// controller retains known state rather than mistaking failure for an
-			// authoritative empty configuration.
 			c.log.Debug("mcp server list after reload failed", "error", err)
 			return ports.ChatMCPReloadResult{}, nil
 		}
 		for _, entry := range resp.Data {
-			// serverInfo is supplied by the MCP initialize handshake. A configured
-			// server whose startup failed can still have a status-list row, but it
-			// must remain failed via its startup notification rather than being
-			// promoted to ready merely because configuration knows its name.
 			if entry.Name == "" || entry.ServerInfo == nil {
 				continue
 			}
@@ -986,9 +752,6 @@ func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloa
 				continue
 			}
 			seen[entry.Name] = struct{}{}
-			// A server that answers the inventory call is running. Failed enabled
-			// servers arrive through startup-status notifications and are reconciled
-			// by the controller with this complete ready-server inventory.
 			servers = append(servers, ports.ChatMCPServer{
 				Name:   entry.Name,
 				Status: string(codexproto.McpServerStartupStateReady),
@@ -1013,7 +776,6 @@ func (c *conversation) discardPending(requestID string) {
 	c.mu.Unlock()
 }
 
-// failPendingApprovals unblocks every parked handler when the controller ends.
 func (c *conversation) failPendingApprovals() {
 	c.mu.Lock()
 	pending := c.pending
@@ -1031,7 +793,6 @@ func (c *conversation) failPendingApprovals() {
 	}
 }
 
-// Close releases the controller without touching provider-side history.
 func (c *conversation) Close() error {
 	c.closeOnce.Do(func() {
 		if c.proc.terminate == nil {
@@ -1044,8 +805,6 @@ func (c *conversation) Close() error {
 	return c.closeErr
 }
 
-// Terminate destroys the provider host. Close only detaches and is used by
-// daemon-wide shutdown; explicit session/controller replacement calls this.
 func (c *conversation) Terminate() error {
 	c.closeOnce.Do(func() {
 		c.failPendingApprovals()
@@ -1058,12 +817,9 @@ func (c *conversation) Terminate() error {
 	return c.closeErr
 }
 
-// CanHibernate reads Codex's live exec registry, since a settled turn can leave
-// a terminal running and terminating app-server also terminates those commands.
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	// Subset of Codex 0.160.1's experimental background-terminal response.
 	var resp struct {
 		Data       []json.RawMessage `json:"data"`
 		NextCursor *string           `json:"nextCursor"`
@@ -1071,7 +827,7 @@ func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	if err := c.conn.request(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": c.threadID, "limit": 1}, &resp); err != nil {
 		var rpcErr *rpcError
 		if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
-			return false, nil // Older builds cannot prove that background work ended.
+			return false, nil
 		}
 		return false, err
 	}
@@ -1081,24 +837,18 @@ func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	return len(resp.Data) == 0 && (resp.NextCursor == nil || *resp.NextCursor == ""), nil
 }
 
-// Hibernate stops the app-server but leaves its native thread on disk for Resume.
 func (c *conversation) Hibernate() error { return c.Terminate() }
 
-// approvalPayload is the subset of an approval request AO renders.
 type approvalPayload struct {
-	ThreadID string `json:"threadId"`
-	TurnID   string `json:"turnId"`
-	ItemID   string `json:"itemId"`
-	Command  string `json:"command"`
-	Cwd      string `json:"cwd"`
-	Reason   string `json:"reason"`
-	// AvailableDecisions is authoritative: the provider varies the offered set
-	// per request and does not always offer a plain decline, so a client must
-	// render from this rather than a fixed set of buttons.
+	ThreadID           string            `json:"threadId"`
+	TurnID             string            `json:"turnId"`
+	ItemID             string            `json:"itemId"`
+	Command            string            `json:"command"`
+	Cwd                string            `json:"cwd"`
+	Reason             string            `json:"reason"`
 	AvailableDecisions []json.RawMessage `json:"availableDecisions"`
 }
 
-// parseApproval extracts the decisions, label, and neutral detail for a request.
 func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionOption, string, []byte, string) {
 	var p approvalPayload
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -1143,9 +893,6 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 	return options, summary, encoded, p.TurnID
 }
 
-// decisionOption reads one entry of availableDecisions, which is either a plain
-// string ("accept") or a single-key object carrying parameters
-// ({"acceptWithExecpolicyAmendment": {...}}).
 func decisionOption(raw json.RawMessage) (ports.ChatDecisionOption, bool) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
@@ -1187,9 +934,6 @@ func codexDecisionKind(id string) ports.ChatDecisionKind {
 	}
 }
 
-// decisionLabel gives known decision ids readable text. An unknown id falls back
-// to its own name rather than being hidden, so a new provider decision still
-// renders as a usable button.
 func decisionLabel(id string) string {
 	switch id {
 	case "accept":
@@ -1207,8 +951,6 @@ func decisionLabel(id string) string {
 	}
 }
 
-// approvalReply builds the provider response for a decision. A decision carrying
-// Raw is echoed verbatim so the structured forms round-trip exactly.
 func approvalReply(decision ports.ChatDecision) any {
 	if len(decision.Raw) > 0 {
 		return map[string]any{"decision": json.RawMessage(decision.Raw)}

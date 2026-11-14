@@ -55,8 +55,6 @@ func newHarness(t *testing.T) *harness {
 	}
 }
 
-// write sets a file's content and gives it a fresh modification time, so
-// every write is observed as a change regardless of filesystem resolution.
 func (h *harness) write(rel, body string) {
 	h.t.Helper()
 	p := filepath.Join(h.dir, filepath.FromSlash(rel))
@@ -215,7 +213,7 @@ func TestCaptureSession_PrunesOldestVersionsAndOnlyUnreferencedBlobs(t *testing.
 	for i := 1; i <= MaxVersionsPerFile+2; i++ {
 		body := fmt.Sprintf("v%02d", i)
 		if i == 1 {
-			body = "v1" // same content as other.html
+			body = "v1"
 		}
 		h.write("page.html", body)
 		h.tick()
@@ -225,11 +223,9 @@ func TestCaptureSession_PrunesOldestVersionsAndOnlyUnreferencedBlobs(t *testing.
 	if len(vs) != MaxVersionsPerFile || vs[len(vs)-1].Version != 3 || vs[0].Version != MaxVersionsPerFile+2 {
 		t.Fatalf("got %d versions, oldest %d newest %d", len(vs), vs[len(vs)-1].Version, vs[0].Version)
 	}
-	// v1 of page.html was pruned, but other.html still references its blob.
 	if _, ok := h.blob(sum("v1")); !ok {
 		t.Fatal("blob still referenced by other.html was deleted")
 	}
-	// v2 of page.html was pruned and nothing else references it.
 	if _, ok := h.blob(sum("v02")); ok {
 		t.Fatal("unreferenced blob of a pruned version was kept")
 	}
@@ -345,8 +341,6 @@ func TestCaptureSession_NoArtifactDirIsNotAnError(t *testing.T) {
 	}
 }
 
-// A renamed file is the same artifact: its history moves with it, and its next
-// edit is its next version, not the first of a new file.
 func TestCaptureSession_RenamedFileKeepsItsHistory(t *testing.T) {
 	h := newHarness(t)
 	h.write("page.html", "<p>one</p>")
@@ -392,10 +386,6 @@ func TestCaptureSession_RenamedFileKeepsItsHistory(t *testing.T) {
 	}
 }
 
-// A read that drops a version does not remove its blob while a capture is
-// running, since the capture may be about to record a version of the same
-// content; the next capture removes it. Versions left at a path with no
-// artifact are dropped when a renamed file takes that path.
 func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
 	h := newHarness(t)
 	h.write("a.html", "<p>a</p>")
@@ -419,14 +409,13 @@ func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
 	if err := os.Remove(filepath.Join(h.dir, "b.html")); err != nil {
 		t.Fatal(err)
 	}
-	// Its row goes and its versions stay, belonging to no artifact.
 	if err := h.store.RemoveSessionArtifact(h.ctx, h.sess.ID, "b.html"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(filepath.Join(h.dir, "a.html"), filepath.Join(h.dir, "b.html")); err != nil {
 		t.Fatal(err)
 	}
-	h.cap.mu.Lock() // a capture is running
+	h.cap.mu.Lock()
 	track()
 	if _, ok := h.blob(gone[0].SHA256); !ok {
 		h.cap.mu.Unlock()

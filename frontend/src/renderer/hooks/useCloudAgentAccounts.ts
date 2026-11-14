@@ -1,11 +1,3 @@
-/**
- * The signed-in user's Cloud coding-agent accounts (GET /me/agent-accounts),
- * when the control plane reports agentAccounts: each login or key is an
- * account, the default one runs new sessions, and a live session can move to
- * another of its agent's accounts. The default account is also the agent's
- * /me/providers connection, so every change here refreshes that list too.
- */
-
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { agentLabel } from "../lib/agent-options";
@@ -27,7 +19,6 @@ export function useCloudAgentAccounts(enabled = true) {
 	});
 }
 
-/** The account a Cloud session's agent runs on. */
 export function useCloudSessionAgentAccount(orgId: string | undefined, sessionId: string | undefined) {
 	const { client, ready } = useCloudCp(Boolean(orgId && sessionId));
 	return useQuery({
@@ -37,11 +28,8 @@ export function useCloudSessionAgentAccount(orgId: string | undefined, sessionId
 	});
 }
 
-/** The agents whose live session can move to another account (the control plane's accountSwitchHarnesses). */
 export const CLOUD_ACCOUNT_SWITCH_HARNESSES: readonly string[] = ["claude-code", "codex", "cursor"];
 
-/** An account's name: the one the user gave it, else its login's email, else
- * what it is (a setup token reports no identity, nor does an API key). */
 export function cloudAgentAccountName(account: Pick<CloudCpAgentAccount, "agent" | "name" | "email" | "credentialType">, t: TFunction): string {
 	if (account.name) return account.name;
 	if (account.email) return account.email;
@@ -51,7 +39,6 @@ export function cloudAgentAccountName(account: Pick<CloudCpAgentAccount, "agent"
 		: t("cloudCredential.method.apiKey", { provider });
 }
 
-/** A subscription login, as opposed to an API key: the plan's limits apply. */
 export function isCloudSubscriptionAccount(account: Pick<CloudCpAgentAccount, "credentialType">): boolean {
 	return account.credentialType === "oauth_token" || account.credentialType === "auth_json" || account.credentialType === "access_token";
 }
@@ -77,12 +64,6 @@ export function useCloudAgentAccountActions() {
 			await client.removeAgentAccount(accountId);
 			await refresh();
 		},
-		/**
-		 * Starts the move; the session's interface-transition status shows its
-		 * progress. A terminal cannot prove it is idle, so a drain would wait out
-		 * its window and fail: as an agent switch does, a terminal whose agent's
-		 * latest activity is idle is stopped directly, and a working one drains.
-		 */
 		switchSession: async (orgId: string, sessionId: string, accountId: string, stopTurn = false, terminal = false) => {
 			let interrupt = stopTurn;
 			if (!interrupt && terminal) {

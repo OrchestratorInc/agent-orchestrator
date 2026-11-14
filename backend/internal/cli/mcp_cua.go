@@ -11,18 +11,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
-// maxMCPImageBytes bounds one screenshot sent inline.
 const maxMCPImageBytes = 10 << 20
 
-// mcpState is one `ao mcp` server's memory between messages.
 type mcpState struct {
 	cuaLoaded bool
 	cuaTools  []map[string]any
 	cuaNames  map[string]bool
 }
 
-// cuaCallRequest, cuaImage, and cuaCallResponse mirror the daemon's
-// computer-use call DTOs.
 type cuaCallRequest struct {
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments,omitempty"`
@@ -46,12 +42,8 @@ type cuaAgentTool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-// readOnlyCuaTools look at the screen without acting on it.
 var readOnlyCuaTools = map[string]bool{"list_windows": true, "get_window_state": true}
 
-// cuaTools are the computer-use tools this server offers: none unless the
-// session has computer use, and none while the daemon cannot list them (Cua
-// Driver not installed); the list is asked for again on the next tools/list.
 func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[string]any {
 	if os.Getenv(config.EnvComputerUse) != "1" {
 		return nil
@@ -82,9 +74,6 @@ func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[st
 	return state.cuaTools
 }
 
-// callCua runs one Cua Driver tool through the daemon and returns its result
-// as text (the window line, the tree or the diff, and the stale snapshots)
-// with each screenshot as an image.
 func (c *commandContext) callCua(ctx context.Context, tool string, raw json.RawMessage) map[string]any {
 	var arguments map[string]any
 	if len(raw) > 0 && string(raw) != "null" {

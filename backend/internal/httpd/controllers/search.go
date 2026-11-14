@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
-// ConversationSearch finds chat messages for the command palette. Implemented
-// by the SQLite store's full-text index.
 type ConversationSearch interface {
 	SearchConversationMessages(ctx context.Context, query string) ([]domain.ChatSearchHit, error)
 }
@@ -39,8 +37,7 @@ func (c *ConversationsController) searchConversations(w http.ResponseWriter, r *
 			ProjectID: hit.ProjectID,
 			ReviewID:  hit.ReviewID,
 			Title:     hit.Title,
-			// The snippet may span lines; the palette shows one.
-			Text: strings.Join(strings.Fields(hit.Snippet), " "),
+			Text:      strings.Join(strings.Fields(hit.Snippet), " "),
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)

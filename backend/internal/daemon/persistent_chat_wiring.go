@@ -16,9 +16,6 @@ type persistentChatSessionStore interface {
 	ListRecoverableChatReviews(context.Context) ([]domain.Review, error)
 }
 
-// reconcilePersistentChatHosts removes hosts only when durable state proves
-// there is no live Chat session to adopt. An unreadable session set is not
-// evidence that any host is orphaned.
 func reconcilePersistentChatHosts(ctx context.Context, dataDir string, store persistentChatSessionStore, appRunIDs ...string) error {
 	records, err := store.ListAllSessions(ctx)
 	if err != nil {
@@ -49,9 +46,6 @@ func persistentChatHostKeepSet(records []domain.SessionRecord, reviews []domain.
 	return keep
 }
 
-// Launch identity in the host name preserves side providers until Electron
-// restores its RAM snapshot. A fresh desktop launch has a different identity,
-// so the existing authenticated reconciliation retires its predecessor's hosts.
 func keepLaunchSideHosts(dataDir, runID string, keep map[string]struct{}) {
 	entries, err := os.ReadDir(filepath.Join(dataDir, "chat-hosts"))
 	if err != nil {

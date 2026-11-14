@@ -15,12 +15,6 @@ type hookTaskLifecycle struct {
 	TaskMetadata hookTaskMetadata `json:"taskMetadata"`
 }
 
-// SessionIDFromHook returns the native root session id accepted by `cline
-// --id`. Current Cline CLI hooks expose it as sessionContext.rootSessionId;
-// older lifecycle payloads exposed the same resumable id as taskMetadata.ulid.
-//
-// The top-level taskId is deliberately ignored. In Cline CLI 3.x it identifies
-// an agent conversation (a conv_ value), which is not a resumable CLI session.
 func SessionIDFromHook(payload []byte) (string, bool) {
 	var input struct {
 		SessionContext struct {

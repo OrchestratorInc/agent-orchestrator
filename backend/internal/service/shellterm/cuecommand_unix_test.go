@@ -194,8 +194,6 @@ func TestCueCommandPreservesNativeEvalEOFAndOptionBehavior(t *testing.T) {
 						case "fish":
 							want = "not executed"
 						default:
-							// bash before 4 drops a trailing backslash at EOF, so ask the shell.
-							// No startup file may print into the answer.
 							probe := exec.Command(path, "-c", `f() { printf '%s' "$1"; }; eval 'f foo\'`)
 							probe.Env = append(os.Environ(), "BASH_ENV=", "ENV=")
 							native, err := probe.Output()

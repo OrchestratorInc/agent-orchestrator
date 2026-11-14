@@ -6,13 +6,6 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { isWebImageUrl } from "../components/PRDescriptionImage";
 import type { DescriptionImage } from "../components/PRImageGallery";
 
-/**
- * Raw HTML in a PR body would show as literal tags, since the renderer never
- * runs it. Template comments and script or style blocks go, a key like
- * <kbd>⌘K</kbd> becomes inline code, an <img> (what GitHub writes for a
- * pasted screenshot) becomes a markdown image, and other tags drop to their
- * text. Code spans and fenced blocks are left exactly as written.
- */
 export function withoutRawHtml(markdown: string): string {
 	return mapOutsideMarkdownCode(markdown, (prose) => prose
 		.replace(/<!--[\s\S]*?-->/g, "")
@@ -34,11 +27,6 @@ function imageAsMarkdown(tag: string): string {
 	return `![${alt}](<${src.replace(/[<>\s]/g, encodeURIComponent)}>)`;
 }
 
-/**
- * The PR body as its tab shows it: raw HTML made safe, template padding
- * squeezed, and an opening heading dropped when it only repeats the
- * Description title ("## Summary").
- */
 export function descriptionMarkdown(pr: SessionPRSummary): string {
 	const body = withoutRawHtml(pr.description ?? "").trim().replace(/\n{3,}/g, "\n\n");
 	const withoutHeading = body.replace(/^#{1,6}[ \t]+(?:pr[ \t]+)?(?:summary|description)[ \t]*:?[ \t]*#*[ \t]*(\n+|$)/i, "").trimStart();
@@ -48,12 +36,6 @@ export function descriptionMarkdown(pr: SessionPRSummary): string {
 type MarkdownNode = { type: string; url?: string; alt?: string | null; identifier?: string; children?: MarkdownNode[] };
 const markdownParser = unified().use(remarkParse).use(remarkGfm);
 
-/**
- * The description's web images, in order, and how many tables it holds, read
- * from the same markdown tree the renderer draws: code never counts, and an
- * image's URL is exactly the one the renderer loads (titles, parentheses,
- * escapes and reference images included). Other images stay labels in the text.
- */
 export function descriptionMedia(markdown: string): { images: DescriptionImage[]; tables: number } {
 	const tree = markdownParser.parse(markdown) as MarkdownNode;
 	const definitions = new Map<string, string>();

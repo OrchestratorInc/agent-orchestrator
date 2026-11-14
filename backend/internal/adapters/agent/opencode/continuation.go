@@ -13,24 +13,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// OpenCode continuation for imported chats. Unlike the file-per-conversation
-// providers, OpenCode records every session as a row in one SQLite database
-// (opencode.db), so the native state root is the data directory and session
-// existence is a read-only row lookup, never a transcript file on disk.
-
 var (
 	_ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 	_ ports.AgentNativeSessionProber         = (*Plugin)(nil)
 )
 
-// openCodeSessionID matches OpenCode's session identifiers (for example
-// ses_e830c4a8affelmmC9j6HFbCZAr).
 var openCodeSessionID = regexp.MustCompile(`^ses_[A-Za-z0-9]+$`)
 
-// NativeSessionConfigDir resolves OpenCode's data directory exactly as the
-// provider does: OPENCODE_DATA_DIR, else $XDG_DATA_HOME/opencode, else
-// ~/.local/share/opencode. The launch env takes precedence over the process
-// environment so a project-scoped override is honored.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -59,10 +48,6 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return filepath.Join(home, ".local", "share", "opencode"), nil
 }
 
-// ProbeNativeSession reports whether the imported conversation still backs a
-// resumable OpenCode session: a non-archived, top-level row in opencode.db.
-// A missing database or row is unavailable; an unreadable one is unknown so a
-// transient lock does not look like deletion.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	configDir := strings.TrimSpace(ref.ConfigDir)
 	sessionID := strings.TrimSpace(ref.NativeSessionID)

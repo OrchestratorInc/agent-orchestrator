@@ -1,6 +1,3 @@
-// The memoized BrowserPanelView driven by the real useBrowserView and
-// useBrowserAnnotationQueue: every state change the main process pushes must
-// still reach the panel, while its parent also renders for unrelated reasons.
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -76,7 +73,6 @@ function Harness({
 	const annotationQueue = useBrowserAnnotationQueue({ sessionId, navUrl: browserView.navState.url });
 	return (
 		<TooltipProvider>
-			{/* Stands in for the SessionView state that changes without touching Browser. */}
 			<span data-testid="unrelated">{unrelated}</span>
 			<BrowserPanelView
 				active

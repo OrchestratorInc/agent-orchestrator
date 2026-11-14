@@ -27,8 +27,6 @@ describe("KeyboardShortcutsContent", () => {
 		useKeybindingsStore.setState({ resetAll: originalResetAll });
 	});
 
-	// Enter confirms a confirm dialog, and a failed reset keeps the dialog open
-	// with the reason.
 	it("opens the Reset all confirm on its confirm button and reports a failed reset", async () => {
 		const user = userEvent.setup();
 		const resetAll = vi.fn(async () => {

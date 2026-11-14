@@ -41,8 +41,6 @@ func read(t *testing.T, path string) string {
 	return string(b)
 }
 
-// sourceRepo has a pushed-nowhere commit, an edit, a staged file, a new file,
-// a deleted file, and an ignored file.
 func sourceRepo(t *testing.T) string {
 	dir := t.TempDir()
 	git(t, dir, "init", "-q", "-b", "main")
@@ -118,7 +116,6 @@ func TestApplyCopiesUncommittedAndUntracked(t *testing.T) {
 	if got := git(t, dst, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("fork HEAD = %q, want %q", got, head)
 	}
-	// The changes stay uncommitted in the fork.
 	if s := git(t, dst, "status", "--porcelain"); !strings.Contains(s, "a.txt") || !strings.Contains(s, "new/") {
 		t.Fatalf("fork status = %q", s)
 	}
@@ -247,8 +244,6 @@ func TestDiscardInheritedLeavesTheWorktreeClean(t *testing.T) {
 	}
 }
 
-// A fork's worktree recreated on restore gets its starting files back,
-// uncommitted, as long as its branch hasn't moved since the fork.
 func TestRestoreBasePutsTheForksStartingFilesBack(t *testing.T) {
 	src := sourceRepo(t)
 	ctx := context.Background()
@@ -256,7 +251,6 @@ func TestRestoreBasePutsTheForksStartingFilesBack(t *testing.T) {
 	if err := RecordBase(ctx, src, ref); err != nil {
 		t.Fatal(err)
 	}
-	// A recreated worktree: clean, at the commit the fork started on.
 	restored := filepath.Join(t.TempDir(), "restored")
 	git(t, src, "worktree", "add", "-q", "--detach", restored, "HEAD")
 
@@ -275,8 +269,6 @@ func TestRestoreBasePutsTheForksStartingFilesBack(t *testing.T) {
 	}
 }
 
-// A fork that committed since it started keeps its own history: its starting
-// files would undo those commits, so they aren't written back.
 func TestRestoreBaseLeavesAForkThatMovedOn(t *testing.T) {
 	src := sourceRepo(t)
 	ctx := context.Background()
@@ -301,9 +293,6 @@ func TestRestoreBaseLeavesAForkThatMovedOn(t *testing.T) {
 	}
 }
 
-// A recreated worktree that already got the fork's own edits back, from the
-// copy archiving preserved, keeps them: the starting files would overwrite
-// them.
 func TestRestoreBaseLeavesReplayedEditsAlone(t *testing.T) {
 	src := sourceRepo(t)
 	ctx := context.Background()

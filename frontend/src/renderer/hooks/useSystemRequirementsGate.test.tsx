@@ -79,8 +79,6 @@ describe("useSystemRequirementsGate", () => {
 		act(() => deferred.resolve({ data: { requirements: [{ required: true, satisfied: false }] }, error: undefined }));
 		await waitFor(() => expect(result.current.requirementsBlocked).toBe(true));
 
-		// The supervisor invalidates this cache on a daemon identity change,
-		// including a restart that binds the same port again.
 		setBaseUrl("");
 		act(() => queryClient.removeQueries({ queryKey: systemRequirementsQueryKey }));
 		getMock.mockResolvedValueOnce({ data: { requirements: [] }, error: undefined } as never);
@@ -91,12 +89,6 @@ describe("useSystemRequirementsGate", () => {
 });
 
 describe("useGitHubAuthTerminal", () => {
-	// A `gh auth login` device flow routinely outlives React Query's five-minute
-	// default gcTime: the user leaves AO, authenticates in a browser, then comes
-	// back. The notice renders only on the home page and the empty board, so
-	// opening a project unmounts the last observer of this query. If the handle
-	// were collected the panel could not reattach, and the PTY would be orphaned
-	// with no way to close it from the notice.
 	it("retains the login terminal handle while no component observes it", () => {
 		vi.useFakeTimers();
 		const queryClient = new QueryClient();

@@ -22,9 +22,7 @@ describe("browser storage cleanup", () => {
 			await mkdir(path.join(partitions, `ao-browser-temporary-${uuid(n)}`, "Code Cache"), { recursive: true });
 			await writeFile(path.join(partitions, `ao-browser-temporary-${uuid(n)}`, "Code Cache", "index"), "x");
 		}
-		// Named profiles hold the user's sign-ins.
 		await mkdir(path.join(partitions, `ao-browser-profile-${uuid(4)}`, "Cookies"), { recursive: true });
-		// Look-alikes: wrong shape, a file, and a symlink to somewhere that must survive.
 		await mkdir(path.join(partitions, "ao-browser-temporary-not-a-uuid"), { recursive: true });
 		await writeFile(path.join(partitions, `ao-browser-temporary-${uuid(5)}`), "a file");
 		const outside = path.join(userData, "outside");

@@ -53,7 +53,6 @@ func validateSnapshotRetry(msg ports.ChatUserMessage, existing domain.Conversati
 	return nil
 }
 
-// Snapshot validation bounds user input only. It must never read source history.
 func validateExcerptSnapshot(s *domain.ChatExcerptSnapshot) error {
 	invalid := func() error { return fmt.Errorf("%w: malformed captured excerpt", ErrExcerptInvalid) }
 	if (s.ReferenceFormat != "" && s.ReferenceFormat != "numbered-v1") || (s.BadgeOnly && !isFlowchartOnlySnapshot(s)) || s.Version != 1 || (s.CaptureMode != "exact" && s.CaptureMode != "block" && s.CaptureMode != "legacy") ||

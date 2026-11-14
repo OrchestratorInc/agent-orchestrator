@@ -11,13 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Retry scenarios.
-//
-// The promise under test is the issue #4215 contract: a failed human turn can be
-// re-dispatched as a NEW turn whose content the daemon reads from its own durable
-// rows — never from a caller-supplied payload — while the original failed attempt
-// stays failed and visible. Refusals are typed, not silent.
-
 func failedTurnSnapshot(t *testing.T, h *harness, turnID string) store.ConversationSnapshot {
 	t.Helper()
 	return h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
@@ -111,7 +104,6 @@ func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 		t.Fatalf("turn state after dispatch = %q, want running", turn.State)
 	}
 
-	// The provider fails the turn asynchronously after a transient network loss.
 	h.conv.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: turn.ProviderTurnID,
@@ -130,7 +122,6 @@ func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 		t.Fatalf("SetTurnSettings: %v", err)
 	}
 
-	// Retry re-dispatches the same durable prompt as a brand-new turn.
 	retried, err := h.svc.RetryTurn(ctx, testSession, turn.ID)
 	if err != nil {
 		t.Fatalf("RetryTurn: %v", err)
@@ -142,8 +133,6 @@ func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 		t.Fatalf("retried turn state = %q, want running", retried.State)
 	}
 
-	// The provider received exactly two sends, with the same prompt, structured
-	// content, and the conversation's current next-turn settings.
 	sent := h.conv.sentMessages()
 	if len(sent) != 2 {
 		t.Fatalf("provider received %d sends, want 2: %v", len(sent), sent)
@@ -158,8 +147,6 @@ func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 		t.Fatalf("second send settings = %+v, want current settings %+v", sent[1].Settings, settings)
 	}
 
-	// Both attempts are durable: the original is still failed, the retry is a
-	// separate turn.
 	after := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		_, ok := turnByID(s, retried.ID)
 		return ok && len(s.Turns) == 2
@@ -176,8 +163,6 @@ func TestRetryTurnDispatchesFailedPromptAsNewTurn(t *testing.T) {
 		t.Fatalf("retry correlation = %+v, want source %q", retryAttempt, turn.ID)
 	}
 
-	// Rollback hides the retry's message, but its durable relation still consumes
-	// the source action: replaying the source can only return this existing turn.
 	h.conv.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retried.ProviderTurnID,
 		TurnState: domain.TurnStateCompleted,
@@ -260,8 +245,6 @@ func TestRetryTurnRefusesResourceLinkUnsupportedByCurrentProvider(t *testing.T) 
 	})
 	failedTurnSnapshot(t, h, turn.ID)
 
-	// A provider selected in place may not preserve resource-link blocks. Refuse
-	// clearly instead of silently re-sending only the prompt text.
 	h.conv.setCapabilities(productionCaps())
 	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); !errors.Is(err, chatsvc.ErrRetryUnsupported) {
 		t.Fatalf("RetryTurn unsupported resource link = %v, want ErrRetryUnsupported", err)
@@ -328,8 +311,6 @@ func TestRetryTurnRefusesContentUnsupportedByCurrentProvider(t *testing.T) {
 	})
 	failedTurnSnapshot(t, h, turn.ID)
 
-	// An in-place provider change can leave older prompts visible while the new
-	// provider negotiates fewer structured-content capabilities.
 	h.conv.setCapabilities(productionCaps())
 	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); !errors.Is(err, chatsvc.ErrRetryUnsupported) {
 		t.Fatalf("RetryTurn unsupported content = %v, want ErrRetryUnsupported", err)
@@ -351,7 +332,6 @@ func TestRetryTurnRefusesNonFailedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	// Complete the turn, so it is terminal but not failed.
 	h.conv.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: turn.ProviderTurnID,
@@ -365,7 +345,6 @@ func TestRetryTurnRefusesNonFailedTurn(t *testing.T) {
 	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); !errors.Is(err, chatsvc.ErrTurnNotRetryable) {
 		t.Fatalf("RetryTurn on a completed turn = %v, want ErrTurnNotRetryable", err)
 	}
-	// Nothing was re-dispatched.
 	if sent := h.conv.sentTexts(); len(sent) != 1 {
 		t.Fatalf("provider received %d sends after refused retry, want 1", len(sent))
 	}
@@ -375,7 +354,6 @@ func TestRetryTurnRefusesWhileBusy(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	// First turn fails, leaving it eligible for retry.
 	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text:            "first",
 		ClientMessageID: "cm-3",
@@ -392,7 +370,6 @@ func TestRetryTurnRefusesWhileBusy(t *testing.T) {
 	})
 	failedTurnSnapshot(t, h, turn.ID)
 
-	// A second turn is now running.
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text:            "second",
 		ClientMessageID: "cm-4",
@@ -401,7 +378,6 @@ func TestRetryTurnRefusesWhileBusy(t *testing.T) {
 		t.Fatalf("Send second: %v", err)
 	}
 
-	// Retrying the failed first turn is refused while another turn runs.
 	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); !errors.Is(err, chatsvc.ErrTurnRunning) {
 		t.Fatalf("RetryTurn while busy = %v, want ErrTurnRunning", err)
 	}
@@ -425,8 +401,6 @@ func TestRetryTurnRefusesFailedTurnOutsideActiveBranch(t *testing.T) {
 	})
 	failedTurnSnapshot(t, h, stale.ID)
 
-	// Editing the first prompt forks before the failed second turn, so the
-	// failed source remains durable but is no longer on the active lineage.
 	edited, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{
 		Text: "edited first prompt", Origin: domain.MessageOriginHuman, ClientMessageID: "edited-first",
 	})
@@ -491,7 +465,6 @@ func TestRetrySourceRemainsConsumedWhenAttemptIsEditedOntoAnotherBranch(t *testi
 		t.Fatalf("inactive retry attempt %q remained in active snapshot", attempt.ID)
 	}
 
-	// A replay remains daemon-idempotent even while the replacement turn runs.
 	replayed, err := h.svc.RetryTurn(ctx, testSession, source.ID)
 	if err != nil {
 		t.Fatalf("RetryTurn after branch edit: %v", err)
@@ -551,8 +524,6 @@ func TestRetryTurnReplaysReturnExistingAttempt(t *testing.T) {
 		t.Fatalf("first RetryTurn: %v", err)
 	}
 
-	// A replay of the same request — an uncertain round trip or a double-click —
-	// must return the attempt that already exists rather than opening another.
 	second, err := h.svc.RetryTurn(ctx, testSession, turn.ID)
 	if err != nil {
 		t.Fatalf("replayed RetryTurn: %v", err)
@@ -565,8 +536,6 @@ func TestRetryTurnReplaysReturnExistingAttempt(t *testing.T) {
 		t.Fatalf("provider received %d sends after replay, want exactly 2: %v", len(sent), sent)
 	}
 
-	// Even when restart history can only recover the attempt as terminal, the
-	// source keeps answering with it instead of minting another attempt.
 	h.conv.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventTurnCompleted,
 		ProviderTurnID: first.ProviderTurnID,
@@ -604,8 +573,6 @@ func TestRetryTurnIgnoresCallerControlledRetryLikeClientID(t *testing.T) {
 	})
 	failedTurnSnapshot(t, h, source.ID)
 
-	// Before retry lineage was explicit, this caller-controlled id could be
-	// mistaken for the retry of source and consume the retry action.
 	counterfeit, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "unrelated ordinary message", ClientMessageID: "retry/" + source.ID, Origin: domain.MessageOriginHuman,
 	})
@@ -641,9 +608,6 @@ func TestRetryTurnIgnoresCallerControlledRetryLikeClientID(t *testing.T) {
 	}
 }
 
-// A deliberate further attempt is expressed by retrying the failed RETRY turn,
-// which owns its own deterministic key. That builds the chain A -> B -> C from
-// distinct sources instead of ever re-sending A.
 func TestRetryChainThroughFailedAttempt(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -698,9 +662,6 @@ func TestRetryChainThroughFailedAttempt(t *testing.T) {
 	}
 }
 
-// A dispatch the provider never acknowledged may still have been accepted, so
-// re-dispatching it could run the work twice. These turns are refused with a
-// typed uncertain-delivery error rather than retried.
 func TestRetryTurnRefusesUnconfirmedDispatch(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

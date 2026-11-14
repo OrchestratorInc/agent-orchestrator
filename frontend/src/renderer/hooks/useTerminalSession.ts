@@ -1,17 +1,3 @@
-// Terminal Attachment (see CONTEXT.md): the live binding between a terminal
-// pane and a PTY over the mux. The hook owns the whole attachment lifecycle —
-// open ordering, auto-reattach with backoff, error surfacing, and exit
-// handling — so the pane component only renders.
-//
-// The PTY is either an agent session's pane (the default) or a standalone
-// shell terminal the user opened by hand (options.shellTerminalHandleId). The
-// mux draws no distinction between them, so only the handle's source and the
-// session-specific side effects branch below.
-//
-// Status rule: the frontend never writes a session's display status. On mux
-// `exited`/`error` it invalidates the workspaces query and lets the daemon's
-// derived status flow back (docs/architecture.md).
-
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "../lib/api-client";
@@ -24,173 +10,59 @@ import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { shellTerminalsQueryKey } from "./useShellTerminals";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
-/**
- * The slice of xterm's Terminal the attachment needs. Structural, so tests can
- * drive the hook with a tiny fake instead of a real xterm + DOM.
- */
 export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "mouse" | "hover" | "protocol";
 export type TerminalWriteSource = "live" | "replay";
 
 export type AttachableTerminal = {
 	cols: number;
 	rows: number;
-	/**
-	 * False until cols/rows come from measuring the terminal's laid-out slot.
-	 * Before that they are xterm's constructor default, which must never be
-	 * claimed as the PTY's size: a shell started at it lays out its first prompt
-	 * for the wrong width.
-	 */
 	hasMeasuredGrid: boolean;
-	/**
-	 * `done` fires once this exact chunk has been parsed into the buffer (xterm's
-	 * own write callback). The attachment uses it to reveal the pane at the
-	 * replay's final scroll position instead of guessing with a timer.
-	 */
 	write: (data: Uint8Array, done?: () => void, source?: TerminalWriteSource) => void;
 	writeln: (line: string) => void;
-	/** Move xterm's logical viewport and DOM scrollbar to the latest output. */
 	showLatestOutput: () => void;
-	/**
-	 * Fit a retained terminal and move it to the latest output while its
-	 * container is still non-visible. Resolves only after xterm has rendered the
-	 * bottom viewport and crossed a paint boundary, so the owner can reveal
-	 * without exposing an intermediate row.
-	 */
 	prepareForActivation: () => Promise<void>;
-	/**
-	 * Restore the caret after the owner re-activates a retained terminal (tab
-	 * switch back to this pane). Must stay guarded: it may not steal focus from
-	 * dialogs or other controls that legitimately hold it.
-	 */
 	requestActivationFocus: () => void;
-	/** Tell Cursor Agent the live light/dark scheme (private 997 notification). */
 	notifyCursorColorScheme: () => void;
-	/** Send an explicit UI action through the same guarded path as user input. */
 	sendUserInput: (data: string, source?: TerminalUserInputSource) => boolean;
 	onUserInput: (listener: (data: string, source: TerminalUserInputSource) => boolean | void) => { dispose: () => void };
 	onResize: (listener: (size: { cols: number; rows: number }) => void) => { dispose: () => void };
 };
 
 export type TerminalSessionState =
-	| "idle" // nothing attached (no session, or detached)
-	| "connecting" // first attach in flight
-	| "attached" // server acked the open
-	| "reattaching" // socket dropped; waiting on backoff or daemon readiness
-	| "exited" // PTY process ended; terminal kept for scrollback
-	| "error"; // server reported a pane error; no automatic retry
+	| "idle"
+	| "connecting"
+	| "attached"
+	| "reattaching"
+	| "exited"
+	| "error";
 
 export type UseTerminalSessionOptions = {
-	/** Gates auto-reattach: when false, a dropped socket waits instead of retrying. */
 	daemonReady: boolean;
-	/** Refuse user bytes without detaching while a controller handoff owns input. */
 	inputDisabled?: boolean;
-	/** Coalesce and cover the initial replay. Disable for non-retained reviewer panes. */
 	coverInitialReplay?: boolean;
-	/** Keep the initial cover up until the terminal emits its first bytes. */
 	waitForInitialOutput?: boolean;
-	/**
-	 * False while a retained terminal is parked off screen. Output and transport
-	 * recovery continue, but hidden panes cannot send user input or PTY resizes.
-	 */
 	isVisible?: boolean;
-	/** Test seam: build the mux client. Defaults to a fresh socket against the current API base. */
 	createMux?: () => TerminalMux;
-	/** Contextual terminal-close text for an intentionally short-lived pane. */
 	exitNotice?: string;
-	/**
-	 * Attach to a standalone shell terminal (POST /api/v1/shell-terminals)
-	 * instead of a session's pane. When set it wins over `session`, which
-	 * callers pass as undefined for shell panes.
-	 *
-	 * The mux needs no distinction between the two: it treats the id it is
-	 * given as an opaque runtime handle either way. Everything downstream of
-	 * `handle` in this hook is therefore shared verbatim; only the handle's
-	 * source and the session-specific side effects differ.
-	 */
 	shellTerminalHandleId?: string;
 };
 
 const RETRY_BASE_MS = 500;
 const RETRY_MAX_MS = 8_000;
-// Flat retry while a cloud session has never attached: the control plane
-// answers the terminal-ticket mint with a cheap 409 until the sandbox worker
-// connects, so this is a poll for readiness, not a reconnect storm.
-// Exponential backoff here only adds dead seconds between "worker ready" and
-// "terminal attached" (a worker ready at 17s would wait for the 23s attempt).
 const CLOUD_CONNECT_RETRY_MS = 1_000;
-// While the worker is still starting (mint 409, "waiting"), poll faster for the
-// first seconds of a cold start: the agent terminal typically appears within a
-// few seconds, and a 1s poll leaves up to a second between "terminal exists"
-// and "terminal attached". A 409 costs the control plane a few milliseconds.
-// Past the window, or for a genuine socket failure (which counts toward the
-// connect breaker below), the flat 1s poll applies unchanged.
 const CLOUD_STARTUP_RETRY_MS = 250;
 const CLOUD_STARTUP_WINDOW_MS = 15_000;
-// Stop retrying and surface a real error after this many consecutive genuine
-// socket failures for a cloud session that has never successfully attached.
-// Only post-mint socket failures count; "worker still provisioning" (mint 409,
-// reported by the mux as "waiting") never trips this, so a slow cold start does
-// not false-fire a "check your firewall" error. ~8 socket failures ≈ 8s.
 const CLOUD_CONNECT_MAX_FAILURES = 8;
-// Local daemon panes only: the daemon runs a liveness probe and spawns the
-// runtime client between mux.open() and the pane opening, so a stalled spawn
-// must recover. A CLOUD pane gets NO client open timeout — readiness is
-// server-driven: the CP holds the socket in "starting" until the terminal opens
-// or its own 20s ready deadline closes the socket, which the client already
-// handles as onConnectionChange("closed") -> scheduleReattach. A client-side
-// cloud open timeout only manufactured reconnect storms (the 3s/30s band-aids).
 const OPEN_TIMEOUT_MS = 3_000;
-// Initial-replay gate. On attach the runtime replays the pane's state, and the
-// daemon pumps it in 32KB reads (attachment.go copyOut) — so the renderer gets
-// N WebSocket frames, N `write()` calls, and N separate event-loop turns. xterm
-// parses each write atomically but the browser paints BETWEEN turns, so every
-// frame boundary is a painted, further-scrolled state: the terminal visibly
-// walks from mid-session down to the tail. Measured on a 1000-line replay: 25
-// frames at 16ms spacing paint 25 distinct scroll positions; the same bytes as
-// ONE write paint exactly 1, for ~2ms of parse.
-//
-// The first burst is buffered, joined in wire order, then parsed in bounded
-// batches behind one cover. QUIET_MS or CAP_MS ends that coalesced phase; xterm
-// then consumes late tail frames in order behind the same cover. The tail
-// quiet/cap below decides when to reveal at the bottom.
 const REPLAY_QUIET_MS = 60;
 const REPLAY_CAP_MS = 750;
-// After the coalesced replay batches land, keep the cover up while late replay
-// frames stream into xterm. This removes the visible first-open walk without
-// retaining another large duplicate replay buffer. A second cap bounds the
-// cover for an agent that is already producing live output continuously.
 const REPLAY_TAIL_QUIET_MS = 180;
 const REPLAY_TAIL_CAP_MS = 750;
-// Byte ceiling on the buffered burst. Attaching to a pane that is actively
-// streaming (an agent mid-run) means every frame restarts the quiet window, so
-// the time bounds alone would hold the entire burst. The byte cap limits the
-// duplicate JS buffer; the write-batch cap below separately limits each xterm
-// parser task. Real replays are far below this; only a pathological stream trips
-// it, and tripping it ends only the coalesced phase: later bytes still render
-// behind the cover until the tail settles.
 const REPLAY_MAX_BYTES = 1024 * 1024;
-// A replay below the byte ceiling can still be large enough to monopolize the
-// renderer in one xterm parser task. Feed it in bounded writes behind the same
-// cover and yield between them; the user still sees one final reveal while
-// fullscreen/window input remains responsive.
 const REPLAY_WRITE_BATCH_BYTES = 256 * 1024;
-// Cover-only grace on the first replay byte. A pane that has produced NOTHING
-// has no walk to hide, so holding the cover to the cap just shows a blank
-// overlay — and past the pane's label delay (REPLAY_COVER_LABEL_MS in
-// TerminalPane.tsx) a "Loading latest output…" label with nothing to load.
-// Uncovering on this timer keeps that window short.
-//
-// It lifts the cover WITHOUT ending the gate: flushing here instead would clear
-// `replayBuffering`, and a replay that then arrives late would go to xterm frame
-// by frame — the exact walk this gate removes, with no cover left over it. So
-// the burst stays coalesced either way and a late one lands as a single paint.
-// Longer than the quiet window on purpose: `opened` fires from setPTY before
-// copyOut, so the first byte is imminent but not instant, and a value near
-// QUIET_MS would uncover panes that were about to draw.
 const REPLAY_FIRST_BYTE_MS = 250;
 
 function defaultCreateMux(): TerminalMux {
-	// Resolved per connect, not per hook: a daemon restart can change the port.
 	return createTerminalMux(muxUrlFromApiBase(getApiBaseUrl()));
 }
 
@@ -198,13 +70,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	const queryClient = useQueryClient();
 	const [state, setState] = useState<TerminalSessionState>("idle");
 	const [error, setError] = useState<string | undefined>(undefined);
-	// False only while the initial replay is being buffered — the pane keeps a
-	// cover over xterm until the burst has been written and parsed.
 	const [replaySettled, setReplaySettled] = useState(true);
-	// True once this attachment has opened at least once. Lets the pane show a
-	// calm "Connecting…" during the first connect (e.g. a cloud sandbox worker
-	// still checking in) and reserve "disconnected — reattaching" for a genuine
-	// mid-session drop.
 	const [hasAttached, setHasAttached] = useState(false);
 
 	const sessionRef = useRef(session);
@@ -223,42 +89,25 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		disposers: [] as Array<() => void>,
 		retryTimer: null as ReturnType<typeof setTimeout> | null,
 		openTimer: null as ReturnType<typeof setTimeout> | null,
-		// Last positive grid claimed by this attachment. This is deliberately
-		// separate from xterm's local grid: hidden fits must not resize the PTY, and
-		// repeated identical visible fits must not manufacture another SIGWINCH.
 		lastPublishedGrid: null as { cols: number; rows: number } | null,
 		attempts: 0,
 		generation: 0,
 		inputReady: false,
-		// Mirrors the hasAttached state for callbacks: false until this
-		// attachment's first successful open, which switches the cloud pane's
-		// flat readiness polling over to exponential reconnect backoff.
 		hasAttachedOnce: false,
-		// Consecutive genuine socket failures before the first successful attach.
-		// Reset on a real open and on a fresh attach; provisioning waits do not
-		// touch it. Trips the connect-failure circuit breaker at the cap.
 		cloudConnectFailures: 0,
-		// When this attachment began; bounds the fast startup poll.
 		connectStartedAt: 0,
 		detached: true,
-		// True only after this attachment opens parked at 0×0. The next visible
-		// activation must promote it back to a positive primary grid.
 		needsVisibleSizeSync: false,
-		// Initial-replay gate, reset per connect (see REPLAY_QUIET_MS).
 		replayBuffering: false,
 		replayChunks: [] as Uint8Array[],
 		replayBytes: 0,
 		replayQuietTimer: null as ReturnType<typeof setTimeout> | null,
 		replayCapTimer: null as ReturnType<typeof setTimeout> | null,
-		// Uncovers a pane that never produced a first byte; see
-		// REPLAY_FIRST_BYTE_MS. Does not end the gate, so it is not a flush timer.
 		replayFirstByteTimer: null as ReturnType<typeof setTimeout> | null,
 		replayTailQuietTimer: null as ReturnType<typeof setTimeout> | null,
 		replayTailCapTimer: null as ReturnType<typeof setTimeout> | null,
 		replayTailPending: false,
 		queuedProtocolInputs: [] as string[],
-		// The current attachment's flush, published so teardown can land buffered
-		// bytes instead of discarding them (the closure lives inside connect).
 		flushReplay: null as ((preserveBeforeTeardown?: boolean) => void) | null,
 	});
 
@@ -268,12 +117,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	}, []);
 
 	const invalidateWorkspaces = useCallback(() => {
-		// A standalone shell has no session row behind it, so its exit carries no
-		// news for the session board. Refetching every workspace on `exit` would
-		// be pure churn — the shell terminal list owns that pane's fate instead.
-		// The list drops a shell whose process has exited, so refetching it closes
-		// the tab (and collapses a split it was in), as closing a terminal app's
-		// tab on `exit` does.
 		if (optionsRef.current.shellTerminalHandleId) {
 			void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
 			void queryClient.invalidateQueries({ queryKey: ["remote-shell-terminals"] });
@@ -308,9 +151,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 
 	const teardownMux = useCallback(() => {
 		const r = runtime.current;
-		// Land anything still buffered before the attachment goes away. Dropping
-		// it would lose output that had already arrived. No-ops when the gate is
-		// closed or already superseded.
 		r.flushReplay?.(true);
 		r.flushReplay = null;
 		clearReplayTimers();
@@ -320,12 +160,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		r.replayTailPending = false;
 		r.queuedProtocolInputs = [];
 		r.lastPublishedGrid = null;
-		// Nothing is buffering any more, so nothing should stay covered. connect()
-		// re-arms the gate immediately after calling this, in the same tick, so
-		// the reveal here never flashes. Without it, a teardown that does not
-		// reconnect (open timeout while the daemon is down) strands the pane
-		// behind the cover — the cap no longer covers that case now it is armed
-		// from `opened` rather than from connect().
 		setReplaySettled(true);
 		if (r.retryTimer) {
 			clearTimeout(r.retryTimer);
@@ -362,26 +196,16 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		if (r.detached || !r.terminal || !r.handle) {
 			return;
 		}
-		// A socket dropping after the PTY ended (or errored) changes nothing.
 		if (stateRef.current === "exited" || stateRef.current === "error") {
 			return;
 		}
 		transition("reattaching");
-		// Not ready → no timer; the daemonReady effect reconnects when it flips.
-		// A cloud pane targets its sandbox worker, not the local daemon, so it
-		// keeps retrying on its own backoff regardless of local daemon state.
 		if (!optionsRef.current.daemonReady && !sessionRef.current?.cloud) {
 			return;
 		}
 		if (r.retryTimer) {
 			return;
 		}
-		// Count only genuine post-mint socket failures for a cloud pane that has
-		// never attached. A "worker still provisioning" wait (mint 409) reaches
-		// here with countAsCloudFailure=false and must not accrue, so a slow cold
-		// start never false-fires the breaker. After CLOUD_CONNECT_MAX_FAILURES
-		// real socket failures we know it is a proxy/firewall/CSP block, not a
-		// transient, so we stop the loop and surface a real error.
 		if (countAsCloudFailure && !r.hasAttachedOnce && sessionRef.current?.cloud) {
 			r.cloudConnectFailures += 1;
 			if (r.cloudConnectFailures >= CLOUD_CONNECT_MAX_FAILURES) {
@@ -393,9 +217,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				return;
 			}
 		}
-		// First connect of a cloud pane = polling for sandbox readiness; keep it
-		// flat (see CLOUD_CONNECT_RETRY_MS). After a real attachment, drops back
-		// to exponential backoff like every other reconnect.
 		const cloudStartup = !r.hasAttachedOnce && sessionRef.current?.cloud;
 		const delay = !cloudStartup
 			? Math.min(RETRY_BASE_MS * 2 ** r.attempts, RETRY_MAX_MS)
@@ -415,8 +236,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		if (!terminal || !handle || r.detached) {
 			return;
 		}
-		// Flush the outgoing attachment BEFORE bumping the generation: past that
-		// point its own guard rejects the flush and its buffered bytes are lost.
 		r.flushReplay?.(true);
 		const generation = r.generation + 1;
 		r.generation = generation;
@@ -424,20 +243,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		teardownMux();
 
 		const baseMux = (optionsRef.current.createMux ?? defaultCreateMux)();
-		// Cloud panes ride a real network round trip per keystroke, so wrap their
-		// mux with line-buffered local input (see lib/terminal-local-echo.ts): typed
-		// characters render in xterm immediately, then the complete line is sent
-		// once on Enter and reconciled against the server echo.
-		// Local panes are loopback PTYs with ~0 latency and stay byte-exact
-		// untouched. Shell panes carry no session, so they are never wrapped —
-		// today the renderer only dials cloud sockets for agent panes anyway.
-		// opencode's OpenTUI repaints the whole screen on every keystroke and polls
-		// the terminal color-scheme protocol (CSI ? 996/997 n) every frame, whose
-		// replies ride the same input path. That fights the line-buffered
-		// prediction/rollback (tuned for codex/claude), corrupting the input line
-		// (e.g. a typed prefix followed by a runaway character run). opencode draws
-		// its own input authoritatively, so skip local prediction for it — direct,
-		// server-authoritative input like a local pane (the pre-#4763 behavior).
 		const localEchoSafeHarness = sessionRef.current?.provider !== "opencode";
 		const mux =
 			LOCAL_ECHO_ENABLED && sessionRef.current?.cloud && localEchoSafeHarness
@@ -445,13 +250,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				: baseMux;
 		r.mux = mux;
 
-		// Live output: one xterm.write in flight at a time. A burst arrives as many
-		// WebSocket messages, and writing each separately costs a parse/render
-		// cycle per message. Output arriving while xterm parses the previous write
-		// is joined and written as one batch when that write completes, so batches
-		// grow with load while an isolated chunk (a keystroke's echo) is written
-		// immediately. The backlog lives here, bounded by the daemon's
-		// back-pressure, rather than in xterm's own write queue.
 		let liveChunks: Uint8Array[] = [];
 		let liveBytes = 0;
 		let liveWriteInFlight = false;
@@ -484,8 +282,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			liveBytes += bytes.length;
 			if (!liveWriteInFlight) writeLiveBatch();
 		};
-		// Hand any held output to xterm now, in order, ahead of a teardown or a
-		// write that must follow it.
 		const drainLiveOutput = () => {
 			const batch = takeLiveBatch();
 			if (batch) terminal.write(batch);
@@ -500,13 +296,8 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		let replayBatchTimer: ReturnType<typeof setTimeout> | null = null;
 		let replayBatchDone: (() => void) | null = null;
 		let replayWritesPreserved = false;
-		// Only a newly created handle can have live initial output. Component
-		// mounts, including the first mount after app startup, can replay history.
 		const initialWriteSource: TerminalWriteSource = consumeFreshTerminalHandle(handle) ? "live" : "replay";
 
-		// Reveal only after xterm has parsed the coalesced replay and any late tail
-		// frames have gone quiet. The tail itself streams straight into xterm behind
-		// the cover, avoiding an unbounded duplicate replay buffer.
 		const revealReplayTail = () => {
 			if (!r.replayTailPending || !isCurrentAttachment(generation, handle, mux)) return;
 			if (r.replayTailQuietTimer) {
@@ -542,8 +333,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				r.replayTailCapTimer = setTimeout(revealReplayTail, REPLAY_TAIL_CAP_MS);
 			}
 		};
-		// The mux does not distinguish historical bytes from fresh PTY output, so
-		// the handle's creation state classifies the entire covered burst.
 		const writeReplayBatches = (bytes: Uint8Array, done: () => void) => {
 			replayBatchBytes = bytes;
 			replayBatchOffset = 0;
@@ -581,8 +370,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				replayBatchTimer = null;
 			}
 			if (replayBatchBytes && replayBatchOffset < replayBatchBytes.length) {
-				// The current batch is already in xterm's queue. Queue the remainder in
-				// one call before dispose so it cannot be overtaken or discarded.
 				terminal.write(replayBatchBytes.subarray(replayBatchOffset), undefined, initialWriteSource);
 			}
 			replayBatchBytes = null;
@@ -605,9 +392,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			terminal.showLatestOutput();
 			setReplaySettled(true);
 		};
-		// Frames after the replay went quiet are the agent's live output, so a colour
-		// query in them is answered. Only a replay cut short by its size cap leaves
-		// history in the tail.
 		let tailHoldsHistory = false;
 		const drainPostReplayWrites = () => {
 			if (!isCurrentAttachment(generation, handle, mux)) return;
@@ -628,15 +412,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			}, tailHoldsHistory ? initialWriteSource : "live");
 		};
 
-		// End the buffered part of the initial replay: concatenate what arrived so
-		// far and feed it through bounded writes. Bytes arriving during those yields
-		// queue behind the replay so ANSI/VT commands remain in exact wire order.
-		// Normal quiet/cap flushes keep the cover for the tail. Explicit input settles
-		// after the ordered queue drains; teardown synchronously submits any remainder
-		// to xterm before releasing the attachment.
-		//
-		// Safe to call from anywhere — a second call is a no-op, and a call from
-		// a superseded attachment is dropped.
 		const flushReplay = (holdTail = false, preserveBeforeTeardown = false) => {
 			if (!r.replayBuffering) {
 				if (preserveBeforeTeardown) preservePendingReplayWrites();
@@ -652,11 +427,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			r.replayBytes = 0;
 
 			if (chunks.length === 0) {
-				// Nothing buffered, so there is nothing to reveal at a settled
-				// position — just make sure the cover is off. Reaching here means an
-				// exit, error, dead socket or the cap; a pane that is merely slow to
-				// draw was already uncovered by REPLAY_FIRST_BYTE_MS without ending
-				// the gate.
 				if (holdTail) scheduleReplayTailReveal();
 				else setReplaySettled(true);
 				return;
@@ -691,23 +461,16 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				if (r.replayBuffering) {
 					r.replayChunks.push(bytes);
 					r.replayBytes += bytes.length;
-					// A stream that never idles would restart the quiet window forever
-					// and grow the buffer without bound; flush on size instead.
 					if (r.replayBytes >= REPLAY_MAX_BYTES) {
 						tailHoldsHistory = initialWriteSource === "replay";
 						flushReplay(true);
 						return;
 					}
-					// Each frame restarts the quiet window: the burst is over only
-					// once the stream actually goes idle.
 					if (r.replayQuietTimer) clearTimeout(r.replayQuietTimer);
 					r.replayQuietTimer = setTimeout(() => flushReplay(true), REPLAY_QUIET_MS);
 					return;
 				}
 				if (pendingReplayWrites > 0 || postReplayWriteActive || r.replayTailPending) {
-					// Preserve wire order while the bounded initial replay is yielding,
-					// and do not let a previous quiet deadline reveal before this newer
-					// chunk has been parsed by xterm.
 					if (r.replayTailQuietTimer) {
 						clearTimeout(r.replayTailQuietTimer);
 						r.replayTailQuietTimer = null;
@@ -732,23 +495,13 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				transition("attached");
 				terminal.notifyCursorColorScheme();
 				flushQueuedProtocolInputs();
-				// Bound the gate from here: the daemon fires onOpen from setPTY and
-				// starts copyOut immediately after, so the replay is imminent and
-				// the cap now measures the burst rather than the connect handshake.
 				if (r.replayBuffering && !optionsRef.current.waitForInitialOutput && !r.replayCapTimer) {
 					r.replayCapTimer = setTimeout(() => flushReplay(true), REPLAY_CAP_MS);
 				}
-				// Same anchor, different job: local panes may uncover when there is
-				// nothing to replay (see REPLAY_FIRST_BYTE_MS). Cloud agent panes
-				// deliberately wait for their first real TUI bytes: showing xterm
-				// after the worker attaches but before Codex draws created a second
-				// blank screen between “Connecting…” and the agent UI.
 				if (r.replayBuffering && !optionsRef.current.waitForInitialOutput && !r.replayFirstByteTimer) {
 					r.replayFirstByteTimer = setTimeout(() => {
 						r.replayFirstByteTimer = null;
 						if (!isCurrentAttachment(generation, handle, mux)) return;
-						// Bytes arrived, or the burst already flushed: the flush owns
-						// the reveal in both cases, at the settled scroll position.
 						if (!r.replayBuffering || r.replayChunks.length > 0) return;
 						setReplaySettled(true);
 					}, REPLAY_FIRST_BYTE_MS);
@@ -758,13 +511,9 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				if (!isCurrentAttachment(generation, handle, mux)) return;
 				clearOpenTimer(generation);
 				r.inputReady = false;
-				// Land whatever was buffered before the notice, and lift the cover:
-				// a pane that exits mid-replay must never be left behind it.
 				flushReplay(false, true);
 				terminal.writeln(optionsRef.current.exitNotice ?? "\r\n\x1b[2m[process exited]\x1b[0m");
 				transition("exited");
-				// Preserve xterm scrollback, but release the attachment: an exited
-				// pane has no reason to keep a WebSocket/client writer alive.
 				teardownMux();
 				invalidateWorkspaces();
 			}),
@@ -776,27 +525,13 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				terminal.writeln(`\r\n\x1b[2m[terminal error] ${message}\x1b[0m`);
 				setError(message);
 				transition("error");
-				// Pane errors are terminal for this attachment. Keep the renderer
-				// and its error text inspectable while disposing the failed socket;
-				// an explicit session restore can create a fresh attachment later.
 				teardownMux();
 				void captureRendererEvent("ao.terminals.attach_failed", { reason: "pane_error" });
 				invalidateWorkspaces();
 			}),
 			mux.onConnectionChange((connectionState) => {
 				if (!isCurrentAttachment(generation, handle, mux)) return;
-				// "closed" = a genuine socket failure (ticket minted but the
-				// WebSocket dropped or never opened); "waiting" = the worker is
-				// still provisioning (mint 409), which reconnects the same way but
-				// must not count against the connect-failure breaker.
 				if (connectionState === "closed" || connectionState === "waiting") {
-					// End the gate: no replay is coming over a dead socket. This is
-					// the ONLY settle path when the socket dies before `opened` —
-					// clearOpenTimer below drops the open timeout, and
-					// scheduleReattach schedules nothing while the daemon is down,
-					// so without this the pane is stranded behind the cover with no
-					// timer left to lift it (and stays there for a whole reconnect
-					// storm). The cap cannot cover this: it is armed from `opened`.
 					flushReplay(false, true);
 					clearOpenTimer(generation);
 					r.inputReady = false;
@@ -815,7 +550,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			if (!isCurrentAttachment(generation, handle, mux)) {
 				return false;
 			}
-			// Protocol replies must bypass visibility and ownership gates so hidden panes stay connected.
 			if (source === "protocol") {
 				if (!r.inputReady) {
 					r.queuedProtocolInputs.push(data);
@@ -827,34 +561,19 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			if (!r.inputReady) {
 				return false;
 			}
-			// Agent color-scheme bytes are not human input — forwarding them must not
-			// flush the replay gate or reveal the tail (that was the theme-toggle jank).
 			if (optionsRef.current.inputDisabled || optionsRef.current.isVisible === false) {
 				return false;
 			}
-			// Pointer movement with no button held, reported to a program that
-			// tracks every mouse event. The program needs it, but it is not the user
-			// acting on the session: it must not end the replay gate or count as
-			// interaction.
 			if (source === "hover") {
 				mux.sendInput(handle, data);
 				return true;
 			}
-			// Input is accepted from `opened`, which lands before the replay — so a
-			// user can type while the gate still holds the burst, and their echo
-			// would sit in the buffer behind an opaque cover. Someone typing has
-			// stopped caring about a tidy reveal and needs to see the pane now:
-			// end the gate immediately.
 			if (r.replayBuffering) flushReplay();
 			else revealReplayTail();
 			if (session) recordDirectWorkerInteraction(session.id, "terminal", session.kind, session.hostId);
 			mux.sendInput(handle, data);
 			return true;
 		});
-		// xterm only fires onResize when the grid actually changed. Publish that
-		// grid immediately so a separator drag resizes the program while the
-		// handle is still moving. The last published grid is checked because a
-		// retained activation can report the same grid through several paths.
 		const resize = terminal.onResize(({ cols, rows }) => {
 			if (!isCurrentAttachment(generation, handle, mux)) return;
 			if (optionsRef.current.isVisible === false) return;
@@ -868,38 +587,12 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			() => resize.dispose(),
 		);
 
-		// Open the replay gate before the pane can produce any output. It cannot
-		// wait for `opened`: the daemon fires onOpen from setPTY and only then
-		// starts copyOut (attachment.go), so `attached` arrives before the first
-		// replay byte and would uncover a pane that has not drawn yet.
-		// A handle this renderer just created has no history to replay: its first
-		// bytes are the program starting up (a new shell's prompt). Covering them
-		// only holds a blank pane through the quiet window and reveal fit, so they
-		// stream straight into xterm instead.
 		const coverInitialReplay = optionsRef.current.coverInitialReplay !== false && initialWriteSource !== "live";
 		r.replayBuffering = coverInitialReplay;
 		r.replayChunks = [];
 		r.replayBytes = 0;
 		setReplaySettled(!coverInitialReplay);
-		// The cap is armed from `opened`, NOT from here. A slow attach — the
-		// daemon runs a liveness probe and spawns the runtime client before the
-		// first byte, which is why OPEN_TIMEOUT_MS budgets 3s — would otherwise
-		// burn the whole cap on the handshake, flush an empty buffer, and leave
-		// `replayBuffering` false for the rest of the attachment. The replay
-		// would then land frame-by-frame with the bug fully intact, behind a
-		// pointless blank cover. `opened` fires from setPTY immediately before
-		// copyOut, so anchoring there means the cap only ever measures the burst.
-		// If `opened` never arrives, the cover is lifted by the recovery path for
-		// that transport: a LOCAL pane's openTimer tears down (teardownMux lifts
-		// it); a CLOUD pane's socket closing or mint-409 reaches
-		// onConnectionChange, whose flushReplay lifts it.
 
-		// A retained pane may reconnect while parked. It still needs the output
-		// stream, but its stale off-screen grid must not resize the shared PTY.
-		// Zero dimensions mean "attach without claiming a size"; the first
-		// visible fit emits the authoritative grid after activation.
-		// The same applies before the terminal has measured its slot: the first
-		// measurement publishes the grid instead (see onVisibleSize).
 		const claimsSize = optionsRef.current.isVisible !== false && terminal.hasMeasuredGrid;
 		r.needsVisibleSizeSync = !claimsSize;
 		const openCols = claimsSize ? terminal.cols : 0;
@@ -907,22 +600,10 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		mux.open(handle, openCols, openRows);
 		r.lastPublishedGrid =
 			openCols > 0 && openRows > 0 ? { cols: openCols, rows: openRows } : null;
-		// Client open timeout for LOCAL panes only. It budgets the time between
-		// mux.open() and the pane opening — the daemon's liveness probe + runtime
-		// spawn — so a stalled spawn recovers. A CLOUD pane gets NO client open
-		// timeout: readiness is server-driven (the mux opens its socket directly,
-		// the CP holds it in "starting" until the terminal opens or its own ~20s
-		// deadline closes it, and a closed socket already reaches
-		// onConnectionChange("closed") -> scheduleReattach). A client timeout here
-		// only ever tore a healthy slow open down mid-attach and rebuilt the mux —
-		// the reconnect storm the 3s/30s band-aids chased. The mint-409 "waiting"
-		// poll and the CP-close bound already cover every cloud stall.
 		if (!sessionRef.current?.cloud) {
 			r.openTimer = setTimeout(() => {
 				if (!isCurrentAttachment(generation, handle, mux)) return;
 				r.openTimer = null;
-				// Only the first timeout of a reattach sequence is reported; the
-				// backoff loop retrying against a restarting daemon is not news.
 				if (r.attempts === 0) {
 					void captureRendererEvent("ao.terminals.attach_failed", { reason: "open_timeout" });
 				}
@@ -942,10 +623,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 	]);
 	connectRef.current = connect;
 
-	/**
-	 * Bind a terminal to the current session's PTY. Call once the terminal is
-	 * opened (and fitted); returns the detach function for effect cleanup.
-	 */
 	const attach = useCallback(
 		(terminal: AttachableTerminal) => {
 			const r = runtime.current;
@@ -960,8 +637,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			setError(undefined);
 			setHasAttached(false);
 			if (handle) {
-				// A cloud pane connects to its sandbox worker directly, so it must
-				// not wait on the LOCAL daemon being ready; only local panes do.
 				if (optionsRef.current.daemonReady || Boolean(sessionRef.current?.cloud)) {
 					transition("connecting");
 					connect();
@@ -972,9 +647,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				transition("idle");
 			}
 			return () => {
-				// Before the generation bump — past it the flush's own guard rejects
-				// it and the buffered bytes (and any URL in them) are lost. This is
-				// the session-switch path, so it is the one that matters most.
 				r.flushReplay?.(true);
 				r.generation += 1;
 				r.detached = true;
@@ -984,8 +656,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				r.inputReady = false;
 				r.needsVisibleSizeSync = false;
 				setError(undefined);
-				// Detaching ends any pending replay: never leave the next mount of
-				// this hook believing a burst is still in flight.
 				setReplaySettled(true);
 				transition("idle");
 			};
@@ -993,11 +663,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		[connect, teardownMux, transition],
 	);
 
-	// Publish the retained terminal's positive grid only after activation has
-	// painted it and made it visible. A parked reconnect opens at 0×0, while a
-	// continuously connected parked terminal may be refitted locally with resize
-	// forwarding suppressed. In both cases activation must explicitly promote the
-	// retained primary back to an authoritative size.
 	const syncVisibleSize = useCallback((cols: number, rows: number) => {
 		const r = runtime.current;
 		if (
@@ -1018,8 +683,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		r.lastPublishedGrid = { cols, rows };
 	}, []);
 
-	// Daemon came back while we were waiting: reconnect immediately, without
-	// backoff debt from attempts made against the dead daemon.
 	const daemonReady = options.daemonReady;
 	useEffect(() => {
 		const r = runtime.current;
@@ -1029,18 +692,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		connect();
 	}, [daemonReady, connect]);
 
-	// A parked cache entry keeps parsing output, but it must be inert as a PTY
-	// client. A hidden local refit cannot be forwarded. useLayoutEffect runs
-	// before the cache's activation preparation, so the first visible frame
-	// always publishes its final positive grid even when xterm's local size no
-	// longer changes.
-	// Tell the daemon nobody is looking at this terminal. A 0×0 grid is the mux's
-	// "attached without claiming a size": the daemon stops counting this client
-	// as showing the terminal (so an idle agent may be restarted on a new harness
-	// release) and leaves the PTY at its size unless another client shows it.
-	// Forgetting the published grid makes the next visible sync send the real
-	// one again. The cloud mux has no such frame, so it is skipped. (Ported from
-	// Account Manager, #6274.)
 	const parkOffScreen = useCallback(() => {
 		const r = runtime.current;
 		r.needsVisibleSizeSync = true;
@@ -1054,7 +705,6 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		if (!isVisible) parkOffScreen();
 	}, [isVisible, parkOffScreen]);
 
-	// A hidden or minimised window takes its active pane off screen as well.
 	useEffect(() => {
 		const onWindowVisibility = () => {
 			const terminal = runtime.current.terminal;
@@ -1095,12 +745,9 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 		transition,
 	]);
 
-	// Belt-and-braces: never leak a socket past unmount, even if the owner
-	// forgot to call detach.
 	useEffect(
 		() => () => {
 			const r = runtime.current;
-			// Same ordering rule as the detach path above.
 			r.flushReplay?.(true);
 			r.generation += 1;
 			r.detached = true;

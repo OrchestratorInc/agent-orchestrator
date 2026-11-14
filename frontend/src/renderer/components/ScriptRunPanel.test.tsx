@@ -26,7 +26,6 @@ function runOf(...payloads: Record<string, unknown>[]) {
 }
 
 const steps = () => screen.getAllByTestId("script-step");
-/** A step row's disclosure button (its body also holds a copy button). */
 const toggleOf = (row: HTMLElement) => row.querySelector<HTMLButtonElement>("button[aria-expanded]");
 
 beforeEach(() => {
@@ -129,11 +128,9 @@ describe("ScriptRunPanel", () => {
 		const { rerender } = render(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "x" })} />);
 		const button = () => toggleOf(steps()[0])!;
 		expect(button()).toHaveAttribute("aria-expanded", "true");
-		// Finishing closes it by default...
 		sequence = 0;
 		rerender(<ScriptRunPanel run={runOf({ ...first, status: "succeeded", exitCode: 0, durationMs: 1000, output: "x" })} />);
 		expect(button()).toHaveAttribute("aria-expanded", "false");
-		// ...but a reader who opens it keeps it open.
 		fireEvent.click(button());
 		sequence = 0;
 		rerender(<ScriptRunPanel run={runOf(
@@ -149,7 +146,6 @@ describe("ScriptRunPanel", () => {
 		const button = toggleOf(steps()[0])!;
 		button.focus();
 		expect(document.activeElement).toBe(button);
-		// Native buttons activate on Enter and Space; the browser turns either into a click.
 		fireEvent.click(button);
 		expect(button).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("No output")).toBeInTheDocument();
@@ -197,10 +193,8 @@ describe("ScriptRunPanel", () => {
 		const { rerender } = render(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "a" })} />);
 		expect(announcer()).toHaveAttribute("role", "status");
 		expect(announcer()).toHaveAttribute("aria-live", "polite");
-		// What the panel first draws is not announced.
 		expect(announcer()).toHaveTextContent("");
 		expect(screen.getByTestId("script-step-output")).not.toHaveAttribute("aria-live");
-		// New output alone says nothing.
 		sequence = 0;
 		rerender(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "a\nb" })} />);
 		expect(announcer()).toHaveTextContent("");
@@ -295,7 +289,6 @@ describe("ScriptRunPanel quiet step note", () => {
 
 	it("says a running step has printed nothing for 3 minutes, with its limit, and keeps counting", () => {
 		vi.setSystemTime(new Date("2026-10-18T10:02:59Z"));
-		// Started at 10:00:00; its output last changed at 10:00:30.
 		const run = quietRun(["2026-10-18T10:00:00Z", "2026-10-18T10:00:30Z"], [
 			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "", timeoutMinutes: 10 },
 			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "seeding", timeoutMinutes: 10 },
@@ -310,9 +303,6 @@ describe("ScriptRunPanel quiet step note", () => {
 
 	it("counts from when the step last wrote any output, not when its tail last changed", () => {
 		vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
-		// The tail has not changed since 10:00:30, but a heartbeat at 10:04:40
-		// says the step wrote output at 10:04:20 (control plane time), so it is
-		// not silent; the worker's own startedAt clock is far behind and ignored.
 		const busy = quietRun(["2026-10-18T10:00:00Z", "2026-10-18T10:04:40Z"], [
 			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T09:40:00Z", output: "" },
 			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T09:40:00Z", output: "seeding", outputAt: "2026-10-18T10:04:20Z" },
@@ -338,7 +328,6 @@ describe("ScriptRunPanel quiet step note", () => {
 		act(() => { vi.advanceTimersByTime(1_000); });
 		expect(announcer).toHaveTextContent("No output for 3 min. The step is still running (limit 10 min).");
 		act(() => { vi.advanceTimersByTime(60_000); });
-		// The note counts on; the live region keeps its first wording, so it is not spoken again.
 		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 4 min.");
 		expect(screen.getByTestId("script-step-quiet")).not.toHaveAttribute("role");
 		expect(screen.getByTestId("script-step-quiet").closest("[role=status], [aria-live]")).toBeNull();
@@ -357,11 +346,9 @@ describe("ScriptRunPanel quiet step note", () => {
 	});
 
 	it("measures the silence on the control plane's clock when the desktop clock runs fast", () => {
-		// The desktop clock is 5 minutes ahead: control plane 10:00:00 is 10:05:00 here.
 		vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
 		const started = { runId: "run-fast-clock", step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T09:59:59Z", output: "" };
 		const { rerender } = render(<ScriptRunPanel run={quietRun(["2026-10-18T09:59:59Z"], [started])} />);
-		// Output arrives live: written at 10:00:10 control plane time, seen at 10:05:10 here.
 		act(() => { vi.advanceTimersByTime(10_000); });
 		rerender(<ScriptRunPanel run={quietRun(["2026-10-18T09:59:59Z", "2026-10-18T10:00:10Z"], [
 			started,

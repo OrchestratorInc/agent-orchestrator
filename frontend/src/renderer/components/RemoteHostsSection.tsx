@@ -13,14 +13,11 @@ type Props = {
 	onRetry: () => void;
 };
 
-/** Only host-specific chrome lives here; project and session rows are shared. */
 export function RemoteHostsSection({ hosts, workspaces, failedHostIds = [], renderProject, onRetry }: Props) {
 	const { t } = useTranslation();
 	return <>
 		{hosts.map((host) => {
 			const projects = workspaces.filter((workspace) => workspace.hostId === host.hostId);
-			// While the host connects or is offline, its last lists show under its status;
-			// a host that refused this device's password shows nothing it kept.
 			if (host.status !== "connected") return <Fragment key={host.url}><SidebarMenuItem data-host-id={host.hostId}>
 				<SidebarMenuButton
 					aria-label={host.status === "offline" ? t("remote.retryHost", { label: host.label }) : undefined}

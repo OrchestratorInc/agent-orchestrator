@@ -14,15 +14,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 )
 
-// AgentAuthService exposes only fixed, daemon-owned authentication plans.
 type AgentAuthService interface {
 	Plans(context.Context) []agentauth.Plan
 	Start(ctx context.Context, agentID string) (agentauth.StartResult, error)
 	Logout(ctx context.Context, agentID string) (agentauth.StartResult, error)
 }
 
-// AgentUILoginService exposes background authentication without raw output or
-// commands. Kept separate so older services can continue offering terminal login.
 type AgentUILoginService interface {
 	StartLogin(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 	Login(context.Context, string, string) (agentauth.LoginSnapshot, error)
@@ -31,8 +28,6 @@ type AgentUILoginService interface {
 	SubmitLoginCode(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 }
 
-// ProviderKeyService manages AO-stored provider keys. Values are accepted
-// only in request bodies and never returned.
 type ProviderKeyService interface {
 	ProviderKeys(context.Context) ([]agentauth.ProviderKey, error)
 	SaveProviderKey(ctx context.Context, name, secret string, device bool) (agentauth.ProviderKey, error)
@@ -40,26 +35,19 @@ type ProviderKeyService interface {
 	CheckProviderKey(ctx context.Context, name, secret string) (agentauth.ProviderKeyCheck, error)
 }
 
-// AgentSignInRecorder applies a sign-in completed in the harness's own
-// terminal login to AO's state, so the CLI never writes that state itself.
 type AgentSignInRecorder interface {
 	RecordSignIn(ctx context.Context, agentID string) (string, error)
 }
 
-// ProviderCatalogService reads a harness's own provider catalog.
 type ProviderCatalogService interface {
 	CatalogProviders(ctx context.Context, agentID string) ([]agentauth.CatalogProvider, error)
 	CatalogModels(ctx context.Context, agentID, providerID string) ([]string, error)
 }
 
-// AgentAuthController owns the safe native authentication routes.
 type AgentAuthController struct {
 	Svc AgentAuthService
 }
 
-// Register mounts the agent authentication routes. The /agents prefix is
-// shared with other controllers, so routes are registered individually rather
-// than through a chi sub-router.
 func (c *AgentAuthController) Register(r chi.Router) {
 	r.Get("/agents/auth-plans", c.list)
 	c.registerProviderKeys(r)
@@ -68,7 +56,6 @@ func (c *AgentAuthController) Register(r chi.Router) {
 	c.registerUILogin(r)
 }
 
-// registerProviderKeys mounts the AO-saved provider key routes.
 func (c *AgentAuthController) registerProviderKeys(r chi.Router) {
 	r.Get("/agents/provider-keys", c.listProviderKeys)
 	r.Put("/agents/provider-keys/{name}", c.saveProviderKey)
@@ -76,8 +63,6 @@ func (c *AgentAuthController) registerProviderKeys(r chi.Router) {
 	r.Post("/agents/provider-keys/{name}/check", c.checkProviderKey)
 }
 
-// registerUILogin mounts the in-app sign-in routes: operations, the
-// harness's provider catalog, and its guided menu.
 func (c *AgentAuthController) registerUILogin(r chi.Router) {
 	r.Post("/agents/{agent}/auth/operations", c.startUILogin)
 	r.Get("/agents/{agent}/auth/providers", c.catalogProviders)
@@ -112,8 +97,6 @@ func (c *AgentAuthController) uiLoginAction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req AgentLoginActionRequest
-	// The action plus an option label of up to 256 characters, each up to 4
-	// bytes in UTF-8, and the JSON around them.
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*1024))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
@@ -136,9 +119,6 @@ func (c *AgentAuthController) uiLoginAction(w http.ResponseWriter, r *http.Reque
 	envelope.WriteJSON(w, http.StatusOK, result)
 }
 
-// validLoginAction allows fixed menu navigation and the digits 1-9 for
-// numbered native pickers; the service still rejects digits outside the
-// recognized option list.
 func validLoginAction(action string) bool {
 	switch action {
 	case "previous", "next", "select":
@@ -346,7 +326,6 @@ func (c *AgentAuthController) checkProviderKey(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, result)
 }
 
-// decodeOne reads exactly one small JSON object with no unknown fields.
 func decodeOne(w http.ResponseWriter, r *http.Request, into any, what string) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20*1024))
 	decoder.DisallowUnknownFields()

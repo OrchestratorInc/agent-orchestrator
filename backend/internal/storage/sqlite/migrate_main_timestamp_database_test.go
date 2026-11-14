@@ -9,13 +9,6 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// shadowed199FS returns the migration set with version 0199 replaced by a
-// no-op — modeling a database whose version-199 slot was spent by another
-// distribution. The wesleymatosdev fork's hermes-plus8 and hermes-v0.13.2 to
-// v0.13.8 builds recorded 199 for 0199_allow_hermes_harness, after main had
-// taken 199 for conversation_message_continuation. goose does not checksum
-// applied migrations, so on such a database it sees 199 recorded and never
-// runs main's file.
 func shadowed199FS(t *testing.T) fstest.MapFS {
 	t.Helper()
 	entries, err := migrationsFS.ReadDir("migrations")
@@ -38,10 +31,6 @@ func shadowed199FS(t *testing.T) fstest.MapFS {
 	return legacyFS
 }
 
-// openShadowed199Database builds the database the way those fork builds left
-// it: every numeric and timestamp migration applied, except version 199 holds
-// other content — so conversation_messages.continuation does not exist even
-// though goose_db_version records 199 as applied.
 func openShadowed199Database(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", databaseURI(t.TempDir())+noForeignKeysDSN)
@@ -83,27 +72,13 @@ func openShadowed199Database(t *testing.T) *sql.DB {
 	return db
 }
 
-// TestMigrateUpgradesShadowed199Database covers the failure observed on
-// 2026-10-29: after upgrading a database from those fork builds (or any
-// database that recorded version 199 with other content), chat history
-// returned HTTP 500 with "no such column: conversation_messages.continuation"
-// for every chat session. goose_db_version already records 199 and goose does
-// not checksum applied files, so Up never runs
-// 0199_conversation_message_continuation. Fresh databases — and therefore the
-// snapshot-based tests and CI — always apply main's 199 and cannot catch this.
-//
-// reconcileSchema's schemaRepairs entry for version 199 adds the missing
-// column after goose runs, leaving the recorded version as it is.
 func TestMigrateUpgradesShadowed199Database(t *testing.T) {
 	db := openShadowed199Database(t)
 
-	// The upgrade under test: open the legacy database with this build.
 	if err := migrate(db); err != nil {
 		t.Fatalf("migrate shadowed-199 database: %v", err)
 	}
 
-	// The contract the generated chat-history selects depend on (every
-	// conversations.sql select names this column).
 	var present int
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name = 'continuation'`,
@@ -119,7 +94,6 @@ func TestMigrateUpgradesShadowed199Database(t *testing.T) {
 			"with its new meaning from the start.")
 	}
 
-	// The generated history select must run without a schema error.
 	rows, err := db.Query(`
 SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming,
        provider_item_id, client_message_id, created_at, updated_at, delivery_content_json,
@@ -134,9 +108,6 @@ FROM conversation_messages`)
 	}
 }
 
-// TestMigrateUpgradesShadowed199DatabaseIdempotent pins the repair contract:
-// repeated migrate passes over a healed database must keep version 199
-// recorded exactly once with the schema stable.
 func TestMigrateUpgradesShadowed199DatabaseIdempotent(t *testing.T) {
 	db := openShadowed199Database(t)
 

@@ -1,4 +1,3 @@
-// Package codex adapts the codex worker agent for code-review sessions.
 package codex
 
 import (
@@ -13,23 +12,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Reviewer is the codex code-review adapter.
 type Reviewer struct {
 	agent ports.Agent
 }
 
-// New builds the codex reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{agent: workeragent.New()}
 }
 
-// Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCodex
 }
 
-// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
-// the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
 	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
 		invalidator.InvalidateBinaryResolution()
@@ -41,12 +35,8 @@ var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 var _ ports.ReviewerChatProfile = (*Reviewer)(nil)
 
-// ReviewChatHarness selects Codex's typed app-server driver for review runs.
 func (r *Reviewer) ReviewChatHarness() domain.AgentHarness { return domain.HarnessCodex }
 
-// ReviewCommand launches the reviewer with an enforced read-only filesystem
-// sandbox. Auto approval lets the headless session request the narrowly needed
-// network access for posting the review and reporting its result.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config:           inv.Config,
@@ -67,8 +57,6 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	return ports.ReviewCommandSpec{Argv: insertBeforePrompt(argv, extra...)}, nil
 }
 
-// ReviewRestoreCommand resumes the reviewer Codex conversation captured from
-// Codex hooks when AO recreates the reviewer pane after worker restore.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{Permissions: ports.PermissionModeAuto})
 	if err != nil || !ok {
@@ -82,14 +70,10 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	return cmd, true, nil
 }
 
-// ReviewMessage returns the centrally-authored task for an existing pane.
 func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel stops the active Codex reviewer turn while preserving the
-// terminal pane for inspection. Codex advertises "esc to interrupt", and a
-// single Escape stops the active turn without queuing prompt text.
 func (r *Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{
 		Mode:  ports.ReviewCancelInput,
@@ -121,8 +105,6 @@ func insertBeforeLastArg(argv []string, extra ...string) []string {
 
 func codexReadOnlyArgs(inv ports.ReviewInvocation) ([]string, error) {
 	extra := []string{"--sandbox", "read-only"}
-	// Shell commands inherit only Codex's core environment by default. Preserve
-	// the AO location overrides the reviewer needs to submit to this daemon.
 	values := map[string]string{
 		"AO_PORT":     os.Getenv("AO_PORT"),
 		"AO_DATA_DIR": firstNonEmpty(inv.DataDir, os.Getenv("AO_DATA_DIR")),

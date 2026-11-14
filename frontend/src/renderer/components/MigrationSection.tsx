@@ -17,11 +17,6 @@ interface MigrationView {
 	legacyRoot: string;
 }
 
-// fetchMigrationSettings reads the persisted decision (app marker) and asks the
-// daemon whether legacy data is present. Unlike useMigrationOffer it never
-// short-circuits on a terminal status: Settings always shows the full state so a
-// user who declined or already completed can re-run. A 501/unreachable daemon
-// resolves to "not available", never an error.
 async function fetchMigrationSettings(): Promise<MigrationView> {
 	const migration = await aoBridge.appState.getMigration();
 	const { data, error } = await apiClient.GET("/api/v1/import");
@@ -56,11 +51,6 @@ function formatTime(iso: string | undefined, locale: string | undefined): string
 	return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(locale);
 }
 
-// MigrationSection is a drop-in Settings card for re-running the legacy-AO
-// import. It reads the persisted migration decision + the daemon's availability,
-// shows the last report/error, and exposes a Run / Re-run button that calls the
-// idempotent POST /api/v1/import (safe even when completed/declined/failed).
-// Issue #2205.
 export function MigrationSection() {
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();

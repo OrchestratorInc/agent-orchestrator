@@ -11,11 +11,10 @@ function seenPauses(): Set<string> {
 	try {
 		const saved: unknown = JSON.parse(window.localStorage.getItem(SEEN_KEY) ?? "[]");
 		if (Array.isArray(saved)) for (const key of saved) if (typeof key === "string") acknowledged.add(key);
-	} catch { /* Memory acknowledgements remain available when storage is denied. */ }
+	} catch { }
 	return acknowledged;
 }
 
-/** Keeps each active launch-configuration pause visible until acknowledged. */
 export function useAutoSpawnPauseNotice(projects: { id: string; name: string; hostId?: string; autoSpawnPauses?: AutoSpawnPause[] }[]) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -39,7 +38,7 @@ export function useAutoSpawnPauseNotice(projects: { id: string; name: string; ho
 						tone: "error", durationMs: 0, dedupeKey,
 						action: { label: t("autoSpawnPause.acknowledge", { defaultValue: "Acknowledge" }), run: () => {
 							seen.add(key);
-							try { window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch { /* Retained in memory for this app run. */ }
+							try { window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch { }
 						} },
 					},
 				);

@@ -134,14 +134,11 @@ func TestHealthProbesIncludeAppImageIdentity(t *testing.T) {
 	})
 }
 
-// TestServerLifecycle exercises the full Run loop: bind an ephemeral port,
-// publish running.json, serve a request, then cancel the context and confirm a
-// clean shutdown that removes the handshake file.
 func TestServerLifecycle(t *testing.T) {
 	runPath := filepath.Join(t.TempDir(), "running.json")
 	cfg := config.Config{
 		Host:            "127.0.0.1",
-		Port:            0, // let the OS pick a free port — no conflict with a real daemon
+		Port:            0,
 		ShutdownTimeout: 5 * time.Second,
 		RunFilePath:     runPath,
 	}
@@ -156,7 +153,6 @@ func TestServerLifecycle(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- srv.Run(ctx) }()
 
-	// Wait for the handshake file to confirm the server is up.
 	base := "http://" + srv.Addr().String()
 	waitForHealth(t, base)
 
@@ -244,11 +240,6 @@ func TestServerShutdownEndpoint(t *testing.T) {
 	base := "http://" + srv.Addr().String()
 	waitForHealth(t, base)
 
-	// Not http.Post: the shared DefaultTransport races the health poll's conn
-	// return-to-pool and dials a spare that never carries a request; the server
-	// then waits on that silent conn for the whole ShutdownTimeout (observed as
-	// a flaky 5s failure under -race). DisableKeepAlives keeps this POST off
-	// the shared pool entirely.
 	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	resp, err := client.Post(base+"/shutdown", "application/json", nil)
 	if err != nil {
@@ -275,11 +266,6 @@ func TestServerShutdownEndpoint(t *testing.T) {
 
 func waitForHealth(t *testing.T, base string) {
 	t.Helper()
-	// Per-request timeout so a stalled connect or hung handshake doesn't park
-	// the test for the full Go test timeout; the outer deadline only bounds
-	// the polling loop, not any single GET. Keep-alives are off for the reason
-	// given in TestServerShutdownEndpoint: a pooled spare conn that never carries a
-	// request holds graceful shutdown for the whole ShutdownTimeout.
 	client := &http.Client{Timeout: 500 * time.Millisecond, Transport: &http.Transport{DisableKeepAlives: true}}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -295,9 +281,6 @@ func waitForHealth(t *testing.T, base string) {
 	t.Fatal("server did not become healthy within timeout")
 }
 
-// TestNewFallsBackOnPortConflict confirms that when the configured port is
-// already held, the constructor binds an ephemeral port instead of failing, so
-// the desktop supervisor never gets stuck on "daemon not ready".
 func TestNewFallsBackOnPortConflict(t *testing.T) {
 	cfg := config.Config{Host: "127.0.0.1", Port: 0, RunFilePath: filepath.Join(t.TempDir(), "r.json")}
 
@@ -307,8 +290,6 @@ func TestNewFallsBackOnPortConflict(t *testing.T) {
 	}
 	defer closeListeners(first)
 
-	// Request the exact port the first server took; the second server should
-	// fall back to a different, ephemeral port rather than error out.
 	conflict := config.Config{Host: "127.0.0.1", Port: first.boundPort(), RunFilePath: cfg.RunFilePath}
 	second, err := NewWithDeps(conflict, discardLogger(), nil, APIDeps{})
 	if err != nil {
@@ -324,7 +305,6 @@ func TestNewFallsBackOnPortConflict(t *testing.T) {
 	}
 }
 
-// closeListeners releases a constructed Server's sockets without running it.
 func closeListeners(s *Server) {
 	_ = s.listen.Close()
 	if s.listen6 != nil {
@@ -332,7 +312,6 @@ func closeListeners(s *Server) {
 	}
 }
 
-// requireIPv6Loopback skips a test on a host without an IPv6 loopback.
 func requireIPv6Loopback(t *testing.T) {
 	t.Helper()
 	ln, err := net.Listen("tcp6", "[::1]:0")
@@ -342,7 +321,6 @@ func requireIPv6Loopback(t *testing.T) {
 	_ = ln.Close()
 }
 
-// probeIPv6Loopback reads a health probe and its ipv6Loopback flag.
 func probeIPv6Loopback(t *testing.T, base string) (pid int, ipv6Loopback bool) {
 	t.Helper()
 	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
@@ -364,9 +342,6 @@ func probeIPv6Loopback(t *testing.T, base string) (pid int, ipv6Loopback bool) {
 	return body.PID, *body.IPv6Loopback
 }
 
-// The desktop opens event streams on a *.localhost name, which Chromium
-// resolves to ::1 first. The daemon serves the same router there, at the same
-// port, so that name always reaches it; the probes say so.
 func TestServerAlsoServesIPv6Loopback(t *testing.T) {
 	requireIPv6Loopback(t)
 	cfg := config.Config{Host: "127.0.0.1", Port: 0, ShutdownTimeout: 5 * time.Second, RunFilePath: filepath.Join(t.TempDir(), "running.json")}
@@ -401,7 +376,6 @@ func TestServerAlsoServesIPv6Loopback(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not return after context cancel")
 	}
-	// Shutdown released both addresses.
 	if ln, err := net.Listen("tcp6", base6[len("http://"):]); err != nil {
 		t.Fatalf("[::1]:%d still held after shutdown: %v", srv.boundPort(), err)
 	} else {
@@ -409,9 +383,6 @@ func TestServerAlsoServesIPv6Loopback(t *testing.T) {
 	}
 }
 
-// Another process on [::1] at the daemon's port would receive whatever the
-// desktop sends to a *.localhost name. The daemon keeps serving 127.0.0.1 and
-// reports the IPv6 listener down, so the desktop stays on 127.0.0.1.
 func TestServerReportsIPv6LoopbackTaken(t *testing.T) {
 	requireIPv6Loopback(t)
 	for attempt := 0; ; attempt++ {
@@ -436,7 +407,6 @@ func TestServerReportsIPv6LoopbackTaken(t *testing.T) {
 			t.Fatalf("New: %v", err)
 		}
 		if srv.boundPort() != port {
-			// Something took the IPv4 port in between; try another.
 			closeListeners(srv)
 			_ = squatter.Close()
 			if attempt < 5 {
@@ -464,8 +434,6 @@ func TestServerReportsIPv6LoopbackTaken(t *testing.T) {
 	}
 }
 
-// Only the loopback daemon binds [::1]; a test or caller configuring another
-// host gets no second listener.
 func TestBindIPv6LoopbackOnlyForTheLoopbackHost(t *testing.T) {
 	primary, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {

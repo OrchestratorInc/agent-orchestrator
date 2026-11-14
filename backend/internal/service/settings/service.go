@@ -1,8 +1,3 @@
-// Package settings owns AO's daemon-side user preferences.
-//
-// It exists so every spawn surface — desktop, mobile, `ao spawn`, headless —
-// resolves one value. A renderer-held preference would look correct in Settings
-// while disagreeing with the CLI, which is worse than having no control.
 package settings
 
 import (
@@ -21,7 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Store is the durable preference surface.
 type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
@@ -32,46 +26,25 @@ type Store interface {
 	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
 }
 
-// Snapshot is the current preference set.
 type Snapshot struct {
 	HarnessDefaults        map[string]domain.HarnessDefault
 	DefaultSessionMode     domain.SessionMode
 	ChatHibernationEnabled bool
-	// VersionRefresh moves idle open sessions to a harness release installed
-	// while they ran (Settings, General). On by default.
-	VersionRefresh bool
-	// ComputerUse gives new chat sessions the computer-use tools and their
-	// standing instruction (Settings, Computer use agents). Off by default.
-	ComputerUse bool
-	// SessionRetentionDays is how long an archived session whose worktree is
-	// released is kept before the daemon deletes it (Settings, General). 0, the
-	// default, keeps it.
-	SessionRetentionDays int
-	AccountHandoff       bool
-	UpdatedAt            time.Time
+	VersionRefresh         bool
+	ComputerUse            bool
+	SessionRetentionDays   int
+	AccountHandoff         bool
+	UpdatedAt              time.Time
 }
 
-// Offering reports which AO offerings this daemon exposes to clients. It is
-// resolved once at boot from daemon config: offering gates are a deployment
-// decision, not a user preference, so they ride alongside the preferences the
-// settings endpoint serves rather than living in the durable store.
 type Offering struct {
-	// Client is the deployment's client identity (AO_CLIENT); empty when unset.
-	Client string
-	// LocalEnabled reports whether the local offering is available.
-	LocalEnabled bool
-	// CloudOffering reports whether the cloud offering is available
-	// (AO_CLOUD_OFFERING, on unless switched off).
-	CloudOffering bool
-	// CloudControlPlaneURL is the cloud control plane base URL; empty when
-	// no control plane is configured.
+	Client               string
+	LocalEnabled         bool
+	CloudOffering        bool
 	CloudControlPlaneURL string
-	// TrackerIntakeEnabled reports the AO_TRACKER_INTAKE gate. Clients need it
-	// to avoid offering a per-project intake control the daemon will ignore.
 	TrackerIntakeEnabled bool
 }
 
-// OfferingFromConfig derives the offering gates from daemon config.
 func OfferingFromConfig(cfg config.Config) Offering {
 	return Offering{
 		Client:               cfg.Client,
@@ -82,43 +55,30 @@ func OfferingFromConfig(cfg config.Config) Offering {
 	}
 }
 
-// CloudEnabled resolves the effective cloud gate: on for everyone whenever the
-// offering is available and a control plane is configured. A missing
-// control-plane URL fails closed instead of surfacing broken cloud UI.
 func (o Offering) CloudEnabled() bool {
 	return o.CloudOffering && o.CloudControlPlaneURL != ""
 }
 
-// ChatCapability reports which harnesses can run in chat mode, so the UI can warn
-// that choosing chat narrows the agents available rather than letting the user
-// discover it at spawn time.
 type ChatCapability interface {
 	SupportsChat(harness domain.AgentHarness) bool
 }
 
-// Service reads and writes preferences.
 type Service struct {
 	store           Store
 	chat            ChatCapability
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
-	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
-	versionRefresh atomic.Int32
-	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
-	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
+	versionRefresh  atomic.Int32
+	cuaInstalled    atomic.Pointer[func(context.Context) (bool, error)]
 }
 
-// errCuaDriverMissing refuses turning computer use on without Cua Driver.
 var errCuaDriverMissing = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Install Cua Driver in Settings > Computer use agents before letting agents use this computer.", nil)
 
-// SetCuaDriverInstalled supplies the check SetComputerUse runs before turning
-// computer use on.
 func (s *Service) SetCuaDriverInstalled(installed func(context.Context) (bool, error)) {
 	s.cuaInstalled.Store(&installed)
 }
 
-// New builds the service.
 func New(store Store, chat ChatCapability, offering Offering, now func() time.Time) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -126,12 +86,10 @@ func New(store Store, chat ChatCapability, offering Offering, now func() time.Ti
 	return &Service{store: store, chat: chat, offering: offering, now: now}
 }
 
-// Offering reports the boot-resolved offering gates.
 func (s *Service) Offering() Offering {
 	return s.offering
 }
 
-// Get returns the current preferences.
 func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
@@ -141,13 +99,11 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	return snapshot, err
 }
 
-// AccountHandoffEnabled reports the "Move to another account at a usage limit" setting.
 func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	return err == nil && snapshot.AccountHandoff
 }
 
-// SetAccountHandoff turns the usage-limit account handoff on or off.
 func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
@@ -163,9 +119,6 @@ func (s *Service) cacheVersionRefresh(enabled bool) {
 	}
 }
 
-// VersionRefreshEnabled reports the user's "move open sessions to new
-// versions" toggle. It reads the store once and then serves the cached value;
-// an unreadable store counts as off until a read succeeds.
 func (s *Service) VersionRefreshEnabled(ctx context.Context) bool {
 	switch s.versionRefresh.Load() {
 	case 1:
@@ -181,7 +134,6 @@ func (s *Service) VersionRefreshEnabled(ctx context.Context) bool {
 	return snapshot.VersionRefresh
 }
 
-// SetVersionRefresh changes whether idle open sessions move to new harness releases.
 func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot, error) {
 	if err := s.store.SetVersionRefresh(ctx, enabled, s.now()); err != nil {
 		return Snapshot{}, err
@@ -190,16 +142,11 @@ func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot
 	return s.Get(ctx)
 }
 
-// ComputerUseEnabled reports the user's "Let agents use this computer"
-// toggle. It is read once per session spawn, so it goes to the store each
-// time; an unreadable store counts as off.
 func (s *Service) ComputerUseEnabled(ctx context.Context) bool {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	return err == nil && snapshot.ComputerUse
 }
 
-// SetComputerUse changes whether new chat sessions get the computer-use tools.
-// Turning it on needs Cua Driver installed; turning it off always works.
 func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, error) {
 	if installed := s.cuaInstalled.Load(); enabled && installed != nil {
 		ok, err := (*installed)(ctx)
@@ -216,9 +163,6 @@ func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, e
 	return s.Get(ctx)
 }
 
-// DefaultSessionMode resolves the default for a spawn that named no mode. A read
-// failure falls back to the compatibility default rather than failing the spawn:
-// an unreadable preference should not stop work.
 func (s *Service) DefaultSessionMode(ctx context.Context) domain.SessionMode {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	if err != nil {
@@ -227,10 +171,6 @@ func (s *Service) DefaultSessionMode(ctx context.Context) domain.SessionMode {
 	return domain.NormalizeSessionMode(snapshot.DefaultSessionMode)
 }
 
-// SetDefaultSessionMode changes the default for sessions created afterwards.
-//
-// It deliberately does not touch existing sessions or their controllers. This
-// is a preference for future sessions, not an implicit migration of the present.
 func (s *Service) SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (Snapshot, error) {
 	if !mode.Valid() {
 		return Snapshot{}, fmt.Errorf("%w: %q", ports.ErrChatUnsupported, mode)
@@ -241,11 +181,8 @@ func (s *Service) SetDefaultSessionMode(ctx context.Context, mode domain.Session
 	return s.Get(ctx)
 }
 
-// maxSessionRetentionDays bounds the retention setting to ten years.
 const maxSessionRetentionDays = 3650
 
-// SetSessionRetentionDays sets how long archived sessions are kept; 0 keeps
-// them. The daemon's next cleanup pass applies it.
 func (s *Service) SetSessionRetentionDays(ctx context.Context, days int) (Snapshot, error) {
 	if days < 0 || days > maxSessionRetentionDays {
 		return Snapshot{}, apierr.Invalid("SESSION_RETENTION_INVALID", fmt.Sprintf("days must be between 0 and %d", maxSessionRetentionDays), nil)
@@ -256,14 +193,10 @@ func (s *Service) SetSessionRetentionDays(ctx context.Context, days int) (Snapsh
 	return s.Get(ctx)
 }
 
-// ChatHibernationEnabled is false on every daemon boot until Developer Mode
-// enables it through the settings route.
 func (s *Service) ChatHibernationEnabled() bool { return s.chatHibernation.Load() }
 
-// SetChatHibernationEnabled changes the in-memory hibernation gate.
 func (s *Service) SetChatHibernationEnabled(ctx context.Context, enabled bool) (Snapshot, error) {
 	if !enabled {
-		// Disabling must take effect even if reading the response later fails.
 		s.chatHibernation.Store(false)
 	}
 	snapshot, err := s.store.GetAppSettings(ctx)
@@ -277,7 +210,6 @@ func (s *Service) SetChatHibernationEnabled(ctx context.Context, enabled bool) (
 	return snapshot, nil
 }
 
-// ChatHarnesses lists the harnesses that can run in chat mode today.
 func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness {
 	if s.chat == nil {
 		return nil
@@ -291,11 +223,8 @@ func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.Agent
 	return out
 }
 
-// maxDisabledModels bounds the picker denylist; the largest catalog (OpenCode
-// via models.dev) lists under 9,000 models.
 const maxDisabledModels = 20000
 
-// normalizeDisabledModels trims and de-duplicates ids, keeping the given order.
 func normalizeDisabledModels(ids []string) ([]string, bool) {
 	if len(ids) > maxDisabledModels {
 		return nil, false
@@ -319,15 +248,10 @@ func normalizeDisabledModels(ids []string) ([]string, bool) {
 	return out, true
 }
 
-// ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
 var ErrInvalidHarnessDefault = errors.New("invalid harness default")
 
-// ErrUnknownHarness marks a preference for a harness AO does not know.
 var ErrUnknownHarness = errors.New("unknown harness")
 
-// SetHarnessDefault replaces the selected harness's picker preference. The
-// store writes only that harness's entry, so concurrent saves for other
-// harnesses are kept.
 func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (Snapshot, error) {
 	if !slices.Contains(domain.AllHarnesses, agent) {
 		return Snapshot{}, fmt.Errorf("%w %q", ErrUnknownHarness, agent)

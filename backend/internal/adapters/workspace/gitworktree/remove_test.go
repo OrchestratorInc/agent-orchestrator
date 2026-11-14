@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// shrinkRemoveAllRetry makes the retry budget test-fast and treats every stubbed
-// error as retryable, restoring the production values afterwards. Without the
-// predicate override the retry assertions would not run on non-Windows CI.
 func shrinkRemoveAllRetry(t *testing.T, attempts int) {
 	t.Helper()
 	origAttempts, origBackoff, origCap := removeAllAttempts, removeAllBackoff, removeAllBackoffCap
@@ -24,7 +21,6 @@ func shrinkRemoveAllRetry(t *testing.T, attempts int) {
 	})
 }
 
-// stubRemoveAll replaces the real os.RemoveAll for the duration of a test.
 func stubRemoveAll(t *testing.T, fn func(string) error) {
 	t.Helper()
 	orig := removeAll
@@ -51,8 +47,6 @@ func TestRemoveAllWithRetryRemovesPopulatedDirectory(t *testing.T) {
 	}
 }
 
-// A path that was never there is success, matching os.RemoveAll's own
-// semantics — teardown must be idempotent.
 func TestRemoveAllWithRetryTreatsMissingPathAsSuccess(t *testing.T) {
 	shrinkRemoveAllRetry(t, 3)
 	if err := removeAllWithRetry(context.Background(), filepath.Join(t.TempDir(), "never-existed")); err != nil {
@@ -60,11 +54,6 @@ func TestRemoveAllWithRetryTreatsMissingPathAsSuccess(t *testing.T) {
 	}
 }
 
-// TestRemoveAllWithRetrySucceedsAfterTransientFailure is the regression for the
-// Windows sharing violation this retry exists for: `ao session kill` destroys a
-// session's scoped shell terminal and then removes its worktree in the same
-// request, but the PTY's handle on that directory can outlive the call that
-// killed it, so the first removal fails and a moment later succeeds.
 func TestRemoveAllWithRetrySucceedsAfterTransientFailure(t *testing.T) {
 	shrinkRemoveAllRetry(t, 5)
 	sharingViolation := errors.New("The process cannot access the file because it is being used by another process")
@@ -85,8 +74,6 @@ func TestRemoveAllWithRetrySucceedsAfterTransientFailure(t *testing.T) {
 	}
 }
 
-// A path that never becomes removable must surface the error rather than
-// retrying forever — a permanently wedged directory has to fail loudly.
 func TestRemoveAllWithRetryGivesUpAndReturnsError(t *testing.T) {
 	shrinkRemoveAllRetry(t, 4)
 	wedged := errors.New("still locked")
@@ -108,8 +95,6 @@ func TestRemoveAllWithRetryGivesUpAndReturnsError(t *testing.T) {
 	}
 }
 
-// os.ErrNotExist must short-circuit immediately: a worktree already gone is
-// not a failure to retry against.
 func TestRemoveAllWithRetryDoesNotRetryMissingPath(t *testing.T) {
 	shrinkRemoveAllRetry(t, 5)
 	var calls int
@@ -126,9 +111,6 @@ func TestRemoveAllWithRetryDoesNotRetryMissingPath(t *testing.T) {
 	}
 }
 
-// A non-retryable failure is permanent as far as the remover is concerned. It
-// must surface immediately instead of being mislabeled as a deferred handle
-// release after sleeping through the full retry budget.
 func TestRemoveAllWithRetryReturnsPermanentFailureImmediately(t *testing.T) {
 	shrinkRemoveAllRetry(t, 5)
 	removeAllRetryable = func(error) bool { return false }
@@ -177,11 +159,6 @@ func TestRemoveAllWithRetryStopsWhenFailureBecomesPermanent(t *testing.T) {
 	}
 }
 
-// TestRemoveAllWithRetryStopsOnContextCancellation: time.Sleep is
-// uninterruptible, so without a ctx check a caller that has already given up
-// still pays out the remaining budget — and Session Manager tears a workspace
-// project's repos down serially, so that cost repeats per repo while the
-// session's shell-terminal gate is held.
 func TestRemoveAllWithRetryStopsOnContextCancellation(t *testing.T) {
 	shrinkRemoveAllRetry(t, 50)
 	removeAllBackoff, removeAllBackoffCap = 20*time.Millisecond, 20*time.Millisecond

@@ -59,8 +59,6 @@ func TestBootstrapCannotCloseItsOwnElements(t *testing.T) {
 	}
 }
 
-// What PublishRender stored before the bootstrap moved to serve time: the
-// optional viewport meta, then the theme style, base style, and script.
 const earlierStoredPage = "<!doctype html>" +
 	`<meta name="viewport" content="width=device-width, initial-scale=1">` +
 	`<style id="ao-theme">:root{--old-theme:1}</style><style>html{--old-base:1}</style>` +
@@ -88,8 +86,6 @@ func TestDocumentReplacesAnEarlierBootstrap(t *testing.T) {
 	}
 }
 
-// Only the block right after the doctype is AO's; the same markup later in the
-// page is the agent's own (a page about renders, say), and stays.
 func TestDocumentKeepsTheThemeMarkupInThePagesOwnContent(t *testing.T) {
 	page := "<!doctype html><p>Before</p><pre>&lt;style id=\"ao-theme\"&gt;</pre>" +
 		`<script>const t = '<style id="ao-theme">';</script><p>After</p><script>draw()</script>`
@@ -123,9 +119,6 @@ func TestVersionIsAShortDigestOfTheBootstrap(t *testing.T) {
 }
 
 func TestBootstrapStylesFullscreenAndScrollableFrames(t *testing.T) {
-	// Fullscreen centers a width-capped top-level block (the page's own margins
-	// win over this low-specificity rule) and shows the scrollbar; a scrollable
-	// frame, AO's own field, shows the scrollbar alone.
 	for _, want := range []string{
 		`"body>*{margin-inline:auto}" + showScrollbar`,
 		`showScrollbar = "html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}"`,
@@ -138,7 +131,6 @@ func TestBootstrapStylesFullscreenAndScrollableFrames(t *testing.T) {
 	}
 }
 
-// The cases mirror renderFileName in frontend/src/renderer/lib/render-frame.test.ts.
 func TestFileNameMatchesTheRenderer(t *testing.T) {
 	for title, want := range map[string]string{
 		"Turns by day":                          "Turns by day.html",
@@ -149,8 +141,7 @@ func TestFileNameMatchesTheRenderer(t *testing.T) {
 		strings.Repeat("y", 300):                strings.Repeat("y", 120) + ".html",
 		strings.Repeat("é", 130):                strings.Repeat("é", 120) + ".html",
 		"tab\there\u00a0and\u2003wide   spaces": "tab here and wide spaces.html",
-		// JS \s matches U+FEFF; Go's unicode.IsSpace does not.
-		"\ufeffTurns\ufeffby day\ufeff": "Turns by day.html",
+		"\ufeffTurns\ufeffby day\ufeff":         "Turns by day.html",
 	} {
 		if got := FileName(title); got != want {
 			t.Errorf("FileName(%q) = %q, want %q", title, got, want)

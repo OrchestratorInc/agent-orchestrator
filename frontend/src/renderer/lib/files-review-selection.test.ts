@@ -28,7 +28,6 @@ const SHA_C = "c".repeat(40);
 const BRANCH: FilesBranchTarget = { kind: "branch", name: "feature/login", tipSha: SHA_A };
 const PR: FilesBranchTarget = { kind: "pull_request", number: 42, url: "https://github.com/acme/app/pull/42", branch: "fix/crash" };
 
-// Complete enough for a commit's files, which always carry editable and a fingerprint.
 function file(path: string, overrides: Partial<WorkspaceFileSummary> = {}): WorkspaceCommitSummary["files"][number] {
 	return { path, status: "modified", additions: 2, deletions: 1, size: 10, binary: false, editable: false, fileFingerprint: `fp:${path}`, ...overrides };
 }
@@ -314,7 +313,6 @@ describe("branch rows", () => {
 		const rows = [checkedOut, local, pr];
 		expect(findBranchRow(rows, CHECKED_OUT_BRANCH)).toBe(checkedOut);
 		expect(findBranchRow(rows, { kind: "branch", name: "main" })).toBe(local);
-		// A picked branch that is checked out since is still there to read.
 		expect(findBranchRow(rows, { kind: "branch", name: "feature/login" })).toBe(checkedOut);
 		expect(findBranchRow(rows, { kind: "branch", name: "deleted" })).toBeUndefined();
 		expect(findBranchRow(rows, PR)).toBe(pr);

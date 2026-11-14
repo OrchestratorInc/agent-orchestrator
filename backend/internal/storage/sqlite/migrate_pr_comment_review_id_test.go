@@ -7,9 +7,6 @@ import (
 func TestMigrateRecognizesPreLedgeredPRCommentReviewID(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 104)
 
-	// Reproduce a database opened while this migration was still being
-	// renumbered: the physical column exists, but neither its canonical ledger
-	// entry nor the newly assigned 0105 migration has run.
 	if _, err := db.Exec(`
 ALTER TABLE pr_comment ADD COLUMN review_id TEXT NOT NULL DEFAULT '';
 UPDATE app_settings SET default_session_mode = 'tui' WHERE id = 1;

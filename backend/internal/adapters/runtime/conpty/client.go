@@ -1,6 +1,3 @@
-// client.go - loopback TCP client helpers that mirror pty-client.ts.
-// Each function dials the host addr fresh (short-lived connection) and
-// returns without maintaining state. Cross-platform: uses only stdlib net.
 package conpty
 
 import (
@@ -16,12 +13,8 @@ import (
 )
 
 const (
-	// ptyInputChunkRunes is the max runes per terminal-input frame.
-	// Mirrors PTY_INPUT_CHUNK_CHARS in pty-client.ts.
 	ptyInputChunkRunes = 512
-	// ptyInputChunkDelay is the inter-chunk delay. Mirrors PTY_INPUT_CHUNK_DELAY_MS.
 	ptyInputChunkDelay = 15 * time.Millisecond
-	// ptyInputEnterDelay is the pause before sending Enter. Mirrors PTY_INPUT_ENTER_DELAY_MS.
 	ptyInputEnterDelay = 300 * time.Millisecond
 
 	dialTimeout      = 3 * time.Second
@@ -29,7 +22,6 @@ const (
 	isAliveTimeout   = 2 * time.Second
 )
 
-// dialHost opens a TCP connection to addr with a deadline. Callers close it.
 func dialHost(addr string, timeout time.Duration) (net.Conn, error) {
 	return net.DialTimeout("tcp", addr, timeout)
 }
@@ -39,9 +31,6 @@ func dialHostContext(ctx context.Context, addr string, timeout time.Duration) (n
 	return dialer.DialContext(ctx, "tcp", addr)
 }
 
-// armClientDeadline bounds host I/O by both the client's transport timeout and
-// its caller context. AfterFunc also interrupts an in-flight Read immediately
-// when a context without an earlier deadline is cancelled.
 func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration) func() {
 	deadline := time.Now().Add(timeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
@@ -52,9 +41,6 @@ func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration
 	return func() { _ = stop() }
 }
 
-// clientSendMessage chunks message by 512 runes and sends each as a
-// MsgTerminalInput frame with 15ms gaps, then pauses 300ms and sends "\r".
-// Mirrors ptyHostSendMessage from pty-client.ts.
 func clientSendMessage(addr, message string) error {
 	conn, err := dialHost(addr, dialTimeout)
 	if err != nil {
@@ -76,16 +62,11 @@ func clientSendMessage(addr, message string) error {
 		if _, err := conn.Write(frame); err != nil {
 			return err
 		}
-		// Inter-chunk delay only between chunks, not after the last one.
 		if end < len(runes) {
 			time.Sleep(ptyInputChunkDelay)
 		}
 	}
 
-	// Brief pause before Enter (matches TS: Enter sent as a separate frame).
-	// Skipped for an empty message — an Enter-only nudge has no paste to let
-	// settle, and the pause would only widen the guard-read→Enter window
-	// (mirrors the tmux runtime's enterDelay contract).
 	if delay := inputdelay.ForMessage(message, ptyInputEnterDelay); delay > 0 {
 		time.Sleep(delay)
 	}
@@ -111,9 +92,6 @@ func clientSendInput(addr, input string) error {
 	return err
 }
 
-// clientGetOutput sends MsgGetOutputReq and reads frames until MsgGetOutputRes.
-// Returns "" on timeout or connection failure (no error), matching the TS.
-// lines <= 0 is handled by the caller (runtime.go rejects it before calling).
 func clientGetOutput(ctx context.Context, addr string, lines int) (string, error) {
 	return clientReadOutput(ctx, addr, lines, MsgGetOutputReq, MsgGetOutputRes)
 }
@@ -128,14 +106,14 @@ func clientReadOutput(ctx context.Context, addr string, lines int, requestType, 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
-		return "", nil // ponytail: connect failure -> "" like the TS
+		return "", nil
 	}
 	defer func() { _ = conn.Close() }()
 	stopCancellation := armClientDeadline(ctx, conn, getOutputTimeout)
 	defer stopCancellation()
 
 	req, _ := json.Marshal(GetOutputReq{Lines: lines})
-	reqFrame, _ := EncodeMessage(requestType, req) // req is small JSON, never overflows uint32
+	reqFrame, _ := EncodeMessage(requestType, req)
 	if _, err := conn.Write(reqFrame); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
@@ -171,36 +149,19 @@ func clientReadOutput(ctx context.Context, addr string, lines int, requestType, 
 			break
 		}
 	}
-	// Drain the channel one last time after the read loop ends.
 	select {
 	case text := <-resultC:
 		return text, nil
 	default:
-		return "", nil // timeout or EOF before response
+		return "", nil
 	}
 }
 
-// clientIsAlive probes the host with MsgStatusReq and distinguishes three
-// outcomes for the reaper (see IsAlive in runtime.go):
-//
-//   - alive==true,  transientErr==nil: a valid MsgStatusRes was received.
-//   - alive==false, transientErr==nil: the host is DEFINITIVELY gone (the dial
-//     was refused: nothing is listening on the loopback addr).
-//   - alive==false, transientErr!=nil: a TRANSIENT probe failure (network
-//     timeout, or any connected-then-failed I/O error). The reaper records this
-//     as ProbeFailed and retries instead of reaping a possibly-live session.
-//
-// When unsure, we prefer transient (return the error) rather than reporting
-// death. Mirrors ptyHostIsAlive from pty-client.ts on the alive path: host
-// reachable == alive, regardless of the inner agent's alive field.
 func clientIsAlive(addr string) (alive bool, transientErr error) {
 	_, hostAlive, err := clientStatus(addr)
 	return hostAlive, err
 }
 
-// clientStatus returns both pty-host reachability and the state of the child
-// process managed by that host. A reachable host remains the runtime after its
-// child exits.
 func clientStatus(addr string) (status StatusPayload, hostAlive bool, transientErr error) {
 	return clientStatusContext(context.Background(), addr)
 }
@@ -211,9 +172,6 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return StatusPayload{}, false, ctxErr
 		}
-		// A dial timeout is transient (the loopback hiccupped). A refused
-		// connection means nothing is listening -> definitively gone. Any
-		// other dial failure is treated as transient ("when unsure, retry").
 		if isTimeout(err) {
 			return StatusPayload{}, false, err
 		}
@@ -226,13 +184,11 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 	stopCancellation := armClientDeadline(ctx, conn, isAliveTimeout)
 	defer stopCancellation()
 
-	statusReqFrame, _ := EncodeMessage(MsgStatusReq, nil) // nil payload, never overflows
+	statusReqFrame, _ := EncodeMessage(MsgStatusReq, nil)
 	if _, err := conn.Write(statusReqFrame); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return StatusPayload{}, false, ctxErr
 		}
-		// We connected, then the write failed: connected-then-failed I/O is
-		// transient (the host may still be up; the conn was disrupted).
 		return StatusPayload{}, false, err
 	}
 
@@ -282,23 +238,15 @@ func clientStatusContext(ctx context.Context, addr string) (status StatusPayload
 		}
 		return result.payload, true, nil
 	default:
-		// Connected but never got a STATUS_RES: read timeout or mid-read EOF.
-		// lastErr is the error that broke the read loop (always non-nil here).
 		return StatusPayload{}, false, lastErr
 	}
 }
 
-// isTimeout reports whether err is a network timeout (dial timeout or
-// read-deadline expiry). Cross-platform via the net.Error interface.
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
-// isConnRefused reports whether err is a fast "connection refused" dial
-// failure (nothing listening). errors.Is(ECONNREFUSED) covers Unix and modern
-// Windows; the explicit WSAECONNREFUSED (10061) guards older Windows runtimes
-// where the errno is not mapped to syscall.ECONNREFUSED.
 func isConnRefused(err error) bool {
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return true
@@ -307,9 +255,6 @@ func isConnRefused(err error) bool {
 	return errors.Is(err, wsaeconnrefused)
 }
 
-// clientKill sends MsgKillReq. Connection refused is idempotent success because
-// the host is already absent; other transport failures are preserved so
-// Destroy can combine them with its final PID evidence.
 func clientKill(addr string) error {
 	conn, err := dialHost(addr, isAliveTimeout)
 	if err != nil {
@@ -320,15 +265,13 @@ func clientKill(addr string) error {
 	}
 	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(isAliveTimeout))
-	killFrame, _ := EncodeMessage(MsgKillReq, nil) // nil payload, never overflows
+	killFrame, _ := EncodeMessage(MsgKillReq, nil)
 	if _, err := conn.Write(killFrame); err != nil {
 		return fmt.Errorf("write pty-host kill request: %w", err)
 	}
 	return nil
 }
 
-// clientWatchForeground calls fn for every MsgForegroundState until ctx ends
-// or the host goes away.
 func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload)) error {
 	return clientWatchFrames(ctx, addr, MsgWatchForegroundReq, MsgForegroundState, func(payload []byte) {
 		var state ForegroundPayload
@@ -338,8 +281,6 @@ func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundP
 	})
 }
 
-// clientWatchTitle calls fn for every MsgTitleState until ctx ends or the host
-// goes away. The host sends its current title first.
 func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload)) error {
 	return clientWatchFrames(ctx, addr, MsgWatchTitleReq, MsgTitleState, func(payload []byte) {
 		var state TitlePayload
@@ -349,8 +290,6 @@ func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload)) e
 	})
 }
 
-// clientWatchFrames subscribes with request and passes each response frame's
-// payload to fn. The replay sent before the request is ignored.
 func clientWatchFrames(ctx context.Context, addr string, request, response byte, fn func(payload []byte)) error {
 	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {

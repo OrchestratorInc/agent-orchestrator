@@ -183,7 +183,6 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		renderDialog(true);
 
 		await user.click(screen.getByRole("button", { name: "Change Toggle terminal" }));
-		// With Shift held the browser reports "{", so only the code ties it to the default.
 		fireEvent.keyDown(window, { key: "{", code: "BracketLeft", metaKey: true, shiftKey: true });
 
 		expect(await screen.findByRole("dialog", { name: "Shortcut already in use" })).toBeInTheDocument();

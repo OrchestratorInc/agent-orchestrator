@@ -20,8 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// forkSourceWorktree makes a source session worktree with an unpushed commit,
-// an edit, and a new file.
 func forkSourceWorktree(t *testing.T, repo string) string {
 	t.Helper()
 	src := filepath.Join(t.TempDir(), "source")
@@ -101,7 +99,6 @@ func TestForkRestoreFailureRollsBack(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error when the files can't be copied")
 	}
-	// The caller rolls back a returned worktree; it must be reported.
 	if ws.Path == "" {
 		t.Fatal("the created worktree must be returned for rollback")
 	}
@@ -128,7 +125,6 @@ func TestChatForkStartsFromPreparedConversation(t *testing.T) {
 	if len(launcher.started) != 1 || launcher.started[0].ProviderConversationID != "forked-thread" {
 		t.Fatalf("started = %+v", launcher.started)
 	}
-	// So the fork's conversation starts with, and saves, the original's settings.
 	if !launcher.started[0].ForkFirstStart {
 		t.Fatal("the fork's first start isn't marked as one")
 	}
@@ -178,7 +174,6 @@ func TestForkCopiesArtifacts(t *testing.T) {
 	if err != nil || string(got) != "<h1>hi</h1>" {
 		t.Fatalf("artifact = %q, %v", got, err)
 	}
-	// The copy is independent: removing the source's artifacts keeps the fork's.
 	if err := os.RemoveAll(srcDir); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +232,6 @@ func TestForkPromptSurvivesRestore(t *testing.T) {
 	}
 }
 
-// transcriptAgent keeps each native session as <dir>/<id>.jsonl.
 type transcriptAgent struct {
 	fakeAgent
 	dir string
@@ -482,7 +476,6 @@ func TestOlderTurnForkGetsThatTurnsArtifacts(t *testing.T) {
 	writeTestFile(t, filepath.Join(src, "report.md"), "report v2")
 	writeTestFile(t, filepath.Join(src, "notes", "todo.md"), "created later")
 	writeTestFile(t, filepath.Join(src, "plain.txt"), "never versioned")
-	// Written before the turn and deleted after it: only its saved version is left.
 	gone := writeArtifactBlob(t, src, "deleted later")
 	if err := os.Chtimes(filepath.Join(src, "plain.txt"), before, before); err != nil {
 		t.Fatal(err)
@@ -622,7 +615,6 @@ func TestArchivingAnUnchangedForkRemovesItsWorktree(t *testing.T) {
 
 func TestForkFallsBackToTheDefaultModelWhenTheOriginalsIsRejected(t *testing.T) {
 	m, _, _, _ := newManager()
-	// The original's model now needs a newer Claude Code than this machine has.
 	m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "claude-opus-5-5", IsDefault: true},
 		{ID: "claude-opus-6", RequiresVersion: "9.0.0", UnavailableReason: "needs a newer Claude Code"},
@@ -669,9 +661,6 @@ func TestChatTextHandoffForkStartsWithTheNote(t *testing.T) {
 	}
 }
 
-// Restore recreates an archived fork's worktree at its start commit; its
-// starting files are written back, so archiving an untouched fork loses
-// nothing. An ordinary session's recreated worktree is left as it is.
 func TestRestoreRecreatedForkGetsItsStartingFilesBack(t *testing.T) {
 	m, st, _, _ := newManager()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -702,7 +691,6 @@ func TestRestoreRecreatedForkGetsItsStartingFilesBack(t *testing.T) {
 	if len(seeds.restoredBase) != 1 || seeds.restoredBase[0] != want {
 		t.Fatalf("starting files restored for %v, want only %q", seeds.restoredBase, want)
 	}
-	// A worktree that wasn't recreated keeps whatever it has.
 	if _, err := m.restoreSessionWorkspace(context.Background(), project, fork); err != nil {
 		t.Fatal(err)
 	}
@@ -711,8 +699,6 @@ func TestRestoreRecreatedForkGetsItsStartingFilesBack(t *testing.T) {
 	}
 }
 
-// A fork of an older turn copies only the attachments its conversation had
-// by then; a fork of the latest turn copies them all.
 func TestForkCopiesOnlyTheAttachmentsItsTurnHad(t *testing.T) {
 	m, _, _, _ := newManager()
 	m.dataDir = t.TempDir()
@@ -746,14 +732,10 @@ func TestForkCopiesOnlyTheAttachmentsItsTurnHad(t *testing.T) {
 	}
 }
 
-// A fork whose artifacts can't all be copied must not start with some of
-// them missing: the spawn fails and leaves nothing behind.
 func TestForkFailsWhenItsArtifactsCannotBeCopied(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
 	m.dataDir = t.TempDir()
-	// An older turn's saved version of report.md whose stored copy is gone,
-	// so copying it fails the same way on every system.
 	cutoff := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 	writeTestFile(t, filepath.Join(m.artifactDir("mer-0"), "report.md"), "report now")
 	m.store = artifactVersionStore{fakeStore: st, versions: map[string][]domain.SessionArtifactVersion{
@@ -777,10 +759,6 @@ func TestForkFailsWhenItsArtifactsCannotBeCopied(t *testing.T) {
 	}
 }
 
-// A fork of an older turn gets the artifacts that turn left, under the paths
-// they had then, even after a later turn renamed one. The real version store
-// moves a renamed file's history to its new path, so the fork reads the list
-// kept as the next turn started.
 func TestOlderTurnForkKeepsAnArtifactRenamedLater(t *testing.T) {
 	m, _, _, _ := newManager()
 	m.dataDir = t.TempDir()
@@ -808,7 +786,6 @@ func TestOlderTurnForkKeepsAnArtifactRenamedLater(t *testing.T) {
 		}
 	}
 	track()
-	// Turn two starts, then renames the page.
 	if err := capturer.SnapshotTurn(ctx, source, []string{"turn-2"}); err != nil {
 		t.Fatal(err)
 	}
@@ -830,9 +807,6 @@ func TestOlderTurnForkKeepsAnArtifactRenamedLater(t *testing.T) {
 	}
 }
 
-// The copied conversation names the original's worktree; the fork's agent is
-// told which folder that is, so it works on its own copy of those files. A
-// restored fork is told too.
 func TestForkPromptNamesTheOriginalsWorktree(t *testing.T) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)

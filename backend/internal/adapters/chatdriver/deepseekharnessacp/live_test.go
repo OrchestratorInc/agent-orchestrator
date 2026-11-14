@@ -12,14 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestLiveDeepSeekACPModelCatalog drives the installed DeepSeek Harness through
-// AO's own ACP client and asserts the contract this binding depends on: the
-// session advertises a model select plus the reasoning_effort select, and every
-// model it offers carries the opaque JSON-array value AO passes back.
-//
-// It is opt-in because it needs a real `dsh` install with a working model route:
-//
-//	AO_LIVE_DEEPSEEK=1 go test ./internal/adapters/chatdriver/deepseekacp/ -run Live -v
 func TestLiveDeepSeekACPModelCatalog(t *testing.T) {
 	if os.Getenv("AO_LIVE_DEEPSEEK") != "1" {
 		t.Skip("set AO_LIVE_DEEPSEEK=1 to test the installed DeepSeek Harness")
@@ -57,8 +49,6 @@ func TestLiveDeepSeekACPModelCatalog(t *testing.T) {
 		t.Fatal("model option has no current value")
 	}
 	for _, choice := range model.Choices {
-		// AO stores the advertised value verbatim and sends it back, so the
-		// JSON-array shape is a contract, not a formatting preference.
 		if len(choice.Value) == 0 || choice.Value[0] != '[' || choice.Value[len(choice.Value)-1] != ']' {
 			t.Fatalf("model choice %q is not a JSON array value", choice.Value)
 		}
@@ -68,7 +58,6 @@ func TestLiveDeepSeekACPModelCatalog(t *testing.T) {
 	if effort == nil {
 		t.Fatalf("session advertises no reasoning_effort option: %#v", options)
 	}
-	// The driver maps AO's vocabulary onto exactly these levels.
 	offered := map[string]bool{}
 	for _, choice := range effort.Choices {
 		offered[choice.Value] = true

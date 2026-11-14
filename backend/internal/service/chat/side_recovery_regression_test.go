@@ -62,8 +62,6 @@ func (c *terminalSideHistory) ReadHistory(context.Context) ([]ports.ChatEvent, e
 	return c.history, nil
 }
 
-// Exercise the public recovery boundary, not just the history reconciliation
-// helper: Electron's last snapshot predates an already-delivered completion.
 func TestSideLaunchRecoveryReconcilesStaleRunningSnapshot(t *testing.T) {
 	for _, completed := range []bool{true, false} {
 		name := "unknown outcome holds queue"
@@ -91,7 +89,6 @@ func TestSideLaunchRecoveryReconcilesStaleRunningSnapshot(t *testing.T) {
 					{Turn: domain.SideTurn{ID: "next", SideID: "recovered", ClientMessageID: "next-receipt", Text: "queued question", State: "queued", CreatedAt: now.Add(time.Second)}},
 				},
 			}}
-			// Match the real JSON transport between Electron and a replacement daemon.
 			raw, err := json.Marshal(records)
 			if err != nil {
 				t.Fatal(err)

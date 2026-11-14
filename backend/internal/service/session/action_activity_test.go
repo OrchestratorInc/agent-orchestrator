@@ -132,9 +132,6 @@ func TestTerminateRecordsOnSpawnParent(t *testing.T) {
 	}
 }
 
-// A child archived by the user (or another session) is not the parent's
-// action: it stays out of the parent's chat, where it would read as part of
-// whatever the parent was running then.
 func TestTerminateByOtherCallerStaysOutOfSpawnParent(t *testing.T) {
 	for name, ctx := range map[string]context.Context{
 		"user":          context.Background(),
@@ -380,7 +377,6 @@ func TestActionJoinsTheCallersRunningTurn(t *testing.T) {
 	if got := spawn(t, caller.With(context.Background(), "parent"), []string{"turn-1"}).TurnID; got != "turn-1" {
 		t.Fatalf("own command: turn = %q, want turn-1", got)
 	}
-	// A desktop click, another session's command, or overlapping turns stay on their own.
 	if got := spawn(t, context.Background(), []string{"turn-1"}).TurnID; got != "" {
 		t.Fatalf("no caller: turn = %q", got)
 	}

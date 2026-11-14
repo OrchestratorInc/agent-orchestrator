@@ -51,8 +51,6 @@ describe("subscribeCloudSessionEvents", () => {
 		const chat = vi.fn();
 		const pullRequests = vi.fn();
 		const setupLog = vi.fn();
-		// The chat (resuming after what its poll loaded), the header's live
-		// state, the inspector's pull requests and Setup log, all mounted at once.
 		const leave = [
 			subscribe(bridge, { onEvent: chat, resumeAfter: () => 40 }),
 			subscribe(bridge, { live: true }),
@@ -65,12 +63,10 @@ describe("subscribeCloudSessionEvents", () => {
 		bridge.emit("stream-1", eventFrame(41));
 		for (const listener of [chat, pullRequests, setupLog]) expect(listener).toHaveBeenCalledWith(expect.objectContaining({ sequence: 41 }));
 
-		// The chat closing keeps the stream for the rest.
 		leave[0]();
 		leave[2]();
 		await new Promise((resolve) => setTimeout(resolve, 5));
 		expect(bridge.closeStream).not.toHaveBeenCalled();
-		// Leaving the session view closes it, without opening another.
 		leave[1]();
 		leave[3]();
 		await new Promise((resolve) => setTimeout(resolve, 5));
@@ -92,7 +88,6 @@ describe("subscribeCloudSessionEvents", () => {
 		bridge.emit("stream-1", { type: "end" });
 		await vi.advanceTimersByTimeAsync(0);
 		expect(states).toEqual([true, false]);
-		// It reconnects by itself, from where it was.
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(bridge.paths().at(-1)).toBe(`${EVENTS_PATH}?after=7`);
 		expect(states.at(-1)).toBe(true);
@@ -145,7 +140,6 @@ describe("subscribeCloudSessionEvents", () => {
 		expect(bridge.closeStream).toHaveBeenCalledWith("stream-1");
 		expect(bridge.paths()[1]).toBe(`${EVENTS_PATH}?after=11&live=1`);
 
-		// Back to live state only once the listener leaves.
 		leave();
 		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(3));
 		expect(bridge.paths()[2]).toBe(`${EVENTS_PATH}?live=1&types=session.live`);
@@ -159,7 +153,6 @@ describe("subscribeCloudSessionEvents", () => {
 		subscribe(bridge, { onEvent: loader, resumeAfter: () => 0 });
 		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(2));
 		expect(bridge.paths()[1]).toBe(`${EVENTS_PATH}?after=0`);
-		// One that needs nothing older joins without reopening it.
 		subscribe(bridge, { onEvent: vi.fn(), resumeAfter: () => 60 });
 		await new Promise((resolve) => setTimeout(resolve, 5));
 		expect(bridge.openStream).toHaveBeenCalledTimes(2);
@@ -168,7 +161,6 @@ describe("subscribeCloudSessionEvents", () => {
 	it("reads as closed once the last stream listener leaves a listener that only reads the state", async () => {
 		const bridge = fakeBridge();
 		const reader = vi.fn();
-		// Something that only reads what an open Chat streams, such as New Task's orchestrator model.
 		subscribe(bridge, { onStateChange: reader });
 		const leaveChat = subscribe(bridge, { live: true, onEvent: vi.fn(), resumeAfter: () => 3 });
 		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(1));
@@ -178,7 +170,6 @@ describe("subscribeCloudSessionEvents", () => {
 		leaveChat();
 		await vi.waitFor(() => expect(bridge.closeStream).toHaveBeenCalledWith("stream-1"));
 		await new Promise((resolve) => setTimeout(resolve, 5));
-		// No stream is open, so a Chat mounting again polls rather than waiting on one.
 		expect(cloudSessionEventsState(TARGET)).toEqual({ open: false, live: undefined });
 		expect(reader).toHaveBeenLastCalledWith({ open: false, live: undefined });
 		expect(bridge.openStream).toHaveBeenCalledTimes(1);

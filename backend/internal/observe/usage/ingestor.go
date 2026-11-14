@@ -34,22 +34,17 @@ type ingestorStore interface {
 	UpdateUsageBindingState(context.Context, int64, domain.UsageBindingState, string, time.Time) (bool, error)
 }
 
-// IngestorConfig controls bounded processing of one transcript source.
 type IngestorConfig struct {
-	ChunkBytes       int64
-	RecordBytes      int
-	FinalizationWait time.Duration
-	Clock            func() time.Time
-	Pricing          *pricing.Manager
-	OnPricingError   func(error)
-	SQLiteChunkRows  int
-	// RequestAttributionRepair asks for a legacy repair pass. See
-	// notifyLateRouteEvidence for the one window it closes.
+	ChunkBytes               int64
+	RecordBytes              int
+	FinalizationWait         time.Duration
+	Clock                    func() time.Time
+	Pricing                  *pricing.Manager
+	OnPricingError           func(error)
+	SQLiteChunkRows          int
 	RequestAttributionRepair func()
 }
 
-// IngestResult tells the coordinator whether another immediate chunk, source
-// inventory refresh, or delayed retry is required.
 type IngestResult struct {
 	More                bool
 	Refresh             bool
@@ -60,8 +55,6 @@ type IngestResult struct {
 	ReplacementSourceID int64
 }
 
-// Ingestor incrementally processes registered transcript files when a usage
-// read, a finalizing session, or a retry timer requests work.
 type Ingestor struct {
 	store            ingestorStore
 	chunkBytes       int64
@@ -76,7 +69,6 @@ type Ingestor struct {
 	afterRead        func()
 }
 
-// NewIngestor constructs a bounded transcript ingestor.
 func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 	if cfg.ChunkBytes <= 0 {
 		cfg.ChunkBytes = defaultChunkBytes
@@ -110,9 +102,6 @@ func NewIngestor(store ingestorStore, cfg IngestorConfig) *Ingestor {
 	}
 }
 
-// Ingest processes one source from its durable cursor. It never loops on an
-// incomplete trailing record; the next read after the provider finishes the
-// record picks it up.
 func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, error) {
 	if err := ctx.Err(); err != nil {
 		return IngestResult{}, err
@@ -177,8 +166,6 @@ func (i *Ingestor) Ingest(ctx context.Context, sourceID int64) (IngestResult, er
 	if !parserCheckpointsEqual(cursorSample.checkpoint, parserState.Integrity.Checkpoint) {
 		return i.resetSourceGeneration(ctx, source, identity, now)
 	}
-	// A conflict leaves unread bytes. Suppress repeated ingestion only while
-	// that file snapshot is unchanged, so in-place corrections can recover.
 	conflict := parserState.Integrity.ConflictSnapshot
 	if source.Source.State == domain.UsageSourceComplete &&
 		source.BindingState != domain.UsageBindingFinalizing &&
@@ -356,13 +343,6 @@ func (i *Ingestor) applyParsedChunk(
 					if parsed.Events[index].Costs.EstimatedCostNanos != nil {
 						continue
 					}
-					// Live ingestion prices only what the transcript or the
-					// binding's route hint named outright. Resolving the model
-					// against the catalog would turn "one catalog lists this
-					// name" into a billed provider and a dollar amount in the
-					// same write, for a session whose route may simply not have
-					// been recorded yet. Deriving it is the legacy repairer's
-					// job, once no hook is coming.
 					estimate, estimateErr := snapshot.Estimate(parsed.Events[index])
 					if estimateErr != nil {
 						parsed.Events[index].Costs.PricingVersion = snapshot.ProviderVersion(parsed.Events[index].BillingProviderID)
@@ -390,9 +370,6 @@ func (i *Ingestor) applyParsedChunk(
 	}
 	if err := apply(); err != nil {
 		if errors.Is(err, domain.ErrUsageSourceEventConflict) {
-			// The failed transaction did not advance the cursor or parser.
-			// Persist the quarantine against that original state, with the
-			// same revision check used for a successful chunk.
 			conflictState, stateErr := decodeParserState(source.Source)
 			if stateErr != nil {
 				return true, errors.Join(err, stateErr)
@@ -416,8 +393,6 @@ func (i *Ingestor) applyParsedChunk(
 			); markErr != nil {
 				return true, errors.Join(err, markErr)
 			}
-			// Retrying cannot resolve a conflict, so drop any finalization
-			// quiet-period retry scheduled above.
 			result.RetryAt = nil
 			if source.BindingState == domain.UsageBindingFinalizing {
 				return true, i.completeBinding(ctx, source.Source.BindingID, now)
@@ -429,22 +404,10 @@ func (i *Ingestor) applyParsedChunk(
 	return false, nil
 }
 
-// notifyLateRouteEvidence asks for a repair pass when a chunk landed
-// unattributed events on a binding that already knows its route.
-//
-// The hook that resolves a route fires the repair trigger exactly once. A chunk
-// parsed before that hook but applied after it slips straight through the pass
-// it fired: those rows did not exist yet when the pass read the table, and
-// nothing fires again for this binding until the daemon restarts. Re-reading
-// the source is the point — the context this chunk was parsed against is
-// precisely the stale one.
 func (i *Ingestor) notifyLateRouteEvidence(ctx context.Context, sourceID int64) {
 	if i.requestRepair == nil {
 		return
 	}
-	// A binding with no route yet leaves rows open on every chunk, and its own
-	// hook will fire the trigger when one arrives; a route the hook could not
-	// name is never going to produce one. Only a usable route is worth a pass.
 	source, ok, err := i.store.GetUsageSourceForIngestion(ctx, sourceID)
 	if err != nil || !ok {
 		return
@@ -453,10 +416,6 @@ func (i *Ingestor) notifyLateRouteEvidence(ctx context.Context, sourceID int64) 
 	case "", pricing.UnidentifiedBillingRoute:
 		return
 	}
-	// Asking the table rather than the parsed chunk catches the second way a
-	// row is left open under a known route: a replaced transcript re-emits an
-	// event, the replay deduplicates against the stored row and rehomes it, and
-	// the parsed event carrying the route is discarded with the duplicate.
 	open, err := i.store.HasOpenUsageAttribution(ctx, sourceID)
 	if err != nil || !open {
 		return

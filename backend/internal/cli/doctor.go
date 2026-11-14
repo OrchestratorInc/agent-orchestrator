@@ -74,27 +74,22 @@ type harnessProbeSpec struct {
 	ExpectedVersionPrefix string
 }
 
-// harnessProbeSpecs overrides per-harness probe settings for agent harnesses whose
-// binary name or version flags differ from the default convention (where BinaryName
-// defaults to the harness ID and VersionArg is empty for PATH-only probing).
 var harnessProbeSpecs = map[string]harnessProbeSpec{
-	"claude-code": {BinaryName: "claude", VersionArg: "--version"},
-	"codex":       {BinaryName: "codex", VersionArg: "--version"},
-	"opencode":    {BinaryName: "opencode", VersionArg: "--version"},
-	"muse":        {BinaryName: "muse", VersionArg: "--version", ExpectedVersionPrefix: "Muse Code "},
-	"aider":       {BinaryName: "aider", VersionArg: "--version"},
-	"goose":       {BinaryName: "goose", VersionArg: "--version"},
-	"grok":        {BinaryName: "grok", VersionArg: "--version"},
-	"devin":       {BinaryName: "devin", VersionArg: "--version"},
-	"kimi":        {BinaryName: "kimi", VersionArg: "--version"},
-	"kiro":        {BinaryName: "kiro-cli", VersionArg: "--version"},
-	"kilocode":    {BinaryName: "kilocode", VersionArg: "--version"},
-	"omp":         {BinaryName: "omp", VersionArg: "--version"},
-	"codewhale":   {BinaryName: "codewhale", VersionArg: "--version"},
-	"cursor":      {BinaryName: "cursor-agent"},
-	"continue":    {BinaryName: "cn"},
-	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`
-	// is the built-in shell; the full name resolves on every platform.
+	"claude-code":  {BinaryName: "claude", VersionArg: "--version"},
+	"codex":        {BinaryName: "codex", VersionArg: "--version"},
+	"opencode":     {BinaryName: "opencode", VersionArg: "--version"},
+	"muse":         {BinaryName: "muse", VersionArg: "--version", ExpectedVersionPrefix: "Muse Code "},
+	"aider":        {BinaryName: "aider", VersionArg: "--version"},
+	"goose":        {BinaryName: "goose", VersionArg: "--version"},
+	"grok":         {BinaryName: "grok", VersionArg: "--version"},
+	"devin":        {BinaryName: "devin", VersionArg: "--version"},
+	"kimi":         {BinaryName: "kimi", VersionArg: "--version"},
+	"kiro":         {BinaryName: "kiro-cli", VersionArg: "--version"},
+	"kilocode":     {BinaryName: "kilocode", VersionArg: "--version"},
+	"omp":          {BinaryName: "omp", VersionArg: "--version"},
+	"codewhale":    {BinaryName: "codewhale", VersionArg: "--version"},
+	"cursor":       {BinaryName: "cursor-agent"},
+	"continue":     {BinaryName: "cn"},
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
@@ -184,8 +179,6 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 
 	checks = append(checks, checkStore(cfg.DataDir), checkHooksLog(cfg.DataDir, time.Now()))
 
-	// The running daemon's own binary, when one is reachable: it, not the CLI
-	// running this command, is the `ao` the app actually uses.
 	daemonExe := ""
 	st, err := c.inspectDaemon(ctx)
 	if err != nil {
@@ -235,12 +228,6 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 	return checks
 }
 
-// checkStore inspects the SQLite store WITHOUT opening or migrating it. The
-// daemon is the sole writer and migrator of the database (architecture.md §7);
-// the CLI must never run migrations or open a second writer against a database
-// a live daemon may already own. Migrations are validated by the daemon at
-// startup and surfaced through /readyz, so doctor only confirms whether the
-// database file exists yet.
 func checkStore(dataDir string) doctorCheck {
 	dbPath := filepath.Join(dataDir, "ao.db")
 	info, err := os.Stat(dbPath)
@@ -281,19 +268,6 @@ func checkDataDirWritable(dataDir string) doctorCheck {
 	return doctorCheck{Level: doctorPass, Section: doctorSectionCore, Name: "data-dir-write", Message: "write probe succeeded"}
 }
 
-// checkAOBinary verifies the `ao` that workspace hooks and hand-typed commands
-// would invoke. Agent adapters install hook commands as a bare
-// `ao hooks <agent> <event>`, so an `ao` earlier on PATH that is not the
-// binary the app runs (e.g. a stale npm/Homebrew CLI, whose older flags make
-// current commands look broken) fails every callback and silently kills
-// activity tracking. The daemon pins PATH inside the sessions and shells it
-// spawns, so a mismatch here is a warning about every other context (manual
-// runs, foreign panes), not a hard failure.
-//
-// daemonExe is the running daemon's own binary when one is reachable, and is
-// preferred over this process's executable: `ao doctor` may itself be the
-// shadowing copy, in which case comparing against itself would report the
-// shadow as a match.
 func (c *commandContext) checkAOBinary(daemonExe string) doctorCheck {
 	const name = "ao-binary"
 	self, err := c.deps.Executable()
@@ -326,9 +300,6 @@ func (c *commandContext) checkAOBinary(daemonExe string) doctorCheck {
 	}
 }
 
-// sameBinary reports whether two paths name the same file, tolerating symlinks
-// via os.SameFile and falling back to cleaned-path equality when either stat
-// fails.
 func sameBinary(a, b string) bool {
 	ai, aErr := os.Stat(a)
 	bi, bErr := os.Stat(b)
@@ -338,20 +309,8 @@ func sameBinary(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
 }
 
-// loginShellProbeTimeout matches the desktop's own login-shell environment
-// probe (SHELL_ENV_TIMEOUT_MS in frontend/src/main.ts).
 const loginShellProbeTimeout = 3 * time.Second
 
-// checkAOLoginShell reports which ao a login shell runs when it starts the way
-// every AO session starts one: the app's ao first on PATH, plus the wrappers
-// that put it back after the user's startup files in zsh and bash. Codex runs
-// each agent command through such a shell, and a new terminal is one. A
-// startup file that prepends a directory holding another ao still wins in a
-// shell AO cannot wrap (sh, dash, ksh), and an alias or function wins in any,
-// which checkAOBinary cannot see from doctor's own PATH (#3562). ok is false
-// when there is nothing to probe: Windows, a shell this probe does not speak,
-// or a binary not named ao, which sessions never pin. dataDir holds the ao
-// shim and wrappers sessions use.
 func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataDir string) (check doctorCheck, ok bool) {
 	const name = "ao-login-shell"
 	if runtime.GOOS == "windows" {
@@ -407,10 +366,6 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataD
 	args = append(args, shell, "-l", "-c", `command -v ao >"$1"`, shellName, answerPath)
 	reqCtx, cancel := context.WithTimeout(ctx, loginShellProbeTimeout)
 	defer cancel()
-	// The shell answers into a file, and its stdout and stderr point at
-	// /dev/null before any startup file runs. A process a startup file leaves
-	// running then cannot hold doctor's output pipe open past the timeout; the
-	// desktop's probe likewise settles when the shell exits.
 	_, err = c.deps.CommandOutput(reqCtx, "/bin/sh", args...)
 	answer, readErr := os.ReadFile(answerPath) //nolint:gosec // path is inside doctor's own temp dir
 	resolved := strings.TrimSpace(string(answer))
@@ -432,8 +387,6 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataD
 	case !filepath.IsAbs(resolved):
 		msg = fmt.Sprintf("a %s login shell resolves ao to %q, not %s %s: an alias or function from a startup file shadows it in agent commands that run in a login shell (Codex's) and new terminals", shellName, resolved, wantLabel, want)
 	case sameBinary(want, resolved) || (pinned != filepath.Dir(want) && sameBinary(filepath.Join(pinned, "ao"), resolved)):
-		// The second form is the shim sessions pin when want's directory holds
-		// other tools; it execs want.
 		return doctorCheck{
 			Level: doctorPass, Section: doctorSectionTools, Name: name,
 			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),
@@ -472,8 +425,6 @@ func (c *commandContext) checkGit(ctx context.Context) doctorCheck {
 	return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; supports worktrees)", path, version)}
 }
 
-// checkTerminalRuntime checks the runtime multiplexer used on this platform:
-// tmux on Darwin/Linux, ConPTY (built-in) on Windows.
 func (c *commandContext) checkTerminalRuntime(ctx context.Context) doctorCheck {
 	if runtime.GOOS == "windows" {
 		return doctorCheck{
@@ -504,10 +455,6 @@ func (c *commandContext) checkTmux(ctx context.Context) doctorCheck {
 	return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: "tmux", Message: fmt.Sprintf("%s (%s for this ao process; %s)", resolution.Path, resolution.Source, version)}
 }
 
-// checkHooksLog surfaces recent agent hook delivery failures. `ao hooks`
-// callbacks deliberately swallow errors (a hook must never break the user's
-// agent), so $AO_DATA_DIR/hooks.log is the only place a dead activity feed
-// becomes visible. Lines start with an RFC3339 timestamp (see appendHooksLog).
 func checkHooksLog(dataDir string, now time.Time) doctorCheck {
 	const name = "hooks-log"
 	path := filepath.Join(dataDir, hooksLogName)
@@ -579,13 +526,6 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name, Message: fmt.Sprintf("%s resolves to %s (%s)", harness.BinaryName, path, version)}
 }
 
-// checkCodexLaunchFlags smoke-tests AO's codex launch surface against the
-// installed binary: the hook-trust bypass flag and the `-c` session-flag
-// config AO injects at spawn (activity hooks, worktree trust, nudge
-// suppression). Codex has no stable hook-config contract, so a codex upgrade
-// can silently break activity tracking; this canary turns that breakage into
-// a doctor warning. The probes come from the codex adapter itself so they
-// cannot drift from the real spawn argv.
 func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck {
 	const name = "codex-launch-flags"
 	path, err := c.deps.LookPath("codex")
@@ -752,11 +692,6 @@ func (c *commandContext) gitlabToken(ctx context.Context) (token, source string,
 	return token, "glab", nil
 }
 
-// parseGLabTokenLine extracts the token value from `glab auth status --show-token`
-// output. The token appears on a line containing "Token" followed by a colon
-// and the token value (e.g. "✓ Token found: glpat-xxx"). This mirrors the
-// parsing logic in the GitLab SCM adapter (gitlab/auth.go) without importing
-// the adapter package into the CLI.
 func parseGLabTokenLine(output string) string {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)

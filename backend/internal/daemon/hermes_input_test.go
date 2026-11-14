@@ -138,7 +138,6 @@ func TestHermesAdmissionKeepsPendingAfterAmbiguousSendError(t *testing.T) {
 	if err := messenger.Send(ctx, rec.ID, "first"); err == nil {
 		t.Fatal("write failure ignored")
 	}
-	// The write may have landed: an unchanged frame must not admit a retry.
 	runtime.sendErr = nil
 	if err := messenger.Send(ctx, rec.ID, "first"); err == nil || !strings.Contains(err.Error(), "prior terminal submission remains unconfirmed") {
 		t.Fatalf("ambiguous write admitted a retry: %v", err)
@@ -146,7 +145,6 @@ func TestHermesAdmissionKeepsPendingAfterAmbiguousSendError(t *testing.T) {
 	if len(runtime.messages) != 0 {
 		t.Fatalf("retry was written: %v", runtime.messages)
 	}
-	// Hermes's committed echo of the first write releases admission.
 	runtime.screen = rule + "\n● first\n" + rule + "\n" + idle
 	if err := messenger.Send(ctx, rec.ID, "second"); err != nil {
 		t.Fatalf("native submission witness did not release admission: %v", err)

@@ -69,7 +69,6 @@ func TestShareLinksApply(t *testing.T) {
 	}
 }
 
-// A record kept by artifact ID follows the file to its new path.
 func TestShareLinksApplyByArtifactID(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ShareLinksFile), []byte(`{
@@ -89,7 +88,6 @@ func TestShareLinksApplyByArtifactID(t *testing.T) {
 	}
 }
 
-// A record's access says who its link opens for; anything else is not recorded.
 func TestShareLinksApplyAccess(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ShareLinksFile), []byte(`{

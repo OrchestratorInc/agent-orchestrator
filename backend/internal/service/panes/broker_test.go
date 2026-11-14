@@ -116,7 +116,6 @@ func TestExecuteAsksOnlyTheWindowShowingTheSession(t *testing.T) {
 		asked["second"]++
 		go second.Resolve(Result{ID: cmd.ID, OK: true})
 	})
-	// Both windows show the session; the one that reported last owns it.
 	first.Report("s-1", json.RawMessage(`{"selected":"a"}`))
 	second.Report("s-1", json.RawMessage(`{"selected":"b"}`))
 	if _, err := b.Execute(context.Background(), "s-1", "split", nil); err != nil {

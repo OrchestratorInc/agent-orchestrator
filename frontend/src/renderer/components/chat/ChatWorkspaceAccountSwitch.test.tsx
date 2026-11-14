@@ -7,7 +7,6 @@ import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
-/** turn-2 was stopped by an account switch to acct-b. */
 function switchedSnapshot(): ConversationSnapshot {
 	const turns = chatFixture.turns.map((turn) =>
 		turn.id === "turn-2"
@@ -131,20 +130,14 @@ describe("ChatWorkspace account switch", () => {
 		expect(screen.getByText(/Press Continue to resume this turn/)).toBeInTheDocument();
 		expect(screen.queryByText("The agent was interrupted by you")).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
-		// The stopped turn can still be continued from the composer.
 		expect(screen.getByRole("button", { name: "Continue turn" })).toBeInTheDocument();
 	});
 
-	// The switch marker stands in for the stop outcome, so the outcome's action row is
-	// never drawn: the answer has to keep its own copy and roll back.
 	it("keeps copy and roll back on the answer of a turn stopped by an account switch", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
 		const switched = switchedSnapshot();
-		// The stop settled the answer the switch interrupted.
 		const snapshot: ConversationSnapshot = {
 			...switched,
-			// Without the fixture's steer, the answer is the turn's last reply rather
-			// than the end of an earlier, already-settled segment.
 			items: switched.items
 				.filter((item) => item.id !== "a-steer-1")
 				.map((item) => (item.kind === "message" && item.id === "m-5" ? { ...item, streaming: false } : item)),

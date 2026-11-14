@@ -15,14 +15,10 @@ export type CloudProjectSettingsDraft = {
 	reviewer: CloudProjectRoleDraft;
 	autoReview: boolean;
 	workersRequestReview: boolean;
-	/** Agent commits name the AO GitHub App as a co-author; on unless turned off. */
 	coAuthorCommits: boolean;
 	intake: { enabled: boolean; repo: string; assignee: string };
 };
 
-// A role without an agent runs the agent its session was started with, and an
-// orchestrator-spawned worker of such a project gets Claude Code: the settings
-// page names that agent, as a local project names its own.
 const DEFAULT_ROLE_AGENT: CloudCpAgentProvider = "claude-code";
 
 export function emptyCloudAgentConfig(): Required<CloudCpProjectAgentConfig> {
@@ -50,7 +46,6 @@ export function cloudProjectSettingsDraft(project: CloudCpProject): CloudProject
 			agent: cloudAgent(config.reviewers?.[0]?.harness),
 			agentConfig: { ...emptyCloudAgentConfig(), ...config.reviewers?.[0]?.agentConfig },
 		},
-		// Like local projects, automatic review is off until the project enables it.
 		autoReview: config.autoReview ?? false,
 		workersRequestReview: config.workersRequestReview ?? false,
 		coAuthorCommits: config.coAuthorCommits ?? true,
@@ -58,7 +53,6 @@ export function cloudProjectSettingsDraft(project: CloudCpProject): CloudProject
 	};
 }
 
-// Send only changed fields. The control plane preserves every omitted setting.
 export function cloudProjectSettingsPatch(before: CloudProjectSettingsDraft, after: CloudProjectSettingsDraft): CloudCpProjectSettingsRequest {
 	const patch: CloudCpProjectSettingsRequest = {};
 	if (before.displayName !== after.displayName) patch.displayName = after.displayName.trim();
@@ -76,7 +70,6 @@ export function cloudProjectSettingsPatch(before: CloudProjectSettingsDraft, aft
 	if (before.autoReview !== after.autoReview) config.autoReview = after.autoReview;
 	if (before.workersRequestReview !== after.workersRequestReview) config.workersRequestReview = after.workersRequestReview;
 	if (before.coAuthorCommits !== after.coAuthorCommits) config.coAuthorCommits = after.coAuthorCommits;
-	// The rule is sent whole, so the control plane stores exactly what the page shows.
 	if (JSON.stringify(before.intake) !== JSON.stringify(after.intake)) {
 		config.trackerIntake = { enabled: after.intake.enabled, repo: after.intake.repo.trim(), assignee: after.intake.assignee.trim() };
 	}

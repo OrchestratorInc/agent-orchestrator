@@ -12,9 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// codexCredentialIdentity contains only locally parsed matching material. The
-// API key is kept in memory for direct comparison and is never persisted,
-// logged, or exposed through the API.
 type codexCredentialIdentity struct {
 	Method            domain.CodexAuthMethod
 	ProviderAccountID string
@@ -52,10 +49,6 @@ func inspectCodexCredentialIdentity(data []byte) (codexCredentialIdentity, bool)
 	return identity, err == nil
 }
 
-// localCredentialIdentifiesRecord validates the non-secret identity that can be
-// derived from one AO-owned credential. Legacy OAuth credentials without an
-// account id remain distinguishable by their private account slot and exact
-// bytes at the reconciliation/switch boundaries.
 func localCredentialIdentifiesRecord(record codexAccountRecord, data []byte) bool {
 	identity, err := parseCodexCredentialIdentity(data)
 	if err != nil {
@@ -67,9 +60,6 @@ func localCredentialIdentifiesRecord(record codexAccountRecord, data []byte) boo
 	if record.Snapshot.AuthMethod != domain.CodexAuthMethodUnknown && record.Snapshot.AuthMethod != identity.Method {
 		return false
 	}
-	// API keys and legacy OAuth credentials have no non-secret stable account
-	// identifier. They belong to a saved slot only when their private bytes still
-	// match exactly. Keep that comparison in memory and never expose either value.
 	saved, savedErr := readOpaqueCredential(filepath.Join(record.Home, codexCredentialFilename))
 	return savedErr == nil && bytes.Equal(saved, data)
 }

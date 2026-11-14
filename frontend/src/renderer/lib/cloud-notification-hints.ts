@@ -1,7 +1,3 @@
-// Ephemeral hints arrive over the existing cloud terminal WebSocket before the
-// control plane's durable notification processor has committed its inbox row.
-// They are intentionally process-local: REST/SSE remains the recovery source
-// after a reconnect, and consumers must dedupe by eventId when that row lands.
 export interface CloudNotificationHint {
 	source: "cloud";
 	eventId: string;

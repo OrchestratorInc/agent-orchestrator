@@ -122,7 +122,6 @@ func TestInstallContextReadsDesktopMarkersAndRefreshes(t *testing.T) {
 		"acq_channel_self_reported": "x",
 	})
 	writeJSONFile(t, filepath.Join(dir, updateSettingsFileName), map[string]any{"channel": "nightly", "feature": nil})
-	// Cached until the TTL passes.
 	props = map[string]any{}
 	ctx.stamp(props)
 	if props["install_source"] != "unknown" {
@@ -186,8 +185,6 @@ func TestPostHogPropertiesCarrySegmentation(t *testing.T) {
 }
 
 func TestPayloadCannotOverrideSegmentation(t *testing.T) {
-	// Common properties are not in any per-event allowlist, so an event payload
-	// cannot smuggle a different install_source or is_ci past the sanitizer.
 	for name, allowed := range remotePayloadAllowlist {
 		for _, key := range []string{"install_source", "installed_at", "is_ci", "is_container", "ci_signal", "arch", "platform", "$os", "$os_version", "release_channel", "experiment_cohort"} {
 			if _, ok := allowed[key]; ok {

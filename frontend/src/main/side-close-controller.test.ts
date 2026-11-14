@@ -38,7 +38,6 @@ it.each(["ledger", "ownership", "notification"])("keeps 204 proof across rendere
 	if (failure === "notification") h.onChange.mockImplementation(() => { throw new Error("renderer gone"); });
 	await h.close();
 	h.remote(snapshot([])); await h.capture();
-	// A replacement renderer only queries main; it never needs the lost reply.
 	expect(h.controller.summary("session").sides).toMatchObject([{ id: "side", status: "closed" }]);
 	expect(JSON.stringify(h.controller.summary())).not.toMatch(/private-fork|credentials|providerHost/);
 });

@@ -3,9 +3,6 @@ import type { components } from "../../api/schema";
 import type { useDaemonStatus } from "../hooks/useDaemonStatus";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
-// Shared state the persistent _shell layout owns and route content reads. The
-// daemon status effect (IPC poll + event transport) must run exactly once, so
-// it lives in the shell and is handed down here rather than re-run per route.
 export type ShellContextValue = {
 	daemonStatus: ReturnType<typeof useDaemonStatus>;
 	workspaceStartupState: "loading" | "ready" | "error";
@@ -29,9 +26,7 @@ export type ShellContextValue = {
 	openRemoteProjectSettings: (hostId: string, projectId: string) => void;
 	remoteHosts?: RemoteHost[];
 	retryRemoteHosts?: () => void;
-	/** Removes a project the way the sidebar's Remove project does, after its confirm. */
 	removeProject?: (projectId: string, cloud: boolean) => void;
-	/** Navigate to a project's board, e.g. a cloud project just created. */
 	openProject?: (projectId: string) => void;
 	validateImport?: (input: {
 		path: string;
@@ -49,8 +44,6 @@ export function useShell(): ShellContextValue {
 	return ctx;
 }
 
-// Non-throwing variant for components that also render outside the shell
-// (e.g. Sidebar in unit tests): returns null instead of throwing.
 export function useShellMaybe(): ShellContextValue | null {
 	return useContext(ShellContext);
 }

@@ -1,11 +1,3 @@
-// Package autohand implements the Autohand Code agent adapter: launching new
-// interactive sessions, resuming native sessions by id, installing AO's
-// lifecycle hooks into Autohand's config, and reading hook-derived session info.
-//
-// Autohand ("autohand") is an autonomous coding agent with an interactive TUI
-// (its one-shot `autohand -p` exits after one answer), native session resume
-// (`autohand resume <sessionId>`), and a native hook/lifecycle system whose
-// events AO maps onto activity states. See hooks.go for hook installation.
 package autohand
 
 import (
@@ -22,12 +14,8 @@ import (
 
 const adapterID = "autohand"
 
-// NoBrowserEnv is Autohand's opt-out for opening an external browser when a
-// command discovers that authentication is required.
 const NoBrowserEnv = "AUTOHAND_NO_BROWSER"
 
-// Plugin is the Autohand agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 
@@ -35,7 +23,6 @@ type Plugin struct {
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Autohand adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -43,15 +30,10 @@ func New() *Plugin {
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
-// AugmentRuntimeEnv keeps ordinary AO-managed sessions from opening an
-// external browser when Autohand discovers that account authentication is
-// required. The explicit agent-auth action still runs outside this session
-// environment and retains Autohand's native browser login flow.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, _ string) {
 	env[NoBrowserEnv] = "1"
 }
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -64,16 +46,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Autohand understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `autohand --model`.")
 }
 
-// GetLaunchCommand builds the argv to start a new interactive Autohand session.
-// The prompt is typed in once ready: on the command line Autohand would run it
-// in command mode and exit.
-//
-//	autohand [--path <workspace>] [<approval flags>] [--model <value>] [--sys-prompt <value>]
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.autohandBinary(ctx)
 	if err != nil {
@@ -85,8 +61,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 
-	// Autohand's --sys-prompt accepts either an inline string or a file path,
-	// auto-detected by the CLI; prefer inline instructions when AO has them.
 	if cfg.SystemPrompt != "" {
 		cmd = append(cmd, "--sys-prompt", cfg.SystemPrompt)
 	} else if cfg.SystemPromptFile != "" {
@@ -96,8 +70,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy types the first prompt into the interactive
-// session, which stays open for the next one.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -105,8 +77,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints waits for Autohand's status footer: the composer shows a
-// suggested task, so an empty-prompt marker would never match.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -120,12 +90,6 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Autohand
-// session: `autohand resume [--path <workspace>] [--model <value>] <sessionId>`.
-// ok is false when the hook-derived native session id has not landed yet, so
-// callers can fall back to fresh launch behavior. Autohand's resume
-// sub-command only accepts the workspace path, model, and session id, so
-// approval and system-prompt flags are not re-applied here.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -148,8 +112,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces Autohand hook-derived metadata. Metadata is intentionally
-// nil: callers get the normalized fields directly.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -158,22 +120,15 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// appendWorkspaceFlag scopes the run to the given workspace path via --path.
 func appendWorkspaceFlag(cmd *[]string, workspacePath string) {
 	if strings.TrimSpace(workspacePath) != "" {
 		*cmd = append(*cmd, "--path", workspacePath)
 	}
 }
 
-// appendApprovalFlags maps AO's four permission modes onto Autohand's approval
-// flags. Default emits no flag so Autohand resolves its starting mode from the
-// user's own config (permissions.mode). Autohand has no distinct "accept-edits"
-// mode, so it maps to --yes (auto-confirm risky actions) -- the least-privileged
-// non-interactive option -- while auto/bypass map to --unrestricted.
 func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
-		// No flag: defer to the user's Autohand config/default behavior.
 	case ports.PermissionModeAcceptEdits:
 		*cmd = append(*cmd, "--yes")
 	case ports.PermissionModeAuto:
@@ -197,15 +152,11 @@ var autohandBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveAutohandBinary returns the path to the autohand binary, or a wrapped
-// ports.ErrAgentBinaryNotFound when it is absent.
 func ResolveAutohandBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, autohandBinarySpec)
 }
 
 func (p *Plugin) autohandBinary(ctx context.Context) (string, error) {
-	// Honor cancellation even on the cached path, where ResolveAutohandBinary
-	// (which has its own ctx.Err() guard) is never reached.
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -225,8 +176,6 @@ func (p *Plugin) autohandBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

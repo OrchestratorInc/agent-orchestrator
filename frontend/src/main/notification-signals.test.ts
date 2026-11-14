@@ -55,8 +55,6 @@ describe("shouldReplaceBounce", () => {
 });
 
 describe("osToastChimeControllable", () => {
-	// Platform contract: Electron's mac and win presenters read `silent`;
-	// the Linux libnotify presenter does not (no suppress-sound hint).
 	it.each(["darwin", "win32"] as const)("is controllable on %s", (platform) => {
 		expect(osToastChimeControllable(platform)).toBe(true);
 	});
@@ -82,7 +80,6 @@ describe("toastSilent", () => {
 		expect(toastSilent(platform, true, false)).toBe(false);
 	});
 
-	// On Linux the value would be ignored, so no combination may claim a mute.
 	it.each([
 		[false, false],
 		[false, true],

@@ -6,8 +6,6 @@ export const Route = createFileRoute("/_shell/settings")({
 	component: LegacyGlobalSettingsRoute,
 });
 
-// Deep-link / bookmark shim: settings is a modal now. In-app openers call
-// openGlobalSettings() directly; this route only handles cold loads of /settings.
 function LegacyGlobalSettingsRoute() {
 	const navigate = useNavigate();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);

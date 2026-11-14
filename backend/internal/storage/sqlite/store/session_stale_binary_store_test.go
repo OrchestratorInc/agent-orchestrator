@@ -31,7 +31,6 @@ func TestStaleBinaryMarkAppliesOnlyToLiveLaunchesOfTheHarness(t *testing.T) {
 		create(func(r *domain.SessionRecord) { r.IsTerminated = true }),
 		create(func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityExited }),
 	}
-	// The sleep marker is written on its own, never by CreateSession.
 	asleep := create(func(*domain.SessionRecord) {})
 	sleeping, _, _ := s.GetSession(ctx, asleep)
 	if applied, err := s.SetSessionHibernated(ctx, asleep, sleeping.Revision, &now); err != nil || !applied {
@@ -59,7 +58,6 @@ func TestStaleBinaryMarkAppliesOnlyToLiveLaunchesOfTheHarness(t *testing.T) {
 		t.Fatalf("counts = %v, %v", counts, err)
 	}
 
-	// A second update moves the version on but keeps when the launch went stale.
 	later := now.Add(time.Hour)
 	if _, err := s.MarkHarnessSessionsStale(ctx, domain.HarnessClaudeCode, "2.1.301", later); err != nil {
 		t.Fatal(err)
@@ -69,7 +67,6 @@ func TestStaleBinaryMarkAppliesOnlyToLiveLaunchesOfTheHarness(t *testing.T) {
 		t.Fatalf("re-marked = %+v", rec.StaleBinary)
 	}
 
-	// Any new launch runs the installed release: the mark no longer applies.
 	rec.Metadata.ControllerGeneration = "gen-2"
 	if err := s.UpdateSession(ctx, rec); err != nil {
 		t.Fatal(err)
@@ -127,8 +124,6 @@ func TestVersionRefreshChatCandidatesWaitForQuietAndSkipFailedSwitches(t *testin
 	}
 }
 
-// An orchestrator moves like any Chat session: the move starts it again right
-// away, so idle hibernation keeping orchestrators awake does not apply.
 func TestVersionRefreshChatCandidatesIncludeOrchestrators(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

@@ -22,8 +22,6 @@ import { browserRuntimeKeyPath, resolveBrowserRuntimeToken, type BrowserRuntimeK
 
 const dirs: string[] = [];
 const children: ReturnType<typeof spawn>[] = [];
-// The child process loads the real module from disk; a vitest module URL would
-// point at the dev server, which node cannot import.
 const MODULE_URL = pathToFileURL(
 	path.join(process.cwd(), "src", "main", "browser-runtime-token.ts"),
 ).href;
@@ -37,13 +35,6 @@ const nodeIo: BrowserRuntimeKeyFs = {
 	writeFileSync: (target, data) => writeFileSync(target, data),
 };
 
-/**
- * The real filesystem, with a hook that runs once — immediately after this launch
- * reads the key path and before it can act on what it read. That is the window a
- * competing launch slips into: it reads, stalls, then finds the key already
- * repaired and published. Node builtins cannot be module-mocked in this setup,
- * so the injection seam is the filesystem.
- */
 function ioWithStaleReadHook(onKeyRead: () => void): BrowserRuntimeKeyFs {
 	let fired = false;
 	return {
@@ -80,7 +71,6 @@ function readKeySafely(dataDir: string): string | null {
 	}
 }
 
-/** Resolve the token in a separate process, the way a second app launch does. */
 function resolveInChildProcess(dataDir: string): Promise<{ token: string | null; error: string | null }> {
 	const script = `import(${JSON.stringify(MODULE_URL)}).then((m) => {
 		process.stdout.write(m.resolveBrowserRuntimeToken(${JSON.stringify(dataDir)}));
@@ -122,8 +112,6 @@ describe("resolveBrowserRuntimeToken", () => {
 	it("returns the same token for every launch on one data dir", () => {
 		const dataDir = tempDataDir();
 
-		// Each call stands in for one app launch: the key persists, so a daemon
-		// kept alive across restarts still accepts this app's hello.
 		expect(resolveBrowserRuntimeToken(dataDir)).toBe(resolveBrowserRuntimeToken(dataDir));
 	});
 
@@ -143,9 +131,6 @@ describe("resolveBrowserRuntimeToken", () => {
 		}
 	});
 
-	// The reported interleave: this launch reads a damaged key, another launch
-	// repairs and publishes a valid one while this one is stalled, and this launch
-	// must not move that valid key aside on its way to publishing its own.
 	it("adopts a key repaired by another launch after a stale read", () => {
 		const dataDir = tempDataDir();
 		resolveBrowserRuntimeToken(dataDir);
@@ -156,8 +141,6 @@ describe("resolveBrowserRuntimeToken", () => {
 		const staleReader = resolveBrowserRuntimeToken(
 			dataDir,
 			ioWithStaleReadHook(() => {
-				// The competitor repairs the damaged key and returns its token
-				// before this launch acts on what it read.
 				repairer = resolveBrowserRuntimeToken(dataDir);
 			}),
 		);
@@ -268,8 +251,6 @@ describe("resolveBrowserRuntimeToken", () => {
 		const dataDir = tempDataDir();
 		const observed: Array<string | null> = [];
 		const io = ioWithStaleReadHook(() => {
-			// Read the key path the moment this launch observes it. Until the key
-			// is published it must be absent, never truncated.
 			observed.push(readKeySafely(dataDir));
 		});
 		const first = resolveBrowserRuntimeToken(dataDir, io);
@@ -289,7 +270,6 @@ describe("resolveBrowserRuntimeToken", () => {
 	it("replaces a corrupt key instead of propagating it", () => {
 		const dataDir = tempDataDir();
 		const dataRoot = path.dirname(browserRuntimeKeyPath(dataDir));
-		// Simulate a truncated file: the previous token is unrecoverable either way.
 		resolveBrowserRuntimeToken(dataDir);
 		writeFileSync(browserRuntimeKeyPath(dataDir), "not-a-key\n", { mode: 0o600 });
 		chmodSync(browserRuntimeKeyPath(dataDir), 0o600);
@@ -309,8 +289,6 @@ describe("resolveBrowserRuntimeToken", () => {
 		const resolved = tokens.map((result) => result.token as string);
 		const inProcess = resolveBrowserRuntimeToken(dataDir);
 
-		// One key on disk, one token everywhere: a launch that disagreed with the
-		// persisted key would authenticate against no daemon.
 		expect(new Set(resolved)).toEqual(new Set([inProcess]));
 		expect(readFileSync(browserRuntimeKeyPath(dataDir), "utf8")).toMatch(/(?:^|\n)[A-Za-z0-9_-]{43}\n/);
 	});
@@ -318,8 +296,6 @@ describe("resolveBrowserRuntimeToken", () => {
 	it("gives every concurrent launch the same repaired key", async () => {
 		const dataDir = tempDataDir();
 		resolveBrowserRuntimeToken(dataDir);
-		// A damaged key is the case the reviewer measured: many launches repairing
-		// at once is where a stale reader used to strand the others.
 		writeFileSync(browserRuntimeKeyPath(dataDir), "not-a-key\n", { mode: 0o600 });
 
 		const tokens = await Promise.all(Array.from({ length: 8 }, () => resolveInChildProcess(dataDir)));

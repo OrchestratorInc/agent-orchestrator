@@ -92,8 +92,6 @@ func TestBrokerAuthenticatesStartsAndPublishesLatestFrame(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Let the broker consume both pipe writes before observing the one-slot
-	// latest-value subscription.
 	time.Sleep(10 * time.Millisecond)
 	select {
 	case event := <-res.sub.Frames:
@@ -166,7 +164,6 @@ func TestBrokerClosesSubscriberOnControlOverflow(t *testing.T) {
 	if _, ok := <-sub.events; ok {
 		t.Fatal("control channel stayed open")
 	}
-	// Further frames and unsubscribe must not panic after overflow teardown.
 	b.publish(1, Event{Frame: &Frame{Sequence: 1}})
 	b.unsubscribe("s1", 1)
 }

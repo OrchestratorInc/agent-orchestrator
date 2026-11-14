@@ -376,8 +376,6 @@ describe("agent-browser runtime lifecycle", () => {
 				}
 				if (command[0] === "close") return { stdout: "", stderr: "", exitCode: 0 };
 				if (streamingEnabled) return { stdout: "", stderr: "streaming remained enabled", exitCode: 1 };
-				// Simulate the native daemon expiring after this command. Its next
-				// generation starts with the input-capable stream enabled again.
 				streamingEnabled = true;
 				return { stdout: "", stderr: "", exitCode: 0 };
 			},
@@ -813,7 +811,6 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			});
 			for (const tabId of ["t2", "t3"]) {
 				const url = `http://localhost:5173/${tabId}`;
-				// Electron registers a page-opened popup without Target.createTarget.
 				targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
 				await runtime.runAction(sessionId, "tab-select", { tabId }, provider);
 				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
@@ -839,8 +836,6 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 	it("selects and closes AO targets when a vanished popup leaves a gap in target IDs", async () => {
 		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
 		const sessionId = "native-target-id-gap";
-		// AO's ephemeral t2 disappeared before native discovery. Native IDs will
-		// be t1,t2,t3 for these physical AO targets t1,t3,t4.
 		for (const tabId of ["t3", "t4"]) {
 			const url = `http://localhost:5173/${tabId}`;
 			targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });

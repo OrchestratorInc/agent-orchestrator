@@ -27,8 +27,6 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	}
 }
 
-// OpenCode 2.0.14 exits 0 with no output the first time `models` runs in a
-// folder, so every new project started with a failed, empty catalog.
 func TestOpenCodeV2RetriesEmptyFirstRunInNewFolder(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "opencode2")
 	script := "#!/bin/sh\nif [ ! -f seen ]; then : > seen; exit 0; fi\nprintf 'anthropic/claude-opus-5-5\\n'\n"
@@ -56,8 +54,6 @@ func TestNormalizeShowsConcreteNameForDefaultCatalogModel(t *testing.T) {
 	}
 }
 
-// Verbatim shape of `cmd --list-models` from Command Code v1.74.0, including the
-// banner, section headings, and the `(default)` marker.
 const commandCodeListModelsFixture = `Available models  ·  85 models
 
 Open Source
@@ -103,8 +99,6 @@ func TestParseCommandCodeModelsUsesIDAsLabel(t *testing.T) {
 	}
 }
 
-// The regression this fixes: the picker offered "balances intelligence and
-// cost" and similar descriptions as selectable models.
 func TestParseCommandCodeModelsNeverUsesDescriptionAsLabel(t *testing.T) {
 	got, err := parseCommandCodeModels([]byte(commandCodeListModelsFixture))
 	if err != nil {
@@ -142,7 +136,6 @@ func TestParseCommandCodeModelsReadsDefaultMarker(t *testing.T) {
 	}
 }
 
-// The banner and section headings must not become selectable models.
 func TestParseCommandCodeModelsSkipsBannerAndSections(t *testing.T) {
 	got, err := parseCommandCodeModels([]byte(commandCodeListModelsFixture))
 	if err != nil {
@@ -194,8 +187,6 @@ func TestModelDiscoveryErrorExplainsTimeout(t *testing.T) {
 }
 
 func TestModelDiscoveryErrorSurfacesCommandOutput(t *testing.T) {
-	// A live-exit failure must carry the CLI's own stderr so an "exit status 1"
-	// is diagnosable; ANSI is stripped and whitespace collapsed to one line.
 	err := modelDiscoveryError(context.Background(), "opencode", errors.New("exit status 1"),
 		[]byte("\x1b[31mError:\x1b[0m Configuration is invalid at\n  /x/opencode.json: bad file reference\n"))
 	msg := err.Error()
@@ -219,7 +210,6 @@ func TestOpenCodeCredentialPresenceUnlocksProvider(t *testing.T) {
 	if got["EXISTING"] != "1" {
 		t.Fatalf("existing env not preserved: %v", got)
 	}
-	// The caller's map must not be mutated (it may be reused/cached).
 	if _, leaked := base["ANTHROPIC_API_KEY"]; leaked {
 		t.Fatalf("input env was mutated: %v", base)
 	}
@@ -236,7 +226,6 @@ func TestOpenCodeCredentialPresenceUnknownTypeIsNoop(t *testing.T) {
 func TestModelDiscoveryErrorTailBounded(t *testing.T) {
 	err := modelDiscoveryError(context.Background(), "opencode", errors.New("exit status 1"),
 		[]byte(strings.Repeat("x", discoveryErrorDetailMax*3)))
-	// The detail is the wrapped error plus a bounded, ellipsis-prefixed tail.
 	if detail := discoveryErrorDetail([]byte(strings.Repeat("x", discoveryErrorDetailMax*3))); len([]rune(detail)) != discoveryErrorDetailMax+1 {
 		t.Fatalf("detail rune length = %d, want %d", len([]rune(detail)), discoveryErrorDetailMax+1)
 	}
@@ -249,13 +238,9 @@ func TestKiroDiscoveryRunsOnlyAfterAConfirmedSignIn(t *testing.T) {
 	const missingBinary = "ao-test-missing-kiro-cli"
 	type outcome int
 	const (
-		// ranModelCommand: the model command ran (and failed on the missing binary).
 		ranModelCommand outcome = iota
-		// skippedSignedOut: a clear signed-out answer skipped discovery.
 		skippedSignedOut
-		// failedCheck: an inconclusive check is an ordinary, retried failure.
 		failedCheck
-		// canceled: the caller's context ended during the check.
 		canceled
 	)
 	for _, tc := range []struct {
@@ -349,10 +334,6 @@ func TestDiscoveryWithoutASignInCheckNeverProbes(t *testing.T) {
 }
 
 func TestOpenCodeDiscoveryUsesStableModelsCommandForEachMajor(t *testing.T) {
-	// Must be the bare `models` subcommand. `--pure` is a global flag some
-	// opencode builds reject ("Unrecognized flag: --pure"), which would empty the
-	// picker; the stable contract for both verified majors is `opencode models`
-	// with no rejectable flag.
 	for _, agentID := range []string{"opencode", "opencode-v2"} {
 		spec, ok := commandSpecs[agentID]
 		if !ok {
@@ -794,8 +775,6 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ACP groups name the model vendors; the shared catalog identifies Cline
-	// as the serving connection while preserving native IDs and the default.
 	want := []ports.AgentModelInfo{
 		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "cline", IsDefault: true},
 		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "cline"},
@@ -863,11 +842,6 @@ gpt-oss-120b-medium  GPT-OSS 120B (Medium)
 	}
 }
 
-// Command Code's `--list-models` prints `<id>  <description>`, where the
-// trailing text is marketing copy rather than a display name. This replaced an
-// earlier fixture that assumed `anthropic/claude-opus-4-1  Claude Opus 4.1`;
-// the real v1.74.0 output emits bare ids and descriptions, which is why the
-// picker was offering "balances intelligence and cost" as a model.
 func TestCommandCodeCatalogParsesTabularModelList(t *testing.T) {
 	got, err := commandSpecs["command-code"].parser([]byte(`Available models  ·  3 models
 
@@ -1287,21 +1261,12 @@ func TestClaudeCatalogFingerprintUsesOnlyResolvedSettings(t *testing.T) {
 func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *testing.T) {
 	dir := t.TempDir()
 	writeClaudeSettings(t, dir, "opus")
-	// codex reads no configuration, so its fingerprint must stay byte-identical
-	// to the executable fingerprint earlier daemons cached under.
 	got := CatalogFingerprint(context.Background(), "codex", "codex", dir, nil)
 	if want := BinaryVersion(context.Background(), "codex"); got != want {
 		t.Fatalf("fingerprint = %q, want the executable fingerprint %q", got, want)
 	}
 }
 
-// TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
-// ACP harnesses. Cline keeps configured provider selections, so an ACP
-// failure falls back to those. DeepSeek Harness and Devin have no second
-// source, and the generic path answers with an empty catalog and no error —
-// which the caller stores as a successful discovery, parking the picker until
-// the next calendar day and skipping the retry ladder. The error has to
-// survive instead.
 func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
 	boom := errors.New("workspace path must be absolute")
 	for _, agentID := range []string{"deepseek-harness", "devin"} {
@@ -1324,10 +1289,6 @@ func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
 	}
 }
 
-// TestCatalogFingerprintTracksTheDeepSeekProfile pins the invalidation the ACP
-// catalog depends on: the models come from a live `dsh --profile acp` session,
-// so a profile edit — a model route changed in the web setup flow — must not
-// leave the day's cached choices in place.
 func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 	home := t.TempDir()
 	profile := filepath.Join(home, "profiles", "acp")
@@ -1383,7 +1344,6 @@ func TestMemcodeCatalogFingerprintInvalidatesFormerEmptyCatalog(t *testing.T) {
 }
 
 func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
-	// As cursor-agent prints a missing module.
 	output := "node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module 'tree-sitter'\n" +
 		"Require stack:\n- /opt/cursor-agent/index.js\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)\n" +
 		"    at Module.require (node:internal/modules/cjs/loader:1311:19)\n"

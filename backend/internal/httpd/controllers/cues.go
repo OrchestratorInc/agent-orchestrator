@@ -19,7 +19,6 @@ import (
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 )
 
-// CueService is the controller-facing project cue contract.
 type CueService interface {
 	Create(ctx context.Context, projectID domain.ProjectID, input cuesvc.Input) (domain.Cue, error)
 	List(ctx context.Context, projectID domain.ProjectID) ([]domain.Cue, error)
@@ -29,8 +28,6 @@ type CueService interface {
 	Invoke(ctx context.Context, cueID domain.CueID, input cuesvc.InvokeInput) (cuesvc.InvokeResult, error)
 }
 
-// CuesController owns the project cue routes: reusable, user-defined quick
-// actions scoped to a project.
 type CuesController struct {
 	Svc CueService
 }
@@ -48,7 +45,6 @@ func (b *invokeCueRequestBody) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*rawInvokeCueRequestBody)(b))
 }
 
-// Register mounts the bounded cue REST routes.
 func (c *CuesController) Register(r chi.Router) {
 	r.Get("/projects/{projectId}/cues", c.list)
 	r.Post("/projects/{projectId}/cues", c.create)
@@ -148,8 +144,6 @@ func (c *CuesController) update(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Check both the replacement and stored type so remote clients cannot convert
-// a desktop-owned command cue into an agent cue to bypass the write policy.
 func rejectLANCommandCueWrite(w http.ResponseWriter, r *http.Request, types ...domain.CueType) bool {
 	if !requestscope.IsLAN(r.Context()) {
 		return false
@@ -219,9 +213,6 @@ func (c *CuesController) invoke(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
-// Bound allocation before decoding, and consume the entire body so trailing
-// JSON or oversized whitespace cannot bypass validation. Empty bodies retain
-// the existing default request behavior (notably project-dialog invocation).
 func decodeCueBody(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	err := decoder.Decode(dst)

@@ -25,7 +25,6 @@ describe("SessionInspectorRail session navigation", () => {
 			expect(container.querySelector('[data-slot="inspector-gap"]')).toHaveAttribute("data-motion", "instant");
 			expect(screen.getByLabelText("Inspector draft")).toBe(draft);
 			expect(draft).toHaveValue("preserved");
-			// Background updates must not re-enable the route transition.
 			rerender(rail("second", to));
 			expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-motion", "instant");
 		},
@@ -93,7 +92,6 @@ describe("SessionInspectorRail session navigation", () => {
 			><span data-testid="inspector-child">content</span></SessionInspectorRail>;
 			const { rerender } = render(closing(true));
 			rerender(closing(false));
-			// A child's transition is not the panel's slide.
 			const childEnd = new Event("transitionend", { bubbles: true });
 			Object.defineProperty(childEnd, "propertyName", { value: "transform" });
 			fireEvent(screen.getByTestId("inspector-child"), childEnd);

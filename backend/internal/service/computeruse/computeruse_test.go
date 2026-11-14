@@ -17,7 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// pngHeader is enough for http.DetectContentType to call it image/png.
 var pngHeader = []byte("\x89PNG\r\n\x1a\n0000")
 
 type fakeDriver struct {
@@ -118,8 +117,6 @@ func TestStatusReportsVersionDaemonUpdateAndPermissions(t *testing.T) {
 	}
 }
 
-// Permissions are read from the running service; with it stopped the driver
-// could only report the caller's grants, which are not CuaDriver.app's.
 func TestStatusPermissionsUnknownWhileDaemonStopped(t *testing.T) {
 	s := newTestService(t, &fakeDriver{}, "darwin")
 	status, _ := s.Status(context.Background())
@@ -148,8 +145,6 @@ func TestGrantPermissionsOnlyOnMacOS(t *testing.T) {
 	}
 }
 
-// The core promise: a screenshot tool is pointed at a file under AO's data
-// directory, and a path the caller supplied is replaced.
 func TestCallWritesScreenshotsToFiles(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	var sent map[string]any
@@ -215,10 +210,6 @@ func TestConcurrentReadsGetDistinctScreenshotFiles(t *testing.T) {
 	}
 }
 
-// statefulDriver answers like Cua Driver's session model: a call without a
-// `session` runs in a fresh implicit session, and a pixel click needs a window
-// read by the same session. It refuses a `session` argument for
-// sessionlessTool.
 type statefulDriver struct {
 	read            map[string]bool
 	sessionlessTool string
@@ -260,9 +251,6 @@ func newStatefulService(t *testing.T) (*Service, *statefulDriver) {
 
 var snapshotArgs = map[string]any{"pid": 7, "window_id": 9, "include_screenshot": false}
 
-// Separate calls read a window and then pixel-click it, each in its own
-// driver process, so both must run in one driver session tied to the AO
-// session.
 func TestCallKeepsOneDriverSessionPerAOSession(t *testing.T) {
 	s, state := newStatefulService(t)
 	ctx := context.Background()
@@ -277,7 +265,6 @@ func TestCallKeepsOneDriverSessionPerAOSession(t *testing.T) {
 	if _, err := s.Call(ctx, CallRequest{Tool: "click", Arguments: pixelClick, SessionID: "worker-2"}); err == nil || !strings.Contains(err.Error(), "screenshot_context_missing") {
 		t.Fatalf("pixel click from another AO session err = %v, want screenshot_context_missing", err)
 	}
-	// The read, the click, AO's read after the click, then worker-2's refused click.
 	want := []any{"ao-worker-1", "ao-worker-1", "ao-worker-1", "ao-worker-2"}
 	if fmt.Sprint(state.sessions) != fmt.Sprint(want) {
 		t.Fatalf("driver sessions = %v, want %v", state.sessions, want)
@@ -305,8 +292,6 @@ func TestCallKeepsCallerDriverSession(t *testing.T) {
 	}
 }
 
-// A tool whose input has no `session` is sent again without it, and later
-// calls leave it out from the start.
 func TestCallDropsSessionForToolsThatRefuseIt(t *testing.T) {
 	s, state := newStatefulService(t)
 	for range 2 {
@@ -340,8 +325,6 @@ func TestCallLeavesTreeOnlySnapshotsAlone(t *testing.T) {
 	}
 }
 
-// A tool that prints an image as base64 instead of writing a file gets it
-// decoded to a file; the base64 is never passed through.
 func TestCallExternalizesInlineImages(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString(pngHeader)
 	driver := &fakeDriver{daemonUp: true}
@@ -462,8 +445,6 @@ func TestCallWhenNotInstalled(t *testing.T) {
 	}
 }
 
-// The call route runs only the tools agents are offered: not Cua Driver's
-// browser tools, scripts, whole-screen capture, or the step-only actions.
 func TestCallRefusesToolsAONotOffers(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	s := newTestService(t, driver, "darwin")
@@ -481,8 +462,6 @@ func TestCallRefusesToolsAONotOffers(t *testing.T) {
 	}
 }
 
-// Calls run only while "Let agents use this computer" is on; a service the
-// daemon never wired counts as off.
 func TestCallRefusesWhileComputerUseIsOff(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	s := newTestService(t, driver, "darwin")
@@ -501,8 +480,6 @@ func TestCallRefusesWhileComputerUseIsOff(t *testing.T) {
 	}
 }
 
-// Cua Driver refuses an output path under a symlinked folder, such as macOS's
-// /tmp, so the scope folder is handed over resolved.
 func TestScopeResolvesSymlinks(t *testing.T) {
 	target := t.TempDir()
 	link := filepath.Join(t.TempDir(), "data")
@@ -546,8 +523,6 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
-// Actions that name no window or field would land wherever the user is
-// working; they are refused before the driver runs.
 func TestCallRefusesActionsWithoutATarget(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	s := newTestService(t, driver, "darwin")
@@ -556,17 +531,16 @@ func TestCallRefusesActionsWithoutATarget(t *testing.T) {
 		arguments map[string]any
 		code      string
 	}{
-		"pixel click without window": {"click", map[string]any{"x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
-		"pixel click with pid only":  {"click", map[string]any{"pid": 7, "x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
-		"drag without window":        {"run_steps", map[string]any{"steps": []any{map[string]any{"drag": map[string]any{"from_x": 1, "from_y": 1, "to_x": 9, "to_y": 9}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
-		"desktop scope":              {"click", map[string]any{"scope": "desktop", "x": 1, "y": 1}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
-		"desktop target":             {"press_key", map[string]any{"key": "return", "target": map[string]any{"kind": "desktop", "display_id": "primary"}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
-		"desktop scope with token":   {"type_text", map[string]any{"element_token": "s1:2", "text": "hi", "scope": "desktop"}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
-		"type into focus":            {"type_text", map[string]any{"pid": 7, "window_id": 9, "text": "Nihal"}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
-		"run_steps pixel step":       {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "click", "args": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
-		"run_steps type into focus":  {"run_steps", map[string]any{"app": "WhatsApp", "steps": []any{map[string]any{"type_text": map[string]any{"text": "hi"}}}}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
-		"run_steps desktop scope":    {"run_steps", map[string]any{"steps": []any{map[string]any{"press_key": map[string]any{"key": "a", "scope": "desktop"}}}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
-		// A step is checked as the tool the driver runs it as.
+		"pixel click without window":      {"click", map[string]any{"x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"pixel click with pid only":       {"click", map[string]any{"pid": 7, "x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"drag without window":             {"run_steps", map[string]any{"steps": []any{map[string]any{"drag": map[string]any{"from_x": 1, "from_y": 1, "to_x": 9, "to_y": 9}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"desktop scope":                   {"click", map[string]any{"scope": "desktop", "x": 1, "y": 1}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"desktop target":                  {"press_key", map[string]any{"key": "return", "target": map[string]any{"kind": "desktop", "display_id": "primary"}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"desktop scope with token":        {"type_text", map[string]any{"element_token": "s1:2", "text": "hi", "scope": "desktop"}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"type into focus":                 {"type_text", map[string]any{"pid": 7, "window_id": 9, "text": "Nihal"}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
+		"run_steps pixel step":            {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "click", "args": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"run_steps type into focus":       {"run_steps", map[string]any{"app": "WhatsApp", "steps": []any{map[string]any{"type_text": map[string]any{"text": "hi"}}}}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
+		"run_steps desktop scope":         {"run_steps", map[string]any{"steps": []any{map[string]any{"press_key": map[string]any{"key": "a", "scope": "desktop"}}}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
 		"run_steps type alias into focus": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "type", "args": map[string]any{"text": "hi"}}}}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
 		"run_steps press alias pixel":     {"run_steps", map[string]any{"steps": []any{map[string]any{"press": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
 		"run_steps triple_click pixel":    {"run_steps", map[string]any{"steps": []any{map[string]any{"Triple_Click": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
@@ -618,8 +592,6 @@ func TestCallAllowsTargetedActions(t *testing.T) {
 	}
 }
 
-// The driver's own advice for a windowless pixel click is scope "desktop";
-// AO says to name the window instead.
 func TestCallExplainsDesktopScopeRefusal(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	driver.onCall = func([]string) ([]byte, []byte, error) {
@@ -633,8 +605,6 @@ func TestCallExplainsDesktopScopeRefusal(t *testing.T) {
 	}
 }
 
-// observingDriver answers get_window_state with a snapshot of window 9 of pid
-// 7, writing the requested screenshot file, and records every call.
 type observingDriver struct {
 	sent    []map[string]any
 	tools   []string
@@ -697,8 +667,6 @@ func TestActionsAreFollowedByAWindowRead(t *testing.T) {
 	}
 }
 
-// A token names a snapshot, not a window; the window comes from the read that
-// returned the snapshot.
 func TestTokenActionsReadTheSnapshotWindow(t *testing.T) {
 	recorder := &observingDriver{}
 	s := newTestService(t, recorder.driver(), "darwin")
@@ -713,7 +681,6 @@ func TestTokenActionsReadTheSnapshotWindow(t *testing.T) {
 		t.Fatalf("read after token action = %s %v", recorder.tools[2], read)
 	}
 
-	// Snapshots belong to a driver session: another AO session's token is unknown.
 	result, err := s.Call(ctx, CallRequest{Tool: "click", Arguments: map[string]any{"element_token": "s1:4"}, SessionID: "worker-2"})
 	if err != nil {
 		t.Fatalf("click: %v", err)
@@ -726,7 +693,6 @@ func TestTokenActionsReadTheSnapshotWindow(t *testing.T) {
 	}
 }
 
-// The action already ran, so a failed read is reported, not returned.
 func TestFailedReadKeepsTheActionResult(t *testing.T) {
 	recorder := &observingDriver{readErr: true}
 	s := newTestService(t, recorder.driver(), "darwin")
@@ -822,8 +788,6 @@ func TestCallDropsCallerImageFiles(t *testing.T) {
 		t.Fatalf("caller's step arguments changed: %v", given)
 	}
 
-	// A trailing get_window_state becomes the batch's end read, and its file
-	// would force a capture the batch's observe turned off.
 	read := map[string]any{"screenshot_out_file": "/etc/outside.png"}
 	steps = []any{
 		map[string]any{"click": map[string]any{"element_token": "s1:2"}},
@@ -849,8 +813,6 @@ func TestCallDropsCallerImageFiles(t *testing.T) {
 	}
 }
 
-// An idle driver session ends, and the driver refuses calls naming it until
-// start_session revives the name.
 func TestCallRevivesAnEndedDriverSession(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	ended := true
@@ -882,8 +844,6 @@ func TestCallRevivesAnEndedDriverSession(t *testing.T) {
 	}
 }
 
-// A batch whose step failed still reports every step and the window after it;
-// a batch refused before running is an error.
 func TestCallReturnsFailedRunStepsReport(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	report := `{"ok":false,"executed":1,"failed_step":0,"total":1,"steps":[{"index":0,"tool":"click","ok":false,"phase":"find","message":"no button"}]}`
@@ -948,14 +908,11 @@ func TestAgentToolsReadSchemasFromTheDriver(t *testing.T) {
 		t.Fatalf("described %v", described)
 	}
 
-	// The same driver version is read once.
 	if _, err := s.AgentTools(context.Background()); err != nil || len(described) != len(agentToolNames) {
 		t.Fatalf("second AgentTools() re-described: err=%v, %d calls", err, len(described))
 	}
 }
 
-// Actions reached only as run_steps steps have their arguments listed in
-// run_steps' description, since its schema types a step's args as any object.
 func TestAgentToolsSummarizeStepOnlyArguments(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	driver.onCall = func(args []string) ([]byte, []byte, error) {
@@ -999,8 +956,6 @@ func TestInstalledLocatesTheDriverOnly(t *testing.T) {
 	}
 }
 
-// The driver session can end between an action and AO's read of its window;
-// the read revives it like Call does instead of reporting the session ended.
 func TestReadAfterActionRevivesAnEndedSession(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	ended := false
@@ -1009,7 +964,7 @@ func TestReadAfterActionRevivesAnEndedSession(t *testing.T) {
 		tools = append(tools, args[1])
 		switch {
 		case args[1] == "click":
-			ended = true // the session expires right after the action lands
+			ended = true
 			return []byte(`{"summary":"clicked"}`), nil, nil
 		case args[1] == "start_session":
 			ended = false
@@ -1033,9 +988,6 @@ func TestReadAfterActionRevivesAnEndedSession(t *testing.T) {
 	}
 }
 
-// A driver refusal or rejected arguments is the caller's request (400); an
-// error with a code is the screen not matching the call (409); only a driver
-// that is not working is unavailable (503). The outputs are Cua Driver 0.37.0's.
 func TestCallFailureStatusFollowsTheDriverAnswer(t *testing.T) {
 	for name, tc := range map[string]struct {
 		stdout, stderr string
@@ -1064,9 +1016,6 @@ func TestCallFailureStatusFollowsTheDriverAnswer(t *testing.T) {
 	}
 }
 
-// A type_text the driver refuses for the field, such as a web composer that
-// takes no background input, points the agent to set_value and its caveat;
-// one refused for its arguments does not.
 func TestRefusedTypeTextAdvisesSetValue(t *testing.T) {
 	for name, tc := range map[string]struct {
 		tool, stdout string
@@ -1094,8 +1043,6 @@ func TestRefusedTypeTextAdvisesSetValue(t *testing.T) {
 	}
 }
 
-// The driver reports text it typed into web content as unverifiable; the
-// result carries the same advice, since the page may not have seen it.
 func TestUnverifiableTypeTextNotesSetValueCaveat(t *testing.T) {
 	recorder := &observingDriver{}
 	s := newTestService(t, recorder.driver(), "darwin")
@@ -1115,7 +1062,6 @@ func TestUnverifiableTypeTextNotesSetValueCaveat(t *testing.T) {
 	}
 }
 
-// deadlineDriver records how long each driver call was given.
 type deadlineDriver struct {
 	*fakeDriver
 	budgets map[string]time.Duration

@@ -89,7 +89,6 @@ export function nodeCliShadowIo(): CliShadowIo {
 				return null;
 			}
 		},
-		// A shell skips a directory named ao, though it passes an X_OK check.
 		async isExecutableFile(value) {
 			try {
 				return (await stat(value)).isFile() && (await io.canExecute(value));

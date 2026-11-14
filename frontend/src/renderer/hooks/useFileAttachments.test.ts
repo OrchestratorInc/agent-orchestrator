@@ -367,7 +367,6 @@ describe("useFileAttachments", () => {
 	it("holds files to a smaller limit when one is given, as AO Cloud's 25 MiB", async () => {
 		const { result } = renderHook(() => useFileAttachments({ maxAttachmentBytes: 25 * mb }));
 		await act(async () => {
-			// Under the daemon's 50 MB, over Cloud's 25 MiB.
 			await result.current.addFiles([file("big.bin", 25 * mb + 1, "application/octet-stream")]);
 		});
 		expect(result.current.attachments).toHaveLength(0);
@@ -429,7 +428,6 @@ describe("useFileAttachments", () => {
 	it("stops waiting at once when every uploading file is removed, and attaches nothing that finishes later", async () => {
 		const releases: Array<() => void> = [];
 		const prepareAttachments = vi.fn(([attachment]: FileAttachment[]) => new Promise<FileAttachment[]>((resolve) => {
-			// A preparer that ignores the signal, as a stalled request would.
 			releases.push(() => resolve([{ ...attachment!, stagedPath: "ao-cloud-attachment:x/late.bin" }]));
 		}));
 		const { result } = renderHook(() => useFileAttachments({ initialKey: "cloud-cancel-all", prepareAttachments, prepareEach: true }));
@@ -440,7 +438,6 @@ describe("useFileAttachments", () => {
 		await waitFor(() => expect(releases).toHaveLength(1));
 		expect(result.current.preparing).toBe(true);
 		act(() => result.current.cancelPending(result.current.pendingAttachments[0]!.id));
-		// Send is enabled again without waiting for the stalled upload.
 		expect(result.current.preparing).toBe(false);
 		expect(result.current.hasPendingReads()).toBe(false);
 		await act(async () => {
@@ -494,9 +491,6 @@ describe("useFileAttachments", () => {
 	});
 
 	it("skips a file that exceeds the total cap without dropping later smaller files", async () => {
-		// Regression probe for the break-vs-continue cap bug: one file that does not
-		// fit into the remaining budget aborted the whole staging loop, silently
-		// dropping every smaller file staged after it in the same batch.
 		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
 		const { result } = renderHook(() => useFileAttachments());
 		try {
@@ -508,8 +502,6 @@ describe("useFileAttachments", () => {
 					file("d.txt", 15 * mb),
 				]);
 			});
-			// a + b (80 MB) fit; c would push past MAX_ATTACHMENTS_BYTES (100 MB) and only it is
-			// refused; d (95 MB total) still fits and must survive the batch.
 			expect(result.current.attachments.map((a) => a.name)).toEqual(["a.txt", "b.txt", "d.txt"]);
 			expect(result.current.attachments.reduce((sum, a) => sum + a.bytes, 0)).toBeLessThanOrEqual(
 				MAX_ATTACHMENTS_BYTES,

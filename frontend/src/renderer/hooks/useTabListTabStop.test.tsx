@@ -48,7 +48,6 @@ describe("useTabListTabStop", () => {
 
 	it("scrolls the selected tab into view only when the selection changes", () => {
 		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
-		// The scroll runs in the next frame so it shares that frame's layout.
 		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
 			callback(0);
 			return 0;

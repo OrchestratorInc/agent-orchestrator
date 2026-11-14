@@ -1,15 +1,3 @@
-// Package sentryobs is the daemon-side Sentry integration. It captures genuine
-// server faults (5xx, registered fault codes answered with a 4xx or 503,
-// background failures, and panics) with a stable fingerprint. Recovered panics
-// keep their interrupted frame. Ordinary Go errors have no captured stack;
-// their wrapped causes expose bounded types instead of an opaque count.
-//
-// It is a no-op until a DSN is configured (AO_SENTRY_DSN), and deny-by-default
-// on privacy: no PII, no server name, no request data, no breadcrumbs, and
-// dynamic error text and stack paths are removed before send. Plain transient
-// conditions (503 SERVICE_UNAVAILABLE from lock contention) are deliberately
-// not captured; a 503 whose cause is a server-side deadline is, because that is
-// a hang, not contention.
 package sentryobs
 
 import (
@@ -39,9 +27,6 @@ import (
 var enabled atomic.Bool
 var installID atomic.Pointer[string]
 
-// sampled reports whether this install sends non-fatal errors. Panics always
-// send. The same hash picks the same installs in Electron main
-// (frontend/src/shared/sentry-config.ts installInErrorSample).
 var sampled atomic.Bool
 var release atomic.Pointer[string]
 var environment atomic.Pointer[string]
@@ -55,28 +40,17 @@ var errorBudget = struct {
 
 const (
 	maxErrorsPerFingerprintMinute = 5
-	// The daemon is one per install, so this is the per-install daily cap: one
-	// noisy failure used to spend the project's whole Sentry quota (AO-DAEMON-9).
-	// ponytail: in memory, so a daemon restart refills it; persist under the
-	// data dir if restart loops turn out to matter.
-	maxErrorsPerFingerprintDay = 10
-	maxErrorFingerprintsPerDay = 1024
-	// maxErrorsPerInstallDay bounds one install's non-fatal errors across all
-	// fingerprints, matching the Electron main cap.
-	maxErrorsPerInstallDay = 25
-	// errorSampleBuckets: one install in this many sends non-fatal errors.
-	errorSampleBuckets = 10
+	maxErrorsPerFingerprintDay    = 10
+	maxErrorFingerprintsPerDay    = 1024
+	maxErrorsPerInstallDay        = 25
+	errorSampleBuckets            = 10
 )
 
-// Sample rates tagged on every event so Sentry counts can be scaled back up.
 const (
 	sampledErrorRate = "0.1"
 	fatalErrorRate   = "1"
 )
 
-// InstallInErrorSample reports whether an install sends non-fatal errors:
-// sha256(install_id) read as a big-endian uint32, modulo 10, equals 0. An
-// unknown install is never in the sample.
 func InstallInErrorSample(id string) bool {
 	if id == "" {
 		return false
@@ -89,9 +63,7 @@ type errorBudgetGroup struct {
 	minute      int64
 	minuteCount int
 	dayCount    int
-	// dropped counts events refused since the last one sent; the next one
-	// sent carries it as dropped_since_last.
-	dropped int
+	dropped     int
 }
 
 var captureGate = struct {
@@ -108,8 +80,6 @@ var (
 	safeRoute       = regexp.MustCompile(`^/[A-Za-z0-9_./{}*:-]+$`)
 )
 
-// New daemon Sentry capture operations and tags must be registered here.
-// The values are fixed by AO, never copied from an error or request.
 var operationLabels = map[string]string{
 	"http_request":       "HTTP server error",
 	"http_request_panic": "http handler panic",
@@ -125,7 +95,6 @@ var areaLabels = map[string]string{
 	"network": "Network operation failed",
 }
 
-// These are the fixed relaunch steps produced by session_manager.Manager.
 var relaunchSteps = map[string]struct{}{
 	"agent adapter": {}, "system prompt": {}, "system prompt file": {},
 	"browser capability": {}, "model configuration": {}, "agent hooks": {},
@@ -136,8 +105,6 @@ var relaunchSteps = map[string]struct{}{
 	"workspace roots": {}, "provider ownership": {}, "chat start": {},
 }
 
-// Only literal codes used for reportable daemon errors belong here. A new
-// error code stays out of Sentry until it is deliberately added to this list.
 var safeErrorCodes = map[string]struct{}{
 	"AGENT_RESUME_FAILED":                       {},
 	"AGENT_AUTH_DATA_HOME_UNAVAILABLE":          {},
@@ -193,18 +160,15 @@ var safeErrorCodes = map[string]struct{}{
 	"WORKSPACE_GIT_READ_FAILED":                 {},
 }
 
-// Config configures the daemon Sentry client.
 type Config struct {
 	DSN         string
 	InstallID   string
 	Release     string
 	Environment string
-	SampleRate  float64 // <=0 or >1 defaults to 1.0
+	SampleRate  float64
 	Transport   sentry.Transport
 }
 
-// Init initializes the global Sentry client. A blank DSN leaves it a permanent
-// no-op. Safe to call once at daemon startup.
 func Init(cfg Config) error {
 	enabled.Store(false)
 	errorBudget.Lock()
@@ -235,9 +199,6 @@ func Init(cfg Config) error {
 	}
 	transport := cfg.Transport
 	if transport == nil {
-		// A synchronous transport leaves no SDK queue that could send after an
-		// opt-out acknowledgement. The policy drain below waits for any send
-		// already in progress.
 		transport = sentry.NewHTTPSyncTransport()
 	}
 	if err := sentry.Init(sentry.ClientOptions{
@@ -247,13 +208,9 @@ func Init(cfg Config) error {
 		EnableTracing: false,
 		SampleRate:    rate,
 		Transport:     transport,
-		// PII is off by default; BeforeSend additionally clears ServerName and
-		// Request and replaces title text, so raw error details are not sent.
-		// Deny-by-default: scrub the event before it leaves the process.
 		BeforeSend: func(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 			return scrubEvent(event)
 		},
-		// No automatic breadcrumbs (they can carry URLs/paths).
 		BeforeBreadcrumb: func(_ *sentry.Breadcrumb, _ *sentry.BreadcrumbHint) *sentry.Breadcrumb {
 			return nil
 		},
@@ -264,11 +221,8 @@ func Init(cfg Config) error {
 	return nil
 }
 
-// Enabled reports whether Sentry is active (a DSN was configured).
 func Enabled() bool { return enabled.Load() }
 
-// SetPolicyCheck installs the durable authority consulted before each capture.
-// A nil check closes intake.
 func SetPolicyCheck(check func(context.Context) bool) {
 	captureGate.Lock()
 	captureGate.policyCheck = check
@@ -307,7 +261,6 @@ func leaveCapture() {
 	captureGate.Unlock()
 }
 
-// Drain waits for every provider call that entered before intake closed.
 func Drain(ctx context.Context) error {
 	captureGate.Lock()
 	if captureGate.active == 0 {
@@ -326,9 +279,6 @@ func Drain(ctx context.Context) error {
 }
 
 func scrubEvent(event *sentry.Event) *sentry.Event {
-	// Error strings can contain project names, session IDs, repository paths,
-	// provider output, or panic values. Sentry derives issue titles from these
-	// fields, so path matching alone cannot make them safe.
 	label := "daemon error"
 	if known, ok := operationLabels[event.Tags["operation"]]; ok {
 		label = known
@@ -344,10 +294,8 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 		label += " (" + typ + ")"
 	}
 	event.Message = label
-	event.ServerName = "" // never leak the machine hostname
-	event.Request = nil   // no URLs/headers/cookies
-	// Rebuild the SDK environment context from trusted runtime constants. An
-	// arbitrary context, including a raw panic stack, never crosses this edge.
+	event.ServerName = ""
+	event.Request = nil
 	event.Contexts = map[string]sentry.Context{
 		"device":  {"arch": runtime.GOARCH},
 		"os":      {"name": runtime.GOOS},
@@ -413,7 +361,6 @@ func safeSentryTag(key, value string) bool {
 		_, ok := operationLabels[value]
 		return ok
 	case "path":
-		// Only route templates supplied by RoutePattern may pass this final edge.
 		if value == "unmatched" {
 			return true
 		}
@@ -425,8 +372,6 @@ func safeSentryTag(key, value string) bool {
 			return true
 		}
 	case "status":
-		// Fault codes can answer with a 4xx or 503 (see IsFaultCode), so any
-		// error status is a valid tag; it is a bare number, never request data.
 		status, err := strconv.Atoi(value)
 		return err == nil && status >= http.StatusBadRequest && status <= 599
 	case "category":
@@ -479,21 +424,14 @@ func safeErrorType(value string) bool {
 	return false
 }
 
-// ShouldCaptureStatus reports whether an HTTP status is a genuine server fault
-// worth an issue. 5xx qualifies, except 503 (transient/retryable contention).
 func ShouldCaptureStatus(status int) bool {
 	return status >= http.StatusInternalServerError && status != http.StatusServiceUnavailable
 }
 
-// CaptureError captures a reportable daemon error with safe tags and the
-// caller's stable fingerprint. No-op when disabled or canceled.
 func CaptureError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 	captureErrorFor(ctx, err, withErrorTags(tags, err), fingerprint, route, site, tags["operation"])
 }
 
-// withErrorTags adds the tags an error in err's chain declares through
-// SentryTags (a classified spawn failure's failed_step and cause). They pass
-// the same safeSentryTag filter as every other tag; tags is never modified.
 func withErrorTags(tags map[string]string, err error) map[string]string {
 	var tagged interface{ SentryTags() map[string]string }
 	if err == nil || !errors.As(err, &tagged) {
@@ -511,8 +449,6 @@ func withErrorTags(tags map[string]string, err error) map[string]string {
 	return out
 }
 
-// CaptureErrorAsync reports HTTP faults without waiting for Sentry transport.
-// It shares bounded admission, budgets and consent draining with background captures.
 func CaptureErrorAsync(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) {
 		return
@@ -532,8 +468,6 @@ func captureErrorFor(ctx context.Context, err error, tags map[string]string, fin
 	capture(sentry.LevelError, withDropped(tags, dropped), fingerprint, route, site, false)
 }
 
-// withDropped returns tags carrying how many events of this fingerprint the
-// budget refused since the last one sent. tags is never modified.
 func withDropped(tags map[string]string, dropped int) map[string]string {
 	if dropped <= 0 {
 		return tags
@@ -546,18 +480,11 @@ func withDropped(tags map[string]string, dropped int) map[string]string {
 	return out
 }
 
-// allowErrorFingerprintFor applies the per-fingerprint budget and the
-// per-install daily total (maxErrorsPerInstallDay). Once a day has
-// seen maxErrorFingerprintsPerDay distinct fingerprints, a new one shares an
-// overflow bucket for its operation rather than one bucket for the whole
-// daemon, so a noisy day cannot hide a new failure in a different operation.
 func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool {
 	ok, _ := admitErrorFingerprint(fingerprint, operation, now)
 	return ok
 }
 
-// admitErrorFingerprint is allowErrorFingerprintFor that also reports, for an
-// admitted event, how many were refused since the last admitted one.
 func admitErrorFingerprint(fingerprint, operation string, now time.Time) (bool, int) {
 	overflow := "unknown"
 	if _, ok := operationLabels[operation]; ok {
@@ -570,8 +497,6 @@ func admitErrorFingerprint(fingerprint, operation string, now time.Time) (bool, 
 	defer errorBudget.Unlock()
 	day := now.YearDay() + now.Year()*366
 	if errorBudget.day != day {
-		// A new day refills every budget but keeps the refused counts, so the
-		// first event sent tomorrow still reports what today dropped.
 		groups := make(map[string]errorBudgetGroup)
 		for key, group := range errorBudget.groups {
 			if group.dropped > 0 {
@@ -606,7 +531,6 @@ func admitErrorFingerprint(fingerprint, operation string, now time.Time) (bool, 
 	return true, dropped
 }
 
-// CapturePanic captures a recovered panic at fatal level. No-op when disabled.
 func CapturePanic(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 	if ctx.Err() != nil || !enterCapture(ctx) {
 		return
@@ -615,8 +539,6 @@ func CapturePanic(ctx context.Context, tags map[string]string, fingerprint strin
 	capture(sentry.LevelFatal, tags, fingerprint, route, site, true)
 }
 
-// RecoverBackground reports a panic without sending its value to Sentry, then
-// preserves the daemon's crash-on-panic behavior. Defer it at the goroutine entry.
 func RecoverBackground() {
 	rec := recover()
 	if rec == nil {
@@ -692,7 +614,6 @@ func applyTags(scope *sentry.Scope, level sentry.Level, tags map[string]string, 
 	}
 }
 
-// Area classifies only errors with concrete type or code evidence.
 func Area(err error, code string) string {
 	switch {
 	case code == "WORKSPACE_GIT_READ_FAILED":
@@ -713,7 +634,6 @@ func Area(err error, code string) string {
 	return ""
 }
 
-// Flush waits up to timeout for buffered events to send. Call on shutdown.
 func Flush(timeout time.Duration) {
 	if enabled.Load() {
 		sentry.Flush(timeout)

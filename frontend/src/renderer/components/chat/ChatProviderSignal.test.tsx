@@ -16,11 +16,6 @@ function render(ui: ReactElement) {
 	);
 }
 
-// One test file per new provider signal the daemon started serving. What each covers
-// is the claim the row makes, not its markup: an MCP call must not read as a command
-// that ran in the worktree, an auto-review must not read as something the user
-// approved, and a reasoning row must not be blank when the provider sent prose.
-
 function activity(overrides: Partial<ConversationActivity>): ConversationActivity {
 	return {
 		kind: "activity",
@@ -42,8 +37,6 @@ describe("reasoning", () => {
 				activity={activity({
 					activityKind: "reasoning",
 					summary: "Reasoning",
-					// The field the provider actually fills. An earlier build read one that
-					// does not exist, which is why these rows arrived blank.
 					detail: { text: "**Reading the worktree**\n\nStatus first, then the diff." },
 				})}
 			/>,
@@ -78,8 +71,6 @@ describe("reasoning", () => {
 		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
-	// The default install sends the item with no body. A labelled empty row teaches
-	// nothing, so the surface explains the emptiness once instead.
 	it("renders nothing for a reasoning item with no body", () => {
 		const { container } = render(
 			<ActivityRow activity={activity({ activityKind: "reasoning", detail: {} })} />,
@@ -104,8 +95,6 @@ describe("MCP tool call", () => {
 	it("names the server and the tool, not a shell command", () => {
 		render(<ActivityRow activity={call} />);
 		expect(screen.getByText("search_issues")).toBeInTheDocument();
-		// The distinction the kind exists to draw: nothing ran in the worktree, a
-		// tool server answered. The row reads "<tool> · <server>".
 		expect(screen.getByText("· github")).toBeInTheDocument();
 	});
 
@@ -144,8 +133,6 @@ describe("MCP tool call", () => {
 		expect(screen.getByText("connection refused")).toBeInTheDocument();
 	});
 
-	// A payload the daemon could not store arrives as a stand-in. Printing it as the
-	// tool's answer would be a small lie with a confusing shape.
 	it("says a payload was too large rather than printing the stand-in", async () => {
 		render(
 			<ActivityRow
@@ -210,8 +197,6 @@ describe("auto review", () => {
 	it("carries the provider's own word for who decided", async () => {
 		render(<ActivityRow activity={review} />);
 		await userEvent.click(screen.getByRole("button"));
-		// "agent" means a model made the call, which is materially different from a
-		// policy rule matching — so it is not flattened to "automatically".
 		expect(screen.getByText("agent · 812ms")).toBeInTheDocument();
 	});
 
@@ -233,8 +218,6 @@ describe("auto review", () => {
 		expect(screen.getByText("Auto-declined")).toBeInTheDocument();
 	});
 
-	// An auto-review's `files` are bare paths, while a file_change's are objects. Same
-	// key on the wire, different shape, discriminated only by the kind.
 	it("lists the paths an action was allowed to touch", async () => {
 		render(
 			<ActivityRow
@@ -450,7 +433,6 @@ describe("provider error", () => {
 		turnId: "019ffd9d-714c-7d31-932f-4e7c10cf5a82",
 		willRetry: true,
 	});
-	// What AO persists: the Codex envelope, prefixed, in summary and detail.error.
 	const stored = `provider error: ${envelope.length > 400 ? `${envelope.slice(0, 400)}…` : envelope}`;
 
 	it("unwraps the truncated prefixed payload AO actually stores", () => {
@@ -472,7 +454,6 @@ describe("provider error", () => {
 				name: "https://platform.openai.com/settings/organization/billing",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
-		// The raw envelope must not paint as the row label — that is what overflowed the column.
 		expect(screen.queryByText(/codexErrorInfo/i)).not.toBeInTheDocument();
 		expect(screen.queryByText(/provider error:/i)).not.toBeInTheDocument();
 	});
@@ -619,8 +600,6 @@ describe("command terminal input", () => {
 					detail: {
 						output: "running tests\n",
 						outputSource: "stream",
-						// One unprintable byte. Stripping it would leave an empty box where the
-						// interesting thing happened.
 						terminalInput: "\u0003",
 					},
 				})}
@@ -703,12 +682,9 @@ describe("file changes", () => {
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
 		expect(screen.getByText(/@@ -1 \+1 @@/)).toBeInTheDocument();
-		// Header already shows the basename; do not repeat "Edited FAQ.tsx" in the body.
 		expect(screen.getAllByText("FAQ.tsx")).toHaveLength(1);
 	});
 
-	// A file with no patch is not a button: a control that does nothing when pressed
-	// is worse than plain text.
 	it("does not offer to open a file that carries no patch", async () => {
 		render(<ActivityRow activity={edit} />);
 		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
@@ -740,8 +716,6 @@ describe("file changes", () => {
 		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
-	// Rows written by earlier builds carry no status. The file is still drawn, as a
-	// modification, rather than being dropped for lacking a field.
 	it("draws a file whose status predates the daemon normalizing it", async () => {
 		render(
 			<ActivityRow

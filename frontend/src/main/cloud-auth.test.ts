@@ -25,8 +25,6 @@ const mocks = vi.hoisted(() => ({
   providerAuthenticate: vi.fn(),
 }));
 
-// The browser login itself is exercised in provider-auth-flow tests; here it
-// just returns a captured credential.
 vi.mock("./provider-auth-flow", () => ({
   providerAuthFlow: () => ({ authenticate: mocks.providerAuthenticate }),
 }));
@@ -47,8 +45,6 @@ vi.mock("electron", () => ({
     once: vi.fn(),
     removeAsDefaultProtocolClient: vi.fn(),
     setAsDefaultProtocolClient: vi.fn(),
-    // These tests exercise the packaged deep-link (ao-app://) sign-in flow;
-    // unpackaged builds default to a loopback redirect instead.
     isPackaged: true,
   },
   dialog: { showMessageBox: mocks.showMessageBox },
@@ -217,13 +213,10 @@ describe("native WorkOS authentication", () => {
     }));
   });
 
-  // The orchestrator.inc return page adds web_distinct_id for visitors who
-  // accepted website analytics. It must never change how signing in goes.
   describe("website visitor id on the return link", () => {
     const VISITOR = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
     const callback = (extra = "") => `ao-app://callback?code=code_123&state=state_123${extra}`;
 
-    // Everything the sign-in produced, for comparing a run with and without the id.
     async function signInWith(extra: string) {
       await beginCloudSignIn(dataDir);
       const result = await handleCloudDeepLink(callback(extra), dataDir);
@@ -292,7 +285,6 @@ describe("native WorkOS authentication", () => {
       const link = callback(`&web_distinct_id=${VISITOR}`);
       const first = await handleCloudDeepLink(link, dataDir);
       const again = await handleCloudDeepLink(link, dataDir);
-      // The same code and state with a different id is still the same callback.
       const otherVisitor = await handleCloudDeepLink(callback("&web_distinct_id=someone-else"), dataDir);
 
       expect(first?.signIn?.webDistinctId).toBe(VISITOR);
@@ -312,7 +304,6 @@ describe("native WorkOS authentication", () => {
     it("never stores or logs the id", async () => {
       const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "info"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
       await signInWith(`&web_distinct_id=${VISITOR}`);
-      // The test safeStorage mock "encrypts" to plain text, so the store is readable here.
       const stored = await readFile(path.join(dataDir, "cloud-auth.bin"), "utf8");
       expect(stored).toContain("user_123");
       expect(stored).not.toContain(VISITOR);
@@ -400,8 +391,6 @@ describe("native WorkOS authentication", () => {
       await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
 
-    // Local sessions use the default account's login: an account login is
-    // kept locally only when the control plane saved it as the default.
     const connectAccount = async (account: string) => {
       const handler = mocks.ipcHandle.mock.calls.find(
         ([channel]) => channel === "cloud:connectProviderAuth",
@@ -728,9 +717,6 @@ describe("native WorkOS authentication", () => {
   });
 });
 
-// registerCloudProtocol decides from how the build was launched and where it
-// signs in; the platform only decides whether a claim can be released (not on
-// Linux), so each case pins process.platform.
 describe("registerCloudProtocol", () => {
   const argv = process.argv;
   const defaultApp = Object.getOwnPropertyDescriptor(process, "defaultApp");
@@ -749,11 +735,6 @@ describe("registerCloudProtocol", () => {
     Object.defineProperty(process, "platform", platform);
   });
 
-  // Loads cloud-auth fresh, since it picks its sign-in redirect once at import
-  // from app.isPackaged and AO_CLOUD_AUTH_REDIRECT. The electron mock itself
-  // survives resetModules, so its calls are cleared here. A dev build is
-  // launched as `electron <app dir>`, which sets process.defaultApp; a
-  // packaged build leaves it unset.
   async function load(options: {
     isPackaged: boolean;
     redirect?: string;
@@ -791,7 +772,6 @@ describe("registerCloudProtocol", () => {
   });
 
   it("claims the bare scheme for a packaged app launched with a deep link", async () => {
-    // Windows and Linux start the installed app with the link as argv[1].
     const { app, registerCloudProtocol } = await load({
       isPackaged: true,
       argv: [process.execPath, "ao-app://callback?code=c&state=s"],
@@ -811,8 +791,6 @@ describe("registerCloudProtocol", () => {
   it.each(["darwin", "win32"] as const)("hands ao-app:// back on %s when an earlier dev run took it", async (os) => {
     const { app, registerCloudProtocol } = await load({ isPackaged: false, ownsScheme: true, platform: os });
     registerCloudProtocol();
-    // Windows only matches (and removes) the registration for this exact
-    // executable and script.
     expect(app.isDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
     expect(app.removeAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
     expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
@@ -848,7 +826,6 @@ describe("registerCloudProtocol", () => {
   ])("claims ao-app:// for a dev build signing in through %s, until it quits", async (_name, redirect) => {
     const { app, registerCloudProtocol } = await load({ isPackaged: false, redirect, ownsScheme: true });
     registerCloudProtocol();
-    // Windows launches this checkout's script with the dev Electron binary.
     expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
     expect(app.removeAsDefaultProtocolClient).not.toHaveBeenCalled();
     expect(app.once).toHaveBeenCalledWith("will-quit", expect.any(Function));
@@ -883,7 +860,6 @@ describe("resolveCloudAuthDir", () => {
 
 describe("the sign-in redirect each build sends", () => {
   const PRODUCTION_CLIENT = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
-  // The baked default, which belongs to the staging WorkOS environment.
   const STAGING_CLIENT = "client_01KZ3VRKC374HS91XGRDPT3671";
   const WEBSITE_PAGE = "https://orchestrator.inc/app/auth/return/";
   const CONTROL_PLANE_PAGE = "https://api.aoagents.dev/app/auth/return";
@@ -897,7 +873,6 @@ describe("the sign-in redirect each build sends", () => {
     ["a development build on the baked staging client", false, STAGING_CLIENT, LOOPBACK],
   ])("%s", (_name, isPackaged, clientId, redirect) => {
     expect(resolveCloudAuthRedirect({}, isPackaged, clientId)).toBe(redirect);
-    // The control plane a build talks to plays no part in it.
     expect(resolveCloudAuthRedirect({ AO_CLOUD_CONTROL_PLANE_URL: "https://staging-api.aoagents.dev" }, isPackaged, clientId)).toBe(redirect);
   });
 
@@ -925,7 +900,6 @@ describe("the sign-in redirect each build sends", () => {
       await rm(dataDir, { recursive: true, force: true });
     });
 
-    // cloud-auth picks its client and redirect once at import.
     async function startSignIn(clientId: string) {
       vi.resetModules();
       vi.stubEnv("VITE_WORKOS_CLIENT_ID", clientId);
@@ -986,7 +960,6 @@ describe("cloud:signOut with telemetry", () => {
       return new Response(null, { status: 204 });
     });
     const ctl = new TelemetryIdentityController(telemetryDir, () => "http://127.0.0.1:4010", fetcher as never);
-    // A normal signed-in hand-off: the daemon recorded user_A.
     expect(await ctl.setCloudUser("user_A")).toBe(true);
     await writeFile(path.join(telemetryDir, "telemetry_bound_user"), "user_A\n");
     await writeFile(path.join(telemetryDir, "telemetry_anonymous_id"), "anon_linked\n");

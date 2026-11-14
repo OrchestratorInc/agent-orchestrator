@@ -19,14 +19,10 @@ const (
 	delegatedTaskTitleLimit             = maxDisplayNameLen
 	delegatedTaskUntitledName           = "Untitled task"
 	delegatedTaskTitleRefinementTimeout = time.Minute
-	// ponytail: cosmetic work is dropped at the daemon-wide cap; add a queue only if skipped titles become a product problem.
-	delegatedTaskTitleConcurrency  = 4
-	delegatedTaskTitleSystemPrompt = "Return only a concise task title of at most 100 characters. Do not use tools, change files, or explain the answer."
+	delegatedTaskTitleConcurrency       = 4
+	delegatedTaskTitleSystemPrompt      = "Return only a concise task title of at most 100 characters. Do not use tools, change files, or explain the answer."
 )
 
-// DelegateTaskInput describes a task AO should spawn as a worker session. Brief
-// may be empty to open an idle worker that the user can instruct later. Empty
-// RequestedAgent means the spawn uses the project's worker-agent default.
 type DelegateTaskInput struct {
 	ProjectID         domain.ProjectID
 	Brief             string
@@ -44,14 +40,11 @@ type DelegateTaskInput struct {
 	ClientRequestHash string
 }
 
-// DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
-// optional for wire compatibility; title refinement never requires one.
 type DelegateTaskOutcome struct {
 	OrchestratorID domain.SessionID
 	WorkerID       domain.SessionID
 }
 
-// PrepareTask starts the reversible worktree-only half of task creation.
 func (s *Service) PrepareTask(ctx context.Context, projectID domain.ProjectID) (string, error) {
 	project, err := s.requireProject(ctx, projectID)
 	if err != nil {
@@ -61,15 +54,10 @@ func (s *Service) PrepareTask(ctx context.Context, projectID domain.ProjectID) (
 	return string(token), err
 }
 
-// CancelTaskPreparation releases an unclaimed speculative worktree. Unknown or
-// already-claimed tokens are intentionally idempotent.
 func (s *Service) CancelTaskPreparation(ctx context.Context, token string) error {
 	return s.manager.CancelTaskPreparation(ctx, domain.TaskPreparationToken(token))
 }
 
-// DelegateTask spawns the worker directly, matching `ao spawn`, with a
-// provisional display name derived from the task brief. Git tasks finalize
-// title and workspace names during provisioning; Scratch titles refine after spawn.
 func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (DelegateTaskOutcome, error) {
 	if rec, found, err := s.replayClientRequest(ctx, in.ClientRequestID, in.ClientRequestHash); err != nil {
 		return DelegateTaskOutcome{}, err
@@ -114,13 +102,10 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 			Effort:      effort,
 			Permissions: in.ApprovalMode,
 		},
-		EffortOverride: effortOverride,
-		RequestedMode:  in.RequestedMode,
-		AgentAccountID: in.AccountID,
-		Attachments:    in.Attachments,
-		// This is the desktop's new-task path: there is a UI waiting to navigate
-		// to the session. A Chat worker answers as soon as it is addressable and
-		// finishes starting in the background.
+		EffortOverride:  effortOverride,
+		RequestedMode:   in.RequestedMode,
+		AgentAccountID:  in.AccountID,
+		Attachments:     in.Attachments,
 		Async:           true,
 		TaskPreparation: in.TaskPreparation,
 	}, project)
@@ -128,9 +113,6 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)
 	}
 
-	// The worker spawn is the commit point. Background title
-	// generation must never hold the new-task response open. A promptless worker
-	// stays idle with its provisional title until the user supplies instructions.
 	if prompt != "" && project.Kind.WithDefault() == domain.ProjectKindScratch && !worker.ClientRequestCommitted {
 		s.refineDelegatedTaskTitleInBackground(worker.ID, in)
 	}

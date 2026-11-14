@@ -10,9 +10,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// minimumOMPVersion is the first tagged OMP release that contains the native
-// `omp acp` command. Older builds exposed a different RPC mode whose session,
-// approval, and replay semantics are not treated as interchangeable.
 const minimumOMPVersion = "15.0.0"
 
 var versionPattern = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)

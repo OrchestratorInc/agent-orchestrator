@@ -10,10 +10,10 @@ func TestStemRootWidensInflectedForms(t *testing.T) {
 	}{
 		{"rebasing", "rebas", true},
 		{"failing", "fail", true},
-		{"verified", "verif", true}, // the stemmer's "i" from "y" is dropped, so "verify" matches too
+		{"verified", "verif", true},
 		{"signatures", "signatur", true},
-		{"fail", "", false}, // already its own stem: nothing to widen
-		{"runs", "", false}, // a three-letter root ("run") would also match "runtime"
+		{"fail", "", false},
+		{"runs", "", false},
 	}
 	for _, tc := range cases {
 		root, ok := stemRoot(tc.word)

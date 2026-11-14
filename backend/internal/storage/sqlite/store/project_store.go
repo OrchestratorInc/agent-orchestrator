@@ -12,7 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// UpsertProject inserts or replaces a registered project row.
 func (s *Store) UpsertProject(ctx context.Context, r domain.ProjectRecord) error {
 	config, err := marshalProjectConfig(r.Config)
 	if err != nil {
@@ -23,8 +22,6 @@ func (s *Store) UpsertProject(ctx context.Context, r domain.ProjectRecord) error
 	return upsertProject(ctx, s.qw, r, config)
 }
 
-// UpsertWorkspaceProject inserts or replaces a workspace project and its child
-// repository registry in one transaction. The child set is authoritative.
 func (s *Store) UpsertWorkspaceProject(ctx context.Context, r domain.ProjectRecord, repos []domain.WorkspaceRepoRecord) error {
 	config, err := marshalProjectConfig(r.Config)
 	if err != nil {
@@ -35,8 +32,6 @@ func (s *Store) UpsertWorkspaceProject(ctx context.Context, r domain.ProjectReco
 	})
 }
 
-// ImportWorkspaceProject inserts or replaces a workspace project from an
-// authoritative import source, including the source registration timestamp.
 func (s *Store) ImportWorkspaceProject(ctx context.Context, r domain.ProjectRecord, repos []domain.WorkspaceRepoRecord) error {
 	config, err := marshalProjectConfig(r.Config)
 	if err != nil {
@@ -74,7 +69,6 @@ func (s *Store) writeWorkspaceProject(ctx context.Context, label string, r domai
 	})
 }
 
-// ListWorkspaceRepos returns the registered direct child repos for a workspace project.
 func (s *Store) ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
 	rows, err := s.qr.ListWorkspaceRepos(ctx, domain.ProjectID(projectID))
 	if err != nil {
@@ -162,7 +156,6 @@ func importProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, 
 	})
 }
 
-// GetProject returns a project by id, active or archived.
 func (s *Store) GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error) {
 	p, err := s.qr.GetProject(ctx, domain.ProjectID(id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -174,7 +167,6 @@ func (s *Store) GetProject(ctx context.Context, id string) (domain.ProjectRecord
 	return projectRowFromGen(p), true, nil
 }
 
-// FindProjectByPath returns a project registered at path, active or archived.
 func (s *Store) FindProjectByPath(ctx context.Context, path string) (domain.ProjectRecord, bool, error) {
 	p, err := s.qr.FindProjectByPath(ctx, path)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -186,7 +178,6 @@ func (s *Store) FindProjectByPath(ctx context.Context, path string) (domain.Proj
 	return projectRowFromGen(p), true, nil
 }
 
-// ListProjects returns active projects ordered by id.
 func (s *Store) ListProjects(ctx context.Context) ([]domain.ProjectRecord, error) {
 	rows, err := s.qr.ListProjects(ctx)
 	if err != nil {
@@ -199,9 +190,6 @@ func (s *Store) ListProjects(ctx context.Context) ([]domain.ProjectRecord, error
 	return out, nil
 }
 
-// UpdateProjectSettings atomically updates the user-facing display name and
-// config for an active project. It returns ok=false when the project is missing
-// or archived.
 func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName string, config domain.ProjectConfig) (bool, error) {
 	encodedConfig, err := marshalProjectConfig(config)
 	if err != nil {
@@ -220,9 +208,6 @@ func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName strin
 	return rows > 0, nil
 }
 
-// CountProjectsIncludingArchived returns all registry rows, including projects
-// the user archived. It is intentionally separate from ListProjects so first-run
-// seeding does not recreate Scratch after any project has existed.
 func (s *Store) CountProjectsIncludingArchived(ctx context.Context) (int, error) {
 	count, err := s.qr.CountProjectsIncludingArchived(ctx)
 	if err != nil {
@@ -231,7 +216,6 @@ func (s *Store) CountProjectsIncludingArchived(ctx context.Context) (int, error)
 	return int(count), nil
 }
 
-// ArchiveProject soft-deletes a project and reports whether a row was affected.
 func (s *Store) ArchiveProject(ctx context.Context, id string, at time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -261,9 +245,6 @@ func projectRowFromGen(p gen.Project) domain.ProjectRecord {
 	return r
 }
 
-// marshalProjectConfig encodes the typed per-project config into the nullable
-// JSON column. An IsZero config stores SQL NULL so an unset config round-trips
-// back to a zero value rather than an empty object.
 func marshalProjectConfig(cfg domain.ProjectConfig) (sql.NullString, error) {
 	if cfg.IsZero() {
 		return sql.NullString{}, nil
@@ -275,11 +256,6 @@ func marshalProjectConfig(cfg domain.ProjectConfig) (sql.NullString, error) {
 	return sql.NullString{String: string(data), Valid: true}, nil
 }
 
-// unmarshalProjectConfig decodes the nullable JSON column back into the typed
-// struct. SQL NULL (an unset config) decodes to a zero value. A damaged config
-// (invalid JSON from a direct DB edit or migration bug) also degrades to a zero
-// config rather than erroring — a corrupt config must never block access to the
-// project row, nor fail an entire ListProjects.
 func unmarshalProjectConfig(s sql.NullString) domain.ProjectConfig {
 	if !s.Valid || s.String == "" {
 		return domain.ProjectConfig{}
@@ -298,7 +274,6 @@ func nullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t, Valid: true}
 }
 
-// SetProjectPermissions serializes a focused read-modify-write with other writes.
 func (s *Store) SetProjectPermissions(ctx context.Context, id string, permissions domain.PermissionMode) (domain.ProjectRecord, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

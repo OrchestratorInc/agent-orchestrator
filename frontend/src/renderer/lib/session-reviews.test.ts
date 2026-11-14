@@ -64,10 +64,6 @@ const reviewState = (number: number, status: PRReviewState["status"]): PRReviewS
 	title: `PR ${number}`,
 });
 
-// The Reviews tab and the command palette both read their eligibility from these
-// helpers. They previously lived as a private copy inside SessionInspector, and a
-// merge silently re-forked them — pin the behaviour so a second copy can't drift
-// back in unnoticed.
 describe("shared review eligibility helpers", () => {
 	it("keeps only the review states belonging to a session's open or draft PRs", () => {
 		const target = session({ prs: [pr(1), pr(2, "draft"), pr(3, "merged"), pr(4, "closed")] });

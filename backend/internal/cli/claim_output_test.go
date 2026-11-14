@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// Both commands must report what the claim response establishes, without
-// interpreting branchChanged=false as proof that HEAD matches the PR branch.
 func TestClaimCommandsCheckoutOutput(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -67,8 +65,6 @@ func TestClaimCommandsCheckoutOutput(t *testing.T) {
 					t.Errorf("%v output contradicts branchChanged=%t: %s", args, tc.branchChanged, out)
 				}
 			}
-			// spawn has no --json mode; its human output above must agree with
-			// the same daemon field that session claim-pr exposes as JSON.
 			out, errOut, err := executeCLI(t, deps, "session", "claim-pr", "demo-1", "7", "--json")
 			if err != nil {
 				t.Fatalf("claim-pr --json: %v stderr=%s", err, errOut)

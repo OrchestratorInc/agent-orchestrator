@@ -3,9 +3,6 @@ import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { useTabScrollEdges } from "./useTabScrollEdges";
 
-// The session tab strip mounts through a portal after its owner rendered, so
-// the hook must wire the wheel handler when the element appears, not only on
-// the owner's first render.
 function LateStrip() {
 	const { scrollRef } = useTabScrollEdges();
 	const [mounted, setMounted] = useState(false);

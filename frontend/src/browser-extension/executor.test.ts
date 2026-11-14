@@ -32,10 +32,8 @@ function storage() {
 	};
 }
 
-// A 1x1 PNG data URL, as chrome.tabs.captureVisibleTab returns.
 const CAPTURE_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-// Pages served to the fake tab by URL.
 const PAGES: Record<string, string> = {
 	"https://shop.test/": `<h1>Shop</h1><label for="q">Search</label><input id="q"><button id="buy">Buy now</button><a href="/help">Help</a>`,
 	"https://shop.test/done": `<h1>Thanks</h1>`,
@@ -53,14 +51,11 @@ class FakeChrome {
 	attached = 0;
 	windowsCreated: string[] = [];
 	holdLoad = false;
-	/** When set, tabs.update leaves the commit to the test. */
 	deferCommit?: () => void;
 	holdCommit = false;
 	windowsRemoved: number[] = [];
 	windowStates = new Map<number, string>();
-	/** Debugger screenshots that never produce a frame, like a page that loaded minimized. */
 	hangingScreenshots = 0;
-	/** The user's last focused window, if they have one open. */
 	userWindow?: { id: number; incognito?: boolean };
 	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
@@ -84,9 +79,7 @@ class FakeChrome {
 	local = storage();
 	session = storage();
 	frames = [{ frameId: 0, parentFrameId: -1, url: "" }];
-	/** Which tab was in front of its window at each capture. */
 	captures: number[] = [];
-	/** Runs during a capture, for example a user switching tabs. */
 	duringCapture?: () => void;
 
 	activate(tabId: number) {
@@ -94,7 +87,6 @@ class FakeChrome {
 		for (const other of this.tabs.values()) if (other.windowId === tab.windowId) other.active = other.id === tabId;
 		this.events.tabsActivated.fire({ tabId, windowId: tab.windowId });
 	}
-	/** Answers content requests for specific frames (tabId, frameId). */
 	frameResponder?: (frameId: number, message: Record<string, unknown>) => unknown;
 
 	load(tabId: number, url: string) {
@@ -163,8 +155,6 @@ class FakeChrome {
 					if (!self.groups.has(id)) self.groups.set(id, { id, windowId: createProperties?.windowId ?? 1 });
 					for (const tabId of Array.isArray(tabIds) ? tabIds : [tabIds]) {
 						self.tabs.get(tabId)!.groupId = id;
-						// Chrome reports the grouping as a tab update, possibly before
-						// the caller has recorded the tab.
 						self.events.tabsUpdated.fire(tabId, { groupId: id }, self.tabs.get(tabId));
 					}
 					return id;
@@ -413,7 +403,6 @@ describe("Executor", () => {
 		await approve("s2");
 		await run("open", { url: "https://shop.test/" }, "s1");
 		const tabOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!;
-		// The user's tab stays in front while the agent works behind it.
 		const { refs } = (await run("snapshot", { interactive: true }, "s1")) as { refs: Record<string, { name: string }> };
 		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
 		expect(await run("click", { ref: buy }, "s1")).toMatchObject({ inputTier: "trusted" });
@@ -428,7 +417,6 @@ describe("Executor", () => {
 		expect(tabOf("https://shop.test/").groupId).not.toBe(tabOf("https://shop.test/done").groupId);
 		expect(fake.tabs.get(mine.id!)!.active).toBe(true);
 
-		// Ending a session never closes the user's window.
 		await run("__destroy-session", {}, "s1");
 		expect(fake.windowsRemoved).toEqual([]);
 		expect(fake.tabs.get(mine.id!)).toBeDefined();
@@ -452,7 +440,6 @@ describe("Executor", () => {
 		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
 		expect(fake.windowsCreated).toHaveLength(2);
 		expect(windowOf("https://shop.test/")).not.toBe(windowOf("https://shop.test/done"));
-		// A second tab for a session joins that session's window.
 		await run("tab-new", { url: "https://shop.test/more" }, "s1");
 		expect(windowOf("https://shop.test/more")).toBe(windowOf("https://shop.test/"));
 	});
@@ -514,7 +501,6 @@ describe("Executor", () => {
 		expect(await run("screenshot")).toMatchObject({ width: 1, height: 1 });
 		expect(fake.windowUpdates).toEqual([]);
 		expect(fake.captures).toEqual([]);
-		// Pages that check focus see the agent's tab as focused while it acts.
 		const focus = fake.debuggerCalls.filter((call) => call.method === "Emulation.setFocusEmulationEnabled").map((call) => call.params?.enabled);
 		expect(focus).toEqual([true, false, true, false, true, false]);
 	});
@@ -573,7 +559,7 @@ describe("Executor", () => {
 		expect(second).toMatchObject({ id: "t2", active: true, title: "Thanks" });
 		expect((await run("tabs")).tabs).toHaveLength(2);
 		const t2 = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/done")!;
-		t2.groupId = -1; // The user drags it out of the AO group: the agent loses it.
+		t2.groupId = -1;
 		const tabs = (await run("tabs")).tabs as { id: string }[];
 		expect(tabs.map((tab) => tab.id)).toEqual(["t1"]);
 		expect(await run("snapshot")).toMatchObject({ target: { tabId: "t1" } });
@@ -625,7 +611,6 @@ describe("Executor", () => {
 		const pressed = fake.debuggerCalls.find((call) => call.params?.type === "mousePressed");
 		expect(pressed?.params).toMatchObject({ x: 130, y: 245 });
 
-		// Back to the page clears the whole chain.
 		await run("frame", { target: "main" });
 		fake.debuggerCalls.length = 0;
 		fake.frameResponder = (frameId, message) =>
@@ -644,7 +629,6 @@ describe("Executor", () => {
 		const [first, second] = await Promise.all([run("screenshot", {}, "s1"), run("screenshot", {}, "s2")]);
 		expect(first).toMatchObject({ target: { url: "https://shop.test/" } });
 		expect(second).toMatchObject({ target: { url: "https://shop.test/done" } });
-		// Each session's debugger captured its own tab, never the window's front tab.
 		const shots = fake.debuggerCalls.filter((call) => call.method === "Page.captureScreenshot").map((call) => call.tabId);
 		expect(shots.sort()).toEqual([tabOf("https://shop.test/"), tabOf("https://shop.test/done")].sort());
 		expect(fake.captures).toEqual([]);
@@ -657,7 +641,6 @@ describe("Executor", () => {
 		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
 		const sessionWindow = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId;
 		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: sessionWindow });
-		// The user switches the session's window to another tab during the capture.
 		fake.duringCapture = () => fake.activate(personal.id!);
 		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
 		expect(fake.captures).toHaveLength(1);
@@ -676,7 +659,6 @@ describe("Executor", () => {
 		fake.activate(personal.id!);
 		const inputBefore = fake.debuggerCalls.length;
 
-		// Trusted input and screenshots reach the agent's background tab directly.
 		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "trusted" });
 		expect(await run("press", { key: "Enter" })).toBeTruthy();
 		expect(await run("screenshot")).toMatchObject({ width: 1, height: 1 });
@@ -686,7 +668,6 @@ describe("Executor", () => {
 		expect(after.filter((call) => call.method.startsWith("Input.")).every((call) => call.tabId === own.id)).toBe(true);
 		expect(after.some((call) => call.method === "Page.captureScreenshot" && call.tabId === own.id)).toBe(true);
 
-		// A synthetic-input site falls back to captureVisibleTab, which never takes the user's tab.
 		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["shop.test"] } });
 		expect(await run("click", { ref: buy })).toMatchObject({ inputTier: "synthetic" });
 		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TAB_BUSY" });
@@ -742,7 +723,6 @@ describe("Executor", () => {
 		await vi.waitFor(() => expect(fake.deferCommit).toBeDefined());
 		tab.url = "https://shop.test/#more";
 		const started = Date.now();
-		// A same-document navigation fires no DOMContentLoaded or load event.
 		fake.events.navFragment.fire({ tabId: tab.id, frameId: 0, url: tab.url });
 		expect(await opening).toMatchObject({ isLoading: false, target: { tabId: "t1" } });
 		expect(Date.now() - started).toBeLessThan(1_000);
@@ -773,11 +753,9 @@ describe("Executor", () => {
 			return undefined;
 		};
 
-		// An allowed page embedding a denied site cannot select that frame.
 		await expect(run("frame", { target: "ePay" })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
 		expect(contentOps).toEqual([]);
 
-		// A frame that navigates to a denied site after selection is blocked.
 		await run("frame", { target: "eWidget" });
 		expect(await run("snapshot", { interactive: true })).toMatchObject({ text: '- textbox "Card" [ref=e1]' });
 		fake.frames[2]!.url = "https://www.paypal.com/embedded";

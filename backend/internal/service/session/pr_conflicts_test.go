@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
-// conflictRepo returns a repo with main pushed to origin and a feature branch
-// whose x.txt and y.txt differ from main's, plus the feature branch's tip.
 func conflictRepo(t *testing.T, conflicting ...string) (repo, headSHA string) {
 	t.Helper()
 	repo = newPushableRepo(t)
@@ -65,8 +63,6 @@ func TestPRConflictFilesIsEmptyForACleanMerge(t *testing.T) {
 	}
 }
 
-// An answer that cannot be computed is "unknown", which must never read as a
-// list of files.
 func TestPRConflictFilesIsUnknownWhenACommitIsNotAvailableLocally(t *testing.T) {
 	repo, head := conflictRepo(t, "x.txt")
 	svc := &Service{}
@@ -102,7 +98,6 @@ func TestPRConflictFilesMergesOnlyOncePerPairOfCommits(t *testing.T) {
 		t.Fatalf("a repeat ran %d git processes, the first ran %d: the merge was not cached", second, first)
 	}
 
-	// A moved base is a new pair of commits and must be computed again.
 	runGit(t, repo, "checkout", "main")
 	commitFile(t, repo, "later.go")
 	runGit(t, repo, "push", "origin", "main")

@@ -1,16 +1,3 @@
-// Dev-only email/password sign-in against a LOCAL Docker control plane running
-// AO_CLOUD_LOCAL_AUTH. This lets an unpackaged desktop build exercise the whole
-// AO cloud flow with zero NodeOps/WorkOS: the CP mints an OPAQUE token (prefix
-// "ao_local_", not a JWT) which is stored in the same safeStorage-encrypted
-// store as a WorkOS session, so cloud-cp-proxy.ts and the terminal WS authorize
-// with no further changes.
-//
-// Hard gate: local auth is permitted ONLY when the build is unpackaged (or the
-// explicit AO_CLOUD_LOCAL_AUTH_DEV=1 override is set) AND the control-plane URL
-// resolves to loopback (127.0.0.1/localhost). An email/password must never be
-// sent to a remote host. The gate is enforced here in the main process on every
-// register/login attempt; the renderer only mirrors it for UI visibility.
-
 import { app, ipcMain } from "electron";
 import type {
 	CloudAccount,
@@ -26,26 +13,14 @@ import {
 } from "./cloud-auth";
 
 const LOCAL_AUTH_PREFIX = "/api/cloud/v1/auth/local";
-/** Opaque tokens the local CP mints all carry this prefix (never a JWT). */
 export const LOCAL_TOKEN_PREFIX = "ao_local_";
 
-// ---------------------------------------------------------------------------
-// The gate — one predicate, in one place, so it stays unit-testable.
-// ---------------------------------------------------------------------------
-
 export interface LocalAuthGateOptions {
-	/** Electron's app.isPackaged for this build. */
 	isPackaged: boolean;
-	/** The AO_CLOUD_LOCAL_AUTH_DEV=1 escape hatch for packaged dev testing. */
 	devEnvEnabled: boolean;
-	/** The resolved cloud control-plane base URL (settings.cloudControlPlaneUrl). */
 	cpUrl: string;
 }
 
-/**
- * True only for an http/https URL whose host is loopback. This is the security
- * boundary: it guarantees an email/password never leaves the machine.
- */
 export function isLoopbackCpUrl(cpUrl: string): boolean {
 	let url: URL;
 	try {
@@ -57,13 +32,11 @@ export function isLoopbackCpUrl(cpUrl: string): boolean {
 	return url.hostname === "127.0.0.1" || url.hostname === "localhost";
 }
 
-/** Pure gate predicate: dev build (or explicit override) AND loopback CP. */
 export function localAuthAllowed(options: LocalAuthGateOptions): boolean {
 	const devAllowed = !options.isPackaged || options.devEnvEnabled;
 	return devAllowed && isLoopbackCpUrl(options.cpUrl);
 }
 
-/** Gate against the live Electron/app + process env for a given CP URL. */
 export function localAuthAvailable(cpUrl: string): boolean {
 	return localAuthAllowed({
 		isPackaged: app.isPackaged,
@@ -71,10 +44,6 @@ export function localAuthAvailable(cpUrl: string): boolean {
 		cpUrl,
 	});
 }
-
-// ---------------------------------------------------------------------------
-// CP transport
-// ---------------------------------------------------------------------------
 
 export class LocalAuthError extends Error {
 	constructor(
@@ -102,7 +71,6 @@ export interface LocalLoginInput {
 }
 
 export interface LocalAuthOptions {
-	/** Transport override for tests; defaults to the main-process global fetch. */
 	fetchImpl?: typeof fetch;
 }
 
@@ -147,8 +115,6 @@ async function postLocalAuth(
 	body: unknown,
 	fetchImpl: typeof fetch,
 ): Promise<AuthResponse> {
-	// Defence in depth: never dial a non-loopback host from this module even if
-	// a caller skipped the gate. Prevents credentials leaking to a remote CP.
 	if (!isLoopbackCpUrl(cpUrl)) {
 		throw new LocalAuthError(0, "Local sign-in is only allowed against a loopback control plane.");
 	}
@@ -200,17 +166,12 @@ async function persistLocalSession(
 	dataDir: string,
 	session: StoredSession,
 ): Promise<CloudAccount> {
-	// Any in-flight WorkOS refresh for this data dir is now stale.
 	invalidateAuthOperations(dataDir);
 	return withAuthMutation(dataDir, async () => {
 		await writeAuthStore(dataDir, { session, pkce: null });
 		return publicAccount(session);
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Public operations
-// ---------------------------------------------------------------------------
 
 export async function registerLocal(
 	dataDir: string,
@@ -248,11 +209,6 @@ export async function loginLocal(
 	return persistLocalSession(dataDir, toStoredSession(input.cpUrl, response));
 }
 
-/**
- * Best-effort server-side revoke of a stored local session's opaque token.
- * Never removes the store (sign-out does that uniformly) and never throws:
- * the token has a bounded TTL server-side regardless.
- */
 export async function revokeLocalSession(
 	session: StoredSession,
 	options: LocalAuthOptions = {},
@@ -266,15 +222,8 @@ export async function revokeLocalSession(
 			headers: { Authorization: `Bearer ${session.accessToken}` },
 		});
 	} catch {
-		// Ignore: revocation is best-effort.
 	}
 }
-
-// ---------------------------------------------------------------------------
-// IPC — dev-only local sign-in surface. Registered from main.ts alongside
-// installCloudIPC. The register/login handlers re-enforce the gate server-side
-// so a compromised renderer can never send credentials to a remote host.
-// ---------------------------------------------------------------------------
 
 export function installCloudLocalAuthIPC(
 	getDataDir: () => string,

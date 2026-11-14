@@ -1,9 +1,5 @@
 package conpty
 
-// oscTitleFilter removes OSC 0/1/2 title payloads from passive capture, not PTY replay.
-// x/ansi mistakes UTF-8 continuation byte 0x9c (e.g. Claude's ✳) for ST and
-// paints the remaining title into cells: https://github.com/charmbracelet/x/issues/848.
-// Titles cannot affect cells; other OSC commands (palette, hyperlinks) still can.
 type oscTitleFilter struct {
 	prefix        []byte
 	inTitle       bool
@@ -15,8 +11,6 @@ type oscTitleFilter struct {
 func (f *oscTitleFilter) filter(p []byte) []byte {
 	out := make([]byte, 0, len(p))
 	for _, b := range p {
-		// C1 OSC/ST bytes can also be UTF-8 continuation bytes. Track runes
-		// across writes both inside titles and in text that must pass unchanged.
 		if f.utf8Remaining > 0 && b >= 0x80 && b <= 0xbf {
 			f.utf8Remaining--
 			if !f.inTitle {
@@ -39,8 +33,6 @@ func (f *oscTitleFilter) filter(p []byte) []byte {
 				f.inTitle = false
 				out = append(out, b)
 			case 0x1b:
-				// ESC ends the title. Keep it to parse ST (ESC \), another
-				// title, or the next cursor/style command normally.
 				f.inTitle = false
 				f.prefix = append(f.prefix, b)
 			}
@@ -62,7 +54,7 @@ func (f *oscTitleFilter) filter(p []byte) []byte {
 			}
 		}
 
-		oscLen := 2 // ESC ]; C1 OSC is a single byte.
+		oscLen := 2
 		if len(f.prefix) > 0 && f.prefix[0] == 0x9d {
 			oscLen = 1
 		}
@@ -71,9 +63,6 @@ func (f *oscTitleFilter) filter(p []byte) []byte {
 			f.prefix = append(f.prefix, b)
 			continue
 		case len(f.prefix) == oscLen && b >= '0' && b <= '9':
-			// Retain the envelope: its introducer cancels any preceding partial
-			// escape in the emulator, and the terminator restores ground. Emit
-			// it while parsing so leading zeros cannot grow the buffer.
 			out = append(out, f.prefix...)
 			out = append(out, b)
 			f.prefix = f.prefix[:0]

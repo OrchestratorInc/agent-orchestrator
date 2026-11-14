@@ -8,7 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// AccountHandoffCandidateTurns lists recent failed chat turns that have no retry yet.
 func (s *Store) AccountHandoffCandidateTurns(ctx context.Context, since time.Time) ([]domain.ConversationTurn, error) {
 	rows, err := s.qr.SelectAccountHandoffCandidateTurns(ctx, timeToNullTime(since))
 	if err != nil {

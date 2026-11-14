@@ -7,8 +7,6 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
 const EVENTSOURCE_CLOSED = 2;
-// The commit selection is not here: its key (the SHAs, a view's fenced tip and base, or
-// the manifest version) names content that never changes.
 const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-branches", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file", "files-preview-end-of-file"] as const;
 const INVENTORY_QUERY_NAMES = ["workspace-file-paths", "session-workspace-files", "session-workspace-search", "session-workspace-tree"] as const;
 const ALL_QUERY_NAMES = [...CONTENT_QUERY_NAMES, ...INVENTORY_QUERY_NAMES] as const;
@@ -22,11 +20,6 @@ type WorkspaceStream = {
 	phase: ConnectionPhase;
 	generation: number;
 	failures: number;
-	/**
-	 * Scheduled rebuilds since the last successful open. Distinct from
-	 * `failures`, which also counts the browser's own non-terminal retries and
-	 * so would inflate the backoff exponent past what we actually retried.
-	 */
 	retries: number;
 	lastVersion?: string;
 	source?: EventSource;
@@ -70,9 +63,6 @@ function setWorkspaceFileConnectionState(key: string, next: WorkspaceFileConnect
 	connectionStateListeners.get(key)?.forEach((listener) => listener());
 }
 
-// Shares one daemon watcher between the rail and maximized copies of a Files
-// view. The daemon sends only invalidation edges; Git status and visible diffs
-// are then refetched through the existing typed queries.
 export function subscribeWorkspaceFileChanges(sessionId: string, queryClient: QueryClient, hostId?: string): () => void {
 	const key = sessionUiKey(sessionId, hostId);
 	let stream = streams.get(key);
@@ -103,7 +93,6 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	const scheduleAnnotations = () => {
 		annotationDirty = true;
 		if (stream.disposed || annotationTimer || annotationRunning) return;
-		// Event throttle, not a quiet-period debounce: continuous writes still refresh.
 		annotationTimer = setTimeout(() => {
 			annotationTimer = undefined;
 			annotationDirty = false;
@@ -112,7 +101,6 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			void Promise.resolve(queryClient.invalidateQueries({ queryKey: queryPrefix("file-annotation-source") }, { cancelRefetch: false }))
 				.finally(() => {
 					annotationRunning = false;
-					// A pre-existing request may have read the source before this event.
 					annotationDirty ||= alreadyFetching;
 					if (annotationDirty && !stream.disposed) scheduleAnnotations();
 				});
@@ -137,8 +125,6 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	const scheduleInvalidation = (names: readonly string[]) => {
 		if (names.includes("session-workspace-file")) scheduleAnnotations();
 		for (const name of names) stream.pendingInvalidations.add(name);
-		// Bound the wait from the first event: continuous agent writes must not
-		// postpone visible content refresh until the workspace becomes quiet.
 		if (stream.debounce) return;
 		stream.debounce = setTimeout(() => {
 			stream.debounce = undefined;
@@ -284,11 +270,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 				try {
 					payload = JSON.parse((event as MessageEvent<string>).data || "{}") as typeof payload;
 				} catch {
-					// Older daemons emitted an untyped invalidation edge. Preserve that
-					// compatibility path instead of dropping the refresh.
 				}
-				// File contents and parsed diffs can change without changing the
-				// metadata-derived manifest version. Never deduplicate these queries.
 				scheduleInvalidation(CONTENT_QUERY_NAMES);
 				if (payload.kind === "dirty") return;
 				if (payload.kind === "version" && payload.workspaceVersion) {

@@ -30,15 +30,11 @@ var qwenRoutes = map[string]qwenRoute{
 	"DASHSCOPE_API_KEY":  {"openai", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
 }
 
-// saveQwenProvider selects a usable model route in Qwen's user settings.
-// Qwen's default auth is OAuth, so an environment key alone is insufficient.
 func saveQwenProvider(ctx context.Context, envName, modelID string) error {
 	_, err := saveQwenProviderUndoable(ctx, envName, modelID)
 	return err
 }
 
-// saveQwenProviderUndoable is saveQwenProvider that also returns a function
-// restoring the settings file as it was, for a caller whose later step fails.
 func saveQwenProviderUndoable(ctx context.Context, envName, modelID string) (func(), error) {
 	modelID = strings.TrimSpace(modelID)
 	if !providerModelID.MatchString(modelID) {
@@ -105,8 +101,6 @@ func saveQwenProviderUndoable(ctx context.Context, envName, modelID string) (fun
 		if key != envName || (baseURL != "" && baseURL != route.baseURL) {
 			return nil, apierr.Invalid("AGENT_AUTH_MODEL_CONFLICT", "Qwen already uses this model ID with another credential. Choose another model ID or use native setup.", nil)
 		}
-		// Without the route's endpoint (OpenRouter, DashScope) the model
-		// would send this key to Qwen's default endpoint for its auth type.
 		if baseURL == "" && route.baseURL != "" {
 			existing["baseUrl"], _ = json.Marshal(route.baseURL)
 			changed = true
@@ -116,8 +110,6 @@ func saveQwenProviderUndoable(ctx context.Context, envName, modelID string) (fun
 	if _, err := qwenObject(root["model"]); err != nil {
 		return nil, err
 	}
-	// Each change is spliced into the file, so comments, key order and
-	// layout elsewhere stay as the user wrote them.
 	type edit struct {
 		path  []string
 		value any
@@ -171,8 +163,6 @@ func qwenObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	return value, nil
 }
 
-// readQwenSettings returns Qwen's settings parsed the way Qwen reads them
-// (comments, trailing commas, a BOM), with the file's bytes for editing.
 func readQwenSettings(path string) (map[string]json.RawMessage, []byte, error) {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {

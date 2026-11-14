@@ -49,7 +49,6 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		return out
 	}
 
-	// Install ID until someone signs in.
 	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) {
 		t.Fatalf("anonymous identity = %#v", got)
 	}
@@ -57,7 +56,6 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatal("unresolved Cloud sign-in state was reported to the phone")
 	}
 
-	// Only loopback callers without an Origin (Electron main) may set the user.
 	if c := post("127.0.0.1:3001", "app://renderer", `{"cloudUserId":"user_01H"}`); c != http.StatusForbidden {
 		t.Fatalf("renderer origin = %d, want 403", c)
 	}
@@ -87,7 +85,6 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatalf("known sign-out = %#v", got)
 	}
 
-	// Opt-out hides everything from the phone.
 	if err := os.WriteFile(filepath.Join(dir, telemetryadapter.OptOutFile), []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -97,8 +94,6 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 }
 
-// A sign-out whose install ID rotation fails must not leave the phone on the
-// ID that is still linked to the previous account.
 func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) {
 	dir := t.TempDir()
 	ident, err := telemetryadapter.NewIdentity(dir)
@@ -127,7 +122,6 @@ func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) 
 	if c := post(`{"cloudUserId":"user_A"}`); c != http.StatusNoContent {
 		t.Fatalf("sign-in = %d", c)
 	}
-	// A non-empty directory where the anonymous ID file lives makes the rename fail.
 	idPath := filepath.Join(dir, "telemetry_anonymous_id")
 	if err := os.MkdirAll(filepath.Join(idPath, "x"), 0o700); err != nil {
 		t.Fatal(err)
@@ -145,7 +139,6 @@ func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) 
 		}
 	}
 
-	// Recovery lifts the suppression and hands out the retired-and-replaced ID.
 	if err := os.RemoveAll(idPath); err != nil {
 		t.Fatal(err)
 	}
@@ -158,8 +151,6 @@ func TestTelemetryIdentityRouteSuppressesPhoneAfterFailedRotation(t *testing.T) 
 	}
 }
 
-// A request delayed past the client's timeout can reach the daemon after a newer
-// one. The daemon must keep the newer identity.
 func TestTelemetryIdentityRouteRejectsAnOlderSequence(t *testing.T) {
 	dir := t.TempDir()
 	ident, err := telemetryadapter.NewIdentity(dir)
@@ -183,14 +174,12 @@ func TestTelemetryIdentityRouteRejectsAnOlderSequence(t *testing.T) {
 	if c := post(`{"cloudUserId":"user_A","sequence":10}`); c != http.StatusConflict {
 		t.Fatalf("late older request = %d, want 409", c)
 	}
-	// The rejection tells a client whose clock regressed where the daemon is.
 	if !strings.Contains(lastBody, `"lastSequence":20`) {
 		t.Fatalf("409 body should carry the daemon's sequence: %s", lastBody)
 	}
 	if got := ident.Snapshot().CloudUserID; got != "user_B" {
 		t.Fatalf("daemon ended on %q, want user_B", got)
 	}
-	// Sign-out that was sent after B wins; the same sequence is an idempotent retry.
 	if c := post(`{"cloudUserId":"","sequence":30}`); c != http.StatusNoContent {
 		t.Fatalf("sign-out = %d", c)
 	}

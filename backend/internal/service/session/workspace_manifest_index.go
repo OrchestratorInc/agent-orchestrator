@@ -19,8 +19,6 @@ type workspaceManifestIndexEntry struct {
 	generation  uint64
 }
 
-// workspaceManifestIndex retains the last complete review manifest. It is a
-// performance cache only: Git and the worktree remain the source of truth.
 type workspaceManifestIndex struct {
 	mu      sync.Mutex
 	entries map[domain.SessionID]workspaceManifestIndexEntry
@@ -86,9 +84,6 @@ func (i *workspaceManifestIndex) beginRefresh(id domain.SessionID) uint64 {
 	return entry.generation
 }
 
-// publish returns true only when no invalidation arrived while the snapshot
-// was being computed. A newer generation keeps the result as a usable stale
-// snapshot and makes the refresh caller loop once more.
 func (i *workspaceManifestIndex) publish(id domain.SessionID, manifest WorkspaceManifest, generation uint64) bool {
 	if i == nil {
 		return true
@@ -150,8 +145,6 @@ func (i *workspaceManifestIndex) invalidateSession(id domain.SessionID) {
 	i.mu.Unlock()
 }
 
-// GetWorkspaceManifest returns the last complete snapshot immediately. A
-// stale snapshot starts one daemon-owned refresh without blocking the reader.
 func (s *Service) GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
 	if manifest, ok := s.workspaceManifests.get(id); ok {
 		if manifest.Stale && !manifest.Refreshing && s.workspaceManifests.markStale(id) {
@@ -163,19 +156,12 @@ func (s *Service) GetWorkspaceManifest(ctx context.Context, id domain.SessionID)
 	return s.RefreshWorkspaceManifest(ctx, id)
 }
 
-// ReconcileWorkspaceManifest closes the gap between establishing a filesystem
-// watcher and its first event. Edits made while no watcher existed must bypass
-// both the manifest and lower Git-status caches before the stream announces it
-// is ready.
 func (s *Service) ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
 	s.workspaceCache.invalidateSession(id)
 	s.workspaceManifests.markStale(id)
 	return s.RefreshWorkspaceManifest(ctx, id)
 }
 
-// workspaceDiffManifest reuses the just-loaded snapshot for a version-fenced
-// patch batch. Dirty or expired snapshots are recomputed before validation.
-// Unversioned reads always refresh because they have no preceding manifest.
 func (s *Service) workspaceDiffManifest(ctx context.Context, id domain.SessionID, version string) (WorkspaceManifest, error) {
 	if version != "" {
 		if manifest, ok := s.workspaceManifests.get(id); ok && !manifest.Stale && !manifest.Refreshing && manifest.WorkspaceVersion == version {
@@ -185,8 +171,6 @@ func (s *Service) workspaceDiffManifest(ctx context.Context, id domain.SessionID
 	return s.RefreshWorkspaceManifest(ctx, id)
 }
 
-// RefreshWorkspaceManifest waits for one coalesced manifest computation and
-// publishes only its complete result.
 func (s *Service) RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
 	type refreshResult struct {
 		manifest WorkspaceManifest

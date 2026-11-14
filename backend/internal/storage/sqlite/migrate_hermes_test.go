@@ -7,10 +7,6 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// TestMigration20261019142324385AllowsHermesAndReversesBothHistoricalSchemas mirrors the
-// fx and DeepSeek coverage: the new harness must be insertable on a current and a
-// legacy-qm schema, an unknown harness must still be rejected, and the down
-// migration must restore the exact prior constraint.
 func TestMigration20261019142324385AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
@@ -20,9 +16,6 @@ func TestMigration20261019142324385AllowsHermesAndReversesBothHistoricalSchemas(
 		t.Run(name, func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, 215)
 			if legacyQM {
-				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 20261019142324385 rewrites, so anchor
-				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -55,7 +48,6 @@ func TestMigration20261019142324385AllowsHermesAndReversesBothHistoricalSchemas(
 			if rollbackErr == nil {
 				t.Fatal("rollback accepted existing hermes session")
 			}
-			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'hermes'`)
 			downTo(t, db, 215)
 			var after string
@@ -187,8 +179,6 @@ func TestMigration20261019142324385PreservesHarnessesAfterHermes(t *testing.T) {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	// A preexisting Hermes entry may be followed by a later harness even when
-	// this migration runs or retries; neither Up nor Down may drop that entry.
 	upTo(t, db, 20261019142324385)
 	downTo(t, db, 215)
 	var after string

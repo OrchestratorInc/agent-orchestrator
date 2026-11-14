@@ -9,9 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The computer-use section follows the setting at spawn time, and only chat
-// sessions get it: their `ao mcp` server carries the tools. Off (or never
-// wired) leaves the prompt as it was.
 func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 	ctx := context.Background()
 	newManager := func() *Manager {
@@ -74,8 +71,6 @@ func TestBuildSystemPromptComputerUseFollowsSetting(t *testing.T) {
 	}
 }
 
-// The chat session's `ao mcp` server offers the computer-use tools only while
-// the setting is on.
 func TestAOMCPServerFollowsComputerUseSetting(t *testing.T) {
 	enabled := false
 	st := newFakeStore()

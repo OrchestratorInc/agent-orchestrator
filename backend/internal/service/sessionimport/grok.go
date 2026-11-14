@@ -50,9 +50,6 @@ func discoverGrok(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			return nil //nolint:nilerr // Skip unreadable or non-regular transcript files.
 		}
-		// Keep every cwd bucket until Scan applies project eligibility. Otherwise
-		// AO's own newer copy, in an AO worktree's bucket, would hide the
-		// eligible original with the same id.
 		out = append(out, sourceFiles{harness: domain.HarnessGrok, root: root, key: id, paths: []string{filepath.Join(root, path)}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
@@ -103,8 +100,6 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 	if info, err := os.Stat(t.path); err == nil {
 		fallback = info.ModTime()
 	}
-	// Grok streams a reply in token-sized chunks, so they are joined in a
-	// builder rather than by repeated string concatenation.
 	var role string
 	var text strings.Builder
 	var at time.Time
@@ -115,8 +110,6 @@ func readGrokTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 		role = ""
 		text.Reset()
-		// Keep stable prompt indexes until all rewinds have been applied. Drop
-		// old text under the same memory budget without deleting its boundary.
 		for held > maxHeldText && drop < len(items) {
 			held -= len(items[drop].Text)
 			items[drop].Text = ""

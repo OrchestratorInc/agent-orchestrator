@@ -16,17 +16,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// A quick-tunnel address changes on connector restart. The host publishes its
-// current address outward; clients still reach the daemon directly, never
-// through AO Cloud. A failed publish is retried on the next tick.
 func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.BridgeService, controlPlaneURL string, log *slog.Logger) {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	lastSent, nextAt, refusedWait := "", time.Time{}, refusedRetry
 	publish := func() {
 		address, hash := accountTunnelAddress(bridge)
 		key := address + "\x00" + hash
-		// Sent again now and then: the desktop also writes the listing, so the
-		// last address sent is not always the one listed.
 		if address == "" || hash == "" || (key == lastSent && time.Now().Before(nextAt)) {
 			return
 		}
@@ -36,9 +31,6 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 		}
 		switch {
 		case errors.Is(err, errAddressRefused):
-			// No account lists this link yet: a device that just took the
-			// machine has not listed it, or never could. Asked again soon,
-			// then less often, without a warning every tick.
 			if key != lastSent {
 				refusedWait = refusedRetry
 			}
@@ -60,23 +52,18 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 		case <-ticker.C:
 			publish()
 		case <-bridge.ListingNudges():
-			// A device just linked the machine: ask again now, even at an
-			// unchanged address still in its refusal backoff.
 			lastSent = ""
 			publish()
 		}
 	}
 }
 
-// republishEvery spaces publishes of an unchanged address. One AO Cloud
-// refused is tried again after refusedRetry, doubling to maxRefusedRetry.
 const (
 	republishEvery  = 10 * time.Minute
 	refusedRetry    = time.Minute
 	maxRefusedRetry = 30 * time.Minute
 )
 
-// errAddressRefused is AO Cloud refusing the digest: no account lists it.
 var errAddressRefused = errors.New("no account lists this machine under its link")
 
 func accountTunnelAddress(bridge *controllers.BridgeService) (string, string) {

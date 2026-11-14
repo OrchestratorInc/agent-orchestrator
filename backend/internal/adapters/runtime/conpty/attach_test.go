@@ -11,9 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// runtimeForFixture wires a conpty Runtime to a running serveFixture by stuffing
-// the fixture's loopback addr into the session map under the given id, so Attach
-// resolves it without a real Windows spawn.
 func runtimeForFixture(id string, f *serveFixture) *Runtime {
 	r := New(Options{})
 	r.mu.Lock()
@@ -55,8 +52,6 @@ func readUntil(t *testing.T, s io.Reader, want string, timeout time.Duration) st
 	}
 }
 
-// TestAttachReplaysScrollback: the host sends the ring snapshot as the first
-// MsgTerminalData on connect, so a fresh Read on the Stream yields the replay.
 func TestAttachReplaysScrollback(t *testing.T) {
 	f := startServe(t, 300)
 	defer f.cancel()
@@ -75,8 +70,6 @@ func TestAttachReplaysScrollback(t *testing.T) {
 	}
 }
 
-// TestAttachWriteReachesPTY: Write on the Stream sends MsgTerminalInput, which
-// the host forwards to the fakePTY's input.
 func TestAttachWriteReachesPTY(t *testing.T) {
 	f := startServe(t, 301)
 	defer f.cancel()
@@ -101,14 +94,11 @@ func TestAttachWriteReachesPTY(t *testing.T) {
 	}
 }
 
-// TestAttachResizeReachesPTY: an initial size on Attach plus a later Resize both
-// reach the fakePTY.Resize via MsgResize frames.
 func TestAttachResizeReachesPTY(t *testing.T) {
 	f := startServe(t, 302)
 	defer f.cancel()
 
 	r := runtimeForFixture("sess", f)
-	// Attach with a birth size: the implementation sends an initial MsgResize.
 	s, err := r.Attach(context.Background(), nameHandle("sess"), 40, 132)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
@@ -119,7 +109,6 @@ func TestAttachResizeReachesPTY(t *testing.T) {
 		t.Fatalf("Resize: %v", err)
 	}
 
-	// Poll for both resizes (birth + explicit) to arrive on the fakePTY.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		f.pty.resizeMu.Lock()
@@ -166,7 +155,6 @@ func TestAttachReportsHostedCommandExit(t *testing.T) {
 	}
 }
 
-// TestAttachUnknownSession: Attach to a session with no resolvable addr errors.
 func TestAttachUnknownSession(t *testing.T) {
 	r := New(Options{})
 	if _, err := r.Attach(context.Background(), nameHandle("nope"), 0, 0); err == nil {

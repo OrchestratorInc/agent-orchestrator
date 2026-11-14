@@ -74,8 +74,6 @@ test("renderer telemetry is off on unpackaged builds unless explicitly opted in"
 	expect(rendererTelemetryEnabled({ AO_TELEMETRY_RENDERER: "off" }, true)).toBe(false);
 });
 
-// A null bootstrap is the switch itself: initTelemetry bails on it, so an
-// unpackaged build never constructs a PostHog client at all.
 test("buildTelemetryBootstrap withholds the bootstrap on an unpackaged build", async () => {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 	tempDirs.push(dir);
@@ -144,7 +142,7 @@ test("buildTelemetryBootstrap withholds an install id linked to an AO Cloud acco
 	const again = await buildTelemetryBootstrap(env, "1.2.3", "linux", "/home/test", true, enabledPolicy);
 	expect(linked?.distinctId).toMatch(/^anon_/);
 	expect(linked?.distinctId).not.toBe(installId);
-	expect(again?.distinctId).not.toBe(linked?.distinctId); // throwaway, never reused across launches
+	expect(again?.distinctId).not.toBe(linked?.distinctId);
 	expect(linked?.installId).toBe(installId);
 	expect(again?.installId).toBe(installId);
 	expect(await readFile(path.join(dir, "telemetry_install_id"), "utf8")).toContain(installId);
@@ -154,7 +152,6 @@ test("buildTelemetryBootstrap withholds the install id when the bound-user marke
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 	tempDirs.push(dir);
 	const installId = await loadOrCreateTelemetryInstallId(dir);
-	// A self-referencing symlink fails with ELOOP, not ENOENT.
 	await symlink("telemetry_bound_user", path.join(dir, "telemetry_bound_user"));
 
 	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "linux", "/home/test", true, enabledPolicy);
@@ -162,7 +159,6 @@ test("buildTelemetryBootstrap withholds the install id when the bound-user marke
 	expect(bootstrap?.distinctId).not.toBe(installId);
 });
 
-// The daemon retires an ID by writing the replacement, then removing the marker.
 async function rotate(dir: string, next: string): Promise<void> {
 	await writeFile(path.join(dir, "telemetry_anonymous_id"), `${next}\n`);
 	await rm(path.join(dir, "telemetry_bound_user"), { force: true });
@@ -174,8 +170,6 @@ test("bootstrapDistinctId never returns an ID retired between the marker check a
 	const retired = await loadOrCreateTelemetryInstallId(dir);
 	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
 
-	// Rotation completes before the marker check: a missing marker means the ID
-	// read afterwards is already the replacement.
 	const afterRotation = await bootstrapDistinctId(dir, {
 		markerMissing: async (file) => {
 			await rotate(dir, "anon_replacement");
@@ -187,7 +181,6 @@ test("bootstrapDistinctId never returns an ID retired between the marker check a
 	expect(afterRotation).not.toBe(retired);
 	expect(await loadOrCreateTelemetryInstallId(dir)).toBe(retired);
 
-	// Rotation after the marker check: the marker was present, so the linked ID is withheld.
 	await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
 	const beforeRotation = await bootstrapDistinctId(dir, {
 		markerMissing: (file) => access(file).then(() => false, () => true),
@@ -238,7 +231,6 @@ test("loadOrAssignExperimentCohort assigns one sticky bucket shared with the dae
 	expect(first).toBeLessThan(EXPERIMENT_COHORT_BUCKETS);
 	const concurrent = await Promise.all(Array.from({ length: 5 }, () => loadOrAssignExperimentCohort(dir)));
 	expect(new Set(concurrent)).toEqual(new Set([first]));
-	// Same file and format the daemon reads (backend/internal/adapters/telemetry/cohort.go).
 	expect((await readFile(path.join(dir, "telemetry_experiment_cohort"), "utf8")).trim()).toBe(String(first));
 });
 
@@ -265,7 +257,6 @@ test("claimFirstOpen claims once, for a fresh install only", async () => {
 	tempDirs.push(dir);
 	expect(await claimFirstOpen(dir, { daysSinceInstall: 1, lifetimeSessions: 0 })).toBe("ineligible");
 	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 3 })).toBe("ineligible");
-	// An unreadable count is not "no sessions": the CLI may already have started one.
 	expect(await claimFirstOpen(dir, { daysSinceInstall: 0 })).toBe("unknown");
 	expect(await claimFirstOpen(dir, {})).toBe("ineligible");
 	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe("claimed");
@@ -275,7 +266,6 @@ test("claimFirstOpen claims once, for a fresh install only", async () => {
 test("claimFirstOpen never claims on an upgrade that already recorded the old install event", async () => {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-first-open-"));
 	tempDirs.push(dir);
-	// Builds that sent ao.install.created wrote the install ID here.
 	await writeFile(path.join(dir, "telemetry_first_open_emitted"), "ins_existing\n");
 	expect(await claimFirstOpen(dir, { daysSinceInstall: 0, lifetimeSessions: 0 })).toBe("ineligible");
 });

@@ -12,10 +12,6 @@ export interface MigrationOffer {
 	migration: MigrationState;
 }
 
-// fetchMigrationOffer combines the app marker (decision) with the daemon's
-// availability (is there legacy data). A terminal marker (completed/declined)
-// short-circuits before any daemon call. A 501/unreachable daemon resolves to
-// "no offer", never an error.
 async function fetchMigrationOffer(): Promise<MigrationOffer> {
 	const migration = await aoBridge.appState.getMigration();
 	if (migration.status === "completed" || migration.status === "declined") {

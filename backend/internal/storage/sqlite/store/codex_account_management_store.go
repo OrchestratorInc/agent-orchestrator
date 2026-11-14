@@ -13,7 +13,6 @@ import (
 
 var _ ports.CodexAccountSwitchStore = (*Store)(nil)
 
-// CreateCodexAccountSwitch inserts or returns an idempotent global switch.
 func (s *Store) CreateCodexAccountSwitch(ctx context.Context, rec domain.CodexAccountSwitch) (domain.CodexAccountSwitch, bool, error) {
 	if rec.SourceKind == "" {
 		rec.SourceKind = domain.CodexAccountSwitchSourceManaged
@@ -54,7 +53,6 @@ func (s *Store) CreateCodexAccountSwitch(ctx context.Context, rec domain.CodexAc
 	return domain.CodexAccountSwitch{}, false, ports.ErrCodexAccountSwitchIdempotencyConflict
 }
 
-// GetCodexAccountSwitch reads one switch by ID.
 func (s *Store) GetCodexAccountSwitch(ctx context.Context, id string) (domain.CodexAccountSwitch, bool, error) {
 	row, err := s.qr.GetCodexAccountSwitch(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -66,7 +64,6 @@ func (s *Store) GetCodexAccountSwitch(ctx context.Context, id string) (domain.Co
 	return codexAccountSwitchFromGen(row), true, nil
 }
 
-// GetCodexAccountSwitchByIdempotency reads one switch by idempotency key.
 func (s *Store) GetCodexAccountSwitchByIdempotency(ctx context.Context, key string) (domain.CodexAccountSwitch, bool, error) {
 	row, err := s.qr.GetCodexAccountSwitchByIdempotency(ctx, key)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -78,7 +75,6 @@ func (s *Store) GetCodexAccountSwitchByIdempotency(ctx context.Context, key stri
 	return codexAccountSwitchFromGen(row), true, nil
 }
 
-// GetActiveCodexAccountSwitch reads the sole nonterminal switch.
 func (s *Store) GetActiveCodexAccountSwitch(ctx context.Context) (domain.CodexAccountSwitch, bool, error) {
 	row, err := s.qr.GetActiveCodexAccountSwitch(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -90,7 +86,6 @@ func (s *Store) GetActiveCodexAccountSwitch(ctx context.Context) (domain.CodexAc
 	return codexAccountSwitchFromGen(row), true, nil
 }
 
-// UpdateCodexAccountSwitch applies a compare-and-swap phase transition.
 func (s *Store) UpdateCodexAccountSwitch(ctx context.Context, rec domain.CodexAccountSwitch, expected domain.CodexAccountSwitchPhase) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

@@ -8,8 +8,6 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// upTo migrates the db to a specific goose version, sharing migrate()'s goose
-// global setup under gooseMu.
 func upTo(t *testing.T, db *sql.DB, version int64) {
 	t.Helper()
 	gooseMu.Lock()
@@ -38,19 +36,9 @@ func downTo(t *testing.T, db *sql.DB, version int64) {
 	}
 }
 
-// TestMigration0013DedupesExistingDuplicates guards the data-safety concern in
-// #246: a pre-#242 daemon could already hold duplicate (session_id, target_sha)
-// review_run rows, on which CREATE UNIQUE INDEX would fail and wedge startup. The
-// migration must collapse each group to one survivor first. We open without the
-// foreign_keys pragma so review_run rows can be seeded without the full
-// project/session/review parent chain — the dedup is pure data movement.
 func TestMigration0013DedupesExistingDuplicates(t *testing.T) {
-	// Stop just before 0013: review tables exist, the unique index does not.
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 12)
 
-	// One duplicate group on shaA (a stale run, a completed pass carrying the
-	// verdict, and a newer still-running pass), plus a distinct sha and two
-	// empty-sha rows that the partial index excludes and must all survive.
 	seed := []struct{ id, sha, status, createdAt string }{
 		{"r-old", "shaA", "running", "2026-06-01T00:00:00Z"},
 		{"r-complete", "shaA", "complete", "2026-06-02T00:00:00Z"},
@@ -69,7 +57,6 @@ func TestMigration0013DedupesExistingDuplicates(t *testing.T) {
 		}
 	}
 
-	// Applying 0013 dedupes, then builds the unique index.
 	upTo(t, db, 13)
 
 	survivors := map[string]bool{}
@@ -89,7 +76,6 @@ func TestMigration0013DedupesExistingDuplicates(t *testing.T) {
 		t.Fatalf("rows: %v", err)
 	}
 
-	// shaA collapses to the completed pass; everything else is untouched.
 	want := []string{"r-complete", "r-other-sha", "r-empty-1", "r-empty-2"}
 	if len(survivors) != len(want) {
 		t.Fatalf("survivors = %v, want exactly %v", survivors, want)
@@ -100,7 +86,6 @@ func TestMigration0013DedupesExistingDuplicates(t *testing.T) {
 		}
 	}
 
-	// The index is live and now rejects a fresh duplicate.
 	if _, err := db.Exec(
 		`INSERT INTO review_run (id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at)
 		 VALUES ('dup', 'rev-1', 's1', 'claude-code', '', 'shaA', 'running', '', '', '2026-06-04T00:00:00Z')`,
@@ -181,8 +166,6 @@ ORDER BY harness`)
 		t.Fatalf("migrated reviews = %#v", got)
 	}
 
-	// Prove the generated upsert conflict target now matches a physical unique
-	// constraint and that a second harness can coexist for one worker.
 	if _, err := db.Exec(`
 INSERT INTO review (
 	id, session_id, project_id, harness, pr_url, reviewer_handle_id,

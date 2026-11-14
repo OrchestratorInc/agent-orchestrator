@@ -23,9 +23,6 @@ func TestReconcileReplayDropsFailedTurnNoticesOnly(t *testing.T) {
 		{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "turn-2"},
 	}
 	got := reconcileReplay(events)
-	// The chat service rebuilds a reply from the replay's message.delta chunks,
-	// so every event carrying the notice item's provider id must go — not just
-	// the completed event (review comment 4365736419 on PR #6635).
 	if len(got) != 9 {
 		t.Fatalf("reconciled events = %d, want 9 (turn-1 reply plus turn-2's user message and outcome)", len(got))
 	}
@@ -40,14 +37,11 @@ func TestReconcileReplayDropsFailedTurnNoticesOnly(t *testing.T) {
 			t.Fatal("boundary notice survived reconciliation as a reply")
 		}
 	}
-	// Turn-1's reply survives whole: both delta chunks and the completed event.
 	if got[2].Kind != ports.ChatEventMessageDelta || got[2].Delta != "Answer " ||
 		got[3].Kind != ports.ChatEventMessageDelta || got[3].Delta != "one." ||
 		got[4].Kind != ports.ChatEventMessageCompleted || got[4].Text != "Answer one." {
 		t.Fatalf("turn-1 reply events = %+v, %+v, %+v, want the untouched reply", got[2], got[3], got[4])
 	}
-	// The stored copy is untouched: reconciliation runs after the caller
-	// snapshot, and the input here is that fresh copy.
 	if len(events) != 12 {
 		t.Fatalf("input slice length changed to %d", len(events))
 	}
@@ -64,8 +58,6 @@ func TestReconcileReplayDropsFailedTurnNoticesOnly(t *testing.T) {
 	}
 }
 
-// A notice whose completed event carries no provider item id still drops; the
-// id-based sweep is an optimization over the text match, never a dependency.
 func TestReconcileReplayDropsNoticeWithoutItemID(t *testing.T) {
 	events := []ports.ChatEvent{
 		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "turn-1", Text: "Do turn two."},
@@ -77,9 +69,6 @@ func TestReconcileReplayDropsNoticeWithoutItemID(t *testing.T) {
 	}
 }
 
-// A partial turn replays its text, a tool call, and PARTIAL_FAILED_TURN_NOTICE;
-// the id-less text and the notice share one item, so the completed text ends
-// with the notice. The reply keeps its text and loses every notice chunk.
 func TestReconcileReplayCutsPartialTurnNotice(t *testing.T) {
 	notice := hermesFailedTurnNotices[1]
 	events := []ports.ChatEvent{

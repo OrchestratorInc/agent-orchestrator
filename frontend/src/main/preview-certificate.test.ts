@@ -37,7 +37,7 @@ describe("trustPreviewCertificate", () => {
 	it("trusts only the preview certificate, and only on preview hosts", () => {
 		const { cert } = previewCertificate();
 		const lines = cert.split("\n");
-		lines[2] = (lines[2][0] === "A" ? "B" : "A") + lines[2].slice(1); // one base64 character differs
+		lines[2] = (lines[2][0] === "A" ? "B" : "A") + lines[2].slice(1);
 		const other = lines.join("\n");
 		const { session, verdict } = fakeSession();
 		trustPreviewCertificate(session);

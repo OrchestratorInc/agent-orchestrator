@@ -13,10 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 )
 
-// The staging route is what makes an attachment chip mean something: the bytes have
-// to land in the worktree and the caller has to learn the path the agent can open.
-// These cover the contract a composer depends on.
-
 func stagingServer(t *testing.T, svc *fakeSessionService) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -51,17 +47,11 @@ func TestStageAttachmentsReturnsTheWorktreePaths(t *testing.T) {
 	if len(svc.staged) != 1 {
 		t.Fatalf("service received %d attachments, want 1", len(svc.staged))
 	}
-	// The extension has to be derived from the MIME type, or the agent opens a file
-	// whose name says nothing about what it is.
 	if svc.staged[0].Ext != ".png" || string(svc.staged[0].Data) != "pngbytes" {
 		t.Errorf("decoded attachment = %q %q", svc.staged[0].Ext, svc.staged[0].Data)
 	}
 }
 
-// The same security restrictions as spawn: this is the same operation against a
-// session that already exists, so it must not be a looser door into the worktree.
-// Blocked types (e.g., SVG for security) and the same caps are enforced, but all
-// other MIME types are accepted.
 func TestStageAttachmentsRejectsWhatSpawnRejects(t *testing.T) {
 	srv := stagingServer(t, newFakeSessionService())
 
@@ -86,7 +76,6 @@ func TestStageAttachmentsAcceptsAllNonBlockedTypes(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := stagingServer(t, svc)
 
-	// PDF should now be accepted
 	pdfBody := `{"attachments":[{"mimeType":"application/pdf","data":"eA=="}]}`
 	body, status, _ := doRequest(t, srv, http.MethodPost,
 		"/api/v1/sessions/ao-1/attachments", pdfBody)

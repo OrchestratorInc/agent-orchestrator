@@ -18,7 +18,6 @@ func TestListTurnFailureCandidatesFiltersInSQL(t *testing.T) {
 	for i, change := range []func(*domain.SessionRecord){
 		func(*domain.SessionRecord) {},
 		func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityWaitingInput },
-		// Esc at a permission prompt ends the turn without a hook.
 		func(r *domain.SessionRecord) { r.Activity.State = domain.ActivityBlocked },
 		func(r *domain.SessionRecord) { r.Harness = domain.HarnessClaudeCode },
 		func(r *domain.SessionRecord) { r.Mode = domain.SessionModeChat },

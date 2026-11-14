@@ -262,7 +262,6 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).toHaveBeenCalledTimes(2);
 		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ code: 1, decision: "restart", cause: "scope_launch_failed", fallback: "oom_score_adj" }));
 		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback" }));
-		// The retry is not a scoped launch, so a second early exit is an ordinary failure.
 		h.crash(1, null);
 		await vi.advanceTimersByTimeAsync(5000);
 		expect(h.spawn).toHaveBeenCalledTimes(2);
@@ -280,7 +279,6 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(h.spawn).toHaveBeenCalledTimes(2);
 		expect(h.spawn.mock.calls[1][0]).toBe("/usr/bin/systemd-run");
-		// A successor daemon now owns running.json, so automatic recovery must decline.
 		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
 		h.crash(1, null);
 		await vi.advanceTimersByTimeAsync(2000);

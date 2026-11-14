@@ -22,7 +22,6 @@ const page = (turns: ConversationTurn[], items: ConversationItem[], extra: Parti
 		oldestSequence: items[0]?.sequence ?? 1, hasMoreBefore: false, settings: {}, activeBranchId: "b1", nativeForkAvailableAfterSequence: 0, ...extra,
 	}) as ConversationSnapshot;
 
-// t1 settled at 1-3; t2 running at 4-6 with a running tool at 5.
 const prior = page(
 	[turn("t1", "completed"), turn("t2", "running")],
 	[message("m1", "t1", 1), tool("a1", "t1", 2), message("r1", "t1", 3), message("m2", "t2", 4), tool("a2", "t2", 5, "running"), message("r2", "t2", 6, "partial")],
@@ -38,13 +37,11 @@ describe("remote conversation tail", () => {
 	});
 
 	it("protects the newest turn with rows when a later turn shows none", () => {
-		// An undone or cancelled turn stays last in turns with its rows hidden.
 		const undone = page(
 			[turn("t1", "completed"), turn("t2", "completed"), turn("t3", "completed", { rolledBack: true })],
 			[message("m1", "t1", 1), message("m2", "t2", 2), message("r2", "t2", 3)],
 		);
 		expect(remoteConversationFloor(undone)).toBe(1);
-		// A second undo from another client allocates no sequence, so its tail is empty.
 		const tail = page(undone.turns.slice(2), [], { latestSequence: 3, oldestSequence: 2 });
 		expect(mergeRemoteConversationTail(undone, tail, 1)?.items.map((item) => item.id)).toEqual(["m1"]);
 	});
@@ -55,7 +52,6 @@ describe("remote conversation tail", () => {
 		expect(merged.items.map((item) => item.id)).toEqual(["m1", "a1", "r1", "m2", "a2", "r2", "a3"]);
 		expect(merged.items.find((item) => item.id === "r2")).toMatchObject({ text: "partial and more" });
 		expect(merged.turns.map((entry) => entry.id)).toEqual(["t1", "t2"]);
-		// The cursor for older pages stays where the live page had it.
 		expect(merged).toMatchObject({ oldestSequence: 1, hasMoreBefore: true, latestSequence: 7 });
 	});
 
@@ -71,19 +67,16 @@ describe("remote conversation tail", () => {
 	});
 
 	it("refuses a tail that brings a new copy of a list kept across turns", () => {
-		// The daemon marks t1's copy superseded, and that row is below the floor.
 		const listed = page([turn("t1", "completed"), turn("t2", "running")], [message("m1", "t1", 1), plan("p1", "t1", 2), message("m2", "t2", 3)]);
 		const floor = remoteConversationFloor(listed);
 		expect(floor).toBe(2);
 		const newCopy = page([turn("t2", "running")], [message("m2", "t2", 3), plan("p2", "t2", 4)], { oldestSequence: 3 });
 		expect(mergeRemoteConversationTail(listed, newCopy, floor)).toBeUndefined();
 
-		// The whole page now holds that copy, and later revisions rewrite the same row.
 		const reread = page(listed.turns, [...listed.items, plan("p2", "t2", 4)]);
 		const revised = page([turn("t2", "running")], [message("m2", "t2", 3), plan("p2", "t2", 4), tool("a1", "t2", 5)], { oldestSequence: 3 });
 		expect(mergeRemoteConversationTail(reread, revised, floor)?.items.map((item) => item.id)).toEqual(["m1", "p1", "m2", "p2", "a1"]);
 
-		// A list that belongs to one turn supersedes nothing.
 		const ownList = page([turn("t2", "running")], [message("m2", "t2", 3), plan("p3", "t2", 4, false)], { oldestSequence: 3 });
 		expect(mergeRemoteConversationTail(listed, ownList, floor)?.items.map((item) => item.id)).toEqual(["m1", "p1", "m2", "p3"]);
 	});

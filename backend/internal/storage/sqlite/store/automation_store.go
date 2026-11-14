@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// CreateAutomation persists a validated automation definition.
 func (s *Store) CreateAutomation(ctx context.Context, rec domain.Automation) (domain.Automation, error) {
 	if rec.TemplateID == "" {
 		rec.TemplateID = domain.AutomationTemplateCustom
@@ -27,7 +26,6 @@ func (s *Store) CreateAutomation(ctx context.Context, rec domain.Automation) (do
 	return rec, nil
 }
 
-// GetAutomation returns one automation definition by id.
 func (s *Store) GetAutomation(ctx context.Context, id domain.AutomationID) (domain.Automation, bool, error) {
 	row, err := s.qr.GetAutomation(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -39,7 +37,6 @@ func (s *Store) GetAutomation(ctx context.Context, id domain.AutomationID) (doma
 	return automationFromGen(row), true, nil
 }
 
-// ListAutomations returns a stable filtered page and its filtered total.
 func (s *Store) ListAutomations(ctx context.Context, filter domain.AutomationFilter) (domain.AutomationPage, error) {
 	projectID := domain.ProjectID("")
 	if filter.ProjectID != nil {
@@ -74,8 +71,6 @@ func (s *Store) ListAutomations(ctx context.Context, filter domain.AutomationFil
 	return domain.AutomationPage{Items: items, Total: total}, nil
 }
 
-// ListLatestAutomationRuns loads at most one newest run per requested
-// definition in a single query.
 func (s *Store) ListLatestAutomationRuns(ctx context.Context, ids []domain.AutomationID) (map[domain.AutomationID]domain.AutomationRun, error) {
 	out := make(map[domain.AutomationID]domain.AutomationRun)
 	if len(ids) == 0 {
@@ -92,7 +87,6 @@ func (s *Store) ListLatestAutomationRuns(ctx context.Context, ids []domain.Autom
 	return out, nil
 }
 
-// UpdateAutomation persists a complete validated mutable definition.
 func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -119,8 +113,6 @@ func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bo
 	return rows > 0, nil
 }
 
-// DeleteAutomation removes a definition. Database foreign keys cascade its
-// run history and clear origin links on surviving sessions.
 func (s *Store) DeleteAutomation(ctx context.Context, id domain.AutomationID) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -131,7 +123,6 @@ func (s *Store) DeleteAutomation(ctx context.Context, id domain.AutomationID) (b
 	return rows > 0, nil
 }
 
-// ListDueAutomations returns enabled definitions whose durable cursor is due.
 func (s *Store) ListDueAutomations(ctx context.Context, now time.Time, limit int64) ([]domain.Automation, error) {
 	rows, err := s.qr.ListDueAutomations(ctx, gen.ListDueAutomationsParams{NextRunAt: now, Limit: limit})
 	if err != nil {
@@ -144,9 +135,6 @@ func (s *Store) ListDueAutomations(ctx context.Context, now time.Time, limit int
 	return items, nil
 }
 
-// MaterializeAutomationRuns atomically inserts a bounded occurrence batch and
-// advances the definition cursor. expectedNext is a compare-and-swap fence
-// against stale or concurrent scheduler passes.
 func (s *Store) MaterializeAutomationRuns(
 	ctx context.Context,
 	id domain.AutomationID,
@@ -184,9 +172,6 @@ func (s *Store) MaterializeAutomationRuns(
 	return applied, nil
 }
 
-// ClaimNextAutomationRun leases the globally oldest eligible pending run.
-// The transaction and active-sibling predicate are the durable non-overlap
-// boundary for one automation definition.
 func (s *Store) ClaimNextAutomationRun(ctx context.Context, now, leaseExpiresAt time.Time) (domain.AutomationRun, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -266,8 +251,6 @@ func automationFromGen(row gen.Automation) domain.Automation {
 	}
 }
 
-// CreateAutomationRun inserts one logical occurrence. When the occurrence was
-// already materialized it returns the existing row with created=false.
 func (s *Store) CreateAutomationRun(ctx context.Context, rec domain.AutomationRun) (domain.AutomationRun, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -289,7 +272,6 @@ func (s *Store) CreateAutomationRun(ctx context.Context, rec domain.AutomationRu
 	return automationRunFromGen(row), false, nil
 }
 
-// GetAutomationRun returns one durable occurrence by id.
 func (s *Store) GetAutomationRun(ctx context.Context, id domain.AutomationRunID) (domain.AutomationRun, bool, error) {
 	row, err := s.qr.GetAutomationRun(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -301,7 +283,6 @@ func (s *Store) GetAutomationRun(ctx context.Context, id domain.AutomationRunID)
 	return automationRunFromGen(row), true, nil
 }
 
-// ListActiveAutomationRuns returns spawning and running rows in occurrence order.
 func (s *Store) ListActiveAutomationRuns(ctx context.Context) ([]domain.AutomationRun, error) {
 	rows, err := s.qr.ListActiveAutomationRuns(ctx)
 	if err != nil {
@@ -318,7 +299,6 @@ func automationRunsFromGen(rows []gen.AutomationRun) []domain.AutomationRun {
 	return items
 }
 
-// MarkAutomationRunRunning links the unique spawned session.
 func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -331,7 +311,6 @@ func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.Automati
 	return rows > 0, nil
 }
 
-// CompleteAutomationRun projects durable session termination into run history.
 func (s *Store) CompleteAutomationRun(ctx context.Context, id domain.AutomationRunID, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -342,7 +321,6 @@ func (s *Store) CompleteAutomationRun(ctx context.Context, id domain.AutomationR
 	return rows > 0, nil
 }
 
-// FailAutomationRun terminally records a bounded permanent dispatch error.
 func (s *Store) FailAutomationRun(ctx context.Context, id domain.AutomationRunID, message string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -355,7 +333,6 @@ func (s *Store) FailAutomationRun(ctx context.Context, id domain.AutomationRunID
 	return rows > 0, nil
 }
 
-// ReleaseAutomationRun returns a transiently failed claim to pending.
 func (s *Store) ReleaseAutomationRun(ctx context.Context, id domain.AutomationRunID, message string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -402,7 +379,6 @@ func automationRunFromGen(row gen.AutomationRun) domain.AutomationRun {
 	}
 }
 
-// ListAutomationRuns returns newest-first history and its filtered total.
 func (s *Store) ListAutomationRuns(ctx context.Context, filter domain.AutomationRunFilter) (domain.AutomationRunPage, error) {
 	status := domain.AutomationRunStatus("")
 	if filter.Status != nil {

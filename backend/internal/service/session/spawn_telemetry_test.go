@@ -27,9 +27,6 @@ func killedProcessError(t *testing.T) error {
 	return err
 }
 
-// A git or agent process killed by the spawn's expired deadline returns its
-// own error, not context.DeadlineExceeded; under an expired context both are
-// timeouts, and without one they keep their stage's code.
 func TestKilledStagesUnderAnExpiredBudgetAreSpawnTimeouts(t *testing.T) {
 	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
@@ -96,7 +93,6 @@ func TestSpawnFailedCarriesStepsCauseAndLaunchFacts(t *testing.T) {
 			t.Errorf("spawn_failed carries %s for a step that never ran", key)
 		}
 	}
-	// The API error carries the classification for the request's Sentry capture.
 	var tagged interface{ SentryTags() map[string]string }
 	if !errors.As(err, &tagged) || tagged.SentryTags()["cause"] != "branch_exists" || tagged.SentryTags()["failed_step"] != "worktree" {
 		t.Fatalf("spawn error %v does not carry failed_step and cause tags", err)
@@ -123,7 +119,6 @@ func TestCancelledSpawnSendsSpawnCancelledNotFailed(t *testing.T) {
 	}
 }
 
-// gitStderrError stands in for the git adapter's commandError.
 type gitStderrError struct{ cause string }
 
 func (e gitStderrError) Error() string        { return "git worktree add: exit status 128" }

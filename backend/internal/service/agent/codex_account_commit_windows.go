@@ -10,11 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Windows can keep a just-exited Codex app-server handle alive for a short
-// time after Process.Wait returns. During that window moving the completed
-// credential home fails with a sharing/access violation. Retry only those
-// transient lock errors; every structural or permission failure still fails
-// closed immediately.
 func renameCodexAccountDirectory(source, target string) error {
 	var err error
 	for attempt := 0; attempt < 20; attempt++ {

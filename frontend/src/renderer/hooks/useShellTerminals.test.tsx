@@ -309,7 +309,6 @@ describe("Cloud shell tabs across a restart", () => {
 		const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
 		await act(async () => close.result.current.mutateAsync(closed.handleId));
 
-		// A restart: a fresh renderer reads the tabs back from storage.
 		reloadCloudShellTerminalsForTest();
 		const restarted = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const listed = renderHook(() => useShellTerminals(), { wrapper: wrapper(restarted) });
@@ -341,7 +340,6 @@ describe("useOpenShellTerminal initial input", () => {
 			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
 		});
 		queryClient.setQueryData(shellTerminalsQueryKey, []);
-		// What a terminal connecting to the shell the moment it is listed would find.
 		const foundOnListing = new Map<string, string | undefined>();
 		const unsubscribe = queryClient.getQueryCache().subscribe(() => {
 			for (const shell of queryClient.getQueryData<ShellTerminal[]>(shellTerminalsQueryKey) ?? []) {
@@ -412,8 +410,6 @@ describe("useCloseShellTerminal", () => {
 	});
 
 	it("keeps a closing tab hidden when another close's refetch still lists it", async () => {
-		// Two tabs closed in quick succession: the first delete settles and
-		// refetches the list before the daemon has processed the second delete.
 		const finishDeletes = new Map<string, (result: { error?: unknown }) => void>();
 		deleteMock.mockImplementation(
 			(_path: string, options: { params: { path: { handleId: string } } }) =>
@@ -503,7 +499,6 @@ describe("tabs opened while their shell is being created", () => {
 		await act(async () => queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created, pending]);
 
-		// The pending tab goes as soon as the response arrives, not on the next refetch.
 		getMock.mockReturnValue(new Promise(() => {}));
 		await act(async () => finishPost(created));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([...shells, created]);
@@ -523,7 +518,6 @@ describe("tabs opened while their shell is being created", () => {
 			pendingSecond = result.current.open({});
 		});
 
-		// UI that recorded either pending tab can find the shell it became.
 		await waitFor(() => expect(adoptedShellHandle(pendingSecond.handleId)).toBe(second.handleId));
 		expect(adoptedShellHandle(pendingFirst.handleId)).toBe(first.handleId);
 	});
@@ -540,7 +534,6 @@ describe("tabs opened while their shell is being created", () => {
 		let pending!: ShellTerminal;
 		act(() => { pending = open.result.current.open({}); });
 		await act(async () => close.result.current.mutateAsync(pending.handleId));
-		// Nothing to close yet: the daemon has not returned the shell.
 		expect(deleteMock).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
 
@@ -549,7 +542,6 @@ describe("tabs opened while their shell is being created", () => {
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: created.handleId } },
 		}));
-		// A refetch while the shell is being destroyed does not show it.
 		await act(async () => queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
 

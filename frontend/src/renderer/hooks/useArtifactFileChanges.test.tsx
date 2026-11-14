@@ -23,7 +23,6 @@ function event(type: string, sequence: number): CloudCpClientEvent {
 	return { sessionId: "cloud-1", sequence, type, payload: {}, createdAt: "2026-11-03T00:00:00Z" };
 }
 
-/** The options of the newest render's cloud listener. */
 function cloudListener(): CloudSessionEventsOptions {
 	return mocks.cloudListener.mock.lastCall![0] as CloudSessionEventsOptions;
 }

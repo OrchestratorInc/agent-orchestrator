@@ -47,7 +47,6 @@ func TestMemorySideStoreRetainsCreationAliasesUntilLaunchEnds(t *testing.T) {
 	}
 }
 
-// Closing a primary destination must preserve the existing /btw retry contract.
 func TestMemorySideStoreClosedPrimaryKeyCanCreateAgain(t *testing.T) {
 	ctx := t.Context()
 	store := newMemorySideStore()
@@ -486,7 +485,6 @@ func TestSideNamesUseLargestCurrentlyOpenNumber(t *testing.T) {
 					_, _ = st.CloseSideConversation(ctx, id, now)
 				}
 			}
-			// An unrelated parent session must not reserve this session's numbers.
 			st.sides["other"] = domain.SideConversation{SessionID: "other", Label: "Side Chat 99"}
 			side, _, err := st.CreateSideConversation(ctx, domain.SideConversation{ID: "new", SessionID: "session", MainConversationID: "main", AppRunID: "run", ForceNew: true})
 			if tc.limit {

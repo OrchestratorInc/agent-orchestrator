@@ -28,9 +28,7 @@ vi.mock("../stores/ui-store", () => ({
 }));
 
 const SHARE_ID = "0b6e7a3c-2f4d-4a51-9c8e-1d2f3a4b5c6d";
-/** A file on this computer: the popover sets it up and its Publish uploads it. */
 const localFile = { sessionId: "sess-1", path: "docs/report.html", projectId: "proj-1" };
-/** A cloud session's file, already in the bucket: the click publishes it. */
 const cloudFile: Omit<CloudShareFile, "baseUrl" | "shareId"> = { source: "cloud", orgId: "org-1", sessionId: "cloud-1", path: "docs/report.html", projectId: "" };
 const inspection: CloudShareInspection = { name: "report.html", size: 2048, unsupported: false, fingerprint: "fp-1" };
 const links: CloudShareLinks = { shares: [], limit: 3, used: 1, unlimited: false, privateLinks: true };
@@ -52,14 +50,12 @@ function renderButton(file: Omit<CloudShareFile, "baseUrl" | "shareId">, name = 
 	return render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={file} name={name} /></TooltipProvider></QueryClientProvider>);
 }
 
-/** Clicks the header button once it says `label`. */
 async function openPopover(file: Omit<CloudShareFile, "baseUrl" | "shareId">, name = "report.html", label = "Publish") {
 	renderButton(file, name);
 	await userEvent.click(await screen.findByRole("button", { name: `${label}: ${name}` }));
 	return screen.findByRole("dialog");
 }
 
-/** The panel as the artifact menu's Publish or Unpublish item opens it. */
 async function openMenuPanel(file: Omit<CloudShareFile, "baseUrl" | "shareId"> = cloudFile, intent: "publish" | "unpublish" = "publish", onOpenChange = () => undefined) {
 	render(
 		<QueryClientProvider client={new QueryClient()}><TooltipProvider>
@@ -84,7 +80,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 	it("publishes privately on the toolbar click, with no second click, and opens on the live link", async () => {
 		const { inspectSpy, listSpy, publishSpy } = stub(inspection, links, { status: "published", replaced: false, share });
 		publishSpy.mockImplementation(async () => {
-			// The main process records the link the file was published to.
 			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
 			listSpy.mockResolvedValue({ ...links, used: 2, shares: [share] });
 			return { status: "published", replaced: false, share };
@@ -93,7 +88,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(popover).not.toHaveAttribute("aria-modal", "true");
 		expect(await within(popover).findByText("Published")).toBeTruthy();
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", access: "restricted" });
-		// Private, nobody invited: Only you. The URL is not shown; Copy link and Unpublish are the only actions.
 		expect(screen.getByText("Only you")).toBeTruthy();
 		expect(screen.getByText("Nobody else can open the link. Invite people, or allow anyone with the link.")).toBeTruthy();
 		expect(screen.queryByRole("textbox", { name: "Public link" })).toBeNull();
@@ -101,10 +95,8 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByRole("button", { name: "Unpublish" })).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Republish" })).toBeNull();
-		// The owner is listed.
 		expect(screen.getByText("Aditi Chauhan (you)")).toBeTruthy();
 		expect(screen.getByText("Owner")).toBeTruthy();
-		// The toolbar button now reads Published.
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
 	});
 
@@ -127,7 +119,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(writeText).toHaveBeenCalledWith("https://viewer.test/artifact/abc");
 		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
 		expect(publishSpy).not.toHaveBeenCalled();
-		// Unpublish sits at the left of the action row, before Copy.
 		const unpublish = screen.getByRole("button", { name: "Unpublish" });
 		expect(unpublish.compareDocumentPosition(screen.getByRole("button", { name: "Copied" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
@@ -143,7 +134,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, ["Maya@acme.co"]);
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
-		// With someone invited, Only you reads Only people invited.
 		expect(screen.getByText("Only people invited")).toBeTruthy();
 		await userEvent.click(screen.getByRole("button", { name: "Remove access for maya@acme.co" }));
 		expect(remove).toHaveBeenCalledWith("https://cp.test", SHARE_ID, maya.id);
@@ -177,7 +167,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [publicShare] });
 		const setAccess = vi.spyOn(aoBridge.cloudShare, "setAccess").mockResolvedValue({ ...publicShare, access: "restricted" });
 		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();
-		// A public link's button carries a globe; its name still says Published.
 		await openPopover(cloudFile, "report.html", "Published");
 		expect(await screen.findByText("Public. Anyone with the link can view it without signing in.")).toBeTruthy();
 		await userEvent.click(screen.getByRole("button", { name: "Anyone with the link" }));
@@ -208,13 +197,11 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(unpublish).not.toHaveBeenCalled();
 		await userEvent.click(await screen.findByRole("button", { name: "Unpublish" }));
 		await userEvent.click(screen.getByRole("button", { name: "Unpublish" }));
-		// Both buttons wait while it runs.
 		expect(await screen.findByRole("button", { name: "Unpublishing…" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
 		finish();
 		expect(await screen.findByText("The old link no longer works and the uploaded copy is deleted. Click Publish to make a new private link.")).toBeTruthy();
 		expect(unpublish).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
-		// The toolbar is back to Publish; the note's Publish makes a new private link.
 		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 		publishSpy.mockResolvedValue({ status: "published", replaced: false, share: { ...share, id: "new" } });
 		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Publish" }));
@@ -234,13 +221,11 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 	it("offers no Cancel while a cloud session's file is being published, and the toolbar says Publishing", async () => {
 		stub(inspection, links);
 		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise(() => undefined));
-		// A publish that never ends outlives this test: give it its own file.
 		const slow = { ...cloudFile, path: "docs/slow.html" };
 		await openPopover(slow, "slow.html");
 		const dialog = await screen.findByRole("dialog");
 		expect(await within(dialog).findByRole("button", { name: "Publishing…" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
-		// No percentage, no progress bar: a spinner and who it will open for.
 		expect(screen.queryByRole("progressbar")).toBeNull();
 		expect(within(dialog).getByText("Private. Nobody else can open the link until you invite people or allow anyone with the link.")).toBeTruthy();
 		expect(await screen.findByRole("button", { name: "Publishing…: slow.html" })).toBeTruthy();
@@ -283,7 +268,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 	});
 
 	it("keeps the menu's Unpublish intent when Try again follows a failed check, never publishing", async () => {
-		// The link was unpublished elsewhere meanwhile: a retry that forgot the intent would publish the file.
 		const { inspectSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
 		inspectSpy.mockRejectedValueOnce(new Error("offline"));
 		await openMenuPanel(cloudFile, "unpublish");
@@ -303,7 +287,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		await openPopover(cloudFile, "report.html", "Published");
 		await screen.findByRole("dialog");
-		// A click inside a preview goes to its iframe: this document only sees its window blur.
 		const frame = document.createElement("iframe");
 		frame.tabIndex = 0;
 		document.body.append(frame);
@@ -318,7 +301,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		const onOpenChange = vi.fn();
 		await openMenuPanel(cloudFile, "publish", onOpenChange);
 		await screen.findByText("Published");
-		// The menu hands focus back to its trigger a frame after the panel opened.
 		const trigger = screen.getByRole("button", { name: "menu" });
 		trigger.focus();
 		await new Promise((resolve) => setTimeout(resolve, 30));
@@ -338,11 +320,9 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		</TooltipProvider></QueryClientProvider>);
 		await screen.findByText("Published");
 		await new Promise((resolve) => setTimeout(resolve, 450));
-		// Focus going back to the menu's own trigger is still the menu's hand-off.
 		screen.getByRole("button", { name: "menu" }).focus();
 		await new Promise((resolve) => setTimeout(resolve, 30));
 		expect(onOpenChange).not.toHaveBeenCalledWith(false);
-		// Tabbing anywhere else is the person leaving.
 		screen.getByRole("button", { name: "elsewhere" }).focus();
 		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
 	});
@@ -380,7 +360,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
-		// The read started on opening lands last, without dev.
 		act(() => answerRead([maya]));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(within(popover).getByText("dev@acme.co")).toBeTruthy();
@@ -400,7 +379,6 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		await openPopover(localFile);
 		expect(await screen.findByText("2 of 3 free links left")).toBeTruthy();
 		expect(publishSpy).not.toHaveBeenCalled();
-		// The button beside the field says Add; people added get access when it is published.
 		await userEvent.type(screen.getByRole("textbox", { name: "Add people by email" }), "dev@acme.co");
 		await userEvent.click(screen.getByRole("button", { name: "Add" }));
 		expect(await screen.findByText("dev@acme.co")).toBeTruthy();
@@ -424,7 +402,6 @@ describe("ShareArtifactButton on a file on this computer", () => {
 	});
 
 	it("keeps who it is for, as chosen, when a fresher link list decides the panel again", async () => {
-		// The button reads the list for a link since unpublished, so the panel opens on that cached list.
 		const revoked = { ...share, revokedAt: "2026-11-01T00:00:00Z" };
 		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [revoked] }, { status: "published", replaced: false, share: { ...share, access: "anyone" } });
 		renderButton(localFile);
@@ -435,7 +412,6 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		await userEvent.click(button);
 		await userEvent.click(await screen.findByRole("button", { name: "Only you" }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: /Anyone with the link/ }));
-		// The background read answers late, with another link used since: the panel is decided again.
 		await act(async () => answer({ ...links, used: 2, shares: [revoked] }));
 		expect(screen.getByRole("button", { name: "Anyone with the link" })).toBeTruthy();
 		expect(screen.getByText("1 of 3 free links left")).toBeTruthy();
@@ -444,7 +420,6 @@ describe("ShareArtifactButton on a file on this computer", () => {
 	});
 
 	it("never lets the opening's background list read undo a publish that answered changed", async () => {
-		// Opened on the list the button read; the refresh behind it answers late.
 		const revoked = { ...share, revokedAt: "2026-11-01T00:00:00Z" };
 		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [revoked] }, {
 			status: "changed",
@@ -458,7 +433,6 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		await userEvent.click(button);
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
 		expect(await screen.findByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
-		// The late answer differs, but the publish's answer stands.
 		await act(async () => answer({ ...links, used: 2, shares: [revoked] }));
 		expect(screen.getByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
 		publishSpy.mockResolvedValue({ status: "published", replaced: false, share });
@@ -542,10 +516,8 @@ describe("ShareArtifactButton once the file changed", () => {
 		expect(screen.queryByRole("button", { name: "Access and people: report.html" })).toBeNull();
 		await userEvent.click(republish);
 		await waitFor(() => expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID }));
-		// The popover opens on the published link, and never offers Republish itself.
 		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
 		expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Republish" })).toBeNull();
-		// Once republished, the button checks again and is back to Published.
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
 	});
 
@@ -615,7 +587,6 @@ describe("ShareArtifactButton once the file changed", () => {
 });
 
 describe("ShareArtifactButton where links are public only", () => {
-	// An older control plane, or one whose viewer has no sign-in.
 	const publicOnly: CloudShareLinks = { ...links, privateLinks: false };
 
 	it("publishes as before, sending no access, and offers no invites", async () => {
@@ -658,7 +629,6 @@ describe("ShareArtifactButton states", () => {
 		renderButton(localFile);
 		await waitFor(() => expect(available).toHaveBeenCalledWith("https://no-shares.test"));
 		expect(screen.queryByRole("button", { name: /^Publish/ })).toBeNull();
-		// The answer is kept: a second button does not ask again.
 		renderButton({ ...localFile, path: "b.html" }, "b.html");
 		expect(available).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole("button", { name: /^Publish/ })).toBeNull();
@@ -678,13 +648,11 @@ describe("ShareArtifactButton states", () => {
 		renderButton(localFile);
 		const button = await screen.findByRole("button", { name: "Published: report.html" });
 		expect(listSpy).toHaveBeenCalledTimes(1);
-		// The control plane is slow now: the panel still opens on its link at once.
 		let answer: (value: CloudShareLinks) => void = () => undefined;
 		listSpy.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
 		await userEvent.click(button);
 		expect(await screen.findByRole("button", { name: "Copy link" })).toBeTruthy();
 		expect(screen.queryByText("Checking the file…")).toBeNull();
-		// The list is read again behind it; an unchanged answer changes nothing.
 		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
 		await act(async () => answer({ ...links, shares: [share] }));
 		expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
@@ -694,7 +662,6 @@ describe("ShareArtifactButton states", () => {
 		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		renderButton(localFile);
 		const button = await screen.findByRole("button", { name: "Published: report.html" });
-		// Unpublished somewhere else since the button read the list.
 		listSpy.mockResolvedValue({ ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
 		await userEvent.click(button);
 		expect(await screen.findByText("This file's link was unpublished. Publishing gives it a new link.")).toBeTruthy();
@@ -731,7 +698,6 @@ describe("ShareArtifactButton states", () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, access }] });
 		renderButton(localFile);
 		const button = await screen.findByRole("button", { name: "Published: report.html" });
-		// Who the link opens for is in the popover, not on the button.
 		expect(button.querySelector("svg")).toHaveClass("icon-share");
 		expect(button.querySelector(".icon-globe, .icon-link, .icon-lock")).toBeNull();
 	});
@@ -748,11 +714,9 @@ describe("ShareArtifactButton states", () => {
 		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const first = renderButton(localFile);
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
-		// Signed out: the mounted button sees it, and the cached list is dropped.
 		mocks.status = "unauthenticated";
 		first.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
 		first.unmount();
-		// Signed in again; this time the list has no links.
 		mocks.status = "authenticated";
 		listSpy.mockResolvedValue({ ...links, shares: [] });
 		renderButton(localFile);
@@ -780,7 +744,6 @@ describe("ShareArtifactButton states", () => {
 		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
 		mocks.status = "unauthenticated";
 		first.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
-		// The old read answers after the sign-out: it is not kept for the next sign-in.
 		await act(async () => answer({ ...links, shares: [share] }));
 		first.unmount();
 		mocks.status = "authenticated";
@@ -789,7 +752,6 @@ describe("ShareArtifactButton states", () => {
 		let empty: (value: CloudShareLinks) => void = () => undefined;
 		listSpy.mockReturnValue(new Promise((resolve) => { empty = resolve; }));
 		renderButton(localFile);
-		// The new button's check runs; it must ask for the list, not reuse the old answer.
 		await waitFor(() => expect(inspectSpy.mock.calls.length).toBeGreaterThan(checks));
 		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
 		await act(async () => empty({ ...links, shares: [] }));

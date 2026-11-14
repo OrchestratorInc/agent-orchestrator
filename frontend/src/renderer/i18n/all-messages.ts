@@ -1,5 +1,3 @@
-// Every locale catalog, eagerly. For tests and build tooling only: importing
-// this from runtime code puts all 9 catalogs (~1.5 MB) back on the startup path.
 import zhCN from "./zh-CN.json";
 import ja from "./ja.json";
 import ko from "./ko.json";
@@ -40,7 +38,6 @@ export function catalogFor(locale: AppLocale): MessageCatalog {
 	return (appCatalogs[locale] ?? appCatalogs.en) as unknown as MessageCatalog;
 }
 
-/** A synchronously initialized instance with every catalog loaded. */
 export function createFullAppI18n(locale: AppLocale = DEFAULT_LOCALE, catalogs: TranslationCatalogs = appCatalogs): i18n {
 	return createAppI18n(locale, catalogs);
 }

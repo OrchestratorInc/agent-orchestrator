@@ -3,8 +3,6 @@ import type { Root } from "hast";
 import { composeLineRuns, languageForPath, splitHastByLine } from "./diff-highlight";
 import type { DiffSegment } from "./diff-parser";
 
-// Hand-built hast fixtures — small enough to not need hastscript, and pinning the
-// exact shape splitHastByLine walks (root -> element[className] -> text).
 function el(className: string, children: Root["children"]): Root["children"][number] {
 	return { type: "element", tagName: "span", properties: { className: [className] }, children } as never;
 }
@@ -52,8 +50,6 @@ describe("splitHastByLine", () => {
 	});
 
 	it("reopens an ancestor class on every line it spans", () => {
-		// One element wraps a 3-line multi-line string, exactly like a template
-		// literal or triple-quoted string tokenized by Shiki in one call.
 		const tree = root([el("hljs-string", [text("`line1\nline2\nline3`")])]);
 		expect(splitHastByLine(tree, 3)).toEqual([
 			[{ text: "`line1", className: "hljs-string" }],
@@ -114,7 +110,6 @@ describe("composeLineRuns", () => {
 	});
 
 	it("composes a token spanning multiple segments", () => {
-		// "value1" is one hljs token but split by the segment boundary after "value".
 		const tokens = [{ text: "value1", className: "hljs-variable" }];
 		const segments = [seg("value", false), seg("1", true)];
 		expect(composeLineRuns(tokens, segments, "value1")).toEqual([
@@ -124,7 +119,6 @@ describe("composeLineRuns", () => {
 	});
 
 	it("composes a segment spanning multiple tokens", () => {
-		// "a+b" is one changed segment but two hljs tokens (identifier, operator, identifier).
 		const tokens = [
 			{ text: "a", className: "hljs-variable" },
 			{ text: "+", className: "hljs-operator" },

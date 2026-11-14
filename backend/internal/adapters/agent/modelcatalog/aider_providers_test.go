@@ -37,8 +37,6 @@ func TestAiderConfiguredProvidersLayersEnvDotenvAndConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Aider's OAuth key file, a configured env-file, the workspace .env that
-	// blanks a key the environment sets, and config-file keys.
 	write(filepath.Join(home, ".aider", "oauth-keys.env"), "OPENROUTER_API_KEY=sk-or\n")
 	write(filepath.Join(home, "keys", "aider.env"), "export ZAI_API_KEY='zai' # z.ai\n")
 	write(filepath.Join(workspace, ".env"), "GROQ_API_KEY=\n")
@@ -54,8 +52,6 @@ func TestAiderConfiguredProvidersLayersEnvDotenvAndConfig(t *testing.T) {
 		t.Fatalf("configured = %v, want %v", got, want)
 	}
 
-	// Without a workspace, the home config's keys still count but the
-	// workspace's openai-api-key and .env do not.
 	got = aiderConfiguredProviders("", env)
 	sort.Strings(got)
 	if want := []string{"deepseek", "groq", "mistral", "openrouter", "vertex_ai",

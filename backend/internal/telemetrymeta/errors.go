@@ -20,7 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// ErrorKindAndCode extracts a telemetry-safe error category and optional code.
 func ErrorKindAndCode(err error) (kind, code string) {
 	kind = "internal"
 	var apiErr *apierr.Error
@@ -30,7 +29,6 @@ func ErrorKindAndCode(err error) (kind, code string) {
 	return kind, ""
 }
 
-// ErrorType returns a fixed diagnostic type from the wrapped cause chain.
 func ErrorType(err error) string {
 	if err == nil {
 		return "unknown"
@@ -78,7 +76,6 @@ var errorKinds = map[apierr.Kind]string{
 	apierr.KindUnavailable:     "unavailable",
 }
 
-// ErrorKind maps API error kinds to coarse telemetry-safe categories.
 func ErrorKind(kind apierr.Kind) string {
 	if value, ok := errorKinds[kind]; ok {
 		return value
@@ -86,7 +83,6 @@ func ErrorKind(kind apierr.Kind) string {
 	return "internal"
 }
 
-// IsErrorKind accepts only the categories produced by ErrorKind.
 func IsErrorKind(kind string) bool {
 	for _, value := range errorKinds {
 		if kind == value {
@@ -96,7 +92,6 @@ func IsErrorKind(kind string) bool {
 	return false
 }
 
-// PanicKind classifies panic payloads without exporting their raw contents.
 func PanicKind(rec any) string {
 	switch rec.(type) {
 	case error:
@@ -108,12 +103,10 @@ func PanicKind(rec any) string {
 	}
 }
 
-// IsPanicKind accepts only the categories produced by PanicKind.
 func IsPanicKind(kind string) bool {
 	return kind == "error" || kind == "string" || kind == "other"
 }
 
-// StatusFamily returns a telemetry-friendly HTTP status bucket like 5xx.
 func StatusFamily(status int) string {
 	if status < 100 || status > 999 {
 		return "unknown"
@@ -121,12 +114,8 @@ func StatusFamily(status int) string {
 	return fmt.Sprintf("%dxx", status/100)
 }
 
-// SafeRoute is a registered route template or a fixed fallback. Its value cannot
-// be built from a request URL path, which may contain user-provided names.
 type SafeRoute struct{ pattern string }
 
-// FailureSite is a function name obtained from the running AO binary.
-// Request and error strings cannot construct one.
 type FailureSite struct {
 	function string
 	line     int
@@ -134,12 +123,8 @@ type FailureSite struct {
 
 func (site FailureSite) String() string { return site.function }
 
-// Line returns the source line in the running AO binary.
 func (site FailureSite) Line() int { return site.line }
 
-// CurrentFailureSite finds the first application frame outside observability
-// wrappers. For an HTTP error this is the controller recording the failure;
-// during panic recovery it is the interrupted handler frame.
 func CurrentFailureSite() FailureSite {
 	pcs := make([]uintptr, 32)
 	n := runtime.Callers(2, pcs)
@@ -167,7 +152,6 @@ func (route SafeRoute) String() string {
 	return route.pattern
 }
 
-// RoutePattern returns the chi route template when available, else "unmatched".
 func RoutePattern(r *http.Request) SafeRoute {
 	if r == nil {
 		return SafeRoute{}
@@ -180,7 +164,6 @@ func RoutePattern(r *http.Request) SafeRoute {
 	return SafeRoute{}
 }
 
-// Fingerprint returns a short stable digest for grouping similar failures.
 func Fingerprint(parts ...string) string {
 	h := sha256.New()
 	for _, part := range parts {

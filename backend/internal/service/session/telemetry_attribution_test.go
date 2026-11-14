@@ -14,7 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// createdByFakeStore records created_by writes on top of the shared fake.
 type createdByFakeStore struct {
 	*fakeStore
 	createdBy map[domain.SessionID]domain.SessionCreator
@@ -115,7 +114,6 @@ func TestSpawnCreatedByAndSurface(t *testing.T) {
 	}
 }
 
-// usageSendFakeStore records counted human sends on top of the shared fake.
 type usageSendFakeStore struct {
 	*fakeStore
 	sends []usageSend
@@ -133,9 +131,6 @@ func (s *usageSendFakeStore) RecordUsageHumanSend(ctx context.Context, id domain
 	return nil
 }
 
-// Steers and sends are counted into the usage summary, with the request
-// surface still on the context the store reads it from; nothing is emitted
-// directly.
 func TestRecordUserMessageCountsIntoUsageSummary(t *testing.T) {
 	st := &usageSendFakeStore{fakeStore: newFakeStore()}
 	sink := &fakeTelemetrySink{}
@@ -152,7 +147,6 @@ func TestRecordUserMessageCountsIntoUsageSummary(t *testing.T) {
 	}
 }
 
-// deliveryFakeStore is the recorder's read surface over fixed facts.
 type deliveryFakeStore struct {
 	prs []domain.PullRequest
 }
@@ -246,8 +240,6 @@ func TestOrchestratorReplacementReportsTerminatedOldSession(t *testing.T) {
 	}
 }
 
-// postTerminationFailure terminates the row and then fails, like a kill whose
-// pre-remove cleanup command fails after recordTermination.
 type postTerminationFailure struct {
 	*fakeCommander
 	st        *fakeStore
@@ -313,7 +305,6 @@ func TestKillReportsEndWhenCleanupFailsAfterTermination(t *testing.T) {
 					}
 					return
 				}
-				// The pre-termination record keeps the activity it ended in.
 				if len(ended) != 1 || ended[0].Payload["outcome"] != "killed" {
 					t.Fatalf("ended = %#v, want one killed outcome", ended)
 				}

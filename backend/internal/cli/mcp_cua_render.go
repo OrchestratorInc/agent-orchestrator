@@ -7,12 +7,6 @@ import (
 	"strings"
 )
 
-// renderCuaCall writes a call's result as text the way Cua Driver's MCP
-// server presents it; the screenshots go alongside as images. A window read
-// is a header line, the tree (or the diff since the last read), and the
-// snapshots it made stale; an action is its summary followed by AO's read of
-// the window; run_steps is one line per step and its observation. Tools
-// without such a layout report false and are sent as JSON.
 func renderCuaCall(response cuaCallResponse) (string, bool) {
 	result, ok := response.Result.(map[string]any)
 	if !ok {
@@ -25,8 +19,6 @@ func renderCuaCall(response cuaCallResponse) (string, bool) {
 	case response.Tool == "run_steps":
 		out.runSteps(result)
 	case result["observation"] != nil:
-		// The daemon attaches its read of the window to every action it
-		// observed (or says why it could not), so the layout follows that.
 		out.action(result)
 	default:
 		return "", false
@@ -100,8 +92,6 @@ func (t *cuaText) runSteps(result map[string]any) {
 	}
 	observation, _ := result["observation"].(map[string]any)
 	if observation["ok"] == false {
-		// The steps ran even though the read after them failed; the result is
-		// not an error, which an agent would answer by running them again.
 		reason := cuaString(observation["message"])
 		if reason == "" {
 			reason = cuaString(observation["error"])
@@ -119,7 +109,6 @@ func (t *cuaText) runSteps(result map[string]any) {
 	}
 }
 
-// window prints a get_window_state result.
 func (t *cuaText) window(state map[string]any) {
 	header := []string{}
 	for _, key := range []string{"window_id", "pid"} {
@@ -156,7 +145,6 @@ func (t *cuaText) window(state map[string]any) {
 		t.line("")
 		t.line(tree)
 	} else if elements, _ := state["elements"].([]any); len(elements) > 0 {
-		// tree_format "elements": each element carries its own token.
 		t.line("")
 		for _, element := range elements {
 			t.line(compactJSON(element))
@@ -175,8 +163,6 @@ func cuaString(value any) string {
 	return strings.TrimSpace(text)
 }
 
-// cuaNumber prints a JSON number without an exponent: window ids and pids
-// are large enough that %v would print 1.234567e+06.
 func cuaNumber(value any) string {
 	number, ok := value.(float64)
 	if !ok {

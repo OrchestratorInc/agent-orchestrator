@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// defaultSpawnHost launches the current AO executable as a detached pty-host.
-// Setsid keeps the host alive when the daemon exits or Electron updates, while
-// the registry lets the replacement daemon adopt it without touching the PTY.
 func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string, opts HostOptions) (string, int, error) {
 	if err := ctx.Err(); err != nil {
 		return "", 0, err
@@ -31,18 +28,11 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	args := ptyHostArgs(sessionID, cwd, argv, opts)
 	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments)
 
-	// Deliberately do not use CommandContext: once READY is received the host
-	// must survive cancellation of the request that created it.
 	cmd := exec.Command(exe, args...) //nolint:forbidigo // detached PTY host must outlive request cancellation
 	cmd.Dir = cwd
 	cmd.Env = merged
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	// Use explicit files instead of Cmd.StdoutPipe or a non-file Stderr writer.
-	// Those helpers are finalized by Cmd.Wait, while a detached host may outlive
-	// the daemon. The unlinked stderr file remains a valid, non-blocking sink in
-	// the host after the parent closes its copy, and retains startup diagnostics
-	// without leaving a pathname behind.
 	stdout, childStdout, err := os.Pipe()
 	if err != nil {
 		return "", 0, fmt.Errorf("%s pty spawn: stdout pipe: %w", runtime.GOOS, err)
@@ -100,9 +90,6 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 		pid := cmd.Process.Pid
 		_ = stdout.Close()
 		_ = stderrFile.Close()
-		// Reap the host if it exits while this daemon is still running. Waiting
-		// in a goroutine does not tie the child's lifetime to the parent; Setsid
-		// still lets it survive daemon exit, after which init/launchd adopts it.
 		go func() { _ = cmd.Wait() }()
 		return result.addr, pid, nil
 	case <-timer.C:

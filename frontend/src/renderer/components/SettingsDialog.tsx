@@ -47,13 +47,6 @@ function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
 }
 
-/**
- * What Settings › Teams offers: managing the workspace's teams where it can
- * share (as the Share button), only the teams the person is in elsewhere
- * where it can't, and nothing against a control plane from before teams.
- * Hidden until the person's teams are known, so the rail never shows an
- * item that then goes away.
- */
 function useTeamsPage(enabled: boolean, share: boolean, orgId: string | undefined): TeamsPage {
 	const mine = useMyTeams(enabled);
 	return enabled ? teamsPageFor({ share, orgId, mine }) : "none";
@@ -63,22 +56,14 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
-	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
-	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
-	// The org's offering decides the cloud pages: the bring-your-own-Coder page
-	// only when it includes coder, Upgrade only for self-serve billing.
 	const offering = useCloudOffering();
 	const { customCoder, selfServeBilling } = offering;
-	// A build without Teams has no Teams page and never asks for the person's teams.
 	const teamsEnabled = useTeamsEnabled();
 	const teams = useTeamsPage(teamsEnabled && cloudEnabled && settingsModal?.scope === "global", offering.features?.includes(SHARE_FEATURE) === true, offering.org?.id);
 
 	const displaySettings = settingsModal;
-	// The selected page includes several store/query subscribers. Mount it one
-	// frame after the lightweight dialog chrome so the opening interaction can
-	// paint first.
 	const deferSettingsBody = settingsModal?.scope === "global";
 	const [bodySettings, setBodySettings] = useState<SettingsModal | null>(() =>
 		deferSettingsBody ? null : settingsModal,
@@ -99,20 +84,12 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const globalSections = visibleGlobalSettings({ cloudEnabled, diagnostics, customCoder, selfServeBilling, teams });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
-	// A cloud project lives only in the control plane; the local daemon has no
-	// record of it. Resolve it here so its settings load from the control plane.
 	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
 	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
-	// Only a project the local daemon may hold needs the org's list to tell
-	// whether it is a Cloud project; one opened as a Cloud project is read on
-	// its own below.
 	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
 	const cloudProject = localProjectScope
 		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
 		: undefined;
-	// Only fall back to the local daemon's form for a project the local daemon
-	// actually lists: a failed cloud lookup must not masquerade as a local
-	// project (the daemon would answer "Unknown project" for a cloud id).
 	const projectId = displaySettings?.scope === "project" ? displaySettings.projectId : "";
 	const knownLocal = useQuery({
 		...workspaceQueryOptions,
@@ -124,9 +101,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
-	// The Cloud project itself, by the query its settings pages load it with,
-	// so they share one read: whichever org it is in, wherever it sits in the
-	// org's list.
 	const cloudCp = useCloudCp(isCloudProjectSettings);
 	const cloudProjectRecord = useQuery({
 		queryKey: cloudProjectSettingsQueryKey(cloudCp.baseUrl, cloudOrgId ?? "", projectId),
@@ -142,13 +116,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	// Scripts, environment and cues are project settings on local and Cloud
-	// projects alike (a Cloud session's worker runs and gets them); remote hosts
-	// expose none of these.
-	// A Cloud project's repositories, where its agent starts, and the
-	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
-		// A workspace's repositories are all its own, side by side in its folder.
 		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
 		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
@@ -158,8 +126,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
-	// Sharing the whole project, as a session's Share does: only the project's
-	// own organization shares it, and only once WorkOS enables sharing for it.
 	const canShareProject = isCloudProjectSettings && cloudOrgId === offering.org?.id && offering.features?.includes(SHARE_FEATURE) === true;
 	if (canShareProject) projectSections.push({ id: "sharing", label: t("settings.project.sharing"), icon: Share2 });
 
@@ -198,7 +164,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 				closeWhenSavedRef.current = true;
 				return;
 			}
-			// A draft that cannot be saved is dropped; waiting for a save would hang the close.
 			if (projectSaveState.unsaveable) {
 				closeSettings();
 				return;
@@ -231,9 +196,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			closeSettings();
 		}
 	}, [closeSettings, projectSaveState]);
-	// Re-resolves the requested page as the gates settle: the org's offering
-	// loads after the dialog opens, so a deep link to Upgrade or Coder lands on
-	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
 			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams }).id;
@@ -242,8 +204,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			globalRequestRef.current = { modal: settingsModal, section };
 		}
 	}, [cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, settingsModal, globalHistory.reset, globalHistory.visit]);
-	// Project scope resets only when a project is opened, never when a gate
-	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
 		if (settingsModal?.scope === "project") {
 			projectHistory.reset(settingsModal.section ?? "general");
@@ -268,12 +228,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		}
 		if (globalSettingsWasOpen.current) return;
 		globalSettingsWasOpen.current = true;
-		// Warm Mobile as soon as global Settings opens: its pairing state and Keep
-		// awake are known before the page is first drawn, so nothing pops in or
-		// flips after it opens.
 		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
 		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
-		// Fails quietly while Connect Mobile is off; the page fetches it once on.
 		void queryClient.prefetchQuery({ queryKey: mobilePairingCodeQueryKey, queryFn: fetchPairingCode, staleTime: PAIRING_CODE_REFRESH_MS });
 	}, [queryClient, settingsModal?.scope]);
 
@@ -384,36 +340,25 @@ type SettingsPageValue = { active: SettingsLayer; layers: SettingsLayer[] };
 
 const SettingsPageContext = createContext<SettingsPageValue | null>(null);
 
-/** The settings layer currently on top, or null while settings is closed. */
 export function useSettingsPage() {
 	return useContext(SettingsPageContext)?.active ?? null;
 }
 
-/**
- * Owns settings state for the shell so the sidebar (section list, Back) and the
- * center pane (page body) stay in sync. A recovery settings page opened above a
- * project form keeps the project layer's state alive underneath.
- */
 export function SettingsProvider({ children }: { children: ReactNode }) {
 	const settingsModal = useUiStore((state) => state.settingsModal);
 	const projectModal = settingsModal?.scope === "project" ? settingsModal : settingsModal?.returnTo ?? null;
 	const globalModal = settingsModal?.scope === "global" ? settingsModal : null;
 	const projectLayer = useSettingsLayer(projectModal);
 	const globalLayer = useSettingsLayer(globalModal);
-	// Global settings is a page in the shell; project settings stays a modal.
 	const active = globalModal ? globalLayer : null;
 	const activeRef = useRef(active);
 	activeRef.current = active;
 	const isOpen = active !== null;
-	// Hand focus back to whatever opened settings once the page closes.
 	useEffect(() => {
 		if (!isOpen) return;
 		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }); };
 	}, [isOpen]);
-	// Settings sections follow the app's navigation chords while the page is
-	// open: previous/next (⌘⇧[ ⌘⇧], ⌃Tab, ⌘⌥←/→) step through the section list and
-	// ⌘1-9 jumps to the Nth section. The shell stands down for these meanwhile.
 	const stepSection = useCallback((direction: -1 | 1) => {
 		const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
 		if (items.length === 0) return;
@@ -444,17 +389,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape" || event.isComposing) return;
 			const target = event.target instanceof Element ? event.target : null;
-			// In-place edits (a profile rename) and login flows (terminal, cloud login panel) take Escape themselves.
 			if (target?.closest("[data-settings-inline-edit]")) return;
-			// Open menus, listboxes, and dialogs take Escape to dismiss themselves. Only popups the
-			// event came from (or that hold focus) count, so a stray tooltip cannot swallow it.
 			if (event.isComposing) return;
 			const focused = document.activeElement instanceof Element ? document.activeElement : null;
 			const popup = '[role="menu"], [role="listbox"], [role="dialog"], [data-radix-popper-content-wrapper]';
 			if ([target, focused].some((element) => element?.closest(popup))) return;
 			activeRef.current?.close();
 		};
-		// Capture phase so a field that handles its own Escape cannot swallow the close.
 		document.addEventListener("keydown", onKeyDown, true);
 		return () => document.removeEventListener("keydown", onKeyDown, true);
 	}, [isOpen]);
@@ -466,10 +407,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 	);
 }
 
-/**
- * Settings page rendered inside the center panel, in place of the routed page:
- * shared page topbar above a centered, scrolling content column.
- */
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
@@ -487,12 +424,7 @@ export function SettingsPane() {
 					</PageTopbarTitle>
 				}
 			/>
-			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
-				// `relative` makes the scroller the containing block for absolutely
-				// positioned content (sr-only labels, menu triggers). Without it they
-				// escape to the shell's overflow-x-hidden wrapper, which then scrolls
-				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
 					className={cn("settings-thin-scrollbar edge-fade [--edge-fade-end-size:0px] relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
@@ -508,7 +440,6 @@ export function SettingsPane() {
 	);
 }
 
-/** Save progress / failure for the project form, shown under the section list. */
 export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayerState }) {
 	const { t } = useTranslation();
 	const pageLayer = useSettingsPage();
@@ -536,22 +467,12 @@ export function SettingsSaveStatus({ layer: layerProp }: { layer?: SettingsLayer
 
 type SettingsLayerState = ReturnType<typeof useSettingsLayer>;
 
-/** Project settings: a dialog over the shell, sharing the page's section list and body. */
 function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; covered: boolean }) {
 	const { t } = useTranslation();
 	const contentRef = useRef<HTMLDivElement>(null);
 	const restoreFocusOnClose = useRestoreFocusOnClose(!covered);
-	// The body renders into a detached host so it stays mounted (and keeps its draft)
-	// while recovery settings cover the dialog, then is re-attached when it returns.
 	const [bodyHost] = useState(() => document.createElement("div"));
 	useEffect(() => { bodyHost.className = "flex min-h-0 flex-1 flex-col"; }, [bodyHost]);
-	// That portal puts the body outside the Dialog's React tree, so Radix cannot
-	// tell that a popover, menu, or picker a page opens (portalled to <body>)
-	// belongs to the dialog: a press in one reads as outside and would dismiss
-	// the dialog, dropping the pick. React still routes events through portals
-	// along the React tree, so remember each press that starts anywhere in the
-	// body's tree (the page or anything it portals) and keep the dialog open
-	// for exactly that press. A press on the backdrop never passes through here.
 	const bodyPointerDown = useRef<Event | null>(null);
 	return (
 		<>
@@ -573,7 +494,6 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						"fixed left-1/2 top-1/2 z-overlay h-[min(40rem,calc(100vh-3rem))] w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
 					)}
 					onOpenAutoFocus={(event) => {
-						// Land on the current section (or the first field), not the close button.
 						const root = contentRef.current;
 						const target = root?.querySelector<HTMLElement>('nav button[aria-current="page"]:not(:disabled)')
 							?? root?.querySelector<HTMLElement>('.settings-dialog-body :is(input, textarea, select, button):not(:disabled)');
@@ -587,10 +507,6 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 							event.preventDefault();
 							return;
 						}
-						// An open picker or menu takes the first outside click to close
-						// itself, as Escape does; the dialog closes on the next one. A
-						// tooltip is not a popup that holds the click, and neither is a
-						// picker still playing its exit animation.
 						const openPopup = Array.from(document.querySelectorAll("[data-radix-popper-content-wrapper]")).some((wrapper) =>
 							!contentRef.current?.contains(wrapper)
 							&& wrapper.firstElementChild?.getAttribute("data-state") !== "closed"
@@ -599,7 +515,6 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 					}}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;
-						// In-place edits and login flows take Escape themselves.
 						if (target?.closest("[data-settings-inline-edit]")) {
 							event.preventDefault();
 							return;
@@ -654,15 +569,9 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 	);
 }
 
-// A page's rows can arrive after it opens (accounts, devices, profiles load),
-// so the lookup retries for a few seconds before giving up quietly.
 const SETTINGS_FOCUS_RETRY_MS = 100;
 const SETTINGS_FOCUS_ATTEMPTS = 40;
 
-/**
- * Scrolls to and briefly highlights the setting a global settings request names
- * (`focusSetting`, its visible label), once the requested page is showing.
- */
 function useSettingsRowFocus(scrollerRef: RefObject<HTMLDivElement | null>, layer: SettingsLayer | null) {
 	const settingsModal = useUiStore((state) => state.settingsModal);
 	const request = settingsModal?.scope === "global" && settingsModal.focusSetting ? settingsModal : null;

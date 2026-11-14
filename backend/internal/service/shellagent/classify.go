@@ -1,6 +1,3 @@
-// Package shellagent notices coding agents started by hand in a user's shell
-// terminal and follows whether each is working, idle or waiting on the user.
-// Nothing is stored; state lives in memory while the agent owns the terminal.
 package shellagent
 
 import (
@@ -10,9 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// executableHarness maps the command a harness installs onto its harness id.
-// Names that collide with ordinary tools (Command Code's `cmd`, FX's `fx`) are
-// left out: a wrong logo is worse than none.
 var executableHarness = map[string]domain.AgentHarness{
 	"claude":       domain.HarnessClaudeCode,
 	"claude-code":  domain.HarnessClaudeCode,
@@ -59,8 +53,6 @@ var executableHarness = map[string]domain.AgentHarness{
 	"stakpak":      domain.HarnessStakpak,
 }
 
-// packageDirHarness names harnesses whose launcher runs a generic script from
-// the package directory, like Cursor's `node …/cursor-agent/versions/<v>/index.js`.
 var packageDirHarness = map[string]domain.AgentHarness{
 	"cursor-agent": domain.HarnessCursor,
 	"claude-code":  domain.HarnessClaudeCode,
@@ -71,8 +63,6 @@ var packageDirHarness = map[string]domain.AgentHarness{
 
 var interpreters = map[string]bool{"node": true, "nodejs": true, "bun": true, "deno": true, "python": true, "python3": true}
 
-// ClassifyArgv names the harness a foreground command line runs, or "". Only
-// the program counts (`vim codex.md` is vim), or an interpreter's script.
 func ClassifyArgv(argv []string) domain.AgentHarness {
 	if len(argv) == 0 {
 		return ""
@@ -118,7 +108,6 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 				switch arg {
 				case "--no-warnings", "--use-system-ca", "--smol", "--bun", "--allow-all", "-A", "-u", "-B", "-I", "-s", "-S", "-m":
 				default:
-					// An unknown option may consume the next argument as its value.
 					return ""
 				}
 			}
@@ -131,7 +120,6 @@ func ClassifyArgv(argv []string) domain.AgentHarness {
 
 func classifyProgram(arg string) domain.AgentHarness {
 	name := baseName(arg)
-	// Muse's launcher execs a versioned binary: muse-bin-1.4.14-R7309.1.
 	if prefix, _, ok := strings.Cut(name, "-bin-"); ok {
 		name = prefix
 	}
@@ -146,8 +134,6 @@ func classifyProgram(arg string) domain.AgentHarness {
 	return ""
 }
 
-// baseName is a command's lowercased file name without a login shell's
-// leading dash or a script extension.
 func baseName(arg string) string {
 	name := strings.TrimPrefix(strings.ToLower(path.Base(arg)), "-")
 	for _, ext := range []string{".js", ".mjs", ".cjs", ".py"} {

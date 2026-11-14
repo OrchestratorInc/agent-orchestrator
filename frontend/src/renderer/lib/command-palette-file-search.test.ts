@@ -131,11 +131,9 @@ describe("command palette Cloud content and chat search", () => {
 		};
 		expect((await search("login")).results.map((hit) => hit.sessionId)).toEqual(["s2"]);
 		expect(searchChats.mock.calls.map(([orgId]) => orgId)).toEqual(["org-a", "org-b"]);
-		// Within the minute only the other organization is asked.
 		await vi.advanceTimersByTimeAsync(30_000);
 		expect((await search("login bug")).results).toHaveLength(1);
 		expect(searchChats.mock.calls.map(([orgId]) => orgId)).toEqual(["org-a", "org-b", "org-b"]);
-		// Once it has rested, it is asked again.
 		await vi.advanceTimersByTimeAsync(30_000);
 		await search("login bug 2");
 		expect(searchChats.mock.calls.map(([orgId]) => orgId).filter((orgId) => orgId === "org-a")).toHaveLength(2);

@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// ListLatestSessionArtifactVersions returns the newest version of each
-// artifact path of a session, ordered by path.
 func (s *Store) ListLatestSessionArtifactVersions(ctx context.Context, id domain.SessionID) ([]domain.SessionArtifactVersion, error) {
 	rows, err := s.qr.ListLatestSessionArtifactVersions(ctx, id)
 	if err != nil {
@@ -20,8 +18,6 @@ func (s *Store) ListLatestSessionArtifactVersions(ctx context.Context, id domain
 	return sessionArtifactVersionsFromGen(rows), nil
 }
 
-// ListSessionArtifactVersions returns every version of one artifact path,
-// newest first.
 func (s *Store) ListSessionArtifactVersions(ctx context.Context, id domain.SessionID, path string) ([]domain.SessionArtifactVersion, error) {
 	rows, err := s.qr.ListSessionArtifactVersions(ctx, gen.ListSessionArtifactVersionsParams{SessionID: id, Path: path})
 	if err != nil {
@@ -30,10 +26,6 @@ func (s *Store) ListSessionArtifactVersions(ctx context.Context, id domain.Sessi
 	return sessionArtifactVersionsFromGen(rows), nil
 }
 
-// AppendSessionArtifactVersion inserts v as the next version of its path,
-// ignoring v.Version, and then removes the oldest versions of that path so at
-// most keep remain (keep <= 0 keeps all). It returns the inserted version and
-// the hashes of the removed rows.
 func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.SessionArtifactVersion, keep int) (domain.SessionArtifactVersion, []string, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -68,8 +60,6 @@ func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.Sessi
 	return sessionArtifactVersionFromGen(row), pruned, nil
 }
 
-// DeleteSessionArtifactVersions removes every version row of a session, for
-// when the user deletes the session's artifacts.
 func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -79,9 +69,6 @@ func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.Ses
 	return nil
 }
 
-// DeleteSessionArtifactPathVersions removes every version row of one artifact
-// path, for when the user deletes that file, and returns the removed rows'
-// hashes.
 func (s *Store) DeleteSessionArtifactPathVersions(ctx context.Context, id domain.SessionID, path string) ([]string, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -92,8 +79,6 @@ func (s *Store) DeleteSessionArtifactPathVersions(ctx context.Context, id domain
 	return sums, nil
 }
 
-// CountSessionArtifactVersionsBySHA counts a session's version rows, across
-// all paths, whose content is the blob named by sha.
 func (s *Store) CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error) {
 	n, err := s.qr.CountSessionArtifactVersionsBySHA(ctx, gen.CountSessionArtifactVersionsBySHAParams{SessionID: id, Sha256: sha})
 	if err != nil {

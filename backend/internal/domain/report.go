@@ -10,15 +10,10 @@ import (
 
 const reportDeliveryPrefix = `<ao-report-delivery id="`
 
-// WrapReportDelivery marks an AO-authored report batch so provider prompt
-// hooks can correlate semantic acceptance with its durable delivery identity.
 func WrapReportDelivery(id, message string) string {
 	return fmt.Sprintf("%s%s\">\n%s\n</ao-report-delivery>", reportDeliveryPrefix, id, message)
 }
 
-// ReportDeliveryID returns the durable identity from an AO report envelope.
-// Delivery ids are generated internally and deliberately restricted so a
-// malformed prompt cannot manufacture markup or an unbounded correlation key.
 func ReportDeliveryID(message string) (string, bool) {
 	return deliveryID(message, reportDeliveryPrefix)
 }
@@ -44,18 +39,13 @@ func deliveryID(message, prefix string) (string, bool) {
 }
 
 const (
-	// MaxReportTextCharacters is the hard limit for free-form messages and structured notes.
 	MaxReportTextCharacters = 1000
-	// ReportBatchFallback is the fixed informational-report fallback deadline.
-	ReportBatchFallback = time.Hour
-	// ReportSettlementWindow is the fixed window opened by a done report.
-	ReportSettlementWindow = 5 * time.Minute
+	ReportBatchFallback     = time.Hour
+	ReportSettlementWindow  = 5 * time.Minute
 )
 
-// ReportState is an optional worker-originated coordination claim.
 type ReportState string
 
-// Supported report states.
 const (
 	ReportCheckpoint ReportState = "checkpoint"
 	ReportNeedsInput ReportState = "needs_input"
@@ -63,7 +53,6 @@ const (
 	ReportDone       ReportState = "done"
 )
 
-// Valid reports whether s is a supported structured state.
 func (s ReportState) Valid() bool {
 	switch s {
 	case ReportCheckpoint, ReportNeedsInput, ReportStuck, ReportDone:
@@ -73,17 +62,14 @@ func (s ReportState) Valid() bool {
 	}
 }
 
-// ReportOutputKind identifies a durable output reference attached to a report.
 type ReportOutputKind string
 
-// Supported report output kinds.
 const (
 	ReportOutputArtifact   ReportOutputKind = "artifact"
 	ReportOutputPRCreated  ReportOutputKind = "pr_created"
 	ReportOutputPRReviewed ReportOutputKind = "pr_reviewed"
 )
 
-// Valid reports whether k is a supported output kind.
 func (k ReportOutputKind) Valid() bool {
 	switch k {
 	case ReportOutputArtifact, ReportOutputPRCreated, ReportOutputPRReviewed:
@@ -93,31 +79,24 @@ func (k ReportOutputKind) Valid() bool {
 	}
 }
 
-// ReportOutput is an ordered reference to work produced by a worker.
 type ReportOutput struct {
 	Kind      ReportOutputKind
 	Reference string
 	Label     string
 }
 
-// ReportDeliveryState is the durable outbox lifecycle of a report.
 type ReportDeliveryState string
 
-// Report delivery states.
 const (
 	ReportPending      ReportDeliveryState = "pending"
 	ReportClaimed      ReportDeliveryState = "claimed"
 	ReportAcknowledged ReportDeliveryState = "acknowledged"
 )
 
-// ReportRecord is the durable report and outbox persistence shape. State and
-// outputs are independent, and neither changes authoritative session state.
 type ReportRecord struct {
-	ID        string
-	SessionID SessionID
-	ProjectID ProjectID
-	// SessionDisplayName is resolved at delivery time for presentation. It is
-	// intentionally not persisted with the durable report row.
+	ID                 string
+	SessionID          SessionID
+	ProjectID          ProjectID
 	SessionDisplayName string
 	State              ReportState
 	Note               string
@@ -136,10 +115,8 @@ type ReportRecord struct {
 	DeliveryBatchID    string
 }
 
-// ErrInvalidReport reports an invalid report or delivery transition input.
 var ErrInvalidReport = errors.New("invalid report")
 
-// Validate checks content, ownership, output, and delivery-state invariants.
 func (r ReportRecord) Validate() error {
 	if r.ID == "" || r.SessionID == "" || r.ProjectID == "" || r.CreatedAt.IsZero() || r.AvailableAt.IsZero() || r.RepeatCount < 1 {
 		return ErrInvalidReport
@@ -176,7 +153,6 @@ func (r ReportRecord) Validate() error {
 	return nil
 }
 
-// ValidateReportContent checks the authoritative report payload contract.
 func ValidateReportContent(state ReportState, note, message string, outputs []ReportOutput) error {
 	if message != "" {
 		if state != "" || note != "" || len(outputs) != 0 || strings.TrimSpace(message) == "" || utf8.RuneCountInString(message) > MaxReportTextCharacters {
@@ -204,13 +180,10 @@ func ValidateReportContent(state ReportState, note, message string, outputs []Re
 	return nil
 }
 
-// WrapSessionDelivery preserves AO session-origin direction as coordination in
-// terminal prompt hooks, without labeling it as a human prompt or worker report.
 func WrapSessionDelivery(id, message string) string {
 	return fmt.Sprintf("<ao-session-delivery id=%q>\n%s\n</ao-session-delivery>", id, message)
 }
 
-// CoordinationDeliveryID recognizes both durable reports and session sends.
 func CoordinationDeliveryID(message string) (string, bool) {
 	if id, ok := ReportDeliveryID(message); ok {
 		return id, true

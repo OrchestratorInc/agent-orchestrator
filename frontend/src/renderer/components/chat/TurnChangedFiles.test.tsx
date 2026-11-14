@@ -13,10 +13,6 @@ function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
 
-// These cover the two signal rules this surface exists to keep: a changed-file
-// list never claims to be complete when it was cut, and command output only adds
-// a warning when AO actually stopped storing it.
-
 function diff(overrides: Partial<TurnDiff> = {}): TurnDiff {
 	return {
 		files: [
@@ -253,8 +249,6 @@ describe("TurnChangedFiles", () => {
 		expect(screen.getByLabelText("still changing")).toBeInTheDocument();
 	});
 
-	// An agent that reports no diff must not get an empty panel implying it changed
-	// nothing.
 	it("renders nothing when the turn changed no files", () => {
 		const { container } = render(<TurnChangedFiles diff={{ files: [] }} />);
 		expect(container).toBeEmptyDOMElement();
@@ -305,8 +299,6 @@ describe("ActivityRow command output", () => {
 
 		await userEvent.click(screen.getByRole("button"));
 		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
-		// Read off the <pre> rather than via getByText, which normalizes the runs of
-		// whitespace that real command output is full of.
 		expect(container.querySelector("pre")?.textContent).toBe("ok  pkg/a\n");
 	});
 
@@ -376,8 +368,6 @@ describe("ActivityRow command output", () => {
 	});
 });
 
-// A run collapses consecutive tool calls to one line, and a command printing
-// inside it does not open it: the reader decides.
 describe("ActivityRun with a streaming command", () => {
 	function plan(id: string): ConversationActivity {
 		return {
@@ -550,7 +540,6 @@ describe("ActivityRow command labels", () => {
 		);
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
-		// One small mark for what the step did, not the bordered rows' icon column.
 		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
 		expect(container.querySelector(".icon-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
@@ -564,7 +553,6 @@ describe("ActivityRow command labels", () => {
 		expect(screen.getByRole("button").textContent).toMatch(/^Pushing changesexit 1/);
 		unmount();
 
-		// A test run that fails did run.
 		render(<ActivityRow activity={commandActivity({ command: "npm test", output: "1 failed", exitCode: 1 }, "failed")} />);
 		expect(screen.getByRole("button").textContent).toMatch(/^Ran testsexit 1/);
 	});
@@ -593,7 +581,6 @@ describe("ActivityRow command labels", () => {
 
 describe("TurnResults", () => {
 	beforeEach(() => {
-		// Thumbnails stay unloaded until seen, so nothing here fetches file bytes.
 		vi.stubGlobal("IntersectionObserver", class {
 			observe() {}
 			disconnect() {}
@@ -635,7 +622,6 @@ describe("TurnResults", () => {
 		expect(screen.getByText("1 File Changed")).toBeInTheDocument();
 		expect(screen.getByText("a.ts")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Open guide.md, created in this turn" }));
-		// By artifact path, never through the workspace-file opener.
 		expect(onOpenArtifact).toHaveBeenCalledWith({ path: "guide.md" });
 		expect(onOpenFile).not.toHaveBeenCalled();
 	});

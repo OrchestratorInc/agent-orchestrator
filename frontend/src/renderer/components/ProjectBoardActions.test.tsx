@@ -27,7 +27,6 @@ describe("ProjectBoardActions", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("button-raised", "text-primary-foreground");
 		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("before:bg-interactive-hover");
 		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("button-raised");
-		// Orchestrator leads, matching the session top bar.
 		const buttons = screen.getAllByRole("button");
 		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
 	});
@@ -41,7 +40,6 @@ describe("ProjectBoardActions", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("button-raised", "text-primary-foreground");
 		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("before:bg-interactive-hover");
 		expect(screen.getByRole("button", { name: /orchestrator/i })).not.toHaveClass("button-raised");
-		// Orchestrator leads, matching the session top bar.
 		const buttons = screen.getAllByRole("button");
 		expect(buttons.indexOf(screen.getByRole("button", { name: /orchestrator/i }))).toBeLessThan(buttons.indexOf(screen.getByRole("button", { name: "New task" })));
 	});

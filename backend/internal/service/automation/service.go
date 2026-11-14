@@ -18,7 +18,6 @@ const (
 	maxPromptBytes      = 4096
 )
 
-// Store is the persistence surface needed for definition management.
 type Store interface {
 	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
 	CreateAutomation(context.Context, domain.Automation) (domain.Automation, error)
@@ -30,18 +29,14 @@ type Store interface {
 	ListLatestAutomationRuns(context.Context, []domain.AutomationID) (map[domain.AutomationID]domain.AutomationRun, error)
 }
 
-// Deps are the automation service's injectable dependencies.
 type Deps struct {
 	Store     Store
 	Telemetry ports.EventSink
-	// Spawner is the existing daemon session service; automations do not add a
-	// second launch path.
-	Spawner SessionSpawner
-	Clock   func() time.Time
-	NewID   func() string
+	Spawner   SessionSpawner
+	Clock     func() time.Time
+	NewID     func() string
 }
 
-// Service owns automation validation and scheduling behavior.
 type Service struct {
 	store     Store
 	telemetry ports.EventSink
@@ -50,7 +45,6 @@ type Service struct {
 	newID     func() string
 }
 
-// New constructs the daemon-owned automation service.
 func New(deps Deps) *Service {
 	if deps.Clock == nil {
 		deps.Clock = time.Now
@@ -61,7 +55,6 @@ func New(deps Deps) *Service {
 	return &Service{store: deps.Store, telemetry: deps.Telemetry, spawner: deps.Spawner, clock: deps.Clock, newID: deps.NewID}
 }
 
-// CreateInput is the validated user intent for one recurring definition.
 type CreateInput struct {
 	ProjectID   domain.ProjectID
 	DisplayName string
@@ -79,8 +72,6 @@ type CreateInput struct {
 	Enabled     *bool
 }
 
-// UpdateInput distinguishes omitted fields from explicit false/empty values.
-// Supplying either schedule source replaces the schedule atomically.
 type UpdateInput struct {
 	DisplayName *string
 	Prompt      *string
@@ -96,7 +87,6 @@ type UpdateInput struct {
 	Enabled     *bool
 }
 
-// Create validates, canonicalizes, and persists an automation definition.
 func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automation, error) {
 	if s.store == nil {
 		return domain.Automation{}, apierr.Internal("AUTOMATION_CREATE_FAILED", "Failed to create automation")
@@ -178,7 +168,6 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.Automat
 	return created, nil
 }
 
-// Get returns one automation definition.
 func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Automation, error) {
 	rec, ok, err := s.store.GetAutomation(ctx, id)
 	if err != nil {
@@ -197,7 +186,6 @@ func (s *Service) Get(ctx context.Context, id domain.AutomationID) (domain.Autom
 	return rec, nil
 }
 
-// List returns a normalized page of definitions.
 func (s *Service) List(ctx context.Context, filter domain.AutomationFilter) (domain.AutomationPage, error) {
 	if filter.Limit == 0 {
 		filter.Limit = 50
@@ -226,8 +214,6 @@ func (s *Service) List(ctx context.Context, filter domain.AutomationFilter) (dom
 	return page, nil
 }
 
-// Update validates a partial definition update and recomputes the next future
-// occurrence when a schedule changes or a disabled definition is re-enabled.
 func (s *Service) Update(ctx context.Context, id domain.AutomationID, input UpdateInput) (domain.Automation, error) {
 	rec, err := s.Get(ctx, id)
 	if err != nil {
@@ -262,7 +248,6 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 			return domain.Automation{}, apierr.Invalid("INVALID_AUTOMATION_HARNESS", "Unknown automation harness", nil)
 		}
 		if rec.Harness != *input.Harness {
-			// Model capabilities belong to the harness; explicit replacements below survive.
 			rec.Model, rec.Mode, rec.Effort = "", "", ""
 		}
 		rec.Harness = *input.Harness
@@ -321,8 +306,6 @@ func (s *Service) Update(ctx context.Context, id domain.AutomationID, input Upda
 	return s.Get(ctx, id)
 }
 
-// Delete removes a definition and its run history. Linked sessions survive by
-// the database foreign-key contract.
 func (s *Service) Delete(ctx context.Context, id domain.AutomationID) error {
 	ok, err := s.store.DeleteAutomation(ctx, id)
 	if err != nil {
@@ -334,7 +317,6 @@ func (s *Service) Delete(ctx context.Context, id domain.AutomationID) error {
 	return nil
 }
 
-// Runs returns one definition's newest-first durable run history.
 func (s *Service) Runs(ctx context.Context, filter domain.AutomationRunFilter) (domain.AutomationRunPage, error) {
 	if _, err := s.Get(ctx, filter.AutomationID); err != nil {
 		return domain.AutomationRunPage{}, err

@@ -36,7 +36,6 @@ func TestDeleteSessionRemovesFilesAndVersionsAndKeepsAnEmptyDir(t *testing.T) {
 	if trash, _ := os.ReadDir(filepath.Join(h.dataDir(), trashDir)); len(trash) != 0 {
 		t.Fatalf("trash entries = %v, want the moved dir removed", trash)
 	}
-	// A capture queued behind the delete finds nothing to record.
 	h.tick()
 	if vs := h.versions("report.html"); len(vs) != 0 {
 		t.Fatalf("versions after a later capture = %+v, want none", vs)
@@ -48,7 +47,6 @@ func TestDeleteSessionLeavesEverythingWhenTheMoveFails(t *testing.T) {
 	h.write("report.html", "<h1>v1</h1>")
 	h.tick()
 	h.tick()
-	// A file where the trash directory belongs makes the move fail up front.
 	if err := os.WriteFile(filepath.Join(h.dataDir(), trashDir), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -6,13 +6,12 @@ import (
 )
 
 type worktreeRecord struct {
-	Path     string
-	Branch   string
-	Head     string
-	Bare     bool
-	Detached bool
-	Locked   bool
-	// LockReason is the text after "locked", empty when none was given.
+	Path       string
+	Branch     string
+	Head       string
+	Bare       bool
+	Detached   bool
+	Locked     bool
 	LockReason string
 	Prunable   bool
 }

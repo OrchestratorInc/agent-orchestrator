@@ -175,8 +175,6 @@ func TestFailedForkReturnsError(t *testing.T) {
 }
 
 func TestLatestForkTurnAcceptsImportedTurns(t *testing.T) {
-	// Native history import marks its last turn recovered; a fork of a fork
-	// must still find it.
 	rows := ConversationRows{Turns: []domain.ConversationTurn{{ID: "t1", State: domain.TurnStateRecovered}}}
 	if turn, ok := latestFinishedTurn(rows); !ok || turn.ID != "t1" {
 		t.Fatalf("turn = %+v, %v", turn, ok)
@@ -253,8 +251,6 @@ func TestLastAssistantAPIMessageID(t *testing.T) {
 	}
 }
 
-// A fork of an older turn takes only the attachments its conversation had by
-// then: the ones named in messages of that turn and the turns before it.
 func TestAttachmentsUpToTurnLeavesOutLaterOnes(t *testing.T) {
 	rows := ConversationRows{
 		Turns: []domain.ConversationTurn{{ID: "t1"}, {ID: "t2"}, {ID: "t3"}},
@@ -275,8 +271,6 @@ func TestAttachmentsUpToTurnLeavesOutLaterOnes(t *testing.T) {
 	}
 }
 
-// A Claude fork of the latest turn copies the session only up to that turn,
-// so a turn the original starts while the fork is being made stays out.
 func TestClaudeLatestTurnForkStopsAtThatTurn(t *testing.T) {
 	driver := &workspaceForkDriver{}
 	rows := ConversationRows{Messages: []domain.ConversationMessage{

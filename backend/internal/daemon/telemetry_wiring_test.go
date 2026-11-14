@@ -129,10 +129,6 @@ type wiringTestRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f wiringTestRoundTripper) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
-// TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire builds the
-// daily summary in front of PostHog, the shape newTelemetrySink wires up, and
-// asserts ao.usage.cli_usage_errors becomes one event whose count survives the
-// allowlist. Raw error text must not.
 func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	remote, err := telemetryadapter.NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "",
@@ -177,7 +173,7 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 		if !ok {
 			t.Fatalf("properties type = %T, want map[string]any", req["properties"])
 		}
-		count, ok := props["count"].(float64) // JSON numbers decode as float64
+		count, ok := props["count"].(float64)
 		if !ok || count != 3 {
 			t.Fatalf("properties.count = %#v, want 3 (rollup count must survive the PostHog allowlist)", props["count"])
 		}
@@ -230,9 +226,6 @@ func TestEmitInstallLifecycleEventsFreshInstallOnce(t *testing.T) {
 	}
 }
 
-// An upgrade can create the install ID file today (an older build never wrote
-// one, or it was lost). Existing projects or sessions prove it is not new: the
-// install event is spent without being sent, and never sent later either.
 func TestEmitInstallLifecycleEventsSkipsUpgradeWithPriorState(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{Events: true}}

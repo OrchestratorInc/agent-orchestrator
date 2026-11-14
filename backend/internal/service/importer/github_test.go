@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// stubGh answers gh calls by their first API path, for the GitHub owner and
-// availability lookups.
 func stubGh(t *testing.T, answer func(args []string) (string, error)) *[][]string {
 	t.Helper()
 	calls := &[][]string{}

@@ -6,7 +6,6 @@ import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
-/** A PR state's icon and colour, shared by the pills and the PR card. */
 export const prStateIcon: Record<SessionPRSummary["state"], { icon: LucideIcon; className: string }> = {
 	open: { icon: GitPullRequest, className: "text-success" },
 	draft: { icon: GitPullRequestDraft, className: "text-passive" },
@@ -14,19 +13,16 @@ export const prStateIcon: Record<SessionPRSummary["state"], { icon: LucideIcon; 
 	closed: { icon: GitPullRequestClosed, className: "text-error" },
 };
 
-/** A PR's identity in a session: its URL, or its number for PRs without one. */
 export function prFocusKey(pr: SessionPRSummary): string {
 	return pr.url || pr.htmlUrl || String(pr.number);
 }
 
-/** Open PRs, then drafts, newest first in each; merged and closed ones after. */
 export function sortSessionPRs(prs: SessionPRSummary[]): SessionPRSummary[] {
 	const byNewest = [...prs].sort((a, b) => b.number - a.number);
 	const rank = { open: 0, draft: 1, merged: 2, closed: 2 } as const;
 	return byNewest.sort((a, b) => rank[a.state] - rank[b.state]);
 }
 
-/** The one fact a folded PR shows as its dot: what stands in its way, or that it is ready or done. */
 export function prStatusDot(pr: SessionPRSummary): { className: string; labelKey: "pr.card.mergeConflict" | "pr.card.checksFailing" | "pr.review.changesRequested" | "pr.card.readyToMerge" | "pr.card.checksPending" | "pr.card.reviewRequired" | "pr.state.merged" | "pr.state.closed" | "pr.state.draft" | "pr.state.open"; breathe?: boolean } {
 	if (pr.state === "merged") return { className: "bg-status-merged", labelKey: "pr.state.merged" };
 	if (pr.state === "closed") return { className: "bg-error", labelKey: "pr.state.closed" };
@@ -40,14 +36,7 @@ export function prStatusDot(pr: SessionPRSummary): { className: string; labelKey
 	return { className: "bg-passive", labelKey: "pr.state.open" };
 }
 
-/**
- * The session's PRs as a row of pills over the PR card, one per open or
- * draft PR with its status dot; merged and closed ones wait behind one
- * "+N earlier" pill. The pill of the PR on screen is pressed, and the PR the
- * branch updates carries a branch mark. Picking a pill shows that PR.
- */
 export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
-	/** The PR the branch updates; its pill carries a branch mark. */
 	branchPR?: SessionPRSummary;
 	focused: SessionPRSummary;
 	onFocus: (pr: SessionPRSummary) => void;
@@ -61,7 +50,6 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 	const active = sorted.filter((pr) => pr.state === "open" || pr.state === "draft");
 	const earlier = sorted.filter((pr) => pr.state === "merged" || pr.state === "closed");
 	const focusKey = prFocusKey(focused);
-	// A merged or closed PR on screen gets its own pill, so the pressed pill always names it.
 	const shown = earlier.some((pr) => prFocusKey(pr) === focusKey) ? [...active, focused] : active;
 	const folded = earlier.filter((pr) => prFocusKey(pr) !== focusKey);
 	const branchKey = branchPR ? prFocusKey(branchPR) : undefined;
@@ -73,7 +61,6 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 				const status = t(dot.labelKey);
 				const pressed = prFocusKey(pr) === focusKey;
 				const branch = prFocusKey(pr) === branchKey;
-				// The repository comes from the PR, or from its URL when the PR doesn't say.
 				const fullRepository = showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined;
 				const repository = fullRepository ? repositoryLabels.get(fullRepository) ?? fullRepository : undefined;
 				return (
@@ -91,7 +78,6 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 						type="button"
 					>
 						<span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full", dot.className, dot.breathe && "animate-status-pulse")} />
-						{/* A long repository name gives way; the number always shows. */}
 						{repository ? <span className="min-w-0 shrink truncate font-medium">{repository}</span> : null}
 						<span className="shrink-0 font-medium">{t("pr.others.short", { number: pr.number })}</span>
 						{pr.title && !repository ? <span className="min-w-0 truncate">{pr.title}</span> : null}

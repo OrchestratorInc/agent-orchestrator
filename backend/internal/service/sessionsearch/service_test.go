@@ -27,16 +27,12 @@ func newFixture(t *testing.T, roots sessionsearch.TranscriptRoots) fixture {
 	svc := sessionsearch.New(sessionsearch.Options{
 		Store: store,
 		Roots: roots,
-		// The daemon wires the store as the namer, so names and session state
-		// resolve in production. The fixture must do the same or a test can pass
-		// while the shipped surface shows an empty state.
 		Namer: store,
 		Now:   func() time.Time { return testNow },
 	})
 	return fixture{store: store, svc: svc}
 }
 
-// seedChatSession creates a Chat session with one conversation and returns it.
 func seedChatSession(t *testing.T, store *sqlite.Store, projectID, sessionID, conversationID string) domain.SessionRecord {
 	t.Helper()
 	ctx := context.Background()
@@ -103,9 +99,6 @@ func addActivity(t *testing.T, store *sqlite.Store, conversationID, turnID strin
 	}
 }
 
-// addCommandActivity records a command the way the Chat controller does: the row
-// first, then its streamed output through the append path that enforces AO's
-// per-row cap. Command output is never written through UpsertActivity.
 func addCommandActivity(t *testing.T, store *sqlite.Store, conversationID, turnID, activityID, summary, output string, status domain.ActivityStatus) {
 	t.Helper()
 	ctx := context.Background()
@@ -123,14 +116,11 @@ func addCommandActivity(t *testing.T, store *sqlite.Store, conversationID, turnI
 		}
 	}
 	if _, err := store.SettleActivityStreamedText(ctx, conversationID, providerItemID, summary, testNow); err != nil {
-		// Settling is best-effort for this fixture; the row and its output are
-		// what the index reads.
 		t.Logf("settle %s: %v", activityID, err)
 	}
 	_ = status
 }
 
-// addReasoningActivity records a reasoning activity with its streamed summary.
 func addReasoningActivity(t *testing.T, store *sqlite.Store, conversationID, turnID, activityID, text string) {
 	t.Helper()
 	ctx := context.Background()
@@ -161,7 +151,6 @@ func conversationFor(t *testing.T, store *sqlite.Store, sessionID string) domain
 	return domain.SessionSearchConversation{}
 }
 
-// search runs a query through the same parser the UI and CLI use.
 func search(t *testing.T, svc *sessionsearch.Service, raw string) domain.SessionSearchResponse {
 	t.Helper()
 	parsed := domain.ParseSessionSearchQuery(raw)
@@ -193,7 +182,6 @@ func TestIndexChatIndexesMessagesAndIsIncremental(t *testing.T) {
 		t.Fatalf("session = %q, want %q", results.Results[0].SessionID, session.ID)
 	}
 
-	// A second pass with nothing new writes nothing: the fingerprint did not move.
 	again, err := f.svc.IndexChat(context.Background(), conversationFor(t, f.store, string(session.ID)))
 	if err != nil {
 		t.Fatalf("second IndexChat: %v", err)
@@ -202,7 +190,6 @@ func TestIndexChatIndexesMessagesAndIsIncremental(t *testing.T) {
 		t.Fatalf("unchanged pass wrote %d docs, want 0", again)
 	}
 
-	// A new turn is picked up, and the earlier documents survive.
 	appendUserMessage(t, f.store, session, "conv-1", "msg-2", "turn-2", "also check the logout redirect")
 	settleAssistantMessage(t, f.store, "conv-1", "msg-2-assistant", "turn-2", "the logout redirect now returns to the login page")
 	if _, err := f.svc.IndexChat(context.Background(), conversationFor(t, f.store, string(session.ID))); err != nil {
@@ -216,11 +203,6 @@ func TestIndexChatIndexesMessagesAndIsIncremental(t *testing.T) {
 	}
 }
 
-// The sweep skips a conversation whose aggregate stamp is unchanged. That skip
-// is the reason an idle sweep stays cheap, and it is also the failure mode that
-// would silently freeze the index, so it is pinned from both sides: nothing is
-// written when nothing changed, and both a new message and a new activity are
-// still picked up.
 func TestSweepStampSkipsUnchangedButDetectsNewWork(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-stamp", "conv-stamp")
@@ -248,8 +230,6 @@ func TestSweepStampSkipsUnchangedButDetectsNewWork(t *testing.T) {
 		t.Fatalf("new message not indexed after sweep: %+v", got.Results)
 	}
 
-	// An activity is a separate timeline table, so the stamp must include it or a
-	// session that only ran commands would never re-index.
 	addCommandActivity(t, f.store, "conv-stamp", "turn-2", "cmd-zebra", "go test ./zebra", "zebra output", domain.ActivityStatusCompleted)
 	if _, err := f.svc.Sweep(context.Background()); err != nil {
 		t.Fatalf("Sweep after activity: %v", err)
@@ -302,8 +282,6 @@ func TestIndexChatIndexesTouchedPaths(t *testing.T) {
 	}
 }
 
-// Command output is the largest body of searchable text in a real database and
-// the one every single-harness competitor skips.
 func TestIndexChatIndexesCommandOutput(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-1", "conv-1")
@@ -320,14 +298,11 @@ func TestIndexChatIndexesCommandOutput(t *testing.T) {
 	if results.Results[0].Kind != domain.SessionSearchKindCommand {
 		t.Fatalf("kind = %q, want command", results.Results[0].Kind)
 	}
-	// The command is shown with the prompt that ran it, so the result opens
-	// there: a tool-output match has somewhere to scroll to, like a message.
 	if results.Results[0].MessageID != "msg-1" {
 		t.Fatalf("command result anchor = %q, want its turn's message msg-1", results.Results[0].MessageID)
 	}
 }
 
-// A long command output keeps its first 3,072 characters (coverage.go).
 func TestCommandOutputKeepsItsStart(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-1", "conv-1")
@@ -349,8 +324,6 @@ func TestCommandOutputKeepsItsStart(t *testing.T) {
 	}
 }
 
-// A file change is found by the files it touched, not by the code it wrote
-// (coverage.go).
 func TestIndexChatIndexesFileChangePathsNotDiffs(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-1", "conv-1")
@@ -375,8 +348,6 @@ func TestIndexChatIndexesFileChangePathsNotDiffs(t *testing.T) {
 	}
 }
 
-// A tool call is indexed by its name and remembered argument; a reasoning
-// activity is not indexed (coverage.go).
 func TestIndexChatIndexesToolCallsButNotReasoning(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-1", "conv-1")
@@ -465,7 +436,6 @@ func TestSearchFiltersBySessionStatus(t *testing.T) {
 	if _, err := f.svc.IndexAll(context.Background()); err != nil {
 		t.Fatalf("IndexAll: %v", err)
 	}
-	// Kill the second session through the durable fact the status filter reads.
 	record, found, err := f.store.GetSession(context.Background(), dead.ID)
 	if err != nil || !found {
 		t.Fatalf("GetSession: found=%v err=%v", found, err)
@@ -485,9 +455,6 @@ func TestSearchFiltersBySessionStatus(t *testing.T) {
 	}
 }
 
-// Requirement: full-text search must be case-insensitive, prefix-matching, and
-// phrase-aware. Each is a separate FTS5 behavior, so each gets its own
-// assertion against one seeded document rather than one combined query.
 func TestSearchCasePrefixAndPhrase(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-case", "conv-case")
@@ -511,7 +478,6 @@ func TestSearchCasePrefixAndPhrase(t *testing.T) {
 		{"quoted phrase out of order", `"login flaky"`, 0},
 		{"phrase spanning three words", `"needs an await"`, 1},
 		{"phrase that is not contiguous", `"flaky needs"`, 0},
-		// A misspelled word is searched as typed, never as a close indexed word.
 		{"swapped letters are not corrected", "falky", 0},
 		{"a missing letter is not corrected", "flky", 0},
 	}
@@ -525,8 +491,6 @@ func TestSearchCasePrefixAndPhrase(t *testing.T) {
 	}
 }
 
-// Tokenization must make code identifiers findable by their parts, through the
-// real query path rather than only in the splitter's unit test.
 func TestSearchFindsIdentifierParts(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-ident", "conv-ident")
@@ -544,8 +508,6 @@ func TestSearchFindsIdentifierParts(t *testing.T) {
 	}
 }
 
-// Requirement: a hibernated session is as searchable as a live one, and its
-// result says it is hibernated so the click can explain what it will do.
 func TestHibernatedSessionsAreSearchableAndLabelled(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-hibernate", "conv-hibernate")
@@ -569,7 +531,6 @@ func TestHibernatedSessionsAreSearchableAndLabelled(t *testing.T) {
 	if got.Results[0].SessionState != "hibernated" {
 		t.Fatalf("session state = %q, want hibernated so the UI can explain the click", got.Results[0].SessionState)
 	}
-	// status:hibernated selects it and status:live does not.
 	if hibernated := search(t, f.svc, "hibernation needle status:hibernated"); len(hibernated.Results) != 1 {
 		t.Fatalf("status:hibernated = %+v", hibernated.Results)
 	}
@@ -578,10 +539,6 @@ func TestHibernatedSessionsAreSearchableAndLabelled(t *testing.T) {
 	}
 }
 
-// The total must be how many results matched, not how many fit on the page.
-// A caller pages with it (ao search --offset), which is not possible if the
-// daemon reports a page length as the count. Per message, that is every
-// matching document.
 func TestSearchTotalCountsMatchesNotPageSize(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-total", "conv-total")
@@ -604,7 +561,6 @@ func TestSearchTotalCountsMatchesNotPageSize(t *testing.T) {
 	if page.Total < 8 {
 		t.Fatalf("total = %d, want all matching documents rather than the page size", page.Total)
 	}
-	// The second page must continue rather than repeat the first.
 	second, err := f.svc.Search(context.Background(), parsed, domain.SessionSearchParams{Limit: 3, Offset: 3, Group: domain.SessionSearchGroupMessage})
 	if err != nil {
 		t.Fatalf("Search page 2: %v", err)
@@ -623,9 +579,6 @@ func TestSearchTotalCountsMatchesNotPageSize(t *testing.T) {
 	}
 }
 
-// Grouped by session (the default), a session is one row at its best match, its
-// row counts the rest, and the total counts sessions. Without this, one long
-// session fills the palette's eight rows and hides every other session.
 func TestSearchGroupsResultsBySession(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	busy := seedChatSession(t, f.store, "proj", "sess-busy", "conv-busy")
@@ -653,7 +606,6 @@ func TestSearchGroupsResultsBySession(t *testing.T) {
 	if matches[string(busy.ID)] != 6 || matches[string(quiet.ID)] != 1 {
 		t.Fatalf("session matches = %v, want 6 for the long session and 1 for the short one", matches)
 	}
-	// The row a session is shown at is its best match, so it opens there.
 	for _, result := range response.Results {
 		if result.MessageID == "" {
 			t.Fatalf("grouped row %s has no message to open at", result.SessionID)
@@ -768,9 +720,6 @@ func TestBrowseOrdersByRecencyWithoutAQuery(t *testing.T) {
 	}
 }
 
-// A standalone session belongs to no project: its project_id is NULL. One such
-// row used to fail the backfill's first query outright, so a machine with any
-// standalone session indexed nothing at all and reported "backfilling" forever.
 func TestStandaloneSessionsAreIndexedSearchedAndBrowsed(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -821,7 +770,6 @@ func TestStandaloneSessionsAreIndexedSearchedAndBrowsed(t *testing.T) {
 		t.Fatalf("search kettle = %d rows, want both sessions", len(both.Results))
 	}
 
-	// The recents list Cmd+K shows before anything is typed.
 	recents := search(t, f.svc, "sort:recent")
 	listed := map[string]bool{}
 	for _, hit := range recents.Results {
@@ -832,7 +780,6 @@ func TestStandaloneSessionsAreIndexedSearchedAndBrowsed(t *testing.T) {
 	}
 }
 
-// failingTargetsStore fails the backfill's session listing while fail is set.
 type failingTargetsStore struct {
 	*sqlite.Store
 	fail bool
@@ -845,9 +792,6 @@ func (s *failingTargetsStore) ListSessionSearchTargets(ctx context.Context) ([]d
 	return s.Store.ListSessionSearchTargets(ctx)
 }
 
-// A failed backfill must not read as "still indexing": nothing is filling the
-// index. It reports unavailable, and a later backfill (the daemon retries on its
-// sweep timer) brings it to ready.
 func TestFailedBackfillReportsUnavailableUntilARetrySucceeds(t *testing.T) {
 	store := sqlitetest.MustOpen(t)
 	flaky := &failingTargetsStore{Store: store, fail: true}
@@ -880,10 +824,6 @@ func TestFailedBackfillReportsUnavailableUntilARetrySucceeds(t *testing.T) {
 	}
 }
 
-// The ranking stage scores at most 2,000 candidates by raw bm25. Two promises
-// keep that invisible: the total stays exact (it is recounted when the cap is
-// reached), and a filter turns the cap off, because a filter could otherwise
-// reject every capped candidate and hide a match that exists.
 func TestSearchCandidateCapKeepsTotalsAndFiltersExact(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -896,8 +836,6 @@ func TestSearchCandidateCapKeepsTotalsAndFiltersExact(t *testing.T) {
 			Body: "capneedle capneedle capneedle", CreatedAt: testNow, IndexedAt: testNow,
 		})
 	}
-	// The weakest match in the index (one mention in a long body), in its own
-	// project: outside the top 2,000 by raw bm25.
 	docs = append(docs, domain.SessionSearchDoc{
 		SourceKey: "chat:quiet", DocKey: "q1", SessionID: "quiet", ProjectID: "other",
 		Kind: domain.SessionSearchKindUser, MessageID: "q1", Seq: 1,
@@ -920,9 +858,6 @@ func TestSearchCandidateCapKeepsTotalsAndFiltersExact(t *testing.T) {
 	}
 }
 
-// Highlight offsets are UTF-16 code units, the unit the renderer slices
-// JavaScript strings by. With byte offsets, every match after a non-ASCII
-// character was highlighted on the wrong letters.
 func TestSplitSnippetOffsetsAreUTF16(t *testing.T) {
 	marked := "café ✓ 😀 日本 " + domain.SessionSearchSnippetStart + "needle" + domain.SessionSearchSnippetEnd + " done"
 	text, highlights := sessionsearch.SplitSnippet(marked)
@@ -936,12 +871,6 @@ func TestSplitSnippetOffsetsAreUTF16(t *testing.T) {
 	}
 }
 
-// A reviewer chat is part of the session it reviews, so its words must be as
-// findable as the session's own. It opens in the reviewer chat while the app can
-// show that transcript (the review is live in Chat); after the review is
-// switched to the terminal or archived (ending a session archives its reviews),
-// the words stay searchable and the result opens the session instead of a
-// reviewer chat that cannot render.
 func TestSearchFindsReviewerChatsAndOpensThemWhileOpenable(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -979,7 +908,6 @@ func TestSearchFindsReviewerChatsAndOpensThemWhileOpenable(t *testing.T) {
 	if len(worker.Results) != 1 || worker.Results[0].ReviewID != "" || worker.Results[0].MessageID != "worker-msg" {
 		t.Fatalf("worker hit = %+v, want the session's own message with no review", worker.Results)
 	}
-	// Two sources for one session must not rewrite each other on every pass.
 	if written, err := f.svc.Sweep(ctx); err != nil || written != 0 {
 		t.Fatalf("sweep after backfill wrote %d (err %v), want 0", written, err)
 	}
@@ -1006,10 +934,6 @@ func renameForSearch(t *testing.T, f fixture, session domain.SessionRecord, name
 	}
 }
 
-// One row per session, ranked by one blended score in which the name weighs
-// most, but shown at its best-matching MESSAGE: the snippet is what was said,
-// Enter opens there, and the count is how many messages matched (a message and
-// the command shown with it count once; the name is not a message).
 func TestGroupedRowShowsTheBestMessageAndCountsMessages(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	named := seedChatSession(t, f.store, "proj", "sess-named", "conv-named")
@@ -1029,26 +953,19 @@ func TestGroupedRowShowsTheBestMessageAndCountsMessages(t *testing.T) {
 		t.Fatalf("results = %s, want the named session first, each session once", describe(got.Results))
 	}
 	top := got.Results[0]
-	// Both messages hold both words as typed, so neither is in a better exact
-	// tier; the person's own words weigh more.
 	if top.Kind == domain.SessionSearchKindTitle || top.MessageID != "named-user" {
 		t.Fatalf("top row = %s %q, want the best-matching message, not the name", top.Kind, top.MessageID)
 	}
 	if top.Snippet != "the flaky login test fails on CI" || len(top.Highlights) != 2 {
 		t.Fatalf("snippet = %q highlights %v, want the message with flaky and login marked", top.Snippet, top.Highlights)
 	}
-	// named-user and the reply; the failing command is shown with named-user.
 	if top.SessionMatches != 2 || got.Results[1].SessionMatches != 1 {
 		t.Fatalf("match counts = %d and %d, want 2 and 1", top.SessionMatches, got.Results[1].SessionMatches)
 	}
 }
 
-// Session metadata is part of the blended score at a lower weight than the
-// name: a session found only by its branch ranks below one whose name matches,
-// and its row (no message matched) opens the session at the top.
 func TestBranchMetadataRanksBelowTheName(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
-	// seedChatSession creates every session on branch "feat/search".
 	byBranch := seedChatSession(t, f.store, "proj", "sess-branch", "conv-branch")
 	renameForSearch(t, f, byBranch, "Tidy the sidebar")
 	appendUserMessage(t, f.store, byBranch, "conv-branch", "branch-user", "branch-turn", "move the buttons left")
@@ -1066,9 +983,6 @@ func TestBranchMetadataRanksBelowTheName(t *testing.T) {
 	}
 }
 
-// A reindex empties the index and rebuilds it from session data, so anything
-// the index held that the sessions do not (here a planted stray document) is
-// gone, while every real match comes back.
 func TestReindexRebuildsTheIndexFromScratch(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
@@ -1093,7 +1007,6 @@ func TestReindexRebuildsTheIndexFromScratch(t *testing.T) {
 	if err := f.svc.RequestReindex(); err != nil {
 		t.Fatalf("RequestReindex: %v", err)
 	}
-	// A second request while one is pending collapses into it.
 	if err := f.svc.RequestReindex(); err != nil {
 		t.Fatalf("second RequestReindex: %v", err)
 	}
@@ -1126,8 +1039,6 @@ func TestReindexRebuildsTheIndexFromScratch(t *testing.T) {
 	}
 }
 
-// With no index there is nothing to rebuild: the request says search is
-// unavailable rather than pretending to start one.
 func TestReindexWithoutAnIndexIsUnavailable(t *testing.T) {
 	svc := sessionsearch.New(sessionsearch.Options{})
 	if err := svc.RequestReindex(); err == nil {

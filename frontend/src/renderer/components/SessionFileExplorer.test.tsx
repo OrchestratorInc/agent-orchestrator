@@ -211,7 +211,6 @@ describe("SessionFileExplorer", () => {
 		useUiStore.getState().setFilesChangedOnly("sess-explorer-maximized", false);
 		const { container } = renderWithQuery(<SessionFileExplorer isMaximized sessionId="sess-explorer-maximized" />);
 
-		// Maximized: both are mounted at once, with no back button.
 		expect(screen.getByTestId("tree-changed-only")).toBeInTheDocument();
 		expect(screen.getByTestId("content-pane")).toHaveTextContent("none");
 		expect(screen.queryByRole("button", { name: "Back to file tree" })).not.toBeInTheDocument();
@@ -220,13 +219,11 @@ describe("SessionFileExplorer", () => {
 		expect(screen.getByTestId("content-pane")).toHaveTextContent("src/App.tsx");
 		expect(screen.getByTestId("tree-changed-only")).toBeInTheDocument();
 
-		// Preview first, tree on the right.
 		const panels = container.querySelectorAll('[data-slot="resizable-panel"]');
 		expect(panels).toHaveLength(2);
 		expect(panels[0]).toHaveStyle({ flexGrow: "74" });
 		expect(panels[1]).toHaveStyle({ flexGrow: "26" });
 
-		// With the view tabs showing, the active Files tab doubles as the tree toggle.
 		await userEvent.click(screen.getByRole("tab", { name: "Hide file tree" }));
 		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
 		expect(screen.getByTestId("content-pane")).toHaveTextContent("src/App.tsx");
@@ -239,7 +236,6 @@ describe("SessionFileExplorer", () => {
 		useUiStore.getState().setFilesChangedOnly("sess-layout-docked", false);
 		const docked = renderWithQuery(<SessionFileExplorer onOpenFile={vi.fn()} sessionId="sess-layout-docked" />);
 		expect(await screen.findByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
-		// Docked, the tree opens plain files in the centre: nothing here to lay out.
 		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
 		docked.unmount();
 
@@ -259,7 +255,6 @@ describe("SessionFileExplorer", () => {
 		const changesHeaderClass = header?.className;
 		await userEvent.click(screen.getByRole("tab", { name: "Files" }));
 
-		// The split's divider is drawn on the content, not by growing the header.
 		expect(screen.getByTestId("content-pane")).toBeInTheDocument();
 		expect(header?.className).toBe(changesHeaderClass);
 		expect(header?.nextElementSibling).toHaveClass("border-t");
@@ -276,7 +271,6 @@ describe("SessionFileExplorer", () => {
 
 		const filter = screen.getByRole("textbox", { name: "Filter files" });
 		expect(titlebar).toContainElement(filter);
-		// One row: the pickers before the filter, the view controls and minimize after it.
 		const changes = await screen.findByRole("button", { name: /^Changes to review/ });
 		const start = titlebar.querySelector(".files-popout-titlebar__start");
 		const end = titlebar.querySelector(".files-popout-titlebar__end");
@@ -285,7 +279,6 @@ describe("SessionFileExplorer", () => {
 		expect(end).toContainElement(screen.getByRole("tab", { name: "Changes" }));
 		expect(end?.lastElementChild).toContainElement(screen.getByRole("button", { name: "Return to panel" }));
 		expect(container.querySelector("header")).toBeNull();
-		// The titlebar's own border divides it from the review, so the split adds none.
 		expect(container.querySelector('[data-slot="resizable-panel-group"]')).not.toHaveClass("border-t");
 		titlebar.remove();
 	});
@@ -309,7 +302,6 @@ describe("SessionFileExplorer", () => {
 		expect(actionsHost).not.toContainElement(viewOptions);
 		const header = viewOptions.closest("header");
 		expect(header).not.toBeNull();
-		// Same row as the pickers, right before the Changes / Files tabs.
 		expect(viewOptions.compareDocumentPosition(screen.getByRole("tab", { name: "Changes" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(header).toContainElement(screen.getByRole("tab", { name: "Changes" }));
 		filterHost.remove();
@@ -351,8 +343,6 @@ describe("SessionFileExplorer", () => {
 		expect(screen.queryByTestId("review-pane")).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Changes" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-		// Nothing to review: the whole header row goes, pickers and layout toggle
-		// included, so the tree starts right under the top bar.
 		expect(screen.queryByRole("button", { name: /^Changes to review/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /^Branch to review/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
@@ -384,7 +374,6 @@ describe("SessionFileExplorer", () => {
 		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("false");
 		expect(container.querySelector("header")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Hide file tree" })).not.toBeInTheDocument();
-		// No header above it, so the split draws no second divider under the titlebar.
 		expect(container.querySelector('[data-slot="resizable-panel-group"]')).not.toHaveClass("border-t");
 		titlebar.remove();
 	});
@@ -393,7 +382,6 @@ describe("SessionFileExplorer", () => {
 		renderWithQuery(<SessionFileExplorer isMaximized onToggleMaximized={vi.fn()} sessionId="sess-review-rail" />);
 
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
-		// Only the review's files, every folder open; no button to hide it.
 		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("true");
 		expect(screen.getByTestId("tree-files")).toHaveTextContent("src/App.tsx");
 		expect(screen.queryByRole("button", { name: /file tree$/ })).not.toBeInTheDocument();
@@ -511,7 +499,6 @@ describe("SessionFileExplorer", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("collapse:1");
 
-		// Once the review reports every file collapsed, the menu offers the way back.
 		await userEvent.click(screen.getByRole("button", { name: "Report all collapsed" }));
 		expect(screen.getByRole("button", { name: "Expand all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-up-down");
 		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
@@ -523,7 +510,6 @@ describe("SessionFileExplorer", () => {
 	it("opens the maximize tooltip on hover or keyboard focus, not when focus is handed back", async () => {
 		renderWithQuery(<SessionFileExplorer onToggleMaximized={vi.fn()} sessionId="sess-explorer-tooltip" />);
 		const maximize = await screen.findByRole("button", { name: "Maximize" });
-		// Closing the maximized overlay restores focus to this button in code.
 		const focusVisible = vi.spyOn(maximize, "matches").mockImplementation((selector) => selector !== ":focus-visible");
 		act(() => maximize.focus());
 		await new Promise((resolve) => setTimeout(resolve, 50));
@@ -599,7 +585,6 @@ describe("SessionFileExplorer review pickers", () => {
 		}));
 	}
 
-	// An open menu hides the rest of the page from role queries, its own trigger included.
 	const changesTrigger = (scope: HTMLElement = document.body) => within(scope).getByRole("button", { hidden: true, name: /^Changes to review:/ });
 	const selectionRequests = () => postMock.mock.calls.filter(([path]) => String(path).endsWith("/workspace/history/selection"));
 
@@ -631,17 +616,14 @@ describe("SessionFileExplorer review pickers", () => {
 
 		expect(await screen.findByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Split diff view" })).toBeInTheDocument();
-		// Nothing is staged, so the menu leaves Staged out.
 		await userEvent.click(changesTrigger());
 		expect((await screen.findAllByRole("menuitemradio")).map((item) => item.textContent?.replace(/[+−]\d+/g, ""))).toEqual(["Uncommitted", "Unstaged"]);
 		await userEvent.keyboard("{Escape}");
 
-		// Staged picked earlier and since emptied.
 		act(() => useUiStore.getState().setFilesSelection("sess-empty-scope", { branch: { kind: "checked_out" }, changes: { kind: "staged" } }));
 		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("staged"));
 		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Collapse all files" })).not.toBeInTheDocument();
-		// The view tabs stay: All files still has something to show.
 		expect(screen.getByRole("tab", { name: "Files" })).toBeInTheDocument();
 
 		await userEvent.click(changesTrigger());
@@ -658,8 +640,6 @@ describe("SessionFileExplorer review pickers", () => {
 			if (path.endsWith("/workspace/history")) return { data: { ...checkedOutHistory, sessionId: init.params.path.sessionId } };
 			throw new Error(`Unexpected GET ${path}`);
 		});
-		// jsdom draws every element as an empty box at 0,0, so the rail's resize
-		// handle would claim every click; move it out of the way.
 		const rect = HTMLElement.prototype.getBoundingClientRect;
 		const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			return this.dataset.slot === "resizable-handle" ? new DOMRect(-1000, -1000, 1, 1) : rect.call(this);
@@ -667,10 +647,8 @@ describe("SessionFileExplorer review pickers", () => {
 		const { container } = renderWithQuery(<SessionFileExplorer isMaximized sessionId="sess-empty-rail" />);
 		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("true");
 
-		// Staged picked earlier and since emptied.
 		act(() => useUiStore.getState().setFilesSelection("sess-empty-rail", { branch: { kind: "checked_out" }, changes: { kind: "staged" } }));
 		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("staged"));
-		// Nothing to list: the review takes the whole width, with no split.
 		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
 		expect(container.querySelectorAll('[data-slot="resizable-panel"]')).toHaveLength(1);
 		expect(container.querySelector('[data-slot="resizable-handle"]')).toBeNull();
@@ -680,8 +658,6 @@ describe("SessionFileExplorer review pickers", () => {
 		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("true");
 		const review = screen.getByTestId("review-pane");
 
-		// A filter that matches none of the files empties the rail, so it goes too,
-		// without remounting the review beside it.
 		const filter = screen.getByRole("textbox", { name: "Filter files" });
 		await userEvent.type(filter, "nothing-matches");
 		await waitFor(() => expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument());
@@ -715,7 +691,6 @@ describe("SessionFileExplorer review pickers", () => {
 		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("false");
 		withPr.unmount();
 
-		// The same session without its PR has nothing to review: the row goes.
 		const noPr = render("sess-clean-no-pr", { ...branchList, branches: branchList.branches.filter((row) => row.prNumber == null) });
 		await waitFor(() => expect(noPr.container.querySelector("header")).toBeNull());
 		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("false");
@@ -765,7 +740,6 @@ describe("SessionFileExplorer review pickers", () => {
 		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string } } }) => {
 			const sessionId = init.params.path.sessionId;
 			if (path.endsWith("/workspace/manifest")) return { data: { ...manifest, sessionId } };
-			// The list is slow: it never answers in this test.
 			if (path.endsWith("/workspace/branches")) return new Promise(() => {});
 			if (path.endsWith("/workspace/history")) return { data: { ...checkedOutHistory, sessionId } };
 			throw new Error(`Unexpected GET ${path}`);
@@ -796,7 +770,6 @@ describe("SessionFileExplorer review pickers", () => {
 		await screen.findByRole("button", { name: "Branch to review: feature/login" });
 		await waitFor(() => expect(reads("/workspace/branches")).toBe(1));
 
-		// On the checked-out branch workspace events keep things current: focus alone reads nothing.
 		regainFocus();
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(reads("/workspace/branches")).toBe(1);
@@ -808,7 +781,6 @@ describe("SessionFileExplorer review pickers", () => {
 		const branchReads = reads("/workspace/branches");
 		const mainReads = reads("/workspace/history", "main");
 
-		// Someone pushes to main; coming back to the window picks it up.
 		mainTip = SHA("7");
 		regainFocus();
 		await waitFor(() => expect(reads("/workspace/branches")).toBe(branchReads + 1));
@@ -845,8 +817,6 @@ describe("SessionFileExplorer review pickers", () => {
 	});
 
 	it("docked and maximized explorers share the selection", async () => {
-		// jsdom draws every element as an empty box at 0,0, so the maximized
-		// review's resize handle would claim every click; move it out of the way.
 		const rect = HTMLElement.prototype.getBoundingClientRect;
 		const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 			return this.dataset.slot === "resizable-handle" ? new DOMRect(-1000, -1000, 1, 1) : rect.call(this);

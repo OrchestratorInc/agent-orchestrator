@@ -9,12 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A configured --model/--reasoning is a creation override: Hermes rejects it on
-// resume ("Resume retains gateway session policy; creation overrides are
-// unsupported on resume"), so the restore command must drop both flags even
-// when the session carries them — otherwise the Chat→TUI switch surfaces a
-// terminal that dies at startup with the flag-combination error. A fresh
-// launch keeps them.
 func TestRestoreDropsCreationOverridesLaunchKeeps(t *testing.T) {
 	binary := fakeNativeBinary(t)
 	data, home := t.TempDir(), t.TempDir()

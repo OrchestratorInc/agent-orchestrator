@@ -6,10 +6,8 @@ import type { CloudCpClient } from "./cloud-cp";
 export type CueDTO = components["schemas"]["CueResponse"];
 export type CueInput = components["schemas"]["CueDefinitionRequest"];
 export type CueInvokeResult = components["schemas"]["InvokeCueResponse"];
-/** A Cloud command cue comes back as its command, for the desktop to run in a new shell of the session. */
 export type CloudCueInvokeResult = { kind: "agent" | "command"; sessionId: string; command?: string };
 
-/** A Cloud project's cues live on the control plane; a local project's on the daemon. */
 export type CueHost = { client: CloudCpClient; orgId: string };
 
 export const CUE_LIMITS = {
@@ -73,7 +71,6 @@ export async function invokeCue(
 	return data;
 }
 
-/** Runs a Cloud cue into a session of its project. */
 export function invokeCloudCue(cloud: CueHost, cueId: string, sessionId: string): Promise<CloudCueInvokeResult> {
 	return cloud.client.invokeProjectCue(cloud.orgId, cueId, sessionId);
 }

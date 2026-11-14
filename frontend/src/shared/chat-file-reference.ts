@@ -1,10 +1,8 @@
 import { normalizeCodeRowText } from "./file-annotations";
 import type { FileCodeReference, FileReferenceLine } from "./file-annotations";
 
-/** Transport policy, not a daemon capability: only cloud opts into text delivery. */
 export type FileReferenceDelivery = "structured" | "text" | "unsupported";
 
-/** Format already bounded captures without cutting any captured rows again. */
 export function formatCapturedFileReferences(text: string, references: readonly ChatFileReference[] = [], quoted = true): string {
 	return text + [...references].sort((a, b) => a.order - b.order).map(reference => {
 		const extension = reference.path.split("/").at(-1)?.split(".").slice(1).at(-1) ?? "";
@@ -15,7 +13,6 @@ export function formatCapturedFileReferences(text: string, references: readonly 
 	}).join("");
 }
 
-/** Durable user-supplied selection; source hints never authorize filesystem access. */
 export interface ChatFileReference extends Omit<FileCodeReference, "source"> {
 	referenceFormat?: "numbered-v1";
 	id: string;
@@ -26,7 +23,6 @@ export interface ChatFileReference extends Omit<FileCodeReference, "source"> {
 	truncated: boolean;
 }
 
-/** Portable path and row restrictions mirror the daemon; source identity is never rewritten. */
 export function isSupportedFileReference(ref: ChatFileReference): boolean {
 	if (ref.referenceFormat !== undefined && ref.referenceFormat !== "numbered-v1") return false;
 	const bytes = (text: string) => new TextEncoder().encode(text).length;
@@ -77,7 +73,6 @@ export function captureFileReference(selection: FileCodeReference, sessionId: st
 	};
 }
 
-/** A File-view capture keeps side "old" to name its historical revision, but its rows are marked "file". */
 export function isFileViewCapture(ref: Pick<ChatFileReference, "side" | "lines">): boolean {
 	return ref.side === "file" || (ref.lines.length > 0 && ref.lines.every((row) => row.side === "file"));
 }

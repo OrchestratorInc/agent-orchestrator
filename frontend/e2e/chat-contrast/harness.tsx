@@ -1,4 +1,3 @@
-// Real composer components and production CSS, without the shell or daemon.
 import { useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

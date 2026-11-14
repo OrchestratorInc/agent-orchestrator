@@ -9,7 +9,6 @@ import (
 
 func TestPromptErrorFailureRestatesAdmittedTurnFailure(t *testing.T) {
 	direct := acpsdk.NewInternalError(map[string]any{"details": "admitted_turn_failed"})
-	// AO's persistent chat host wraps the agent's error data.
 	relayed := acpsdk.NewInternalError(map[string]any{
 		"ao.persistentEventId": "acp-host:1:3",
 		"providerData":         map[string]any{"details": "admitted_turn_failed"},

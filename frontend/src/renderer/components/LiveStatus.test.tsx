@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { LiveStatus } from "./LiveStatus";
 
-// A live region that mounts together with its text is often not announced.
 it("mounts empty and then says its text", () => {
 	expect(renderToStaticMarkup(<LiveStatus text="Loading repositories..." />)).not.toContain("Loading repositories...");
 	render(<LiveStatus text="Loading repositories..." />);

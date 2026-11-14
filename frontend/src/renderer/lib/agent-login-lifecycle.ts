@@ -1,11 +1,6 @@
 import { LOCAL_HOST } from "./hosts";
 
-// Serialize startup and disposal across panel instances. In particular, a late
-// response must be disposed before another panel can recover the same login.
 const tasks = new Map<string, Promise<void>>();
-// Disposals that did not reach the daemon, for example while a remote host is
-// disconnected. The native login may still be running there, so its harness
-// stays pending (no update or new login) until a retry succeeds.
 const unsettled = new Map<string, Array<() => Promise<unknown>>>();
 const retries = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
@@ -37,8 +32,6 @@ function retain(key: string, dispose: () => Promise<unknown>) {
 	publish();
 }
 
-// Run outstanding disposals first. A failure keeps them and rejects the queued
-// task, so nothing can recover or replace a login a stale disposal would stop.
 async function settleDisposals(key: string) {
 	const pending = unsettled.get(key);
 	if (!pending) return;
@@ -81,15 +74,11 @@ export function runAgentLoginTask<T>(agentId: string, hostId: string | undefined
 	return settled.then(() => result);
 }
 
-// retainAgentLoginDisposal records a disposal that already failed inside a
-// login task. It is retried, and the harness stays pending until it succeeds.
 export function retainAgentLoginDisposal(agentId: string, hostId: string | undefined, dispose: () => Promise<unknown>) {
 	retain(agentLoginKey(agentId, hostId), dispose);
 	scheduleRetry(agentId, hostId);
 }
 
-// disposeAgentLogin stops a login the caller no longer shows. A failed attempt
-// is retained and retried instead of releasing the harness.
 export function disposeAgentLogin(agentId: string, hostId: string | undefined, dispose: () => Promise<unknown>): Promise<void> {
 	retain(agentLoginKey(agentId, hostId), dispose);
 	return runAgentLoginTask(agentId, hostId, async () => undefined).catch((err: unknown) => {
@@ -98,7 +87,6 @@ export function disposeAgentLogin(agentId: string, hostId: string | undefined, d
 	});
 }
 
-// resetAgentLoginLifecycle forgets all state between tests.
 export function resetAgentLoginLifecycle() {
 	for (const timer of retries.values()) clearTimeout(timer);
 	retries.clear();

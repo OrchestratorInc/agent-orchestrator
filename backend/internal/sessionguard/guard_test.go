@@ -60,9 +60,6 @@ func (m *blockingMessenger) Send(context.Context, domain.SessionID, string) erro
 }
 
 func TestGuard_ComposerCheckRunsWhileTheInputLeaseIsHeld(t *testing.T) {
-	// The composer check must run between acquiring and releasing the input
-	// lease, and before the pane write, so a human keystroke cannot land between
-	// the check and the write and a proven draft never reaches the messenger.
 	msgr := &fakeMessenger{}
 	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
 	lease := &observedInputLease{acquired: make(chan struct{}), released: make(chan struct{})}
@@ -93,10 +90,6 @@ func TestGuard_ComposerCheckRunsWhileTheInputLeaseIsHeld(t *testing.T) {
 }
 
 func TestGuard_ComposerFenceReleaseRunsAfterTheWrite(t *testing.T) {
-	// When the composer check returns a non-nil release (the terminal-input
-	// fence), the guard must hold it across the pane write and release it only
-	// after — so a human keystroke blocked on the fence cannot land between the
-	// final draft proof and the paste (#5711).
 	msgr := &fakeMessenger{}
 	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
 
@@ -126,8 +119,6 @@ func TestGuard_ComposerFenceReleaseRunsAfterTheWrite(t *testing.T) {
 }
 
 func TestGuard_CancelledContextNeverWrites(t *testing.T) {
-	// A probe that is cancelled reports "no draft" (it fails open), but the
-	// caller is gone: the write must not happen on a cancelled context.
 	msgr := &fakeMessenger{}
 	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,13 +163,8 @@ func TestGuard_OutcomeByState(t *testing.T) {
 	}{
 		{"active", record(domain.ActivityActive, false), true, Sent, Sent},
 		{"idle", record(domain.ActivityIdle, false), true, Sent, Sent},
-		// waiting_input is the split that motivates two methods: a user message
-		// (or its Enter re-submit) belongs at an idle prompt; an unsolicited
-		// automated nudge does not.
 		{"waiting_input", record(domain.ActivityWaitingInput, false), true, Sent, SuppressedAwaitingUser},
 		{"blocked", record(domain.ActivityBlocked, false), true, SuppressedAwaitingUser, SuppressedAwaitingUser},
-		// exited is refused even without IsTerminated: the pane holds an
-		// interactive shell after agent exit, so a paste would execute there.
 		{"exited", record(domain.ActivityExited, false), true, SuppressedExited, SuppressedExited},
 		{"terminated", record(domain.ActivityIdle, true), true, SuppressedTerminated, SuppressedTerminated},
 		{"missing", domain.SessionRecord{}, false, SuppressedNotFound, SuppressedNotFound},
@@ -209,12 +195,6 @@ func TestGuard_OutcomeByState(t *testing.T) {
 	}
 }
 
-// TestGuard_NudgeUrgentReachesNeedsInputButNotBlocked pins NudgeUrgent's
-// outcome table directly: it is the only nudge method that may write into a
-// session idle at a needs-input prompt, and it must still refuse blocked (where
-// a paste+Enter would answer a live permission dialog on the user's behalf) and
-// a waiting_input prompt on a harness that cannot prove the prompt is a genuine
-// idle composer rather than a masked permission decision.
 func TestGuard_NudgeUrgentReachesNeedsInputButNotBlocked(t *testing.T) {
 	acceptsAll := func(domain.AgentHarness) bool { return true }
 	refusesAll := func(domain.AgentHarness) bool { return false }
@@ -227,9 +207,6 @@ func TestGuard_NudgeUrgentReachesNeedsInputButNotBlocked(t *testing.T) {
 	}{
 		{"active", record(domain.ActivityActive, false), true, acceptsAll, Sent},
 		{"idle", record(domain.ActivityIdle, false), true, acceptsAll, Sent},
-		// The whole point of the method: unlike Nudge, an urgent nudge lands at
-		// an idle waiting_input prompt — but only when the harness proves that
-		// prompt is a real composer, not an ambiguous permission state.
 		{"waiting_input capability-safe", record(domain.ActivityWaitingInput, false), true, acceptsAll, Sent},
 		{"waiting_input ambiguous suppressed", record(domain.ActivityWaitingInput, false), true, refusesAll, SuppressedAwaitingUser},
 		{"waiting_input nil predicate suppressed", record(domain.ActivityWaitingInput, false), true, nil, SuppressedAwaitingUser},
@@ -256,10 +233,6 @@ func TestGuard_NudgeUrgentReachesNeedsInputButNotBlocked(t *testing.T) {
 	}
 }
 
-// TestGuard_NudgeUrgentRespectsTUIStartupGate keeps the urgent carve-out from
-// widening past its one intended state: a TUI session that has not yet sent
-// its first hook may still be sitting on a pre-session dialog, so an urgent
-// nudge is refused there exactly as Deliver is.
 func TestGuard_NudgeUrgentRespectsTUIStartupGate(t *testing.T) {
 	msgr := &fakeMessenger{}
 	rec := domain.SessionRecord{
@@ -578,10 +551,6 @@ func TestGuard_CoordinationUnderMutationCheckedRejectsBeforeRuntimeWrite(t *test
 	}
 }
 
-// TestGuard_NudgeCoordinationEnforcesSteeringAtWriteBoundary pins the binding
-// safety decision to the guard's own just-in-time read: an active session is
-// refused unless its harness declares it can be steered mid-turn, no matter what
-// the caller believed when it decided to dispatch.
 func TestGuard_NudgeCoordinationEnforcesSteeringAtWriteBoundary(t *testing.T) {
 	steersCodex := func(h domain.AgentHarness) bool { return h == domain.HarnessCodex }
 	cases := []struct {

@@ -15,7 +15,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -27,8 +26,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// droidLocalAuthStatus checks Droid's own Factory settings first;
-// FACTORY_API_KEY is the fallback when they hold no usable credential.
 func droidLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -97,9 +94,6 @@ func droidSettingsAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// droidConfiguredSecret recognizes literal keys and the documented
-// ${ENV_VAR} interpolation used by Droid's custom model settings. An
-// unresolved placeholder is not evidence that the user is authenticated.
 func droidConfiguredSecret(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {

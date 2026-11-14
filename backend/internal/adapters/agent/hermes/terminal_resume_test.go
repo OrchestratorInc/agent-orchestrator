@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// seedTerminalResumeHome builds a session dir whose native-home points at a
-// Hermes home with a state.db holding the given session rows.
 func seedTerminalResumeHome(t *testing.T, rows ...[3]string) (data, home string) {
 	t.Helper()
 	data, home = t.TempDir(), t.TempDir()
@@ -74,9 +72,6 @@ func TestPrepareNativeTerminalResumeRefusesForeignWorkspace(t *testing.T) {
 }
 
 func TestPrepareNativeTerminalResumeRefusesAmbiguousTitle(t *testing.T) {
-	// "older" carries the duplicate title first, so restoring by title would
-	// resolve to it, not to the recorded chat-2: refuse instead of resuming a
-	// stranger's transcript.
 	data, _ := seedTerminalResumeHome(t,
 		[3]string{"older", "Dup", "/ws"},
 		[3]string{"chat-2", "Dup", "/ws"},

@@ -75,9 +75,6 @@ function sessionWith(overrides: Partial<WorkspaceSession> = {}): WorkspaceSessio
 
 describe("sessionPRDisplaySummaries", () => {
 	it("keeps GitHub PR #7 and GitLab MR #7 distinct in the same session", () => {
-		// Both providers have a PR/MR numbered 7. Keying by number alone collapses
-		// them into one summary (the second wins), hiding the other. Keying by the
-		// canonical web URL keeps both visible.
 		const githubPR: PullRequestFacts = {
 			url: "https://github.com/acme/repo/pull/7",
 			number: 7,
@@ -126,11 +123,9 @@ describe("sessionPRDisplaySummaries", () => {
 
 		const result = sessionPRDisplaySummaries(session, [githubSummary, gitlabSummary]);
 
-		// Both summaries appear — not deduped to one.
 		expect(result).toHaveLength(2);
 		const urls = result.map((r) => r.url).sort();
 		expect(urls).toEqual(["https://github.com/acme/repo/pull/7", "https://gitlab.com/acme/repo/-/merge_requests/7"]);
-		// Each retains its own provider/repo, no summary is hidden.
 		const github = result.find((r) => r.url === "https://github.com/acme/repo/pull/7");
 		const gitlab = result.find((r) => r.url === "https://gitlab.com/acme/repo/-/merge_requests/7");
 		expect(github?.provider).toBe("github");
@@ -138,9 +133,6 @@ describe("sessionPRDisplaySummaries", () => {
 	});
 
 	it("does not drop summaries whose url is empty, falling back to number:${number}", () => {
-		// Two facts with empty urls and distinct numbers must both surface. The
-		// fallback key `number:${number}` keeps them distinct within one provider
-		// even when the canonical URL is not yet populated.
 		const session = sessionWith({
 			prs: [
 				{
@@ -386,9 +378,7 @@ describe("prCardPresentation", () => {
 		expect(explained({ ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [] } })).toBe(true);
 		expect(explained({ ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] } })).toBe(true);
 		expect(explained({ review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] } })).toBe(true);
-		// GitHub blocks it for a reason no row names, such as a branch rule.
 		expect(explained({ mergeability: { state: "blocked", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } })).toBe(false);
-		// A passing row doesn't say why the checks are unknown.
 		expect(explained({
 			ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] },
 			mergeability: { state: "mergeable", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
@@ -552,7 +542,6 @@ describe("merge readiness rows", () => {
 			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 		});
 		expect(labels(pr)).toEqual(["Conflicts unknown", "Checks unknown", "Review required"]);
-		// The row opens to the checks, each with its own link, so it has none of its own.
 		expect(prCardPresentation(pr).readinessRows?.[1]?.href).toBeUndefined();
 	});
 
@@ -572,7 +561,6 @@ describe("merge readiness rows", () => {
 		});
 		const row = prCardPresentation(running, {}).readinessRows?.find((status) => status.key === "ci");
 		expect(row?.checks?.counts.map((count) => count.label)).toEqual(["1 running", "1 pending", "1 passed", "1 skipped"]);
-		// A cancelled run counts as failed, and a check GitHub hasn't reported waits with the queued ones.
 		const failing = summary({
 			ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [check("test", "passed"), check("format", "failed"), check("e2e", "cancelled"), check("docs", "unknown")] },
 		});
@@ -623,7 +611,6 @@ describe("prCheckedOut", () => {
 
 	it("is false on another branch, and true until the branch is observed", () => {
 		expect(prCheckedOut(pr, branch({ head: "def", remoteBranch: "origin/ao/task/root" }))).toBe(false);
-		// A branch whose name only ends the same way is another branch.
 		expect(prCheckedOut(pr, branch({ head: "def", remoteBranch: "origin/team/lab/show" }))).toBe(false);
 		expect(prCheckedOut(pr, branch({ head: "def" }))).toBe(false);
 		expect(prCheckedOut(pr, undefined)).toBe(true);
@@ -1203,7 +1190,6 @@ describe("pull request repositories", () => {
 		const apart = prRepositoryLabels([{ repo: "acme-platform/landing-site" }, { repo: "acme-platform/control-plane" }]);
 		expect(apart.get("acme-platform/landing-site")).toBe("landing-site");
 		expect(apart.get("acme-platform/control-plane")).toBe("control-plane");
-		// A fork and its upstream share a short name, so each keeps its owner.
 		const fork = prRepositoryLabels([{ repo: "acme/app" }, { repo: "ada/app" }, { url: "https://github.com/acme/docs/pull/3" }]);
 		expect(fork.get("acme/app")).toBe("acme/app");
 		expect(fork.get("ada/app")).toBe("ada/app");
@@ -1211,8 +1197,6 @@ describe("pull request repositories", () => {
 	});
 });
 
-// GitHub reports no status rollup for a head nothing checks, which reaches the
-// client as CI "unknown", the same as checks not read yet.
 describe("a PR nothing checks", () => {
 	const unknownCI = { autoInjectCI: true, state: "unknown" as const, failingChecks: [], checks: [] };
 	const unchecked = (overrides: Partial<SessionPRSummary> = {}) => summary({ ci: unknownCI, detailsObservedAt: "2026-06-15T00:00:00Z", ...overrides });

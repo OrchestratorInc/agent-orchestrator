@@ -12,7 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// A FIFO reported as a page must not hang the report.
 func TestRecordReportedArtifactSkipsAFIFOWithoutBlocking(t *testing.T) {
 	h, _ := steerHarness(t)
 	dir := sessionartifacts.Dir(h.rendersDir, testSession)
@@ -28,8 +27,6 @@ func TestRecordReportedArtifactSkipsAFIFOWithoutBlocking(t *testing.T) {
 	}
 }
 
-// On Unix a backslash is a file name character, but the artifact file route
-// reads it as a separator, so such a page could never load in the thread.
 func TestRecordReportedArtifactSkipsABackslashName(t *testing.T) {
 	h, _ := steerHarness(t)
 	writeArtifact(t, sessionartifacts.Dir(h.rendersDir, testSession), `q3\report.html`)

@@ -52,10 +52,6 @@ function renderButton(
 }
 
 describe("TopbarOpenEditorButton", () => {
-	// The bug this PR chases: the worktree goes away after getState was cached,
-	// so the control is still enabled, the click fails, and nothing refreshes the
-	// state, leaving it enabled to fail again. Failing the open must re-read
-	// availability and disable the control.
 	it("refreshes availability after a failed open so the control stops inviting the click", async () => {
 		const getState = vi
 			.fn()
@@ -72,16 +68,12 @@ describe("TopbarOpenEditorButton", () => {
 
 		await userEvent.click(main);
 
-		// the failure must trigger a refetch, not just show a message
 		await waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
 		await waitFor(() =>
 			expect(screen.getByRole("button", { name: "Session workspace is not available" })).toBeDisabled(),
 		);
 	});
 
-	// Regression: an ipcMain rejection arrives wrapped as "Error invoking remote
-	// method 'editorHandoff:open': Error: <reason>", and the topbar used to paint
-	// that whole string into the error.
 	it("shows the reason, not Electron's remote-method wrapper, when the open fails", async () => {
 		setState(availableState);
 		window.ao!.editorHandoff.open = vi.fn().mockRejectedValue(
@@ -205,7 +197,6 @@ describe("TopbarOpenEditorButton", () => {
 		const options = screen.getByRole("button", { name: "Open workspace options" });
 		expect(options).toHaveClass("size-control-md", "hover:bg-transparent");
 		expect(button).toHaveClass("hover:bg-transparent");
-		// Disabled buttons retain a hoverable tooltip wrapper.
 		const group = button.parentElement?.parentElement;
 		expect(group).toHaveClass("gap-0", "inline-flex");
 		expect(screen.getAllByRole("button")).toHaveLength(2);
@@ -227,8 +218,6 @@ describe("TopbarOpenEditorButton", () => {
 		expect(screen.getByRole("menu")).toBeInTheDocument();
 	});
 
-	// No supported editor: the main button opens Finder instead of sitting empty,
-	// with no guidance copy, and the menu still offers every native fallback.
 	it("falls back to Finder when the saved editor is no longer installed", async () => {
 		setState({
 			targets: [
@@ -265,7 +254,6 @@ describe("TopbarOpenEditorButton", () => {
 		renderButton();
 		expect(await screen.findByRole("button", { name: "Session workspace is not available." })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Open workspace options" })).toBeDisabled();
-		// A standing unavailable state must not take inline topbar space.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
@@ -425,8 +413,6 @@ describe("TopbarOpenEditorButton", () => {
 		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }));
 	});
 
-	// Nothing saved reads as the Cursor default, so this is the fresh-install case
-	// on a Mac with VS Code but no Cursor.
 	it("opens Finder with its real icon until an editor is chosen, then shows the editor", async () => {
 		openMock.mockClear();
 		const iconDataUrl = "data:image/png;base64,ZmluZGVy";

@@ -109,7 +109,6 @@ it("says every session in a Cloud project, and anyone using it, can read the val
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	render(<QueryClientProvider client={client}><CloudProjectEnvironmentSettings projectId="p" cloudOrgId="org" /></QueryClientProvider>);
 	expect(await screen.findByText(/Every session in this project receives these values/)).toHaveTextContent("anyone using those sessions, and the agent, can read them. Don't use them for coding-agent logins.");
-	// Members see names only here; that is not where the values are kept from them.
 	expect(screen.getByText(/can see or change their values here/)).toBeInTheDocument();
 });
 
@@ -126,7 +125,6 @@ it("shows the control plane's message when it refuses a reserved name", async ()
 	await waitFor(() => expect(cloudPut).toHaveBeenCalledWith("org", "p", { anthropic_api_key: "sk-test" }));
 	expect(await screen.findByRole("alert")).toHaveTextContent("ANTHROPIC_API_KEY is reserved: sign the agent in instead of setting its key.");
 	expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "ANTHROPIC_API_KEY is reserved: sign the agent in instead of setting its key." }));
-	// The refused draft is kept, and not sent again until it changes.
 	await new Promise((resolve) => setTimeout(resolve, 900));
 	expect(cloudPut).toHaveBeenCalledTimes(1);
 	expect(screen.getByLabelText("Name 1")).toHaveValue("anthropic_api_key");

@@ -6,8 +6,6 @@ import { AccountHostSyncError } from "../lib/account-remote-hosts";
 import { apiClient } from "../lib/api-client";
 import { linkThisComputer } from "../lib/link-this-computer";
 
-// Signing in while Connect Mobile serves this computer links it, so it gets
-// its fixed address without the user turning on Allow access as well.
 const fake = vi.hoisted(() => ({
 	signedIn: false,
 	status: { enabled: true, noPublicTunnel: false, accountLinked: false, hostId: "h_this", password: "pw-1", url: "https://quick.trycloudflare.com:443" },
@@ -38,11 +36,10 @@ test("signing in links a computer Connect Mobile already serves", async () => {
 	fake.signedIn = true;
 	rerender();
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: undefined }));
-	// The connector is asked again once the listing landed, so it moves at once.
 	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/remote-access"));
 	rerender();
 	await new Promise((resolve) => setTimeout(resolve, 20));
-	expect(linkThisComputer).toHaveBeenCalledTimes(1); // once per sign-in
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
 });
 
 test("an AO Cloud without fixed addresses lists it at the tunnel's address", async () => {
@@ -60,8 +57,6 @@ test("an account with no fixed address left lists it at the tunnel's address", a
 });
 
 test("a computer an account already holds is left alone", async () => {
-	// Signing in to another account must not take it from the first, and one
-	// its account removed on another device must not be listed again.
 	Object.assign(fake.status, { accountLinked: true });
 	fake.signedIn = true;
 	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });

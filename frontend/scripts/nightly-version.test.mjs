@@ -17,7 +17,6 @@ describe("computeNightlyVersion", () => {
 	it("orders monotonically by timestamp for the same base", () => {
 		const earlier = computeNightlyVersion("0.10.3", new Date("2026-06-27T03:00:00Z"), "aaaaaaa");
 		const later = computeNightlyVersion("0.10.3", new Date("2026-06-27T04:00:00Z"), "bbbbbbb");
-		// prerelease identifiers compare lexically; zero-padded fixed-width timestamp sorts correctly
 		expect(later > earlier).toBe(true);
 	});
 

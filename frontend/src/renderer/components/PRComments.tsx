@@ -25,7 +25,6 @@ type Thread = NonNullable<SessionPRSummary["threads"]>[number];
 type Comment = Thread["comments"][number];
 type Review = NonNullable<SessionPRSummary["review"]["reviews"]>[number];
 
-/** Everything the Comments section lists for a PR: top-level comments, reviews with a body, and review threads. */
 export function prCommentCount(pr: SessionPRSummary): number {
 	return (pr.conversation?.length ?? 0)
 		+ (pr.review.reviews ?? []).filter((review) => review.body?.trim()).length
@@ -42,27 +41,20 @@ const time = (value?: string | null) => {
 	return Number.isNaN(parsed) ? 0 : parsed;
 };
 
-// The Reviews tab's fold header, so the PR's folded groups read as the same
-// family as its open and resolved review comments. A button takes its parent's
-// font (styles.css), so the containers carry the text size.
 const foldHeaderClass = "flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs font-medium leading-none text-muted-foreground transition-colors hover:bg-interactive-hover/20 hover:text-foreground";
 const iconActionClass = "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
-// A card's action is a quiet word under its text.
 const footActionClass = "inline-flex h-6 items-center gap-1.5 rounded-md font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60";
 const showMoreClass = "inline-flex items-center rounded-sm font-medium text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-/** Quotes a comment as markdown for the chat: who, where, and what they wrote. */
 function quoteForChat(author: string, body: string, where: string, url?: string): string {
 	const head = `**@${sanitizeWorkerMessagePart(author)}** ${sanitizeWorkerMessagePart(where)}${url ? ` (${sanitizeWorkerMessagePart(url)})` : ""}:`;
 	return [head, ...sanitizeWorkerMessagePart(body.trim()).split("\n")].map((line) => `> ${line}`).join("\n");
 }
 
-/** How long a comment's menu says "Added to chat" before offering it again. */
 export const ADDED_TO_CHAT_MS = 2500;
 
 const squash = (text: string) => text.replace(/\s+/g, " ").trim();
 
-/** The text a comment opens by quoting ("> …"), as GitHub's Quote reply writes it. */
 function leadingQuote(body: string): string {
 	const quoted: string[] = [];
 	for (const line of body.split("\n")) {
@@ -72,7 +64,6 @@ function leadingQuote(body: string): string {
 	return squash(quoted.join(" "));
 }
 
-/** A quote reply's own words: the quote it opens with and the @mention after it go. */
 function ownWords(body: string, author: string): string {
 	const lines = body.split("\n");
 	let start = 0;
@@ -82,11 +73,6 @@ function ownWords(body: string, author: string): string {
 	return words.toLowerCase().startsWith(mention) ? words.slice(mention.length).trimStart() : words;
 }
 
-/**
- * What a reply to a top-level comment opens with: its first paragraph quoted
- * (cut at a word past 240 characters) and an @mention, so the reply nests
- * under it and the author is told, without pasting a whole bot summary back.
- */
 function replyQuote(author: string, body: string): string {
 	let excerpt = body.trim().split(/\n\s*\n/)[0] ?? "";
 	if (excerpt.length > 240) {
@@ -97,11 +83,9 @@ function replyQuote(author: string, body: string): string {
 	return `${quoted}\n\n@${author} `;
 }
 
-/** A GitHub login's avatar, or its first letter when the picture can't load. */
 export function PRAvatar({ name, bot, size = "md" }: { name: string; bot?: boolean; size?: "sm" | "md" | "lg" }) {
 	const [failed, setFailed] = useState(false);
 	const login = name.replace(/\[bot\]$/, "");
-	// GitHub Actions has no profile picture under its login.
 	const src = login === "github-actions" ? "https://avatars.githubusercontent.com/in/15368?s=40&v=4" : `https://github.com/${login}.png?size=40`;
 	const box = size === "sm" ? "size-4 text-[8px]" : size === "md" ? "size-5 text-[10px]" : "size-6 text-xs";
 	if (failed || !/^[A-Za-z0-9-]+$/.test(login)) {
@@ -123,7 +107,6 @@ const isLong = (body: string) => body.length > 360 || body.split("\n").length > 
 const clampClass = "line-clamp-6 max-h-[6lh] overflow-hidden";
 const roomyTextClass = "text-sm leading-[1.6]";
 
-/** A reply's text: rendered markdown, clamped to six lines until opened. */
 function Body({ body, roomy }: { body: string; roomy?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -163,34 +146,21 @@ function Fold({ children, count, defaultOpen, label, testId }: { children: React
 type MenuAction = { label: string; onSelect: () => void; disabled?: boolean } | "separator";
 type FootAction = { label: string; icon?: ReactNode; onClick: () => void; disabled?: boolean; busy?: boolean };
 
-/**
- * One comment, review or review thread as a card: who and when, its text, and
- * Reply in plain sight, with Expand for long text across from it. Everything
- * else sits in its menu.
- */
 function Card({ author, at, body, bot, children, foot, label, location, menu, muted, note, reply, roomy, sent, status }: {
 	author: string;
 	at?: string | null;
 	body: string;
 	bot?: boolean;
-	/** A thread's replies, under its text. */
 	children?: ReactNode;
 	foot: FootAction[];
-	/** Names the card for its menu. */
 	label: string;
-	/** A review thread's file and line, shown over its text. */
 	location?: string;
 	menu: MenuAction[];
-	/** A settled card (a resolved thread) sits back on a tinted ground. */
 	muted?: boolean;
-	/** Under the card, such as an error. */
 	note?: ReactNode;
-	/** The reply box, open in place under the card's actions. */
 	reply?: ReactNode;
-	/** Reading size, for the PR's tab; the sidebar stays compact. */
 	roomy?: boolean;
 	sent?: boolean;
-	/** A review's verdict or a thread's state, beside the name. */
 	status?: ReactNode;
 }) {
 	const { t } = useTranslation();
@@ -259,18 +229,6 @@ function Card({ author, at, body, bot, children, foot, label, location, menu, mu
 	);
 }
 
-/**
- * The PR's conversation as cards: reviews, top-level comments and open review
- * threads (bots among them). The PR's tab reads it in order, oldest first, with
- * resolved threads folded after it and the comment box at the end. Each
- * card's text is there to read;
- * Reply (on other people's comments, as on GitHub) opens the comment box at
- * the card, and its menu holds Resolve, Add to chat (the comment quoted in the
- * session's chat, with room for your own words), View in diff, Send to agent
- * now and the GitHub links. Reading is free (the daemon already stored it); only
- * posting calls the provider.
- */
-/** Repositories the person agreed to keep comment files in, so it is asked once each. */
 const ATTACHMENT_CONSENT_KEY = "ao.prAttachmentsConsent";
 
 function attachmentConsentGiven(location: string): boolean {
@@ -288,17 +246,11 @@ function rememberAttachmentConsent(location: string) {
 		const list = Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : [];
 		window.localStorage.setItem(ATTACHMENT_CONSENT_KEY, JSON.stringify([...new Set([...list, location])]));
 	} catch {
-		// Without storage the person is asked again next time; nothing else depends on it.
 	}
 }
 
-/** A comment whose files the person chose not to store; it stays a draft. */
 class AttachmentConsentDeclined extends Error {}
 
-/**
- * Asks once per repository before a comment's files are stored there: they go
- * into the repository, where anyone who can read it can open them for good.
- */
 function useAttachmentConsent(location: string) {
 	const { t } = useTranslation();
 	const [pending, setPending] = useState<((agreed: boolean) => void) | null>(null);
@@ -325,10 +277,8 @@ function useAttachmentConsent(location: string) {
 }
 
 export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }: {
-	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
 	detailsFailed?: boolean;
 	hostId?: string;
-	/** Opens a review thread's file in the diff at its line. */
 	onViewInDiff?: (target: { line?: number; path: string }) => void;
 	pr: SessionPRSummary;
 	session: WorkspaceSession;
@@ -336,17 +286,12 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [replying, setReplying] = useState<string | null>(null);
-	// Threads resolved from here, shown as resolved at once rather than after the next summary.
 	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
-	// Once the summary says so itself, the provider owns the state again (a thread
-	// unresolved on GitHub later shows open).
 	useEffect(() => {
 		const confirmed = new Set((pr.threads ?? []).filter((thread) => thread.resolved).map((thread) => thread.id));
 		setResolvedHere((current) => [...current].some((id) => confirmed.has(id)) ? new Set([...current].filter((id) => !confirmed.has(id))) : current);
 	}, [pr.threads]);
 	const [sent, setSent] = useState<Set<string>>(() => new Set());
-	// "Added to chat" is a moment's confirmation, not a lock: once it fades the
-	// comment can be added again (after the draft was sent or cleared, say).
 	const [added, setAdded] = useState<ReadonlySet<string>>(() => new Set());
 	const addedTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 	useEffect(() => () => { for (const timer of addedTimers.current.values()) clearTimeout(timer); }, []);
@@ -362,8 +307,6 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const sendToWorker = useSendToSessionWorker(session, hostId);
 	const addToChat = useAddTextToChat(session.id, hostId);
 	const canWrite = !session.cloud && !usePreviewData && pr.provider === "github" && Boolean(pr.url);
-	// Who AO posts as. Reply is for other people's comments, as on GitHub; until
-	// the login is known, every comment offers it.
 	const login = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000, enabled: canWrite }).data?.login;
 	const viewer = login?.toLowerCase();
 	const mine = (author: string) => viewer !== undefined && author.replace(/^@/, "").toLowerCase() === viewer;
@@ -373,9 +316,7 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	]);
 
 	const post = useMutation({
-		// from: the reply box that posted, by its card's key; a new comment has none.
 		mutationFn: async ({ body, threadId, files = [] }: { body: string; threadId?: string; files?: File[]; from?: string }) => {
-			// The files travel with the comment: the daemon stores them only now.
 			const attachments = await Promise.all(files.map(async (file) => ({
 				name: file.name,
 				contentType: file.type || "application/octet-stream",
@@ -389,12 +330,10 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 			if (error) throw apiErrorException(error, t("pr.comments.postFailed"));
 		},
 		onSuccess: async (_data, { from }) => {
-			// Only the reply that posted closes: another open reply keeps its draft.
 			if (from) setReplying((current) => (current === from ? null : current));
 			await refresh();
 		},
 	});
-	// Whether files can be attached here, asked before any is picked.
 	const access = useQuery({
 		queryKey: ["pr-attachment-access", hostId ?? "", pr.url],
 		queryFn: async () => {
@@ -415,7 +354,6 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 		: undefined;
 	const attachments = canWrite ? { blockedReason: attachBlocked } : undefined;
 	const consent = useAttachmentConsent(repository);
-	// Files are stored in the repository: asked once per repository, before the first.
 	const postWithFiles = async (input: { body: string; threadId?: string; files: File[]; from?: string }) => {
 		if (input.files.length > 0 && !(await consent.confirm())) throw new AttachmentConsentDeclined();
 		return post.mutateAsync(input);
@@ -456,8 +394,6 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 			setActionError({ key, message: error instanceof Error ? error.message : t("pr.comments.sendFailed") });
 		}
 	};
-	// Add to chat drafts the comment in the session's chat; a session without a
-	// chat (a terminal agent) gets it sent to the agent instead.
 	const addOne = (key: string, quote: string, sendArgs: Parameters<typeof send>) => {
 		setActionError(null);
 		if (addToChat) {
@@ -470,10 +406,8 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const chatAction = (key: string, quote: string, sendArgs: Parameters<typeof send>): MenuAction => ({
 		label: addLabel(key),
 		onSelect: () => addOne(key, quote, sendArgs),
-		// Sending straight to the agent happens once; adding to the draft can be repeated.
 		disabled: added.has(key) || (!addToChat && sent.has(key)),
 	});
-	// The session's diff only has this PR's files when its worktree is on the PR's branch.
 	const viewInDiff = (path: string, line?: number, url?: string) => {
 		if (url && !prCheckedOut(pr, session.branchState)) window.open(prThreadDiffUrl(url), "_blank", "noopener,noreferrer");
 		else onViewInDiff?.({ path, line });
@@ -488,15 +422,9 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 		...(pr.conversation ?? []).map((comment): Item => ({ kind: "comment", key: `c:${comment.id}`, at: time(comment.createdAt), comment })),
 		...(pr.review.reviews ?? []).filter((review) => review.body?.trim()).map((review): Item => ({ kind: "review", key: `r:${review.reviewUrl ?? review.reviewerId + review.submittedAt}`, at: time(review.submittedAt), review })),
 		...(pr.threads ?? []).filter((thread) => thread.comments.length > 0).map((thread): Item => ({ kind: "thread", key: `t:${thread.id}`, at: time(thread.comments.at(-1)?.createdAt), thread: resolvedHere.has(thread.id) ? { ...thread, resolved: true } : thread })),
-	// Newest on top, so what just arrived (or what you just posted) is the first card; a thread sorts by its latest reply.
 	].sort((a, b) => b.at - a.at);
-	// GitHub's conversation has no threads; a Quote reply opens by quoting what
-	// it answers. Such a reply nests under that comment or review, as on a PR page
-	// read in order, and the pair sorts by the reply.
 	const quoteReplies = new Map<string, Comment[]>();
 	const nested = new Set<string>();
-	// Oldest first, so a reply to a reply files under the card its chain started
-	// at (only top-level cards draw their replies), in the order they were written.
 	const parentOf = new Map<string, Item>();
 	for (const item of [...items].reverse()) {
 		if (item.kind !== "comment") continue;
@@ -516,14 +444,11 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const main = items.filter((item) => !nested.has(item.key) && !(item.kind === "thread" && item.thread.resolved));
 
 	const myAvatar = login ? <PRAvatar name={login} size="lg" /> : undefined;
-	// Each box shows its own post's state: the open reply's, or the new comment's.
 	const postedFrom = (from?: string) => post.variables?.from === from;
 	const postError = (from?: string) => (postedFrom(from) && post.error instanceof Error ? post.error.message : null);
-	// An edit answers its own box's error; another box's stays.
 	const clearPostError = (from?: string) => { if (post.error && postedFrom(from)) post.reset(); };
 	const closeReply = () => { setReplying(null); if (post.variables?.from) post.reset(); };
 	const openReply = (key: string) => { if (post.variables?.from) post.reset(); setReplying(key); };
-	// The same simple box as a new comment, opened in place under the card it answers.
 	const replyFor = (item: Item, threadId?: string, initial?: string) => canWrite && replying === item.key ? (
 		<PRCommentComposer
 			autoFocus
@@ -539,7 +464,6 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 			attachments={attachments}
 		/>
 	) : undefined;
-	// Reply is offered on someone else's words, and hides while its box is open.
 	const replyAction = (item: Item, offered: boolean): FootAction[] => offered && canWrite && replying !== item.key ? [{ label: t("pr.comments.reply"), icon: replyIcon, onClick: () => openReply(item.key) }] : [];
 	const errorFor = (key: string) => actionError?.key === key ? <p className="m-0 text-2xs font-medium text-error" role="status">{actionError.message}</p> : null;
 	const addLabel = (key: string) => added.has(key) ? t("pr.comments.addedToChat") : addToChat ? t("pr.comments.addToChat") : sent.has(key) ? t("pr.comments.sentToAgent") : t("pr.comments.sendToAgent");
@@ -556,7 +480,6 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 		return quoteForChat(item.comment.author, item.comment.body, prWhere, item.comment.url);
 	};
 
-	// A thread's replies as they are; a quote reply without the quote and the @mention of `answering`.
 	const replyList = (replies: { id: string; author: string; isBot: boolean; body: string; createdAt?: string | null }[], answering?: string) => replies.map((reply) => (
 		<div className="flex min-w-0 flex-col gap-1 border-l-2 border-border-strong pl-2.5" data-testid="pr-comment-reply" key={reply.id}>
 			<span className="flex min-w-0 items-center gap-1.5 text-control">
@@ -580,7 +503,6 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 						author={first?.author ?? ""}
 						body={first?.body ?? ""}
 						bot={first?.isBot}
-						// A thread with someone else in it takes a reply; one only you wrote waits for theirs.
 						foot={replyAction(item, thread.comments.some((comment) => !mine(comment.author)))}
 						label={location}
 						location={location}

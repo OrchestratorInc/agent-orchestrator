@@ -171,8 +171,6 @@ describe("browser stream link", () => {
 
 	it("keeps only the newest frame per stream while socket writes are blocked", () => {
 		const socket = new FakeSocket();
-		// The hello and first frame are accepted; the first frame also signals
-		// backpressure and must be the final write until drain.
 		socket.writeResults.push(true, false, true, true);
 		const handle = connectBrowserStream("ignored", {
 			token: "secret",

@@ -19,8 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
 )
 
-// Neutral action names stored on an ao_action activity. Chat maps these. It
-// does not infer them from shell text, MCP tool names, or result prose.
 const (
 	actionSessionSpawned       = "session.spawned"
 	actionSessionTerminated    = "session.terminated"
@@ -28,16 +26,11 @@ const (
 	actionSessionRestored      = "session.restored"
 	actionSessionAgentSwitched = "session.agent_switched"
 	actionPullRequestClaimed   = "pull_request.claimed"
-	// actionPullRequestCreated is part of the wire vocabulary. No daemon
-	// boundary creates a pull request today, so nothing emits it.
-	actionPullRequestCreated = "pull_request.created"
+	actionPullRequestCreated   = "pull_request.created"
 )
 
 const actionTextCap = 160
 
-// conversationActionWriter attaches one confirmed product outcome to the
-// session whose chat should show it. Session stores that only implement the
-// read model skip the write.
 type conversationActionWriter interface {
 	ConversationForSession(ctx context.Context, id domain.SessionID) (domain.ConversationRecord, error)
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
@@ -104,10 +97,6 @@ type runningTurnLister interface {
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
 }
 
-// callerTurn names the turn an action belongs to: the audience's one running
-// turn, when the audience itself ran the command (its shell sent the caller
-// header). A click in the desktop, another session's command, or an ambiguous
-// set of running turns leaves the action turn-less, shown on its own.
 func (s *Service) callerTurn(ctx context.Context, audience domain.SessionID, conversationID string) string {
 	if caller.From(ctx) != string(audience) {
 		return ""
@@ -201,9 +190,6 @@ func (s *Service) recordTerminated(ctx context.Context, id domain.SessionID, sta
 		}
 		operationID = failed
 	}
-	// The spawn parent's chat shows only terminations it asked for. A child the
-	// user or another session archived is not the parent's action, and would
-	// otherwise land beside whatever the parent is running at that moment.
 	audience := id
 	if parent, ok := s.spawnParent(ctx, id); ok && actionCaller(ctx) == parent {
 		audience = parent
@@ -224,9 +210,6 @@ func (s *Service) recordRenamed(ctx context.Context, id domain.SessionID, previo
 		return
 	}
 	rec := s.lookupActionSession(ctx, id)
-	// A successful rename is its own operation. The uuid keeps a later rename
-	// between the same names from settling the earlier row. Replay of one
-	// rename request is not deduped.
 	operationID := string(id) + ":" + previous + "->" + next + ":" + uuid.NewString()
 	if status != domain.ActivityStatusCompleted {
 		failed := failureOperationID(ctx, "rename")
@@ -271,9 +254,6 @@ func (s *Service) recordRestored(ctx context.Context, id domain.SessionID, rec d
 }
 
 func (s *Service) recordClaimed(ctx context.Context, id domain.SessionID, pr domain.PullRequest, status domain.ActivityStatus, err error) {
-	// Only a completed claim keys on the PR. A failed re-claim of the same PR
-	// (closed, merged, SCM error) is its own operation, so it cannot settle an
-	// earlier confirmed claim as failed.
 	operationID := string(id) + ":" + pr.URL
 	if status != domain.ActivityStatusCompleted || pr.URL == "" {
 		operationID = failureOperationID(ctx, "claim")
@@ -312,8 +292,6 @@ func (s *Service) spawnParent(ctx context.Context, id domain.SessionID) (domain.
 
 type actionCallerKey struct{}
 
-// WithActionCaller records which AO session issued the request, so an action
-// is shown in the chat of the session that asked for it.
 func WithActionCaller(ctx context.Context, session domain.SessionID) context.Context {
 	session = domain.SessionID(strings.TrimSpace(string(session)))
 	if session == "" {
@@ -343,9 +321,6 @@ func failureOperationID(ctx context.Context, kind string) string {
 	return "failed:" + kind + ":" + requestID
 }
 
-// standaloneSessionProject matches the desktop scratchpad workspace id.
-// ao://sessions/{project}/{session} needs two segments, and a standalone
-// session has no project. The app routes this id to /sessions/{session}.
 const standaloneSessionProject = "__standalone__"
 
 func sessionActionHref(project domain.ProjectID, id domain.SessionID) string {

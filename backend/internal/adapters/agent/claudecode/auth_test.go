@@ -16,9 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
-// The regression this whole ladder exists for: a revoked key in the
-// environment is a credential that is present, not a credential that works.
-// Reporting it as authorized is what let a 401-ing daemon render as ready.
 func TestAuthStatusDoesNotTrustUnvalidatedAPIKey(t *testing.T) {
 	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
 		t.Run(name, func(t *testing.T) {
@@ -52,8 +49,6 @@ func TestClaudeConfigAuthStatusReadsSynchronously(t *testing.T) {
 	}
 }
 
-// Precedence: the reported credential must be the one Claude Code will
-// actually send, or the diagnostics point at the wrong variable.
 func TestLocalAuthStatusReportsConfiguredForCredentialEnvironment(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-key")
@@ -205,9 +200,6 @@ func TestClaudeAuthReportUsesProjectContext(t *testing.T) {
 	}
 }
 
-// I1: the ladder is strictly additive. Anything it cannot resolve degrades to
-// unknown, which never blocks a launch — it must not manufacture an
-// unauthorized verdict out of a failure to look.
 func TestUnreadableLocalStateDegradesToUnknownNotUnauthorized(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	dir := t.TempDir()
@@ -247,7 +239,6 @@ func clearClaudeCredentialEnv(t *testing.T) {
 	}
 }
 
-// Rung 2 is the only rung permitted to return Authorized.
 func TestOnlyTheProbeCanAuthorize(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -270,8 +261,6 @@ func TestOnlyTheProbeCanAuthorize(t *testing.T) {
 	}
 }
 
-// The runtime 401 handler drops the cached verdict; the provider has just
-// contradicted it.
 func TestInvalidateAuthCacheClearsTheStoredVerdict(t *testing.T) {
 	fingerprint := (agentcreds.Credential{Secret: "k"}).Fingerprint()
 	result := agentcreds.Result{
@@ -287,8 +276,6 @@ func TestInvalidateAuthCacheClearsTheStoredVerdict(t *testing.T) {
 	}
 }
 
-// withStubValidator points the probe at a local server for the duration of a
-// test, so no unit test can reach a real provider.
 func withStubValidator(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -388,9 +375,6 @@ func TestRelativeClaudeConfigDirectoryUsesProjectContext(t *testing.T) {
 	if resolved.CommandEnv["CLAUDE_CONFIG_DIR"] != wantConfigDir {
 		t.Error("child command environment did not use the same absolute config directory")
 	}
-	// Execute a local auth-status fixture so the assertions cover the real child
-	// cwd/environment boundary as well as the Go-side readers. No real CLI,
-	// credential store, or provider request is involved.
 	binary := filepath.Join(t.TempDir(), "claude")
 	script := `#!/bin/sh
 test "$1" = auth && test "$2" = status || exit 2
@@ -495,8 +479,6 @@ func TestProviderModelsUsesMergedProjectSettings(t *testing.T) {
 	}
 }
 
-// Rungs 1 and 2 end to end: the provider accepts, so the ladder returns the
-// one state no local rung is allowed to produce.
 func TestProbeAuthorizesOnlyOnAProviderAcceptance(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-works")
@@ -515,8 +497,6 @@ func TestProbeAuthorizesOnlyOnAProviderAcceptance(t *testing.T) {
 	}
 }
 
-// A revoked key is what this whole change exists for: presence resolves it,
-// and the provider is what turns it into a rejection.
 func TestProbeRejectsARevokedCredential(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-revoked")
@@ -533,8 +513,6 @@ func TestProbeRejectsARevokedCredential(t *testing.T) {
 	}
 }
 
-// Rung 1 is a gate, not a guess: an apiProvider this build cannot validate
-// must stop the probe rather than pick a host.
 func TestProbeGateStopsBeforeSendingAnythingForAnUnknownProvider(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-key")
@@ -550,8 +528,6 @@ func TestProbeGateStopsBeforeSendingAnythingForAnUnknownProvider(t *testing.T) {
 	}
 }
 
-// I1 at the probe rung: an inconclusive probe hands down so the lower rungs
-// can still speak, and never becomes a rejection of its own.
 func TestInconclusiveProbeHandsDownTheLadder(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-key")
@@ -568,8 +544,6 @@ func TestInconclusiveProbeHandsDownTheLadder(t *testing.T) {
 	}
 }
 
-// The cache is consulted before anything is sent, and answers from the stored
-// verdict when the credential has not changed.
 func TestProbeAnswersFromCacheWithoutReprobing(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-cached")
@@ -621,12 +595,10 @@ func TestLaunchAuthReusesCachedSuccessUntilInvalidated(t *testing.T) {
 	if err != nil || status != ports.AgentAuthStatusAuthorized || requests != 1 || cliRuns != 1 {
 		t.Fatalf("cached probe setup: status=%q err=%v requests=%d cliRuns=%d", status, err, requests, cliRuns)
 	}
-	// A launch within the cache TTL neither probes the provider nor runs the CLI again.
 	status, err = plugin.ValidateLaunchAuth(context.Background(), "/project", env)
 	if err != nil || status != ports.AgentAuthStatusAuthorized || requests != 1 || cliRuns != 1 {
 		t.Fatalf("cached launch: status=%q err=%v requests=%d cliRuns=%d, want the cached verdict with no new probe", status, err, requests, cliRuns)
 	}
-	// A live rejection drops both caches; the next launch sees the revocation.
 	InvalidateAuthCache()
 	status, err = plugin.ValidateLaunchAuth(context.Background(), "/project", env)
 	if err != nil || status != ports.AgentAuthStatusUnauthorized || requests != 2 || cliRuns != 2 {
@@ -634,9 +606,6 @@ func TestLaunchAuthReusesCachedSuccessUntilInvalidated(t *testing.T) {
 	}
 }
 
-// The provider response that proves the credential works also owns the model
-// and effort catalog. Model discovery must reuse that exact response instead
-// of issuing a second validation request that can fail independently.
 func TestProviderModelsReuseTheValidatedAuthResponse(t *testing.T) {
 	clearClaudeCredentialEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-cached-models")

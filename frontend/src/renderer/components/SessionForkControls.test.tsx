@@ -12,14 +12,12 @@ const { getMock, postMock, navigateMock, remote } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	postMock: vi.fn(),
 	navigateMock: vi.fn(),
-	// The remote "flaky" host, which a test connects and disconnects.
 	remote: { online: false, listeners: new Set<() => void>(), host: { hostId: "flaky", label: "flaky", url: "https://flaky", base: "https://flaky/api" } },
 }));
 
 vi.mock("../lib/host-clients", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/host-clients")>()),
 	clientForSessionHost: (hostId?: string) => {
-		// As the real helper does for a remote host that has disconnected.
 		if (hostId === "gone" || (hostId === "flaky" && !remote.online)) throw new Error(`host ${hostId} is not connected`);
 		return { GET: getMock, POST: postMock };
 	},
@@ -36,7 +34,6 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 const session = { id: "p-1", workspaceId: "p", title: "Fix login", status: "idle" } as unknown as WorkspaceSession;
 
-/** Fork on a session's latest finished turn. */
 function latestTurnFork(s: WorkspaceSession) {
 	return (
 		<ForkSessionContext.Provider value={s}>
@@ -121,7 +118,6 @@ describe("session fork controls", () => {
 			</ForkSessionContext.Provider>,
 		);
 		const buttons = await screen.findAllByRole("button", { name: "Fork" });
-		// One on the latest turn; none on older turns.
 		expect(buttons).toHaveLength(1);
 		expect(buttons[0]).toHaveAttribute("data-testid", "fork-turn");
 		await waitFor(() => expect(buttons[0]).toHaveAttribute("aria-disabled", "false"));
@@ -228,7 +224,6 @@ describe("session fork controls", () => {
 			);
 		});
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		// The timeline re-renders on every streaming tick, recreating its providers.
 		const timeline = () => (
 			<QueryClientProvider client={client}>
 				<TooltipProvider>

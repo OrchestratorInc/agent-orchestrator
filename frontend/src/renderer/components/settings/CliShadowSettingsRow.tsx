@@ -2,9 +2,6 @@ import { useTranslation } from "react-i18next";
 import { CliShadowActions, CliShadowDetails, useCliShadowStatus, useCliShadowTitle } from "../CliShadowActions";
 import { SettingsRow } from "./SettingsRow";
 
-// The only place the app reports another ao on PATH: nothing pops up on its
-// own. Stays away when the versions match, and in dev and isolated builds,
-// where the main process answers "unknown".
 export function CliShadowSettingsRow() {
 	const { t } = useTranslation();
 	const status = useCliShadowStatus();

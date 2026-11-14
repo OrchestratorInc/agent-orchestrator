@@ -24,6 +24,5 @@ export function recordProjectOpened(projectId: string): void {
 	try {
 		window.localStorage.setItem(PROJECT_HISTORY_KEY, JSON.stringify({ ...readHistory(), [projectId]: new Date().toISOString() }));
 	} catch {
-		// Local history is best effort and must never block navigation.
 	}
 }

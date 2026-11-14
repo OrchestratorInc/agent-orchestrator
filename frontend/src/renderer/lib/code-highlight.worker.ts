@@ -55,8 +55,6 @@ async function handle(request: HighlightWorkerRequest): Promise<void> {
 }
 
 self.onmessage = (event: MessageEvent<HighlightWorkerRequest>) => {
-	// Serialize append/reset/release across asynchronous grammar initialization.
-	// Each renderer fence coalesces independently before it reaches this queue.
 	queue = queue.then(() => handle(event.data));
 	return queue;
 };

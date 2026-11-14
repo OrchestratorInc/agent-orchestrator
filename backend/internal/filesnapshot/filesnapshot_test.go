@@ -14,7 +14,6 @@ import (
 
 func TestRestoreReturnsWorktreeAndIndexToTheSnapshot(t *testing.T) {
 	repo := newRepo(t)
-	// Before the turn the user had staged one edit and left one new file untracked.
 	write(t, repo, "a.txt", "staged\n")
 	runGit(t, repo, "add", "a.txt")
 	write(t, repo, "notes.txt", "untracked\n")
@@ -25,7 +24,6 @@ func TestRestoreReturnsWorktreeAndIndexToTheSnapshot(t *testing.T) {
 		t.Fatalf("Capture: %v", err)
 	}
 
-	// The turn edits, deletes, stages, creates a directory and touches ignored output.
 	write(t, repo, "a.txt", "agent\n")
 	remove(t, repo, "b.txt")
 	write(t, repo, "new.txt", "agent\n")
@@ -70,7 +68,6 @@ func TestRestoreReturnsWorktreeAndIndexToTheSnapshot(t *testing.T) {
 
 func TestRestoreUndoesWhatTheTurnOnlyStaged(t *testing.T) {
 	repo := newRepo(t)
-	// Before the turn: an unstaged edit, an untracked file and an unstaged deletion.
 	write(t, repo, "a.txt", "edited\n")
 	write(t, repo, "notes.txt", "untracked\n")
 	remove(t, repo, "b.txt")
@@ -80,7 +77,6 @@ func TestRestoreUndoesWhatTheTurnOnlyStaged(t *testing.T) {
 		t.Fatalf("Capture: %v", err)
 	}
 
-	// The turn stages all three without changing a byte on disk.
 	runGit(t, repo, "add", "--all")
 	after := status(t, repo)
 
@@ -122,7 +118,6 @@ func TestRestoreKeepsIgnoredFilesItOverwrites(t *testing.T) {
 		t.Fatalf("Capture: %v", err)
 	}
 
-	// The turn ignores both paths, edits note.txt and puts a file where out/ was.
 	write(t, repo, ".gitignore", "build/\nnote.txt\n/out\n")
 	write(t, repo, "note.txt", "edited by the turn\n")
 	remove(t, repo, "out/report.txt")
@@ -284,8 +279,6 @@ func TestSnapshotsRunNoRepositoryHooks(t *testing.T) {
 		}
 	}
 	runGit(t, repo, "config", "core.hooksPath", hooks)
-	// The hooks do fire for a plain git command, so none firing below means the
-	// snapshot kept them off.
 	runGit(t, repo, "update-ref", "refs/test/x", "HEAD")
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("hooks did not fire for a plain git command: %v", err)
@@ -358,7 +351,6 @@ func TestPlanErrors(t *testing.T) {
 }
 
 func TestPlanRefusesAWorktreeHoldingAnotherRepository(t *testing.T) {
-	// A workspace project keeps child repositories at ignored paths in its root.
 	repo := newRepo(t)
 	write(t, repo, ".gitignore", "build/\n/services/api/\n")
 	runGit(t, repo, "commit", "-qam", "ignore child")
@@ -372,7 +364,6 @@ func TestPlanRefusesAWorktreeHoldingAnotherRepository(t *testing.T) {
 		t.Fatalf("Plan(ignored child repository) = %v, want ErrNestedRepository", err)
 	}
 
-	// A repository the turn cloned into the worktree shows up as a gitlink.
 	repo = newRepo(t)
 	if err := Capture(context.Background(), repo, ref); err != nil {
 		t.Fatalf("Capture: %v", err)
@@ -386,8 +377,6 @@ func TestPlanRefusesAWorktreeHoldingAnotherRepository(t *testing.T) {
 		t.Fatalf("Plan(embedded repository) = %v, want ErrNestedRepository", err)
 	}
 
-	// A committed submodule records only its commit, so an uncommitted edit
-	// inside it leaves the snapshot and the worktree looking identical.
 	repo = newRepo(t)
 	embedded = filepath.Join(repo, "vendor", "lib")
 	runGit(t, repo, "init", "-q", embedded)
@@ -497,7 +486,6 @@ func TestCaptureSkipsTooManyOrTooLargeUntrackedFiles(t *testing.T) {
 		})
 	}
 
-	// Ignored files never count: they are not snapshotted at all.
 	repo := newRepo(t)
 	sparse(t, repo, "build/huge.bin", maxUntrackedBytes+1)
 	if err := Capture(context.Background(), repo, Ref("s1", "turn-1")); err != nil {
@@ -557,7 +545,6 @@ func TestDeleteOrphansDropsSessionsWhoseWorktreeIsGone(t *testing.T) {
 	if err := Capture(ctx, gone, Ref("s2", "turn-1"), Ref("s2", "turn-2")); err != nil {
 		t.Fatalf("Capture: %v", err)
 	}
-	// A ref that does not say where it was taken is never guessed at.
 	runGit(t, repo, "update-ref", Ref("s3", "turn-1"), "HEAD")
 	runGit(t, repo, "worktree", "remove", gone)
 
@@ -630,7 +617,6 @@ func write(t *testing.T, repo, path, content string) {
 	}
 }
 
-// sparse creates a file of size bytes without writing them.
 func sparse(t *testing.T, repo, path string, size int64) {
 	t.Helper()
 	write(t, repo, path, "")

@@ -41,8 +41,6 @@ func TestChatProviderHandoffRequiresExactCoordinatorProof(t *testing.T) {
 			case "unowned_history":
 				st.activeBranch.SessionID = ""
 			case "rebound_project_root", "rebound_project_root_recovered":
-				// A replacement orchestrator returning to Chat with its own native id on a
-				// root its predecessor created: an in-place resume, not a handoff.
 				rec.Kind = domain.KindOrchestrator
 				st.conversation.Scope = domain.ConversationScopeProject
 				st.activeBranch.SessionID = "p-0"

@@ -1,21 +1,3 @@
-// Package commandcode implements the Command Code agent adapter.
-//
-// Command Code is a terminal coding agent whose CLI binary is `cmd` (Windows
-// alias `cmdc`, because `cmd` is the built-in shell there; the full name
-// `command-code` works everywhere). It exposes Claude-Code-shaped project
-// settings under .commandcode/, reads AGENTS.md memory tiers, and supports
-// sessions, permission modes, model selection, and project hooks.
-//
-// Launch starts Command Code's interactive TUI and lets AO deliver the initial
-// task through the terminal after startup. Command Code accepts a positional
-// initial message, but AO injects after startup so a prompt that begins with
-// "-" is never parsed as a flag. Its `-p`/`--print` mode runs a single headless
-// turn and exits, so supervised AO sessions do not use it.
-//
-// AO installs workspace-local Command Code hooks to observe activity and capture
-// the native session id for restore. Standing instructions are not delivered that
-// way: the SessionStart context hook only reaches the TUI, and memory is the one
-// channel Command Code reads in both modes. See sessionhome.go.
 package commandcode
 
 import (
@@ -48,14 +30,12 @@ var commandCodeBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// Plugin is the Command Code agent adapter.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Command Code adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -63,7 +43,6 @@ func New() *Plugin {
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -76,10 +55,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports Command Code's optional model and reasoning-effort
-// overrides. Effort is forwarded raw (empty = adapter default) because
-// `cmd --list-models` advertises no per-model effort levels to validate
-// against; `cmd --effort` rejects unknown values at launch.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -90,23 +65,11 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}}, nil
 }
 
-// GetLaunchCommand builds `cmd --skip-onboarding --no-auto-update --trust
-// [--permission-mode <mode> | --yolo] [--model <model>] [--effort <level>]`
-// and leaves the prompt for AO's after-start terminal delivery.
-//
-// --skip-onboarding and --no-auto-update keep AO-managed runs non-interactive
-// (no taste onboarding, no mid-session self-update); --trust skips the initial
-// project-trust prompt, which would otherwise block every fresh AO worktree.
-// Permissions map onto `--permission-mode`; bypass uses `--yolo`. Default omits
-// the flag so Command Code uses its configured default.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.binary(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Command Code reads its system prompt from memory rather than a flag, so the
-	// session home has to exist before the process starts. AugmentRuntimeLaunchEnv
-	// points HOME / USERPROFILE at the same directory; see sessionhome.go.
 	if _, err := PrepareSessionHome(cfg.DataDir, domain.SessionID(cfg.SessionID), cfg.SystemPrompt); err != nil {
 		return nil, err
 	}
@@ -118,8 +81,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy reports that AO should inject prompted tasks into
-// the interactive terminal after startup.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -127,9 +88,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints waits for Command Code's interactive UI before AO
-// injects the worker's first task. Timeout falls back to delivery so a changed
-// startup banner cannot permanently block spawning.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -143,9 +101,6 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand continues a Command Code session when AO has captured its
-// native session id. ok=false otherwise, so the restore manager falls back to a
-// fresh launch with AO's saved prompt.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -160,11 +115,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	// A restored session reloads its memory from the same per-session home a fresh
-	// launch would use, so the standing instructions are present without a restart.
-	// Sessions created before per-session homes existed keep their transcripts
-	// under the real home; migrate the captured conversation so --resume can find
-	// it from the isolated home.
 	if _, err := PrepareSessionHome(cfg.DataDir, domain.SessionID(cfg.Session.ID), cfg.SystemPrompt); err != nil {
 		return nil, false, err
 	}
@@ -179,7 +129,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces metadata captured by AO's generic session machinery.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -188,17 +137,12 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// ResolveBinary resolves the `cmd`/`command-code` executable.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return p.binary(ctx)
 }
 
 var _ ports.AgentRuntimeLaunchEnv = (*Plugin)(nil)
 
-// AugmentRuntimeLaunchEnv points the Command Code process at the per-session home
-// that GetLaunchCommand prepared. This is the terminal half of the delivery; the
-// Chat binding sets the same keys from its own launch config, because
-// nativeacp's AugmentRuntimeEnv hook carries no session id.
 func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, _ string) {
 	for key, value := range SessionProcessEnv(dataDir, sessionID, env) {
 		env[key] = value
@@ -220,23 +164,15 @@ func (p *Plugin) binary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// appendEffortFlag forwards a trimmed reasoning-effort override as
-// `cmd --effort`. Empty appends nothing so Command Code uses its own default.
-// This mirrors agentbase.AppendModelFlag; it stays local until the shared
-// effort helper (PR #5906) lands, then it should converge onto that.
 func appendEffortFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if effort := strings.TrimSpace(cfg.Effort); effort != "" {
 		*cmd = append(*cmd, "--effort", effort)
 	}
 }
 
-// appendPermissionFlags maps AO permission modes onto Command Code's flags.
-// Command Code has no separate "auto" tier, so accept-edits and auto both use
-// `--permission-mode accept-edits`; bypass uses `--yolo`.
 func appendPermissionFlags(cmd *[]string, permissions ports.PermissionMode) {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeDefault:
-		// No flag: defer to Command Code's own default (or user config).
 	case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto:
 		*cmd = append(*cmd, "--permission-mode", "accept-edits")
 	case ports.PermissionModeBypassPermissions:
@@ -244,8 +180,6 @@ func appendPermissionFlags(cmd *[]string, permissions ports.PermissionMode) {
 	}
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

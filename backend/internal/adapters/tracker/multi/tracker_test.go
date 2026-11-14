@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// fakeTracker is a minimal ports.Tracker implementation for testing dispatch
-// routing. It records the IDs/repos it receives and returns canned results.
 type fakeTracker struct {
 	issue      domain.Issue
 	getErr     error
@@ -56,10 +54,6 @@ func glIssue() domain.Issue {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Dispatch routing
-// ---------------------------------------------------------------------------
-
 func TestGet_RoutesByProvider(t *testing.T) {
 	gh := &fakeTracker{issue: ghIssue()}
 	gl := &fakeTracker{issue: glIssue()}
@@ -68,7 +62,6 @@ func TestGet_RoutesByProvider(t *testing.T) {
 		NamedTracker{Key: "gitlab", Tracker: gl},
 	)
 
-	// GitHub dispatch
 	got, err := m.Get(context.Background(), domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/repo#1"})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +73,6 @@ func TestGet_RoutesByProvider(t *testing.T) {
 		t.Errorf("github called %d times, gitlab called %d times; want 1/0", len(gh.getCalls), len(gl.getCalls))
 	}
 
-	// GitLab dispatch
 	got, err = m.Get(context.Background(), domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: "acme/repo#2"})
 	if err != nil {
 		t.Fatal(err)
@@ -122,10 +114,6 @@ func TestList_RoutesByProvider(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Unknown provider
-// ---------------------------------------------------------------------------
-
 func TestGet_UnknownProviderReturnsError(t *testing.T) {
 	m := New(NamedTracker{Key: "github", Tracker: &fakeTracker{}})
 
@@ -152,15 +140,10 @@ func TestList_UnknownProviderReturnsError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Single-tracker fallback (degrade gracefully)
-// ---------------------------------------------------------------------------
-
 func TestSingleTracker_OnlyRegisteredProviderServes(t *testing.T) {
 	gl := &fakeTracker{issue: glIssue()}
 	m := New(NamedTracker{Key: "gitlab", Tracker: gl})
 
-	// GitLab dispatch works
 	got, err := m.Get(context.Background(), domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: "acme/repo#2"})
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +152,6 @@ func TestSingleTracker_OnlyRegisteredProviderServes(t *testing.T) {
 		t.Errorf("Get(gitlab) = %q, want %q", got.Title, "gl issue")
 	}
 
-	// GitHub dispatch fails clearly — the unregistered provider is not nil-dereferenced
 	_, err = m.Get(context.Background(), domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/repo#1"})
 	if err == nil {
 		t.Fatal("expected error for unregistered github provider")
@@ -203,10 +185,6 @@ func TestSingleTracker_ListOnlyRegisteredProviderServes(t *testing.T) {
 		t.Errorf("err = %v, want errors.Is(err, ErrUnknownProvider)", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Preflight
-// ---------------------------------------------------------------------------
 
 func TestPreflight_ProbesAllTrackers(t *testing.T) {
 	gh := &fakeTracker{}
@@ -249,10 +227,6 @@ func TestPreflight_NoTrackersReturnsNil(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Error propagation from sub-trackers
-// ---------------------------------------------------------------------------
-
 func TestGet_PropagatesSubTrackerError(t *testing.T) {
 	customErr := errors.New("api down")
 	gh := &fakeTracker{getErr: customErr}
@@ -277,7 +251,6 @@ func TestList_PropagatesSubTrackerError(t *testing.T) {
 	}
 }
 
-// Ensure the error message is descriptive (not just the sentinel alone).
 func TestErrUnknownProvider_MessageIsDescriptive(t *testing.T) {
 	m := New(NamedTracker{Key: "github", Tracker: &fakeTracker{}})
 

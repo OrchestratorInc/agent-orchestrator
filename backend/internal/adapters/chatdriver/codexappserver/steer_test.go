@@ -16,12 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Scripted replies must be single-line JSON: readFrame is newline-delimited, so a
-// pretty-printed reply is read as several unparseable frames and the request never
-// completes.
-
-// steerConversation opens a conversation with a turn already in flight, which is the
-// only state a steer is meaningful in.
 func steerConversation(t *testing.T) (*conversation, *scriptedServer) {
 	t.Helper()
 	d, srv := newTestDriver(t)
@@ -46,18 +40,12 @@ func steerConversation(t *testing.T) (*conversation, *scriptedServer) {
 	return conv, srv
 }
 
-// refuseSteer scripts a raw JSON-RPC error object, so a test can reproduce the
-// provider's structured refusal payload verbatim. scriptedServer.replyError only
-// carries a code and a message, and the payload is the whole point here.
 func refuseSteer(srv *scriptedServer, errorJSON string) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	srv.failures[codexproto.MethodTurnSteer] = errorJSON
 }
 
-// The shape on the wire, checked against the generated params rather than a
-// hand-written struct: expectedTurnId is a precondition the provider enforces, and
-// sending the wrong field name would make every steer land as "no active turn".
 func TestSteerSendsTheProvidersPreconditionShape(t *testing.T) {
 	conv, srv := steerConversation(t)
 
@@ -72,8 +60,6 @@ func TestSteerSendsTheProvidersPreconditionShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Steer: %v", err)
 	}
-	// Observed against codex-cli 0.146.0: the turn id is preserved, so the guidance
-	// belongs to the turn the user is already watching.
 	if ref.ProviderTurnID != "turn-1" {
 		t.Errorf("steered turn = %q, want turn-1", ref.ProviderTurnID)
 	}
@@ -104,8 +90,6 @@ func TestSteerSendsTheProvidersPreconditionShape(t *testing.T) {
 	}
 }
 
-// An empty turn id falls back to the turn the conversation last saw, so a caller
-// that has not tracked one is not forced to guess.
 func TestSteerFallsBackToTheKnownActiveTurn(t *testing.T) {
 	conv, srv := steerConversation(t)
 
@@ -122,8 +106,6 @@ func TestSteerFallsBackToTheKnownActiveTurn(t *testing.T) {
 	}
 }
 
-// With no turn ever started there is nothing to name, and the provider must not be
-// asked to steer the empty string.
 func TestSteerWithoutAnyTurnIsTypedAndNeverReachesTheProvider(t *testing.T) {
 	d, srv := newTestDriver(t)
 	opened, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -153,9 +135,6 @@ func TestSteerRejectsEmptyText(t *testing.T) {
 	}
 }
 
-// The provider's refusal when nothing is in flight. Observed verbatim from a live
-// app-server: code -32600, message "no active turn to steer", no data. It reaches a
-// user as "there is no turn to steer", never as an internal error.
 func TestSteerTranslatesNoActiveTurnRefusal(t *testing.T) {
 	conv, srv := steerConversation(t)
 	refuseSteer(srv, `{"code":-32600,"message":"no active turn to steer"}`)
@@ -166,9 +145,6 @@ func TestSteerTranslatesNoActiveTurnRefusal(t *testing.T) {
 	}
 }
 
-// The other refusal, and the one that is distinguishable without reading prose: a
-// turn IS running but its kind cannot take guidance. Payload copied from a live
-// app-server refusing a steer during a manual compaction.
 func TestSteerTranslatesNotSteerableRefusalFromItsStructuredPayload(t *testing.T) {
 	conv, srv := steerConversation(t)
 	refuseSteer(srv, `{"code":-32600,"message":"cannot steer a compact turn",`+
@@ -180,8 +156,6 @@ func TestSteerTranslatesNotSteerableRefusalFromItsStructuredPayload(t *testing.T
 	if !errors.Is(err, ports.ErrChatTurnNotSteerable) {
 		t.Fatalf("err = %v, want ErrChatTurnNotSteerable", err)
 	}
-	// The kind is what makes the refusal actionable: "wait for the compaction" is
-	// advice a user can follow.
 	if !strings.Contains(err.Error(), "compact") {
 		t.Errorf("err = %v, want it to name the turn kind", err)
 	}
@@ -190,9 +164,6 @@ func TestSteerTranslatesNotSteerableRefusalFromItsStructuredPayload(t *testing.T
 	}
 }
 
-// A refusal AO does not model must stay a plain failure rather than being
-// mistranslated into "nothing to steer", which would tell the user to resend
-// guidance the agent may already have.
 func TestSteerLeavesUnknownProviderErrorsAlone(t *testing.T) {
 	conv, srv := steerConversation(t)
 	refuseSteer(srv, `{"code":-32603,"message":"internal error"}`)
@@ -209,8 +180,6 @@ func TestSteerLeavesUnknownProviderErrorsAlone(t *testing.T) {
 	}
 }
 
-// A response with no turn id still has to be attributed somewhere, and the turn the
-// caller asked about is the only honest answer.
 func TestSteerFallsBackToTheRequestedTurnWhenTheProviderNamesNone(t *testing.T) {
 	conv, srv := steerConversation(t)
 	srv.respondTo(codexproto.MethodTurnSteer, `{}`)
@@ -224,16 +193,6 @@ func TestSteerFallsBackToTheRequestedTurnWhenTheProviderNamesNone(t *testing.T) 
 	}
 }
 
-// TestLiveSteerKeepsTheTurnAndItsWork drives a real `codex app-server`. Skipped
-// unless AO_CODEX_LIVE=1: it needs a local Codex install, working auth, and it makes
-// real model calls.
-//
-//	AO_CODEX_LIVE=1 go test ./internal/adapters/chatdriver/codexappserver/ -run LiveSteer -v
-//
-// This is the test that earns the capability. Steering is advertised only because
-// this passed against codex-cli 0.146.0, and the claim it checks is the one the
-// feature exists for: the turn the user was waiting on survives, keeps its id, and
-// finishes having followed the correction — not interrupted, not restarted.
 func TestLiveSteerKeepsTheTurnAndItsWork(t *testing.T) {
 	if os.Getenv("AO_CODEX_LIVE") != "1" {
 		t.Skip("set AO_CODEX_LIVE=1 to run against a real codex app-server")
@@ -270,8 +229,6 @@ func TestLiveSteerKeepsTheTurnAndItsWork(t *testing.T) {
 		t.Fatalf("conversation %T does not implement ChatSteerer", opened)
 	}
 
-	// Long enough to still be running when the steer lands, and visibly abandoned if
-	// the agent takes the correction.
 	ref, err := opened.SendTurn(ctx, ports.ChatUserMessage{
 		Text: "Run this exact shell command and then report its output verbatim: " +
 			"for i in 1 2 3 4 5 6 7 8 9 10; do echo tick-$i; sleep 3; done",
@@ -283,9 +240,6 @@ func TestLiveSteerKeepsTheTurnAndItsWork(t *testing.T) {
 	}
 	t.Logf("turn %s", ref.ProviderTurnID)
 
-	// Wait for the provider's own acknowledgement AND for work to be under way. A
-	// steer sent before turn/started is refused, which is exactly why the service
-	// layer waits for this signal too.
 	var starts, completions int
 	waitForWork := func() {
 		for {
@@ -320,8 +274,6 @@ func TestLiveSteerKeepsTheTurnAndItsWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Steer: %v", err)
 	}
-	// The load-bearing observation. A steer that opened a second turn would leave the
-	// user's guidance attributed to work they were not watching.
 	if steered.ProviderTurnID != ref.ProviderTurnID {
 		t.Errorf("steer moved the turn: %q -> %q", ref.ProviderTurnID, steered.ProviderTurnID)
 	}
@@ -357,8 +309,6 @@ collect:
 		}
 	}
 
-	// Interrupt-and-resend would have produced an interrupted turn and a second one.
-	// Steering produces neither, which is the whole reason to prefer it.
 	if state != domain.TurnStateCompleted {
 		t.Errorf("steered turn state = %q, want completed", state)
 	}
@@ -371,16 +321,12 @@ collect:
 	t.Logf("steered turn %s completed as %s: %s", steered.ProviderTurnID, state,
 		strings.TrimSpace(text.String()))
 
-	// And the refusal, live: with the turn finished there is nothing to join.
 	if _, err := steerer.Steer(ctx, ref.ProviderTurnID,
 		ports.ChatUserMessage{Text: "too late"}); !errors.Is(err, ports.ErrChatNoSteerableTurn) {
 		t.Errorf("steering a finished turn returned %v, want ErrChatNoSteerableTurn", err)
 	}
 }
 
-// The capability and the method have to agree. Advertising steer while the provider
-// does not declare turn/steer would put a control in the UI that fails on use; the
-// reverse leaves a working feature switched off.
 func TestSteerCapabilityMatchesTheDeclaredProtocol(t *testing.T) {
 	if !codexproto.Declares(codexproto.MethodTurnSteer) {
 		t.Fatalf("generated protocol (%s) does not declare %s",

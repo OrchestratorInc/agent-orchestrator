@@ -10,7 +10,6 @@ export interface UsageLimitNoticeProps {
 	onResume?: () => void;
 	onAutoResumeChange?: (enabled: boolean) => void;
 	pending?: boolean;
-	/** Prevents starting work; cancellation only waits for an in-flight request. */
 	disabled?: boolean;
 	error?: string;
 	className?: string;
@@ -26,7 +25,6 @@ export function UsageLimitMarker() {
 	);
 }
 
-/** The timer updates presentation only; the daemon owns automatic resumption. */
 export function UsageLimitNotice({
 	usageLimit,
 	onResume,

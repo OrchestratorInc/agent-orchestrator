@@ -337,7 +337,6 @@ func TestUpdateAdvisoryReportsInstallAheadOfLatest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Updates install latest, so offering one here would be a downgrade.
 	if advisory.Status != UpdateStatusAheadOfLatest || advisory.LatestVersion != "1.3.0" || advisory.Reason != "" {
 		t.Fatalf("advisory = %+v", advisory)
 	}

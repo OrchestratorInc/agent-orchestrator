@@ -139,7 +139,6 @@ func TestUsageLimitAccountRefreshCannotRearmConsumedConsent(t *testing.T) {
 	source := failUsageLimitedTurn(t, h, timedUsageLimit)
 	later := h.now().Add(time.Hour)
 	h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error) {
-		// Account binding consumes consent independently of the scheduler lock.
 		if err := h.st.SetTurnAutoResume(ctx, source.ConversationID, source.ID, nil, false, ""); err != nil {
 			t.Fatal(err)
 		}

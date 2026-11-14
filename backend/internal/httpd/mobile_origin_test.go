@@ -22,8 +22,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// The real pairing service runs with counted collaborators: no LAN exposure,
-// cloudflared process, or persistent user configuration is touched by these tests.
 type mobileOriginLAN struct {
 	mu      sync.Mutex
 	running bool
@@ -191,7 +189,7 @@ func TestMobileControlNoOriginIsNotBrowserTrust(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer phone-password")
-	req.Host = "127.0.0.1" // a forged loopback Host cannot bypass the LAN control block
+	req.Host = "127.0.0.1"
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +238,6 @@ func TestMobileControlOriginElectron(t *testing.T) {
 	}
 }
 
-// Only this machine's app or CLI may make a pairing code, not a page on another origin.
 func TestPairingCodeIsMadeOnlyForTheLocalApp(t *testing.T) {
 	router, bridge, _, _ := mobileOriginRouter(t)
 	devices, err := mobilebridge.LoadAccessDevices(filepath.Join(filepath.Dir(bridge.ConfigPath), "access-devices.json"))
@@ -257,7 +254,6 @@ func TestPairingCodeIsMadeOnlyForTheLocalApp(t *testing.T) {
 		router.ServeHTTP(w, r)
 		return w
 	}
-	// Remote access is off: there is nothing to pair with.
 	if w := post("pairing-code", "app://renderer"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "REMOTE_ACCESS_OFF") {
 		t.Fatalf("pairing code while off: status=%d body=%s", w.Code, w.Body.String())
 	}

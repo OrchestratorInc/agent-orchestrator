@@ -79,7 +79,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-/** Run frames at ~60 Hz until the drain finishes; returns the time it took. */
 function drain(from = 0, limitMs = 5000) {
 	let now = from;
 	while (frames.size && now - from < limitMs) runFrame((now += 16));
@@ -120,7 +119,6 @@ describe("TurnOutcome", () => {
 		expect(screen.getByTestId("login-status")).toHaveTextContent("Queued");
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Please run \/login/)).not.toBeInTheDocument();
-		// The login is offered on the chat box, so the turn has no action of its own.
 		expect(screen.queryAllByRole("button")).toHaveLength(0);
 		expect(document.querySelector("[data-turn-actions]")).toBeNull();
 	});
@@ -131,11 +129,9 @@ describe("TurnOutcome", () => {
 			retry={{ onRetry: vi.fn() }} copyText="Edited the file" onRollback={onRollback} />);
 		expect(screen.getByTestId("login-status").closest("[data-turn-outcome]")).toBeInTheDocument();
 		expect(screen.getByText("Stopped · send it again once you’re in")).toBeInTheDocument();
-		// Its answer hands copy and undo down to this row, as any stopped turn's does.
 		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Roll back to here" }));
 		expect(onRollback).toHaveBeenCalledOnce();
-		// Sending it again is the band's, so the row has no Retry.
 		expect(screen.queryByTestId("retry-turn")).toBeNull();
 	});
 
@@ -143,12 +139,10 @@ describe("TurnOutcome", () => {
 		const onRetry = vi.fn();
 		const { unmount } = render(<TurnOutcome state="failed" failureCode="auth_required" login={{ status: "stopped", align: "start", ownRetry: true }}
 			retry={{ onRetry }} copyText="Edited the file" onRollback={vi.fn()} />);
-		// A turn that did work: Retry leads its shared row.
 		fireEvent.click(screen.getByTestId("retry-turn"));
 		expect(onRetry).toHaveBeenCalledOnce();
 		unmount();
 
-		// One that did nothing else: on the line, which sits in the message's row.
 		render(<TurnOutcome state="failed" failureCode="auth_required" login={{ status: "stopped", align: "end", ownRetry: true }}
 			retry={{ onRetry, error: "Stop the current turn before retrying this one" }} />);
 		expect(screen.getByTestId("login-status")).toHaveTextContent(/^Stopped$/);
@@ -274,8 +268,6 @@ describe("TurnOutcome", () => {
 });
 
 describe("LiveResponseStatus", () => {
-	// The provider re-saves its retry on every attempt. The chip has to update its
-	// count in place; remounting it would replay its entrance several times a turn.
 	it("keeps the same retry chip while the attempt count climbs", () => {
 		const view = render(
 			<LiveResponseStatus startedAt={new Date().toISOString()} reconnect={{ label: "Reconnecting… 1/5", detail: "401 Unauthorized" }} />,
@@ -306,7 +298,6 @@ describe("LiveResponseStatus", () => {
 		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 
 		view.rerender(<LiveResponseStatus startedAt={new Date().toISOString()} />);
-		// The old label fades out before it leaves.
 		await waitFor(() => expect(screen.queryByTestId("live-working-task")).not.toBeInTheDocument());
 		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
 	});
@@ -318,8 +309,6 @@ describe("AssistantMessage streaming", () => {
 		const text = "Completed 👨‍👩‍👧‍👦 é answer";
 		render(<AssistantMessage message={message({ text, streaming: false })} />);
 		expect(document.querySelector("p")?.textContent).toBe(text);
-		// Markdown may segment for emoji typography; settled text needs no
-		// additional pass for the streaming animation.
 		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
 	});
 
@@ -431,8 +420,6 @@ describe("AssistantMessage streaming", () => {
 		view.rerender(<AssistantMessage message={message({ text })} />);
 		expect(document.querySelector("p")?.textContent).toBe(text);
 		expect(frames.size).toBe(0);
-		// Markdown still segments emoji for typography; smoothing must not add
-		// another pass over the entire long snapshot.
 		expect(segment.mock.calls.filter(([input]) => input === text).length).toBeLessThanOrEqual(1);
 
 		const latest = text + " latest";
@@ -558,7 +545,6 @@ describe("AssistantMessage streaming", () => {
 			<AssistantMessage message={message({ text: "aThe complete answer", streaming: false })} showCopy />,
 		);
 
-		// The fade spans linger briefly after the stream settles, so match the paragraph.
 		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
 		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
 	});
@@ -568,7 +554,6 @@ describe("AssistantMessage streaming", () => {
 		view.rerender(<Cloud><AssistantMessage message={message({ text: "aThe complete answer", streaming: true })} showCopy /></Cloud>);
 		runFrame(0);
 		view.rerender(<Cloud><AssistantMessage message={message({ text: "aThe complete answer", streaming: false })} showCopy /></Cloud>);
-		// The remainder plays out over a few frames rather than landing at once.
 		expect(document.querySelector("p")?.textContent).not.toBe("aThe complete answer");
 		drain(32);
 		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
@@ -577,8 +562,6 @@ describe("AssistantMessage streaming", () => {
 
 	it("in Cloud chat, shows a finished reply whole when its unrevealed remainder is too long to play out", () => {
 		const view = render(<Cloud><AssistantMessage message={message()} /></Cloud>);
-		// Long enough to leave more than a playout's worth after one frame, short
-		// enough to be smoothed at all.
 		const text = "a".padEnd(4_000, "x");
 		view.rerender(<Cloud><AssistantMessage message={message({ text, streaming: true })} /></Cloud>);
 		runFrame(0);
@@ -612,8 +595,6 @@ describe("AssistantMessage streaming", () => {
 		view.rerender(<Cloud><AssistantMessage message={message({ text })} /></Cloud>);
 		runFrame(3_000);
 		runFrame(3_032);
-		// A 140ms settle would reveal about a fifth of the burst in one frame; a
-		// second-apart stream reveals only a few percent.
 		const shown = document.querySelector("p")?.textContent?.length ?? 0;
 		expect(shown - 200).toBeLessThan(20);
 		drain(3_032);
@@ -778,9 +759,6 @@ describe("HumanMessage", () => {
 		return message({ id: "human-1", role: "user", origin: "human", text: "hi", streaming: false, ...overrides });
 	}
 
-	// Light theme cannot separate a sent bubble from the canvas by fill alone, so it
-	// paints an enclosure keyed off this attribute's absence. Losing it makes the
-	// message read as unenclosed text again.
 	it("marks a queued bubble and leaves a sent one unmarked", () => {
 		const { container, rerender } = render(<HumanMessage message={human()} sessionId="s1" />);
 		const sent = container.querySelector(".cursor-chat-human-message");
@@ -796,12 +774,10 @@ describe("HumanMessage", () => {
 			`${body ? `${body}\n\n` : ""}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
 		const apiBaseUrl = "http://127.0.0.1:3002";
 
-		// jsdom has no layout: every element reports a height far over the fold.
 		beforeEach(() => {
 			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
 		});
 
-		// A normal screenshot is taller than the fold, so inside it every image was cut off.
 		it("keeps them above the bubble and outside a long message's fold", () => {
 			const { container } = render(
 				<HumanMessage message={human({ text: attached([".ao/attachments/attachment-ab12.png"], "a long folded message") })} sessionId="s1" apiBaseUrl={apiBaseUrl} />,
@@ -857,7 +833,6 @@ describe("ProviderSwitchMarker", () => {
 	});
 
 	const switched = (sourceHarness: string, targetHarness: string, extra: Record<string, string> = {}) => {
-		// A seeded catalog keeps the recorded-model case off the network.
 		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
 		client.setQueryData(agentModelsQueryKey("codex", ""), { models: [{ id: "gpt-6", label: "GPT Six" }] });
 		return (
@@ -870,7 +845,6 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>
 		);
 	};
-	// The decorative mark drawn just before a side's name.
 	const markBefore = (name: string) => screen.getByText(name).previousElementSibling;
 
 	it("draws each side's agent mark before its name", () => {
@@ -882,7 +856,6 @@ describe("ProviderSwitchMarker", () => {
 		expect(from?.tagName).toBe("IMG");
 		expect(from).toHaveAttribute("src", claudeCodeLogo);
 		expect(to).toHaveAttribute("src", codexLogo);
-		// Marks are decorative: the separator still names the switch in words.
 		expect(screen.getByRole("separator", { name: "Switched from Claude Code to Codex" })).toBeInTheDocument();
 		expect(container.querySelectorAll('[role="separator"] [aria-hidden="true"].size-icon-base')).toHaveLength(2);
 	});

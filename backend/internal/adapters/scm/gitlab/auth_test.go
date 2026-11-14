@@ -84,7 +84,6 @@ func TestGLabTokenSourceUsesInjectedHook(t *testing.T) {
 	if tok != "glpat-from-hook" {
 		t.Fatalf("token = %q, want glpat-from-hook", tok)
 	}
-	// Second call must use the cache (no new shell-out).
 	tok2, err := src.Token(context.Background())
 	if err != nil {
 		t.Fatalf("Token (cached): %v", err)
@@ -143,13 +142,9 @@ func TestGLabTokenSourceInvalidateClearsCache(t *testing.T) {
 	}
 }
 
-// TestGLabTokenSourceParsesHookOutput verifies that the GLab hook returns
-// just the parsed token (same as glabAuthToken would), not the raw status block.
 func TestGLabTokenSourceParsesHookOutput(t *testing.T) {
 	src := &GLabTokenSource{
 		GLab: func(ctx context.Context) (string, error) {
-			// The real glabAuthToken parses `glab auth status --show-token` output
-			// and returns just the token. The injected hook mirrors that contract.
 			return "glpat-parsed\n", nil
 		},
 		TokenTTL: time.Hour,

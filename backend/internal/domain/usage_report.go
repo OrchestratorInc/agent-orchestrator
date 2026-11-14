@@ -2,7 +2,6 @@ package domain
 
 import "time"
 
-// UsageReportEvent is one timestamped usage event as the usage report reads it, with the session it belongs to.
 type UsageReportEvent struct {
 	CreatedAt          time.Time
 	ProviderID         UsageProviderID
@@ -19,7 +18,6 @@ type UsageReportEvent struct {
 	SessionTitle       string
 }
 
-// UsageReport is token and estimated-cost usage over a window, bucketed by day or hour in the reader's time zone.
 type UsageReport struct {
 	Days       int
 	TimeZone   string
@@ -31,7 +29,6 @@ type UsageReport struct {
 	Sessions   []UsageReportSession
 }
 
-// UsageReportRow is one period's usage for one harness, model and speed tier.
 type UsageReportRow struct {
 	Period              string
 	Harness             AgentHarness
@@ -52,7 +49,6 @@ type UsageReportRow struct {
 	CacheSavingsNanos   int64
 }
 
-// UsageReportSession is one session's usage over the report window.
 type UsageReportSession struct {
 	SessionID    SessionID
 	ProjectID    ProjectID

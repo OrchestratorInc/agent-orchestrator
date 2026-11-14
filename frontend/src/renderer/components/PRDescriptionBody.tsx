@@ -10,7 +10,6 @@ import { isWebImageUrl, linksOnlyImages, PRDescriptionImage } from "./PRDescript
 import { PRImageGallery } from "./PRImageGallery";
 import { descriptionMarkdown, descriptionMedia } from "../lib/pr-description";
 
-// Reading width and type for the whole body.
 const readingClass = cn(
 	"min-w-0 select-text break-words text-sm leading-relaxed text-foreground/85",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
@@ -25,10 +24,6 @@ const readingClass = cn(
 	"[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
 );
 
-/**
- * An image in the body at its own size, opening the gallery. One that can't
- * load shrinks to its name; the gallery says why and links to the original.
- */
 function InlineImage({ alt, onOpen, src }: { alt?: string; onOpen: () => void; src: string }) {
 	const { t } = useTranslation();
 	const [failed, setFailed] = useState(false);
@@ -40,13 +35,8 @@ function InlineImage({ alt, onOpen, src }: { alt?: string; onOpen: () => void; s
 	);
 }
 
-/**
- * A PR's whole description, in its tab: the body at a readable width, images
- * full size (each opens the gallery). Says why when there is no body to show.
- */
 export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
 	cloud: boolean;
-	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
 	detailsFailed?: boolean;
 	pr: SessionPRSummary;
 }) {
@@ -59,7 +49,6 @@ export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
 		img: ({ alt, src }) => {
 			const url = typeof src === "string" ? src : undefined;
 			const index = images.findIndex((image) => image.src === url);
-			// A non-web source, or one the gallery doesn't hold, stays a label.
 			if (!isWebImageUrl(url) || index < 0) return <PRDescriptionImage alt={alt} src={url} />;
 			return <InlineImage alt={alt} onOpen={() => setImageIndex(index)} src={url} />;
 		},
@@ -67,7 +56,6 @@ export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
 
 	let empty: string | undefined;
 	if (!pr.detailsObservedAt) {
-		// Only the local GitHub observer fetches details; elsewhere they never arrive.
 		empty = detailsFailed ? t("pr.description.unavailable") : pr.provider === "github" && !cloud ? t("pr.description.pending") : t("pr.description.unsupported");
 	} else if (!markdown) {
 		empty = t("pr.description.none");
@@ -77,7 +65,6 @@ export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
 		<div data-testid="pr-description">
 			{empty ? <p className="m-0 text-sm text-passive">{empty}</p> : (
 				<div className={readingClass}>
-					{/* Provider content: react-markdown never renders raw HTML. */}
 					<ReactMarkdown components={components} remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
 				</div>
 			)}

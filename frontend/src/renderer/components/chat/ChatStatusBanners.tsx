@@ -1,18 +1,3 @@
-/**
- * Conversation state that is not a timeline entry.
- *
- * Each of these answers a question the timeline structurally cannot. A tool server
- * that failed to start produces no rows at all — the agent simply never calls those
- * tools, which reads as a choice. A provider demanding credentials leaves every
- * later turn failing for a reason that looks generic. A thread the provider has put
- * into `system_error` looks, from AO's side, like an agent that has gone quiet.
- *
- * The persistent ones live above the scroller rather than in it because they are
- * current state: scrolling away from them must not scroll away from the reason the
- * session is stuck. The MCP note is a one-time heads-up, so it docks by the composer
- * without displacing the conversation.
- */
-
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
@@ -52,14 +37,6 @@ export function ImportedAgentBlocked({ agent, block }: { agent: string; block: A
 	);
 }
 
-/**
- * The provider refused this session's login.
- *
- * An expired login is routine, so the notice says so plainly and offers one way
- * out: the Harness page, which signs in on the computer that runs the session,
- * a remote host or the cloud connection included. The failed turn stays for the
- * user to retry.
- */
 export const ReauthBanner = memo(function ReauthBanner({
 	account,
 	harness,
@@ -71,11 +48,8 @@ export const ReauthBanner = memo(function ReauthBanner({
 	account: ConversationAccount;
 	harness: string;
 	sessionId?: string;
-	/** The remote host that runs the session; omitted for this computer's. */
 	hostId?: string;
-	/** The session runs in the cloud, so its login is the cloud connection's. */
 	cloud?: boolean;
-	/** Starts the login so that it brings the user back to this chat once it takes. */
 	onLogIn?: () => void;
 }) {
 	const { t } = useTranslation();
@@ -90,7 +64,6 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			{/* A chat signs in the session's own account itself, so it needs no lookup here. */}
 			{onLogIn ? (
 				<Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={onLogIn}>
 					{t("chat.reauth.logInAgain")}
@@ -120,19 +93,6 @@ function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: str
 	);
 }
 
-/**
- * The provider's own view of the thread, when it is bad.
- *
- * Deliberately separate from the controller banner and worded so the two cannot be
- * confused: the controller is AO's connection to the agent process, this is what the
- * provider says about the conversation behind it. They disagree routinely — a
- * healthy controller can be attached to a thread the provider has already given up
- * on, and that combination is precisely the one a user cannot diagnose unaided.
- *
- * Only `system_error` and `closed` are drawn. `active`, `idle` and `not_loaded` are
- * the ordinary run of a session and a banner for each would be noise that teaches
- * readers to ignore this row.
- */
 export const ThreadStateBanner = memo(function ThreadStateBanner({
 	threadState,
 }: {
@@ -175,7 +135,6 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 const MCP_NOTICE_MS = 3_000;
 const MCP_NOTICE_FADE_MS = 200;
 const MCP_NOTICE_STORAGE_PREFIX = "ao:mcp-notice-shown:";
-// The set covers pane remounts; storage keeps the note from replaying after a reload.
 const mcpNoticeShownSessions = new Set<string>();
 
 function mcpNoticeWasShown(sessionId: string): boolean {
@@ -192,17 +151,9 @@ function rememberMcpNotice(sessionId: string): void {
 	try {
 		window.localStorage.setItem(`${MCP_NOTICE_STORAGE_PREFIX}${sessionId}`, "1");
 	} catch {
-		// Best-effort: the in-memory set still covers this renderer's lifetime.
 	}
 }
 
-/**
- * A brief, once-per-session note that some tool servers did not start.
- *
- * The agent never mentions tools it does not have, so without this a user sees a
- * worse answer with no cause. There is nothing to do from here, so say it once,
- * quietly, and get out of the way; a restarted session gets its own note.
- */
 export const McpServerBanner = memo(function McpServerBanner({
 	sessionId,
 	incarnation,
@@ -211,13 +162,9 @@ export const McpServerBanner = memo(function McpServerBanner({
 	active = true,
 }: {
 	sessionId: string;
-	/** Which run of the session; a restart starts its tool servers again. */
 	incarnation?: string;
-	/** Only the broken ones. The caller filters, so an empty list means nothing to say. */
 	servers: McpServer[];
-	/** Relative to the composer, which the parent wraps in a positioned box. */
 	placement?: "above" | "below";
-	/** A hidden chat panel must not use up the session's one note. */
 	active?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -262,13 +209,6 @@ export const McpServerBanner = memo(function McpServerBanner({
 	);
 });
 
-/**
- * A harness update replaced the release this session's agent runs. With
- * "move open sessions to new versions" on, the daemon restarts the agent on
- * the new release once it is idle, or before the next message; a failed
- * restart keeps the queued messages for a manual resume. A stopped agent is
- * never moved on its own: resuming it starts the new release.
- */
 export const VersionSwitchBanner = memo(function VersionSwitchBanner({
 	staleBinary,
 	hostId,
@@ -276,10 +216,8 @@ export const VersionSwitchBanner = memo(function VersionSwitchBanner({
 }: {
 	staleBinary?: SessionStaleBinary;
 	hostId?: string;
-	/** The agent controller stopped and waits for the user to resume it. */
 	agentStopped?: boolean;
 }) {
-	// Most sessions are current; only a marked one reads the setting.
 	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
 });
 

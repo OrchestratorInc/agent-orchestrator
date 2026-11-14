@@ -5,28 +5,13 @@ import { cn } from "../lib/utils";
 import { NotificationCenter } from "./NotificationCenter";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 
-/**
- * The one page topbar. Every center-panel page (board, automations, archive,
- * settings, artifacts, session chrome) renders its header through this module.
- * The panel owns trailing workspace controls; page and session headers reserve
- * their measured width. Pages supply a lead (where am I) and actions.
- *
- * - `PageTopbar` is the page header row (lead + actions).
- * - `SessionTabsTopbar` is the same frame around a session's tab strip.
- */
-
-// Only macOS draws app content under a hidden titlebar. Windows has its own
-// titlebar above the panel and Linux keeps the native frame.
 const usesNativeDragRegion = isMacPlatform();
 export const dragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
 export const noDragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 
 const TopbarTrailingActionsContext = createContext<HTMLDivElement | null>(null);
 
-/** The panel is the single owner of notification placement and trailing width. */
 export function PageTopbarSurface({ children, notifications = false }: { children: ReactNode; notifications?: boolean }) {
-	// Global settings replaces the visible page while its routed session stays
-	// mounted: the bell stays, but session controls must not portal over it.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const showControls = notifications;
 	const surfaceRef = useRef<HTMLDivElement>(null);
@@ -49,9 +34,6 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 		<TopbarTrailingActionsContext.Provider value={showControls && !settingsOpen ? actionsHost : null}>
 			<div className={cn("center-panel-surface relative", showControls && "has-topbar-controls")} ref={surfaceRef}>
 				{children}
-				{/* MUST follow the page in the DOM: Electron builds the macOS window-drag
-				    region in document order, so a no-drag group placed before the page
-				    header would be swallowed by the header's drag rect. */}
 				{showControls ? (
 					<PageTopbarActions className="panel-topbar-controls" data-testid="panel-topbar-controls">
 						<div className="contents" ref={setActionsHost} />
@@ -63,15 +45,11 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 	);
 }
 
-/** Session controls join the panel's trailing group, immediately before the bell. */
 export function PageTopbarTrailingAction({ children }: { children: ReactNode }) {
 	const host = useContext(TopbarTrailingActionsContext);
 	return host ? createPortal(children, host) : null;
 }
 
-// Linux's fixed navigation cluster extends beyond the collapsed sidebar.
-// macOS clearance comes from the center-panel-titlebar CSS; Windows has its
-// own titlebar above the panel.
 function usePageTopbarPaddingLeft() {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	return !isSidebarOpen && isLinuxPlatform()
@@ -91,9 +69,7 @@ export function PageTopbar({
 	className,
 	...props
 }: Omit<ComponentProps<"header">, "children" | "style"> & {
-	/** Orientation: the page's title or crumb. */
 	lead?: ReactNode;
-	/** High-value page actions, right-aligned. */
 	actions?: ReactNode;
 }) {
 	const paddingLeft = usePageTopbarPaddingLeft();
@@ -113,7 +89,6 @@ export function PageTopbar({
 	);
 }
 
-/** Title with an optional leading icon, the standard lead for a page. */
 export function PageTopbarTitle({
 	as: Component = "span",
 	icon,
@@ -128,7 +103,6 @@ export function PageTopbarTitle({
 	);
 }
 
-/** Right-aligned action cluster. Controls inside never start a window drag. */
 export function PageTopbarActions({ className, children, ...props }: ComponentProps<"div">) {
 	return (
 		<div
@@ -142,11 +116,6 @@ export function PageTopbarActions({ className, children, ...props }: ComponentPr
 	);
 }
 
-/**
- * The session tab strip's frame. Terminal and chat sessions render different
- * tabs but share this chrome: surface, window-control clearance, and the
- * trailing action region.
- */
 export function SessionTabsTopbar({
 	className,
 	tabs,
@@ -160,15 +129,12 @@ export function SessionTabsTopbar({
 }: {
 	className?: string;
 	tabs: ReactNode;
-	/** Sits right after the last tab (e.g. New terminal). */
 	tabsTrailing?: ReactNode;
 	actions?: ReactNode;
 	clearanceRef?: Ref<HTMLDivElement>;
 	regionWidth?: number | string;
-	/** Window-control clearance classes for the tabs region. */
 	clearanceClassName?: string;
 	hideActions?: boolean;
-	/** Native fullscreen hides the panel-owned controls outside this subtree. */
 	fullscreen?: boolean;
 }) {
 	return (

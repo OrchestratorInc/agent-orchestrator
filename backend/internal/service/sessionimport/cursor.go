@@ -18,9 +18,6 @@ func cursorRoot(home string) string {
 	return filepath.Join(home, ".cursor")
 }
 
-// cursorPlaceholderTitle is the name Cursor gives a chat it has not titled.
-// Like OpenCode's "New session - …", it is treated as no title so the list
-// shows the opening prompt instead of many identical rows.
 const cursorPlaceholderTitle = "New Agent"
 
 func readCursorTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
@@ -73,8 +70,6 @@ func discoverCursor(ctx context.Context, root string) ([]sourceFiles, error) {
 		if err != nil {
 			return nil //nolint:nilerr // A file can disappear during discovery.
 		}
-		// Keep every cwd bucket until Scan applies project eligibility. Otherwise
-		// a newer AO copy could hide the eligible original with the same id.
 		modTime := info.ModTime()
 		for _, input := range []string{path + "-wal", filepath.Join(filepath.Dir(path), "meta.json")} {
 			if sidecar, err := os.Lstat(input); err == nil && sidecar.ModTime().After(modTime) {

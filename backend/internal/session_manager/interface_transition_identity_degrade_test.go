@@ -14,12 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat covers
-// the upstream-hermes-main runtime: the installed adapter never declares a
-// compatible TUI+Chat identity pair, so the strict gate used to refuse every
-// TUI→Chat switch. The switch must instead degrade to a fresh Chat start
-// through the same durable transition record, marking the row
-// identity-reset and delivering an honest boundary turn into the new Chat.
 func TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat(t *testing.T) {
 	manager, store, runtime, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
 	manager.agents = singleAgent{agent: fakeAgent{}}
@@ -81,9 +75,6 @@ func TestInterfaceTransitionHermesWithoutIdentityPairDegradesToFreshChat(t *test
 	t.Fatalf("degraded marker was not delivered: pending=%+v", store.messages[transition.ID])
 }
 
-// TestInterfaceTransitionHermesWithDeclaredPairKeepsStrictHandoff pins the
-// fork-patched hermes (identity chain present): the handoff resumes the native
-// conversation as before and records no degradation.
 func TestInterfaceTransitionHermesWithDeclaredPairKeepsStrictHandoff(t *testing.T) {
 	manager, store, _, chat, _ := newTransitionManager(t, domain.SessionModeTUI)
 	useFastInterfaceTransitionTimings(manager)
@@ -112,9 +103,6 @@ func TestInterfaceTransitionHermesWithDeclaredPairKeepsStrictHandoff(t *testing.
 	}
 }
 
-// hermesDegradedTransitionAgent models the upstream-hermes adapter: no declared
-// identity pair, but it can resolve the recorded native conversation's terminal
-// resume identity — found only when resumeFound is set.
 type hermesDegradedTransitionAgent struct {
 	fakeAgent
 	resumeFound   bool
@@ -138,12 +126,6 @@ func (a *hermesDegradedTransitionAgent) GetRestoreCommand(ctx context.Context, c
 	return a.fakeAgent.GetRestoreCommand(ctx, cfg)
 }
 
-// TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore covers the
-// upstream-hermes-main runtime in the Chat→TUI direction: the installed adapter
-// never declares a compatible TUI+Chat identity pair, but the recorded native
-// conversation is still resumable, so the switch must restore THAT terminal,
-// mark the row identity-reset, and deliver an honest boundary turn — exactly
-// once — into the resumed terminal.
 func TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore(t *testing.T) {
 	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
 	useFastInterfaceTransitionTimings(manager)
@@ -200,10 +182,6 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToNativeRestore(t *testing.T)
 	awaitDegradedMarker(t, store, transition.ID, degradedTerminalResumeMarkerText)
 }
 
-// TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI covers the missing
-// native terminal: nothing resumable exists, so the switch starts an ordinary
-// fresh TUI for the workspace, still marked identity-reset with its own honest
-// boundary turn. The Chat conversation stays archived as-is.
 func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
 	manager, store, runtime, _, log := newTransitionManager(t, domain.SessionModeChat)
 	useFastInterfaceTransitionTimings(manager)
@@ -252,11 +230,6 @@ func TestInterfaceTransitionHermesChatToTUIDegradesToFreshTUI(t *testing.T) {
 	awaitDegradedMarker(t, store, transition.ID, degradedTerminalFreshMarkerText)
 }
 
-// A Chat that already ran the session's prompt must not hand it to the fresh
-// terminal, or the agent starts the task again. A Chat that never accepted
-// anything still owes that prompt to the terminal. Either way the session keeps
-// its prompt. (Guard reused from OrchestratorInc/agent-orchestrator#7725 by
-// Meraj-08.)
 func TestInterfaceTransitionHermesFreshTUIReplaysPromptOnlyIfChatNeverRanIt(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -289,7 +262,6 @@ func TestInterfaceTransitionHermesFreshTUIReplaysPromptOnlyIfChatNeverRanIt(t *t
 			if settled.Phase != domain.SessionInterfaceTransitionCompleted {
 				t.Fatalf("phase = %s, code = %s, error = %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
 			}
-			// The last build is the real launch; the first is the preflight's.
 			if got := agent.launchPrompts[len(agent.launchPrompts)-1]; got != tc.want {
 				t.Fatalf("fresh terminal prompt = %q, want %q (builds: %q)", got, tc.want, agent.launchPrompts)
 			}
@@ -300,9 +272,6 @@ func TestInterfaceTransitionHermesFreshTUIReplaysPromptOnlyIfChatNeverRanIt(t *t
 	}
 }
 
-// awaitDegradedMarker polls the transition outbox until the degraded boundary
-// turn has been delivered, then asserts it was delivered exactly once with the
-// expected text.
 func awaitDegradedMarker(t *testing.T, store *transitionStore, transitionID, want string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -323,9 +292,6 @@ func awaitDegradedMarker(t *testing.T, store *transitionStore, transitionID, wan
 	t.Fatalf("degraded marker was not delivered: pending=%+v", store.messages[transitionID])
 }
 
-// TestInterfaceTransitionNonHermesChatToTUIStillRequiresHandoffCapability keeps
-// the degrade scoped to hermes: another harness without a declared identity
-// pair still fails closed.
 func TestInterfaceTransitionNonHermesChatToTUIStillRequiresHandoffCapability(t *testing.T) {
 	manager, store, runtime, chat, _ := newTransitionManager(t, domain.SessionModeChat)
 	manager.agents = singleAgent{agent: fakeAgent{}}
@@ -340,11 +306,6 @@ func TestInterfaceTransitionNonHermesChatToTUIStillRequiresHandoffCapability(t *
 	}
 }
 
-// hermesMessagedChatOrchestrator is a hermes Chat worker whose conversation
-// already carries a real turn, backed by the real SQLite store: the Chat has
-// messages, so its root branch is not untouched. The adapter (via
-// hermesDegradedTransitionAgent with resumeFound=false) cannot resolve the
-// native terminal, mirroring upstream issue #7724's unresumable conversation.
 func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *transitionRuntime, *transitionChat, *[]string, domain.SessionID) {
 	t.Helper()
 	ctx := context.Background()
@@ -372,7 +333,6 @@ func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *tra
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One real message: the Chat is not untouched.
 	if err := store.AdoptProviderTurn(ctx, conversation.ID, created.ID, "chat-generation", "turn-1", "provider-turn-1", now); err != nil {
 		t.Fatal(err)
 	}
@@ -394,15 +354,6 @@ func hermesMessagedChatOrchestrator(t *testing.T) (*Manager, *sqlite.Store, *tra
 	return manager, store, runtime, chat, log, created.ID
 }
 
-// TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI covers
-// upstream issue #7724: a hermes Chat whose conversation carries real messages
-// and whose native conversation cannot be resumed must still switch to the
-// terminal through the degraded fresh-TUI path. It used to fail the controller
-// epoch commit with SESSION_CHANGED ("release untouched Chat provider ...:
-// empty root proof changed") because the commit required the untouched-Chat
-// release proof, leaving the session stuck in Chat with every retry failing.
-// The fresh TUI must start, the degraded boundary must be recorded, and the
-// messaged Chat conversation must stay archived exactly as it was.
 func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *testing.T) {
 	manager, store, runtime, _, log, id := hermesMessagedChatOrchestrator(t)
 	ctx := context.Background()
@@ -443,8 +394,6 @@ func TestInterfaceTransitionHermesChatWithMessagesToTUIDegradesToFreshTUI(t *tes
 	if got := fmt.Sprint(*log); got != "[prepare:chat:drain stop:chat start:tui]" {
 		t.Fatalf("controller order = %s", got)
 	}
-	// The messaged Chat conversation stays archived untouched: same root
-	// branch, same provider binding, its turn history intact.
 	conversation, err := store.ConversationForSession(ctx, id)
 	if err != nil {
 		t.Fatal(err)

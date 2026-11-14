@@ -10,7 +10,6 @@ const hooks = vi.hoisted(() => ({
 	noteCloudSignInWebVisitor: vi.fn(),
 	sessionListeners: [] as ((account: unknown) => void)[],
 	unsubscribe: vi.fn(),
-	// What main holds for the renderer to take, once (cloud:takePendingSignIn).
 	pendingSignIn: [] as unknown[],
 	takePendingSignIn: vi.fn(async (): Promise<unknown> => hooks.pendingSignIn.shift() ?? null),
 }));
@@ -72,7 +71,6 @@ describe("TelemetryIdentityRuntime", () => {
 	it("never identifies without an acknowledgement, and retries until the daemon records the user", async () => {
 		vi.useFakeTimers();
 		hooks.session = account("workos");
-		// Daemon unavailable, then a 500, then recovered.
 		hooks.setCloudUser.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
 		render(<TelemetryIdentityRuntime />);
 		await act(async () => {
@@ -100,7 +98,7 @@ describe("TelemetryIdentityRuntime", () => {
 		});
 		hooks.session = null;
 		view.rerender(<TelemetryIdentityRuntime />);
-		hooks.setCloudUser.mockImplementation(async () => true); // the daemon recovers afterwards
+		hooks.setCloudUser.mockImplementation(async () => true);
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0));
 		});
@@ -112,7 +110,6 @@ describe("TelemetryIdentityRuntime", () => {
 	it("retries a sign-out whose request was lost until the daemon acknowledges it", async () => {
 		vi.useFakeTimers();
 		hooks.session = null;
-		// Transport failures with no daemon status change in between.
 		hooks.setCloudUser.mockRejectedValueOnce(new Error("aborted")).mockResolvedValueOnce(false).mockResolvedValue(true);
 		render(<TelemetryIdentityRuntime />);
 		await act(async () => {
@@ -128,7 +125,6 @@ describe("TelemetryIdentityRuntime", () => {
 		});
 		expect(hooks.setCloudUser).toHaveBeenCalledTimes(3);
 		expect(hooks.setCloudUser.mock.calls.every(([id]) => id === null)).toBe(true);
-		// Acknowledged: no further attempts.
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0));
 		});
@@ -141,12 +137,12 @@ describe("TelemetryIdentityRuntime", () => {
 		hooks.session = null;
 		const attemptsInSchedule = BINDING_RETRY_MS.length + 1;
 		let calls = 0;
-		hooks.setCloudUser.mockImplementation(async () => ++calls > attemptsInSchedule + 2); // recovers well after the schedule ends
+		hooks.setCloudUser.mockImplementation(async () => ++calls > attemptsInSchedule + 2);
 		render(<TelemetryIdentityRuntime />);
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0));
 		});
-		expect(calls).toBe(attemptsInSchedule); // the whole schedule is spent and still not acknowledged
+		expect(calls).toBe(attemptsInSchedule);
 		const cap = BINDING_RETRY_MS[BINDING_RETRY_MS.length - 1];
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(cap);
@@ -155,11 +151,11 @@ describe("TelemetryIdentityRuntime", () => {
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(cap);
 		});
-		expect(calls).toBe(attemptsInSchedule + 2); // the daemon answers here
+		expect(calls).toBe(attemptsInSchedule + 2);
 		await act(async () => {
 			await vi.advanceTimersByTimeAsync(cap * 5);
 		});
-		expect(calls).toBe(attemptsInSchedule + 3); // acknowledged on the next attempt, then it stops
+		expect(calls).toBe(attemptsInSchedule + 3);
 		expect(hooks.identifyCloudUser).not.toHaveBeenCalled();
 	});
 
@@ -224,8 +220,6 @@ describe("TelemetryIdentityRuntime", () => {
 	});
 
 	it("takes the sign-in that started the app when it mounts, before any notification", async () => {
-		// The sign-in link launched the app: its notification went out before
-		// this window was listening, so main kept the context.
 		hooks.pendingSignIn.push({ account: account("workos"), signIn: { webDistinctId: "019a3f5e-8c2b" } });
 		hooks.session = account("workos");
 		render(<TelemetryIdentityRuntime />);

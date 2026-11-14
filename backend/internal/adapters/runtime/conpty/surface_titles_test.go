@@ -59,7 +59,6 @@ func TestOSCTitleFilter(t *testing.T) {
 		{"ESC before C1 title", "\x1b\x9d0;✳ title\aafter", "\x1b\x9d0;\aafter"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			// PTY reads may split anywhere, including inside an escape or rune.
 			for split := 0; split <= len(tt.input); split++ {
 				var filter oscTitleFilter
 				got := string(filter.filter([]byte(tt.input[:split]))) + string(filter.filter([]byte(tt.input[split:])))

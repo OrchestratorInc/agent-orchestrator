@@ -14,7 +14,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -28,8 +27,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// auggieLocalAuthStatus checks Auggie's own login session first;
-// AUGMENT_SESSION_AUTH in the environment is the fallback.
 func auggieLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -57,9 +54,6 @@ func auggieStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 	return status, ok, err
 }
 
-// auggieSessionAuthStatus checks Auggie's documented login session file
-// without exposing its contents. The session is JSON and must contain a
-// non-empty token value to count as local authorization evidence.
 func auggieSessionAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

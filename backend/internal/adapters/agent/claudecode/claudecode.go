@@ -1,20 +1,3 @@
-// Package claudecode implements the Claude Code agent adapter.
-//
-// It builds the argv to launch `claude` as an interactive session inside a
-// session's worktree, installs worktree-local hooks that report normalized
-// session metadata (native id, title, summary) back into AO's store,
-// and supports resume: GetLaunchCommand pins either AO's requested native UUID
-// or a stable AO-session-derived fallback so GetRestoreCommand can rebuild
-// `claude --resume <uuid>`. SessionInfo reads the
-// hook-captured metadata from the store — it does not parse transcripts.
-// GetConfigSpec remains a no-op (no agent-specific config keys yet).
-//
-// Claude Code starts an interactive session by default (no -p/--print), which
-// is exactly what AO wants: a live agent the user can attach to in the
-// browser terminal or via `tmux attach`. The initial task prompt is passed
-// as the positional argument; the orchestrator system prompt (if any) is
-// appended to Claude's default system prompt so its built-in coding
-// instructions are preserved.
 package claudecode
 
 import (
@@ -39,38 +22,23 @@ import (
 )
 
 const (
-	// adapterID is the registry id and the value users pass to
-	// `ao spawn --agent`.
 	adapterID = "claude-code"
 )
 
-// Plugin is the Claude Code agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Claude Code adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSubmitActivity signals that Claude Code fires a user-prompt-submit hook
-// under AO's launch, so Activity.State can flip to active after a prompt is
-// accepted. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
-// EmitsSemanticMessageAcceptance reports that UserPromptSubmit includes the
-// accepted prompt, allowing AO delivery ids to be correlated semantically.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
-// EmitsBlockedActivity signals that Claude Code fires both pre- and post-tool
-// hooks, so Activity.State can flip to blocked mid-turn on a permission dialog
-// and the guarded send loop can clear it once the tool completes. Only
-// claude-code (and its hook-delegators) carry this trio; see
-// ports.BlockedActivitySignaler.
 func (p *Plugin) EmitsBlockedActivity() bool { return true }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -82,15 +50,10 @@ var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 
-// ComposerIsEmpty recognizes Claude Code's blank composer or its dim
-// placeholder. Claude renders normal, non-dim status chrome below a bordered
-// composer, so inspect that bounded region before using the footer-free fallback.
-// A permission-menu selection and normal typed text are rejected.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	return p.InspectTerminalSurface(output).Composer == ports.TerminalComposerEmpty
 }
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -103,9 +66,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// permissionConfigEnum lists the permission modes the "permissions" config key
-// accepts. It mirrors the ports.PermissionMode constants so a project's stored
-// config validates against the same vocabulary the launch command maps.
 var permissionConfigEnum = []string{
 	string(ports.PermissionModeDefault),
 	string(ports.PermissionModeAcceptEdits),
@@ -113,8 +73,6 @@ var permissionConfigEnum = []string{
 	string(ports.PermissionModeBypassPermissions),
 }
 
-// GetConfigSpec reports the per-project agent config keys Claude Code
-// understands: a model override and a starting permission mode.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -142,32 +100,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// GetLaunchCommand builds the argv to start an interactive Claude Code
-// session. Shape:
-//
-//	claude [--session-id <uuid>] \
-//	       [--permission-mode <mode> --settings <defaultMode: mode>] \
-//	       [--append-system-prompt-file <path> | --append-system-prompt <text>] \
-//	       [-- <prompt>]
-//
-// --session-id pins Claude's native session UUID to LaunchConfig.NativeSessionID
-// when AO requests a distinct provider conversation, otherwise to a value
-// derived from the AO session id for the legacy one-conversation path. This
-// makes the session resumable later (see
-// GetRestoreCommand) and its transcript is locatable (see SessionInfo) without
-// a separate capture step.
-//
-// <mode> is acceptEdits, auto, or bypassPermissions. AO's "default"
-// mode emits no --permission-mode flag, so Claude's TUI resolves the starting
-// mode from ~/.claude/settings.json exactly as a normal launch. An explicit
-// mode is repeated as the flag-settings defaultMode only to keep Claude's
-// auto-mode default dialog out of the session (see autoDefaultNudgeGuardArgs).
-//
-// The prompt is passed after `--` so a prompt beginning with "-" is not
-// mistaken for a flag.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
-	// Defense-in-depth: the project service validates on write, but re-check
-	// here so a config written by any other path can't launch a bad command.
 	if err := cfg.Config.Validate(); err != nil {
 		return nil, fmt.Errorf("claude-code: %w", err)
 	}
@@ -177,9 +110,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 
-	// A project's configured permissions drive the starting mode; the explicit
-	// LaunchConfig.Permissions wins when set so a per-spawn override still takes
-	// precedence over the stored project default.
 	permissions := cfg.Permissions
 	if permissions == "" {
 		permissions = cfg.Config.Permissions
@@ -205,10 +135,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	})
 }
 
-// claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
-// settings: Ultracode, and the token count at which it compacts on its own.
-// They share one --settings flag with the auto-mode dialog guard (see
-// autoDefaultNudgeGuardArgs).
 func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy) []string {
 	settings := autoDefaultNudgeGuardSettings(policy)
 	if settings == nil {
@@ -228,13 +154,6 @@ func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentrun
 	return []string{"--settings", string(encoded)}
 }
 
-// freshLaunchNativeSessionID keeps a fresh launch from adopting someone else's
-// conversation. The legacy id is derived from the AO session id alone, while
-// Claude's transcripts live in one global config dir, so a reused AO id (a
-// wiped or second data dir) maps onto an old transcript that --session-id would
-// then continue. A fresh launch has no prior conversation of its own, so when
-// the derived id already has a transcript a new id is used instead; hooks
-// capture whichever id Claude ends up with.
 func (p *Plugin) freshLaunchNativeSessionID(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
 	if cfg.NativeSessionID != "" || cfg.SessionID == "" {
 		return cfg.NativeSessionID, nil
@@ -249,20 +168,6 @@ func (p *Plugin) freshLaunchNativeSessionID(ctx context.Context, cfg ports.Launc
 	return "", nil
 }
 
-// PreLaunch is an optional capability the spawn engine invokes (via type
-// assertion) immediately before creating the session. Claude Code shows a
-// blocking "do you trust this folder?" dialog the first time it runs in any
-// directory. Every AO worktree is a fresh path, so without this the
-// agent would hang at that prompt with no one to answer it.
-//
-// An AO worktree is derived from the repo the user is already running
-// AO in, so it is inherently trusted. PreLaunch records that trust in the
-// global config the launched Claude reads (~/.claude.json by default, see
-// claudeLaunchConfigPaths) before launch, additively and atomically, so it
-// cannot clobber a concurrently-running Claude instance's config. For a launch
-// in AO's default permission mode it also marks the auto-mode default dialog
-// seen there, only when the user's settings would make Claude offer it (see
-// autoDefaultNudgeGuardArgs); explicit modes are covered per session instead.
 func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -283,14 +188,6 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	return ensureClaudeLaunchConfigForOS(cfgPath, cfg.WorkspacePath, markNudgeSeen, runtime.GOOS)
 }
 
-// claudeLaunchConfigPaths returns the user settings file and the global config
-// file a Claude launched with env reads, both resolved from the same
-// directory. A CLAUDE_CONFIG_DIR the launch environment sets (the session's
-// project env) wins over the daemon's own, as in NativeSessionConfigDir. With
-// one set, settings live in that directory and the global config is its
-// .claude.json; without, they are ~/.claude/settings.json and ~/.claude.json.
-// Claude prefers a non-empty legacy .config.json in the config directory over
-// either global config path, so that file is used when present.
 func claudeLaunchConfigPaths(env map[string]string) (settingsPath, globalConfigPath string, err error) {
 	configDir, ok := env[claudeConfigDirEnv]
 	if !ok {
@@ -318,24 +215,6 @@ func claudeLaunchConfigPaths(env map[string]string) (settingsPath, globalConfigP
 	return filepath.Join(configDir, "settings.json"), globalConfigPath, nil
 }
 
-// Claude Code (verified in 2.1.287 through 2.1.302; the gate that enables it
-// defaults on from about 2.1.285) shows a one-time "Make auto mode your default
-// permission mode?" dialog once the session is idle, when the global config has
-// completed onboarding without hasSeenAutoDefaultNudge, user settings set a
-// permissions.defaultMode other than "auto", and no project, local, flag, or
-// policy settings set a defaultMode. The dialog takes the keyboard: text AO
-// pastes into the pane is swallowed and its Enter picks the focused "Yes",
-// which switches the running session to auto mode and rewrites the user's
-// settings.json defaultMode to "auto".
-//
-// autoDefaultNudgeGuardArgs suppresses it per session for an explicit AO
-// permission mode by also passing that mode as the flag-settings defaultMode.
-// The --permission-mode flag still decides the starting mode (it outranks every
-// settings defaultMode), so the session's mode and the user's files are
-// unchanged. AO's default mode passes no flag and returns nil here: mirroring
-// the user's defaultMode would change the mode whenever the project environment
-// points Claude at another CLAUDE_CONFIG_DIR, so PreLaunch marks the dialog
-// seen in the global config instead.
 func autoDefaultNudgeGuardArgs(policy agentruntime.PermissionPolicy) []string {
 	settings := autoDefaultNudgeGuardSettings(policy)
 	if settings == nil {
@@ -348,8 +227,6 @@ func autoDefaultNudgeGuardArgs(policy agentruntime.PermissionPolicy) []string {
 	return []string{"--settings", string(encoded)}
 }
 
-// autoDefaultNudgeGuardSettings is the flag-settings content of
-// autoDefaultNudgeGuardArgs, or nil when the mode needs no guard.
 func autoDefaultNudgeGuardSettings(policy agentruntime.PermissionPolicy) map[string]any {
 	flag := agentruntime.ClaudePermissionArgs(policy)
 	if len(flag) != 2 {
@@ -358,10 +235,6 @@ func autoDefaultNudgeGuardSettings(policy agentruntime.PermissionPolicy) map[str
 	return map[string]any{"permissions": map[string]any{"defaultMode": flag[1]}}
 }
 
-// userSettingsOfferAutoDefaultNudge reports whether the user's own Claude
-// settings carry the defaultMode that makes Claude offer the auto-mode default
-// dialog. Unreadable or unparsable settings report false: AO then leaves the
-// global config alone.
 func userSettingsOfferAutoDefaultNudge(settingsPath string) bool {
 	data, err := os.ReadFile(settingsPath) //nolint:gosec // the user's own Claude settings path
 	if err != nil {
@@ -379,16 +252,6 @@ func userSettingsOfferAutoDefaultNudge(settingsPath string) bool {
 	return mode != "" && mode != "auto"
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Claude Code
-// session: `claude [--model <model>] [--permission-mode <mode>]
-// --resume <agentSessionId>`. It prefers the hook-captured native session id
-// from cfg.Session.Metadata["agentSessionId"]; for sessions created before
-// hooks captured it, it falls back to the deterministic UUID AO pins via
-// --session-id at launch. ok is false only when neither is available, so the
-// caller fresh-spawns. The command applies the caller's model selection,
-// permission mode, and current standing system instructions. A blank model
-// leaves model selection to Claude. When Prompt is present it is passed as the
-// resume-time user turn, avoiding a fragile terminal paste into Claude's TUI.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -422,12 +285,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	})
 }
 
-// SessionInfo surfaces the normalized session metadata that the Claude Code
-// hooks persisted into AO's store: the native session id, the title (the
-// first user prompt), and the summary (the final assistant message). It reads
-// only from session.Metadata — never from transcript files — and returns
-// ok=false when none of those fields are present. Metadata is intentionally nil:
-// there is no Claude-specific field callers need beyond the normalized ones.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -436,9 +293,6 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// NativeConversationID bridges Claude Code's terminal and ACP surfaces. Both
-// use the same native Claude session UUID. AO terminal sessions pin a
-// deterministic UUID, while Chat persists the id returned by claude-agent-acp.
 func (p *Plugin) NativeConversationID(
 	ctx context.Context,
 	session ports.SessionRef,
@@ -459,16 +313,6 @@ func (p *Plugin) NativeConversationID(
 	return id, id != "", nil
 }
 
-// NativeConversationExists distinguishes Claude's reserved session UUID from
-// a conversation that Claude has actually persisted. Claude Code accepts
-// --session-id before the first prompt, but does not create its JSONL transcript
-// until the conversation has content. Passing that reserved-but-empty UUID to
-// either `claude --resume` or ACP session/load returns "No conversation found".
-//
-// The Agent SDK documents local transcripts at
-// ~/.claude/projects/<project-key>/<session-id>.jsonl (or beneath
-// CLAUDE_CONFIG_DIR). We only test for a non-empty top-level transcript; AO does
-// not parse or project provider files here.
 func (p *Plugin) NativeConversationExists(
 	ctx context.Context,
 	_ ports.SessionRef,
@@ -526,21 +370,14 @@ func isUUID(value string) bool {
 	return err == nil
 }
 
-// claudeSessionUUID maps an AO session id onto a stable Claude Code
-// session UUID via UUIDv5 over a fixed namespace, so the same AO session
-// always resolves to the same Claude session.
 func claudeSessionUUID(aoSessionID string) string {
 	return agentruntime.ClaudeSessionID(aoSessionID)
 }
 
-// SessionUUID maps an AO session id onto the native Claude Code session UUID
-// used by --session-id and --resume.
 func SessionUUID(aoSessionID string) string {
 	return claudeSessionUUID(aoSessionID)
 }
 
-// claudeBinarySpec locates the claude binary: PATH first, then the native
-// installer's locations, npm global, Homebrew, and the claude-managed dir.
 var claudeBinarySpec = binaryutil.BinarySpec{
 	Label:         "claude",
 	Names:         []string{"claude"},
@@ -555,8 +392,6 @@ var claudeBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveClaudeBinary returns the path to the claude binary, or a wrapped
-// ports.ErrAgentBinaryNotFound when it is absent.
 func ResolveClaudeBinary(ctx context.Context) (string, error) {
 	binary, err := binaryutil.ResolveBinary(ctx, claudeBinarySpec)
 	if err != nil {
@@ -565,10 +400,6 @@ func ResolveClaudeBinary(ctx context.Context) (string, error) {
 	return resolveNativeWindowsClaude(binary, runtime.GOOS), nil
 }
 
-// resolveNativeWindowsClaude unwraps the npm-generated command shim to the
-// native executable shipped by Claude Code. The ACP bridge passes this path to
-// Node child_process.spawn, which cannot execute .cmd files directly on current
-// Node releases.
 func resolveNativeWindowsClaude(path, goos string) string {
 	if goos != "windows" || !strings.EqualFold(filepath.Ext(path), ".cmd") {
 		return path
@@ -587,8 +418,6 @@ func windowsNativeClaudeCandidatesForShim(shim string) []string {
 		filepath.Join(dir, "claude.exe"),
 		filepath.Join(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"),
 	}
-	// AO's managed launcher lives apart from the npm prefix it starts; the
-	// native executable is in the current managed release.
 	if current, ok := binaryutil.ManagedCurrentDir(shim, "claude-code"); ok {
 		candidates = append(candidates, filepath.Join(current, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"))
 	}
@@ -611,8 +440,6 @@ func (p *Plugin) claudeBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// claudeConfigPath returns the path to Claude Code's global config file,
-// ~/.claude.json.
 func claudeConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -621,18 +448,6 @@ func claudeConfigPath() (string, error) {
 	return filepath.Join(home, ".claude.json"), nil
 }
 
-// ensureWorkspaceTrusted records workspacePath as trusted in Claude Code's
-// config so the interactive trust dialog does not block a spawned session.
-//
-// It is additive and concurrency-safe: it reads the existing config, sets
-// only projects[workspacePath].hasTrustDialogAccepted = true (preserving the
-// rest of the entry and every other project), and writes back via a
-// temp-file + atomic rename. If the path is already trusted, it makes no
-// write at all. A missing config file is treated as an empty one; a
-// zero-byte or corrupt config file is refused rather than overwritten.
-// claudeTrustMu serializes ensureWorkspaceTrusted within the process. Concurrent
-// spawns to different workspaces otherwise read the same ~/.claude.json snapshot
-// and the last rename drops the other's trust entry.
 var claudeTrustMu sync.Mutex
 
 func ensureWorkspaceTrusted(configPath, workspacePath string) error {
@@ -643,11 +458,6 @@ func ensureWorkspaceTrustedForOS(configPath, workspacePath, goos string) error {
 	return ensureClaudeLaunchConfigForOS(configPath, workspacePath, false, goos)
 }
 
-// ensureClaudeLaunchConfigForOS records workspace trust and, when
-// markAutoDefaultNudgeSeen is set, hasSeenAutoDefaultNudge (see
-// autoDefaultNudgeGuardArgs) in one additive, atomic config write. The nudge
-// flag only records that the dialog was dealt with; it never touches the
-// user's permission mode.
 func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDefaultNudgeSeen bool, goos string) error {
 	claudeTrustMu.Lock()
 	defer claudeTrustMu.Unlock()
@@ -660,18 +470,12 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 	switch {
 	case err == nil:
 		if len(bytes.TrimSpace(data)) == 0 {
-			// A zero-byte read means we may have caught some other writer
-			// mid-truncate. Treat it like a corrupt file, not a missing
-			// one: refuse to write rather than silently replacing the
-			// user's real config (oauthAccount, projects history, etc.)
-			// with one containing only the trust entry.
 			return fmt.Errorf("claude-code: %s is empty; refusing to overwrite", configPath)
 		}
 		if err := json.Unmarshal(data, &root); err != nil {
 			return fmt.Errorf("claude-code: parse %s: %w", configPath, err)
 		}
 	case os.IsNotExist(err):
-		// Treat as empty config; we'll create it.
 	default:
 		return fmt.Errorf("claude-code: read %s: %w", configPath, err)
 	}
@@ -698,7 +502,6 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 		changed = true
 	}
 	if !changed {
-		// Already prepared — no write needed, so no race window at all.
 		return nil
 	}
 
@@ -707,10 +510,6 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 		return fmt.Errorf("claude-code: encode %s: %w", configPath, err)
 	}
 
-	// Atomic write: temp file in the same directory, then rename. Matches
-	// how Claude Code itself updates this file, so concurrent updates are
-	// last-writer-wins rather than corrupting. A CLAUDE_CONFIG_DIR Claude has
-	// not used yet may not exist; Claude creates it the same way.
 	dir := filepath.Dir(configPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("claude-code: create config directory: %w", err)
@@ -720,7 +519,7 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 		return fmt.Errorf("claude-code: create temp config: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.Write(out); err != nil {
 		_ = tmp.Close()
@@ -735,17 +534,12 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 	return nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
 
-// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
-// The restore command re-applies session options and explicitly selects the
-// captured native conversation rather than selecting the latest session.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 
 var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

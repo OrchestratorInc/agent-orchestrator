@@ -152,8 +152,6 @@ it("keeps a dragged browser tab inside the current tab strip bounds", () => {
 
 	expect(constrain(600, 900, -300)).toMatchObject({ x: -50, y: 0 });
 	expect(constrain(600, 900, 300)).toMatchObject({ x: 50, y: 0 });
-	// A dock/resize transition can move the inspector while a drag is active.
-	// Use the newly measured strip rather than the window, so the chip follows it.
 	expect(constrain(760, 1060, -300)).toMatchObject({ x: 110, y: 0 });
 });
 
@@ -722,8 +720,6 @@ describe("BrowserPanel", () => {
 		const writeText = vi.spyOn(window.ao!.clipboard, "writeText").mockResolvedValue(undefined);
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
-		// The compact address bar displays only the host, but copy must retain the
-		// path and query from the underlying navigation state.
 		expect(screen.getByRole("textbox", { name: /browser url/i })).toHaveValue("google.com");
 		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
 
@@ -786,7 +782,6 @@ describe("BrowserPanel", () => {
 			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent("This page runs on the remote host"),
 		);
 		expect(openExternal).not.toHaveBeenCalled();
-		// Copy stays: it copies the address as shown.
 		await userEvent.click(screen.getByRole("button", { name: "Copy URL" }));
 		expect(writeText).toHaveBeenCalledExactlyOnceWith(url);
 		openExternal.mockRestore();
@@ -895,8 +890,6 @@ describe("BrowserPanel", () => {
 		}));
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
-		// Previously retained downloads hydrate the browser controls without
-		// opening the menu; only genuinely new downloads should interrupt.
 		await waitFor(() => expect(window.ao!.browser.downloads.list).toHaveBeenCalled());
 		const trigger = await screen.findByRole("button", { name: "Downloads" });
 		expect(screen.queryByText("report.pdf")).not.toBeInTheDocument();
@@ -1029,9 +1022,6 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("menu")).toBeInTheDocument();
 	});
 
-	// Regression: the reviewer flagged that the original 6-device list should
-	// match Chrome DevTools' own "Standard" device list rather than a
-	// hand-picked subset.
 	it("offers Chrome DevTools' own standard device list", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 		await openDevicePresets();
@@ -1061,8 +1051,6 @@ describe("BrowserPanel", () => {
 		]) {
 			expect(screen.getByRole("menuitem", { name: new RegExp(name.replace(/[+.]/g, "\\$&")) })).toBeInTheDocument();
 		}
-		// "Nest Hub" alone is a prefix of "Nest Hub Max" — assert it separately
-		// with a negative lookahead so the two rows aren't ambiguous.
 		expect(screen.getByRole("menuitem", { name: /Nest Hub(?! Max)/ })).toBeInTheDocument();
 	});
 
@@ -1191,9 +1179,6 @@ describe("BrowserPanel", () => {
 	});
 
 	it("keeps a shared AO tooltip trigger around a disabled toolbar button", () => {
-		// Disabled buttons never dispatch pointer/focus events natively, so the
-		// hover listener has to live on a wrapping span around the button rather
-		// than on the (potentially disabled) button itself.
 		hookState.navState = {
 			viewId: "42:sess-1",
 			url: "http://localhost:5173/",
@@ -1226,8 +1211,6 @@ describe("BrowserPanel", () => {
 
 		expect(firstTab).toHaveAttribute("aria-selected", "false");
 		expect(secondTab).toHaveAttribute("aria-selected", "true");
-		// The shared tab frame: the full title as the tab's native tooltip, and
-		// the ghost close button in the icon's slot.
 		expect(firstTab).toHaveAttribute("title", "First app");
 		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toBeNull();
 		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-active");
@@ -1283,7 +1266,6 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
-		// Closing an inactive tab does not select it first.
 		expect(hookState.selectTab).not.toHaveBeenCalled();
 	});
 
@@ -1599,7 +1581,6 @@ describe("BrowserPanel", () => {
 			message:
 				"The Orchestrator daemon refused the browser runtime because it comes from a different Orchestrator version than this app. Run `ao stop`, then reopen Orchestrator.",
 		},
-		// A malformed hello, a code this app doesn't know, or none: no cause is claimed.
 		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The Orchestrator daemon refused the browser runtime. Run `ao stop`, then reopen Orchestrator." },
 		{ rejectionCode: undefined, message: "The Orchestrator daemon refused the browser runtime. Run `ao stop`, then reopen Orchestrator." },
 	])(
@@ -1611,7 +1592,6 @@ describe("BrowserPanel", () => {
 			const alert = screen.getByTestId("browser-runtime-alert");
 			expect(alert).toHaveTextContent(message);
 			expect(alert.querySelector("span")).toHaveAttribute("title", message);
-			// Reconnecting resends the same token, which the daemon would refuse again.
 			expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
 		},
 	);
@@ -1649,7 +1629,6 @@ describe("BrowserPanel", () => {
 
 		const button = screen.getByRole("button", { name: /annotate/i });
 		expect(button).toBeDisabled();
-		// The tooltip says why.
 		fireEvent.pointerMove(button.closest('[data-slot="tooltip-trigger"]')!, { pointerType: "mouse" });
 		await waitFor(() =>
 			expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent(

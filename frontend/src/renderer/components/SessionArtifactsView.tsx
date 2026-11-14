@@ -41,10 +41,8 @@ import { GridSpacer, useVirtualGridRows } from "../hooks/useVirtualGridRows";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
 
-// How long a failed open or copy stays in the header.
 const ERROR_CLEAR_MS = 5_000;
 
-/** The session's artifacts, newest first. */
 function sortedArtifacts(artifacts: SessionArtifact[]): SessionArtifact[] {
 	return [...artifacts].sort(
 		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
@@ -59,7 +57,6 @@ function terminalName(): string {
 	return isWindowsPlatform() ? "Command Prompt" : "Terminal";
 }
 
-/** Opens the session's artifact directory in the file manager or a terminal. */
 function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 	const { t } = useTranslation();
 	const open = useOpenSessionArtifacts();
@@ -101,7 +98,6 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 	);
 }
 
-/** A cloud session's artifacts copied to its folder under ~/.ao and opened there. */
 function OpenCloudArtifactsFolderButton({ orgId, sessionId }: { orgId: string; sessionId: string }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
@@ -132,18 +128,8 @@ function OpenCloudArtifactsFolderButton({ orgId, sessionId }: { orgId: string; s
 	);
 }
 
-// The zoom toolbar fades out this long after the last zoom or pointer visit.
 const ZOOM_CONTROLS_IDLE_MS = 1_500;
 
-/**
- * The open artifact's zoom, floating over the bottom of the preview: out, the
- * level (which resets to fit), and in. Shown while the artifact can zoom, and
- * only while in use: it appears when a file opens, on any zoom (pinch, its
- * buttons or the shortcuts), when the pointer nears the bottom edge (over a
- * local framed page, the page reports that through the controller), and when
- * the pointer reaches its own spot, then fades out once idle. Hover or
- * keyboard focus keeps it up.
- */
 function ArtifactZoomControls({ controller }: { controller: ArtifactZoomController }) {
 	const { t } = useTranslation();
 	const { available, zoom } = useArtifactZoomState(controller);
@@ -199,8 +185,6 @@ function ArtifactZoomControls({ controller }: { controller: ArtifactZoomControll
 			className={cn(
 				"absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-px rounded-lg border border-(--color-border-overlay) bg-overlay p-0.5 text-popover-foreground shadow-(--shadow-popover)",
 				"transition-opacity duration-(--duration-normal) ease-out motion-reduce:transition-none",
-				// Hidden, it still takes the pointer: hovering where it sits brings it
-				// back, even over a framed page whose own pointer moves never reach here.
 				!visible && "opacity-0",
 			)}
 			data-state={visible ? "visible" : "hidden"}
@@ -227,13 +211,6 @@ function ArtifactZoomControls({ controller }: { controller: ArtifactZoomControll
 	);
 }
 
-/**
- * The open file's view actions, in its name menu ahead of the file actions:
- * an HTML artifact's page or source, the file view's display modes and
- * actions (Edit, Add feedback), Open in AO Browser, and History. The menu
- * mounts this each time it opens, so it reads the file view's current actions.
- * The file actions always follow, so every group ends with a separator.
- */
 function ArtifactViewMenuItems({ fileActions, history, onOpenInAOBrowser, page }: {
 	fileActions: ArtifactMenuActions;
 	history: ReactNode;
@@ -278,8 +255,6 @@ function ArtifactViewMenuItems({ fileActions, history, onOpenInAOBrowser, page }
 		) });
 	}
 	if (history) groups.push({ key: "history", node: history });
-	// Each group ends with a separator from the file actions after it, so a menu
-	// with none of these starts straight at the file actions.
 	return groups.map(({ key, node }) => (
 		<Fragment key={key}>
 			{node}
@@ -288,19 +263,11 @@ function ArtifactViewMenuItems({ fileActions, history, onOpenInAOBrowser, page }
 	));
 }
 
-// Full screen covers the whole app window; Markdown keeps its shared reading layout.
 const FULLSCREEN_FRAME_CLASS =
 	"fixed inset-0 z-overlay flex flex-col bg-background outline-none";
-// The window's macOS traffic lights sit over the overlay's header unless the
-// window itself is full screen.
 const FULLSCREEN_MAC_HEADER_CLASS = "min-h-traffic-light-clearance pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:min-h-9 [html:has(.native-fullscreen)_&]:pl-1";
 const INLINE_FRAME_CLASS = "flex h-full min-h-0 flex-col outline-none";
 
-/**
- * The open artifact's viewer, in the inspector or full screen. It renders
- * into one node that moves between its inspector slot and a window overlay,
- * so an edit in progress survives the switch. Escape leaves full screen.
- */
 function ArtifactViewerFrame({
 	children,
 	fullscreen,
@@ -312,10 +279,8 @@ function ArtifactViewerFrame({
 	children: ReactNode;
 	fullscreen: boolean;
 	label: string;
-	/** Told whether the viewer is under the pointer or holds focus, also inside a framed page. */
 	onEngagedChange?: (engaged: boolean) => void;
 	onExitFullscreen: () => void;
-	/** Keys pressed with focus in the viewer, which stays the same node in and out of full screen. */
 	onKeyDown?: (event: KeyboardEvent) => void;
 }) {
 	const [frame] = useState(() => {
@@ -337,10 +302,8 @@ function ArtifactViewerFrame({
 		try {
 			hovered = frame.matches(":hover");
 		} catch {
-			// A DOM without :hover support starts unhovered.
 		}
 		let reported: boolean | undefined;
-		// A framed page that takes focus leaves the iframe as this document's activeElement.
 		const update = () => {
 			const engaged = hovered || frame.contains(document.activeElement);
 			if (engaged === reported) return;
@@ -349,7 +312,6 @@ function ArtifactViewerFrame({
 		};
 		const enter = () => { hovered = true; update(); };
 		const leave = () => { hovered = false; update(); };
-		// Focus settles after focusout and window blur, so read it a tick later.
 		const later = () => window.setTimeout(update, 0);
 		frame.addEventListener("pointerenter", enter);
 		frame.addEventListener("pointerleave", leave);
@@ -369,8 +331,6 @@ function ArtifactViewerFrame({
 	useLayoutEffect(() => {
 		frame.className = fullscreen ? FULLSCREEN_FRAME_CLASS : INLINE_FRAME_CLASS;
 		if (fullscreen) {
-			// A dialog role also hides the native Browser view and gives the
-			// overlay solid surfaces in a translucent window.
 			frame.setAttribute("role", "dialog");
 			frame.setAttribute("aria-modal", "true");
 			frame.setAttribute("aria-label", label);
@@ -380,13 +340,11 @@ function ArtifactViewerFrame({
 			for (const name of ["role", "aria-modal", "aria-label", "data-state"]) frame.removeAttribute(name);
 			slotRef.current?.append(frame);
 		}
-		// Moving the node drops focus; after a switch it lands on the frame.
 		if (switchedRef.current || fullscreen) frame.focus({ preventScroll: true });
 		switchedRef.current = true;
 	}, [frame, fullscreen, label]);
 	useEffect(() => {
 		if (!fullscreen) return;
-		// Escape from a menu or dialog opened over the artifact is theirs.
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key !== "Escape" || event.defaultPrevented || !frame.contains(event.target as Node)) return;
 			event.preventDefault();
@@ -402,11 +360,6 @@ function ArtifactViewerFrame({
 	);
 }
 
-/**
- * The open artifact's content: the live file, or a saved version in its place
- * while a saved version is being previewed. The live file stays mounted underneath, so
- * an edit in progress survives a look at an earlier version.
- */
 function ArtifactViewerBody({
 	artifact,
 	artifactRoot,
@@ -430,15 +383,10 @@ function ArtifactViewerBody({
 	zoomController,
 }: {
 	artifact: SessionArtifact;
-	/** A cloud file's access prefix, which relative links resolve against. */
 	artifactRoot?: string;
-	/** Reads the file through the cloud bridge. */
 	cloud?: boolean;
-	/** A cloud file's versions, kept by the control plane. */
 	cloudVersions?: CloudArtifactVersions;
-	/** Saves an edit to the control plane, for a cloud file. */
 	save?: ArtifactSave;
-	/** Takes a fresh access link for a cloud file whose link was refused. */
 	onAccessRefused?: () => void;
 	feedbackRequestKey?: number;
 	initialEditing?: boolean;
@@ -448,14 +396,11 @@ function ArtifactViewerBody({
 	onPreviewVersion: (version: number | null) => void;
 	previewVersion: number | null;
 	readOnly: boolean;
-	/** Sends feedback to a cloud session's worker. */
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
 	onEditingChange?: (editing: boolean) => void;
-	/** The view's zoom, applied by whichever of the file or its page is showing. */
 	zoomController: ArtifactZoomController;
-	/** The header's file menu, which the shown file view fills with its actions. */
 	menuActions: ArtifactMenuActions;
 }) {
 	const restore = useRestoreArtifactVersion({ cloud: cloudVersions, hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
@@ -463,7 +408,6 @@ function ArtifactViewerBody({
 	const media = fileMediaKind(artifact.path);
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const showingPage = Boolean(page) && !htmlSource && !previewing;
-	// An error from one version's restore does not belong to the next one looked at.
 	const resetRestore = restore.reset;
 	useEffect(() => resetRestore(), [previewVersion, resetRestore]);
 	const artifactOrigin = useMemo(() => {
@@ -476,7 +420,6 @@ function ArtifactViewerBody({
 	return (
 		<div className="flex h-full min-h-0">
 			<div className="relative min-h-0 min-w-0 flex-1">
-				{/* A hidden video or audio file would go on playing under the version shown. */}
 				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactZoomContext.Provider value={previewing || showingPage ? null : zoomController}>
 					<ArtifactFileView
@@ -538,11 +481,6 @@ function ArtifactViewerBody({
 	);
 }
 
-/**
- * A rendered page with whole-file feedback for its worker, for an HTML
- * artifact shown as its page. The framed page is in another origin, so
- * feedback is on the file, not a selection in it.
- */
 function ArtifactPageFeedback({
 	children,
 	feedbackRequestKey,
@@ -557,12 +495,10 @@ function ArtifactPageFeedback({
 	children: ReactNode;
 	feedbackRequestKey?: number;
 	hostId?: string;
-	/** The header's file menu, which takes the feedback action. */
 	menuActions: ArtifactMenuActions;
 	name: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
 	path: string;
-	/** Sends feedback to the worker; without it feedback goes through the daemon. */
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 }) {
@@ -588,7 +524,6 @@ function ArtifactPageFeedback({
 	);
 }
 
-/** A cloud session's HTML artifact, framed from the control plane. */
 function CloudHtmlArtifactView({
 	artifact,
 	feedbackRequestKey,
@@ -602,18 +537,14 @@ function CloudHtmlArtifactView({
 }: {
 	artifact: SessionArtifact;
 	feedbackRequestKey?: number;
-	/** The header's file menu, which takes the feedback action. */
 	menuActions: ArtifactMenuActions;
 	onAccessRefused: () => void;
 	onFeedbackRequestConsumed?: (key: number) => void;
-	/** Called with the path of another file the page opened. */
 	onNavigate: (path: string) => void;
 	sendMessage: (message: string) => Promise<void>;
 	sessionId: string;
 	url: string;
 }) {
-	// The page is in the control plane's opaque origin, so the frame itself
-	// zooms: from the viewer's buttons and shortcuts, not a pinch inside it.
 	const { zoom } = useArtifactZoomTarget();
 	return (
 		<ArtifactPageFeedback
@@ -630,11 +561,6 @@ function CloudHtmlArtifactView({
 	);
 }
 
-/**
- * The inspector's Artifacts view (its own inspector tab): every file in
- * the session's artifact directory. Files open in place of the gallery,
- * with isolated inline HTML previews and an optional full-screen view.
- */
 export function SessionArtifactsView({
 	hostId,
 	onRequestConsumed,
@@ -651,7 +577,6 @@ export function SessionArtifactsView({
 	const cloud = Boolean(session.cloud);
 	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
 	const cloudRoot = cloudAccess.data;
-	// A cloud file's URL comes from the session's short-lived access prefix.
 	const artifacts = useMemo(
 		() =>
 			sortedArtifacts(session.artifactFiles ?? []).map((artifact) =>
@@ -659,8 +584,6 @@ export function SessionArtifactsView({
 			),
 		[cloud, cloudRoot, session.artifactFiles],
 	);
-	// The grid lists deliverables only. `artifacts` stays whole, so a link to any
-	// other file of the session still opens below.
 	const listedArtifacts = useMemo(() => deliverableArtifacts(artifacts), [artifacts]);
 	const livePreviewPaths = useMemo(() => new Set(
 		listedArtifacts.filter((artifact) =>
@@ -669,35 +592,24 @@ export function SessionArtifactsView({
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [listedArtifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
-	// A file a request opened before the session listed it, until the list has
-	// it. Only that file gets the not-listed-yet note: one that leaves the list
-	// later (deleted here or by the agent) is gone, not on its way.
 	const [awaitedPath, setAwaitedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
-	// Share hides while the open file is being edited.
 	const [editingFile, setEditingFile] = useState(false);
 	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
 	const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const [zoomController] = useState(() => new ArtifactZoomController());
-	// The shown file view's actions, which its name menu lists.
 	const fileMenuActions = useRef<ArtifactMenuAction[]>([]);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const uiKey = sessionUiKey(session.id, hostId);
-	// Who each published card's link opens for, so it is marked as on the Artifacts page.
 	const shareAccess = useReconciledShareLinks();
 	const { client: cloudClient } = useCloudCp(cloud);
-	// Only the person who started a cloud session shares its files.
 	const cloudUserId = useCloudMeUserId(cloud);
 	const cloudOwner = Boolean(cloudUserId) && session.cloud?.createdByUserId === cloudUserId;
 	const cloudOrgId = session.cloud?.orgId;
-	// Another member's cloud session files open view only: no edit, restore,
-	// delete or copy of them (the control plane refuses the changes too).
 	const owner = canChangeSessionArtifacts(session.cloud, cloudUserId);
 	const queryClient = useQueryClient();
-	// A cloud session's artifacts are edited and versioned in the control plane,
-	// which hands a save to the session's worker.
 	const cloudVersions = useMemo<CloudArtifactVersions | undefined>(
 		() => (cloudOrgId ? { client: cloudClient, orgId: cloudOrgId } : undefined),
 		[cloudClient, cloudOrgId],
@@ -706,33 +618,23 @@ export function SessionArtifactsView({
 		if (!cloudOrgId) throw new Error(t("files.saveError"));
 		const { artifact } = await cloudClient.saveSessionArtifact(cloudOrgId, session.id, { path, content, expectedSha256: expectedFileFingerprint })
 			.catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); });
-		// The file's link changes with it, so the list's refresh reads it again.
 		await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 		return { fileFingerprint: artifact.sha256, size: artifact.size };
 	}, [cloudClient, cloudOrgId, queryClient, session.id, t]);
-	// A cloud session's worker gets feedback from the control plane, not the daemon.
 	const sendCloudFeedback = useCallback(async (message: string) => {
 		if (!cloudOrgId) throw new Error(t("files.feedbackError"));
 		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
 	}, [cloudClient, cloudOrgId, session.id, t]);
 
 	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
-	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
-	// Every file, and each look at its page or source, opens at fit.
 	useEffect(() => zoomController.reset(), [htmlSourcePath, previewVersion, selectedPath, uiKey, zoomController]);
 	const onViewerKeyDown = useCallback((event: KeyboardEvent) => {
 		const action = zoomShortcut(event, isMacPlatform());
 		if (!action || event.defaultPrevented || !zoomController.hasTarget()) return;
-		// Ahead of the app menu's own zoom, which would scale the whole window.
-		// In the desktop app main claims the chord first while the viewer is
-		// engaged (below); this covers the same keys anywhere else.
 		event.preventDefault();
 		applyZoomShortcut(zoomController, action);
 	}, [zoomController]);
-	// While a viewer that can zoom is under the pointer or holds focus (also
-	// inside a framed page, whose keys never reach this view), main claims
-	// Cmd+=/-/0 ahead of the app menu and sends them here.
 	const viewerEngaged = useRef(false);
 	const reportEngaged = useCallback(() => {
 		aoBridge.artifactZoom.setEngaged(viewerEngaged.current && zoomController.hasTarget());
@@ -762,17 +664,11 @@ export function SessionArtifactsView({
 		}
 	}, [request]);
 
-	// A file renamed while it is open, or opened by a link from before its
-	// rename, is found by the path it had.
 	const listed = selectedPath === null ? undefined : artifactAtPath(artifacts, selectedPath);
-	// The awaited file is listed once the lookup finds it, under its own path
-	// or, renamed since the link was written, under a new one.
 	if (awaitedPath !== null && listed) setAwaitedPath(null);
 	useEffect(() => {
 		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
 	}, [listed, selectedPath]);
-	// An open cloud file keeps the URL it opened with while the access prefix
-	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
 	const selected = listed && cloud ? { ...listed, rawUrl: pinned.url } : listed;
 	const artifactRow = (artifact: SessionArtifact): ArtifactRow => ({
@@ -788,15 +684,9 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A file the agent rewrites while it is open shows the new content.
 	useArtifactFileChanges(session, Boolean(selected) && !hostId);
-	// Versions are read back as text or, from a daemon that can, by the media
-	// viewers, so a cloud media file and any other binary file, such as an
-	// archive, get no History. This shares the viewer's cached read of the file, which for a
-	// cloud file also shows when its access link was refused.
 	const selectedFile = useQuery({
 		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact"), cloud),
-		// A cloud page is framed, not read, until its source is shown.
 		enabled: Boolean(selected) && (!cloud || (Boolean(selected?.rawUrl) && (selected?.kind !== "html" || htmlSourcePath === selected?.path))),
 	});
 	const hostServesMediaVersions = useHostServesMediaVersions({
@@ -811,8 +701,6 @@ export function SessionArtifactsView({
 		void refetchAccess();
 		repin();
 	}, [refetchAccess, repin]);
-	// A page that opens another file of its session selects it, so the header
-	// names the file shown.
 	const followFrame = useCallback((path: string) => {
 		const artifact = artifactAtPath(session.artifactFiles, path);
 		if (artifact) setSelectedPath(artifact.path);
@@ -824,8 +712,6 @@ export function SessionArtifactsView({
 	useEffect(() => {
 		if (!selected) setFullscreen(false);
 	}, [selected]);
-	// A trackpad pinch arrives as a wheel event with ctrlKey: it zooms the
-	// artifact, never the app. A page's own pinch comes through its frame.
 	const hasSelection = Boolean(selected);
 	useEffect(() => {
 		const content = contentRef.current;
@@ -838,19 +724,15 @@ export function SessionArtifactsView({
 		content.addEventListener("wheel", onWheel, { passive: false });
 		return () => content.removeEventListener("wheel", onWheel);
 	}, [hasSelection, zoomController]);
-	// Only the cards in view and near it are built; the list itself scrolls.
 	const grid = useVirtualGridRows(listedArtifacts.length);
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
 		const hasHtmlPreview = selected.kind === "html" && (cloud || (selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
 		const showingHtmlSource = htmlSourcePath === selected.path;
-		// The page also opens in the session's Browser, the same target as
-		// `ao preview` on its path; full screen is left first since it covers it.
 		const browserUrl = openInBrowser && !cloud && previewVersion === null ? selected.previewUrl : undefined;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onEngagedChange={onViewerEngagedChange} onExitFullscreen={exitFullscreen} onKeyDown={onViewerKeyDown}>
-				{/* One header row: back, the file's name menu (its view and file actions), an edit's Save, Share, and full screen. */}
 				<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-b border-border bg-background px-1", fullscreen && isMacPlatform() && FULLSCREEN_MAC_HEADER_CLASS)}>
 					<Button
 						aria-label={t("artifacts.back")}
@@ -871,12 +753,9 @@ export function SessionArtifactsView({
 							page={hasHtmlPreview && previewVersion === null ? { showingSource: showingHtmlSource, onShowSource: (source) => setHtmlSourcePath(source ? selected.path : null) } : undefined}
 						/>
 					</ArtifactActionsMenu>
-					{/* The name sizes to its text; the rest of the row stays empty. */}
 					<div aria-hidden="true" className="min-w-0 flex-1" />
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
-						{/* The artifact's public link. Only the person who started a cloud
-						    session publishes its files. */}
 						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
 								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}), ...(selected.sha256 ? { fingerprint: selected.sha256 } : {}) }}
@@ -964,13 +843,9 @@ export function SessionArtifactsView({
 		<div className="flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
 			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
-				{/* The artifact directory is on this machine only for a local session. */}
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
 				{session.cloud && owner && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
-			{/* A file opened by its path (a chat link to one the agent just wrote)
-			    shows once the session lists it; until then, say so rather than
-			    leave the gallery as if nothing was asked. */}
 			{selectedPath !== null && selectedPath === awaitedPath ? (
 				<PanelMessage action={<Button onClick={() => setSelectedPath(null)} size="sm" type="button" variant="secondary">{t("artifacts.back")}</Button>}>
 					{t("artifacts.notListedYet", { name: selectedPath })}
@@ -987,10 +862,8 @@ export function SessionArtifactsView({
 								key={artifact.path}
 								row={row}
 								previewLive={livePreviewPaths.has(artifact.path)}
-								// Every card here belongs to this session, so only its time shows.
 								context=""
 								onPreview={() => openArtifact(artifact)}
-								// File actions would reach only the one file a bundle's row opens.
 								actions={artifact.bundle ? null : <ArtifactActionsMenu
 									artifact={artifact}
 									hostId={hostId}

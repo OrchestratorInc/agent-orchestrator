@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A side uses the ordinary provider launch configuration. Tool access is not
-// restricted by its identity; the side manager supplies behavioral instructions.
 func TestSideConversationsPreserveProviderToolDefaults(t *testing.T) {
 	for _, operation := range []string{"start", "fork", "resume"} {
 		t.Run(operation, func(t *testing.T) {
@@ -40,8 +38,6 @@ func TestSideConversationsPreserveProviderToolDefaults(t *testing.T) {
 			if len(config) != 2 || config["model_reasoning_effort"] != "high" || params["developerInstructions"] != cfg.SystemPrompt || params["sandbox"] == "read-only" {
 				t.Fatalf("inherited configuration changed: %+v", params)
 			}
-			// Every open path, including the fork, carries AO's tool server so a
-			// side has its tools from the first turn rather than after a restart.
 			if mcp, ok := config["mcp_servers"].(map[string]any); !ok || mcp["ao"] == nil {
 				t.Fatalf("side %s has no ao tool server: %+v", operation, config)
 			}

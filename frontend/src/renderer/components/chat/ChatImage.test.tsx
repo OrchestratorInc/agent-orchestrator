@@ -121,8 +121,6 @@ describe("chatImageSaveName", () => {
 });
 
 describe("ChatImage source fallback", () => {
-	// A just-sent tile draws from an object URL first; when that fails it must move
-	// to the daemon's copy, not stop on its alt text.
 	function Tile({ onLocalError }: { onLocalError: () => void }) {
 		const [local, setLocal] = useState<string | undefined>("blob:app/sent");
 		return (

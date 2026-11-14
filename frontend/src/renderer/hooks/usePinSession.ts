@@ -15,9 +15,6 @@ export const unpinSessionMutationKey = ["unpin-session"] as const;
 
 type CloudSessionsSnapshot = [readonly unknown[], CloudCpSession[] | undefined][];
 
-// A Cloud pin is the caller's own and lives on the control plane. The board
-// and sidebar read Cloud rows from cloudSessionsQueryKey, so the row moves at
-// once and moves back if the control plane refuses.
 async function setCloudPinned(queryClient: QueryClient, session: WorkspaceSession, pinned: boolean): Promise<void> {
 	const baseUrl = queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "";
 	if (!session.cloud || baseUrl === "") throw new Error("The cloud control plane is not configured.");
@@ -40,7 +37,6 @@ function restoreCloudSessions(queryClient: QueryClient, snapshot: CloudSessionsS
 	for (const [key, data] of snapshot ?? []) queryClient.setQueryData(key, data);
 }
 
-/** A session another host's daemon owns, as opposed to this computer's or the control plane's. */
 function remoteHostOf(session: WorkspaceSession): string | undefined {
 	return session.hostId && !isLocal(session.hostId) && !session.cloud ? session.hostId : undefined;
 }
@@ -84,9 +80,6 @@ export function useUnpinSession() {
 		mutationKey: unpinSessionMutationKey,
 		mutationFn: async (session: WorkspaceSession) => {
 			if (session.cloud) return setCloudPinned(queryClient, session, false);
-			// Pins are this sidebar's to remove even when the owning host is asleep,
-			// offline, or no longer linked: the row leaves Pinned now and the host
-			// is told whenever it answers.
 			const hostId = remoteHostOf(session);
 			if (hostId) return unpinRemoteSession(queryClient, hostId, session.id, session.pinnedAt);
 			const { error, response } = await (session.hostId ? clientForSessionHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}/pin", {
@@ -99,7 +92,6 @@ export function useUnpinSession() {
 		},
 		onMutate: (session) => markCloudPinned(queryClient, session, false),
 		onSuccess: async (_data, session) => {
-			// A remote unpin refreshes its host itself, once the host has it.
 			if (!remoteHostOf(session)) await refreshAfterPin(queryClient, session);
 		},
 		onError: (error, _session, snapshot) => {

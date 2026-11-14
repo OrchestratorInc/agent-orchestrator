@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// fakeStore is an in-memory Store with the importer's idempotency semantics.
 type fakeStore struct {
 	projects map[string]domain.ProjectRecord
 }
@@ -29,8 +28,6 @@ func (f *fakeStore) UpsertProject(_ context.Context, r domain.ProjectRecord) err
 	return nil
 }
 
-// writeLegacyRoot builds a minimal legacy store: two projects. Returns the
-// legacy root.
 func writeLegacyRoot(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), ".agent-orchestrator")
@@ -68,7 +65,6 @@ func TestRun_EndToEnd(t *testing.T) {
 	if rep.ProjectsImported != 2 {
 		t.Fatalf("projectsImported = %d, want 2", rep.ProjectsImported)
 	}
-	// develop branch survives into the config blob.
 	if store.projects["alpha"].Config.DefaultBranch != "develop" {
 		t.Fatalf("alpha config = %+v", store.projects["alpha"].Config)
 	}
@@ -128,12 +124,6 @@ func TestHasLegacyData(t *testing.T) {
 	}
 }
 
-// TestLegacyConfigError_SurfacesParseFailure covers issue #2186 Bug 2: a legacy
-// config.yaml with a syntax error must be surfaced as a parse error, not
-// swallowed as "no data". The tab-indented line below is a YAML syntax error
-// (not a *yaml.TypeError, so it is not a partial decode), exactly the case
-// HasLegacyData collapses to false today. HasLegacyData's bool contract for the
-// migration-probe service layer must stay intact (still false on a broken store).
 func TestLegacyConfigError_SurfacesParseFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), ".agent-orchestrator")
 	mustMkdir(t, root)
@@ -146,8 +136,6 @@ func TestLegacyConfigError_SurfacesParseFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "parse legacy config.yaml") {
 		t.Fatalf("LegacyConfigError = %q, want an error mentioning parse legacy config.yaml", err)
 	}
-	// The bool probe used by the migration UI must keep reporting "not available"
-	// rather than erroring on a broken store.
 	if HasLegacyData(root) {
 		t.Fatal("HasLegacyData = true for a config.yaml that fails to parse")
 	}

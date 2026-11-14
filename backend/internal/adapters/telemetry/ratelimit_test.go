@@ -80,11 +80,6 @@ func TestRateLimitedSinkCapsTotalPerDayEvenWhenPacedUnderBurstLimit(t *testing.T
 	s := NewRateLimitedSink(&recordingSink{}, nil)
 	start := time.Now()
 
-	// One reservation per (simulated) minute never trips the burst cap, but
-	// the day cap must still bound the total once it's exhausted. Driving
-	// reserve() directly with synthetic timestamps, rather than Emit (which
-	// rate-limits by real wall-clock arrival time, not a caller-supplied
-	// event timestamp), is what actually simulates pacing here.
 	var forwarded int
 	for i := 0; i < eventsPerNamePerDay+10; i++ {
 		if s.reserve("ao.http.5xx", start) {
@@ -101,12 +96,6 @@ func TestRateLimitedSinkGivesAggregatedNamesTheGenerousDailyTier(t *testing.T) {
 	s := NewRateLimitedSink(&recordingSink{}, []string{"ao.http.5xx"})
 	start := time.Now()
 
-	// eventsPerNamePerDayAggregated (1500) exceeds the number of minutes in a
-	// day (1440), so pacing one reservation per minute would let the 24-hour
-	// window itself roll over and hand out a second, fresh budget before the
-	// cap is ever reached - that would test the window reset, not the cap.
-	// Pacing faster (30s) keeps the whole loop inside one 24-hour window so
-	// the cap is what actually gets exercised.
 	const step = 30 * time.Second
 	var forwarded int
 	for i := 0; i < eventsPerNamePerDayAggregated+10; i++ {

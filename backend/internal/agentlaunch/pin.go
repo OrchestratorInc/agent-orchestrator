@@ -14,9 +14,6 @@ import (
 
 var pinMu sync.Mutex
 
-// pinDirectory uses the install directory only when it contains no sibling
-// executables. Shared installs get a shim so pinning ao cannot promote node,
-// git, or other tools ahead of the agent's selected runtime.
 func pinDirectory(exe, dataDir string) (string, error) {
 	dir := pinnedDirForExecutable(exe)
 	if dir == "" {

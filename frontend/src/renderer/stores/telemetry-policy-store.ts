@@ -22,9 +22,6 @@ export const useTelemetryPolicyStore = create<TelemetryPolicyState>((set, get) =
 		pendingLoad = (async () => {
 			if (!subscribed) {
 				subscribed = true;
-				// This policy is the failure-reporting consent. PostHog product
-				// analytics keep their own once-a-day gates in localStorage and
-				// are not governed by it (see applyRendererTelemetryPolicy).
 				aoBridge.telemetry.onPolicy((view) => set({ view, loaded: true, saving: false }));
 			}
 			try { set({ view: await aoBridge.telemetry.getPolicy(), loaded: true }); }

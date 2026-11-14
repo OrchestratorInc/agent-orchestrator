@@ -64,7 +64,6 @@ func TestTerminalTurnsPairRequestsWithResponses(t *testing.T) {
 		t.Fatalf("second turn = %+v, want an open Codex turn", turns[1])
 	}
 
-	// Importing Claude's thread into Chat removes only that thread's turns.
 	if err := s.DeleteTerminalTurnsForThread(ctx, session.ID, domain.HarnessClaudeCode, "claude-1"); err != nil {
 		t.Fatalf("delete imported turns: %v", err)
 	}
@@ -146,7 +145,6 @@ func TestTerminalTurnsJoinOnlyOnTheSameThread(t *testing.T) {
 func TestTerminalTurnStopsGrowingPastItsCap(t *testing.T) {
 	s, session := newTerminalTurnSession(t, "capped")
 	ctx := context.Background()
-	// An agent that never reports its stop leaves the turn open.
 	for i := range 3 {
 		if err := s.RecordTerminalTurnRequest(ctx, domain.TerminalTurn{
 			SessionID: session.ID, Harness: domain.HarnessClaudeCode,

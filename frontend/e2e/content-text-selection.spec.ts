@@ -1,9 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openInspector } from "./support/open-inspector";
 
-// #4268: `body { user-select: none }` keeps app chrome inert; read-only
-// content must opt back in so a drag selects it and Cmd/Ctrl+C copies it.
-
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
 async function dragAcross(page: Page, target: Locator) {
@@ -11,9 +8,8 @@ async function dragAcross(page: Page, target: Locator) {
 		window.getSelection()?.removeAllRanges();
 		return navigator.clipboard.writeText("<untouched>");
 	});
-	await target.hover(); // waits out the inspector's slide-in so the box is final
+	await target.hover();
 	const box = (await target.boundingBox())!;
-	// Corner to corner, so text that wraps onto several lines is covered whole.
 	await page.mouse.move(box.x + 1, box.y + 2);
 	await page.mouse.down();
 	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });

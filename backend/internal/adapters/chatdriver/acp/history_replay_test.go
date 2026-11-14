@@ -18,9 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// replayConversation builds the smallest conversation that can run a history
-// replay: the SDK delivery path only touches the capture, the maps, the log,
-// and (for live assertions) the events channel.
 func replayConversation() *conversation {
 	return &conversation{
 		log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -42,7 +39,6 @@ func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 		t.Fatalf("persisted preamble = (%v, %d blocks), want consumed with no duplicate", conv.preambleSpent, len(conv.preamble))
 	}
 
-	// Preamble concatenated with the user prompt in the same turn (e.g. from Antigravity)
 	convCombined := replayConversation()
 	convCombined.historyEvents = []ports.ChatEvent{{Kind: ports.ChatEventUserMessageCompleted, Text: preamble + "\n\nAdd one line to README.md"}}
 	convCombined.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
@@ -50,8 +46,6 @@ func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 		t.Fatalf("persisted combined preamble = (%v, %d blocks), want consumed with no duplicate", convCombined.preambleSpent, len(convCombined.preamble))
 	}
 
-	// A conversation with prior turns (e.g. started in TUI with "hey") must not
-	// inject standing instructions into subsequent mid-conversation user prompts.
 	convTUI := replayConversation()
 	convTUI.historyEvents = []ports.ChatEvent{
 		{Kind: ports.ChatEventUserMessageCompleted, Text: "hey"},
@@ -63,7 +57,6 @@ func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 		t.Fatalf("TUI history preamble = (%v, %d blocks), want disarmed", convTUI.preambleSpent, len(convTUI.preamble))
 	}
 
-	// An empty conversation (no prior user turns) arms the preamble for the first prompt.
 	convFresh := replayConversation()
 	convFresh.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
 	if convFresh.preambleSpent || len(convFresh.preamble) != 1 {
@@ -71,8 +64,6 @@ func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 	}
 }
 
-// A live reconnect replays no history, so AO's durable turn record decides
-// whether the standing instructions were already delivered.
 func TestSetSessionPreambleDisarmsForDurableTurns(t *testing.T) {
 	const preamble = "Standing instructions from Agent Orchestrator:\n<ao_standing_instructions>rules</ao_standing_instructions>"
 
@@ -114,10 +105,6 @@ func replayAgentChunk(sessionID, messageID, text string) acpsdk.SessionNotificat
 	}
 }
 
-// The SDK owns a bounded (1024) notification queue drained by sequential
-// handler calls: normalizing a whole transcript inline overflows it and kills
-// the connection. Replay notifications must be captured verbatim on delivery
-// and normalized only by the post-load drain.
 func TestACPReplayCaptureDefersNormalization(t *testing.T) {
 	conv := replayConversation()
 	conv.beginHistoryReplay("session-1")
@@ -148,7 +135,6 @@ func TestACPReplayDrainReconstructsTurnsInOrder(t *testing.T) {
 	updates := []acpsdk.SessionNotification{
 		replayUserChunk("session-1", "u1", "hello"),
 		replayAgentChunk("session-1", "a1", "hi"),
-		// The agent's own note starts no turn; its answer stays in this one.
 		replayUserChunk("session-1", "n1", "<note>task finished</note>"),
 		replayAgentChunk("session-1", "a1", " there"),
 		replayUserChunk("session-1", "u2", "bye"),
@@ -261,9 +247,6 @@ func TestACPReplayDrainReconstructsTurnsWithoutMessageIDs(t *testing.T) {
 	}
 }
 
-// pi-acp replays each user message as one id-less chunk and a reply that failed
-// as nothing. Two prompts whose replies both failed stay two turns, with the same
-// ids a replay with replies gives them, so earlier imports still match.
 func TestACPReplayKeepsWholeChunkUserMessagesApart(t *testing.T) {
 	conv := replayConversation()
 	conv.historyUserChunkIsMessage = true
@@ -300,8 +283,6 @@ func TestACPReplayKeepsWholeChunkUserMessagesApart(t *testing.T) {
 	}
 }
 
-// Block normalization while a second burst arrives. Delivery must keep making
-// progress, and the second batch must follow the first in the history snapshot.
 func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {
 	conv := replayConversation()
 	conv.beginHistoryReplay("session-1")
@@ -397,8 +378,6 @@ func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {
 }
 
 func TestACPReplayLoadLargeHistoryThroughSDK(t *testing.T) {
-	// More than the SDK queue capacity, with about 20 MiB of text. Distinct
-	// messages keep this test about replay delivery, not quadratic concatenation.
 	const count = 4096
 	updates := make([]acpsdk.SessionUpdate, 0, count*2)
 	for i := 0; i < count; i++ {
@@ -416,9 +395,6 @@ func TestACPReplayLoadLargeHistoryThroughSDK(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	conv.beginHistoryReplay("session-1")
-	// Hold the normalization mutex until the SDK response barrier returns.
-	// An inline handler cannot finish even its first update, fills the SDK
-	// queue, and disconnects. Capturing must deliver the complete burst anyway.
 	func() {
 		conv.mu.Lock()
 		defer conv.mu.Unlock()
@@ -453,7 +429,6 @@ func TestACPReplayLoadLargeHistoryThroughSDK(t *testing.T) {
 		t.Fatal("SDK connection closed")
 	default:
 	}
-	// An identical refresh must retain every identity, for archive deduplication.
 	if _, err := loader.loadHistory(ctx); err != nil {
 		t.Fatal(err)
 	}

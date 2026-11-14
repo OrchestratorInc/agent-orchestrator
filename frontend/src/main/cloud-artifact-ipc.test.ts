@@ -46,7 +46,6 @@ describe("copyCloudArtifactsToFolder", () => {
 		return mkdtemp(join(tmpdir(), "ao-cloud-artifacts-"));
 	}
 
-	/** A response whose body can only be streamed, never buffered whole. */
 	function streamedResponse(text: string, headers?: HeadersInit): Response {
 		const response = new Response(text, { headers });
 		const buffered = () => Promise.reject(new Error("buffered the whole file"));
@@ -67,7 +66,6 @@ describe("copyCloudArtifactsToFolder", () => {
 		expect(revealed).toBe(join(first, "dir", "a.md"));
 		expect(await readFile(revealed, "utf8")).toBe("# a");
 		expect(await readdir(first)).toEqual(["dir"]);
-		// No staging folder is left beside the session's folder.
 		expect(await readdir(join(dir, "cloud-artifacts"))).toEqual([SESSION]);
 	});
 
@@ -102,7 +100,6 @@ describe("copyCloudArtifactsToFolder", () => {
 		const folder = await copyCloudArtifactsToFolder({ fetch: vi.fn(async () => streamedResponse("kept")) }, { sessionId: SESSION, files: [{ path: "a.md", url: FILE_URL }] }, env);
 		const failing = { fetch: vi.fn(async () => new Response("", { status: 403 })) };
 		await expect(copyCloudArtifactsToFolder(failing, { sessionId: SESSION, files: [{ path: "b.md", url: FILE_URL }] }, env)).rejects.toThrow("403");
-		// A body with no declared length is cut off once it passes the limit.
 		const oversized = { fetch: vi.fn(async () => new Response(new Uint8Array(MAX_CLOUD_ARTIFACT_BYTES + 1))) };
 		await expect(copyCloudArtifactsToFolder(oversized, { sessionId: SESSION, files: [{ path: "big.bin", url: FILE_URL }] }, env)).rejects.toThrow("too large");
 		expect(await readFile(join(folder, "a.md"), "utf8")).toBe("kept");
@@ -196,7 +193,6 @@ describe("cloudArtifact:openFolder in the browser", () => {
 		const { cloudArtifactsFolder } = await import("./cloud-artifact-ipc");
 		const { open, openInBrowser, openInFileManager } = await register();
 		await open({ sessionId: SESSION, files: [{ path: "report.html", url: `${FILE_URL}&a` }, { path: "chart.png", url: `${FILE_URL}&b` }], reveal: "report.html", open: "browser" });
-		// Its own copy, apart from the folder "Show in" replaces.
 		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith(join(cloudArtifactsFolder(SESSION, process.env, true), "report.html"));
 		expect(openInFileManager).not.toHaveBeenCalled();
 		vi.unstubAllEnvs();

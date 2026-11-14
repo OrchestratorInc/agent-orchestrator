@@ -61,7 +61,6 @@ describe("evaluateEscalation - nightly channel", () => {
 	});
 
 	it("escalated when running nightly is behind stable of the same base", () => {
-		// 0.10.4-nightly.x is a pre-release of 0.10.4, so it is behind stable 0.10.4.
 		expect(
 			evaluateEscalation({
 				channel: "nightly",

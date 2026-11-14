@@ -28,8 +28,6 @@ func spawnDetached(ctx context.Context, cfg Config) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn detached chat host: %w", err)
 	}
-	// Setsid detaches the host from our session, but it remains our child until
-	// Wait reaps it. Release alone leaves a zombie after each hibernation.
 	go func() { _ = cmd.Wait() }()
 	return nil
 }

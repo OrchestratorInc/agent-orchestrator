@@ -4,29 +4,19 @@ import { cn } from "../../lib/utils";
 
 const BARS = 11;
 const MIDDLE = (BARS - 1) / 2;
-/** Bar heights, 1px apart, from the resting dot to the pill's inner height. */
 const HEIGHTS = ["h-[3px]", "h-[4px]", "h-[5px]", "h-[6px]", "h-[7px]", "h-[8px]", "h-[9px]", "h-[10px]", "h-[11px]", "h-[12px]", "h-[13px]", "h-[14px]", "h-[15px]", "h-[16px]", "h-[17px]", "h-[18px]", "h-[19px]", "h-[20px]"];
 const BAR = "w-[3px] rounded-full bg-current";
-/** How tall each bar may grow: full in the middle, about a third at the ends. */
 const REACH = Array.from({ length: BARS }, (_, bar) => {
 	const distance = Math.abs(bar - MIDDLE) / MIDDLE;
 	return 1 - 0.65 * distance * distance;
 });
-/** Helper levels at or below this are room noise; speech sits well above it. */
 const NOISE_FLOOR = 0.2;
 const SPEECH_SPAN = 0.6;
-/** The bars catch up with louder sound within a frame or two, and settle back gently. */
 const ATTACK_S = 0.03;
 const RELEASE_S = 0.14;
-/** A standing wave over the bell, so the bars rise and fall in place instead of travelling sideways. */
 const WAVE_DEPTH = 0.22;
 const WAVE_HZ = 1.6;
 
-/**
- * The microphone level as a row of bars that grow up and down from the
- * middle: tallest in the centre, with a gentle standing wave across them.
- * Drawn straight to the bars each frame, outside React.
- */
 export function DictationMeter({ listening }: { listening: boolean }) {
 	const row = useRef<HTMLSpanElement>(null);
 

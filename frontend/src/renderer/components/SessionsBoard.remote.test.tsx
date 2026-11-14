@@ -75,7 +75,6 @@ vi.mock("../lib/shell-context", () => ({
 		retryRemoteHosts: mocks.retryRemoteHosts,
 	}),
 }));
-// A real store, so the shell's archive host follows openArchive/closeArchive.
 vi.mock("../stores/ui-store", async () => {
 	const { create } = await import("zustand");
 	let nonce = 0;
@@ -113,7 +112,6 @@ function worker(hostId: string, title = "Fix login", status = "working") {
 	};
 }
 
-/** Every client a test renders with, so afterEach can empty it. */
 const clients: QueryClient[] = [];
 
 function renderBoard(hostId: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -139,11 +137,6 @@ beforeEach(() => {
 	mocks.remotePost.mockResolvedValue({ data: {}, error: undefined });
 });
 
-// React Query hands updates to React on a 0ms timer. One queued as a test's
-// last fetch settles could fire after this file's DOM was torn down, and React
-// then threw "window is not defined" as an unhandled error that failed the
-// whole run. Unmount, empty the clients, then wait one tick so anything
-// already queued lands while the DOM still exists.
 afterEach(async () => {
 	cleanup();
 	for (const client of clients.splice(0)) client.clear();

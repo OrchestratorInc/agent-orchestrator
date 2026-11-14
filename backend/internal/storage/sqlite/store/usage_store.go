@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// UpsertUsageBinding records or refreshes the association between an AO
-// session and a native root session/thread.
 func (s *Store) UpsertUsageBinding(ctx context.Context, rec domain.UsageBindingRecord) (domain.UsageBindingRecord, error) {
 	if !rec.Harness.IsKnown() {
 		return domain.UsageBindingRecord{}, fmt.Errorf("upsert usage binding: unknown harness %q", rec.Harness)
@@ -38,7 +36,6 @@ func (s *Store) UpsertUsageBinding(ctx context.Context, rec domain.UsageBindingR
 	return usageBindingFromGen(row), nil
 }
 
-// GetUsageBinding returns one binding, or ok=false when absent.
 func (s *Store) GetUsageBinding(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, nativeRootID string) (domain.UsageBindingRecord, bool, error) {
 	row, err := s.qr.GetUsageBindingBySessionHarnessRoot(ctx, gen.GetUsageBindingBySessionHarnessRootParams{
 		SessionID:    sessionID,
@@ -54,7 +51,6 @@ func (s *Store) GetUsageBinding(ctx context.Context, sessionID domain.SessionID,
 	return usageBindingFromGen(row), true, nil
 }
 
-// ListUsageBindingsForSession returns every native usage binding for a session.
 func (s *Store) ListUsageBindingsForSession(ctx context.Context, sessionID domain.SessionID) ([]domain.UsageBindingRecord, error) {
 	rows, err := s.qr.ListUsageBindingsForSession(ctx, sessionID)
 	if err != nil {
@@ -67,9 +63,6 @@ func (s *Store) ListUsageBindingsForSession(ctx context.Context, sessionID domai
 	return out, nil
 }
 
-// FinalizeUsageBindingsForSessionLaunch atomically moves a live session's
-// bindings into finalization only while its durable runtime generation and
-// session revision match the lifecycle observation.
 func (s *Store) FinalizeUsageBindingsForSessionLaunch(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -95,7 +88,6 @@ func (s *Store) FinalizeUsageBindingsForSessionLaunch(
 	return out, nil
 }
 
-// UpdateUsageBindingState updates only the binding lifecycle/error state.
 func (s *Store) UpdateUsageBindingState(ctx context.Context, id int64, state domain.UsageBindingState, lastErrorCode string, at time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -111,8 +103,6 @@ func (s *Store) UpdateUsageBindingState(ctx context.Context, id int64, state dom
 	return n > 0, nil
 }
 
-// UpdateUsageBindingErrorCode refreshes binding diagnostics without changing
-// lifecycle state chosen by a concurrent finalization or ingestion pass.
 func (s *Store) UpdateUsageBindingErrorCode(ctx context.Context, id int64, lastErrorCode string, at time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -128,8 +118,6 @@ func (s *Store) UpdateUsageBindingErrorCode(ctx context.Context, id int64, lastE
 	return n > 0, nil
 }
 
-// CompleteUsageBindingIfSettled atomically completes a finalizing binding only
-// when every registered source generation is complete.
 func (s *Store) CompleteUsageBindingIfSettled(ctx context.Context, bindingID int64, at time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -143,8 +131,6 @@ func (s *Store) CompleteUsageBindingIfSettled(ctx context.Context, bindingID int
 	return n > 0, nil
 }
 
-// InsertUsageSource records a physical JSONL source generation. Repeated calls
-// for the same binding/path/generation return the existing row.
 func (s *Store) InsertUsageSource(ctx context.Context, rec domain.UsageSourceRecord) (domain.UsageSourceRecord, error) {
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
 		return domain.UsageSourceRecord{}, err
@@ -161,8 +147,6 @@ func (s *Store) InsertUsageSource(ctx context.Context, rec domain.UsageSourceRec
 	return usageSourceFromGen(row), nil
 }
 
-// ReplaceUsageSource atomically retires one source generation and inserts its
-// replacement so startup or watcher reconciliation can never observe a gap.
 func (s *Store) ReplaceUsageSource(
 	ctx context.Context,
 	oldSourceID int64,
@@ -207,8 +191,6 @@ func (s *Store) ReplaceUsageSource(
 	return replaced, nil
 }
 
-// ListUsageSourcesForBinding returns all source generations for one native
-// session binding.
 func (s *Store) ListUsageSourcesForBinding(ctx context.Context, bindingID int64) ([]domain.UsageSourceRecord, error) {
 	rows, err := s.qr.ListUsageSourcesForBinding(ctx, bindingID)
 	if err != nil {
@@ -221,9 +203,6 @@ func (s *Store) ListUsageSourcesForBinding(ctx context.Context, bindingID int64)
 	return out, nil
 }
 
-// ListWatchableUsageSources returns the latest source generation for every
-// provider artifact attached to a resumable session. Watch registrations are
-// rebuilt from this durable inventory after daemon and watcher restarts.
 func (s *Store) ListWatchableUsageSources(ctx context.Context) ([]domain.UsageSourceRecord, error) {
 	rows, err := s.qr.ListWatchableUsageSources(ctx)
 	if err != nil {
@@ -236,7 +215,6 @@ func (s *Store) ListWatchableUsageSources(ctx context.Context) ([]domain.UsageSo
 	return out, nil
 }
 
-// ListFinalizingUsageSourceIDs returns the sources of ended sessions that still need a final read.
 func (s *Store) ListFinalizingUsageSourceIDs(ctx context.Context) ([]int64, error) {
 	ids, err := s.qr.ListFinalizingUsageSourceIDs(ctx)
 	if err != nil {
@@ -245,9 +223,6 @@ func (s *Store) ListFinalizingUsageSourceIDs(ctx context.Context) ([]int64, erro
 	return ids, nil
 }
 
-// HasPendingUsageDiscovery reports whether a live binding has a durable reason
-// to retry source discovery. Healthy active bindings are excluded unless their
-// provider has a dynamic child inventory, such as Kimi agents.
 func (s *Store) HasPendingUsageDiscovery(ctx context.Context) (bool, error) {
 	pending, err := s.qr.HasPendingUsageDiscovery(ctx)
 	if err != nil {
@@ -256,9 +231,6 @@ func (s *Store) HasPendingUsageDiscovery(ctx context.Context) (bool, error) {
 	return pending != 0, nil
 }
 
-// HasUsageSourceByPath reports whether any binding already registers a source
-// at this exact artifact path, so one physical transcript cannot be bound to a
-// second session and counted twice.
 func (s *Store) HasUsageSourceByPath(ctx context.Context, artifactPath string) (bool, error) {
 	exists, err := s.qr.ExistsUsageSourceByArtifactPath(ctx, artifactPath)
 	if err != nil {
@@ -267,8 +239,6 @@ func (s *Store) HasUsageSourceByPath(ctx context.Context, artifactPath string) (
 	return exists != 0, nil
 }
 
-// ListLatestRetiredCodexReplacementClaimsByPath returns durable replacement
-// claims for one exact provider artifact path on resumable bindings.
 func (s *Store) ListLatestRetiredCodexReplacementClaimsByPath(
 	ctx context.Context,
 	artifactPath string,
@@ -284,9 +254,6 @@ func (s *Store) ListLatestRetiredCodexReplacementClaimsByPath(
 	return out, nil
 }
 
-// ListUsageDiscoveryBindings returns live-session bindings that may need a
-// main source, a relocated source, or newly-created subagent sources, in id
-// order starting after afterID.
 func (s *Store) ListUsageDiscoveryBindings(ctx context.Context, afterID, limit int64) ([]domain.UsageBindingRecord, error) {
 	rows, err := s.qr.ListUsageDiscoveryBindings(ctx, gen.ListUsageDiscoveryBindingsParams{AfterID: afterID, RowLimit: limit})
 	if err != nil {
@@ -299,9 +266,6 @@ func (s *Store) ListUsageDiscoveryBindings(ctx context.Context, afterID, limit i
 	return out, nil
 }
 
-// ListUsageBindingsForCodexParent returns live bindings whose latest source
-// matches one exact Codex parent native session. The collector validates the
-// child edge from that source's parser state before registration.
 func (s *Store) ListUsageBindingsForCodexParent(ctx context.Context, parentNativeSessionID string) ([]domain.UsageBindingRecord, error) {
 	rows, err := s.qr.ListUsageBindingsForCodexParent(ctx, parentNativeSessionID)
 	if err != nil {
@@ -314,8 +278,6 @@ func (s *Store) ListUsageBindingsForCodexParent(ctx context.Context, parentNativ
 	return out, nil
 }
 
-// GetUsageSourceForIngestion returns a source plus immutable binding/session
-// facts needed by the ingestor.
 func (s *Store) GetUsageSourceForIngestion(ctx context.Context, id int64) (domain.UsageSourceContext, bool, error) {
 	row, err := s.qr.GetUsageSourceWithBindingAndSession(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -327,7 +289,6 @@ func (s *Store) GetUsageSourceForIngestion(ctx context.Context, id int64) (domai
 	return usageSourceContextFromGen(row), true, nil
 }
 
-// MarkUsageSourceState updates only the source lifecycle/error state.
 func (s *Store) MarkUsageSourceState(ctx context.Context, id int64, state domain.UsageSourceState, lastErrorCode string, nextRetryAt *time.Time, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -345,8 +306,6 @@ func (s *Store) MarkUsageSourceState(ctx context.Context, id int64, state domain
 	return n > 0, nil
 }
 
-// ReactivateUsageSource makes a completed or failed source eligible for
-// immediate resumed-session ingestion and clears transient retry state.
 func (s *Store) ReactivateUsageSource(ctx context.Context, id int64, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -364,8 +323,6 @@ func (s *Store) ReactivateUsageSource(ctx context.Context, id int64, updatedAt t
 	return n > 0, nil
 }
 
-// MarkUsageSourceFailure records a failed ingestion attempt and its bounded
-// retry schedule.
 func (s *Store) MarkUsageSourceFailure(ctx context.Context, id, failureCount int64, lastErrorCode string, nextRetryAt, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -383,8 +340,6 @@ func (s *Store) MarkUsageSourceFailure(ctx context.Context, id, failureCount int
 	return n > 0, nil
 }
 
-// ApplyUsageChunk atomically writes parsed usage events and advances the source
-// cursor/baselines. The cursor never moves unless all event writes commit.
 func (s *Store) ApplyUsageChunk(
 	ctx context.Context,
 	sourceID, expectedOffset int64,
@@ -434,10 +389,6 @@ func (s *Store) ApplyUsageChunk(
 				if !matches {
 					return fmt.Errorf("%w: binding %d event %q", domain.ErrUsageSourceEventConflict, source.BindingID, ev.SourceEventKey)
 				}
-				// A replaced transcript re-emits the same logical event under
-				// the same stable key, so this dedup hit can be a row still
-				// pointing at the retired generation. Repair skips that
-				// generation, so leaving it there strands the attribution.
 				if existing.UsageSourceID != sourceID {
 					if _, err := q.RehomeOpenUsageEventToReplacementSource(
 						ctx,
@@ -522,8 +473,6 @@ func (s *Store) ApplyUsageChunk(
 	return nil
 }
 
-// ListUsageCostCandidates returns the next stable bounded page of total-null
-// events whose exact canonical provider has not been attempted at version.
 func (s *Store) ListUsageCostCandidates(
 	ctx context.Context,
 	billingProviderID, version string,
@@ -559,7 +508,6 @@ func (s *Store) ListUsageCostCandidates(
 	return out, nil
 }
 
-// ListUsagePricedVersions lists the catalog versions that priced a provider's stored events, so a newer version can find the rows an older one priced.
 func (s *Store) ListUsagePricedVersions(ctx context.Context, providerID string) ([]string, error) {
 	prefix := "ao-catalog:" + providerID + ":"
 	versions, err := s.qr.ListUsagePricedVersions(ctx, gen.ListUsagePricedVersionsParams{
@@ -572,7 +520,6 @@ func (s *Store) ListUsagePricedVersions(ctx context.Context, providerID string) 
 	return versions, nil
 }
 
-// ListUsageRepriceCandidates returns the next page of events priced at version.
 func (s *Store) ListUsageRepriceCandidates(ctx context.Context, version string, afterID int64) ([]domain.UsageCostCandidate, error) {
 	rows, err := s.qr.ListUsageRepriceCandidates(ctx, gen.ListUsageRepriceCandidatesParams{PricingVersion: version, AfterID: afterID})
 	if err != nil {
@@ -585,7 +532,6 @@ func (s *Store) ListUsageRepriceCandidates(ctx context.Context, version string, 
 	return out, nil
 }
 
-// ListUsageModelCostCandidates returns the next page of one model's events that AO prices itself, leaving agent-reported costs out.
 func (s *Store) ListUsageModelCostCandidates(ctx context.Context, modelID string, afterID int64) ([]domain.UsageCostCandidate, error) {
 	rows, err := s.qr.ListUsageModelCostCandidates(ctx, gen.ListUsageModelCostCandidatesParams{ModelID: modelID, AfterID: afterID})
 	if err != nil {
@@ -615,8 +561,6 @@ func usageCostCandidate(row gen.ModelUsageEvent) domain.UsageCostCandidate {
 	}
 }
 
-// storedUsageTokens rebuilds the canonical token vector from one durable row. A
-// NULL column is an uncollected metric; a stored zero is a known zero.
 func storedUsageTokens(input, cached, uncached, output sql.NullInt64) domain.UsageTokenMetrics {
 	return domain.UsageTokenMetrics{
 		InputTokens:         nullInt64Ptr(input),
@@ -626,9 +570,6 @@ func storedUsageTokens(input, cached, uncached, output sql.NullInt64) domain.Usa
 	}
 }
 
-// ApplyUsageCostUpdates applies one bounded candidate page atomically. Stale
-// candidates are ignored, and every binding with at least one winning CAS is
-// touched exactly once so the existing trigger publishes one CDC invalidation.
 func (s *Store) ApplyUsageCostUpdates(
 	ctx context.Context,
 	updates []domain.UsageCostUpdate,
@@ -700,8 +641,6 @@ func (s *Store) ApplyUsageCostUpdates(
 	return applied, nil
 }
 
-// ListLegacyUsageSources returns source contexts that still own provider-null,
-// total-null events. The repairer validates each durable artifact before use.
 func (s *Store) ListLegacyUsageSources(ctx context.Context) ([]domain.UsageSourceContext, error) {
 	ids, err := s.qr.ListLegacyUsageSourceIDs(ctx)
 	if err != nil {
@@ -721,7 +660,6 @@ func (s *Store) ListLegacyUsageSources(ctx context.Context) ([]domain.UsageSourc
 	return out, nil
 }
 
-// ListUsageSourcesWithUntimedEvents returns the sources that still hold events with no created_at, which the usage report cannot place in any period.
 func (s *Store) ListUsageSourcesWithUntimedEvents(ctx context.Context) ([]domain.UsageSourceContext, error) {
 	ids, err := s.qr.ListUntimedUsageSourceIDs(ctx)
 	if err != nil {
@@ -741,7 +679,6 @@ func (s *Store) ListUsageSourcesWithUntimedEvents(ctx context.Context) ([]domain
 	return out, nil
 }
 
-// SetUsageEventTimes fills created_at on a binding's events, by source event key.
 func (s *Store) SetUsageEventTimes(ctx context.Context, bindingID int64, times map[string]time.Time) (int, error) {
 	if len(times) == 0 {
 		return 0, nil
@@ -772,7 +709,6 @@ func (s *Store) SetUsageEventTimes(ctx context.Context, bindingID int64, times m
 	return filled, nil
 }
 
-// ListUsageTierRepairSources returns the sources still queued for one reread to fill the service tier their older events were stored without.
 func (s *Store) ListUsageTierRepairSources(ctx context.Context) ([]domain.UsageSourceContext, error) {
 	ids, err := s.qr.ListUsageTierRepairSourceIDs(ctx)
 	if err != nil {
@@ -792,7 +728,6 @@ func (s *Store) ListUsageTierRepairSources(ctx context.Context) ([]domain.UsageS
 	return out, nil
 }
 
-// CompleteUsageTierRepair fills the tiers a source's reread found, by source event key, and takes the source off the queue in the same transaction.
 func (s *Store) CompleteUsageTierRepair(ctx context.Context, sourceID, bindingID int64, tiers map[string]string) (int, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return 0, err
@@ -827,7 +762,6 @@ func (s *Store) CompleteUsageTierRepair(ctx context.Context, sourceID, bindingID
 	return filled, nil
 }
 
-// ListUsagePriceOverrides returns the user's model prices, by model ID.
 func (s *Store) ListUsagePriceOverrides(ctx context.Context) ([]domain.UsagePriceOverride, error) {
 	rows, err := s.qr.ListUsagePriceOverrides(ctx)
 	if err != nil {
@@ -843,7 +777,6 @@ func (s *Store) ListUsagePriceOverrides(ctx context.Context) ([]domain.UsagePric
 	return out, nil
 }
 
-// ReplaceUsagePriceOverrides makes overrides the whole set of model prices.
 func (s *Store) ReplaceUsagePriceOverrides(ctx context.Context, overrides []domain.UsagePriceOverride, now time.Time) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
@@ -866,8 +799,6 @@ func (s *Store) ReplaceUsagePriceOverrides(ctx context.Context, overrides []doma
 	})
 }
 
-// ListLegacyUsageEvents returns the immutable generic facts that transcript
-// attribution must match before provider and split repair is eligible.
 func (s *Store) ListLegacyUsageEvents(ctx context.Context, sourceID int64) ([]domain.LegacyUsageEvent, error) {
 	rows, err := s.qr.ListLegacyUsageEvents(ctx, sourceID)
 	if err != nil {
@@ -896,8 +827,6 @@ func (s *Store) ListLegacyUsageEvents(ctx context.Context, sourceID int64) ([]do
 	return out, nil
 }
 
-// ApplyLegacyUsageRepairs atomically CAS-updates one bounded replay result and
-// touches each winning binding once. It never writes usage source cursor state.
 func (s *Store) ApplyLegacyUsageRepairs(
 	ctx context.Context,
 	repairs []domain.LegacyUsageRepair,
@@ -986,7 +915,6 @@ func (s *Store) ApplyLegacyUsageRepairs(
 	return applied, nil
 }
 
-// ListUsageModelAggregates returns model-level aggregate rows for a session.
 func (s *Store) ListUsageModelAggregates(ctx context.Context, sessionID domain.SessionID) ([]domain.UsageModelAggregate, error) {
 	rows, err := s.qr.AggregateUsageBySessionHarnessModel(ctx, sessionID)
 	if err != nil {
@@ -999,8 +927,6 @@ func (s *Store) ListUsageModelAggregates(ctx context.Context, sessionID domain.S
 	return out, nil
 }
 
-// ListCompactSessionUsageAggregates returns sessions with observed usage in
-// one grouped read. projectID optionally limits the rows to one dashboard board.
 func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {
 	rows, err := s.qr.ListCompactSessionUsage(ctx, projectID)
 	if err != nil {
@@ -1143,8 +1069,6 @@ func usageEventInsertParams(source gen.GetUsageSourceWithBindingAndSessionRow, e
 	}
 }
 
-// stringOrNull maps the empty attribution sentinel to SQL NULL so unattributed
-// events stay selectable by the legacy repairer.
 func stringOrNull(value string) sql.NullString {
 	if value == "" {
 		return sql.NullString{}
@@ -1152,8 +1076,6 @@ func stringOrNull(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: true}
 }
 
-// HasOpenUsageAttribution reports whether a source still owns an event whose
-// billing attribution a repair pass could finish.
 func (s *Store) HasOpenUsageAttribution(ctx context.Context, sourceID int64) (bool, error) {
 	open, err := s.qr.HasOpenUsageAttribution(ctx, sourceID)
 	if err != nil {
@@ -1169,19 +1091,12 @@ func usageEventReplayDisposition(existing gen.GetModelUsageEventByKeyRow, event 
 		existing.CachedInputTokens == ptrInt64ToNull(event.Tokens.CachedInputTokens) &&
 		existing.UncachedInputTokens == ptrInt64ToNull(event.Tokens.UncachedInputTokens) &&
 		existing.OutputTokens == ptrInt64ToNull(event.Tokens.OutputTokens)
-	// A stored object is immutable; a stored NULL predates the capture and the
-	// replay is allowed to enrich it.
 	if genericMatches && existing.ProviderUsageJson.Valid && event.ProviderUsageJSON != "" {
 		genericMatches = existing.ProviderUsageJson.String == event.ProviderUsageJSON
 	}
-	// A stored row with no billing attribution predates this feature. Keep it
-	// token-only comparable so replay never rejects it; the legacy repairer owns
-	// filling that column in.
 	if !genericMatches || !existing.BillingProviderID.Valid {
 		return genericMatches, false
 	}
-	// An inference is intentionally replaceable by the first observation. That
-	// observation also replaces every cost derived from the inferred provider.
 	if existing.BillingProviderSource.String == string(domain.UsageBillingProviderInferred) &&
 		event.BillingProviderSource == domain.UsageBillingProviderObserved {
 		return true, true
@@ -1193,8 +1108,6 @@ func usageAggregateFromGen(row gen.AggregateUsageBySessionHarnessModelRow) domai
 	return domain.UsageModelAggregate{
 		Harness: row.Harness,
 		ModelID: row.ModelID,
-		// A summed metric is only meaningful when every event in the group
-		// carried it; one uncollected counter makes the whole sum unknown.
 		Tokens: domain.UsageTokenMetrics{
 			InputTokens:         int64PtrWhen(row.InputTokens, row.KnownInputTokenCount == row.EventCount),
 			CachedInputTokens:   int64PtrWhen(row.CachedInputTokens, row.KnownCachedInputTokenCount == row.EventCount),
@@ -1248,10 +1161,6 @@ func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEven
 		*metrics.InputTokens != *metrics.CachedInputTokens+*metrics.UncachedInputTokens {
 		return errors.New("usage input does not equal cached plus uncached input")
 	}
-	// ALTER TABLE cannot add a CHECK that reads another column, so the pairing
-	// the schema comment describes is enforced here: a provider without a source
-	// would be an attribution nobody can tell apart from an inference, and a
-	// source without a provider names nothing.
 	switch event.BillingProviderSource {
 	case domain.UsageBillingProviderObserved, domain.UsageBillingProviderInferred:
 		if event.BillingProviderID == "" {
@@ -1349,7 +1258,6 @@ func int64PtrWhen(v int64, ok bool) *int64 {
 	return &v
 }
 
-// ListUsageReportEvents reads every timestamped usage event in [since, until).
 func (s *Store) ListUsageReportEvents(ctx context.Context, since, until time.Time) ([]domain.UsageReportEvent, error) {
 	const layout = "2006-01-02 15:04:05"
 	rows, err := s.qr.ListUsageReportEvents(ctx, gen.ListUsageReportEventsParams{

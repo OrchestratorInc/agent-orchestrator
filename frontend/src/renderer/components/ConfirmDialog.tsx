@@ -22,14 +22,10 @@ type ConfirmDialogProps = {
 	title: string;
 	description: React.ReactNode;
 	confirmLabel: string;
-	/** Screen-reader name for the confirm button when "Confirm" alone is vague. */
 	confirmAriaLabel?: string;
-	/** Defaults to "Cancel"; reversible actions can soften it to "No". */
 	cancelLabel?: string;
 	destructive?: boolean;
-	/** Options shown between the description and the buttons. */
 	children?: React.ReactNode;
-	/** Starts here rather than on a button, for a dialog with a field to fill. */
 	initialFocusRef?: React.RefObject<HTMLElement | null>;
 	busy?: boolean;
 	busyLabel?: string;
@@ -69,19 +65,9 @@ export function ConfirmDialog({
 				aria-busy={busy || undefined}
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(420px,calc(100vw-24px))]")}
-				// React portals re-dispatch synthetic events up the React tree, not the
-				// DOM tree, so a confirm rendered from inside a clickable row or card
-				// would otherwise also trigger that ancestor's onClick (opening the very
-				// session being confirmed). The modal — dimmed backdrop included — owns
-				// its own clicks, right-clicks included. Radix still dismisses on the
-				// native pointerdown.
 				onClick={(event) => event.stopPropagation()}
 				onContextMenu={(event) => event.stopPropagation()}
 				onOpenAutoFocus={(event) => {
-					// Start on the confirm button, not the close X, so Enter confirms what
-					// the person just asked for; Escape cancels. A disabled button can't
-					// take focus, which would leave it behind the dialog: then Cancel, or
-					// Radix's own choice.
 					const preferred = confirmRef.current;
 					const target = initialFocusRef?.current ?? (preferred && !preferred.disabled
 						? preferred

@@ -9,20 +9,6 @@ import (
 	"time"
 )
 
-// Scenarios for reclaiming context.
-//
-// Every turn re-sends the whole conversation, so context fills whether or not the
-// user does anything unusual, and once it is full the thread cannot accept another
-// turn at all. Compaction is the difference between a session that works for an
-// hour and one that works for a day, which is why the promise worth checking here
-// is not "the call returned 202" but "the conversation still works afterwards and
-// the timeline says what happened".
-//
-// The provider reports no token figures on its own compaction event, so the driver
-// brackets them from the token-usage reports either side of the compaction turn.
-// That bracketing is only observable against a real app-server, which is what makes
-// this an end-to-end scenario rather than a unit test.
-
 type compactAccepted struct {
 	TokensBefore int64 `json:"tokensBefore"`
 	TokensAfter  int64 `json:"tokensAfter"`
@@ -36,9 +22,6 @@ type compactionDetail struct {
 	ContextWindow   int64  `json:"contextWindow"`
 }
 
-// compactionMarkers reads the compaction entries out of a timeline the way the
-// renderer does: by the discriminator in the detail payload, not by the activity
-// kind. `system` is a general bucket, so the kind alone does not identify one.
 func compactionMarkers(s snapshot) []compactionDetail {
 	var found []compactionDetail
 	for _, a := range s.Activities {
@@ -62,8 +45,6 @@ func TestChatCompactionReclaimsContextAndSaysSo(t *testing.T) {
 	project := seedProject(t, d, "compaction")
 	session := chatSession(t, d, project, "Reply with exactly: READY")
 
-	// Give the conversation some history to summarize. Even two small turns carry a
-	// real context load, because the provider's own instructions dominate it.
 	send(t, d, session, "List the files in this repo, then reply with exactly: LISTED", "compact-1")
 	d.awaitConversation(session, 3*time.Minute, "history to accumulate", func(s snapshot) bool {
 		return len(s.Turns) >= 2 && terminal(s.Turns[len(s.Turns)-1].State)
@@ -72,9 +53,6 @@ func TestChatCompactionReclaimsContextAndSaysSo(t *testing.T) {
 	var accepted compactAccepted
 	d.mustCall("POST", "/sessions/"+session+"/conversation/compact",
 		http.StatusAccepted, nil, &accepted)
-	// 202, not 200: the provider takes the request and does the work as its own turn
-	// over the following seconds. Reporting the before figure is the honest thing to
-	// answer with at that point.
 	if accepted.TokensBefore <= 0 {
 		t.Errorf("compaction reported no context position; there was a conversation to measure")
 	}
@@ -91,10 +69,6 @@ func TestChatCompactionReclaimsContextAndSaysSo(t *testing.T) {
 	}
 	marker := markers[0]
 
-	// The figures have to be internally consistent or the reclaim they claim is
-	// meaningless. They are checked rather than required, because a compaction whose
-	// token reports AO never saw honestly does not know what it saved and says
-	// nothing instead of inventing a number.
 	if marker.TokensReclaimed != 0 {
 		if marker.TokensBefore <= marker.TokensAfter {
 			t.Errorf("claimed a reclaim of %d from %d -> %d, which cannot be true",
@@ -108,14 +82,10 @@ func TestChatCompactionReclaimsContextAndSaysSo(t *testing.T) {
 		t.Errorf("context used (%d) exceeds the window (%d)", marker.TokensAfter, marker.ContextWindow)
 	}
 
-	// The conversation records it too, so a client does not have to walk the
-	// timeline to find out whether compaction has run.
 	if snap.CompactedAt == nil || *snap.CompactedAt == "" {
 		t.Error("the conversation was not marked compacted; a restart would forget it happened")
 	}
 
-	// The whole point. A compaction that reclaimed context but left the session
-	// unable to take another turn would have solved nothing.
 	send(t, d, session, "Reply with exactly: STILLHERE", "compact-after")
 	after := d.awaitConversation(session, 3*time.Minute, "a turn after compaction",
 		func(s snapshot) bool { return contains(s.assistantText(), "STILLHERE") })
@@ -126,11 +96,6 @@ func TestChatCompactionReclaimsContextAndSaysSo(t *testing.T) {
 	}
 }
 
-// Measured twice against a live app-server: thread/compact/start mid-turn silently
-// interrupts the running turn and reports it as interrupted, then compacts. The
-// daemon refuses instead of forwarding it, because losing work the user is waiting
-// on as a side effect of housekeeping is not something they should discover
-// afterwards from the timeline.
 func TestChatCompactionIsRefusedWhileATurnIsInFlight(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -159,8 +124,6 @@ func TestChatCompactionIsRefusedWhileATurnIsInFlight(t *testing.T) {
 		t.Errorf("status/code = %d/%q, want 409/CHAT_COMPACTION_BUSY", status, body.Code)
 	}
 
-	// The turn the refusal protected must still be the user's. Nothing was
-	// interrupted on their behalf.
 	snap := d.awaitConversation(session, 3*time.Minute, "the protected turn to finish",
 		func(s snapshot) bool {
 			return terminal(s.Turns[len(s.Turns)-1].State)

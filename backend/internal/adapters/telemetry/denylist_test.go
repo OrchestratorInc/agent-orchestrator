@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// emitAll pushes bare named events through sink; recordingSink is shared with
-// ratelimit_test.go.
 func emitAll(sink ports.EventSink, names ...string) {
 	for _, name := range names {
 		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name})
@@ -53,8 +51,6 @@ func TestDenylistSinkDropsRenamedEvents(t *testing.T) {
 	}
 }
 
-// A kill switch configured before the event rename names the old stream. It
-// must still silence the renamed one, or the upgrade quietly re-enables it.
 func TestDenylistSinkMatchesCurrentAndLegacyNames(t *testing.T) {
 	for _, denied := range []string{"ao.cli.active", "ao.v2.app.active", "ao.session.*"} {
 		next := &recordingSink{}
@@ -79,10 +75,6 @@ func TestDenylistSinkSupportsPrefixWildcardAndIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// A denylist of only blank or bare "*" entries must not silence everything by
-// accident, and must not add a pointless wrapper either.
-// ao.app.active is still a current name (the desktop heartbeat); silencing
-// it must not also silence CLI activity.
 func TestDesktopActiveDenyDoesNotSilenceCLIActive(t *testing.T) {
 	if EventDenied([]string{"ao.app.active"}, "ao.cli.active") {
 		t.Fatal("ao.app.active entry silenced ao.cli.active")

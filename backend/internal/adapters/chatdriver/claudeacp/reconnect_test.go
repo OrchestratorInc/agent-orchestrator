@@ -12,9 +12,6 @@ type reconnectPlugin struct{}
 
 func (reconnectPlugin) ResolveBinary(context.Context) (string, error) { return "claude", nil }
 
-// The startup health check reconnects through ports.ChatDriverReconnector. A
-// wrapper that hides it makes every live Claude chat look stopped after a
-// daemon restart.
 func TestDriverExposesReconnect(t *testing.T) {
 	d := New(reconnectPlugin{}, nil, nil)
 	if _, ok := d.(ports.ChatDriverReconnector); !ok {

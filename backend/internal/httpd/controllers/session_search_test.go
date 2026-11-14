@@ -19,16 +19,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 )
 
-// stubSessionSearch records the parsed query and returns a fixed page, so the
-// controller test asserts the wire contract rather than index behavior.
 type stubSessionSearch struct {
-	parsed   domain.SessionSearchParsedQuery
-	params   domain.SessionSearchParams
-	calls    int
-	response domain.SessionSearchResponse
-	coverage domain.SessionSearchCoverage
-	err      error
-	// reindexes counts reindex requests; reindexErr is what they return.
+	parsed     domain.SessionSearchParsedQuery
+	params     domain.SessionSearchParams
+	calls      int
+	response   domain.SessionSearchResponse
+	coverage   domain.SessionSearchCoverage
+	err        error
 	reindexes  int
 	reindexErr error
 }
@@ -54,8 +51,6 @@ func newSessionSearchServer(t *testing.T, svc *stubSessionSearch) *httptest.Serv
 	return newSessionSearchServerWith(t, svc)
 }
 
-// newSessionSearchServerWith takes the interface directly so a test can mount an
-// untyped nil service and exercise the 501 branch.
 func newSessionSearchServerWith(t *testing.T, svc controllers.SessionSearchService) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -153,8 +148,6 @@ func TestSearchSessionsReturnsRankedResults(t *testing.T) {
 	if payload.Coverage.State != "ready" || payload.Coverage.IndexedDocs != 12 {
 		t.Fatalf("coverage = %+v", payload.Coverage)
 	}
-	// The controller hands the service a parsed query, not raw text.
-	// "zzNeedle" matches as a prefix of its stem, which still covers the token.
 	if svc.parsed.Text != "zzNeedle" || svc.parsed.MatchQuery != `"zzneedl"*` {
 		t.Fatalf("parsed = %+v", svc.parsed)
 	}
@@ -198,8 +191,6 @@ func TestSearchSessionsParsesOperatorsAndFilters(t *testing.T) {
 	}
 }
 
-// A filter-only query is a browse, not an error: opening search with a project
-// filter and no words must show that project's recent sessions.
 func TestSearchSessionsAllowsFilterOnlyBrowse(t *testing.T) {
 	svc := &stubSessionSearch{response: domain.SessionSearchResponse{Results: []domain.SessionSearchResult{}}}
 	srv := newSessionSearchServer(t, svc)
@@ -210,7 +201,6 @@ func TestSearchSessionsAllowsFilterOnlyBrowse(t *testing.T) {
 	if svc.calls != 1 || svc.params.ProjectID != "proj" {
 		t.Fatalf("params = %+v calls = %d", svc.params, svc.calls)
 	}
-	// A date range alone is a filter too: browsing a week needs no word.
 	for _, dates := range []url.Values{{"from": {"2026-08-01"}}, {"to": {"2026-08-31"}}} {
 		if res, body := getSearch(t, srv, dates); res.StatusCode != http.StatusOK {
 			t.Fatalf("%v: status = %d, want 200 (body %s)", dates, res.StatusCode, body)
@@ -305,15 +295,11 @@ func TestSearchIndexStatusReportsCoverage(t *testing.T) {
 	if len(payload.Coverage.UnindexedHarnesses) != 2 {
 		t.Fatalf("unindexed harnesses = %v", payload.Coverage.UnindexedHarnesses)
 	}
-	// No full pass has finished in this process: the time is left out rather
-	// than sent as year 1, which `ao search --index-status` would print.
 	if strings.Contains(string(body), "backfilledAt") {
 		t.Fatalf("zero backfilledAt was sent: %s", body)
 	}
 }
 
-// group selects one row per session (the default) or one per message, and an
-// unknown value is rejected rather than silently treated as the default.
 func TestSearchSessionsGroupsBySessionByDefault(t *testing.T) {
 	svc := &stubSessionSearch{response: domain.SessionSearchResponse{
 		Group: domain.SessionSearchGroupSession,
@@ -340,7 +326,6 @@ func TestSearchSessionsGroupsBySessionByDefault(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// reviewId routes a reviewer-chat match to that reviewer chat.
 	if decoded.Group != "session" || len(decoded.Results) != 1 || decoded.Results[0].SessionMatches != 4 ||
 		decoded.Results[0].ReviewID != "review-1" {
 		t.Fatalf("response = %s", body)
@@ -373,8 +358,6 @@ func postReindex(t *testing.T, srv *httptest.Server) (*http.Response, []byte) {
 	return res, body
 }
 
-// A reindex is accepted at once and answers with the coverage that follows it,
-// so `ao search --reindex` can say the index is rebuilding.
 func TestReindexAcceptsAndReportsCoverage(t *testing.T) {
 	svc := &stubSessionSearch{coverage: domain.SessionSearchCoverage{State: "backfilling"}}
 	srv := newSessionSearchServer(t, svc)
@@ -395,7 +378,6 @@ func TestReindexAcceptsAndReportsCoverage(t *testing.T) {
 	}
 }
 
-// With search off the daemon says so instead of pretending to rebuild.
 func TestReindexWhileSearchIsOffIsUnavailable(t *testing.T) {
 	svc := &stubSessionSearch{reindexErr: apierr.Unavailable("SESSION_SEARCH_UNAVAILABLE", "off")}
 	srv := newSessionSearchServer(t, svc)

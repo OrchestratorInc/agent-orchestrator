@@ -6,40 +6,25 @@ import (
 	"time"
 )
 
-// foregroundReader is implemented by PTYs that can name their foreground
-// process group. Windows ConPTY has no process groups, so it never reports one.
 type foregroundReader interface {
 	ForegroundPGID() (pgid int, ok bool)
 }
 
-// Timing for foreground tracking. Variables so tests can shorten them.
 var (
-	// foregroundMinInterval coalesces a burst of output into one evaluation.
-	foregroundMinInterval = 100 * time.Millisecond
-	// foregroundBusyWindow: agent TUIs redraw several times a second while
-	// they work and draw nothing while they wait.
-	foregroundBusyWindow = 2 * time.Second
-	// Output this soon after typed input is its echo, and this soon after a
-	// resize is a redraw; neither means the program is working.
+	foregroundMinInterval  = 100 * time.Millisecond
+	foregroundBusyWindow   = 2 * time.Second
 	foregroundEchoWindow   = 250 * time.Millisecond
 	foregroundResizeWindow = 600 * time.Millisecond
-	// foregroundStartGrace: a program drawing its first screen is not working.
-	foregroundStartGrace = 2500 * time.Millisecond
+	foregroundStartGrace   = 2500 * time.Millisecond
 )
 
-// processArgvFunc is processArgv; tests replace it.
 var processArgvFunc = processArgv
 
-// maxForegroundArgs and maxForegroundArgLen bound the argv sent to watchers.
 const (
 	maxForegroundArgs   = 8
 	maxForegroundArgLen = 512
 )
 
-// foregroundTracker follows which program owns the terminal and whether it is
-// drawing. The host's own output, input and resize events drive it, so a new
-// program is reported as soon as it draws, without polling. A nil tracker
-// ignores every call.
 type foregroundTracker struct {
 	reader foregroundReader
 	poke   chan struct{}
@@ -47,15 +32,13 @@ type foregroundTracker struct {
 	mu            sync.Mutex
 	lastInput     time.Time
 	lastResize    time.Time
-	lastOutput    time.Time // output that was not an echo or a resize redraw
+	lastOutput    time.Time
 	lastDraw      time.Time
 	screenPending bool
-	// screenTyped stays false while every draw since the last settled update
-	// was the echo of typed input.
-	screenTyped bool
-	since       time.Time // when the current foreground program appeared
-	state       ForegroundPayload
-	hasState    bool
+	screenTyped   bool
+	since         time.Time
+	state         ForegroundPayload
+	hasState      bool
 }
 
 func newForegroundTracker(reader foregroundReader) *foregroundTracker {
@@ -114,8 +97,6 @@ func (t *foregroundTracker) current() (ForegroundPayload, bool) {
 	return t.state, t.hasState
 }
 
-// run evaluates on every wake, at most once per foregroundMinInterval, and
-// publishes state changes and settled screen updates until done closes.
 func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPayload)) {
 	if t == nil {
 		return
@@ -146,17 +127,12 @@ func (t *foregroundTracker) run(done <-chan struct{}, publish func(ForegroundPay
 	}
 }
 
-// evaluate reports whether a state or settled-screen update is due and when
-// to evaluate again (0: only on the next event).
 func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed bool, state ForegroundPayload) {
 	pgid, _ := t.reader.ForegroundPGID()
-	// exec can replace the program without changing its process group. Wakes
-	// are output-driven and coalesced, so read argv on each evaluation.
 	argv := capForegroundArgv(processArgvFunc(pgid))
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	state.PGID, state.Argv = pgid, argv
-	// exec keeps the process group, so a new program is also a new argv[0].
 	if pgid != t.state.PGID || firstArg(argv) != firstArg(t.state.Argv) {
 		t.since = now
 	}
@@ -167,13 +143,9 @@ func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed
 	}
 	changed = !t.hasState || state.PGID != t.state.PGID || state.Busy != t.state.Busy || !slices.Equal(state.Argv, t.state.Argv)
 	if !state.Busy && t.screenPending {
-		// Echo and resize output must not show as working, but may contain a
-		// permission prompt. Inspect it once it settles, even if state is equal.
 		if wait := foregroundEchoWindow - now.Sub(t.lastDraw); wait > 0 {
 			next = wait
 		} else {
-			// Typing at a prompt only echoes; say so, so the reader can skip
-			// a screen read when nothing else about the program changed.
 			state.EchoOnly = !changed && !t.screenTyped
 			changed, t.screenPending, t.screenTyped = true, false, false
 		}

@@ -37,7 +37,6 @@ export function installersQueryOptions(hostId?: string) {
 	return queryOptions({ queryKey: installerQueryKeyForHost(hostId), queryFn: () => fetchInstallers(hostId), staleTime: 60_000 });
 }
 
-/** One jobs query per host, shared by the notice and the Harness page; it polls only while a job runs. */
 export function installJobsQueryOptions(hostId?: string) {
 	return queryOptions({
 		queryKey: installJobsQueryKeyForHost(hostId),
@@ -51,15 +50,12 @@ export function isActiveInstallJob(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "running" || job?.status === "waiting_for_idle" || job?.status === "installing" || job?.status === "verifying";
 }
 
-/** An update queued until the harness's sessions are idle. */
 export function isWaitingForIdleJob(job?: Pick<InstallJob, "status">): boolean {
 	return job?.status === "waiting_for_idle";
 }
 
-/** How long a waiting update reads as normal before it names what it waits for. */
 export const IDLE_WAIT_DETAIL_MS = 5 * 60_000;
 
-/** Cancels an update still waiting for idle sessions; sessions are left untouched. */
 export async function cancelHarnessUpdate(agentId: AgentId, hostId?: string): Promise<InstallJob> {
 	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: agentId } } });
 	if (error || !data) throw apiErrorException(error, appI18n.t("settings.harness.cancelUpdateFailed"));
@@ -78,7 +74,6 @@ export function installedAgentIds(readiness?: AgentReadiness): Set<AgentId> {
 	return new Set((readiness?.agents ?? []).filter((agent) => agent.installation.state === "installed").map((agent) => agent.id as AgentId));
 }
 
-/** A harness that must sign in before AO updates it or loads its models. */
 export function needsHarnessLogin(plan: Pick<AgentAuthPlan, "action"> | undefined, authState: string | undefined): boolean {
 	return Boolean(plan && plan.action !== "instructions" && authState === "unauthorized");
 }
@@ -92,8 +87,6 @@ export function hasConfirmedHarnessUpdate(advisory?: AgentUpdateAdvisory): boole
 		&& Boolean(advisory.latestVersion?.trim()) && advisory.currentVersion?.trim() !== advisory.latestVersion?.trim();
 }
 
-// The daemon checks harnesses on its own schedule and serves cached results,
-// so polling only reads that cache; it never starts a CLI probe by itself.
 export function updateAdvisoryRefreshInterval(hasError = false): number {
 	return hasError ? 5 * 60_000 : 15 * 60_000;
 }
@@ -106,19 +99,12 @@ export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: stri
 		enabled: enabled && installed.has(agentId),
 		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
 		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
-		// Keep the update badge current while the window is hidden or minimized.
 		refetchIntervalInBackground: true,
 		retry: false,
 	})) });
 	return new Map(AGENT_OPTIONS.map((agentId, index) => [agentId, queries[index]] as const));
 }
 
-/**
- * An advisory can confirm a package owner the daemon derived after the
- * installers list was loaded (e.g. a Homebrew formula outside the fixed
- * methods). Reload the methods then, so Update doesn't depend on which
- * request finished first.
- */
 function syncInstallerMethods(queryClient: QueryClient, advisory: AgentUpdateAdvisory, hostId?: string): AgentUpdateAdvisory {
 	const methodId = maintenanceMethodId(advisory);
 	if (!methodId || !hasConfirmedHarnessUpdate(advisory)) return advisory;
@@ -134,10 +120,6 @@ export async function fetchUpdateAdvisory(agentId: AgentId, hostId?: string, ref
 	return data;
 }
 
-/**
- * Sessions that keep an update from starting: they must end first
- * (update-while-running is off), or one is still starting.
- */
 export type HarnessInUse = {
 	count: number;
 	sessionIds: string[];
@@ -145,28 +127,15 @@ export type HarnessInUse = {
 	starting: boolean;
 };
 
-/**
- * No job and no error: the click-time check found nothing left to install.
- * advisory is that check's result once an install was requested, so a failed
- * update names the release it actually tried.
- */
 export type HarnessUpdateStart = { job?: InstallJob; error?: string; advisory?: AgentUpdateAdvisory; inUse?: HarnessInUse };
 
-/**
- * The sessions an update must wait for, when the advisory says it cannot run
- * alongside them. Otherwise an update installs while sessions
- * run, and they restart on the new release once idle; or the daemon waits for
- * them to be idle, stops them, updates and resumes them.
- */
 export function advisoryInUse(advisory?: Pick<AgentUpdateAdvisory, "inUse">): HarnessInUse | undefined {
 	const inUse = advisory?.inUse;
 	if (!inUse || inUse.liveSessions <= 0 || inUse.level !== "blocked") return undefined;
 	return { count: inUse.liveSessions, sessionIds: inUse.sessionIds ?? [], level: inUse.level, starting: false };
 }
 
-/** Reads a 409 HARNESS_ACTIVE into the sessions it names. */
 export function harnessInUseFromError(error: unknown): HarnessInUse | undefined {
-	// An older daemon refuses without details; its message is shown as before.
 	const details = apiErrorDetails(error);
 	if (apiErrorCode(error) !== "HARNESS_ACTIVE" || !details) return undefined;
 	const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
@@ -179,20 +148,12 @@ export function harnessInUseFromError(error: unknown): HarnessInUse | undefined 
 	};
 }
 
-/**
- * Starts an update the user saw, shared by the notice and the Harness page.
- * The advisory is re-checked at click time, and its latest release is
- * installed through the method the user saw: a release published since the
- * card was last checked is the update they asked for, not a reason to stop.
- * The started job lands in the shared jobs query.
- */
 export function useStartHarnessUpdate(hostId?: string) {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
 	return useCallback(async ({ agentId, methodId, canStart }: {
 		agentId: AgentId;
 		methodId: string;
-		/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
 		canStart?: () => boolean;
 	}): Promise<HarnessUpdateStart> => {
 		try {
@@ -200,7 +161,6 @@ export function useStartHarnessUpdate(hostId?: string) {
 			await queryClient.cancelQueries({ queryKey: key });
 			const fresh = syncInstallerMethods(queryClient, await fetchUpdateAdvisory(agentId, hostId, true), hostId);
 			queryClient.setQueryData(key, fresh);
-			// No longer behind: the refreshed advisory already shows why.
 			if (!hasConfirmedHarnessUpdate(fresh) || canStart?.() === false) return {};
 			if (maintenanceMethodId(fresh) !== methodId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install", {

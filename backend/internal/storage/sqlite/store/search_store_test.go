@@ -36,15 +36,12 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 	if got := searchMessageIDs(t, s, "prompt"); !slices.Equal(got, []string{"message-1", "message-2"}) {
 		t.Fatalf("prompt = %v", got)
 	}
-	// Every word, any order, by prefix and word form.
 	if got := searchMessageIDs(t, s, "answers fir"); !slices.Equal(got, []string{"message-assistant-1"}) {
 		t.Fatalf("answers fir = %v", got)
 	}
-	// A misspelled word falls back to any word.
 	if got := searchMessageIDs(t, s, "secnd prompt"); !slices.Equal(got, []string{"message-1", "message-2"}) {
 		t.Fatalf("secnd prompt = %v", got)
 	}
-	// FTS syntax in the query is plain text.
 	if got := searchMessageIDs(t, s, `second" OR NEAR(*`); !slices.Equal(got, []string{"message-2"}) {
 		t.Fatalf("operators = %v", got)
 	}
@@ -57,7 +54,6 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 		t.Fatalf("hit = %#v", hit)
 	}
 
-	// A reply is searchable once it finishes streaming, not while it streams.
 	if err := s.BindTurnToProvider(ctx, "turn-2", "provider-turn-2", testNow); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +69,6 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 	if got := searchMessageIDs(t, s, "walrus"); !slices.Equal(got, []string{"message-assistant-2"}) {
 		t.Fatalf("settled walrus = %v", got)
 	}
-	// Words in the order typed beat a message that repeats them out of order.
 	if hits, err := s.SearchConversationMessages(ctx, "first prompt"); err != nil || len(hits) != 2 || hits[0].MessageID != "message-1" {
 		t.Fatalf("first prompt = %#v err=%v", hits, err)
 	}
@@ -81,8 +76,6 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 		t.Fatalf("replaced text still matches: %v", got)
 	}
 
-	// Editing the second prompt forks after the first answer: the second turn
-	// leaves the transcript and the search.
 	messages, err := s.ConversationMessages(ctx, conversation.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +99,6 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 
 }
 
-// The index follows edits and deletes of the messages it was built from;
-// FTS5's integrity check compares it with conversation_messages.
 func TestConversationMessagesSearchIndexStaysInSync(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -137,9 +128,7 @@ func TestConversationMessagesSearchIndexStaysInSync(t *testing.T) {
 	for _, statement := range []string{
 		`UPDATE conversation_messages SET text = 'rewritten walrus' WHERE id = 'message-1'`,
 		`DELETE FROM conversation_messages WHERE id = 'message-assistant-1'`,
-		// Every message is finished here, so the index must match the table exactly.
 		`INSERT INTO conversation_messages_fts(conversation_messages_fts, rank) VALUES ('integrity-check', 1)`,
-		// A message going back to streaming leaves the index.
 		`UPDATE conversation_messages SET streaming = 1 WHERE id = 'message-2'`,
 		`INSERT INTO conversation_messages_fts(conversation_messages_fts) VALUES ('integrity-check')`,
 	} {
@@ -167,8 +156,6 @@ func TestSearchConversationMessagesIgnoresEmptyQuery(t *testing.T) {
 func TestSearchConversationMessagesUsesSelectedConversationBeforeCandidateLimit(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
-	// More stale matches than the candidate page must not hide a hit in the
-	// project conversation that SelectConversationBySession actually returns.
 	for i := range 40 {
 		created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
 			ID: fmt.Sprintf("stale-message-%d", i), Origin: domain.MessageOriginHuman, Text: "needle",
@@ -224,7 +211,6 @@ func TestSearchConversationMessagesRoutesReviewerHitsToTheirWorker(t *testing.T)
 	if err != nil || len(hits) != 1 || hits[0].ReviewID != review.ID || hits[0].SessionID != string(session.ID) || hits[0].ProjectID != string(session.ProjectID) {
 		t.Fatalf("reviewer hits = %#v err=%v", hits, err)
 	}
-	// Reviewer Chat remains reachable even when the worker uses a terminal.
 	if changed, err := s.CommitSessionControllerEpoch(ctx, session.ID, domain.SessionModeChat, domain.SessionModeTUI, session.Metadata.ProviderConversationID, testNow.Add(time.Minute)); err != nil || !changed {
 		t.Fatalf("switch worker to terminal: changed=%v err=%v", changed, err)
 	}
@@ -257,9 +243,6 @@ func TestSearchConversationMessagesFiltersHiddenTranscriptBeforeCandidateLimit(t
 		t.Run(hidden, func(t *testing.T) {
 			ctx := context.Background()
 			s, session, conversation := seededChatConversation(t)
-			// Short hidden messages rank above this longer visible message. There
-			// are more of them than the candidate page, so filtering afterwards
-			// would return no hits even though the transcript contains a match.
 			created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
 				ID: "visible-message", Origin: domain.MessageOriginHuman, Text: "needle " + strings.Repeat("context ", 100),
 				ClientMessageID: "visible-client",

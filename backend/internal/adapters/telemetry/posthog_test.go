@@ -246,9 +246,6 @@ func TestRenamedEventAllowlists(t *testing.T) {
 	}
 }
 
-// Each renamed daemon event goes on the wire under its new name, with its
-// property allowlist moved to that name. No old name keeps an allowlist entry,
-// so a reintroduced old emit site would lose its properties and stand out.
 func TestRenamedDaemonEventsExportUnderNewName(t *testing.T) {
 	requests := make(chan map[string]any, len(legacyEventNames))
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
@@ -466,9 +463,6 @@ func (f roundTripClient) Do(req *http.Request) (*http.Response, error) { return 
 
 var _ postHogClient = roundTripClient(nil)
 
-// Daemon events shipped with no version at all, so a session-spawn failure rate
-// could not be attributed to a release. The supervisor supplies the version
-// because the daemon binary has none that release tooling sets.
 func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	newSink := func(appVersion string) *PostHogSink {
@@ -512,8 +506,6 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 		t.Fatalf("version properties = %#v / %#v, want trimmed 0.11.2", props["app_version"], props["ao_version"])
 	}
 
-	// An unset supervisor env var must leave the properties off rather than
-	// reporting a misleading placeholder that would pollute version breakdowns.
 	props = emit(newSink(""))
 	if _, ok := props["app_version"]; ok {
 		t.Fatalf("app_version present without the option: %#v", props["app_version"])
@@ -523,11 +515,6 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 	}
 }
 
-// An event name missing from remotePayloadAllowlist exports with no properties
-// at all rather than failing loudly, so a key added at an emit site and not
-// here ships silently stripped. These assertions are what a review-funnel
-// dashboard actually reads: a renamed key is a broken chart, not a build
-// failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
 		"ao.reviews.triggered":      {"harness", "created_runs", "trigger", "rerun"},
@@ -552,9 +539,6 @@ func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	}
 }
 
-// Review payloads carry counts, enums, and booleans. The review body is
-// reviewer prose about someone's code; the PR URL and SHA identify the
-// repository. None of them may survive into an exported property.
 func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 	forbidden := []string{"body", "pr_url", "url", "target_sha", "head_sha", "branch", "repo", "title", "review_body"}
 	for name, allowed := range remotePayloadAllowlist {
@@ -569,8 +553,6 @@ func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 	}
 }
 
-// The harness-update rollout dashboards read these keys; a key missing here
-// would export stripped.
 func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 	want := map[string][]string{
 		"ao.harnesses.updated":          {"harness", "level", "live_sessions", "result"},
@@ -594,10 +576,6 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 	}
 }
 
-// properties is pure, so the person-property derivation is exercised directly
-// rather than through the HTTP fixture. When the sanitized payload carries the
-// operator's GitHub handle, the sink mirrors it into $set and flips this one
-// event to identified so a breakdown by github_actor is possible.
 func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
@@ -626,8 +604,6 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 		t.Fatalf("$set.github_actor = %#v, want octocat", set["github_actor"])
 	}
 
-	// A successful send records the identity. The next event carries the
-	// handle but does not repeat its person properties.
 	sink.send(context.Background(), event)
 	next := sink.properties(event)
 	if next["github_actor"] != "octocat" {
@@ -673,9 +649,6 @@ func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
 	}
 }
 
-// Older renderer builds wrote per-build values to person profiles, and nothing
-// refreshed them, so a profile kept showing a months-old version. The one
-// identified update clears them on the wire; later events stay anonymous.
 func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	requests := make(chan map[string]any, 2)
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "0.13.1-nightly.202609232348", "", roundTripClient(func(req *http.Request) (*http.Response, error) {

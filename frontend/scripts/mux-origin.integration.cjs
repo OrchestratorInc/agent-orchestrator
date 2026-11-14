@@ -1,4 +1,3 @@
-// Real Chromium transport against the Go router and the production remote proxy.
 const { app, BrowserWindow, protocol } = require("electron");
 const path = require("node:path");
 const assert = require("node:assert/strict");

@@ -11,12 +11,7 @@ export function AccordionTrigger({
 	trailing,
 	...props
 }: ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger> & {
-	/** Classes for the shared row wrapper (Radix's <h3> Header), which Radix
-	 *  stamps with data-state=open|closed. */
 	headerClassName?: string;
-	/** Rendered as a sibling of the trigger <button>, inside the same Header —
-	 *  lets callers place another interactive element (e.g. a copy button)
-	 *  next to the trigger without nesting a <button> inside a <button>. */
 	trailing?: ReactNode;
 }) {
 	return (

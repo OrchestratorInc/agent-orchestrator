@@ -15,7 +15,6 @@ export type SettingsOption<T extends string> = {
 	label: string;
 	icon?: ReactNode;
 	disabled?: boolean;
-	/** Heading for a run of consecutive options; shown above the first of each run. */
 	group?: string;
 };
 
@@ -45,7 +44,6 @@ export function SettingsOptionMenu<T extends string>({
 	value: T;
 	options: SettingsOption<T>[];
 	onChange: (value: T) => void;
-	/** Called with the pointer- or keyboard-highlighted option, and `null` when the menu closes. */
 	onHighlight?: (value: T | null) => void;
 	disabled?: boolean;
 	placeholder?: string;
@@ -59,7 +57,6 @@ export function SettingsOptionMenu<T extends string>({
 	menuAlign?: "start" | "center" | "end";
 	searchable?: boolean;
 	searchPlaceholder?: string;
-	/** An extra row under the options, such as "Manage…". */
 	action?: { label: string; onSelect: () => void; icon?: ReactNode };
 	emptyLabel?: string;
 	triggerRef?: Ref<HTMLButtonElement>;
@@ -79,8 +76,6 @@ export function SettingsOptionMenu<T extends string>({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
-	// Radix skips onOpenChange when an open menu unmounts (e.g. a shortcut closes
-	// the settings view), so end any highlight here or a preview would stick.
 	const highlightCleanupRef = useRef<(() => void) | null>(null);
 	highlightCleanupRef.current = menuOpen && onHighlight ? () => onHighlight(null) : null;
 	useEffect(() => () => highlightCleanupRef.current?.(), []);
@@ -107,8 +102,6 @@ export function SettingsOptionMenu<T extends string>({
 					)}
 				</SettingsMenuTrigger>
 			</DropdownMenuTrigger>
-			{/* This menu scrolls on an inner element, so the panel itself must not
-			    inherit the surface utility's overflow-y. */}
 			<DropdownMenuContent
 				align={menuAlign}
 				alignOffset={0}
@@ -144,10 +137,7 @@ export function SettingsOptionMenu<T extends string>({
 							<DropdownMenuItem
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
-								// Rows remain mounted during the exit animation; they must not restart a preview.
 								onFocus={menuOpen && onHighlight ? () => onHighlight(option.value) : undefined}
-								// Hovering off the options (or into the search box) ends the
-								// preview; moving to another option hands it straight over.
 								onBlur={
 									onHighlight
 										? (event) => {

@@ -157,7 +157,6 @@ func TestResumeScopesRequestsBeforeHandshakeCompletes(t *testing.T) {
 		opened <- result{provider, err}
 	}()
 	resume := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/resume" })
-	// Queue requests while resume is blocked, before the notification pump starts.
 	for i := 0; i < 32; i++ {
 		srv.push(`{"id":` + strconv.Itoa(i+42) + `,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"exec-1","command":"date","availableDecisions":["accept","cancel"]}}`)
 	}

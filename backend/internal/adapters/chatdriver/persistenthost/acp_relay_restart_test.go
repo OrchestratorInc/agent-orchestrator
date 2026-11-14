@@ -69,7 +69,6 @@ func TestACPRelayReplacementDoesNotReuseDurableIdentities(t *testing.T) {
 			t.Fatalf("host replacement reused durable identity: %v -> %v", a, b)
 		}
 	}
-	// Attaching another daemon to the same host must retain both identities.
 	replay := relayReplayFrames(t, first)
 	if len(replay) != 2 || frameMetaString(t, replay[0], ACPEventIDMetaKey) != a[0] ||
 		frameMetaString(t, replay[1], ACPRequestIDMetaKey) != a[1] {

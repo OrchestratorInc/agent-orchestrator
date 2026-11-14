@@ -20,7 +20,6 @@ func TestConfigureBootsTheACPProfile(t *testing.T) {
 	if !reflect.DeepEqual(args, []string{"--profile", "acp"}) {
 		t.Fatalf("args = %#v", args)
 	}
-	// The profile owns the model route and credentials, so AO adds no overlay.
 	if len(env) != 0 {
 		t.Fatalf("env = %#v, want none", env)
 	}
@@ -68,9 +67,6 @@ func TestSessionOptionsOmitUnsetSettings(t *testing.T) {
 	}
 }
 
-// TestSessionOptionsMapAOVocabularyOntoHarnessLevels covers the mapping that
-// keeps a project-level effort configured for another harness from breaking a
-// DeepSeek Harness session: Harness accepts only off, low, high, and max.
 func TestSessionOptionsMapAOVocabularyOntoHarnessLevels(t *testing.T) {
 	cases := map[string]string{
 		"none":    "off",
@@ -81,8 +77,7 @@ func TestSessionOptionsMapAOVocabularyOntoHarnessLevels(t *testing.T) {
 		"high":    "high",
 		"xhigh":   "max",
 		"max":     "max",
-		// AO values are matched case-insensitively.
-		"HIGH": "high",
+		"HIGH":    "high",
 	}
 	for input, want := range cases {
 		options := sessionOptions(ports.ChatTurnSettings{Effort: input})
@@ -123,9 +118,6 @@ func TestValidateTurnSettings(t *testing.T) {
 	}
 }
 
-// TestValidateTurnSettingsAcceptsOpaqueModelValues keeps AO out of Harness's
-// model vocabulary: a session's model is the JSON array string its own catalog
-// advertised, not a provider/model pair.
 func TestValidateTurnSettingsAcceptsOpaqueModelValues(t *testing.T) {
 	err := validateTurnSettings(ports.PermissionModeDefault, ports.ChatTurnSettings{
 		Model: `["deepseek-official","deepseek-v4-pro"]`,
@@ -148,18 +140,15 @@ func TestPermissionPolicyAnswersOnceForAutoAndEdits(t *testing.T) {
 		}
 	}
 
-	// auto answers any request, once.
 	if id, ok := permissionPolicy(ports.PermissionModeAuto, params(nil)); !ok || id != "allow" {
 		t.Fatalf("auto = (%q, %v), want (allow, true)", id, ok)
 	}
-	// accept-edits answers edit-like tools only.
 	if id, ok := permissionPolicy(ports.PermissionModeAcceptEdits, params(&edit)); !ok || id != "allow" {
 		t.Fatalf("accept-edits on edit = (%q, %v), want (allow, true)", id, ok)
 	}
 	if _, ok := permissionPolicy(ports.PermissionModeAcceptEdits, params(nil)); ok {
 		t.Fatal("accept-edits answered a non-edit tool")
 	}
-	// default stays out of the way entirely.
 	if _, ok := permissionPolicy(ports.PermissionModeDefault, params(&edit)); ok {
 		t.Fatal("default mode answered a permission request")
 	}

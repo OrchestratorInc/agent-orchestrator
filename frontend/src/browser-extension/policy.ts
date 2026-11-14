@@ -1,15 +1,7 @@
-// Site policy for agent actions in the user's Chrome: a deny list (with a
-// default seed of high-risk sites), an optional allow list, and sites where
-// agents must use synthetic (T0) input instead of the trusted debugger tier.
-
 export type SitePolicy = {
-	/** Hosts agents must never act on. */
 	deny: string[];
-	/** When non-empty, agents may act only on these hosts. */
 	allow: string[];
-	/** Hosts where input stays synthetic: no debugger, no infobar. */
 	syntheticInput: string[];
-	/** Default input tier for every other site. */
 	trustedInput: boolean;
 };
 
@@ -32,10 +24,6 @@ export const DEFAULT_SITE_POLICY: SitePolicy = {
 	trustedInput: true,
 };
 
-/**
- * A pattern matches its host and every subdomain. A leading "*." is accepted
- * as the same thing; a bare "*" matches everything.
- */
 export function hostMatches(host: string, pattern: string): boolean {
 	const normalized = pattern.trim().toLowerCase().replace(/^\*\./, "").replace(/\.$/, "");
 	if (!normalized) return false;
@@ -46,7 +34,6 @@ export function hostMatches(host: string, pattern: string): boolean {
 
 export type PolicyDecision = { allowed: true } | { allowed: false; reason: string };
 
-/** Whether agents may act on a URL. Only http(s) pages are ever eligible. */
 export function evaluateUrl(policy: SitePolicy, rawUrl: string | undefined): PolicyDecision {
 	if (!rawUrl || rawUrl === "about:blank") return { allowed: true };
 	let url: URL;
@@ -68,7 +55,6 @@ export function evaluateUrl(policy: SitePolicy, rawUrl: string | undefined): Pol
 	return { allowed: true };
 }
 
-/** Whether agents may use trusted (debugger) input on a URL. */
 export function trustedInputAllowed(policy: SitePolicy, rawUrl: string | undefined): boolean {
 	if (!policy.trustedInput) return false;
 	try {
@@ -79,7 +65,6 @@ export function trustedInputAllowed(policy: SitePolicy, rawUrl: string | undefin
 	}
 }
 
-/** Parse a stored policy, falling back to defaults for anything invalid. */
 export function parsePolicy(value: unknown): SitePolicy {
 	if (!value || typeof value !== "object") return { ...DEFAULT_SITE_POLICY };
 	const raw = value as Record<string, unknown>;
@@ -93,7 +78,6 @@ export function parsePolicy(value: unknown): SitePolicy {
 	};
 }
 
-/** Split a textarea of one host per line (commas also accepted). */
 export function parseHostList(text: string): string[] {
 	return text
 		.split(/[\n,]/)

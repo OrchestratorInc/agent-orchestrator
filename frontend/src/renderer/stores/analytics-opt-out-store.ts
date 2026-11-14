@@ -11,11 +11,6 @@ type AnalyticsOptOutState = {
 	setOptedOut(optedOut: boolean): Promise<void>;
 };
 
-/**
- * The in-app PostHog opt-out (Settings > Privacy). Main owns the switch; the
- * renderer applies it to its own client when main broadcasts the change (see
- * main.tsx), so this store only reads and requests.
- */
 export const useAnalyticsOptOutStore = create<AnalyticsOptOutState>((set, get) => ({
 	optedOut: false,
 	loaded: false,

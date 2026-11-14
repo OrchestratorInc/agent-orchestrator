@@ -33,7 +33,6 @@ describe("requestDownscaledImage", () => {
 		expect(fetch).toHaveBeenCalledTimes(1);
 		expect(fetch).toHaveBeenCalledWith(`http://x/shot.png?v=${encodeURIComponent(version)}`, { cache: "no-store" });
 		expect(bitmaps).toEqual([{ options: { resizeWidth: DOWNSCALED_IMAGE_WIDTH, resizeQuality: "medium" } }]);
-		// A card that comes back reads the kept copy without asking again.
 		expect(downscaledImage("http://x/shot.png", version)).toBe(first);
 	});
 
@@ -45,13 +44,11 @@ describe("requestDownscaledImage", () => {
 
 	it("makes a new copy when the file is overwritten at the same URL", async () => {
 		const { requestDownscaledImage, downscaledImage } = await import("./downscaled-image");
-		// A local artifact keeps its URL when an agent writes the file again; only its time changes.
 		const src = "http://127.0.0.1:3001/api/v1/sessions/s1/preview/files/shot.png?source=artifact&raw=true";
 		const before = await requestDownscaledImage(src, "2026-11-13T10:00:00Z");
 		const after = await requestDownscaledImage(src, "2026-11-13T10:05:00Z");
 		expect(after).not.toEqual(before);
 		expect(fetch).toHaveBeenCalledTimes(2);
-		// Each version is fetched by its own URL, so no cached response of the old file is reused.
 		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
 			`${src}&v=${encodeURIComponent("2026-11-13T10:00:00Z")}`,
 			`${src}&v=${encodeURIComponent("2026-11-13T10:05:00Z")}`,
@@ -71,7 +68,6 @@ describe("requestDownscaledImage", () => {
 		void requestDownscaledImage("http://x/3.png", "v1", scrolledPast.signal);
 		const fourth = requestDownscaledImage("http://x/4.png", "v1");
 		expect(fetch).toHaveBeenCalledTimes(MAX_CONVERTING);
-		// The third card scrolled away before its turn: its image is never fetched.
 		scrolledPast.abort();
 		answers[0]?.();
 		await first;

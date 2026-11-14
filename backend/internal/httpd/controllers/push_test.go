@@ -91,10 +91,6 @@ func TestRegisterPushDevice(t *testing.T) {
 	}
 }
 
-// TestRegisterPushDeviceAcceptsMissingToken pins the identity-announce path: a
-// phone that connects before notification permission is granted (or on a
-// build that can't mint a token at all) must still be able to register its
-// identity and appear in the roster, rather than being rejected outright.
 func TestRegisterPushDeviceAcceptsMissingToken(t *testing.T) {
 	reg := &fakePushRegistry{}
 	srv := newPushTestServer(t, reg)
@@ -138,8 +134,6 @@ func TestUnregisterPushDevice(t *testing.T) {
 	reg := &fakePushRegistry{}
 	srv := newPushTestServer(t, reg)
 
-	// The Expo token's [ ] must be URL-encoded by the client; the daemon must
-	// receive the decoded token.
 	token := "ExponentPushToken[abc]"
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/push/devices/"+url.PathEscape(token), nil)
 	res, err := http.DefaultClient.Do(req)
@@ -210,9 +204,6 @@ func TestPushRoutesNotImplementedWithoutRegistry(t *testing.T) {
 	}
 }
 
-// A registration must identify a phone. Accepting an identity-less body would
-// mint a permanent row representing no device, and repeating the call would mint
-// another — the roster fills with phantoms nobody can act on.
 func TestRegisterPushDeviceRequiresAnIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

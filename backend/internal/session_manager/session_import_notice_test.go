@@ -33,8 +33,6 @@ func TestImportFailureNoticeShowsOnlyNotices(t *testing.T) {
 		t.Fatalf("the missing-history notice was not shown: %q", got)
 	}
 
-	// A failed Setup step reads as it does for a native spawn; its output was
-	// redacted when the step failed.
 	setup := fmt.Errorf("prepare import: %w", &SetupStepError{Step: 2, Err: errors.New("exit status 1"), Output: "npm ERR! [redacted]"})
 	if got, ok := ImportFailureNotice(setup); !ok || !strings.Contains(got, "step 2") || !strings.Contains(got, "npm ERR! [redacted]") {
 		t.Fatalf("a failed Setup step was not shown: %q", got)

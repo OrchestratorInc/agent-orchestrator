@@ -13,24 +13,13 @@ import {
 	validateMountedLayout,
 } from "./build-mac-dmg.mjs";
 
-// Platform-independent coverage. The end-to-end proof (a real dmg built,
-// mounted and checked) runs on the macOS runner in frontend.yml's
-// mac-dmg-layout job, and every `npm run make` on macOS checks its dmg in
-// forge.config.ts's postMake.
-
 const svg = readFileSync(path.join(path.dirname(BACKGROUND_IMAGE), "background.svg"), "utf8");
 
 function pngSize(file) {
 	const png = readFileSync(file);
-	// IHDR is always the first chunk: width and height at bytes 16 and 20.
 	return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
 
-// assets/icon.icns is both the app bundle icon and the dmg's volume icon. It
-// once stored its 16/32px sizes as PNG in the legacy icp4/icp5 slots, which
-// Finder decodes as noise: the title bar and small listings showed garbage.
-// iconutil writes those sizes as ic04/ic05; regenerate it with iconutil from an
-// iconset, never by hand-packing PNGs.
 describe("app icon", () => {
 	function chunks(file) {
 		const icns = readFileSync(file);
@@ -48,7 +37,6 @@ describe("app icon", () => {
 		const types = chunks(VOLUME_ICON);
 		expect(types).not.toContain("icp4");
 		expect(types).not.toContain("icp5");
-		// 16, 32, 16@2x, 32@2x, 128, 128@2x, 256, 256@2x, 512, 512@2x (1024).
 		for (const type of ["ic04", "ic05", "ic11", "ic12", "ic07", "ic13", "ic08", "ic14", "ic09", "ic10"]) {
 			expect(types).toContain(type);
 		}
@@ -61,7 +49,6 @@ describe("install window layout", () => {
 		expect(DMG_LAYOUT.iconSize).toBe(128);
 		expect(DMG_LAYOUT.app.x).toBeLessThan(DMG_LAYOUT.applications.x);
 		expect(DMG_LAYOUT.app.y).toBe(DMG_LAYOUT.applications.y);
-		// Symmetric about the window's centre line.
 		expect(DMG_LAYOUT.app.x + DMG_LAYOUT.applications.x).toBe(DMG_LAYOUT.window.width);
 	});
 
@@ -84,8 +71,6 @@ describe("install window layout", () => {
 		expect(pngSize(BACKGROUND_IMAGE.replace(/\.png$/, "@2x.png"))).toEqual({ width: width * 2, height: height * 2 });
 	});
 
-	// The art is drawn against the icon coordinates; moving one without the
-	// other leaves the drag cue pointing at empty space.
 	it("draws the arrow between the icons, landing on Applications", () => {
 		const arrow = /<g class="arrow">\s*<path d="M([\d.]+) ([\d.]+)[^"]*"[^>]*\/>\s*<path d="M[\d.]+ [\d.]+ L([\d.]+) ([\d.]+)/.exec(svg);
 		expect(arrow).not.toBeNull();
@@ -96,19 +81,15 @@ describe("install window layout", () => {
 		expect(start.x).toBeGreaterThan(DMG_LAYOUT.app.x + DMG_LAYOUT.iconSize / 2);
 		expect(tip.x).toBeLessThan(DMG_LAYOUT.applications.x - DMG_LAYOUT.iconSize / 2);
 		expect(tip.x).toBeGreaterThan(start.x + 100);
-		// Starts and lands within the icons' height band.
 		for (const point of [start, tip]) {
 			expect(Math.abs(point.y - DMG_LAYOUT.app.y)).toBeLessThan(DMG_LAYOUT.iconSize / 2);
 		}
 		expect(svg).toContain(">drag to Applications</text>");
 	});
 
-	// The harness tiles are scattered art, not Finder items: a tile under an
-	// icon or label would look like a broken drop target.
 	it("keeps every harness tile in the margins and points it at a real logo", () => {
 		const tiles = [...svg.matchAll(/<g class="harness"[^>]*>\s*<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"[\s\S]*?href="([^"]+)"/g)];
 		expect(tiles.length).toBeGreaterThanOrEqual(6);
-		// Each icon plus its label (about 160pt wide, 20pt below the icon).
 		const keepOut = [DMG_LAYOUT.app, DMG_LAYOUT.applications].map(({ x, y }) => ({
 			left: x - 80,
 			right: x + 80,
@@ -129,11 +110,8 @@ describe("install window layout", () => {
 		}
 	});
 
-	// The background sets the window FRAME size; Finder's title bar covers the
-	// bottom ~32pt, which once clipped a footer out of view.
 	it("keeps the icons, their labels and all text inside the visible area", () => {
 		const visible = DMG_LAYOUT.window.height - 32;
-		// 128pt icon plus a ~20pt label below it.
 		expect(DMG_LAYOUT.app.y + DMG_LAYOUT.iconSize / 2 + 20).toBeLessThan(visible);
 		for (const [, y] of svg.matchAll(/<text[^>]*\sy="(\d+)"/g)) expect(Number(y)).toBeLessThan(visible);
 	});
@@ -198,8 +176,6 @@ describe("validateMountedLayout", () => {
 	});
 	afterEach(() => rmSync(volume, { recursive: true, force: true }));
 
-	// What `hdiutil create -srcfolder` produced for every stable release up to
-	// v0.14.7: the app and the link, and nothing that tells Finder how to draw.
 	it("rejects a bare image with only the app and the Applications link", async () => {
 		mkdirSync(path.join(volume, APP_BUNDLE_NAME));
 		symlinkSync("/Applications", path.join(volume, "Applications"));
@@ -253,7 +229,6 @@ describe("buildMacDmg", () => {
 			...macDmgLayout(),
 			sign: false,
 			writeUpdateInfo: false,
-			// The conductor's published asset name (ao-releases#50).
 			artifactName: "Orchestrator-darwin-arm64.dmg",
 		});
 	});

@@ -3,33 +3,6 @@ import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
-/**
- * The Chat composer.
- *
- * Submitting is a typed send, not a keystroke: there is no notion of "press
- * Enter at the agent" here, and an empty message is never a way to nudge it.
- *
- * A message typed mid-turn is held by the daemon and sent when the turn ends,
- * because the agent is one conversation and cannot run a second turn alongside
- * the first. The placeholder says so rather than leaving the user to guess where
- * their text went, and the queued message stays visible only in the dock.
- *
- * The model, reasoning effort and approval controls belong here rather than in
- * settings because the provider takes all three per turn: choosing one changes the
- * next message and never restarts the agent.
- *
- * Three completions live in the editor — `/` for AO commands and the agent's own
- * skills, `@` for worktree files, and pasted or dropped files. Completed skills
- * and paths are atomic inline chips but serialize to the plain text the agent
- * expects. Enter sends by default; a UI preference reserves Enter for newlines
- * and sends with Cmd/Ctrl+Enter. Ordinary typing stays local to the editor instead
- * of rerendering the surrounding chat surface.
- *
- * Every affordance is conditional on being able to deliver. The `/` menu only opens
- * when the provider actually reported skills, and the attach control only appears
- * when a caller supplied somewhere to put the bytes — a control that cannot do what
- * it says should not be drawn.
- */
 
 import {
 	cloneElement,
@@ -129,16 +102,11 @@ import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
 
-// These responses precede AppendUserMessage. Provider/transport errors can
-// follow durable acceptance and must keep the original delivery ID for recovery.
-/** The agent switch that runs before a send failed, so the message never left. */
 export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
-	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
 	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
-	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
 	"CHAT_MESSAGE_EMPTY",
@@ -153,16 +121,10 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
-	// A shared session refused the send because someone else holds its
-	// composer; nothing was accepted, so the text goes back to the draft.
 	"COMPOSER_LOCKED",
 	"COMPOSER_LEASE_LOST",
-	// Excerpts are verified before AppendUserMessage, so retrying the same
-	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
-	// A /btw request the daemon refused never opened a side chat, so a
-	// retry cannot succeed; return the draft instead of locking the composer.
 	"CHAT_SIDE_UNAVAILABLE",
 	"CHAT_SIDE_UNSUPPORTED",
 	"CHAT_SIDE_ANCHOR_UNAVAILABLE",
@@ -173,19 +135,10 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_SIDE_IDEMPOTENCY_CONFLICT",
 ]);
 
-// Native image blocks are persisted with the chat turn and sent to the provider.
-// Larger attachments still reach the agent through their staged workspace paths.
-/** How long a sent draft stays hidden before it reappears if the daemon has not answered. */
 const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 
-/**
- * The band hung on the chat box slides up out from behind it as it comes and
- * back down behind it as it goes. Only the band moves, and by transform alone:
- * its space above the box is taken at once, so nothing else is laid out again
- * while it slides, and the clip at the box's edge hides it there.
- */
 function isTextEntryFocused(): boolean {
 	const active = document.activeElement;
 	if (!(active instanceof HTMLElement)) return false;
@@ -201,7 +154,6 @@ function ComposerBand({ band }: { band?: ReactNode }) {
 					<motion.div
 						className="chat-composer-band-tray"
 						initial={{ y: "100%" }}
-						// --duration-normal (150ms), DESIGN.md's small panel movement.
 						animate={{ y: 0, transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeOut" } }}
 						exit={{ y: "100%", transition: { duration: reducedMotion ? 0 : 0.15, ease: "easeIn" } }}
 					>
@@ -213,41 +165,27 @@ function ComposerBand({ band }: { band?: ReactNode }) {
 	);
 }
 
-/** A message entered while the previous one was still being sent. */
 type HeldSubmit = {
-	/** The draft as entered; it is sent only if the box still holds exactly this. */
 	text: string;
 	steer: boolean;
-	/** The composer held its own draft (not a new one typed during another send). */
 	own: boolean;
-	/** The message in the unsent strip when this was held, if any. */
 	unsentId?: string;
 };
 
-/**
- * How long after a send Cmd/Ctrl+Enter in the empty box is ignored instead of
- * steering the next queued message. A send clears the box at once and lands in
- * milliseconds, so a double-tapped Cmd/Ctrl+Enter would otherwise steer the
- * message it just queued.
- */
 const STEER_NEXT_AFTER_SEND_MS = 1000;
 
-/** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
 
-/** Whether the unsent strip can take this send: the same rule parkChatComposerDelivery applies. */
 function fitsUnsentSlot(delivery: ChatComposerDelivery | undefined, scope: ChatDraftScope): delivery is ChatComposerDelivery {
 	return isParkableChatComposerDelivery(delivery) && !readChatSessionDraft(scope).unsent;
 }
 
-/** A send nobody is sending, which the composer moves out of the box into the unsent strip. */
 function parksDelivery(delivery: ChatComposerDelivery | undefined, scope: ChatDraftScope | undefined): delivery is ChatComposerDelivery {
 	return Boolean(scope && fitsUnsentSlot(delivery, scope) && !getChatComposerMutation(scope).pending);
 }
 
 function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined, parks = false): string | null {
 	if (!delivery) return null;
-	// The unsent strip says it instead.
 	if (parks) return null;
 	if (delivery.state === "accepted") {
 		return "chat.draft.acceptedMessage";
@@ -256,22 +194,13 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined, park
 		? "chat.draft.steerRestart"
 		: "chat.draft.sendRestart";
 }
-/** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
 export type ChatComposerHandle = {
 	focus(): void;
 	isEmpty(): boolean;
-	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
 };
 
-/**
- * Whether a dock above the composer slides in. One already up when the composer
- * mounts (a chat switched to with a queued message, a question or an unsent
- * message waiting) was on screen before the switch, so it is drawn in place;
- * whatever takes its slot afterwards slides in. `shown` names what the dock
- * holds, or null when it is down.
- */
 function useDockEntrance(shown: string | null): boolean {
 	const quiet = useRef(shown);
 	if (quiet.current !== null && quiet.current !== shown) quiet.current = null;
@@ -349,13 +278,10 @@ export const ChatComposer = memo(function ChatComposer({
 	parkUnsentSends = true,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
-	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
-	/** The conversation branch `sentMessages` belongs to; changing it ends an open walk. */
 	sentMessagesScope?: string;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
-	/** Complete prepared annotation payload budget for the destination transport. */
 	messageByteLimit?: number;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
@@ -365,151 +291,67 @@ export const ChatComposer = memo(function ChatComposer({
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
 	fileReferences?: ChatFileReference[],
-		/** With text delivery, the message as typed, before its captures were inlined into `text`. */
 		displayText?: string,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
-	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
 	addMenuItems?: ReactNode;
-	/** A provider decision that temporarily replaces ordinary message entry. */
 	approval?: ReactNode;
-	/** A provider question, docked above the composer until it is answered. */
 	elicitation?: ReactNode;
-	/** A send is in flight. */
 	busy?: boolean;
-	/** The agent is mid-turn, so this message is held until the turn ends. */
 	willQueue?: boolean;
-	/** Replaces the default queueing hint, e.g. while the agent is still starting. */
 	queuePlaceholder?: string;
 	disabled?: boolean;
-	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
-	/**
-	 * Takes no typing and sends nothing, while the box looks exactly as usual; the
-	 * tools around it (attachments, the agent and model pickers) stay usable.
-	 */
 	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
-	/**
-	 * Files that cannot be staged yet (no workspace to write into) stay in the
-	 * composer with their bytes and go to `onSend` with the message, for a chat
-	 * whose session is created by that send.
-	 */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
-	/**
-	 * Why this chat cannot take files, for a draft that brought some along
-	 * (a new task moved to a target that takes none). They stay as chips with
-	 * this reason, and nothing is sent until they are removed.
-	 */
 	attachmentsRefusal?: string;
-	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
-	/** A proposed next message, kept out of the draft until accepted with Tab. */
 	promptSuggestion?: ComposerPromptSuggestion;
-	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
-	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
-	/**
-	 * Told what follows "@" as it is typed, for a workspace whose files are searched
-	 * rather than listed up front (a Cloud session's): it answers through filePaths.
-	 */
 	onFileQuery?: (query: string) => void;
-	/** The path list was capped, so the menu says so rather than implying it is all. */
 	filePathsTruncated?: boolean;
-	/**
-	 * Writes staged files into the worktree and answers with the paths the agent
-	 * can open. Absent means files cannot be delivered, and no attach control is
-	 * offered at all.
-	 */
 	onStageAttachments?: (attachments: FileAttachmentPayload[], signal?: AbortSignal) => Promise<string[]>;
-	/**
-	 * Staged files are uploaded to AO Cloud, which takes files up to maxBytes
-	 * each. Each file uploads on its own and shows its own failure, removing one
-	 * while it uploads cancels it, and an upload in flight does not hold the
-	 * page: it runs in the main process and is dropped on a reload.
-	 */
 	cloudAttachments?: { maxBytes: number };
-	/** Send the same staged bytes as native ACP image blocks when negotiated. */
 	nativeImages?: boolean;
-	/**
-	 * Deliver this text into the turn already running. Absent means the harness
-	 * cannot steer and the choice is never offered.
-	 */
 	onSteer?: (text: string, attachments?: FileAttachmentPayload[], clientMessageId?: string, recoverOnly?: boolean) => Promise<ChatSteerOutcome | void>;
-	/** Expose steering as a separate action while a Cloud turn is running. */
 	showSteerButton?: boolean;
-	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
-	/**
-	 * Pick a stopped turn back up when there is no draft to send: the same button
-	 * that stopped it continues it, like play after pause. Present only while the
-	 * latest turn is one the user stopped.
-	 */
 	onContinue?: () => Promise<unknown> | void;
-	/** A turn is actually running, so there is something to steer into. */
 	canSteer?: boolean;
-	/** A send mutation is in flight for this session. */
 	sendPending?: boolean;
 	steerPending?: boolean;
-	/** Why the last steer was refused. */
 	steerRefusal?: string;
-	/** A selected history message to load into the composer as a new draft. */
 	draftSeed?: { id: string; text: string; attachments?: StoredComposerAttachment[]; stagedAttachments?: ChatDraftAttachment[] };
-	/** A queued turn being edited in the composer instead of the dock. */
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
 	onQueuedDraftChange?: (text: string) => void;
-	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
-	/** Every edit of the draft text or move of its caret, with the text and caret after it. */
 	onDraftInput?: (text: string, caret?: number) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
-	/** The queued edit mutation is in flight for the turn being edited. */
 	savingQueuedEditPending?: boolean;
-	/** Keep the exact queued edit immutable until its saved delivery ID is reconciled. */
 	queuedEditRecovery?: boolean;
-	/** A failed send, approval, interrupt, or settings mutation. */
 	commandError?: string;
-	/** A notice attached to the form, below queued messages and input requests. */
 	notice?: ReactNode;
-	/** A band hung on top of the chat box (a refused login's); the box itself is not moved or recolored. */
 	trayBand?: ReactNode;
-	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
-	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
 	onCompact?: () => void | Promise<unknown>;
-	/** The provider is already compacting this conversation. */
 	compacting?: boolean;
-	/** A typed provider refusal from the last compaction attempt. */
 	compactUnavailable?: string;
-	/** A running turn must be stopped before its history can be compacted. */
 	compactBlocked?: boolean;
-	/** Changes when the owning chat surface should reclaim composer focus. */
 	autoFocusKey?: string;
-	/** Whether this composer is currently visible and should take focus. */
 	autoFocus?: boolean;
-	/** Durable AO session identity used to scope unsent composer state. */
 	draftSessionId?: string;
-	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
-	/** Host-specific proxy origin for staged attachment reads. */
 	assetBaseUrl?: string;
-	/** The session belongs to a remote host, even if its proxy is disconnected. */
 	remoteHost?: boolean;
-	/** Daemon wire session ID when draft storage uses a host-scoped identity. */
 	assetSessionId?: string;
-	/** Client ids already present in daemon-authoritative conversation history. */
 	acceptedClientMessageIds?: ReadonlySet<string>;
-	/**
-	 * Move a send that nothing is sending (after a restart or a lost answer) out of
-	 * the box into the unsent strip, so typing never waits on it. Off where another
-	 * flow owns that delivery, such as a new chat's pending launch.
-	 */
 	parkUnsentSends?: boolean;
 }) {
 	const translateDraft = useChatDraftTranslation();
@@ -530,16 +372,10 @@ export const ChatComposer = memo(function ChatComposer({
 	const boundarySessionId = draftSessionId ?? queuedDraftScope?.sessionId;
 	const [retainedAttachments, setRetainedAttachments] = useState<StoredComposerAttachment[]>(draftSeed?.attachments ?? []);
 	const visibleRetainedAttachments = editingQueuedTurnId ? retainedAttachments : [];
-	// Seeded from the saved draft, so a remounted composer is not reported empty
-	// for the moment before its editor loads that text.
 	const [hasText, setHasText] = useState(() =>
 		Boolean(draftScope && !queuedDraftScope && readChatSessionDraft(draftScope).composer.text.trim()));
 	const hasTextRef = useRef(hasText);
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
-	/**
-	 * The trigger position the user dismissed with Escape. Held so the menu stays
-	 * shut for the completion they rejected, while a new `/` or `@` still opens one.
-	 */
 	const [dismissedKey, setDismissedKey] = useState<string | null>(null);
 	const dismissedKeyRef = useRef<string | null>(null);
 	const [highlighted, setHighlighted] = useState(0);
@@ -568,25 +404,13 @@ export const ChatComposer = memo(function ChatComposer({
 	);
 	const [unsent, setUnsent] = useState<ChatComposerDelivery | undefined>(() =>
 		draftScope ? readChatSessionDraft(draftScope).unsent : undefined);
-	// The id being retried from the strip, and a just-discarded message that Undo can restore.
 	const [retryingUnsent, setRetryingUnsent] = useState<string>();
 	const [discardedUnsent, setDiscardedUnsent] = useState<ChatComposerDelivery>();
-	// A send can fail long after submit captured its state, so it reads the undo window here.
 	const discardedUnsentRef = useRef(discardedUnsent);
 	discardedUnsentRef.current = discardedUnsent;
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
-	// Cmd/Ctrl held anywhere in the window turns a send-button click into a steer.
 	const [modifierHeld, setModifierHeld] = useState(false);
-	// The DOM event is the source of truth while React catches up with the draft
-	// transition. This keeps Enter-after-fast-typing from observing stale state.
 	const textRef = useRef("");
-	/**
-	 * What Enter does while the agent is working.
-	 *
-	 * Queueing is the safe default and matches `ao send`: the daemon records the
-	 * message durably and dispatches it when the current turn finishes. Steering is
-	 * timing-sensitive and changes the running turn, so it stays an explicit choice.
-	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
 	const dictation = useDictation({
@@ -594,58 +418,28 @@ export const ChatComposer = memo(function ChatComposer({
 		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
 	const dictating = dictation.phase !== "idle";
-	// A locked box takes no dictating either: a lock that comes while the user
-	// speaks stops listening, keeping the words so far.
 	const detachDictation = dictation.detach;
 	useEffect(() => {
 		if (typingLocked) detachDictation();
 	}, [detachDictation, typingLocked]);
-	// Dictation is in preview: macOS only, behind Developer mode.
 	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
-	/**
-	 * Messages sent in quick succession go out one after another, in order.
-	 *
-	 * A send clears the box before the daemon answers, so the next message is
-	 * often typed and entered while the previous one is still on its way. That
-	 * Enter is held here and the draft is sent the moment the previous send is
-	 * accepted (or the composer is free again), instead of being dropped. Only
-	 * the exact text the user entered is sent; an edit made since waits for its
-	 * own Enter. A held message never overtakes a send that did not go through.
-	 * The daemon then queues each one behind the running turn as usual.
-	 */
 	const [heldSubmit, setHeldSubmit] = useState<HeldSubmit | null>(null);
-	// Held during a submit, and decided when that submit settles.
 	const heldDuringSubmit = useRef<HeldSubmit | null>(null);
 	const submitAccepted = useRef(false);
-	// Counts editor clears, so an Enter during a send can tell a new draft
-	// from a repeat Enter on the message being sent.
 	const editorClears = useRef(0);
 	const editorClearsAtSubmit = useRef(0);
-	// When the last submit started or settled, for the empty-Enter steer guard.
 	const lastSubmitAt = useRef(0);
-	// Disabling the active editor can move focus to the document body. Remember
-	// keyboard-origin submissions so focus can return once the editor is enabled.
 	const restoreFocusAfterSubmission = useRef(false);
 	const menuId = useId();
 	const hadQueuedDockRef = useRef(Boolean(queuedDock));
 	const previousTrigger = useRef<ComposerTrigger | undefined>(undefined);
 	const triggerRef = useRef<ComposerTrigger | undefined>(undefined);
 	const automaticDeliveryRecoveryAttempted = useRef<string | undefined>(undefined);
-	/**
-	 * Up/Down recall of sent messages. The history is captured newest first when
-	 * browsing starts, so a message arriving meanwhile cannot shift the position, and
-	 * `draft` is what the editor held before, for Down to bring back. A recalled
-	 * message is never saved as the draft until it is edited: leaving mid-browse keeps
-	 * the user's own text.
-	 */
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
-	// Code selected in a file or diff view ("Ask in chat") arrives here as a
-	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
-	// edit has no draftSessionId and stays out of the way.
  useEffect(() => {
   if (!draftSessionId || !draftScope) return;
   return subscribeChatComposerReferences(draftSessionId, (reference) => {
@@ -659,7 +453,6 @@ export const ChatComposer = memo(function ChatComposer({
    composerRevision.current = result.draft.composer.revision;
    setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
 			if (!result.ok) return false;
-			// The Chat surface may only now be coming forward from behind a file tab.
 			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
 			return true;
 		});
@@ -742,7 +535,6 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return attachments.map((attachment, index) => {
 				const stagedPath = paths[index];
-				// Staging renames the file, and the sent message keeps only that path.
 				if (stagedPath) rememberAttachmentName(stagedPath, attachment.name);
 				return { ...attachment, stagedPath };
 			});
@@ -804,8 +596,6 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
-		// An empty candidate list is the whole reason the sigil stays ordinary: with
-		// no commands or skills there is nothing to open, so `/` types a slash.
 		if (currentTrigger.kind === "skill") {
 			return rankSkills(slashCommands, currentTrigger.query);
 		}
@@ -822,17 +612,9 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [fileQuery, onFileQuery]);
 
 	const menuOpen = suggestions.length > 0;
-	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
-	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
-	// A plain send already shows its echo in the timeline. Its text stays held in the
-	// editor until the daemon accepts, so a rejection or lost response can restore it,
-	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
-	// A steer is never cleared before the daemon answers (a refusal hands it back to
-	// be sent as a new message), but its echo is already in the turn too, so its text
-	// and files are hidden the same way.
 	const steerInFlight = Boolean(
 		submitting &&
 			!deliveryUncertain &&
@@ -846,8 +628,6 @@ export const ChatComposer = memo(function ChatComposer({
 			durableDelivery?.kind === "send" &&
 			durableDelivery.state === "dispatching",
 	);
-	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
-	// send never reads as a vanished draft.
 	const [concealExpired, setConcealExpired] = useState(false);
 	useEffect(() => {
 		if (!sendInFlight) {
@@ -863,8 +643,6 @@ export const ChatComposer = memo(function ChatComposer({
 	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
-		// A cloud file's reference is no daemon path: it previews from its bytes
-		// while they are in memory, else as a file.
 		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
 		return { file, path, preview };
@@ -915,15 +693,7 @@ export const ChatComposer = memo(function ChatComposer({
 			!durableDelivery &&
 			!fileAttachments.preparing;
 	const sendActionEnabled = canSend || canRecoverDelivery;
-	// A plain send while a turn runs is queued, so the button says so instead of
-	// looking identical to an immediate send.
 	const queuesDraft = Boolean(willQueue && !savingQueuedEdit && !queuedEditRecovery);
-	// Cmd/Ctrl+Enter or Cmd/Ctrl+click steers the current draft into the running
-	// turn; the send button only shows it while the modifier is held. When Enter
-	// inserts newlines, Cmd/Ctrl+Enter is the send key, so the modifier delivers
-	// through the ordinary send/queue path instead of steering.
-	// Steering has no excerpt payload, so attached excerpts would be cleared with
-	// the accepted draft without reaching the agent. Queue those drafts instead.
 	const canSteerDraft =
 		Boolean(canSteer && onSteer) && !savingQueuedEdit && contextReferences.length === 0;
 	const steersDraft = enterSends && modifierHeld && canSteerDraft;
@@ -938,8 +708,6 @@ export const ChatComposer = memo(function ChatComposer({
 	const canStopTurn = Boolean(
 		willQueue && onInterrupt && !controlsDisabled && !hasDraft && !savingQueuedEdit,
 	);
-	// Typing a draft turns the button back into Send, so after a stop the user can
-	// still ask something else instead.
 	const canContinueTurn = Boolean(
 		onContinue && !canStopTurn && !controlsDisabled && !hasDraft && !savingQueuedEdit && !durableDelivery,
 	);
@@ -983,8 +751,6 @@ export const ChatComposer = memo(function ChatComposer({
 					? (["persistence-failed"] as const)
 					: []),
 
-				// A Cloud upload runs in the main process, which a leave
-				// confirmation would block, and is only repeated if lost.
 				...(fileAttachments.preparing && !cloudAttachments ? (["pending-attachments"] as const) : []),
 			],
 		);
@@ -1033,9 +799,6 @@ export const ChatComposer = memo(function ChatComposer({
 
 		const onWindowFocus = () => {
 			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
-			// A click that activates the window can land in another field (the Browser
-			// address bar, a terminal) before this fires; taking focus would send the
-			// user's typing into the composer instead.
 			if (isTextEntryFocused()) return;
 			focusEditor();
 		};
@@ -1082,7 +845,6 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!unsavedText.current) composerRevision.current = result.draft.composer.revision;
 			setTextDraftPersistenceError(unsavedText.current ? "chat.draft.saveFailed" : null);
 			setDeliveryRecoveryNotice(null);
-			// A receipt from the old surface must not clear this surface's unsaved draft.
 			if (!unsavedText.current && !result.cleared) {
 				textRef.current = result.draft.composer.text;
 				hasTextRef.current = textRef.current.trim().length > 0;
@@ -1123,9 +885,6 @@ export const ChatComposer = memo(function ChatComposer({
 				? { ok: false, cleared: false, draft: saved.draft }
 				: clearAcceptedChatComposer(draftScope, acceptedRevision, undefined,
 					fileAttachments.getAttachments().map((attachment) => attachment.id));
-			// A successful durable clear can synchronously trigger a replacement
-			// surface before React applies the acceptance receipt. Release the route
-			// boundary first so cleared UI never exposes stale unsafe-draft state.
 			if (result.ok && result.cleared && draftSessionId) {
 				synchronouslyClearedDeliveryRevision.current = acceptedRevision;
 				setChatDraftBoundary(draftSessionId, "composer", undefined);
@@ -1207,19 +966,12 @@ export const ChatComposer = memo(function ChatComposer({
 	]);
 
 	useEffect(() => {
-		// A concurrent replacement can render this memoized seed, remain disconnected,
-		// and commit only after another surface accepted and cleared the draft. Read the
-		// session record again at the effect/commit boundary so acknowledgement cannot
-		// turn the runtime snapshot into an ABA that resurrects accepted text or staged
-		// attachment descriptors.
 		if (unsavedText.current || (composerMutation.pending && restoredSeedKey.current !== undefined)) return;
 		const loadedDraft = draftScope ? loadChatSessionDraft(draftScope) : undefined;
 		if (loadedDraft?.ok === false) return;
 		const committedDraft = loadedDraft?.draft;
-		// A send about to move into the unsent strip takes its text and files with it.
 		const parking = parkUnsentSends && !discardedUnsentRef.current && parksDelivery(committedDraft?.composer.delivery, draftScope);
 		const sentDraft = parking ? undefined : committedDraft?.composer.delivery?.draft;
-		// Keep this surface's native bytes for retry; only a new surface needs descriptors.
 		if (committedDraft && (!sentDraft || restoredSeedKey.current === undefined)) {
 			fileAttachments.reconcilePersistedAttachments(
 				(sentDraft?.attachments ?? committedDraft.composer.attachments).map((attachment) => ({
@@ -1260,9 +1012,6 @@ export const ChatComposer = memo(function ChatComposer({
 			setSendError(null);
 			setSteerOutcomeNotice(null);
 		}
-		// A history action intentionally creates a new draft and must be persisted.
-		// A session restore is already durable; writing it again here needlessly
-		// changes the accepted-send revision during mount.
 		if (draftScope && draftSeed) {
 			const result = writeChatComposerText(draftScope, committedSeedText);
 			if (result.ok) composerRevision.current = result.draft.composer.revision;
@@ -1285,17 +1034,13 @@ export const ChatComposer = memo(function ChatComposer({
 
 	useEffect(() => {
 		if (!durableDelivery || !draftScope) return;
-		// The live send owns completion until its receipt has been applied.
 		if (composerMutation.pending || composerMutation.accepted) return;
-		// A replacement can commit after another surface cleared its rendered seed.
 		const current = loadChatSessionDraft(draftScope);
-		// A failed read cannot prove that the delivery was cleared.
 		const delivery = current.ok ? current.draft.composer.delivery : durableDelivery;
 		if (!delivery || delivery.clientMessageId !== durableDelivery.clientMessageId) {
 			setDurableDelivery(delivery);
 			return;
 		}
-		// The chat already holds this message (or steer): it arrived though its answer was lost.
 		const observed = acceptedClientMessageIds?.has(delivery.clientMessageId);
 		if (delivery.state !== "accepted" && !observed) return;
 		if (automaticDeliveryRecoveryAttempted.current === delivery.clientMessageId) return;
@@ -1310,17 +1055,11 @@ export const ChatComposer = memo(function ChatComposer({
 		durableDelivery,
 	]);
 
-	// A send nothing is sending moves beside the box, so typing and new sends never wait on it.
 	useEffect(() => {
 		if (!parkUnsentSends || !draftScope || retryingUnsent || !parksDelivery(durableDelivery, draftScope)) return;
-		// submitInFlight is a ref still set on the failed send's last render; the
-		// pending runtime mutation in parksDelivery already guards a live send.
 		if (submitting || composerMutation.accepted) return;
-		// The slot frees for this send only once a discarded one can no longer be undone.
 		if (unsent || discardedUnsent) return;
-		// The daemon took it; only the local record failed, so it isn't unsent.
 		if (textDraftPersistenceError === "chat.draft.recordMessageFailed") return;
-		// The effect above clears a send the chat already holds.
 		if (acceptedClientMessageIds?.has(durableDelivery.clientMessageId)) return;
 		const result = parkChatComposerDelivery(draftScope, durableDelivery.clientMessageId);
 		if (!result.ok) return;
@@ -1359,7 +1098,6 @@ export const ChatComposer = memo(function ChatComposer({
 		unsent,
 	]);
 
-	// The chat holds the unsent message after all: its answer was lost, not the message.
 	useEffect(() => {
 		if (!draftScope || !unsent || !acceptedClientMessageIds?.has(unsent.clientMessageId)) return;
 		if (discardUnsentChatComposerDelivery(draftScope, unsent.clientMessageId).ok) setUnsent(undefined);
@@ -1378,7 +1116,6 @@ export const ChatComposer = memo(function ChatComposer({
 		setRetryingUnsent(unsent.clientMessageId);
 		setDurableDelivery(result.draft.composer.delivery);
 	};
-	// The retry runs once the revived delivery is what a submit would recover.
 	const submitRef = useRef<() => Promise<void>>(() => Promise.resolve());
 	const retryStarted = useRef<string | undefined>(undefined);
 	useEffect(() => {
@@ -1435,9 +1172,6 @@ export const ChatComposer = memo(function ChatComposer({
 		const result = writeChatComposerText(draftScope, text);
 		if (result.ok) composerRevision.current = result.draft.composer.revision;
 		unsavedText.current = result.ok ? undefined : { text, revision: composerRevision.current };
-		// A disabled Lexical editor can still publish an internal state update
-		// while its editability changes. It must not erase the recovery notice
-		// for a durable delivery that still owns this exact composer revision.
 		if (!result.ok || !result.draft.composer.delivery) {
 			setTextDraftPersistenceError(
 				result.ok
@@ -1446,8 +1180,6 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
-	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
-	// draft below what is already typed, ready for the person's own words.
 	useEffect(() => {
 		if (!draftSessionId || !draftScope) return;
 		return subscribeChatComposerText(draftSessionId, (text) => {
@@ -1464,9 +1196,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
-		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
-		// Editing a recalled message makes it the draft; until then the saved draft stands.
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
@@ -1500,8 +1230,6 @@ export const ChatComposer = memo(function ChatComposer({
 			setDismissedKey(null);
 		}
 	}, [onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText]);
-	// A walk holds one branch's prompts. Once another branch or conversation is
-	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
 	useEffect(() => {
 		if (walkedScope.current === sentMessagesScope) return;
@@ -1543,17 +1271,12 @@ export const ChatComposer = memo(function ChatComposer({
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
-		// A recalled message is shown, not typed: moving the caret through its `/skill`
-		// must not rewrite it, which would also make it the saved draft.
 		if (historyBrowse.current) return;
 		const query = trigger.query.toLowerCase();
 		if (!query) return;
 		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
 		if (!exact) return;
 
-		// Do not eagerly accept a skill whose full name is also the start of another
-		// skill. The user must still be able to type `/review-pr` when `/review`
-		// exists; Enter remains available to accept the shorter exact match.
 		const hasLongerPrefix = slashCommands.some((skill) => {
 			const name = skill.name.toLowerCase();
 			return name.length > query.length && name.startsWith(query);
@@ -1566,8 +1289,6 @@ export const ChatComposer = memo(function ChatComposer({
 		restoreFocusAfterSubmission.current = false;
 		if (typeof document === "undefined") return;
 		const active = document.activeElement;
-		// Restore focus only when disabling the editor caused the blur. Do not steal
-		// focus if the user deliberately moved to another control while awaiting.
 		if (active === document.body || active === null) editor.current?.focus();
 	}, [submitting]);
 
@@ -1593,11 +1314,6 @@ export const ChatComposer = memo(function ChatComposer({
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
 		if (submitInFlight.current) {
-			// React cannot publish the next busy prop until after this event returns. A
-			// repeat Enter on the message being sent joins that submission instead of
-			// opening a second transport whose local admission rejection would look like
-			// a real provider failure. A new draft typed after the box was cleared for
-			// that send is a new message: hold it and send it next.
 			if (
 				!savingQueuedEdit &&
 				editorClears.current !== editorClearsAtSubmit.current &&
@@ -1613,9 +1329,7 @@ export const ChatComposer = memo(function ChatComposer({
 		submitAccepted.current = false;
 		editorClearsAtSubmit.current = editorClears.current;
 		lastSubmitAt.current = Date.now();
-		// Sending keeps what was dictated so far and stops listening.
 		dictation.detach();
-		// Sending a recalled message makes it the message, not a history position.
 		historyBrowse.current = null;
 		restoreFocusAfterSubmission.current =
 			typeof document !== "undefined" &&
@@ -1629,8 +1343,6 @@ export const ChatComposer = memo(function ChatComposer({
 			lastSubmitAt.current = Date.now();
 			const held = heldDuringSubmit.current;
 			heldDuringSubmit.current = null;
-			// A message entered during a send that did not go through stays in the box:
-			// sending it now would put it ahead of the one being retried.
 			if (held && (held.own || submitAccepted.current)) setHeldSubmit(held);
 			setSubmitting(false);
 		};
@@ -1638,7 +1350,6 @@ export const ChatComposer = memo(function ChatComposer({
 		return pending;
 	}
 
-	/** Wait for the previous send to settle, then send this draft. */
 	function holdOwnDraft(forceSteer?: boolean) {
 		if (savingQueuedEdit || !textRef.current.trim()) return false;
 		heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: true, unsentId: parkedUnsentId() };
@@ -1650,15 +1361,10 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	async function performSubmit(forceSteer?: boolean) {
-		// Own the scoped draft before file reading or staging can yield. A replacement
-		// surface observes this reservation and cannot edit underneath this send.
 		const mutationToken = draftScope && !savingQueuedEdit
 			? beginChatComposerMutation(draftScope)
 			: undefined;
 		if (draftScope && !savingQueuedEdit && !mutationToken) {
-			// The previous send was accepted but its receipt is applied on the next
-			// commit. Until then the draft cannot be claimed; send it right after.
-			// A send still pending from a replaced surface keeps this draft unsent.
 			if (!getChatComposerMutation(draftScope).pending) holdOwnDraft(forceSteer);
 			return;
 		}
@@ -1672,9 +1378,6 @@ export const ChatComposer = memo(function ChatComposer({
 	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
 		let currentText = textRef.current;
 		let body = currentText.trim();
-		// Render state can trail an accepted send by a commit. A delivery the saved
-		// draft no longer holds is finished, so this Enter is a new message and not a
-		// retry that would resend the old id and clear the new text with it.
 		const savedDraft = durableDelivery && draftScope ? loadChatSessionDraft(draftScope) : undefined;
 		const recoveringDelivery = savedDraft?.ok &&
 			savedDraft.draft.composer.delivery?.clientMessageId !== durableDelivery?.clientMessageId
@@ -1720,7 +1423,6 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 
 		await fileAttachments.toSettledPayload();
-		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
@@ -1729,15 +1431,9 @@ export const ChatComposer = memo(function ChatComposer({
 			...visibleRetainedAttachments.flatMap((attachment) => attachment.path ? [attachment.path] : []),
 			...settledPaths,
 		];
-		// Staging that just settled has filled its inline chips, so read the text the
-		// user sees now. First drop chips whose image is gone (an undo can restore
-		// one); typed paths are the user's text and stay.
 		editor.current?.pruneImages(attachedPaths);
 		currentText = textRef.current;
 		body = proseBesideImages(currentText.trim(), attachedPaths);
-		// The message carries only each chip's text; remember the chips so its bubble
-		// can draw them again. A first message sent before its session exists is
-		// found by its text.
 		if (!recoveringDelivery) {
 			const tokens = editor.current?.getTokens() ?? [];
 			if (tokens.length > 0) {
@@ -1745,10 +1441,6 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
-		// Files this chat cannot take stay with their reason (attachmentError);
-		// nothing new goes until they are removed. A send already under way
-		// keeps its identity and its files until its outcome is known, so its
-		// retry goes as it was and the chat settles it.
 		if (attachmentsRefusal && settledAttachments.length > 0 && !recoveringDelivery) return;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || contextReferences.length > 0 || Boolean(recoveringDelivery)) &&
@@ -1759,14 +1451,11 @@ export const ChatComposer = memo(function ChatComposer({
 			(Boolean(recoveringDelivery) ||
 				getChatComposerMutation(draftScope ?? "").accepted?.result.ok !== false);
 		if (!canSubmitNow) {
-			// The previous message is still settling. Send this one right after it
-			// rather than refusing it.
 			if ((busy || draftMutationPending) && !composerMutation.pending && !disabled && !recoveringDelivery) {
 				holdOwnDraft(forceSteer);
 			}
 			return;
 		}
-		// Held files carry their bytes to the send instead of a staged path.
 		const heldPayloads = holdAttachments
 			? settledAttachments.flatMap(({ stagedPath, mimeType, data, name }) => !stagedPath && data ? [{ mimeType, data, name }] : [])
 			: [];
@@ -1779,14 +1468,9 @@ export const ChatComposer = memo(function ChatComposer({
 			return all.length > 0 ? all : undefined;
 		};
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit && contextReferences.length === 0);
-		// The bytes are still here: leave them for the sent message's tiles, which would
-		// otherwise draw empty until they read each file back from the daemon.
-		// A cloud file is kept under its reference, which its message's tile looks up.
 		rememberSentAttachments(settledAttachments.flatMap(({ stagedPath, mimeType, bytes, file, data }) =>
 			stagedPath ? [{ path: stagedPath, mimeType, bytes, file, data }] : []));
 		const message =withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} ${fileReferences.length ? "annotation(s)" : "chat excerpt(s)"} as context` : "");
-		// Ordinary delivery reserves its exact draft before these staged reads await.
-		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
 		const retainedNativeImageCount = visibleRetainedAttachments.filter((item) => item.contentType === "image").length;
 		let nativeImageBytes = 0;
@@ -1795,8 +1479,6 @@ export const ChatComposer = memo(function ChatComposer({
 				...attachment, stagedPath: attachment.path,
 			});
 		const nativeImageAttachments = (deliveryAttachments ?? settledAttachments).filter((attachment) => {
-			// Retained image sizes are server-owned and unknown here. Keep new images
-			// as workspace files so an edit cannot exceed the native 25 MiB budget.
 			if (!sendNativeImages || retainedNativeImageCount > 0 || !isSupportedImageAttachment(attachment.mimeType) ||
 				attachment.bytes > MAX_NATIVE_IMAGE_BYTES ||
 				nativeImageBytes + attachment.bytes > MAX_NATIVE_IMAGES_BYTES) return false;
@@ -1843,9 +1525,6 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		if (!draftScope || savingQueuedEdit) {
 			setSubmitting(true);
-			// A plain-text send has a local timeline echo — clear the editor immediately
-			// so the user sees one acknowledgement rather than their draft stranded until
-			// the daemon round-trip completes. Attachments retain the retry path.
 			const clearForLocalEcho = !shouldSteer && !savingQueuedEdit && nativePayloads.length === 0;
 			try {
 				if (clearForLocalEcho) clearEditorView();
@@ -1860,7 +1539,6 @@ export const ChatComposer = memo(function ChatComposer({
 				} else if (savingQueuedEdit) {
 					await onSend(message, nativePayloads.length ? nativePayloads : undefined, undefined,
 						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
-					// The parent leaves this editor only after proving durable cleanup.
 					return;
 				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
 					await onSend(message, sendPayloads(nativePayloads));
@@ -1999,8 +1677,6 @@ export const ChatComposer = memo(function ChatComposer({
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
     if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
-      // The text carries the captures for the agent; they are passed too, so the
-      // surface can show the message as typed with its captures beside it.
       await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, delivery.requestText);
      } else {
       await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
@@ -2015,14 +1691,8 @@ export const ChatComposer = memo(function ChatComposer({
 			mutationFinished = true;
 			submitAccepted.current = true;
 		} catch (error) {
-			// Refusal of a retry says nothing about a previous attempt whose response
-			// was lost. Only an initial, definitively unaccepted send can be edited.
 			const refused = delivery.kind === "send" && !prepared.recovered &&
 				DEFINITIVE_SEND_REJECTIONS.has(apiErrorCode(error) ?? "");
-			// An unanswered send moves to the unsent strip instead of back into the box,
-			// by the same rule the park uses; anything it would refuse (excerpts, file
-			// references, a taken slot) keeps the restore and notice below.
-			// An open undo window still holds the slot for the discarded message.
 			const parks = parkUnsentSends && !refused && !discardedUnsentRef.current && fitsUnsentSlot(delivery, draftScope);
 			if (delivery.kind === "send" && !parks && !textRef.current) {
 				textRef.current = delivery.draft?.text ?? currentText;
@@ -2045,7 +1715,6 @@ export const ChatComposer = memo(function ChatComposer({
 				setDeliveryUncertain(false);
 				setDeliveryRecoveryNotice(null);
 				setTextDraftPersistenceError(cleared.ok ? null : "chat.draft.saveFailed");
-				// A failed agent switch is reported in its own strip above the box.
 				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
 				return;
 			}
@@ -2086,10 +1755,7 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (!heldSubmit || !heldSubmitReady || submitInFlight.current) return;
 		setHeldSubmit(null);
-		// Only the message the user entered; an edit made since waits for its own Enter.
 		if (textRef.current !== heldSubmit.text) return;
-		// A send that got no answer since this was held is parked in the unsent strip,
-		// whichever surface made it. Sending now would put this message ahead of it.
 		const parked = parkedUnsentId();
 		if (parked && parked !== heldSubmit.unsentId) return;
 		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
@@ -2121,10 +1787,6 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 
 			if (enterSends && canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
-				// Cmd/Ctrl+Enter steers, as it does for a typed draft: here the next queued
-				// message. A plain Enter in the empty box does nothing, so a double tap
-				// after a send never steers. Neither does a held key, or a Cmd/Ctrl+Enter
-				// right after a send, which would steer the message just queued.
 				if (
 					(event.metaKey || event.ctrlKey) &&
 					!event.repeat &&
@@ -2143,12 +1805,9 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
 		if (dictating && !event.metaKey && !event.ctrlKey && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
 			dictation.detach();
 		}
-		// Enter is handled in Lexical before a newline is inserted; this handler is
-		// only for menu navigation and escape while a completion menu is open.
 		const liveSnapshot = editor.current?.getSnapshot();
 		if (liveSnapshot) textRef.current = liveSnapshot.text;
 		const liveTrigger = liveSnapshot?.trigger;
@@ -2185,20 +1844,11 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}
 
-	/**
-	 * Up walks back through sent messages and Down forward, ending on the draft the
-	 * user had. Up starts a walk only with the caret at the very start of the text
-	 * (always true when it is empty), so the arrows still move the caret inside a
-	 * multiline draft. Every step leaves the caret at the start, where either key
-	 * continues; Down also continues from the end, after reading down a long message.
-	 */
 	function recallSentMessage(older: boolean, event: KeyboardEvent<HTMLDivElement>): boolean {
 		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || isComposing) return false;
-		// A queued edit, a delivery still settling, or a disabled controller owns the text.
 		if (editingQueuedTurnId || queuedEditRecovery || disabled || typingLocked || submitInFlight.current || draftMutationPending) {
 			return false;
 		}
-		// A pasted image holds its place in the draft until staging fills it in.
 		if (fileAttachments.preparing || fileAttachments.hasPendingReads()) return false;
 		const caret = editor.current?.caretBoundary();
 		const browsing = historyBrowse.current;
@@ -2216,7 +1866,6 @@ export const ChatComposer = memo(function ChatComposer({
 		return true;
 	}
 
-	/** The image left the draft, which is held aside while a recalled message shows. */
 	function removeImageFromSavedDraft(path: string) {
 		const browse = historyBrowse.current;
 		if (!browse) return;
@@ -2226,10 +1875,7 @@ export const ChatComposer = memo(function ChatComposer({
 		persistComposerText(draft);
 	}
 
-	// Images get an inline chip only beside prose that can refer to them.
-	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
-		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
@@ -2246,8 +1892,6 @@ export const ChatComposer = memo(function ChatComposer({
 		const clipboard = event.clipboardData;
 		const files = Array.from(clipboard?.files ?? []);
 		if (files.length === 0) return;
-		// The paste is only claimed when there is no text alongside the image: a copy
-		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
 		attachFiles(files);
@@ -2263,7 +1907,6 @@ export const ChatComposer = memo(function ChatComposer({
 		attachFiles(files);
 	}
 
-	// Only modifier transitions re-render: React bails out when the value is unchanged.
 	useEffect(() => {
 		const onKey = (event: globalThis.KeyboardEvent) => {
 			setModifierHeld(event.metaKey || event.ctrlKey);
@@ -2290,7 +1933,6 @@ export const ChatComposer = memo(function ChatComposer({
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
 		commandError;
-	// The strip shows the unsent message, the same message while its retry runs, or a short undo after a discard.
 	const retryingDelivery = retryingUnsent && durableDelivery?.clientMessageId === retryingUnsent ? durableDelivery : undefined;
 	const stripDelivery = unsent ?? retryingDelivery;
 	const unsentStrip = stripDelivery?.draft ? (
@@ -2312,7 +1954,6 @@ export const ChatComposer = memo(function ChatComposer({
 			<div className="relative mx-auto flex w-full max-w-3xl flex-col">
 				{queuedDock ? (
 				<div
-					// The queue appears at once, like its rows: no entrance fade.
 					className="cursor-chat-composer-queue relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]"
 					data-testid="queued-composer-dock"
 				>
@@ -2357,7 +1998,6 @@ export const ChatComposer = memo(function ChatComposer({
 
 	return withQueueStack(
 		<form
-			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
 					if (!canAttach || submitInFlight.current) return;
@@ -2366,23 +2006,17 @@ export const ChatComposer = memo(function ChatComposer({
 				}}
 				onDragLeave={() => setDragging(false)}
 				onDropCapture={onDrop}
-				// The border colors for rest, hover, focus and drag are one set of states
-				// on one surface, so they are declared together in CSS rather than half
-				// here and half there.
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
 				onMouseDown={(e) => {
 					if (controlsDisabled || e.button !== 0) return;
-					// Portal menus still bubble mouse events here; focusing the editor would close them.
 					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
-					// The focusable context tooltip must keep its focus on click.
 					if (
 						e.target === e.currentTarget ||
 						!(e.target as HTMLElement).closest("button, a, [role='option'], [data-context-meter], ul")
 					) {
-						// Preserve the live caret before the browser selects the padding.
 						e.preventDefault();
 						editor.current?.focus();
 					}
@@ -2481,7 +2115,6 @@ export const ChatComposer = memo(function ChatComposer({
 											<span className="invisible">{file.name}</span>
 											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
 										</span>
-										{/* Removing a file while it attaches cancels it. */}
 										<Button
 											type="button"
 											variant="destructive-ghost"
@@ -2579,9 +2212,6 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 
-				{/* A refused steer is an ordinary outcome, not a failure: the text is still
-			    in the box and the message says which of "send it instead" and "try again
-			    in a moment" applies. */}
 				{dictation.error ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{dictation.error}
@@ -2607,14 +2237,12 @@ export const ChatComposer = memo(function ChatComposer({
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
 											attachFiles(Array.from(event.target.files ?? []));
 										}
-										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";
 									}}
 								/>
 								{addMenuItems ? (
 									<OptionMenu
 										onOpenChange={(open) => {
-											// Measured on open: the panel sits on the chat box, as wide as it.
 											const button = addMenuTrigger.current;
 											const box = button?.closest("form")?.getBoundingClientRect();
 											const origin = button?.getBoundingClientRect();
@@ -2688,7 +2316,6 @@ export const ChatComposer = memo(function ChatComposer({
 											size="none"
 											shape="pill"
 											disabled={!dictating && (controlsDisabled || typingLocked)}
-											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
 											onClick={() => {
 												editor.current?.focus();

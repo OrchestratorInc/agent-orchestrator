@@ -72,7 +72,6 @@ func TestPrimeLocalAuthStatusAuthorizedFromModelsFileCredentials(t *testing.T) {
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
 	}
-	// The providers sit under "providers"; that key is not a provider.
 	if got := evidence.Identity(); got.Provider != "custom" || got.Method != domain.AgentAccountMethodAPIKey {
 		t.Fatalf("evidence = %+v, want the custom provider's API key", got)
 	}

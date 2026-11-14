@@ -11,7 +11,6 @@ import {
 	type CueInput,
 } from "../lib/cues";
 
-/** Where a project's cues live: the control plane for a Cloud project (its org), else the local daemon. */
 export function useCueHost(cloudOrgId?: string): CueHost | undefined {
 	const { client } = useCloudCp();
 	return cloudOrgId ? { client, orgId: cloudOrgId } : undefined;

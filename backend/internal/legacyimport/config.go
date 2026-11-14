@@ -9,23 +9,13 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// legacyConfig is the subset of the legacy global config.yaml the importer
-// reads: the projects registry keyed by project id. Unknown top-level keys
-// (notifiers, power, plugins, …) are intentionally ignored — they have no home
-// in the rewrite schema (issue #247 §4).
 type legacyConfig struct {
 	Projects map[string]legacyProjectConfig `yaml:"projects"`
 }
 
-// legacyProjectConfig is one project's block. Prompt rule fields stay raw so
-// scalar strings can be copied while non-string legacy values are reported as
-// dropped; fields with no rewrite home are also captured as raw nodes purely for
-// dropped-field notes (issue #247 §4).
 type legacyProjectConfig struct {
-	Path string `yaml:"path"`
-	Name string `yaml:"name"`
-	// Repo is captured as a raw YAML node but never consumed; the origin URL is
-	// re-resolved from the repo path at import time.
+	Path             string             `yaml:"path"`
+	Name             string             `yaml:"name"`
 	Repo             *yaml.Node         `yaml:"repo"`
 	DefaultBranch    string             `yaml:"defaultBranch"`
 	SessionPrefix    string             `yaml:"sessionPrefix"`
@@ -39,7 +29,6 @@ type legacyProjectConfig struct {
 	AgentRulesFile   *yaml.Node         `yaml:"agentRulesFile"`
 	OrchestratorRule *yaml.Node         `yaml:"orchestratorRules"`
 
-	// Captured only to surface as dropped in the report (no rewrite home).
 	Tracker   *yaml.Node `yaml:"tracker"`
 	SCM       *yaml.Node `yaml:"scm"`
 	Runtime   *yaml.Node `yaml:"runtime"`
@@ -57,8 +46,6 @@ type legacyRole struct {
 	AgentConfig *legacyAgentConfig `yaml:"agentConfig"`
 }
 
-// loadLegacyConfig reads and parses root/config.yaml. A missing file is not an
-// error — it yields an empty registry so the caller reports "nothing to import".
 func loadLegacyConfig(root string) (legacyConfig, error) {
 	data, err := os.ReadFile(globalConfigPath(root))
 	if os.IsNotExist(err) {
@@ -73,14 +60,10 @@ func loadLegacyConfig(root string) (legacyConfig, error) {
 		if !errors.As(err, &typeErr) {
 			return legacyConfig{}, fmt.Errorf("parse legacy config.yaml: %w", err)
 		}
-		// A type mismatch (e.g. a scalar where a mapping is expected) is a
-		// partial decode: keep the decoded fields and continue.
 	}
 	return cfg, nil
 }
 
-// preferences is the portfolio/preferences.json overlay: only per-project
-// display names survive into the rewrite (issue #247 §1).
 type preferences struct {
 	Projects map[string]struct {
 		DisplayName string `json:"displayName"`
@@ -93,13 +76,10 @@ func loadPreferences(root string) preferences {
 	if err != nil {
 		return p
 	}
-	_ = json.Unmarshal(data, &p) // best-effort overlay; a damaged file is ignored
+	_ = json.Unmarshal(data, &p)
 	return p
 }
 
-// registeredManifest is the portfolio/registered.json overlay: it carries each
-// project's addedAt, the best available registered_at provenance (issue #247 §1,
-// G10). The legacy shape is a list of {id|path, addedAt} records.
 type registeredManifest struct {
 	Projects []struct {
 		ID      string `json:"id"`
@@ -118,8 +98,6 @@ func loadRegistered(root string) registeredManifest {
 	return m
 }
 
-// addedAt returns the registration timestamp for a project, matching first by
-// id then by path. "" when the manifest has no record.
 func (m registeredManifest) addedAt(id, path string) string {
 	for _, p := range m.Projects {
 		if p.ID == id && p.AddedAt != "" {

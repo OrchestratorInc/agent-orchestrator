@@ -13,7 +13,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -46,9 +45,6 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	// Aider's own config and .env files decide first; a key in the
-	// environment is the fallback. A file read error only surfaces when no
-	// key is set either.
 	var fileErr error
 	for _, path := range aiderConfigPaths() {
 		status, ok, err := aiderAuthStatusFromFile(path)
@@ -138,9 +134,6 @@ func valueAfterAssignment(line string) string {
 			return value
 		}
 	}
-	// Aider's documented `api-key` YAML option is a list of provider=value
-	// entries (for example `- gemini=...`), so it does not have the word
-	// "key" on the left side of the assignment.
 	trimmed := strings.TrimSpace(line)
 	if strings.HasPrefix(trimmed, "-") {
 		if _, after, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(trimmed, "-")), "="); ok {

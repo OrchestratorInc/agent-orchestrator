@@ -32,17 +32,12 @@ var expectedUsageTableColumns = map[string][]string{
 		"source_event_key", "created_at",
 		"input_cost_nanos", "cached_input_cost_nanos", "output_cost_nanos",
 		"estimated_cost_nanos", "pricing_version",
-		// 0116 appends: ALTER TABLE has no way to place a column mid-row, and a
-		// second full rebuild to move it beside billing_provider_id would cost
-		// more than the adjacency is worth.
 		"billing_provider_source",
 		"service_tier",
 		"provider_message_id",
 	},
 }
 
-// The provider detail tables were the shape 0115 replaced with one bounded
-// provider usage object. Nothing may recreate them.
 var retiredUsageTables = []string{"openai_usage_event_details", "anthropic_usage_event_details"}
 
 func TestMigrateDefaultsSessionInterfaceToChat(t *testing.T) {
@@ -132,9 +127,6 @@ WHERE mue.source_event_key = 'migration-event'`).Scan(
 	); err != nil {
 		t.Fatalf("read migrated usage facts: %v", err)
 	}
-	// The counters came from a native record, so the event is native_reported,
-	// but nothing observed its bounded provider object: that is the legacy
-	// repairer's job, not the migration's.
 	if providerHint != "" || pricingVersion != "" || billingProviderID.Valid ||
 		measurementKind != "native_reported" || providerUsage.Valid ||
 		inputCost.Valid || cachedInputCost.Valid || outputCost.Valid || totalCost.Valid {
@@ -183,8 +175,6 @@ FROM usage_sources WHERE artifact_path = '/tmp/rollout.jsonl';
 func TestUsageSchemaUpgradePreservesEarlierPRData(t *testing.T) {
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 43)
 
-	// Reproduce the wider tables and burned migration history created by an
-	// earlier checkout of this PR.
 	if _, err := db.Exec(`
 CREATE TABLE usage_bindings (
     id INTEGER PRIMARY KEY, session_id TEXT, harness TEXT, native_root_id TEXT,
@@ -318,7 +308,6 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 		); err != nil {
 			t.Fatalf("read %s canonical event: %v", test.key, err)
 		}
-		// Exact arithmetic over native counters is still native_reported.
 		if row.provider != test.provider || row.input != 100 || row.cached != test.cached || row.uncached != test.uncached ||
 			row.out != 20 || row.measurementKind != "native_reported" {
 			t.Fatalf("%s canonical row = %+v", test.key, row)
@@ -329,9 +318,6 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 	}
 }
 
-// TestUsageMeasurementMigrationFoldsCostsAndRetiresDetailTables covers 0115
-// directly: a pre-0115 profile is seeded through the migrations that shipped
-// before it, then upgraded.
 func TestUsageMeasurementMigrationFoldsCostsAndRetiresDetailTables(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 114)
 
@@ -374,10 +360,8 @@ VALUES (1, 50, 10);
 		wantCachedInput sql.NullInt64
 		wantTotal       sql.NullInt64
 	}{
-		// Fresh input plus cache write become one input charge.
 		{key: "priced", wantKind: "native_reported", wantInput: sql.NullInt64{Int64: 45, Valid: true},
 			wantCachedInput: sql.NullInt64{Int64: 10, Valid: true}, wantTotal: sql.NullInt64{Int64: 105, Valid: true}},
-		// A half-known input charge stays unknown rather than under-reporting.
 		{key: "half-priced", wantKind: "native_reported", wantCachedInput: sql.NullInt64{Int64: 10, Valid: true}},
 		{key: "uncollected", wantKind: "unknown"},
 	} {
@@ -394,8 +378,6 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 		if kind != test.wantKind || input != test.wantInput || cachedInput != test.wantCachedInput || total != test.wantTotal {
 			t.Fatalf("%s migrated row = kind:%q input:%v cached:%v total:%v", test.key, kind, input, cachedInput, total)
 		}
-		// Detail-table counters are never rewritten into a provider object AO
-		// never observed; the legacy repairer refills it from the transcript.
 		if providerUsage.Valid {
 			t.Fatalf("%s invented a provider usage object: %q", test.key, providerUsage.String)
 		}
@@ -418,8 +400,6 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 			t.Fatalf("index %s was not recreated: %v", index, err)
 		}
 	}
-	// provider_id no longer reaches a detail table and no query filters by it,
-	// so its index is retired rather than rebuilt.
 	var retired string
 	if err := db.QueryRow(
 		`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_model_usage_events_provider'`,
@@ -431,10 +411,6 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 	}
 }
 
-// TestBillingProviderSourceMigrationMarksExistingAttributionsObserved covers
-// 0116. Every row attributed before the column existed came from the transcript
-// or the route hint, so all of them must survive as observations: mislabelling
-// one as an inference would invite a later repair to overwrite a fact.
 func TestBillingProviderSourceMigrationMarksExistingAttributionsObserved(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 115)
 
@@ -467,8 +443,6 @@ INSERT INTO model_usage_events (
 		want sql.NullString
 	}{
 		{key: "attributed", want: sql.NullString{String: "observed", Valid: true}},
-		// No provider, so no source: an attribution nobody made cannot be
-		// labelled with how it was reached.
 		{key: "unattributed"},
 	} {
 		var got sql.NullString
@@ -504,9 +478,6 @@ INSERT INTO model_usage_events (
 	}
 }
 
-// TestKimiUsageMigrationPreservesCurrentUsageFacts covers 0117 directly. The
-// harness/source enum rebuild must retain columns introduced by 0113-0116 and
-// leave the bounded provider usage object untouched.
 func TestKimiUsageMigrationPreservesCurrentUsageFacts(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 116)
 
@@ -704,13 +675,6 @@ func tableColumns(t *testing.T, db *sql.DB, table string) []string {
 	return columns
 }
 
-// TestMigrateAllowsEveryShippedHarness guards against the collapsed-migration
-// silent-no-op concern: a hand-written replace() that fails to widen the
-// sessions.harness CHECK (because the target substring drifted) leaves the
-// schema accepting only the original harnesses while migrate() still reports
-// success. This test opens a fresh DB, runs the migrations, and asserts the
-// live sessions schema admits every harness the domain ships, building the
-// expected set from the domain constants so it can't silently drift.
 func TestMigrateAllowsEveryShippedHarness(t *testing.T) {
 	db := openMigratedTestDB(t)
 
@@ -831,16 +795,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 }
 
-// TestMigration0054AddsKimchiToLegacyQMConstraint seeds a QM-variant constraint
-// (the legacy constraint that includes 'qm' alongside 'muse') and runs only
-// migration 0054, asserting that the QM replace pair inserted 'kimchi' into
-// the constraint. Without the QM pair, the replace() source string omits 'qm'
-// and no-ops, leaving Kimchi inserts to fail with a CHECK violation.
 func TestMigration0054AddsKimchiToLegacyQMConstraint(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 53)
 
-	// Simulate a legacy QM-variant database: swap the constraint from the
-	// post-0053 state (muse, no qm) to the QM variant (muse, qm, no kimchi).
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
 		t.Fatalf("enable writable_schema: %v", err)
 	}
@@ -857,7 +814,6 @@ WHERE type = 'table' AND name = 'sessions'`,
 		t.Fatalf("reparse legacy qm harness constraint: %v", err)
 	}
 
-	// Run only migration 0054 (versions 1–53 are already applied).
 	upTo(t, db, 54)
 
 	var schema string
@@ -873,11 +829,6 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 }
 
-// TestMigrateRepairsKimchiConstraintWithPrimeAgentAndLegacyQM reproduces the
-// shared dev profile: the Kimchi migration is recorded as applied, while a
-// later checkout widened the physical constraint for Prime Agent and legacy QM
-// without retaining Kimchi. Startup must converge the known constraint without
-// dropping either existing harness or rejecting existing Prime Agent rows.
 func TestMigrateRepairsKimchiConstraintWithPrimeAgentAndLegacyQM(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 80)
 
@@ -937,10 +888,6 @@ VALUES ('agent-orchestrator-1', 'agent-orchestrator', 1, 'prime-agent', ?, ?, ?)
 	}
 }
 
-// TestMigrateRepairsOMPHarnessConstraint reproduces a dev profile that has the
-// OMP migration recorded but still carries the pre-OMP physical CHECK
-// constraint. Startup must repair the schema so new OMP sessions can be
-// inserted without losing existing harness variants.
 func TestMigrateRepairsOMPHarnessConstraint(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 94)
 	if _, err := db.Exec(
@@ -980,9 +927,6 @@ VALUES ('agent-orchestrator-2', 'agent-orchestrator', 2, 'gemini', ?, ?, ?);
 	}
 }
 
-// TestMigrateAllowsOpenHandsHarness checks both paths to an OpenHands-capable
-// schema: running migration 192, and startup repair of a profile that has 192
-// recorded but still carries the pre-OpenHands physical CHECK constraint.
 func TestMigrateAllowsOpenHandsHarness(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

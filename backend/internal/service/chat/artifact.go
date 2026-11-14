@@ -19,11 +19,6 @@ import (
 
 var _ reportsvc.ArtifactRecorder = (*Service)(nil)
 
-// RecordReportedArtifact shows an HTML page a chat agent reported with
-// ao report --artifact in the turn it is running. It is best effort and never
-// fails the report: a terminal session, no turn in flight, a reference that is
-// not an HTML file in the session's artifact directory, or any error is only
-// logged.
 func (s *Service) RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string) {
 	if err := s.recordReportedArtifact(ctx, id, reference); err != nil {
 		s.log.Debug("reported artifact not shown in the thread", "session", id, "reference", reference, "error", err)
@@ -43,7 +38,6 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 	if ext := strings.ToLower(path.Ext(rel)); ext != ".html" && ext != ".htm" {
 		return errors.New("not an HTML page")
 	}
-	// Only what the artifact file route serves: the same lookup, and its cap.
 	entry, ok := previewutil.EntryAtPath(dir, rel)
 	if !ok {
 		return errors.New("not a regular file the artifact file route serves")
@@ -55,14 +49,9 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 	if err != nil {
 		return err
 	}
-	// entry.Path is the cleaned path the route serves, so the row and the
-	// served file always name the same page.
 	return controller.recordArtifact(ctx, entry.Path)
 }
 
-// recordArtifact shows a reported HTML artifact in the turn in flight, as a
-// system activity identified by its "artifact" discriminator. A page that turn
-// already shows, reported before or kept from a render, is not shown again.
 func (c *Controller) recordArtifact(ctx context.Context, rel string) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -96,8 +85,6 @@ func (c *Controller) recordArtifact(ctx context.Context, rel string) error {
 	return nil
 }
 
-// markArtifactShown notes that provider turn turn shows the artifact at rel.
-// ponytail: in memory, so a daemon restart mid-turn can show a page twice.
 func (c *Controller) markArtifactShown(turn, rel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

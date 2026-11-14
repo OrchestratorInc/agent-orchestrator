@@ -5,9 +5,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 
-// The control plane and the org's offering are external boundaries; the
-// settings dialog, the Repositories page, the repositories editor, and its
-// picker are the real components.
 const mocks = vi.hoisted(() => ({
 	get: vi.fn(),
 	patch: vi.fn(),
@@ -62,7 +59,6 @@ it("keeps project settings open while a repository is picked, and saves the pick
 	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
 
 	await userEvent.click(screen.getByRole("button", { name: "Add a repository" }));
-	// The picker's list is portalled outside the dialog; choosing from it is not an outside click.
 	await userEvent.click(await screen.findByRole("option", { name: "acme/voice-calling-ai" }));
 
 	expect(useUiStore.getState().settingsModal).not.toBeNull();
@@ -78,14 +74,12 @@ it("keeps project settings open while a repository is picked, and saves the pick
 });
 
 it("names a Cloud workspace's repositories page from the project itself, without listing the org's projects", async () => {
-	// Not in the first page of the org's projects, nor in the active org: neither matters.
 	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }] }) });
 	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-2" });
 	renderSettings();
 
 	expect(await screen.findByRole("dialog", { name: "Workspace repositories" })).toBeInTheDocument();
 	expect(mocks.listProjects).not.toHaveBeenCalled();
-	// The page and the rail share one read of the project.
 	expect(mocks.get).toHaveBeenCalledOnce();
 	expect(mocks.get).toHaveBeenCalledWith("org-2", "p", expect.anything());
 });
@@ -122,7 +116,6 @@ it("closes on a backdrop click while a picker is still playing its exit animatio
 	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-1" });
 	renderSettings();
 	await screen.findByText("acme/alice");
-	// Radix keeps a closing picker mounted, with data-state="closed", until its exit animation ends.
 	const closing = document.createElement("div");
 	closing.setAttribute("data-radix-popper-content-wrapper", "");
 	closing.innerHTML = '<div data-state="closed" role="dialog"><div role="listbox"></div></div>';

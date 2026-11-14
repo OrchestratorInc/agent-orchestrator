@@ -17,9 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The browser selects rendered text, whereas assistant messages are stored as
-// Markdown. Verify against readable text from the durable source, never against
-// a client-supplied rendering of that source.
 func sourceContainsExcerptSelection(source domain.ConversationMessage, selection string) bool {
 	needle := normalizeExcerptWhitespace(selection)
 	if needle == "" {
@@ -40,9 +37,6 @@ func renderedExcerptText(markdown string) string {
 	return renderedExcerptTextWithMarkers(markdown, false)
 }
 
-// Native selectable text includes list markers, table separators, code language
-// labels and image captions. Derive those from the durable Markdown too; neither
-// client gets to supply the source against which a selection is verified.
 func renderedExcerptTextWithMarkers(markdown string, native bool) string {
 	source := []byte(markdown)
 	root := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(mdtext.NewReader(source))
@@ -58,7 +52,7 @@ func renderedExcerptTextWithMarkers(markdown string, native bool) string {
 		case *ast.ListItem:
 			if native {
 				if first := n.FirstChild(); first != nil && first.FirstChild() != nil && first.FirstChild().Kind() == extast.KindTaskCheckBox {
-					break // the checkbox itself supplies the native marker
+					break
 				}
 				list, ok := n.Parent().(*ast.List)
 				if ok && list.IsOrdered() {
@@ -106,7 +100,6 @@ func renderedExcerptTextWithMarkers(markdown string, native bool) string {
 			}
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
-			// React Markdown escapes raw HTML, leaving the markup selectable as text.
 			for i := 0; i < n.Segments.Len(); i++ {
 				segment := n.Segments.At(i)
 				visible.Write(segment.Value(source))
@@ -151,8 +144,6 @@ func renderedExcerptTextWithMarkers(markdown string, native bool) string {
 
 var nativeOrderedItem = regexp.MustCompile(`^\s*\d+\.\s+.+$`)
 
-// The mobile text surface flattens consecutive numbered lines (including nested
-// items) and counts from one. Use their durable source lines for the same count.
 func nativeListIndex(item *ast.ListItem, source []byte) int {
 	first := item.FirstChild()
 	if first == nil || first.Lines().Len() == 0 {

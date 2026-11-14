@@ -17,38 +17,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// AO-managed versioned installs.
-//
-// npm, Bun, uv and pipx update a package by rewriting its directory in place,
-// so a session still running the old release can fail on its next lazy load
-// (a JS chunk, a bundled helper such as ripgrep, a Python module), and on
-// Windows the rewrite fails outright while the release runs. AO therefore
-// installs each update into a fresh directory of its own and switches to it
-// atomically, the way Claude Code's native installer keeps each release apart:
-//
-//	<root>/<target>/versions/v12/   one release, never modified after install
-//	<root>/<target>/current          → versions/v12 (symlink; a junction on Windows)
-//	<root>/<target>/managed.json     method, package, CLI name and version
-//	<root>/bin/<cli>                 launcher → ../<target>/current/<bin>
-//
-// Harness resolvers check <root>/bin first (binaryutil.ManagedBinary), so AO's
-// sessions start the current release, while a running session keeps the
-// files of the release it started from until it moves and the old directory
-// is removed. The user's own install, on PATH for their terminal, is left alone.
-
-// ManagedReleaseStore records which managed release each session launch runs.
-// Launches record the harness's current release themselves (a database
-// trigger), so the store only needs the current release and the ones in use.
 type ManagedReleaseStore interface {
 	SetManagedHarnessRelease(ctx context.Context, harness domain.AgentHarness, release string, at time.Time) error
 	ListHarnessReleasesInUse(ctx context.Context, harness domain.AgentHarness) ([]string, error)
 	PruneSessionHarnessReleases(ctx context.Context) error
 }
 
-// managedMethods are the update methods AO installs side by side.
 var managedMethods = map[string]bool{"npm": true, "bun": true, "uv": true, "pipx": true}
 
-// managedRecord is <root>/<target>/managed.json.
 type managedRecord struct {
 	Method  string `json:"method"`
 	Package string `json:"package"`
@@ -58,8 +34,6 @@ type managedRecord struct {
 	BinRel  string `json:"binRel"`
 }
 
-// ManagedBinDir is where AO's managed launchers live, or "" when managed
-// installs are off. The daemon passes it to binaryutil.SetManagedBinDir.
 func (s *Service) ManagedBinDir() string {
 	if s.managedRoot == "" {
 		return ""
@@ -67,25 +41,18 @@ func (s *Service) ManagedBinDir() string {
 	return filepath.Join(s.managedRoot, "bin")
 }
 
-// SetBinaryInvalidator late-binds the callback that makes a harness adapter
-// resolve its executable again, so the first managed install is picked up
-// without a daemon restart.
 func (s *Service) SetBinaryInvalidator(invalidate func(Target)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.invalidateBinary = invalidate
 }
 
-// managedEligible reports whether an update through plan installs side by side.
 func (s *Service) managedEligible(plan Plan) bool {
 	if _, ok := s.officialManagedRecipeFor(plan); ok {
 		return s.managedRoot != "" && !plan.Unsupported
 	}
 	return s.managedRoot != "" && s.installCommands != nil && managedMethods[plan.Method] &&
 		plan.Package != "" && !plan.Unsupported &&
-		// A managed npm copy installs and runs with the npm and Node on PATH,
-		// the daemon's; when that Node is too old, the update keeps validating
-		// the installed copy's own Node instead.
 		(plan.Method != "npm" || !plan.daemonRuntimeRejected)
 }
 
@@ -93,9 +60,6 @@ func (s *Service) managedTargetDir(target Target) string {
 	return filepath.Join(s.managedRoot, string(target))
 }
 
-// isManagedPath reports whether the executable lives in AO's managed root.
-// A launcher in bin may instead link to a user's external installation;
-// that installation keeps its own owner, regardless of the launcher's location.
 func (s *Service) isManagedPath(path string) bool {
 	if s.managedRoot == "" || path == "" {
 		return false
@@ -112,7 +76,6 @@ func (s *Service) isManagedPath(path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// readManagedRecord returns target's managed install, if AO manages it.
 func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	if s.managedRoot == "" {
 		return managedRecord{}, false
@@ -128,26 +91,17 @@ func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	return record, true
 }
 
-// managedRecordMatchesPlan keeps the Bun entry usable after OMP migrates to
-// AO's standalone release. This alias applies only to managed OMP on platforms
-// where its isolated standalone installer is supported.
 func (s *Service) managedRecordMatchesPlan(record managedRecord, plan Plan) bool {
 	method := plan.ownershipMethod()
 	return record.Method == method || plan.Target == TargetOMP && method == "bun" &&
 		record.Method == "official-installer" && (s.goos == "darwin" || s.goos == "linux")
 }
 
-// managedCLINames fixes the executable a managed install puts in bin/ for
-// targets whose resolved binary has another name. OpenCode v2 resolves its own
-// opencode-v2 launcher but installs bin/opencode, and the Copilot resolver
-// follows the npm loader to its platform binary (copilot-darwin-arm64).
 var managedCLINames = map[Target]string{
 	TargetOpencodeV2: "opencode",
 	TargetCopilot:    "copilot",
 }
 
-// managedCLIName is the executable name sessions launch, taken from the
-// binary AO resolved before the update. managedCLINames overrides it.
 func managedCLIName(baseline *installedBaseline) string {
 	if baseline == nil || baseline.path == "" {
 		return ""
@@ -159,7 +113,6 @@ func managedCLIName(baseline *installedBaseline) string {
 	return name
 }
 
-// managedBinRel is where method puts the CLI inside one release directory.
 func managedBinRel(goos, method, cli string) string {
 	if goos == "windows" {
 		if method == "npm" {
@@ -170,7 +123,6 @@ func managedBinRel(goos, method, cli string) string {
 	return filepath.Join("bin", cli)
 }
 
-// managedInstallCommand builds the install of pkgSpec into dir for method.
 func managedInstallCommand(method, pkg, pin, dir string) (argv, env []string) {
 	switch method {
 	case "npm":
@@ -178,16 +130,12 @@ func managedInstallCommand(method, pkg, pin, dir string) (argv, env []string) {
 		if pin != "" {
 			spec = pkg + "@" + pin
 		}
-		// npm 12 skips install scripts by default and still exits 0, which
-		// leaves a package that finishes installing in postinstall broken.
 		return []string{"npm", "install", "-g", "--prefix", dir, "--allow-scripts=" + pkg, spec}, nil
 	case "bun":
 		spec := pkg + "@latest"
 		if pin != "" {
 			spec = pkg + "@" + pin
 		}
-		// BUN_INSTALL alone loses to a global or bin directory the user set
-		// (env or bunfig), which would install over the copy sessions run.
 		return []string{"bun", "install", "-g", spec}, []string{
 			"BUN_INSTALL=" + dir,
 			"BUN_INSTALL_GLOBAL_DIR=" + filepath.Join(dir, "install", "global"),
@@ -211,8 +159,6 @@ func managedInstallCommand(method, pkg, pin, dir string) (argv, env []string) {
 	return nil, nil
 }
 
-// nextManagedDir allocates the next unused release directory name (v1, v2, …).
-// Short names keep Windows paths well under MAX_PATH.
 func nextManagedDir(versionsDir string) string {
 	highest := 0
 	entries, _ := os.ReadDir(versionsDir)
@@ -226,22 +172,16 @@ func nextManagedDir(versionsDir string) string {
 
 const (
 	switchFailed = "Installed, but could not switch to it."
-	// After current moved, new sessions already run the new release.
 	setupFailed  = "Switched to the new version, but could not finish setting it up."
 	recordFailed = "Switched to the new version, but could not record it."
 )
 
-// runManagedInstall installs the update into a new release directory,
-// verifies it, and switches the target's current release to it. Nothing a
-// running session uses is touched; on any failure the new directory is
-// removed and the current release stays as it was.
 func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *installedBaseline, env []string, out io.Writer) error {
 	cli := managedCLINames[plan.Target]
 	if cli == "" {
 		cli = managedCLIName(baseline)
 	}
 	if cli == "" {
-		// A reinstall has no baseline; it repairs the copy AO already manages.
 		if record, ok := s.readManagedRecord(plan.Target); ok {
 			cli = record.CLI
 		}
@@ -308,13 +248,10 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		}
 	}
 	previous := s.currentManagedRelease(targetDir)
-	// The switch is marked unsettled before current moves, so a daemon that
-	// dies before recording it leaves the mark for startup to reconcile.
 	marker := filepath.Join(targetDir, unsettledMarker)
 	_, statErr := os.Stat(marker)
 	wasUnsettled := statErr == nil
 	settle := func() {
-		// An earlier unsettled switch keeps its mark until its sessions end.
 		if !wasUnsettled {
 			_ = os.Remove(marker)
 		}
@@ -328,25 +265,14 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		if s.currentManagedRelease(targetDir) == previous {
 			settle()
 		} else {
-			// Windows may have removed current and failed both mklink attempts.
-			// Keep the intent and candidate so startup can repair the junction.
 			keep = true
 		}
 		return installFailed(switchFailed, err)
 	}
 	if s.releases != nil {
-		// Still under the harness lock: every launch from here on records this
-		// release, and every earlier launch recorded the one it started from.
-		// Recorded even if the update is cancelled now, so current and the
-		// database never disagree because of the cancel.
 		if err := s.releases.SetManagedHarnessRelease(context.WithoutCancel(ctx), domain.AgentHarness(plan.Target), name, time.Now().UTC()); err != nil {
 			recordErr := fmt.Errorf("record the new release: %w", err)
-			// Launches would run the new files while recording the old
-			// release, so switch back before anything launches.
 			if rollbackErr := s.restoreManagedCurrent(context.WithoutCancel(ctx), targetDir, previous); rollbackErr != nil {
-				// current and the database disagree: the mark stays, and
-				// every release is kept until no session that may have
-				// launched meanwhile is left.
 				keep = true
 				return installFailed(recordFailed, errors.Join(recordErr, fmt.Errorf("restore the previous release: %w", rollbackErr)))
 			}
@@ -373,7 +299,6 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 	return nil
 }
 
-// probeManagedVersion runs the new copy's --version.
 func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, binary string) (string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, defaultVerifyTimeout)
 	defer cancel()
@@ -392,17 +317,8 @@ func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, b
 	return version.display, nil
 }
 
-// unsettledMarker, in a target's directory, says an update is switching
-// current, or switched it but could neither record the switch nor undo it
-// (or the daemon died first), so the releases sessions recorded may not be
-// the ones they run. Cleanup keeps every release of that target until none of
-// its sessions is left.
 const unsettledMarker = ".unsettled"
 
-// ReconcileManagedReleases runs at daemon start, before any launch. A switch
-// the daemon died in the middle of left its mark: the release new launches
-// record is set to the one current points at, the files they run. The mark
-// stays, so launches recorded before this keep every release alive.
 func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	if s.managedRoot == "" || s.releases == nil {
 		return nil
@@ -429,9 +345,6 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 		}
 		current := s.currentManagedRelease(targetDir)
 		if current == "" {
-			// Windows removes the old junction before mklink. A crash in that gap
-			// leaves the durable intent, but no launcher target. Prefer its intended
-			// installed release, falling back to the last published managed record.
 			intended := strings.TrimSpace(string(intent))
 			record, ok := s.readManagedRecord(target)
 			if !ok {
@@ -463,8 +376,6 @@ func (s *Service) ReconcileManagedReleases(ctx context.Context) error {
 	return nil
 }
 
-// currentManagedRelease names the release <targetDir>/current points at, or
-// "" when there is none yet.
 func (s *Service) currentManagedRelease(targetDir string) string {
 	current, err := os.Readlink(filepath.Join(targetDir, "current"))
 	if err != nil {
@@ -473,9 +384,6 @@ func (s *Service) currentManagedRelease(targetDir string) string {
 	return filepath.Base(current)
 }
 
-// restoreManagedCurrent points current back at previous after a switch that
-// could not be recorded. With no previous release it removes current: nothing
-// launched from it, since the launcher is written only after the record.
 func (s *Service) restoreManagedCurrent(ctx context.Context, targetDir, previous string) error {
 	if previous == "" {
 		if err := os.Remove(filepath.Join(targetDir, "current")); err != nil && !os.IsNotExist(err) {
@@ -486,19 +394,13 @@ func (s *Service) restoreManagedCurrent(ctx context.Context, targetDir, previous
 	return s.switchManagedCurrent(ctx, targetDir, previous)
 }
 
-// switchManagedCurrent points <targetDir>/current at versions/<name>. It runs
-// while the update holds the harness, so no session starts mid-switch.
 func (s *Service) switchManagedCurrent(ctx context.Context, targetDir, name string) error {
 	current := filepath.Join(targetDir, "current")
 	if s.goos == "windows" {
-		// Symlinks need a privilege on Windows; a junction does not. Replacing
-		// it is not atomic, which the harness lock makes harmless.
 		previous, _ := os.Readlink(current)
 		_ = os.Remove(current)
 		err := s.commands.Run(ctx, []string{"cmd", "/c", "mklink", "/J", current, filepath.Join(targetDir, "versions", name)}, io.Discard, io.Discard)
 		if err != nil && previous != "" {
-			// A failed or cancelled switch must not leave the launcher
-			// pointing through a missing current: put the old junction back.
 			_ = os.Remove(current)
 			if restoreErr := s.commands.Run(context.WithoutCancel(ctx), []string{"cmd", "/c", "mklink", "/J", current, previous}, io.Discard, io.Discard); restoreErr != nil {
 				err = errors.Join(err, fmt.Errorf("restore the previous release: %w", restoreErr))
@@ -518,8 +420,6 @@ func (s *Service) switchManagedCurrent(ctx context.Context, targetDir, name stri
 	return nil
 }
 
-// ensureManagedLauncher creates <root>/bin/<cli>, a stable path into the
-// current release. It never changes once written, so resolvers may cache it.
 func (s *Service) ensureManagedLauncher(target Target, record managedRecord) error {
 	binDir := s.ManagedBinDir()
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
@@ -547,19 +447,12 @@ func (s *Service) ensureManagedLauncher(target Target, record managedRecord) err
 	return os.Rename(tmp, launcher)
 }
 
-// RemoveUnusedManagedReleases deletes every release directory that is neither
-// current (per managed.json or the current link) nor run by a live session. What a session runs is recorded per
-// launch in the database, so a daemon restart, or a Chat that reconnected to
-// its old process, never lets a release in use be deleted. A directory a
-// process still holds (Windows refuses the delete) is left for the next call.
-// Without the release store nothing is deleted.
 func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 	if s.managedRoot == "" || s.releases == nil {
 		return
 	}
 	processes, err := s.snapshotManagedProcesses(ctx)
 	if err != nil {
-		// Unknown process state is never proof that an old release is unused.
 		return
 	}
 	_ = s.releases.PruneSessionHarnessReleases(ctx)
@@ -576,8 +469,6 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 		if !gate.TryLock() {
 			continue
 		}
-		// Read with launches and updates held off, so neither the current
-		// release nor what sessions run can change before the deletion.
 		record, ok := s.readManagedRecord(target)
 		if !ok {
 			gate.Unlock()
@@ -588,16 +479,11 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 			gate.Unlock()
 			continue
 		}
-		// Reviewers launch outside sessions, so no release row says which
-		// copy they run; keep every release until none is live.
 		sessions, reviewers, err := s.harnessInUse(ctx, target)
 		if err != nil || len(reviewers) > 0 {
 			gate.Unlock()
 			continue
 		}
-		// After a switch that was neither recorded nor undone, the release
-		// rows of launches since then cannot be trusted; wait for those
-		// sessions to end.
 		marker := filepath.Join(s.managedTargetDir(target), unsettledMarker)
 		if _, err := os.Stat(marker); err == nil {
 			if len(sessions) > 0 {
@@ -606,9 +492,6 @@ func (s *Service) RemoveUnusedManagedReleases(ctx context.Context) {
 			}
 			_ = os.Remove(marker)
 		}
-		// current can be ahead of managed.json when an update switched it but
-		// failed before writing the file; it is what launches run, so it is
-		// kept too. Without it, nothing is known to be safe.
 		current, err := os.Readlink(filepath.Join(s.managedTargetDir(target), "current"))
 		if err != nil {
 			gate.Unlock()

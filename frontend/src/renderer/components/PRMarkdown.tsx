@@ -5,11 +5,6 @@ import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
 import { linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
 
-/**
- * How GitHub's comment HTML reads in AO's type: `<details>` sections fold
- * under their summary, `<dl><dd>` indents, keys look like keys. Shared by
- * the PR's comments and the inspector's reviews so a bot reads the same in both.
- */
 export const githubHtmlClass = cn(
 	"[&_details]:my-1.5 [&_details]:rounded-md [&_details]:border [&_details]:border-border/70 [&_details]:px-2 [&_details]:py-1",
 	"[&_details_details]:border-border/50 [&_details[open]>summary]:mb-1",
@@ -24,9 +19,7 @@ export const githubHtmlClass = cn(
 	"[&_input[type=checkbox]]:mr-1.5 [&_input[type=checkbox]]:align-middle [&_li:has(>input[type=checkbox])]:list-none",
 );
 
-// The review summary's typography, for PR comments and their preview.
 const bodyClass = cn(
-	// Comment text reads at full contrast, like a PR page; code stays the size of the words around it.
 	"min-w-0 select-text break-words text-xs leading-[1.6] text-foreground/90",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
 	"[&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em] [&_code]:text-foreground [&_code]:[overflow-wrap:anywhere]",
@@ -38,7 +31,6 @@ const bodyClass = cn(
 	githubHtmlClass,
 );
 
-// Outside the component, so a re-render keeps an open image lightbox open.
 const markdownComponents: Components = {
 	a: ({ node, href, children }) => linksOnlyImages(node) ? <>{children}</> : <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
 	img: ({ alt, src, width, height }) => isDecorativeIcon(alt, width, height)
@@ -46,16 +38,10 @@ const markdownComponents: Components = {
 		: <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
 };
 
-/**
- * A PR comment's or review's markdown with the HTML GitHub allows in it,
- * sanitized to GitHub's own allowlist (see GITHUB_HTML_REHYPE), without a
- * wrapper: the caller sets the typography.
- */
 export function GitHubMarkdown({ body }: { body: string }) {
 	return <ReactMarkdown components={markdownComponents} rehypePlugins={GITHUB_HTML_REHYPE} remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>;
 }
 
-/** A PR comment's markdown, in the comments' typography. */
 export function PRMarkdown({ body, className }: { body: string; className?: string }) {
 	return (
 		<div className={cn(bodyClass, className)}>

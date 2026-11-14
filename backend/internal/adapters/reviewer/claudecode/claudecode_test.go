@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// captureAgent is a stub ports.Agent that records the LaunchConfig the reviewer
-// builds, so the test asserts the reviewer's tool policy without needing the
-// real claude binary on PATH.
 type captureAgent struct {
 	got        ports.LaunchConfig
 	gotRestore ports.RestoreConfig
@@ -83,10 +80,6 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
 
-	// The allowlist and the PermissionRequest hook enforce read-only, so the
-	// pane must start in Claude's default mode whatever the user's defaultMode
-	// is: bypassPermissions ignores the rules, and auto approves shell writes
-	// without prompting the hook.
 	if agent.got.Permissions != ports.PermissionModeDefault {
 		t.Fatalf("reviewer must request AO's default mode; got %q", agent.got.Permissions)
 	}
@@ -106,16 +99,11 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 	if !contains(agent.got.AllowedTools, "Read") {
 		t.Fatalf("allowlist missing read-only review tools: %#v", agent.got.AllowedTools)
 	}
-	// A prefix rule would skip the matcher: git diff/log/show write files with
-	// --output=<file>, and `ao review submit` would accept any --session.
 	for _, denied := range []string{"Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(ao review submit:*)"} {
 		if contains(agent.got.AllowedTools, denied) {
 			t.Fatalf("allowlist admits %q without the matcher: %#v", denied, agent.got.AllowedTools)
 		}
 	}
-	// A blanket Bash(gh:*) rule would admit merges and arbitrary API
-	// mutations without a prompt; only the read subcommands are allowed and the
-	// review POST goes through the PermissionRequest hook (#4810).
 	for _, allowed := range []string{"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr checks:*)"} {
 		if !contains(agent.got.AllowedTools, allowed) {
 			t.Fatalf("allowlist missing %q: %#v", allowed, agent.got.AllowedTools)
@@ -236,10 +224,6 @@ func TestAllowlistLeavesSubmitCommandsToTheMatcher(t *testing.T) {
 		t.Fatalf("allowlist missing printf for piped review commands: %#v", agent.got.AllowedTools)
 	}
 
-	// Neither submit command is allowlisted, so both reach the PermissionRequest
-	// hook, which admits only the exact shapes (claudecode.ReviewerSubmitCommandAllowed).
-	// `gh api` can mutate anything (#4810), and an `ao review submit` prefix rule
-	// would accept any --session or --reviews file, skipping the worker pin.
 	for _, cmd := range []string{
 		"printf '%s' '{ \"reviews\": [] }' | ao review submit --session sess-1 --reviews -",
 		"ao review submit --session other-worker --reviews /tmp/reviews.json",
@@ -470,12 +454,6 @@ func TestReviewRestoreCommandFallsBackWhenPersistedConversationIsMissing(t *test
 	}
 }
 
-// TestReviewRestoreCommandProbesFallbackWhenNoNativeSessionIDWasEverCaptured
-// covers a daemon restart before the hook ever recorded a native id (e.g. the
-// reviewer crashed mid-first-pass): with no persisted id, the caller still
-// derives the same deterministic fallback id agentrestore.Command would use,
-// so it must be probed too — resuming a transcript that may never have been
-// created would misreport NativeResumed as true.
 func TestReviewRestoreCommandProbesFallbackWhenNoNativeSessionIDWasEverCaptured(t *testing.T) {
 	fallbackID := workeragent.SessionUUID("review-w1")
 	agent := &captureHistoryAgent{existing: map[string]bool{fallbackID: true}}
@@ -495,10 +473,6 @@ func TestReviewRestoreCommandProbesFallbackWhenNoNativeSessionIDWasEverCaptured(
 	}
 }
 
-// TestReviewRestoreCommandFallsBackToFreshWhenNoNativeSessionIDWasEverCaptured
-// is the negative case: no persisted id and no transcript at the deterministic
-// fallback id either (the process never got far enough to write one). Restore
-// must not claim a native resume for a conversation that was never created.
 func TestReviewRestoreCommandFallsBackToFreshWhenNoNativeSessionIDWasEverCaptured(t *testing.T) {
 	agent := &captureHistoryAgent{existing: map[string]bool{}}
 	r := &Reviewer{agent: agent}
@@ -601,8 +575,6 @@ func flagValue(argv []string, flag string) string {
 	return ""
 }
 
-// pinnedModeArgs is what pinDefaultMode appends to an argv with no prompt and
-// no launch settings.
 const pinnedModeArgs = ` --permission-mode default --settings {"permissions":{"defaultMode":"default"}}`
 
 func TestPinDefaultModeMergesLaunchSettingsBeforeThePrompt(t *testing.T) {

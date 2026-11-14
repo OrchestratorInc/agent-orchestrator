@@ -9,9 +9,6 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// Main owns 159/160, while older PR builds may have applied automations at
-// 159. Every history must end with 159-162 applied, automations present, and
-// the PR discussion columns dropped again by 162.
 func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -72,7 +69,6 @@ func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			// A second startup must not read 162's dropped columns as a lost 159.
 			store, err = Open(dataDir)
 			if err != nil {
 				t.Fatalf("reopen upgraded database: %v", err)
@@ -122,9 +118,6 @@ func TestMigrateRepairsInterleavedAutomationsHistory(t *testing.T) {
 	}
 }
 
-// Removing the run-occurrence uniqueness or the durable enum constraints must
-// make this test fail: they are what let duplicate pollers and restart recovery
-// converge on one logical run instead of spawning independent work.
 func TestMigration0161EnforcesAutomationRunIdentity(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 161)
 
@@ -168,9 +161,6 @@ INSERT INTO automations (
 	}
 }
 
-// Removing the unique session origin or changing its delete action must make
-// this test fail: one run may create at most one session, while deleting
-// automation history must never delete the user's already-created session.
 func TestMigration0161LinksOneSessionAndPreservesItOnAutomationDelete(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 161)
 

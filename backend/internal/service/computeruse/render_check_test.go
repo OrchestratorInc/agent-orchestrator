@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// writeScreenshot saves a PNG: one color when blank, otherwise a pattern of
-// distinct blocks like a painted window.
 func writeScreenshot(t *testing.T, blank bool) string {
 	t.Helper()
 	picture := image.NewRGBA(image.Rect(0, 0, 230, 408))
@@ -44,19 +42,16 @@ func TestFlagUnrenderedReads(t *testing.T) {
 		tree  bool
 		want  bool
 	}{
-		"frame only":          {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "screenshot_file_path": painted}, true, true},
-		"blank screenshot":    {map[string]any{"snapshot_id": "s1", "element_count": float64(40), "screenshot_file_path": blank}, true, true},
-		"painted window":      {map[string]any{"snapshot_id": "s1", "element_count": float64(33), "screenshot_file_path": painted}, true, false},
-		"tree-only read":      {map[string]any{"snapshot_id": "s1", "element_count": float64(33)}, true, false},
-		"screenshot-only":     {map[string]any{"screenshot_file_path": painted}, true, false},
-		"unreadable image":    {map[string]any{"snapshot_id": "s1", "element_count": float64(33), "screenshot_file_path": "/no/such.png"}, true, false},
-		"not a window read":   {map[string]any{"summary": "clicked"}, true, false},
-		"blank, no tree read": {map[string]any{"screenshot_file_path": blank}, true, true},
-		// Cua Driver 0.37.0 on Windows, max_elements 5 on a painted Notepad.
-		"truncated, painted": {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "total_element_count": float64(1), "truncated": true, "truncation_reason": "node_budget", "screenshot_file_path": painted}, true, false},
-		"truncated, blank":   {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "truncated": true, "screenshot_file_path": blank}, true, true},
-		// Cua Driver 0.37.0 on macOS, include_accessibility_tree:false on a
-		// painted Brave window: a snapshot_id, and an element_count of 0.
+		"frame only":            {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "screenshot_file_path": painted}, true, true},
+		"blank screenshot":      {map[string]any{"snapshot_id": "s1", "element_count": float64(40), "screenshot_file_path": blank}, true, true},
+		"painted window":        {map[string]any{"snapshot_id": "s1", "element_count": float64(33), "screenshot_file_path": painted}, true, false},
+		"tree-only read":        {map[string]any{"snapshot_id": "s1", "element_count": float64(33)}, true, false},
+		"screenshot-only":       {map[string]any{"screenshot_file_path": painted}, true, false},
+		"unreadable image":      {map[string]any{"snapshot_id": "s1", "element_count": float64(33), "screenshot_file_path": "/no/such.png"}, true, false},
+		"not a window read":     {map[string]any{"summary": "clicked"}, true, false},
+		"blank, no tree read":   {map[string]any{"screenshot_file_path": blank}, true, true},
+		"truncated, painted":    {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "total_element_count": float64(1), "truncated": true, "truncation_reason": "node_budget", "screenshot_file_path": painted}, true, false},
+		"truncated, blank":      {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "truncated": true, "screenshot_file_path": blank}, true, true},
 		"tree skipped, painted": {map[string]any{"snapshot_id": "s1", "element_count": float64(0), "total_element_count": float64(0), "elements_complete": false, "screenshot_file_path": painted}, false, false},
 		"tree skipped, blank":   {map[string]any{"snapshot_id": "s1", "element_count": float64(0), "screenshot_file_path": blank}, false, true},
 	} {
@@ -90,7 +85,6 @@ func TestTreeRequested(t *testing.T) {
 		"batch observe, off":     {"run_steps", map[string]any{"steps": []any{click}, "observe": skip}, false},
 		"trailing read, off":     {"run_steps", map[string]any{"steps": []any{click, map[string]any{"get_window_state": skip}}}, false},
 		"trailing read, written": {"run_steps", map[string]any{"steps": []any{click, map[string]any{"tool": "get_window_state", "args": skip}}}, false},
-		// The driver lets an explicit observe win over the step it merges in.
 		"observe wins over step": {"run_steps", map[string]any{"steps": []any{click, map[string]any{"get_window_state": skip}}, "observe": map[string]any{"include_accessibility_tree": true}}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -101,8 +95,6 @@ func TestTreeRequested(t *testing.T) {
 	}
 }
 
-// A screenshot-only read of a painted window has an element_count of 0 by
-// design; only a blank screenshot gets the warning.
 func TestScreenshotOnlyReadWarnsOnlyWhenBlank(t *testing.T) {
 	for name, blank := range map[string]bool{"painted": false, "blank": true} {
 		t.Run(name, func(t *testing.T) {
@@ -130,8 +122,6 @@ func TestScreenshotOnlyReadWarnsOnlyWhenBlank(t *testing.T) {
 	}
 }
 
-// The driver reports an unpainted window's read as ok; the read after an
-// action carries the warning so the agent stops retrying.
 func TestActionReadOfAnUnpaintedWindowWarns(t *testing.T) {
 	blank := writeScreenshot(t, true)
 	driver := &fakeDriver{daemonUp: true}
@@ -141,7 +131,6 @@ func TestActionReadOfAnUnpaintedWindowWarns(t *testing.T) {
 		}
 		var arguments map[string]any
 		_ = json.Unmarshal([]byte(args[2]), &arguments)
-		// Like the driver, write the requested file and name it in the result.
 		out := arguments["screenshot_out_file"].(string)
 		data, _ := os.ReadFile(blank)
 		_ = os.WriteFile(out, data, 0o600)

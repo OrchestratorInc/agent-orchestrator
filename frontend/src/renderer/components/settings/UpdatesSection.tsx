@@ -25,11 +25,6 @@ type PrimaryValue = UpdateChannel | "feature";
 
 const DEFAULT_SETTINGS: UpdateSettings = { enabled: false, channel: "latest", nightlyAck: false, feature: null };
 const MIN_MANUAL_CHECK_VISIBLE_MS = 1_000;
-// Hard ceiling on how long a manual check may hold the button. The IPC call is
-// awaited and normally settles on its own, but if it ever does not, the pending
-// request id disables the Check button for the rest of the session with nothing
-// on screen to explain it. Releasing the button is always safe: the main process
-// serializes updater operations, so a redundant check queues rather than racing.
 const MAX_MANUAL_CHECK_MS = 90_000;
 
 let updateRequestSequence = 0;
@@ -117,8 +112,6 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 		},
 		[],
 	);
-	// Set only for the owned pin/home transition request, so unrelated hourly
-	// updater events cannot auto-progress through download/install.
 	const autoProgressRef = useRef<string | null>(null);
 	const handledStatusRef = useRef<UpdateState | null>(null);
 
@@ -190,9 +183,6 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 		setForm(next);
 		save.mutate(next);
 		if (from !== to) {
-			// Reported on the switch rather than inferred later, because someone who
-			// moves to nightly and does not update yet is on nightly by intent while
-			// still running a stable build.
 			setReleaseChannelContext(to);
 			void captureRendererEvent("ao.renderer.update_channel_changed", { from_channel: from, to_channel: to });
 		}
@@ -227,19 +217,15 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 
 	const handleReturnToHome = async () => {
 		setShowFeature(false);
-		// Optimistic; the main process clears the pin against persisted state.
 		setForm({ ...formRef.current, feature: null });
 		const requestId = nextUpdateRequestId();
 		autoProgressRef.current = requestId;
 		handledStatusRef.current = null;
 		try {
-			// Single updater-serialized op: clears the pin and checks the home channel
-			// atomically, so a concurrent settings-write cannot restore the pin.
 			await aoBridge.updates.returnHome(requestId);
 			void queryClient.invalidateQueries({ queryKey: updateSettingsQueryKey });
 		} catch {
 			if (autoProgressRef.current === requestId) autoProgressRef.current = null;
-			// The optimistic form update may now disagree with disk; re-sync to truth.
 			void queryClient.invalidateQueries({ queryKey: updateSettingsQueryKey });
 		}
 	};
@@ -249,7 +235,6 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 		queryFn: () => aoBridge.featureBuilds.getActive(),
 	});
 	const activeBuild = activeQuery.data ?? null;
-	// Show the escape hatch whenever a feature build is running or pinned.
 	const featurePr = activeBuild?.pr ?? (developerMode ? null : (form.feature?.pr ?? null));
 
 	return (
@@ -296,10 +281,6 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 						<>
 							{t("settings.updates.channelHelp")}
 							{primaryValue === "nightly" && (
-								// A standing property of the chosen channel, not an alert:
-								// --color-warning is one step from --destructive, and a
-								// permanent note in it read as a permanent failure. Red is
-								// kept for states that are actually broken and actionable.
 								<span className="nightly-warning mt-1 flex items-start gap-1.5">
 									<Info className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
 									<span className="min-w-0">{t("settings.updates.nightlyWarning")}</span>
@@ -398,7 +379,6 @@ function UpdateActions({
 	const statusLineRef = useRef<HTMLDivElement | null>(null);
 	const restoreActionFocusRef = useRef(false);
 	const setDownloadButtonRef = useCallback((node: HTMLButtonElement | null) => {
-		// Capture focus before React removes the download action from the DOM.
 		if (!node && downloadButtonRef.current && downloadButtonRef.current === document.activeElement) restoreActionFocusRef.current = true;
 		downloadButtonRef.current = node;
 	}, []);
@@ -407,7 +387,6 @@ function UpdateActions({
 		restoreActionFocusRef.current = false;
 		if (document.activeElement !== document.body) return;
 		const nextAction = restartButtonRef.current ?? checkButtonRef.current;
-		// A fast failure can arrive inside the manual-check minimum busy window.
 		if (nextAction?.disabled) statusLineRef.current?.focus();
 		else nextAction?.focus();
 	});
@@ -418,15 +397,7 @@ function UpdateActions({
 	const downloadLabel = downloading ? t("settings.updates.updating") : t("settings.updates.update");
 	const updateTargetLabel = status.version ? t("settings.updates.updateTo", { version: `v${status.version}` }) : t("settings.updates.updateToLatest");
 	const downloadAccessibleLabel = downloading ? `${downloadLabel} ${updateTargetLabel}` : updateTargetLabel;
-	// Only the user's OWN in-flight check blocks the button. A background check
-	// also reports "checking", and gating on that swallowed the first click
-	// whenever Settings was opened during one — every 15 minutes on nightly.
-	// A click during a background check is fine: the main process serializes
-	// updater operations, so the manual check simply queues behind it.
 	const busy = manualCheckPending || downloading;
-	// The minimum-spinner window keeps "checking" on screen briefly after the
-	// updater has already answered. Only the Check button shows checking feedback;
-	// the status row resumes with the updater's terminal result.
 	const displayState: UpdateState = checking && !downloading && status.state !== "error" && status.state !== "downloaded" ? "checking" : status.state;
 	const showStatusState = displayState !== "checking";
 
@@ -440,17 +411,9 @@ function UpdateActions({
 		: null;
 
 	const channelSwitchInFlight = channelSwitch !== null && (!status.requestId || status.requestId === channelSwitch.requestId);
-	// Use the live updater state, not displayState: the manual-check minimum
-	// spinner time forces displayState back to "checking" even after a channel
-	// switch finds an update, which would hide this guidance until the timer fires.
-	// Not shown for "downloaded": the status line already says "Downloaded.
-	// Restart to finish updating." and names the build under it, so adding
-	// "Restart to switch to Nightly." put two restart sentences side by side.
 	const channelSwitchMessage = channelSwitchInFlight &&
 		(status.state === "available" || status.state === "downloading")
 		? t("settings.updates.channelSwitchUpdate", {
-			// Short form: "Restart to switch to Nightly (Pre-release)." reads as a
-			// parenthetical stuck mid-sentence. The suffix belongs in the picker.
 			channel: channelSwitch.channel === "nightly" ? t("settings.updates.channel.nightlyShort") : t("settings.updates.channel.stable"),
 		})
 		: null;
@@ -467,9 +430,6 @@ function UpdateActions({
 		}
 	};
 
-	// One settings row: the version is the label, the live status line is its
-	// description, and the actions sit at the trailing edge. Only Update and
-	// Restart & install are primary; Check for updates is a quiet row action.
 	return (
 		<>
 			<SettingsRow
@@ -485,9 +445,6 @@ function UpdateActions({
 				description={
 					<div className="flex min-w-0 flex-col gap-1">
 						{installed && (
-							// Two spans, not one string: the version needs break-all so a long
-							// nightly stamp can never overflow, but break-all applied to the
-							// whole line also snapped the date mid-word ("20/26, 5:21 PM").
 							<p className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
 								<span className="min-w-0 break-all font-mono">{version.data}</span>
 								<span className="whitespace-nowrap">
@@ -497,9 +454,6 @@ function UpdateActions({
 								</span>
 							</p>
 						)}
-						{/* One status block, in normal flow. It used to be an absolutely
-						    positioned h-5 strip, so a two-line message overlapped the
-						    last-checked line and the cross-fade left it looking half-rendered. */}
 						<div
 							ref={statusLineRef}
 							id="update-status-line"
@@ -509,8 +463,6 @@ function UpdateActions({
 							aria-atomic="true"
 							aria-busy={checking || downloading}
 							tabIndex={-1}
-							// Keep one line while the button owns the checking feedback, so
-							// the notices below do not jump up.
 							className="flex min-h-4 min-w-0 flex-col gap-1"
 						>
 							{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
@@ -523,8 +475,6 @@ function UpdateActions({
 								</p>
 							) : null}
 						</div>
-						{/* The primary error already explains the failed check. Keep a separate
-						    notice only when it adds information (for example beside a staged build). */}
 						{status.checkError && !(displayState === "error" && status.message === status.checkError) && (
 							<UpdateNotice tone="error" text={localizedUpdateError(status.checkError, status.checkErrorInfo, t("settings.updates.updateFailed"), t)} />
 						)}
@@ -535,11 +485,7 @@ function UpdateActions({
 					</div>
 				}
 			>
-				{/* Actions. Fixed to the right and never widened by a version string:
-				    the primary label used to carry the full nightly stamp and grew
-				    across the version. The target build is named in the status line. */}
 				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-					{/* Reflect every download, including automatic and channel-switch work. */}
 					{(status.state === "available" || downloading) && (
 						<Button
 							ref={setDownloadButtonRef}
@@ -559,18 +505,11 @@ function UpdateActions({
 						</Button>
 					)}
 					{(!downloading && (status.state === "downloaded" || (status.staged && status.staged.ready !== false))) && (
-						// Opens the restart confirmation rather than installing outright:
-						// installing quits the app, which costs a turn on any chat session
-						// running a daemon-owned driver.
 						<Button ref={restartButtonRef} type="button" variant="primary" size="sm" onClick={requestUpdateInstall}>
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 							{t("settings.updates.restartInstall")}
 						</Button>
 					)}
-					{/* Always rendered. Hiding it whenever something was available or
-					    staged left no way to re-check at all: a user sitting on a build
-					    that will not install had a single dead Restart button and no
-					    other action on the page. */}
 					<Button
 						ref={checkButtonRef}
 						type="button"
@@ -591,10 +530,6 @@ function UpdateActions({
 				</div>
 			</SettingsRow>
 
-			{/* Release notes used to live only in the restart confirmation, so
-			    skipping that dialog when nothing is at risk would have hidden them
-			    entirely. The shared renderer keeps contributor handles out while
-			    preserving linked PR numbers. */}
 			{(status.state === "downloaded" || status.staged) && status.releaseNotes ? (
 				<div className="settings-content-row flex flex-col gap-1.5" data-testid="update-release-notes">
 					<p className="text-sm font-medium text-settings-label">{t("update.restart.whatsNew")}</p>
@@ -608,7 +543,6 @@ function UpdateActions({
 	);
 }
 
-/** Inline caution/failure note under the status line: tone and icon, no box. */
 function UpdateNotice({ tone, text }: { tone: "warning" | "error"; text: string }) {
 	return (
 		<p className={cn("flex items-start gap-1.5 text-xs leading-4", tone === "warning" ? "text-warning" : "text-error")}>
@@ -630,12 +564,6 @@ function DownloadProgressIcon({ percent }: { percent: number }) {
 	);
 }
 
-/**
- * The single status line for the section. Every state gets a visible line with
- * a leading state icon: `available` used to be suppressed entirely (the button
- * was the only clue) and `checking` was rendered `sr-only`, which meant a
- * check in progress and a wedged check looked identical — an empty panel.
- */
 function UpdateStatusLine({
 	state,
 	status,
@@ -690,14 +618,9 @@ function UpdateStatusLine({
 		case "error":
 			className = "text-error";
 			icon = <AlertTriangle className="size-icon-sm shrink-0" aria-hidden="true" />;
-			// The main process already rewrites updater failures and says what they
-			// mean, so the sentence is localized here; the English fallback still
-			// keeps a dump it has not learned yet out of Settings (#5755).
 			label = status.netError
 				? t("settings.updates.netErrorRestartGuidance")
 				: localizedUpdateError(status.message, status.errorInfo, t("settings.updates.updateFailed"), t);
-			// Name the build being held back (a full disk refuses staging, a
-			// download failed) so the user still learns what they are missing.
 			detail = status.version ? t("settings.updates.availableVersion", { version: status.version }) : null;
 			break;
 		default:

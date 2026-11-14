@@ -58,7 +58,6 @@ export function clientForHost(hostId: HostId) {
 	return client;
 }
 
-/** Resolve the daemon that owns a session at the point a request is made. */
 export function clientForSessionHost(hostId?: HostId) {
 	return hostId && hostId !== LOCAL_HOST ? clientForHost(hostId) : apiClient;
 }

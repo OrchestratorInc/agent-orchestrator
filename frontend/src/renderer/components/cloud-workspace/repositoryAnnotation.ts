@@ -1,13 +1,6 @@
 import { joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath } from "../../lib/cloud-cp";
 import type { ActiveFileAnnotationTarget, FileAnnotationModel } from "../WorkspaceDiffView";
 
-/**
- * The shared annotation model seen from one sibling repository of a
- * multi-repository session. The views address that repository's files by
- * their own paths; the shared model, and so the feedback the agent receives,
- * names them `../<repository>/<path>`, where they sit beside the main
- * checkout the agent starts in. The main repository uses the model as is.
- */
 export function repositoryAnnotationModel(model: FileAnnotationModel, repository: string | undefined): FileAnnotationModel {
 	if (!repository) return model;
 	const outward = (target: ActiveFileAnnotationTarget): ActiveFileAnnotationTarget => ({

@@ -42,7 +42,6 @@ describe("side close recovery ownership", () => {
 		expect(recovery.pending()[0].phase).toBe("unconfirmed");
 		recovery.remember(snapshot([{ ...record, cleanupOnly: true }]));
 		expect(recovery.pending()).toEqual([{ id: "side", sessionId: "session", label: "Question", phase: "cleanup_pending" }]);
-		// Older open records cannot undo observed closure or leak private fields.
 		recovery.remember(snapshot([record]));
 		expect(recovery.pending()[0].phase).toBe("cleanup_pending");
 	});
@@ -112,7 +111,6 @@ describe("side close recovery ownership", () => {
 		expect(recovery.summary("session")).toEqual({ pending: recovery.pending(), closedIds: [] });
 		recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
 		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
-		// Native fork cleanup is still owned, but it must no longer keep a tab open.
 		expect(recovery.state?.sides).toHaveLength(1);
 		recovery.remember(snapshot([{ ...record, cleanupOnly: true }]));
 		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });

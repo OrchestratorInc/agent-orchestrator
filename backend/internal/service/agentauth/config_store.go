@@ -7,9 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// atomicConfigWrite replaces a harness configuration file through a secured
-// temporary file in the same directory, so a crash can never leave a partial
-// credential store behind. The caller has already validated the existing file.
 func atomicConfigWrite(ctx context.Context, dir, path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The credential store directory could not be prepared.")

@@ -16,8 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// -- fakeRunner test seam --
-
 type fakeRunner struct {
 	calls   []runnerCall
 	outputs [][]byte
@@ -49,11 +47,6 @@ func (f *fakeRunner) Run(ctx context.Context, env []string, name string, args ..
 	return out, nil
 }
 
-// -- reapSessions test seam --
-
-// recordingReaper captures reapSessions calls instead of signaling real
-// processes, so unit tests exercising Destroy never touch the host's process
-// table.
 type recordingReaper struct {
 	pids   [][]int
 	graces []time.Duration
@@ -64,22 +57,15 @@ func (rr *recordingReaper) reap(_ context.Context, pids []int, grace time.Durati
 	rr.graces = append(rr.graces, grace)
 }
 
-// -- helpers --
-
 func newTestRuntime(chunkSize int) (*Runtime, *fakeRunner) {
 	fr := &fakeRunner{}
-	// Launch environment files go to a scratch directory, never ~/.ao: the
-	// fake runner starts no shell to read and delete them.
 	r := New(Options{Binary: "tmux-test", Timeout: time.Second, Shell: "/bin/sh", ChunkSize: chunkSize, EnvDir: filepath.Join(os.TempDir(), "ao-tmux-test-env")})
 	r.runner = fr
-	r.enterDelay = 0                           // tests must not pay the real 300ms pre-Enter pause
-	r.reapSessions = (&recordingReaper{}).reap // never signal real processes from unit tests
+	r.enterDelay = 0
+	r.reapSessions = (&recordingReaper{}).reap
 	return r, fr
 }
 
-// countCalls returns how many of fr's recorded calls invoked the given tmux
-// subcommand (args[0]), e.g. "display-message" for pane cwd verification
-// probes.
 func countCalls(fr *fakeRunner, subcommand string) int {
 	n := 0
 	for _, c := range fr.calls {
@@ -89,8 +75,6 @@ func countCalls(fr *fakeRunner, subcommand string) int {
 	}
 	return n
 }
-
-// -- Options / New tests --
 
 func TestNewDefaultsToPortableShell(t *testing.T) {
 	t.Setenv("SHELL", "")
@@ -176,15 +160,6 @@ func TestNewLeavesLegacyTmuxUnavailableWithoutSystemTmux(t *testing.T) {
 	}
 }
 
-// TestExecRunnerRunsFromStableDir is the direct regression test for Fix 1:
-// execRunner.Run must pin cmd.Dir to os.TempDir() rather than inheriting
-// whatever the daemon process's own cwd happens to be. The first tmux CLI
-// call auto-starts the persistent tmux server, which then keeps that cwd for
-// its entire lifetime (issue #2775); without this pin a daemon started from a
-// Squirrel/ShipIt staging directory permanently poisons the server once that
-// staging directory is deleted by the next auto-update. This runs the real
-// execRunner (not the fakeRunner test seam every other test in this file
-// uses), so it is the only test that would catch a regression here.
 func TestExecRunnerRunsFromStableDir(t *testing.T) {
 	out, err := (execRunner{}).Run(context.Background(), nil, "sh", "-c", "pwd")
 	if err != nil {
@@ -192,10 +167,6 @@ func TestExecRunnerRunsFromStableDir(t *testing.T) {
 	}
 	got := strings.TrimSpace(string(out))
 
-	// Resolve symlinks on both sides: macOS reports os.TempDir() under
-	// /var/folders/... but pwd (and everything else) sees the real path under
-	// /private/var/folders/..., so a raw string comparison would spuriously
-	// fail there.
 	gotResolved, err := filepath.EvalSymlinks(got)
 	if err != nil {
 		t.Fatalf("resolve pwd output %q: %v", got, err)
@@ -209,11 +180,6 @@ func TestExecRunnerRunsFromStableDir(t *testing.T) {
 	}
 }
 
-// TestExecRunnerFallsBackWhenTempDirMissing pins the guard on Fix 1's pin.
-// os.TempDir() returns $TMPDIR without checking it exists, so a stale or bogus
-// TMPDIR would otherwise set cmd.Dir to a dead path and fail EVERY tmux command
-// with "chdir <dir>: no such file or directory" — the same dead-cwd failure
-// #2775 was about, just moved. Run must degrade to a directory that exists.
 func TestExecRunnerFallsBackWhenTempDirMissing(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "deleted-by-an-update"))
 	if _, err := os.Stat(os.TempDir()); !os.IsNotExist(err) {
@@ -230,8 +196,6 @@ func TestExecRunnerFallsBackWhenTempDirMissing(t *testing.T) {
 	}
 }
 
-// -- command builder tests --
-
 func TestCommandBuilders(t *testing.T) {
 	if got, want := newSessionArgs("sess-1", "/tmp/ws", "/bin/sh", `echo hi; exec "${SHELL:-/bin/sh}" -i`),
 		[]string{"new-session", "-d", "-s", "sess-1", "-x", "220", "-y", "50", "-c", "/tmp/ws", "/bin/sh", "-c", `echo hi; exec "${SHELL:-/bin/sh}" -i`}; !reflect.DeepEqual(got, want) {
@@ -241,7 +205,6 @@ func TestCommandBuilders(t *testing.T) {
 		[]string{"respawn-pane", "-k", "-t", "sess-1", "-c", "/tmp/ws", "/bin/sh", "-c", "echo hi"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("respawnPaneArgs = %#v, want %#v", got, want)
 	}
-	// set-option uses pane-targeting (no = prefix).
 	if got, want := setStatusOffArgs("sess-1"), []string{"set-option", "-t", "sess-1", "status", "off"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("setStatusOffArgs = %#v, want %#v", got, want)
 	}
@@ -254,17 +217,12 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := setMouseOnArgs("sess-1"), []string{"set-option", "-t", "sess-1", "mouse", "on"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("setMouseOnArgs = %#v, want %#v", got, want)
 	}
-	// set-option uses the exact-match target `=<id>:`, unlike the plain targets
-	// above: this call can run long after creation, when the session may
-	// already be gone, and a plain target then risks silently re-targeting an
-	// unrelated session sharing the name prefix (see setDetachOnDestroyOnArgs).
 	if got, want := setDetachOnDestroyOnArgs("sess-1"), []string{"set-option", "-t", "=sess-1:", "detach-on-destroy", "on"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("setDetachOnDestroyOnArgs = %#v, want %#v", got, want)
 	}
 	if got, want := showDetachOnDestroyArgs("sess-1"), []string{"show-options", "-t", "=sess-1:", "-v", "detach-on-destroy"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("showDetachOnDestroyArgs = %#v, want %#v", got, want)
 	}
-	// kill-session and has-session use exact-match prefix =.
 	if got, want := killSessionArgs("sess-1"), []string{"kill-session", "-t", "=sess-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("killSessionArgs = %#v, want %#v", got, want)
 	}
@@ -274,7 +232,6 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := panePIDArgs("sess-1"), []string{"display-message", "-p", "-t", "sess-1", "#{pane_pid}"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("panePIDArgs = %#v, want %#v", got, want)
 	}
-	// list-panes reaps whole-session (-s) with exact-match target and prints pane pids.
 	if got, want := listPanePIDsArgs("sess-1"), []string{"list-panes", "-s", "-t", "=sess-1", "-F", "#{pane_pid}"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("listPanePIDsArgs = %#v, want %#v", got, want)
 	}
@@ -294,8 +251,6 @@ func TestCommandBuilders(t *testing.T) {
 		t.Fatalf("capturePaneStyledArgs = %#v, want %#v", got, want)
 	}
 }
-
-// -- session name sanitization --
 
 func TestSessionNameSanitizesSpecialChars(t *testing.T) {
 	got, err := tmuxSessionName("repo/issue#42.1")
@@ -333,8 +288,6 @@ func TestSessionNameMatchesCreateNaming(t *testing.T) {
 	}
 }
 
-// -- env key validation --
-
 func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	_ = fr
@@ -349,11 +302,7 @@ func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
 	}
 }
 
-// -- Create tests --
-
 func TestCreateIssuesNewSessionAndStatusOff(t *testing.T) {
-	// new-session, display-message cwd verification, set-option status,
-	// set-option mouse, set-option window-size, has-session (exit 0 = alive)
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
 
@@ -369,18 +318,13 @@ func TestCreateIssuesNewSessionAndStatusOff(t *testing.T) {
 	if h.ID != "sess-1" {
 		t.Fatalf("handle ID = %q, want sess-1", h.ID)
 	}
-	// Expect 7 calls: new-session, display-message cwd verification,
-	// set-option status, set-option mouse, set-option window-size,
-	// set-option detach-on-destroy, has-session.
 	if len(fr.calls) != 7 {
 		t.Fatalf("calls = %d, want 7", len(fr.calls))
 	}
 
-	// Call 0: new-session
 	if got := fr.calls[0].args[0]; got != "new-session" {
 		t.Fatalf("call[0] = %q, want new-session", got)
 	}
-	// Check -s <id>, -c <cwd> are present.
 	joined := strings.Join(fr.calls[0].args, " ")
 	if !strings.Contains(joined, "-s sess-1") {
 		t.Fatalf("new-session args missing -s sess-1: %v", fr.calls[0].args)
@@ -388,39 +332,30 @@ func TestCreateIssuesNewSessionAndStatusOff(t *testing.T) {
 	if !strings.Contains(joined, "-c /tmp/ws") {
 		t.Fatalf("new-session args missing -c /tmp/ws: %v", fr.calls[0].args)
 	}
-	// Ensure -x and -y are set.
 	if !strings.Contains(joined, "-x 220") || !strings.Contains(joined, "-y 50") {
 		t.Fatalf("new-session args missing -x/-y: %v", fr.calls[0].args)
 	}
 
-	// Call 1: verify pane cwd.
 	if got, want := fr.calls[1].args, paneCurrentPathArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("call[1] = %#v, want %#v", got, want)
 	}
 
-	// Call 2: set-option status off (plain target, pane-targeting does not use =).
 	if got, want := fr.calls[2].args, setStatusOffArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("call[2] = %#v, want %#v", got, want)
 	}
 
-	// Call 3: set-option mouse on (enables wheel-scroll of the pane).
 	if got, want := fr.calls[3].args, setMouseOnArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("call[3] = %#v, want %#v", got, want)
 	}
 
-	// Call 4: set-option window-size largest (multi-client sizing, see
-	// setWindowSizeLargestArgs).
 	if got, want := fr.calls[4].args, setWindowSizeLargestArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("call[4] = %#v, want %#v", got, want)
 	}
 
-	// Call 5: set-option detach-on-destroy on (attach client exits on destroy
-	// even under a user `detach-on-destroy off`, see setDetachOnDestroyOnArgs).
 	if got, want := fr.calls[5].args, setDetachOnDestroyOnArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("call[5] = %#v, want %#v", got, want)
 	}
 
-	// Call 6: has-session (IsAlive, uses exact-match target =sess-1).
 	if got, want := fr.calls[6].args, hasSessionArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("call[6] = %#v, want %#v", got, want)
 	}
@@ -438,7 +373,6 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	// The launch command is the last argument to new-session (after shellPath -c).
 	args := fr.calls[0].args
 	launchCmd := args[len(args)-1]
 	if !strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) {
@@ -518,13 +452,11 @@ func TestCreateLaunchCommandExportsEnvVars(t *testing.T) {
 			t.Fatalf("launch environment missing %q in: %q", want, script)
 		}
 	}
-	// PATH is exported last so an explicit override takes effect.
 	if !strings.HasSuffix(script, "export PATH='/custom/bin:/usr/bin'\n") {
 		t.Fatalf("PATH is not exported last: %q", script)
 	}
 }
 
-// launchEnvPath returns the environment file a launch command sources.
 func launchEnvPath(t *testing.T, launchCmd string) string {
 	t.Helper()
 	_, rest, ok := strings.Cut(launchCmd, "; . '")
@@ -538,8 +470,6 @@ func launchEnvPath(t *testing.T, launchCmd string) string {
 	return path
 }
 
-// readLaunchEnv reads the environment file a launch command sources, checks
-// only its owner can read it, and removes it as the pane's shell would.
 func readLaunchEnv(t *testing.T, launchCmd string) string {
 	t.Helper()
 	path := launchEnvPath(t, launchCmd)
@@ -642,9 +572,6 @@ func TestBuildLaunchCommandPreservesExplicitNoColor(t *testing.T) {
 
 func TestCreateDestroysAndReturnsErrorWhenPaneCWDDoesNotMatch(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	// new-session, then a stale pane cwd on every one of the paneCwdVerifyAttempts
-	// retries: the pane never settles on the workspace, so Create must exhaust
-	// all attempts and fail with the typed mismatch error.
 	fr.outputs = [][]byte{nil}
 	for i := 0; i < paneCwdVerifyAttempts; i++ {
 		fr.outputs = append(fr.outputs, []byte("/deleted/shipit\n"))
@@ -669,18 +596,12 @@ func TestCreateDestroysAndReturnsErrorWhenPaneCWDDoesNotMatch(t *testing.T) {
 	}
 }
 
-// TestVerifyPaneWorkingDirectoryKeepsMismatchErrorAfterLaterProbeFailure pins
-// Fix 2's sticky-sentinel behavior: once an attempt has observed a genuine cwd
-// mismatch, a later attempt that fails to even probe the pane (a transient
-// tmux CLI error, not a mismatch) must not overwrite that classifiable error.
-// Losing it would make the caller fall back to an opaque, unclassifiable
-// error and regress the whole point of Fix 4 (mapping to a typed apierr).
 func TestVerifyPaneWorkingDirectoryKeepsMismatchErrorAfterLaterProbeFailure(t *testing.T) {
 	r, _ := newTestRuntime(0)
 	fr := &fakeRunnerSequence{
 		results: []fakeRunnerResult{
-			{out: []byte("/deleted/shipit\n")},                // attempt 1: mismatch
-			{err: errors.New("tmux: lost server connection")}, // attempt 2: probe failure
+			{out: []byte("/deleted/shipit\n")},
+			{err: errors.New("tmux: lost server connection")},
 		},
 	}
 	r.runner = fr
@@ -694,15 +615,8 @@ func TestVerifyPaneWorkingDirectoryKeepsMismatchErrorAfterLaterProbeFailure(t *t
 	}
 }
 
-// TestVerifyPaneWorkingDirectoryRetriesUntilMatch pins the retry behavior Fix 2
-// depends on: buildLaunchCommand's `cd <workspace> || exit;` guard corrects a
-// pane's cwd asynchronously, so the first sample right after `new-session` can
-// still show the tmux server's (possibly poisoned) cwd even though the pane is
-// about to land in the right place. Create must not fail on that stale first
-// sample if a later sample matches.
 func TestVerifyPaneWorkingDirectoryRetriesUntilMatch(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	// new-session, then a stale sample, then a matching sample.
 	fr.outputs = [][]byte{nil, []byte("/deleted/shipit\n"), []byte("/tmp/ws\n"), nil, nil, nil, nil}
 
 	h, err := r.Create(context.Background(), ports.RuntimeConfig{
@@ -721,9 +635,6 @@ func TestVerifyPaneWorkingDirectoryRetriesUntilMatch(t *testing.T) {
 	}
 }
 
-// TestVerifyPaneWorkingDirectoryHonorsCancellation ensures the retry loop's
-// select on ctx.Done() actually aborts a pending retry instead of always
-// sleeping out the full retry budget.
 func TestVerifyPaneWorkingDirectoryHonorsCancellation(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{[]byte("/deleted/shipit\n")}
@@ -735,18 +646,12 @@ func TestVerifyPaneWorkingDirectoryHonorsCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("verifyPaneWorkingDirectory: got nil, want context cancellation error")
 	}
-	// The first attempt runs before the retry-delay select is reached, so one
-	// verification call happens even though ctx is already canceled; the
-	// second attempt's select must observe ctx.Done() rather than waiting out
-	// paneCwdVerifyRetryDelay.
 	if got := countCalls(fr, "display-message"); got != 1 {
 		t.Fatalf("pane cwd verification attempts = %d, want 1 (canceled before the first retry)", got)
 	}
 }
 
 func TestCreateDestroysAndReturnsErrorWhenNotAlive(t *testing.T) {
-	// Every setup command succeeds; only the has-session liveness probe reports the
-	// session as gone, so Create must fail on the liveness check specifically.
 	r2, _ := newTestRuntime(0)
 	fr3 := &fakeRunnerSelectiveErr{
 		exitErrOn: "has-session",
@@ -762,9 +667,6 @@ func TestCreateDestroysAndReturnsErrorWhenNotAlive(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create: got nil, want error when session not alive after create")
 	}
-	// The failure must come from the liveness probe, not from an earlier setup
-	// command. Without this the test would still pass if a newly inserted tmux
-	// call took the injected error first — which is exactly what happened once.
 	if !strings.Contains(err.Error(), "exited before ready") {
 		t.Fatalf("Create err = %v, want the liveness-check failure (exited before ready)", err)
 	}
@@ -777,7 +679,6 @@ func TestCreateDestroysAndReturnsErrorWhenNotAlive(t *testing.T) {
 	if !sawHasSession {
 		t.Fatal("Create never reached the has-session liveness probe")
 	}
-	// Verify Destroy was called (kill-session).
 	hasKill := false
 	for _, c := range fr3.calls {
 		if len(c.args) > 0 && c.args[0] == "kill-session" {
@@ -789,11 +690,6 @@ func TestCreateDestroysAndReturnsErrorWhenNotAlive(t *testing.T) {
 	}
 }
 
-// fakeRunnerSelectiveErr returns an exec.ExitError (carrying errOutput) for the
-// call whose tmux subcommand is exitErrOn, and succeeds for every other call.
-// Matching on the subcommand rather than a call index is deliberate: Create's
-// command sequence grows over time, and an index would silently retarget the
-// injected failure onto whichever command was inserted before the intended one.
 type fakeRunnerSelectiveErr struct {
 	calls     []runnerCall
 	exitErrOn string
@@ -811,17 +707,11 @@ func (f *fakeRunnerSelectiveErr) Run(_ context.Context, env []string, name strin
 	return nil, nil
 }
 
-// fakeRunnerResult is one scripted response for fakeRunnerSequence: either out
-// bytes (success) or err (failure).
 type fakeRunnerResult struct {
 	out []byte
 	err error
 }
 
-// fakeRunnerSequence returns each result in results in order for successive
-// Run calls, repeating the last result once results is exhausted. It ignores
-// which tmux subcommand was invoked, which is enough for tests that only
-// care about a fixed sequence of successes/failures across retries.
 type fakeRunnerSequence struct {
 	calls   []runnerCall
 	results []fakeRunnerResult
@@ -889,11 +779,11 @@ func TestIsAliveAdoptsSessionFromLegacyDefaultSocket(t *testing.T) {
 	})
 	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
 		{out: []byte("can't find session: sess-1"), err: &exec.ExitError{}},
-		{},                    // legacy default-socket discovery
-		{},                    // enforceDetachOnDestroy: set-option
-		{out: []byte("on\n")}, // enforceDetachOnDestroy: show-options verify
-		{},                    // first has-session call after discovery
-		{},                    // cached second has-session call
+		{},
+		{},
+		{out: []byte("on\n")},
+		{},
+		{},
 	}}
 	r.runner = fr
 	handle := ports.RuntimeHandle{ID: "sess-1"}
@@ -945,10 +835,10 @@ func TestIsAliveAdoptsLegacyDefaultSessionWhenNamedSocketDoesNotExist(t *testing
 			out: []byte("error connecting to /private/tmp/tmux-501/ao (No such file or directory)"),
 			err: &exec.ExitError{},
 		},
-		{},                    // legacy default-socket discovery
-		{},                    // enforceDetachOnDestroy: set-option
-		{out: []byte("on\n")}, // enforceDetachOnDestroy: show-options verify
-		{},                    // has-session on the adopted legacy socket
+		{},
+		{},
+		{out: []byte("on\n")},
+		{},
 	}}
 	r.runner = fr
 
@@ -1084,14 +974,8 @@ func TestIsAliveReportsTransientLegacyConnectionAsProbeInconclusive(t *testing.T
 	}
 }
 
-// -- Destroy tests --
-
 func TestDestroyIsIdempotentWhenSessionMissing(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	// First output feeds list-panes (which also errors here → no sids); fr.err
-	// applies to every call, so the missing-session marker must also cover the
-	// detach-on-destroy set-option, not just kill-session (both must be
-	// tolerated as idempotent, see the fail-closed change in Destroy).
 	fr.outputs = [][]byte{nil, []byte("can't find session: sess-1"), []byte("can't find session: sess-1")}
 	fr.err = &exec.ExitError{}
 
@@ -1113,7 +997,6 @@ func TestDestroyIsIdempotentWhenNoServer(t *testing.T) {
 	}
 }
 
-// Same teardown generosity for the tmux ≥ 3.4 absent-server wording.
 func TestDestroyIsIdempotentWhenSocketAbsent(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{
@@ -1128,9 +1011,6 @@ func TestDestroyIsIdempotentWhenSocketAbsent(t *testing.T) {
 	}
 }
 
-// The migration-deployment reboot case: every probe on both sockets hits the
-// absent-socket text, and kill-session still resolves to "nothing to kill"
-// instead of surfacing the probe failure.
 func TestDestroyIsIdempotentWhenBothMigrationSocketsAbsent(t *testing.T) {
 	r := New(Options{
 		Binary:       "bundled-tmux-test",
@@ -1142,7 +1022,7 @@ func TestDestroyIsIdempotentWhenBothMigrationSocketsAbsent(t *testing.T) {
 		out: []byte("error connecting to /tmp/tmux-1000/missing (No such file or directory)"),
 		err: &exec.ExitError{},
 	}
-	fr := &fakeRunnerSequence{results: []fakeRunnerResult{absent}} // repeated for every call
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{absent}}
 	r.runner = fr
 
 	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); err != nil {
@@ -1150,8 +1030,6 @@ func TestDestroyIsIdempotentWhenBothMigrationSocketsAbsent(t *testing.T) {
 	}
 	sawKill := false
 	for _, c := range fr.calls {
-		// Socket-qualified argv carries the "-L <name>" prefix, so scan for the
-		// subcommand instead of expecting it at args[0].
 		for _, a := range c.args {
 			if a == "kill-session" {
 				sawKill = true
@@ -1180,9 +1058,6 @@ func TestDestroyArgs(t *testing.T) {
 	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	// list-panes discovers pane sessions; set-option re-asserts detach-on-destroy
-	// (see setDetachOnDestroyOnArgs) for handles Create never ran on; kill-session
-	// (exact-match target =<id>) tears the session down.
 	if got, want := fr.calls[0].args, listPanePIDsArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("list-panes args = %#v, want %#v", got, want)
 	}
@@ -1194,18 +1069,6 @@ func TestDestroyArgs(t *testing.T) {
 	}
 }
 
-// TestDestroyPreservesErrorAndRetryPathOnTransientKillSessionFailure pins
-// "treat only confirmed absence as idempotent" for kill-session's own result,
-// not just the pre-kill guard. A transient kill-session failure (connection
-// refused here) does not prove the session actually died — the kill may not
-// have run at all. Destroy must return that error rather than swallow it,
-// because a caller reading nil as success could mark the session terminated
-// and delete its worktree while the session, and its detach-on-destroy
-// guard's target, might still be alive. It must also leave the cached socket
-// mapping alone: this test runs Destroy on a legacy-adopted handle (so the
-// socket is cached after the first call, see socketForSession) and confirms
-// a second Destroy call goes straight back through the cached socket instead
-// of re-running discovery from scratch, proving the retry path survived.
 func TestDestroyPreservesErrorAndRetryPathOnTransientKillSessionFailure(t *testing.T) {
 	r := New(Options{
 		Binary:       "bundled-tmux-test",
@@ -1214,16 +1077,16 @@ func TestDestroyPreservesErrorAndRetryPathOnTransientKillSessionFailure(t *testi
 		Timeout:      time.Second,
 	})
 	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
-		{out: []byte("can't find session: sess-1"), err: &exec.ExitError{}}, // private probe: missing
-		{},                    // legacy discovery: found
-		{},                    // enforceDetachOnDestroy: set-option
-		{out: []byte("on\n")}, // enforceDetachOnDestroy: verify
-		{},                    // list-panes (first Destroy call)
-		{},                    // pre-kill set-option (first Destroy call)
-		{out: []byte("error connecting to /tmp/tmux-1000/default (Connection refused)"), err: &exec.ExitError{}}, // kill-session: transient
-		{}, // list-panes (second Destroy call)
-		{}, // pre-kill set-option (second Destroy call)
-		{}, // kill-session (second Destroy call): succeeds
+		{out: []byte("can't find session: sess-1"), err: &exec.ExitError{}},
+		{},
+		{},
+		{out: []byte("on\n")},
+		{},
+		{},
+		{out: []byte("error connecting to /tmp/tmux-1000/default (Connection refused)"), err: &exec.ExitError{}},
+		{},
+		{},
+		{},
 	}}
 	r.runner = fr
 	handle := ports.RuntimeHandle{ID: "sess-1"}
@@ -1243,11 +1106,6 @@ func TestDestroyPreservesErrorAndRetryPathOnTransientKillSessionFailure(t *testi
 	if len(fr.calls) != 10 {
 		t.Fatalf("calls = %d, want 10 (4 discovery/enforcement calls once, plus 3 Destroy calls per attempt): %+v", len(fr.calls), fr.calls)
 	}
-	// The retry's three calls (list-panes, set-option, kill-session) must be
-	// exactly that — no interleaved has-session probe, which would mean the
-	// socket mapping was forgotten and adoption ran again from scratch.
-	// Legacy-socket calls carry a "-L default" prefix (see runOnSocket), so the
-	// subcommand is the third arg, not the first.
 	retrySubcommands := []string{fr.calls[7].args[2], fr.calls[8].args[2], fr.calls[9].args[2]}
 	want := []string{"list-panes", "set-option", "kill-session"}
 	if !reflect.DeepEqual(retrySubcommands, want) {
@@ -1255,15 +1113,6 @@ func TestDestroyPreservesErrorAndRetryPathOnTransientKillSessionFailure(t *testi
 	}
 }
 
-// TestDestroyFailsClosedWhenDetachOnDestroySettingFails pins the fail-closed
-// requirement: if the detach-on-destroy guard cannot be confirmed for an
-// unexpected reason (anything other than the session/server already being
-// gone), Destroy must not reach kill-session. A session that dies with the
-// guard still off can hand AO's terminal, and its input, to one of the user's
-// own tmux sessions (issue #4223) — proceeding on an unconfirmed guard would
-// reopen exactly that gap. kill-session is configured here to succeed if
-// called, so the assertion only passes if Destroy actually stopped short of
-// it.
 func TestDestroyFailsClosedWhenDetachOnDestroySettingFails(t *testing.T) {
 	r, _ := newTestRuntime(0)
 	fr := &fakeRunnerSelectiveErr{exitErrOn: "set-option", errOutput: []byte("permission denied")}
@@ -1280,14 +1129,6 @@ func TestDestroyFailsClosedWhenDetachOnDestroySettingFails(t *testing.T) {
 	}
 }
 
-// TestDestroyFailsClosedWhenDetachOnDestroySettingConnectionRefused pins the
-// narrower half of the fail-closed guard: "connection refused" (and the other
-// transient wording in transientServerFailureOutput's protocol-mismatch /
-// unexpected-exit cases) means the probe was inconclusive, not that the
-// session or server is confirmed gone (see confirmedAbsentOutput). Treating
-// it as safe would let a merely flaky set-option wave kill-session through
-// with the guard unconfirmed, reopening the same terminal/input transfer
-// risk.
 func TestDestroyFailsClosedWhenDetachOnDestroySettingConnectionRefused(t *testing.T) {
 	r, _ := newTestRuntime(0)
 	fr := &fakeRunnerSelectiveErr{
@@ -1307,14 +1148,8 @@ func TestDestroyFailsClosedWhenDetachOnDestroySettingConnectionRefused(t *testin
 	}
 }
 
-// TestDestroyIsIdempotentWhenDetachOnDestroySettingReportsSessionMissing
-// covers the other half of the fail-closed change: a set-option failure that
-// definitively means the session is already gone (the same idempotent case
-// kill-session itself tolerates) must not block teardown.
 func TestDestroyIsIdempotentWhenDetachOnDestroySettingReportsSessionMissing(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	// list-panes: no session, no panes. set-option: session missing. kill-session:
-	// session missing too (the ordinary double-kill case).
 	fr.outputs = [][]byte{nil, []byte("can't find session: sess-1"), []byte("can't find session: sess-1")}
 	fr.err = &exec.ExitError{}
 
@@ -1326,10 +1161,6 @@ func TestDestroyIsIdempotentWhenDetachOnDestroySettingReportsSessionMissing(t *t
 	}
 }
 
-// tmux >= 3.5 words a missing session "no such session: <target>" (with the
-// "=" exact-match prefix echoed back) instead of "can't find session" (issue
-// #6099). It must read as confirmed absence, while transient server failures
-// stay unconfirmed so the #4223 fail-closed guard holds.
 func TestSessionMissingOutputRecognizesTmux35Wording(t *testing.T) {
 	tests := []struct {
 		output      string
@@ -1355,9 +1186,6 @@ func TestSessionMissingOutputRecognizesTmux35Wording(t *testing.T) {
 	}
 }
 
-// The reviewer launcher destroys any stale pane before every launch, so a
-// missing session on tmux >= 3.5 must be a no-op success rather than failing
-// the pre-kill detach-on-destroy reassertion (issue #6099).
 func TestDestroyIsIdempotentWhenSessionMissingTmux35Wording(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{nil, []byte("no such session: =review-x:"), []byte("no such session: =review-x:")}
@@ -1371,8 +1199,6 @@ func TestDestroyIsIdempotentWhenSessionMissingTmux35Wording(t *testing.T) {
 	}
 }
 
-// Recognizing the tmux >= 3.5 wording must not widen confirmed absence:
-// transient failures at either Destroy step still fail closed (issue #4223).
 func TestDestroyFailsClosedOnTransientFailuresAlongsideTmux35Wording(t *testing.T) {
 	transient := []string{
 		"error connecting to /tmp/tmux-1000/default (Connection refused)",
@@ -1430,9 +1256,6 @@ func TestProcessRootPIDsTreatsTmux35NoSuchSessionAsNoPIDs(t *testing.T) {
 	}
 }
 
-// The legacy-socket migration probe must cross to the system socket when the
-// private server reports the session missing in tmux >= 3.5 wording, exactly as
-// it does for "can't find session".
 func TestIsAliveAdoptsLegacySessionWhenPrivateSocketReportsTmux35NoSuchSession(t *testing.T) {
 	r := New(Options{
 		Binary:       "bundled-tmux-test",
@@ -1441,11 +1264,11 @@ func TestIsAliveAdoptsLegacySessionWhenPrivateSocketReportsTmux35NoSuchSession(t
 		Timeout:      time.Second,
 	})
 	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
-		{out: []byte("no such session: =sess-1:"), err: &exec.ExitError{}}, // private probe: missing
-		{},                    // legacy default-socket discovery
-		{},                    // enforceDetachOnDestroy: set-option
-		{out: []byte("on\n")}, // enforceDetachOnDestroy: show-options verify
-		{},                    // has-session on the adopted legacy socket
+		{out: []byte("no such session: =sess-1:"), err: &exec.ExitError{}},
+		{},
+		{},
+		{out: []byte("on\n")},
+		{},
 	}}
 	r.runner = fr
 
@@ -1809,12 +1632,8 @@ func TestIsSupervisedProcessAliveRejectsInvalidPanePID(t *testing.T) {
 	}
 }
 
-// Destroy must reap the pane sessions it discovered so a worker's backgrounded
-// dev servers do not outlive the session.
 func TestDestroyReapsDiscoveredPaneSessions(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	// list-panes lists two pane pids (one per line, plus noise the parser must
-	// drop); the best-effort set-option and kill-session then succeed.
 	fr.outputs = [][]byte{[]byte("4242\n4243\n\n1\n"), nil, nil}
 	reaper := &recordingReaper{}
 	r.reapSessions = reaper.reap
@@ -1825,7 +1644,6 @@ func TestDestroyReapsDiscoveredPaneSessions(t *testing.T) {
 	if len(reaper.pids) != 1 {
 		t.Fatalf("reaper called %d times, want 1", len(reaper.pids))
 	}
-	// pids <= 1 and blank lines are dropped; the real sids reach the reaper.
 	if got, want := reaper.pids[0], []int{4242, 4243}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("reaped session ids = %#v, want %#v", got, want)
 	}
@@ -1833,8 +1651,6 @@ func TestDestroyReapsDiscoveredPaneSessions(t *testing.T) {
 		t.Fatalf("reap grace = %v, want %v", reaper.graces[0], r.reapGrace)
 	}
 }
-
-// -- IsAlive tests --
 
 func TestIsAliveReturnsTrueOnExitZero(t *testing.T) {
 	r, fr := newTestRuntime(0)
@@ -1866,10 +1682,6 @@ func TestIsAliveReturnsFalseNilOnCantFindSession(t *testing.T) {
 	}
 }
 
-// A conclusively absent server means the tmux runtime handle is gone, although
-// the agent may still be alive as an orphan. Surface the infrastructure-level
-// sentinel rather than a per-session false result: the reaper treats errors as
-// failed probes, while explicit recovery paths may recreate the missing server.
 func TestIsAliveReportsNoServerAsRuntimeUnavailable(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{[]byte("no server running on /tmp/tmux-1000/default")}
@@ -1884,11 +1696,6 @@ func TestIsAliveReportsNoServerAsRuntimeUnavailable(t *testing.T) {
 	}
 }
 
-// tmux ≥ 3.4 words an absent server "error connecting … (No such file or
-// directory)" instead of "no server running". The socket file does not exist,
-// so no server can be listening: this is the same conclusive server absence,
-// and the recovery paths (boot reconcile, restore, restart) key off
-// ErrRuntimeUnavailable.
 func TestIsAliveReportsAbsentSocketAsRuntimeUnavailable(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{[]byte("error connecting to /tmp/tmux-1000/default (No such file or directory)")}
@@ -1903,13 +1710,6 @@ func TestIsAliveReportsAbsentSocketAsRuntimeUnavailable(t *testing.T) {
 	}
 }
 
-// After a reboot both the private and the legacy server are gone. The session
-// must come back as ErrRuntimeUnavailable, not ErrRuntimeProbeInconclusive:
-// an inconclusive probe dead-ends boot reconciliation ("a failed probe is not
-// proof of death: leave the session as-is") and leaves the session live-looking
-// but unrecoverable — kill 500s, restore refuses. Connection refused (socket
-// exists, no listener yet) stays inconclusive; see
-// TestIsAliveKeepsAmbiguousNamedSocketFailureInNamedNamespace.
 func TestIsAliveReportsUnavailableWhenBothSocketsAbsent(t *testing.T) {
 	r := New(Options{
 		Binary:       "bundled-tmux-test",
@@ -1941,8 +1741,6 @@ func TestIsAliveReportsUnavailableWhenBothSocketsAbsent(t *testing.T) {
 	}
 }
 
-// IsAlive must treat any non-"missing" non-zero exit as a probe error so the
-// reaper never reads a transient failure as proof of death.
 func TestIsAliveReportsOtherExitFailuresAsProbeErrors(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{[]byte("unexpected internal error")}
@@ -2025,11 +1823,8 @@ func TestIsChildAlivePreservesProbeFailures(t *testing.T) {
 	}
 }
 
-// -- SendMessage tests --
-
 func TestSendMessageChunksAndSendsEnter(t *testing.T) {
-	r, fr := newTestRuntime(5) // chunkSize=5
-	// "hello世界": hello=5 bytes, 世=3 bytes, 界=3 bytes => 3 sends + 1 Enter
+	r, fr := newTestRuntime(5)
 	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "hello世界"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
@@ -2055,19 +1850,12 @@ func TestSendMessageUsesLiteralFlag(t *testing.T) {
 	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "Enter"); err != nil {
 		t.Fatalf("SendMessage: %v", err)
 	}
-	// First call must use -l so "Enter" is sent literally, not as a key binding.
 	if fr.calls[0].args[3] != "-l" {
 		t.Fatalf("send-keys args[3] = %q, want -l", fr.calls[0].args[3])
 	}
 }
 
-// TestSendMessageDelaysBeforeEnter verifies the pre-Enter pause (mirroring
-// conpty's ptyInputEnterDelay) fires only for a non-empty message: a large
-// multiline paste needs time to settle before the trailing Enter, or the Enter
-// is absorbed and the prompt is left unsubmitted (issue #2342). An empty
-// (nudge) message skips the pause — there is no paste ahead of a catch-up Enter.
 func TestSendMessageDelaysBeforeEnter(t *testing.T) {
-	// enterDelay=0 (the test default) => no pause: SendMessage is near-instant.
 	r0, _ := newTestRuntime(0)
 	r0.enterDelay = 0
 	start := time.Now()
@@ -2078,8 +1866,6 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 		t.Fatalf("SendMessage with enterDelay=0 took %s; want no real pause", dt)
 	}
 
-	// enterDelay>0 => SendMessage blocks at least enterDelay before Enter, but
-	// only for a non-empty message.
 	r, fr := newTestRuntime(0)
 	r.enterDelay = 30 * time.Millisecond
 	start = time.Now()
@@ -2089,7 +1875,6 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	if dt := time.Since(start); dt < r.enterDelay {
 		t.Fatalf("SendMessage took %s, want >= %s pre-Enter pause", dt, r.enterDelay)
 	}
-	// Non-empty message still ends with the literal chunks then Enter.
 	if len(fr.calls) != 2 {
 		t.Fatalf("calls = %d, want 2 (chunk + Enter)", len(fr.calls))
 	}
@@ -2097,7 +1882,6 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 		t.Fatalf("Enter args = %#v, want %#v", got, want)
 	}
 
-	// Empty (nudge) message: no paste, no pause — even with enterDelay set.
 	rNudge, frNudge := newTestRuntime(0)
 	rNudge.enterDelay = 30 * time.Millisecond
 	start = time.Now()
@@ -2107,7 +1891,6 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	if dt := time.Since(start); dt > 50*time.Millisecond {
 		t.Fatalf("nudge SendMessage took %s; want no pause for empty message", dt)
 	}
-	// Empty message is Enter-only: no send-keys -l call, just Enter.
 	if len(frNudge.calls) != 1 {
 		t.Fatalf("nudge calls = %d, want 1 (Enter only)", len(frNudge.calls))
 	}
@@ -2116,15 +1899,8 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	}
 }
 
-// TestSendMessageEnterSurvivesCallerCancel pins the detached-Enter contract:
-// once the chunks are pasted, a caller cancellation landing in the pre-Enter
-// pause must NOT abandon the send — the pasted draft would sit unsubmitted and
-// a retried send would double-paste. The pause and Enter run on a context
-// detached from the caller's, so SendMessage completes (chunks then Enter).
 func TestSendMessageEnterSurvivesCallerCancel(t *testing.T) {
 	r, fr := newTestRuntime(0)
-	// A pause long enough that the 50ms-delayed cancel deterministically lands
-	// inside it (the chunk send is near-instant against the fake runner).
 	r.enterDelay = 200 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2231,8 +2007,6 @@ func TestSendInputSendsEscapeWithoutEnter(t *testing.T) {
 	}
 }
 
-// -- GetOutput tests --
-
 func TestGetOutputValidatesLines(t *testing.T) {
 	r, _ := newTestRuntime(0)
 	_, err := r.GetOutput(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, 0)
@@ -2296,8 +2070,6 @@ func TestGetStyledOutputPreservesCaptureMode(t *testing.T) {
 	}
 }
 
-// -- AttachCommand tests --
-
 func TestAttachCommandReturnsExpectedArgv(t *testing.T) {
 	r := New(Options{Binary: "/usr/bin/tmux", Timeout: time.Second})
 	argv, err := r.attachCommand(ports.RuntimeHandle{ID: "sess-1"})
@@ -2356,8 +2128,6 @@ func TestAttachEnvForcesUsableTerm(t *testing.T) {
 	}
 }
 
-// -- commandError tests --
-
 func TestCommandErrorUnwraps(t *testing.T) {
 	base := errors.New("base")
 	err := commandError{err: base, output: "details"}
@@ -2369,8 +2139,6 @@ func TestCommandErrorUnwraps(t *testing.T) {
 	}
 }
 
-// -- text helper tests --
-
 func TestChunks(t *testing.T) {
 	if got := chunks("", 5); !reflect.DeepEqual(got, []string{""}) {
 		t.Fatalf("chunks empty = %#v", got)
@@ -2378,7 +2146,6 @@ func TestChunks(t *testing.T) {
 	if got := chunks("hello", 10); !reflect.DeepEqual(got, []string{"hello"}) {
 		t.Fatalf("chunks fits = %#v", got)
 	}
-	// UTF-8 boundary: 世 is 3 bytes; with chunkSize=5 "hello世界" splits at 5,6,6
 	got := chunks("hello世界", 5)
 	if len(got) != 3 {
 		t.Fatalf("chunks count = %d, want 3: %#v", len(got), got)
@@ -2409,19 +2176,12 @@ func TestTrimTrailingBlankLines(t *testing.T) {
 	}
 }
 
-// -- reap tests --
-
-// The reap used to sleep the whole grace before rechecking, and Destroy blocks
-// the shell-terminal DELETE handler, so closing a plain terminal took the full
-// 5s no matter how fast the shell exited. Polling must return as soon as the
-// pane session is empty.
 func TestReapPaneSessionsReturnsAsSoonAsSessionsAreEmpty(t *testing.T) {
 	grace := 3 * time.Second
 	var signals []string
 	calls := 0
 	hasProcesses := func(context.Context, []int) bool {
 		calls++
-		// Alive for the SIGTERM check, gone by the first poll.
 		return calls == 1
 	}
 
@@ -2440,9 +2200,6 @@ func TestReapPaneSessionsReturnsAsSoonAsSessionsAreEmpty(t *testing.T) {
 	}
 }
 
-// The grace still exists for what it was added for (issue #2523): a dev server
-// a worker backgrounded gets the full window to release its ports, and is only
-// then forced.
 func TestReapPaneSessionsSigkillsSurvivorsAfterGrace(t *testing.T) {
 	grace := 150 * time.Millisecond
 	var signals []string
@@ -2462,8 +2219,6 @@ func TestReapPaneSessionsSigkillsSurvivorsAfterGrace(t *testing.T) {
 	}
 }
 
-// An empty pane list means there is nothing to reap; signalling anything there
-// would be pkill against no session at all.
 func TestReapPaneSessionsIgnoresEmptyPidList(t *testing.T) {
 	called := false
 	reapPaneSessions(context.Background(), nil, time.Second,
@@ -2475,10 +2230,6 @@ func TestReapPaneSessionsIgnoresEmptyPidList(t *testing.T) {
 	}
 }
 
-// Regression: macOS pkill/pgrep have no `-s` (session id) matcher — it is a
-// Linux procps extension — so every signal and probe failed with a usage error
-// and the probe's conservative "assume survivors" kept the full grace running.
-// The reap accomplished nothing and cost 5s on every close.
 func TestReapPaneSessionsSkipsWaitWhenSessionMatcherUnsupported(t *testing.T) {
 	grace := 3 * time.Second
 	probed := false
@@ -2552,9 +2303,6 @@ func TestRuntime_ServerPID(t *testing.T) {
 		}
 	})
 
-	// Without a private socket tmux answers from the machine default server,
-	// which is the user's own tmux: claiming it bills their shells, editors
-	// and anything else they run there as AO memory.
 	t.Run("false without a private socket, never asking tmux", func(t *testing.T) {
 		r, fr := newTestRuntime(0)
 		fr.outputs = [][]byte{[]byte("54321\n")}

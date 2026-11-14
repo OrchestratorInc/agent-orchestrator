@@ -55,7 +55,6 @@ describe("terminal WebGL pool", () => {
 
 		expect(addons).toHaveLength(MAX_WEBGL_TERMINALS + 4);
 		expect(liveAddons()).toBe(MAX_WEBGL_TERMINALS);
-		// The oldest four were parked back on the DOM renderer.
 		expect(addons.slice(0, 4).every((addon) => addon.disposed)).toBe(true);
 	});
 
@@ -70,7 +69,6 @@ describe("terminal WebGL pool", () => {
 		expect(terminals[0].term.loadAddon).toHaveBeenCalledTimes(2);
 		expect(addons.at(-1)?.disposed).toBe(false);
 		expect(liveAddons()).toBe(MAX_WEBGL_TERMINALS);
-		// The next least recently shown terminal gave up its context instead.
 		expect(addons[1].disposed).toBe(true);
 	});
 
@@ -109,7 +107,6 @@ describe("terminal WebGL pool", () => {
 	});
 
 	it("stops trying once WebGL is unavailable", async () => {
-		// The failure is remembered for the module's lifetime, so use a fresh copy.
 		vi.resetModules();
 		const pool = await import("./terminal-webgl-pool");
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Exercise the launcher boundary with real owner-scoped controllers and SQLite.
 type reviewerCancelBridge struct {
 	reviewcore.ReviewerChatController
 	svc *chatsvc.Service

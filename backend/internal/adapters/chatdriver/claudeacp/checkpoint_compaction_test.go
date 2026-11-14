@@ -43,14 +43,11 @@ func compactionAnswer(id, parent, text, stop string) map[string]any {
 		"message": map[string]any{"content": []map[string]string{{"type": "text", "text": text}}, "stop_reason": stop}}
 }
 
-// compactionBoundary is the record Claude Code writes when it compacts: no
-// parent, and metadata naming the messages it kept before the boundary.
 func compactionBoundary(id, logicalParent string, metadata map[string]any) map[string]any {
 	return map[string]any{"type": "system", "subtype": "compact_boundary", "uuid": id, "parentUuid": nil,
 		"logicalParentUuid": logicalParent, "compactMetadata": metadata}
 }
 
-// compactionSummary keeps the prompt ID of the turn being compacted.
 func compactionSummary(id, boundary, promptID string) map[string]any {
 	return map[string]any{"type": "user", "uuid": id, "parentUuid": boundary, "promptId": promptID,
 		"isCompactSummary": true, "isVisibleInTranscriptOnly": true, "message": map[string]any{"content": compactionSummaryText}}
@@ -73,9 +70,6 @@ func stopObservation(n int, text string) domain.NativeCheckpointObservation {
 	return domain.NativeCheckpointObservation{PromptID: fmt.Sprintf("prompt-%d", n), Text: text}
 }
 
-// A then compaction then B, the shape Claude Code writes after an automatic
-// compaction between turns. A's final answer is kept and re-parented after the
-// summary at load time.
 func compactedBetweenTurns(t *testing.T, metadata map[string]any, tailStop string) string {
 	records := compactionPrompt(0, "", "A")
 	records = append(records,
@@ -142,8 +136,6 @@ func TestNativeCheckpointCompactionKeepsSafetyChecks(t *testing.T) {
 			reason: "no native user boundary",
 		},
 		{
-			// Replay starts at the summary, which Chat skips, so there is no user
-			// turn to match until the next prompt.
 			name: "no prompt since the compaction",
 			transcript: compactionLines(t, append(compactionPrompt(0, "", "A"),
 				compactionAnswer("assistant-0", "submission-attachment-0", "answer A", "end_turn"),
@@ -162,9 +154,6 @@ func TestNativeCheckpointCompactionKeepsSafetyChecks(t *testing.T) {
 	}
 }
 
-// compactionContext is what Claude Code 2.1.306 to 2.1.318 writes between the
-// boundary and the summary when it compacts mid-turn: the instructions,
-// session_context and date attachments, each under the one before.
 func compactionContext(boundary string) []map[string]any {
 	var records []map[string]any
 	parent := boundary
@@ -177,9 +166,6 @@ func compactionContext(boundary string) []map[string]any {
 	return records
 }
 
-// Compacting in the middle of a turn keeps the turn going after the summary,
-// which carries its prompt ID. Its Stop must still see the turn complete and
-// match the answer Claude writes after the summary.
 func TestNativeCheckpointTurnRunsThroughCompaction(t *testing.T) {
 	toolResult := map[string]any{"type": "user", "uuid": "tool-result-0", "parentUuid": "tool-call-0",
 		"message": map[string]any{"content": []map[string]string{{"type": "tool_result", "tool_use_id": "tool"}}}}
@@ -237,9 +223,9 @@ func TestFollowsCompactionCrossesOnlyAttachments(t *testing.T) {
 	}
 	records["answer"] = checkpointRecord{UUID: "answer", ParentUUID: "context-date", Type: "assistant"}
 	for parent, want := range map[string]bool{
-		"boundary":     true,  // between turns
-		"context-date": true,  // mid-turn
-		"answer":       false, // an ordinary reply, even one after a compaction
+		"boundary":     true,
+		"context-date": true,
+		"answer":       false,
 		"missing":      false,
 		"":             false,
 	} {
@@ -249,8 +235,6 @@ func TestFollowsCompactionCrossesOnlyAttachments(t *testing.T) {
 	}
 }
 
-// Only the latest compaction bounds replay. Evidence from every earlier
-// segment was flushed before it.
 func TestNativeCheckpointRepeatedCompactions(t *testing.T) {
 	records := compactionPrompt(0, "", "A")
 	records = append(records,
@@ -319,8 +303,6 @@ func TestRelinkCompactedTranscriptMatchesSDK(t *testing.T) {
 	}
 }
 
-// A manual /compact writes the command and its output after the summary,
-// under the summary's prompt ID. Replay skips both.
 func TestNativeCheckpointManualCompactCommand(t *testing.T) {
 	records := compactionPrompt(0, "", "A")
 	records = append(records,
@@ -360,9 +342,6 @@ func TestClaudeLocalCommandMetadata(t *testing.T) {
 	}
 }
 
-// Long sessions are the ones that compact. History before the latest
-// compaction is dropped as it is read, so the size bound applies to each
-// stretch between compactions, not to the whole file.
 func TestNativeCheckpointSizeBoundCountsOnlySinceCompaction(t *testing.T) {
 	previous := checkpointRetainedBytes
 	checkpointRetainedBytes = 12 << 10

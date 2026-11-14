@@ -113,7 +113,6 @@ func TestCheckCredentialsOnce_ProbeAvailable(t *testing.T) {
 	if !checked || disabled {
 		t.Fatalf("after success: checked=%v disabled=%v", checked, disabled)
 	}
-	// Second call must NOT re-invoke probe.
 	if ok, err := CheckCredentialsOnce(context.Background(), probe, &checked, &disabled, quietLogger(), "test"); err != nil || !ok {
 		t.Fatalf("second call: ok=%v err=%v", ok, err)
 	}
@@ -133,8 +132,6 @@ func TestCheckCredentialsOnce_ProbeUnavailableRetries(t *testing.T) {
 	if !checked || !disabled {
 		t.Fatalf("after unavailable: checked=%v disabled=%v", checked, disabled)
 	}
-	// Subsequent calls must keep reporting unavailable, while checking again
-	// so credentials added after startup can resume observation.
 	for i := 0; i < 3; i++ {
 		ok, err := CheckCredentialsOnce(context.Background(), probe, &checked, &disabled, quietLogger(), "test")
 		if err != nil || ok {
@@ -178,7 +175,6 @@ func TestStartPollLoop_FirstPollImmediateThenTicks(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := StartPollLoop(ctx, 10*time.Millisecond, poll, quietLogger(), "test")
-	// Wait for at least 2 polls (initial + one tick).
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()

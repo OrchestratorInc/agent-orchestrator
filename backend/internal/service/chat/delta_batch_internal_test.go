@@ -20,8 +20,6 @@ func messageDelta(item, text string) ports.ChatEvent {
 	return streamDelta(ports.ChatEventMessageDelta, item, text)
 }
 
-// writes renders each unit the pump handed over as one line, so a failure reads
-// as the sequence of SQLite writes it would have produced.
 func writes(units [][]ports.ChatEvent) []string {
 	lines := make([]string, 0, len(units))
 	for _, unit := range units {
@@ -34,8 +32,6 @@ func writes(units [][]ports.ChatEvent) []string {
 	return lines
 }
 
-// pumpQueued runs the pump over events that were all queued before it started,
-// the shape of a backlog that built up while the previous write was running.
 func pumpQueued(t *testing.T, interval time.Duration, events ...ports.ChatEvent) [][]ports.ChatEvent {
 	t.Helper()
 	queued := make(chan ports.ChatEvent, len(events))
@@ -53,9 +49,6 @@ func pumpQueued(t *testing.T, interval time.Duration, events ...ports.ChatEvent)
 	return units
 }
 
-// startPump runs the pump in the test's synctest bubble and exposes each unit as
-// it is written. The returned end closes the stream once; deferring it lets a
-// failed assertion end the bubble cleanly instead of reporting a deadlock.
 func startPump(
 	t *testing.T,
 	events chan ports.ChatEvent,
@@ -98,9 +91,6 @@ func assertWrites(t *testing.T, got [][]ports.ChatEvent, want ...string) {
 	}
 }
 
-// A run is one stream: the same kind of delta for the same provider item. Any
-// other event, including a delta for another item or another column of the same
-// item, writes the run first so the archive and projection keep arrival order.
 func TestPumpKeepsArrivalOrderAcrossItemsAndEvents(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		units := pumpQueued(t, 50*time.Millisecond,
@@ -128,8 +118,6 @@ func TestPumpKeepsArrivalOrderAcrossItemsAndEvents(t *testing.T) {
 	})
 }
 
-// Deltas that differ in anything but their text stay apart, so a merged write
-// never drops metadata one of them carried.
 func TestPumpOnlyJoinsIdenticalStreams(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		base := messageDelta("msg", "a")
@@ -150,8 +138,6 @@ func TestPumpOnlyJoinsIdenticalStreams(t *testing.T) {
 			`message.delta msg "b"`,
 			`message.delta msg "c"`,
 			`message.delta msg "d"`,
-			// A native event identity is not stream metadata: identified deltas
-			// batch, and the unit keeps every event so each identity is archived.
 			`message.delta msg "ef"`,
 		)
 		if last := units[len(units)-1]; len(last) != 2 || last[0].ProviderEventID != "native-1" || last[1].ProviderEventID != "native-2" {
@@ -160,8 +146,6 @@ func TestPumpOnlyJoinsIdenticalStreams(t *testing.T) {
 	})
 }
 
-// A backlog is bounded in bytes and in events, so one archive row or
-// transaction cannot grow without limit while the writer is slow.
 func TestPumpCapsRunSize(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -210,7 +194,6 @@ func TestPumpCapsRunSize(t *testing.T) {
 	}
 }
 
-// Zero turns batching off: every delta is its own write, as before batching.
 func TestPumpWithoutIntervalWritesEveryDelta(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		units := pumpQueued(t, 0, messageDelta("msg", "a"), messageDelta("msg", "b"), messageDelta("msg", "c"))
@@ -222,9 +205,6 @@ func TestPumpWithoutIntervalWritesEveryDelta(t *testing.T) {
 	})
 }
 
-// An idle writer adds no latency: the first delta is written at once. While the
-// stream keeps going, later deltas wait for the window so a reply costs a write
-// per interval rather than one per token.
 func TestPumpWritesAtMostOncePerInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan ports.ChatEvent)
@@ -256,9 +236,6 @@ func TestPumpWritesAtMostOncePerInterval(t *testing.T) {
 	})
 }
 
-// A new item's first delta creates its row and takes its timeline position, so
-// it is written at once even right after another stream's write; only the same
-// stream continuing waits for the window.
 func TestPumpWritesTheFirstDeltaOfANewStreamAtOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan ports.ChatEvent)
@@ -289,8 +266,6 @@ func TestPumpWritesTheFirstDeltaOfANewStreamAtOnce(t *testing.T) {
 	})
 }
 
-// Closing the stream is controller shutdown: whatever is still batched is
-// written before the pump returns, without waiting for its window.
 func TestPumpFlushesPendingRunWhenTheStreamEnds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan ports.ChatEvent)
@@ -309,8 +284,6 @@ func TestPumpFlushesPendingRunWhenTheStreamEnds(t *testing.T) {
 	})
 }
 
-// A non-delta event is never held back: it and the run before it are written
-// immediately, run first.
 func TestPumpWritesPendingRunBeforeALaterEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan ports.ChatEvent)
@@ -330,8 +303,6 @@ func TestPumpWritesPendingRunBeforeALaterEvent(t *testing.T) {
 	})
 }
 
-// Deltas that arrive while a write is still running queue up and join the next
-// run, which is written as soon as the writer is free again.
 func TestPumpGrowsRunsWhileTheWriterIsBusy(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan ports.ChatEvent, 16)
@@ -359,8 +330,6 @@ func TestPumpGrowsRunsWhileTheWriterIsBusy(t *testing.T) {
 	})
 }
 
-// A flush request writes the pending run before it is answered, so a write the
-// requester makes next cannot overtake text the provider already sent.
 func TestPumpFlushRequestWritesPendingRunFirst(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		events := make(chan ports.ChatEvent)
@@ -396,8 +365,6 @@ func TestPumpFlushRequestWritesPendingRunFirst(t *testing.T) {
 	})
 }
 
-// A failed write that must stop the controller stops the pump: nothing after it
-// is projected, batched or not.
 func TestPumpStopsWhenProjectionStops(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		queued := make(chan ports.ChatEvent, 4)

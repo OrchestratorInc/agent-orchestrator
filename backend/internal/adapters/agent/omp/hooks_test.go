@@ -24,9 +24,6 @@ func TestManagedExtensionEmitsOMPLifecycleHooksAndIgnoresHookFailures(t *testing
 	}
 
 	fixtureDir := t.TempDir()
-	// This test validates lifecycle ordering and payloads, not the production
-	// delivery deadline. Give the fixture headroom under parallel CI load; the
-	// dedicated timeout test below exercises the unmodified production value.
 	source := strings.Replace(ompActivityExtensionSource(), "const HOOK_TIMEOUT_MS = 1_250;", "const HOOK_TIMEOUT_MS = 10_000;", 1)
 	modulePath := writeExecutableOMPExtension(t, fixtureDir, source)
 	capturePath := filepath.Join(fixtureDir, "calls.jsonl")
@@ -122,8 +119,6 @@ for (const [name, event] of [
 		t.Fatalf("approval payload = %#v", approvalPayload)
 	}
 
-	// Removing ao from PATH exercises spawnSync's command-not-found result. The
-	// extension must still resolve every handler without rejecting the session.
 	missingDir := t.TempDir()
 	missingCmd := exec.CommandContext(context.Background(), node, harnessPath, modulePath)
 	missingCmd.Env = append(envWithoutOMPPath(os.Environ()), "PATH="+missingDir, "AO_TEST_CAPTURE="+capturePath)

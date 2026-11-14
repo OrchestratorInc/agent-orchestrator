@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 import manifest from "./manifest.json";
 import { HOST_NAME } from "./protocol";
 
-// Must equal backend/internal/browserchrome.ExtensionID: the native host
-// manifest only admits this extension origin.
 const EXTENSION_ID = "eefgahhblbmjpccfcnpkhkadgcccnibg";
 
 function extensionId(key: string): string {
@@ -37,7 +35,6 @@ describe("extension manifest", () => {
 			["alarms", "debugger", "nativeMessaging", "scripting", "storage", "tabGroups", "tabs", "webNavigation", "webRequest"].sort(),
 		);
 		expect(manifest.host_permissions).toEqual(["<all_urls>"]);
-		// Content runs only in tabs an approved session owns, injected on demand.
 		expect(manifest).not.toHaveProperty("content_scripts");
 	});
 });

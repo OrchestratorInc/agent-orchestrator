@@ -19,11 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
-// stubSource attaches a throwaway shell command instead of a real mux pane, so
-// the /mux path exercises the genuine upgrade + wsjson + Serve + creack/pty flow
-// without needing a runtime. The pane reports alive until the first attach
-// happens (the mux refuses to attach to a dead pane), then dead, so the
-// command's exit is treated as the pane being gone (no re-attach).
 type stubSource struct {
 	argv     []string
 	attached atomic.Bool
@@ -103,7 +98,6 @@ func TestMuxUpgradeStreamsTerminal(t *testing.T) {
 		t.Fatalf("streamed data = %q, want it to contain MUXOK", got)
 	}
 
-	// The shell exits; the pane is reported gone (IsAlive=false) so we get exited.
 	readFrame(t, c, "terminal", "exited", 5*time.Second)
 }
 

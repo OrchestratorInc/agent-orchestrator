@@ -1,7 +1,3 @@
-// AO Browser Bridge service worker. Connects to AO through Chrome native
-// messaging (`ao browser-host`), runs commands for consenting AO sessions in
-// their own tab groups, and serves the popup and options pages.
-
 import { chromeApi, type ChromeApi, type Port } from "./chrome-api";
 import { ConsentManager } from "./consent";
 import { Executor, POLICY_KEY } from "./executor";
@@ -13,7 +9,6 @@ import { TrustedInput } from "./trusted-input";
 
 const MAX_BACKOFF_MS = 60_000;
 const RECONNECT_ALARM = "ao-reconnect";
-// Chrome's minimum alarm period.
 const RECONNECT_ALARM_MINUTES = 0.5;
 
 export type BridgeStatus = {
@@ -52,15 +47,10 @@ export class Bridge {
 		this.executor.start();
 		this.chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 			if (!isRecord(message) || typeof message.type !== "string" || !message.type.startsWith("ao-ui-")) return;
-			// Popup and options pages only; content scripts and pages cannot ask.
 			if (sender.id !== this.chrome.runtime.id || sender.tab) return;
 			this.handleUi(message).then(sendResponse, (error) => sendResponse({ error: String(error) }));
 			return true as unknown as void;
 		});
-		// Chrome suspends an idle MV3 service worker, which also drops the
-		// reconnect timer, and only an extension event starts it again. These
-		// events reconnect after AO restarts or Chrome starts. An open native
-		// port keeps the worker alive, so connect() is a no-op while connected.
 		this.chrome.alarms.onAlarm.addListener((alarm) => {
 			if (alarm.name === RECONNECT_ALARM) this.connect();
 		});
@@ -166,7 +156,6 @@ export class Bridge {
 		this.port?.postMessage(frame);
 	}
 
-	/** The kill switch: stop every agent and forget every approval. */
 	async stopAll(): Promise<void> {
 		for (const { controller } of this.inFlight.values()) controller.abort();
 		await this.consent.revoke();

@@ -71,15 +71,12 @@ it("keeps a submenu a selection closed shut when the hover-open timer from befor
 			</OptionMenu>,
 		);
 		const model = screen.getByRole("menuitem", { name: "Model" });
-		// The pointer arrives on the row (Radix starts its 100ms hover-open timer)
-		// and clicks it at once; a choice is made before the timer fires.
 		fireEvent.pointerMove(model, { pointerType: "mouse" });
 		fireEvent.click(model);
 		fireEvent.click(screen.getByRole("menuitem", { name: "Opus" }));
 		act(() => vi.advanceTimersByTime(500));
 		expect(screen.queryByRole("menuitem", { name: "Opus" })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("menu")).toHaveLength(1);
-		// Asked for again, it opens.
 		fireEvent.click(model);
 		act(() => vi.advanceTimersByTime(50));
 		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();

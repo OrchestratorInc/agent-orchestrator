@@ -35,8 +35,6 @@ type browserChromeStatusDTO struct {
 	Channels         []browserChromeChannelDTO `json:"channels"`
 }
 
-// newBrowserTargetCommand switches the current session between AO's Browser
-// panel and the user's own Chrome.
 func newBrowserTargetCommand(ctx *commandContext, jsonOutput *bool) *cobra.Command {
 	return &cobra.Command{
 		Use:   "target [panel|chrome]",
@@ -78,7 +76,6 @@ func newBrowserTargetCommand(ctx *commandContext, jsonOutput *bool) *cobra.Comma
 	}
 }
 
-// newBrowserChromeCommand manages Chrome mode for this machine.
 func newBrowserChromeCommand(ctx *commandContext, jsonOutput *bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "chrome",
@@ -162,16 +159,12 @@ func writeBrowserChromeStatus(out io.Writer, status browserChromeStatusDTO, meth
 	return err
 }
 
-// newBrowserHostCommand is the Chrome native messaging host. Chrome starts it
-// through the wrapper written by `ao browser chrome setup` and talks to it on
-// stdin/stdout; it is not meant to be run by hand.
 func newBrowserHostCommand() *cobra.Command {
 	var endpoint string
 	cmd := &cobra.Command{
-		Use:    "browser-host",
-		Short:  "Chrome native messaging host for the Orchestrator Browser Bridge (internal)",
-		Hidden: true,
-		// Chrome appends the caller origin (and --parent-window on Windows).
+		Use:                "browser-host",
+		Short:              "Chrome native messaging host for the Orchestrator Browser Bridge (internal)",
+		Hidden:             true,
 		Args:               cobra.ArbitraryArgs,
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -185,7 +178,6 @@ func newBrowserHostCommand() *cobra.Command {
 				Dial:         browserchrome.DialRuntime,
 			})
 			if err != nil && !errors.Is(err, context.Canceled) {
-				// Chrome shows the host's stderr in its own log only.
 				fmt.Fprintln(os.Stderr, "ao browser-host:", err)
 			}
 			return nil

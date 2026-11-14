@@ -114,8 +114,6 @@ func finishTriage(ctx context.Context, in io.Reader, out io.Writer, dir string, 
 	if err != nil || !yes {
 		return err
 	}
-	// Both payloads are written before the first GitHub write, so a local
-	// failure can never follow a post that already went through.
 	bodyPath := filepath.Join(dir, "post-body.md")
 	if err := os.WriteFile(bodyPath, []byte(body), 0o600); err != nil {
 		return err

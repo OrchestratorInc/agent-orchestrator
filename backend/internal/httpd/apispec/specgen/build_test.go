@@ -65,9 +65,6 @@ func TestBuild_CodexSwitchContractIsRedactedAndOnlyMountedRoutesAreDocumented(t 
 	}
 }
 
-// TestBuild_MatchesEmbedded is the drift guard: the committed (embedded)
-// openapi.yaml must equal fresh Build() output. If this fails, run
-// `go generate ./...` and commit the result.
 func TestBuild_MatchesEmbedded(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {
@@ -381,8 +378,6 @@ func buildSchemas(t *testing.T) schemaDocument {
 	return doc
 }
 
-// TestBuild_Deterministic guards against nondeterministic output (which would
-// make the drift check flaky in CI).
 func TestBuild_Deterministic(t *testing.T) {
 	a, err := specgen.Build()
 	if err != nil {

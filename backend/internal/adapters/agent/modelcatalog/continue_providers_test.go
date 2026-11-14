@@ -22,9 +22,6 @@ func TestContinueConfiguredProvidersResolvesModelKeys(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Literal keys, secrets from the environment and from Continue's home and
-	// workspace .env files count; an unresolved secret, a keyless local model
-	// and an empty key do not.
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`
 name: test
 models:
@@ -69,7 +66,6 @@ models:
 	if want := []string{"openai", "anthropic", "mistral", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("configured providers = %v, want %v", got, want)
 	}
-	// Without the workspace, its .env is not consulted.
 	got = continueConfiguredProviders("", nil)
 	if want := []string{"openai", "anthropic"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("configured providers without workspace = %v, want %v", got, want)

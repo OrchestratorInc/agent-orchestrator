@@ -31,8 +31,6 @@ type persistentDecision struct {
 	ID string `json:"id"`
 }
 
-// ClientApprovalRequest describes a provider extension's blocking approval in
-// AO's durable, provider-neutral vocabulary.
 type ClientApprovalRequest struct {
 	Summary      string
 	ActivityKind domain.ActivityKind
@@ -40,17 +38,12 @@ type ClientApprovalRequest struct {
 	Decisions    []ports.ChatDecisionOption
 }
 
-// ClientExtensionBridge exposes only the durable user-interaction operations a
-// provider extension may need while its JSON-RPC request is blocked.
 type ClientExtensionBridge interface {
 	RequestInput(context.Context, ports.ChatInputRequest) (ports.ChatInputResponse, error)
 	RequestApproval(context.Context, ClientApprovalRequest) (string, error)
 	UpdatePlan(*domain.ConversationPlan)
 }
 
-// ClientExtensionHandler handles provider-defined agent-to-client JSON-RPC
-// methods, including providers whose legacy names do not use ACP's `_` prefix.
-// handled=false delegates to the standard ACP method dispatcher.
 type ClientExtensionHandler func(
 	context.Context,
 	ClientExtensionBridge,
@@ -81,8 +74,6 @@ func (b stableExtensionBridge) UpdatePlan(plan *domain.ConversationPlan) {
 	b.conversation.UpdatePlan(plan)
 }
 
-// HandleExtensionMethod is the SDK's narrow extension hook. Legacy wire method
-// aliases are restored before dispatch so provider handlers use documented names.
 func (c *conversation) HandleExtensionMethod(
 	ctx context.Context,
 	method string,
@@ -134,7 +125,6 @@ func (c *conversation) HandleExtensionMethod(
 			return nil, errors.New("persistent ACP prompt result has no durable active turn")
 		}
 		if adopted {
-			// A steer prompt this attachment sent may still be answering.
 			c.finishTurnPrompt(turnID, adoptedPromptSeq, response, promptErr)
 			return nil, nil
 		}
@@ -239,8 +229,6 @@ func persistentInteractionEvent(command persistentInteractionCommand) ports.Chat
 	return event
 }
 
-// decodeHostPromptAnswer reads a session/prompt answer the persistent host
-// passed on as a private notification.
 func decodeHostPromptAnswer(params json.RawMessage) (promptAnswer, string, error) {
 	var payload struct {
 		Result  json.RawMessage      `json:"result"`

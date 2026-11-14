@@ -12,9 +12,6 @@ import (
 	"testing"
 )
 
-// A client that leaves mid-body breaks ReverseProxy's copy, which then aborts
-// the response with http.ErrAbortHandler. Nothing in the daemon failed: the
-// abort reaches the server, with no panic log, event or report.
 func TestRecoverTelemetryLetsAnAbortedResponseThrough(t *testing.T) {
 	release := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

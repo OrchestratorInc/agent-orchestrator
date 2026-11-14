@@ -39,7 +39,6 @@ describe("parseRemoteTabReport", () => {
 		}
 		expect(icon("data:image/png;base64,AAA=")).toBe("data:image/png;base64,AAA=");
 		expect(icon("data:image/png;base64,AA==")).toBe("data:image/png;base64,AA==");
-		// The longest that fits the 90,000-character cap (22 + 89,976).
 		expect(icon(`data:image/png;base64,${"A".repeat(89_976)}`)).toHaveLength(89_998);
 		for (const dropped of [
 			"https://a.example/icon.png",

@@ -31,9 +31,6 @@ func storedLoginContext(expiresAt time.Time, renewable bool, baseURL string) cla
 	}
 }
 
-// An access token past its recorded expiry is renewed by Claude Code on its
-// next run, so it must not read as signed out — and nothing is sent, because
-// the provider can only answer with a 401 that looks like a sign-out.
 func TestExpiredRenewableLoginIsConfiguredNotSignedOut(t *testing.T) {
 	InvalidateAuthCache()
 	t.Cleanup(InvalidateAuthCache)
@@ -63,9 +60,6 @@ func TestExpiredRenewableLoginIsConfiguredNotSignedOut(t *testing.T) {
 	}
 }
 
-// Without a refresh token Claude Code cannot renew the login, so the provider
-// still decides — and a rejection is classified for the login shortcut while
-// keeping the provider's own words.
 func TestExpiredLoginWithoutRefreshTokenStillProbes(t *testing.T) {
 	InvalidateAuthCache()
 	t.Cleanup(InvalidateAuthCache)
@@ -90,8 +84,6 @@ func TestExpiredLoginWithoutRefreshTokenStillProbes(t *testing.T) {
 	}
 }
 
-// The catalog names the agent and the step when it wraps a discovery failure,
-// so the reason must not repeat them: the picker shows the warning verbatim.
 func TestModelDiscoveryWarningNamesDiscoveryOnce(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	pinClaudeNow(t, now)
@@ -160,11 +152,6 @@ func TestModelDiscoveryWarningNamesDiscoveryOnce(t *testing.T) {
 	}
 }
 
-// Once the refresh token has lapsed too, Claude Code cannot renew the login, so
-// the expired access token goes to the provider. The 401 must read as a
-// definite rejection: auth diagnostics report it rejected, and model discovery
-// fails with the credential-rejected error that the catalog service turns into
-// auth_required (the composer's Log in), not into a generic stale catalog.
 func TestExpiredLoginWithLapsedRefreshTokenIsRejectedByProvider(t *testing.T) {
 	InvalidateAuthCache()
 	t.Cleanup(InvalidateAuthCache)

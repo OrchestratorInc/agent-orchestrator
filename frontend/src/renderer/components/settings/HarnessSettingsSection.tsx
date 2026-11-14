@@ -25,9 +25,7 @@ export function HarnessSettingsSection({
 	focusAgentId?: string;
 	hostId?: string;
 	initialView?: HarnessView;
-	/** Start focusAgentId's local login flow once its row is ready (a shortcut from a login error elsewhere). */
 	startLogin?: boolean;
-	/** Open focusAgentId's local install or update diagnostics (a shortcut from a failed update notice). */
 	showDiagnostics?: HarnessDiagnosticsRequest;
 	titleHidden?: boolean;
 }) {
@@ -41,7 +39,6 @@ export function HarnessSettingsSection({
 	const [selectedHostId, setSelectedHostId] = useState(hostId ?? LOCAL_HOST);
 	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
 	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
-	// An open harness page replaces the list, so its search and filters step aside.
 	const [detailOpen, setDetailOpen] = useState(false);
 	const showToolbar = cloudView || !detailOpen;
 	return <SettingsSection

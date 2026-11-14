@@ -1,11 +1,5 @@
 import en from "./en.json";
 
-// Only English is bundled into the startup graph; it is the fallback and the
-// source of the key types. Other locales load on demand (instance.ts
-// loadLocaleCatalog). Tests and tools that need every catalog import
-// all-messages.ts, which must stay out of runtime code.
-
-/** English is the source-of-truth catalog; keys are typed from it. */
 export const enMessages = en;
 
 export type MessageKey = {

@@ -25,7 +25,6 @@ describe("SessionFileWorkspace", () => {
 		expect(screen.getByTestId("session-file-workspace").querySelector("header")).not.toBeInTheDocument();
 		expect(screen.getByTestId("file-content")).toHaveAttribute("data-split", "true");
 		expect(screen.getByTestId("file-content")).toHaveAttribute("data-mode", "file");
-		// Centre tabs remember the display mode picked in the toolbar.
 		expect(screen.getByTestId("file-content")).toHaveAttribute("data-remember-mode", "true");
 	});
 

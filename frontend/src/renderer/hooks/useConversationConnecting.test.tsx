@@ -96,8 +96,6 @@ async function publishReadySession(kind: SessionEventKind = "ancillary", convers
 			projectId: "connecting-repro-project",
 			type: "session_updated",
 			sessionId: wire.sessionId,
-			// Neither this ancillary update nor the async spawn readiness
-			// update carries conversationId; both must refresh the open chat.
 			payload: {
 				id: wire.sessionId,
 				...(kind === "provisioned" ? {

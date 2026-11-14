@@ -59,7 +59,6 @@ describe("readProcessStartMs", () => {
 			await once(child, "spawn");
 			const start = await readProcessStartMs(child.pid!);
 			expect(start).not.toBeNull();
-			// ps reports whole seconds; allow generous scheduling slack on a busy runner.
 			expect(Math.abs(start! - spawnedAt)).toBeLessThan(5_000);
 		} finally {
 			child.kill();

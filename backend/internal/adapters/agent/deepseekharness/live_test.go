@@ -13,15 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The live tests below pin the two headless contracts GetLaunchCommand depends
-// on against the real binary, rather than against the published docs alone.
-// They are opt-in because they need a real `dsh` install:
-//
-//	AO_LIVE_DEEPSEEK=1 go test ./internal/adapters/agent/deepseekharness/ -run Live -v
-//
-// None of them needs a working model route: each assertion lands before DeepSeek
-// Harness reaches its provider, so an install without credentials still proves
-// the contract.
 func liveBinary(t *testing.T) string {
 	t.Helper()
 	if os.Getenv("AO_LIVE_DEEPSEEK") != "1" {
@@ -34,11 +25,6 @@ func liveBinary(t *testing.T) string {
 	return binary
 }
 
-// runLive runs one dsh invocation to completion and returns its combined output.
-// Output is captured to a real file rather than a pipe: a pipe would be
-// inherited by the node child the dsh shim spawns on Windows, so reading one
-// can outlive the process the test is waiting on. It reports timedOut instead of
-// hanging when the run does not finish.
 func runLive(t *testing.T, timeout time.Duration, args ...string) (out string, timedOut bool, err error) {
 	t.Helper()
 	sink, err := os.CreateTemp(t.TempDir(), "dsh-*.log")
@@ -70,10 +56,6 @@ func runLive(t *testing.T, timeout time.Duration, args ...string) (out string, t
 	return string(body), timedOut, err
 }
 
-// TestLiveHeadlessRejectsAnUnknownSessionID is why a fresh launch must not pass
-// AO's session id: Harness treats --session-id as adopting a session it has
-// already persisted, so AO's own id — which it supplies on every spawn — would
-// fail the launch outright.
 func TestLiveHeadlessRejectsAnUnknownSessionID(t *testing.T) {
 	binary := liveBinary(t)
 	out, timedOut, err := runLive(t, time.Minute, binary, "--profile", headlessProfile,
@@ -89,17 +71,9 @@ func TestLiveHeadlessRejectsAnUnknownSessionID(t *testing.T) {
 	}
 }
 
-// TestLiveHeadlessBlocksWithoutATask is why a promptless launch is refused in
-// process: with no task argument Harness falls back to reading stdin, and an AO
-// terminal session never writes to it, so the session would hang until the
-// supervisor killed it.
 func TestLiveHeadlessBlocksWithoutATask(t *testing.T) {
 	binary := liveBinary(t)
 
-	// A pipe whose write end stays open models a terminal that never sends a
-	// line, which is what a promptless AO session gives the process. Output goes
-	// to the null device rather than a pipe: reading one would outlive the
-	// process on Windows, where the dsh shim's node child inherits the handle.
 	stdin, writer := io.Pipe()
 	cmd := exec.Command(binary, "--profile", headlessProfile) //nolint:gosec // test-only
 	cmd.Stdin = stdin
@@ -116,8 +90,6 @@ func TestLiveHeadlessBlocksWithoutATask(t *testing.T) {
 	case <-time.After(15 * time.Second):
 	}
 
-	// Close the write end so the run sees EOF and exits on its own: killing the
-	// shim would leave its node child behind.
 	_ = writer.Close()
 	select {
 	case <-waited:
@@ -127,10 +99,6 @@ func TestLiveHeadlessBlocksWithoutATask(t *testing.T) {
 	}
 }
 
-// TestLiveLaunchCommandIsAcceptedByTheBinary drives the argv the adapter builds
-// for the config AO actually supplies — SessionID always populated — and asserts
-// it clears both traps above. It stops at the credential check on an install
-// with no model route, which is already past the contract under test.
 func TestLiveLaunchCommandIsAcceptedByTheBinary(t *testing.T) {
 	binary := liveBinary(t)
 	p := &Plugin{resolvedBinary: binary}
@@ -153,14 +121,6 @@ func TestLiveLaunchCommandIsAcceptedByTheBinary(t *testing.T) {
 	}
 }
 
-// TestLiveCredentialStoreLayoutIsAccepted pins the credential-store layout
-// AuthStatus reads. It writes the document AO treats as evidence into a private
-// DSH_HOME and asserts the real Harness loads it: a store AO calls authorized
-// but Harness refuses is a false ready badge.
-//
-// The key is not a real one, so the run still fails — but it fails at the
-// provider ("Authentication Fails"), which only happens once the document has
-// parsed and the key has been read out of it.
 func TestLiveCredentialStoreLayoutIsAccepted(t *testing.T) {
 	binary := liveBinary(t)
 	home := t.TempDir()
@@ -172,7 +132,6 @@ func TestLiveCredentialStoreLayoutIsAccepted(t *testing.T) {
 	t.Setenv(credentialsPathEnv, store)
 	t.Setenv(deepseekCredentialKey, "")
 
-	// AO reads the document as authorization evidence.
 	p := &Plugin{resolvedBinary: binary}
 	status, err := p.AuthStatus(context.Background())
 	if err != nil {
@@ -182,7 +141,6 @@ func TestLiveCredentialStoreLayoutIsAccepted(t *testing.T) {
 		t.Fatalf("status = %q, want authorized for the version-1 refs layout", status)
 	}
 
-	// Harness loads the same document rather than rejecting it.
 	out, timedOut, _ := runLive(t, time.Minute, binary, "--profile", headlessProfile, "print ok")
 	if timedOut {
 		t.Fatalf("run did not finish; output: %s", out)

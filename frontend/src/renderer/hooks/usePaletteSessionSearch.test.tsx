@@ -5,9 +5,6 @@ import type { ReactNode } from "react";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
-// The local daemon's client is mocked, not host resolution: a search on this
-// machine must go through clientForSessionHost's local path (clientForHost
-// throws for the local host), and only an unmocked host-clients proves it.
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
 	apiClient: { GET: getMock },
@@ -53,8 +50,6 @@ describe("usePaletteSessionSearch", () => {
 		expect(result.current.error?.message).toBe("search failed");
 	});
 
-	// Search is optional. A daemon whose index could not be opened must not put a
-	// warning in the palette every time it opens; a typed search still says why.
 	it("opens with no recents and no error when search is off", async () => {
 		getMock.mockResolvedValue({ error: { code: "SESSION_SEARCH_UNAVAILABLE", message: "off" } });
 		const { result } = renderHook(() => usePaletteSessionSearch(""), { wrapper });
@@ -88,8 +83,6 @@ describe("useSessionSearchIndexStatus", () => {
 		expect(result.current.data).toEqual({ state: "backfilling", pendingSources: 3 });
 	});
 
-	// A missing status must not become a visible error in the palette: the
-	// search itself is the thing the person asked for.
 	it("swallows an unavailable status", async () => {
 		getMock.mockResolvedValue({ error: { message: "unavailable" } });
 		const { result } = renderHook(() => useSessionSearchIndexStatus(), { wrapper });

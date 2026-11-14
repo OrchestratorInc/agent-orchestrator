@@ -22,25 +22,18 @@ import { listNames } from "../share/accessLabels";
 import { PeopleField, type Recipient } from "./PeopleField";
 import { CloseButton } from "../ui/close-button";
 
-/** A readable message for a failed team request. */
 export function teamErrorMessage(error: unknown, fallback: string): string {
 	if (error instanceof CloudCpError && error.message) return error.message;
 	if (error instanceof Error && error.message) return error.message;
 	return fallback;
 }
 
-/**
- * Two fields: a name and the people in it. Everything else (owners,
- * renaming, removing) lives on the team page, so making a team is quick. The
- * person creating it becomes its owner.
- */
 export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeople = [], initialName = "" }: {
 	orgId: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onCreated: (team: CloudCpTeamDetail) => void;
 	initialPeople?: Recipient[];
-	/** What was typed in the field "New team…" was picked from. */
 	initialName?: string;
 }) {
 	const { t, i18n } = useTranslation();
@@ -55,8 +48,6 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 				members: people.filter((person): person is Extract<Recipient, { kind: "person" }> => person.kind === "person").map((person) => ({ email: person.email })),
 			}),
 		onSuccess: (team) => {
-			// Its page and the lists have it at once: no skeleton on the way in,
-			// and it's there on the way back.
 			queryClient.setQueryData(teamQueryKey(baseUrl, orgId, team.team.id, false), team);
 			for (const key of [teamsQueryKey(baseUrl, orgId), myTeamsQueryKey(baseUrl)]) {
 				queryClient.setQueryData<CloudCpTeam[]>(key, (list) => (list && !list.some((listed) => listed.id === team.team.id) ? [...list, team.team] : list));

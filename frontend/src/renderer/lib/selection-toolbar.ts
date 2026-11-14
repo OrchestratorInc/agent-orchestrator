@@ -17,7 +17,6 @@ export function selectionRangesEqual(
 	);
 }
 
-/** Clip to the window and each enclosing scroll/clip pane, never the whole page. */
 export function selectionViewport(element?: Element): Rect {
 	const visual = window.visualViewport;
 	let bounds: Rect = {
@@ -44,7 +43,6 @@ export function selectionViewport(element?: Element): Rect {
 	return bounds;
 }
 
-/** First-line anchor, with the full extent used only to decide visibility. */
 export function selectionToolbarPosition(
 	rect: Rect,
 	bounds: Rect,

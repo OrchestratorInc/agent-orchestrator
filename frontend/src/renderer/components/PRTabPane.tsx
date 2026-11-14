@@ -25,14 +25,12 @@ import { Pressable } from "./ui/pressable";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
-/** The session's PR with this URL, as the inspector's card shows it. */
 export function useSessionPR(session: WorkspaceSession | undefined, url: string, hostId?: string): SessionPRSummary | undefined {
 	const query = useSessionScmSummary(session?.id, Boolean(session) && !session?.cloud, undefined, false, hostId);
 	if (!session) return undefined;
 	return sessionPRDisplaySummaries(session, query.data?.prs).find((pr) => pr.url === url);
 }
 
-/** A PR's tab in the session's tab strip, beside its chat and files. */
 export function PRTabChip({ active, hostId, onActivate, onClose, session, url }: {
 	active: boolean;
 	hostId?: string;
@@ -45,7 +43,6 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 	const pr = useSessionPR(session, url, hostId);
 	const state = prStateIcon[pr?.state ?? "open"];
 	const name = pr ? `#${pr.number} ${pr.title}` : t("pr.tab.loading");
-	// The close button takes the state icon's slot on hover, like a file tab's.
 	const closeAction = (
 		<Pressable
 			aria-label={t("files.closeTab", { name })}
@@ -78,11 +75,8 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 	);
 }
 
-// Underlined tabs: the word carries the state, and the line sits on the strip's rule.
 const tabClass = "relative h-9 flex-none rounded-none border-0 px-0.5 py-0 text-control text-muted-foreground after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:rounded-full focus-visible:ring-2 focus-visible:ring-ring/60 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:after:bg-foreground dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-transparent";
 
-// A filled mark is a result: its colour fills the disc and the glyph is cut out in
-// the page's colour. A hollow one means nothing has been decided yet.
 const resultMark = (fill: string) => cn("text-background", fill);
 const markClass = "size-icon-sm shrink-0";
 const sideRowClass = "flex min-h-6 min-w-0 max-w-full items-center gap-2 text-control text-foreground";
@@ -102,12 +96,10 @@ const checkMark: Record<"failed" | "running" | "passed" | "skipped", { icon: Luc
 	skipped: { icon: CircleMinus, className: "text-passive" },
 };
 
-/** Checks named in the side column; the rest are a link to the provider's checks page. */
 const PR_TAB_CHECKS_SHOWN = 6;
 
 const failedChecks = (checks: SessionPRSummary["ci"]["checks"] = []) => checks.filter((check) => checkTone[check.status].key === "failed").length;
 
-/** A group of the side column: a quiet label, and its items under it (beside it when narrow). */
 function SideGroup({ children, label, note }: { children: React.ReactNode; label?: string; note?: { label: string; text: string } }) {
 	return (
 		<div className="flex min-w-0 items-start gap-x-3 gap-y-1.5 border-t border-border/60 px-3.5 py-2 first:border-t-0 @3xl:flex-col @3xl:px-0 @3xl:py-3 @3xl:first:pt-0">
@@ -126,15 +118,6 @@ const sideListClass = "m-0 flex min-w-0 list-none flex-wrap gap-x-4 p-0 @3xl:w-f
 const SideEmpty = ({ children }: { children: string }) => <span className="min-h-6 text-control leading-6 text-passive">{children}</span>;
 const SideLoading = () => <Skeleton aria-hidden="true" className="my-1 h-4 w-32 max-w-full" data-testid="pr-tab-side-loading" />;
 
-/**
- * What the PR waits on at a glance: who reviews it, each check by name, and
- * whether it can merge. Marks are one size and column, an avatar sits level
- * with its mark, and only a real result is filled in, so the eye lands on what
- * was decided. Nothing to report is plain text, a fact still being read is a
- * shape, and merge state stays away until there is one. It is the right
- * column of a wide tab, and a stacked block under the title of a narrow one
- * (with the inspector open beside it).
- */
 function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: boolean; hostId?: string; pr: SessionPRSummary; session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const stack = usePRStack(pr, hostId, !session.cloud).data;
@@ -144,7 +127,6 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 	const checks = sortedChecks(pr.ci.checks ?? []);
 	const hiddenChecks = checks.length - PR_TAB_CHECKS_SHOWN;
 	const checksUrl = prChecksUrl(pr);
-	// Checks that were skipped have no say, so they don't count against the total.
 	const decidingChecks = checks.filter((check) => checkTone[check.status].key !== "skipped");
 	const passedChecks = decidingChecks.filter((check) => checkTone[check.status].key === "passed").length;
 	const checksNote = decidingChecks.length > 0 ? {
@@ -220,7 +202,6 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 	);
 }
 
-/** Who opened the PR: the person when AO's GitHub App opened it for them, otherwise its author. */
 function PRAuthor({ pr }: { pr: SessionPRSummary }) {
 	const { t } = useTranslation();
 	const opener = pr.openedBy;
@@ -237,19 +218,9 @@ function PRAuthor({ pr }: { pr: SessionPRSummary }) {
 	);
 }
 
-/**
- * A PR in its own tab, beside the chat: its state (changed from the pill), title
- * and who opened it on top, then its description and its conversation as two
- * tabs, the things the sidebar's card only previews, with its reviewers, checks,
- * stack and merge state in a column beside them. Both tabs stay mounted so a
- * half-written comment survives a look at the description. Merge is here so the
- * tab works with the sidebar closed; labels and the branch's work stay on the card.
- */
 export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	hostId?: string;
-	/** Opens a file's diff at a line, for a review thread's "View in diff". */
 	onViewInDiff?: (target: { line?: number; path: string }) => void;
-	/** The part the card asked to show; a new key asks again. */
 	request?: { section: PRTabSection; key: number };
 	session: WorkspaceSession;
 	url: string;
@@ -270,9 +241,6 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 		if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
 	}, [requestKey, requestSection]);
 	const ready = Boolean(pr);
-	// The tabs stick over the body as it scrolls. In a translucent window the
-	// pane's background is clear, so the body would show through them: it is
-	// clipped at the tabs' lower edge instead, which holds in every theme.
 	useEffect(() => {
 		const scroller = scrollerRef.current;
 		const strip = stripRef.current;
@@ -292,7 +260,6 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 			resize?.disconnect();
 		};
 	}, [ready]);
-	// Past the top, the tabs are stuck under the window's edge: the other tab starts at its own top.
 	const show = (next: string) => {
 		setSection(next as PRTabSection);
 		const scroller = scrollerRef.current;

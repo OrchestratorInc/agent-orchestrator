@@ -14,14 +14,11 @@ import (
 )
 
 const (
-	// LiteLLMURL is LiteLLM's live model price table, the one place the daemon reads prices from.
-	LiteLLMURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-	// MaxSourceBytes bounds the price table.
+	LiteLLMURL     = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 	MaxSourceBytes = 32 << 20
 	fetchTimeout   = time.Minute
 )
 
-// Catalog builds a runtime catalog from one copy of LiteLLM's price table, with every provider it prices: a harness can bill through any of them.
 func Catalog(upstream []byte) (*pricing.Catalog, error) {
 	generated, err := build(upstream)
 	if err != nil {
@@ -45,20 +42,17 @@ func gitBlobID(contents []byte) string {
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
-// Fetcher downloads LiteLLM's price table and builds the catalog from it, so a model LiteLLM prices is priced within a refresh, with no AO release or catalog commit in between.
 type Fetcher struct {
 	client *http.Client
 	url    string
 }
 
-// NewFetcher reads the table at url: LiteLLMURL in production, a test server in tests.
 func NewFetcher(client *http.Client, url string) *Fetcher {
 	clone := *client
 	clone.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Fetcher{client: &clone, url: url}
 }
 
-// Fetch implements pricing.CatalogFetcher.
 func (f *Fetcher) Fetch(ctx context.Context, etag string, cacheAvailable bool) (pricing.FetchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()

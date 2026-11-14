@@ -405,8 +405,6 @@ func TestSemanticMessageAcceptanceIsNotAdvertised(t *testing.T) {
 	}
 }
 
-// withoutDataHome drops the XDG_DATA_HOME isolation entry (covered in
-// datahome_test.go) so these tests can assert the rest of the launch argv.
 func withoutDataHome(cmd []string) []string {
 	out := make([]string, 0, len(cmd))
 	for _, arg := range cmd {

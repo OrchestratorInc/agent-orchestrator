@@ -1,7 +1,6 @@
 import type { AppShortcutId, ShortcutCategory } from "../../shared/shortcuts";
 import type { MessageKey } from "./messages";
 
-/** Exhaustive mappings keep dynamic domain identifiers inside the typed catalog. */
 export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
 	"find-in-chat": "shortcut.find-in-chat",
 	"add-selection-to-chat": "shortcut.add-selection-to-chat",

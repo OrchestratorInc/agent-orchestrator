@@ -1,6 +1,3 @@
-// Package runtimeselect picks the correct runtime backend by platform. Windows
-// uses ConPTY, while macOS and Linux route legacy handles to tmux while creating
-// new sessions on a detached native PTY host. Other platforms default to tmux.
 package runtimeselect
 
 import (
@@ -13,12 +10,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Runtime is the union interface that every selected runtime satisfies.
-// It extends ports.Runtime (Create/Destroy/IsAlive) with the additional methods
-// the daemon wires directly, including ports.Attacher (Attach) so the terminal
-// layer can open a Stream against the selected runtime.
 type Runtime interface {
-	ports.Runtime // Create, Destroy, IsAlive
+	ports.Runtime
 	ports.RuntimeChildInspector
 	ports.RuntimeProcessRootInspector
 	ports.FencedRuntimeProber
@@ -29,18 +22,12 @@ type Runtime interface {
 	SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error
 	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
 	GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error)
-	// ServerPID names AO's own detached session-host process, where the
-	// backend has one (tmux). Zero, false where it does not (ConPTY).
 	ServerPID(ctx context.Context) (int, bool)
 }
 
-// Compile-time assertions: both concrete adapters must implement the union
-// interface.
 var _ Runtime = (*tmux.Runtime)(nil)
 var _ Runtime = (*conpty.Runtime)(nil)
 
-// New returns the platform runtime. runFilePath is this daemon instance's
-// running.json path and scopes detached-host recovery to that AO instance.
 func New(log *slog.Logger, runFilePath string) Runtime {
 	switch runtime.GOOS {
 	case "windows":

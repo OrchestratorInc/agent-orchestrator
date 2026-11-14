@@ -52,47 +52,30 @@ export function AgentModelField({
 	onEffortChange: (value: string) => void;
 	onValidityChange: (valid: boolean) => void;
 	allowCustomFallback?: boolean;
-	/** Cloud accepts custom model IDs and validates effort at the harness boundary. */
 	supportedEfforts?: readonly string[];
-	/** Local catalog defaults may differ from the Cloud worker runtime. */
 	followCatalogDefaults?: boolean;
 	emptyLabel?: string;
-	/** Cloud Cursor can select both a model and a launch mode. */
 	independentMode?: boolean;
-	/** Where the warning sits in the caller's layout (a row gives it its own line). */
 	warningClassName?: string;
-	/**
-	 * A Cloud project's organization: the field then lists Cloud's models for
-	 * the account (the ones its sessions run), and this computer's only where
-	 * Cloud has no list for the agent (an older control plane, opencode).
-	 */
 	cloudOrgId?: string;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const cloud = useCloudModelCatalog({ orgId: cloudOrgId, agent: agentId, enabled: Boolean(cloudOrgId) && agentId !== "" });
 	const cloudListed = cloud.catalog;
-	// This computer's list stands in only where Cloud has none for the agent (an
-	// older control plane, opencode's credential-scoped list), never after a
-	// failed read: its models may not run in Cloud.
 	const localWanted = !cloudOrgId || listsLocalModelsForCloud(cloud.gap, agentId, projectId);
 	const query = useQuery({ ...agentModelsQueryOptions(agentId, projectId, hostId), enabled: localWanted });
 	const catalog: AgentModelCatalog | undefined = cloudListed
 		? cloudCatalogAsAgentCatalog(agentId, cloudListed)
 		: localWanted ? query.data : undefined;
-	// Cloud is the field's only source (a Cloud project, and not an agent Cloud
-	// lists nothing for that this computer's list stands in for).
 	const cloudSourced = Boolean(cloudOrgId) && !localWanted;
 	const catalogFetching = cloudSourced ? cloud.loading : query.isFetching && !catalog;
-	// Without Cloud's list the field says so, offers to read it again, and keeps
-	// manual entry; it never lists this computer's models in its place.
 	const cloudGapWarning = cloudSourced && !cloudListed && cloud.gap
 		? t(cloud.gap === "unavailable" ? "settings.models.cloudModelsUnavailable" : "settings.models.cloudModelsFailed", { agent: agentLabel(agentId) })
 		: undefined;
 	const readCloudAgain = async () => {
 		await cloud.query.refetch();
 	};
-	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
 	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
 	const revalidationQuery = useQuery({
 		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
@@ -108,8 +91,6 @@ export function AgentModelField({
 	}, [agentId, hostId, projectId, queryClient, revalidationQuery.data]);
 	const isMode = !independentMode && catalog?.selectionMode === "mode";
 	const label = t(`settings.models.${role}${isMode ? "Mode" : "Model"}`);
-	// The account's own Cloud list says a saved model will not run: its tasks
-	// start on the agent's default instead (the control plane sees to it).
 	const cloudUnavailable = cloudListed !== undefined && cloudModelVerdict(cloudListed, model) === "unavailable";
 	const warning =
 		cloudGapWarning ??
@@ -139,16 +120,12 @@ export function AgentModelField({
 			value: item.id,
 			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
-		// Cloud (and a catalog with no marked mode) has no listed default: unset
-		// means the agent's own default, which the picker names and can return to.
 		const defaultListed = options.some((option) => option.value === defaultMode);
 		const shownMode = selectedMode || (defaultListed ? defaultMode : "") || "";
 		const selectMode = (value: string) => {
 			onModeChange(value === defaultMode ? "" : value);
 			onModelChange("");
 		};
-		// The agent picks its own model for each mode, so its modes are the row's
-		// effort levels and the model column reads "Auto".
 		if (options.length > 0) {
 			return (
 				<>
@@ -190,14 +167,11 @@ export function AgentModelField({
 		...item,
 		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, item.label),
 		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
-		// Cloud runs the worker's own CLI, so this computer's version limits do not apply.
 		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined, requiresVersion: undefined, unavailableReason: undefined } : {}),
 	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
 	}
-	// Cloud saves only explicit picks, but an unset model still names the one the
-	// agent uses by default rather than a generic placeholder.
 	const catalogDefault = followCatalogDefaults ? undefined : catalog?.models?.find((item) => item.isDefault && isConcreteModelID(item.id));
 	const unsetLabel = emptyLabel ?? (catalogDefault ? agentModelDisplayLabel(agentId, catalogDefault.label) : undefined);
 	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom || allowCustomFallback ? "direct" : "none");
@@ -217,8 +191,6 @@ export function AgentModelField({
 		onModelChange(value);
 		if (!independentMode) onModeChange("");
 	};
-	// No wrapper: the pickers and the effort warning join the caller's row, so the
-	// warning takes its own line there instead of widening the model's column.
 	return (
 		<>
 			<AgentModelCombobox
@@ -285,7 +257,6 @@ function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: 
 	);
 }
 
-/** A model field's warning, with a Retry when reading Cloud's list again can clear it. */
 function FieldWarning({ warning, className, onRetry }: { warning: string; className?: string; onRetry?: () => Promise<void> }) {
 	const { t } = useTranslation();
 	if (!onRetry) return <p className={cn("text-warning", className)}>{warning}</p>;

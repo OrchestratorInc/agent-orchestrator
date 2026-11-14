@@ -99,7 +99,6 @@ func TestGetLaunchCommandModelFlagComposesWithApprovalFlags(t *testing.T) {
 	}
 }
 
-// Kimi Code 2.2 accepts model overrides alongside exact session resume.
 func TestGetRestoreCommandPreservesModelOverride(t *testing.T) {
 	p := &Plugin{resolvedBinary: "kimi"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
@@ -143,9 +142,6 @@ func TestPromptReadinessHints(t *testing.T) {
 	}
 }
 
-// Kimi prompt mode is non-interactive, so AO launches the TUI and lets the
-// session manager inject the task after startup. Because the prompt is not
-// carried with `-p`, approval flags remain valid for prompted workers.
 func TestGetLaunchCommandInteractiveMapsPermissionModes(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -195,18 +191,12 @@ func TestGetLaunchCommandIgnoresSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Kimi has no documented system-prompt flag, and prompted tasks are injected
-	// after startup rather than through non-interactive `-p`.
 	want := []string{"kimi"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
 
-// Kimi docs: `--yolo` and `--auto` cannot be used together with `--continue`
-// or `--session` — resumed sessions inherit the approval settings of the
-// original session — so the restore path must not emit approval flags
-// regardless of the requested AO PermissionMode.
 func TestGetRestoreCommand(t *testing.T) {
 	modes := []ports.PermissionMode{
 		ports.PermissionModeDefault,
@@ -533,7 +523,6 @@ func TestGetAgentHooksSeedsCredentialReferencedByOAuthConfig(t *testing.T) {
 				t.Fatalf("AO scoped credentials = %s, want %s", gotCredentials, scopedCredentials)
 			}
 			if tc.writeDefaultSource {
-				// A user signed in to Kimi shares their whole store with AO's Kimi.
 				assertKimiCredentialsShared(t, userHome, aoHome)
 			} else if _, err := os.Stat(filepath.Join(aoHome, "credentials", "kimi-code.json")); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("unreferenced default AO credential stat err = %v, want not exist", err)
@@ -568,7 +557,6 @@ func TestGetAgentHooksReseedsHookOnlyAOManagedConfigFromOAuthUserKimiHome(t *tes
 		t.Fatalf("GetAgentHooks err = %v", err)
 	}
 
-	// AO's stale copy gives way to the user's own login.
 	assertKimiOAuthProfileSeeded(t, userHome, aoHome, userCredentials, userCredentials)
 	assertKimiCredentialsShared(t, userHome, aoHome)
 }
@@ -674,8 +662,6 @@ func TestGetAgentHooksSeedsAOManagedCredentialsFromUserKimiHome(t *testing.T) {
 	}
 }
 
-// Kimi renews its 15-minute tokens with a rotating refresh token, so a copy
-// seeded once went stale and could not sign in. AO's Kimi shares the user's.
 func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 	workspace := t.TempDir()
 	userHome := t.TempDir()
@@ -709,7 +695,6 @@ func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 		t.Fatalf("AO credentials = %s, want %s", got, want)
 	}
 	assertKimiCredentialsShared(t, userHome, aoHome)
-	// A token Kimi renews in AO's home is the user's too.
 	if err := os.WriteFile(targetPath, []byte(`{"access_token":"renewed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +703,6 @@ func TestGetAgentHooksSharesTheUsersKimiLoginInPlaceOfAStaleCopy(t *testing.T) {
 	}
 }
 
-// Where no link can be made, the copy follows a newer login.
 func TestSeedKimiCredentialReplacesAnOlderCopy(t *testing.T) {
 	dir := t.TempDir()
 	source, target := filepath.Join(dir, "user.json"), filepath.Join(dir, "ao", "kimi-code.json")
@@ -740,7 +724,6 @@ func TestSeedKimiCredentialReplacesAnOlderCopy(t *testing.T) {
 	if got, _ := os.ReadFile(target); string(got) != `{"access_token":"new"}` {
 		t.Fatalf("copy = %s, want the newer login", got)
 	}
-	// A copy newer than the login, as one Kimi renewed itself, is kept.
 	if err := os.WriteFile(target, []byte(`{"access_token":"renewed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1090,8 +1073,6 @@ func TestContextCancellation(t *testing.T) {
 	}
 }
 
-// Kimi Code reads <project>/.kimi-code/AGENTS.md, not the older .kimi/ one, so
-// AO's instructions and a switch's handoff note go to both.
 func TestPrepareACPInstructionsWritesWhereKimiCodeReads(t *testing.T) {
 	workspace := t.TempDir()
 	if err := PrepareACPInstructions(context.Background(), workspace, "AO standing instructions"); err != nil {

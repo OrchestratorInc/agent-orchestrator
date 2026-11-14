@@ -22,10 +22,6 @@ func newGitHubTracker() (ports.Tracker, error) {
 	return trackergithub.New(trackergithub.Options{Token: &ghTokenSource{}})
 }
 
-// ghTokenSource mirrors the SCM credential precedence: AO_GITHUB_TOKEN →
-// GITHUB_TOKEN (via EnvTokenSource) → `gh auth token` CLI fallback with
-// short-lived caching. This matches the old lazyGitHubTracker's token chain
-// and the GitLab tracker's DefaultTokenSource (env → glab CLI).
 type ghTokenSource struct {
 	mu        sync.Mutex
 	token     string
@@ -66,10 +62,6 @@ func (s *ghTokenSource) Token(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-// newGitLabTracker constructs a host-aware GitLab tracker. AllowedHosts and
-// HostTokens from GitLabConfig are passed through so the tracker can route
-// self-managed GitLab issue lookups to the correct host with the correct
-// token. This mirrors the SCM provider's wiring in newGitLabSCMProvider.
 func newGitLabTracker(gitlabCfg config.GitLabConfig) (ports.Tracker, error) {
 	hostTokens := make(map[string]scmgitlab.TokenSource, len(gitlabCfg.HostTokens))
 	for host, token := range gitlabCfg.HostTokens {
@@ -85,22 +77,9 @@ func newGitLabTracker(gitlabCfg config.GitLabConfig) (ports.Tracker, error) {
 	})
 }
 
-// newMultiTracker builds a multi-tracker dispatching to both GitHub and
-// GitLab sub-trackers. The daemon builds it once (in Run) and shares the
-// instance between the session service and the intake observer. A GitHub
-// token from the environment is validated eagerly at boot; without one, the
-// GitHub adapter stays lazy so the `gh auth token` CLI probe never blocks
-// daemon readiness — no CLI token is resolved until a session spawn or an
-// intake poll actually needs GitHub issue data (see lazyTracker). When one
-// tracker's token is missing, the other still serves issue lookups — the
-// same degrade-gracefully pattern used by newMultiSCMProvider. Callers must
-// tolerate a nil ports.Tracker (the session service's nil-guard handles
-// this).
 func newMultiTracker(gitlabCfg config.GitLabConfig, logger *slog.Logger) ports.Tracker {
 	var named []trackermulti.NamedTracker
 
-	// Probing the environment is a cheap read — no subprocess. Only when no
-	// env token exists do we defer to the gh CLI fallback, lazily.
 	env := trackergithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}}
 	if _, err := env.Token(context.Background()); err == nil {
 		if t, err := newGitHubTracker(); err != nil {
@@ -124,13 +103,6 @@ func newMultiTracker(gitlabCfg config.GitLabConfig, logger *slog.Logger) ports.T
 	return trackermulti.New(named...)
 }
 
-// lazyTracker defers adapter construction until the first tracker call, so
-// daemon readiness is not blocked by credential probing or a gh CLI call: no
-// token is resolved until a session spawn or an enabled project poll actually
-// needs issue data. Construction succeeds at most once; failures are not
-// cached, so a user who authenticates later (e.g. `gh auth login`) is picked
-// up without a daemon restart — the same retry semantics the old intake-only
-// lazyGitHubTracker had.
 type lazyTracker struct {
 	name   string
 	logger *slog.Logger

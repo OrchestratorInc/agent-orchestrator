@@ -14,10 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A worktree's ignored build output (node_modules and friends) is the bulk of
-// what teardown has to unlink, and unlinking it inline is what pushed a kill
-// past the daemon's request timeout. Destroy must return with the path already
-// gone and the registration already pruned, leaving only the unlinking behind.
 func TestDestroyDiscardsWorktreeWithoutUnlinkingInline(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -31,8 +27,6 @@ func TestDestroyDiscardsWorktreeWithoutUnlinkingInline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Ignored, like a real session's dependency tree: git would delete it as
-	// part of `worktree remove`, which is the cost being moved off the request.
 	if err := ws.AddExclude(ctx, info, "deps/"); err != nil {
 		t.Fatalf("add exclude: %v", err)
 	}
@@ -73,8 +67,6 @@ func TestDestroyDiscardsWorktreeWithoutUnlinkingInline(t *testing.T) {
 	}
 }
 
-// The discard path must not weaken the refusal that protects uncommitted agent
-// work: a dirty worktree stays on disk, registered, and reported as dirty.
 func TestDestroyDiscardStillRefusesDirtyWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -108,9 +100,6 @@ func TestDestroyDiscardStillRefusesDirtyWorktree(t *testing.T) {
 	}
 }
 
-// ForceDestroy has no refusal to honour, so it discards unconditionally, but
-// it still owes the caller a path that is gone and a registration that is
-// pruned by the time it returns.
 func TestForceDestroyDiscardsWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -127,9 +116,6 @@ func TestForceDestroyDiscardsWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(info.Path, "in-progress.txt"), []byte("agent work"), 0o600); err != nil {
 		t.Fatalf("seed dirty file: %v", err)
 	}
-	// Recording the git calls is what proves the fast path ran: a ForceDestroy
-	// that fell through to `git worktree remove --force` would still leave the
-	// path gone and pass every assertion below.
 	inner := ws.run
 	var calls []string
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -157,9 +143,6 @@ func TestForceDestroyDiscardsWorktree(t *testing.T) {
 	ws.waitForDiscards()
 }
 
-// A daemon that dies mid-removal leaves directories in the discard root that
-// nothing else ever revisits. Construction is the one moment the root is known
-// to be ours, so that is where the leftovers get collected.
 func TestNewSweepsLeftoverDiscards(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "managed")
@@ -193,11 +176,6 @@ func writeIgnoredTree(t *testing.T, worktree string) {
 	}
 }
 
-// Once the registration is pruned, restoring the directory would be a worse
-// outcome than losing it: the next teardown would see an unregistered stray and
-// delete it with no dirty check at all. The move only happens after a
-// conclusive clean status, so letting it go costs nothing that is not already
-// committed on the session branch.
 func TestDiscardKeepsGoingWhenThePostPruneProbeFails(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -235,11 +213,6 @@ func TestDiscardKeepsGoingWhenThePostPruneProbeFails(t *testing.T) {
 	ws.waitForDiscards()
 }
 
-// A project directory the user deleted turns every `git -C <repo> ...` in
-// teardown into an opaque exit 128, which surfaced as a permanent
-// "Internal server error" on delete and left the session in the sidebar
-// forever. Teardown reports it as a typed refusal instead, so the caller can
-// preserve the directory and still terminate the session.
 func TestDestroyReportsAMissingProjectRepoAsUnavailable(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -269,12 +242,6 @@ func TestDestroyReportsAMissingProjectRepoAsUnavailable(t *testing.T) {
 	}
 }
 
-// The move is not always possible. On Windows a PTY or agent child can still
-// hold a handle on the worktree directory for a moment after the process is
-// gone, and a rename against an open handle fails outright, so the fast path
-// has to hand back to the git-driven teardown rather than give up. Simulated
-// here by blocking the discard root with a file, which is the one failure mode
-// that reproduces identically on every platform.
 func TestDestroyFallsBackToGitWhenTheMoveIsImpossible(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -288,8 +255,6 @@ func TestDestroyFallsBackToGitWhenTheMoveIsImpossible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// A plain file where the discard root belongs: MkdirAll cannot create the
-	// directory, so no rename is even attempted.
 	if err := os.WriteFile(ws.discardedRoot(), []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("block discard root: %v", err)
 	}
@@ -324,13 +289,6 @@ func TestDestroyFallsBackToGitWhenTheMoveIsImpossible(t *testing.T) {
 	}
 }
 
-// The git-driven teardown can be left with a directory it cannot unlink this
-// run — on Windows a live agent process or scoped shell holds a handle on the
-// worktree directory past the removal retry budget. git has already
-// unregistered the directory by then, so nothing is being reconciled anymore;
-// the failure must be typed as deferred rather than a generic teardown error,
-// or `ao session kill` answers 500 and strands the session in the sidebar
-// forever (#3408).
 func TestDestroyDefersRemovalFailureWhenTheDirectoryStillExists(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -345,10 +303,6 @@ func TestDestroyDefersRemovalFailureWhenTheDirectoryStillExists(t *testing.T) {
 	shrinkRemoveAllRetry(t, 2)
 	wedged := errors.New("The process cannot access the file because it is being used by another process")
 	stubRemoveAll(t, func(string) error { return wedged })
-	// Registration probes fail first so the discard fast path hands back to the
-	// git-driven remove; afterwards the path is reported as unregistered but
-	// still on disk, so the final removeAllWithRetry is the only remaining
-	// teardown step — and it fails.
 	listCalls := 0
 	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		if strings.Contains(strings.Join(args, " "), "worktree list --porcelain") {
@@ -456,11 +410,6 @@ func TestForceRemovalDoesNotPromiseDeferredCleanup(t *testing.T) {
 	}
 }
 
-// Work that appears between the dirty probe and the delete must not be taken.
-// The probe therefore runs against the directory after it has been moved aside:
-// once the worktree path no longer resolves, nothing can add to what is about
-// to be unlinked, so the state git reports is the state that gets deleted.
-// Probing the live path first and deleting afterwards leaves exactly that gap.
 func TestDirtyProbeRunsAgainstTheIsolatedDirectory(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -504,9 +453,6 @@ func TestDirtyProbeRunsAgainstTheIsolatedDirectory(t *testing.T) {
 	ws.waitForDiscards()
 }
 
-// A failed prune must leave both halves intact. Deleting the directory anyway
-// reports failure while destroying the worktree and stranding its registration,
-// and that dangling entry blocks the path from being reused.
 func TestForceDestroyKeepsTheWorktreeWhenPruneFails(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -535,11 +481,6 @@ func TestForceDestroyKeepsTheWorktreeWhenPruneFails(t *testing.T) {
 	}
 }
 
-// Project removal now kills every live session of a project concurrently, and
-// those kills all reach `git worktree` commands against the one shared repo.
-// The per-repo teardown lock must serialize a single repo's destroy sequences
-// (interleaved prune/remove/list writes to .git/worktrees would race) while
-// leaving different repositories free to tear down in parallel.
 func TestDestroySerializesGitCommandsPerRepository(t *testing.T) {
 	root := t.TempDir()
 	repoA := t.TempDir()
@@ -651,7 +592,6 @@ func TestRepoTeardownLockCanonicalizesRepositoryPath(t *testing.T) {
 		unlock()
 		t.Fatal("equivalent repository paths acquired different teardown locks")
 	case <-time.After(100 * time.Millisecond):
-		// The equivalent spelling is blocked on the canonical repository lock.
 	}
 
 	unlock()

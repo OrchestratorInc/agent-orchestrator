@@ -1,7 +1,3 @@
-// Command genspec writes the code-first OpenAPI document produced by
-// apispec.Build() to disk. It is invoked via `go generate` (see
-// internal/httpd/apispec/gen.go); the output openapi.yaml is committed and
-// embedded by the apispec package.
 package main
 
 import (

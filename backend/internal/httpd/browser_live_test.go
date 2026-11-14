@@ -184,7 +184,6 @@ func TestBrowserLivePreviewTargetUsesOnlyStoredSelection(t *testing.T) {
 		})
 	}
 
-	// A same-named workspace file cannot substitute for a missing artifact.
 	hub := NewBrowserLiveHub(nil, nil, nil, nil)
 	hub.SetLoopbackBaseURL("http://127.0.0.1:4317")
 	session := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{
@@ -200,9 +199,6 @@ func TestBrowserLivePreviewTargetUsesOnlyStoredSelection(t *testing.T) {
 	}
 }
 
-// A phone can start watching before the agent has produced a page. Keep the
-// stream open and verify the newly selected entry is offered without any
-// desktop panel being mounted or a mobile reconnect.
 type livePreviewSession struct {
 	mu        sync.Mutex
 	workspace string

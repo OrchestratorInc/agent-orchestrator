@@ -11,16 +11,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
-// SessionImportService scans only after a user opens import, and registers only selected histories.
 type SessionImportService interface {
 	Scan(context.Context) (sessionimport.Preview, error)
 	Import(context.Context, []string) ([]sessionimport.Result, error)
 }
 
-// SessionImportController exposes local history discovery and import.
 type SessionImportController struct{ Svc SessionImportService }
 
-// Register mounts history discovery and import routes.
 func (c *SessionImportController) Register(r chi.Router) {
 	r.Get("/session-import", c.scan)
 	r.Post("/session-import", c.importSelected)
@@ -46,7 +43,6 @@ func (c *SessionImportController) importSelected(w http.ResponseWriter, r *http.
 		apispec.NotImplemented(w, r, "POST", "/api/v1/session-import")
 		return
 	}
-	// The body is only a list of candidate ids; thousands fit well within this.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSessionImportBodyBytes)
 	var in SessionImportRequest
 	if err := decodeJSONStrict(r, &in); err != nil {

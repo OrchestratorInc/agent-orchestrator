@@ -73,8 +73,6 @@ func TestImportedSnapshotSurvivesProviderSourceDeletion(t *testing.T) {
 	}
 }
 
-// Claude resumes from its latest compaction, so its replay is only the tail of
-// an imported conversation. The archive stays the visible history below AO turns.
 func TestAdoptedImportShowsArchiveInPlaceOfPartialReplay(t *testing.T) {
 	ctx := context.Background()
 	st := sqlitetest.MustOpen(t)
@@ -119,7 +117,6 @@ func TestAdoptedImportShowsArchiveInPlaceOfPartialReplay(t *testing.T) {
 	if err != nil || conversation.LatestSequence <= 4 {
 		t.Fatalf("replay did not follow the archive's sequences: %+v %v", conversation, err)
 	}
-	// Session Manager records the replay boundary when it adopts the import.
 	adopted, _, err := st.GetSession(ctx, rec.ID)
 	if err != nil {
 		t.Fatal(err)

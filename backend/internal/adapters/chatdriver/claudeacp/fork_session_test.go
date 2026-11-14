@@ -46,7 +46,6 @@ func TestClaudeForkScriptMovesFile(t *testing.T) {
 				gotConfig = strings.TrimPrefix(kv, "CLAUDE_CONFIG_DIR=")
 			}
 		}
-		// The SDK writes the child beside the source, keeping the source cwd.
 		var lines []byte
 		for _, record := range []map[string]string{
 			{"type": "user", "sessionId": "child-id", "cwd": src, "uuid": "a"},
@@ -118,8 +117,6 @@ func TestClaudeProjectKey(t *testing.T) {
 	}
 }
 
-// TestClaudeForkRealSDK runs the bundled SDK. Set AO_TEST_CLAUDE_FORK_SESSION
-// to a Claude session file and AO_ACP_RUNTIME_DIR to an installed runtime.
 func TestClaudeForkRealSDK(t *testing.T) {
 	sessionFile := os.Getenv("AO_TEST_CLAUDE_FORK_SESSION")
 	if sessionFile == "" || os.Getenv("AO_ACP_RUNTIME_DIR") == "" {
@@ -158,7 +155,6 @@ func TestClaudeForkRealSDK(t *testing.T) {
 func TestResolveForkPointUsesLastLineInSourceFile(t *testing.T) {
 	dir := realDir(t)
 	file := filepath.Join(dir, "s.jsonl")
-	// One API message is streamed as several lines; the cut must include all.
 	lines := []string{
 		`{"type":"user","uuid":"u1","message":{"role":"user","content":"hi"}}`,
 		`{"type":"assistant","uuid":"a1","message":{"id":"msg_A","content":[{"type":"thinking"}]}}`,
@@ -203,8 +199,6 @@ func TestClaudeForkPassesTheCutPoint(t *testing.T) {
 	}
 }
 
-// TestClaudeForkRealSDKAtOlderMessage cuts a real session after its first
-// assistant message. Opt-in, like TestClaudeForkRealSDK.
 func TestClaudeForkRealSDKAtOlderMessage(t *testing.T) {
 	sessionFile := os.Getenv("AO_TEST_CLAUDE_FORK_SESSION")
 	if sessionFile == "" || os.Getenv("AO_ACP_RUNTIME_DIR") == "" {
@@ -261,15 +255,12 @@ func TestClaudeForkRealSDKAtOlderMessage(t *testing.T) {
 	}
 }
 
-// A fork's session copy is removed even when its workspace is already gone
-// and was reached through a symlink, so its folder can't be derived again.
 func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 	config, resolved := realDir(t), realDir(t)
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(resolved, link); err != nil {
 		t.Fatal(err)
 	}
-	// Saved under the resolved folder's key, as ForkIntoWorkspace does.
 	forked := filepath.Join(config, "projects", claudeProjectKey(resolved), "child-id.jsonl")
 	other := filepath.Join(config, "projects", claudeProjectKey(resolved), "other-id.jsonl")
 	for _, path := range []string{forked, other} {
@@ -294,7 +285,6 @@ func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("another session was removed: %v", err)
 	}
-	// A pattern in the id must never widen what is removed.
 	if err := d.DeleteWorkspaceFork(context.Background(), "*", link, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -303,10 +293,6 @@ func TestDeleteWorkspaceForkFindsTheCopyWithoutItsWorkspace(t *testing.T) {
 	}
 }
 
-// The copied conversation names the original's worktree in tool inputs and
-// results too, not only in cwd. Left as they are, the fork's agent edits the
-// original's files, so every reference moves to the fork's worktree. A
-// sibling folder that only shares the name's start is left alone.
 func TestForkCopyPointsEveryWorktreePathAtTheFork(t *testing.T) {
 	src, dst := "/w/fork-test/fork-test-1", "/w/fork-test/fork-test-4"
 	record := map[string]any{

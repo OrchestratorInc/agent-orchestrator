@@ -24,7 +24,6 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 const observed = new Set<Element>();
 let reportIntersection: (element: Element, isIntersecting: boolean) => void = () => undefined;
 
-// The module keeps one observer for the page, so one fake serves every test.
 vi.stubGlobal("IntersectionObserver", class {
 	constructor(callback: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void) {
 		reportIntersection = (target, isIntersecting) => callback([{ target, isIntersecting }]);

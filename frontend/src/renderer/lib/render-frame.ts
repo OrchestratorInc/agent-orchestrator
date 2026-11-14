@@ -10,7 +10,6 @@ export function clampRenderHeight(height: number): number {
 	return Math.min(RENDER_MAX_HEIGHT, Math.max(RENDER_MIN_HEIGHT, Math.round(height)));
 }
 
-/** The page a `render` activity points at, or undefined for anything malformed. */
 export function readRenderRef(detail: ConversationActivity["detail"]): RenderRef | undefined {
 	const render = detail?.event === "render" ? detail.render : undefined;
 	if (
@@ -25,12 +24,10 @@ export function readRenderRef(detail: ConversationActivity["detail"]): RenderRef
 		return undefined;
 	}
 	const ref: RenderRef = { id: render.id, title: render.title, height: clampRenderHeight(render.height), path: render.path };
-	// A malformed measurement costs only the measured first height, not the page.
 	if (isMeasuredHeights(render.heights)) ref.heights = render.heights;
 	return ref;
 }
 
-/** The HTML artifact an `artifact` activity points at, or undefined for anything malformed. */
 export function readArtifactRef(detail: ConversationActivity["detail"]): ArtifactRef | undefined {
 	const artifact = detail?.event === "artifact" ? detail.artifact : undefined;
 	if (
@@ -46,19 +43,16 @@ export function readArtifactRef(detail: ConversationActivity["detail"]): Artifac
 	return { path: artifact.path, name: artifact.name, url: artifact.url };
 }
 
-/** Whether url, once the browser resolves its dot segments (escaped ones too), is still under prefix. */
 function staysUnder(url: string, prefix: string | undefined): boolean {
 	return prefix !== undefined && new URL(url, "http://127.0.0.1").pathname.startsWith(prefix);
 }
 
-/** Non-empty, not rooted or drive-lettered, and no `..` segment. */
 function isRelativePath(path: string): boolean {
 	return path !== "" && !/^([a-z]:|[\\/])/i.test(path) && !path.split(/[\\/]/).includes("..");
 }
 
 const isPositiveInteger = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;
 
-/** 1-16 `[width, height]` pairs of positive integers, in increasing width. */
 function isMeasuredHeights(heights: unknown): heights is Array<[number, number]> {
 	return (
 		Array.isArray(heights) &&
@@ -75,12 +69,6 @@ function isMeasuredHeights(heights: unknown): heights is Array<[number, number]>
 	);
 }
 
-/**
- * The page's height at a frame width, from its measured heights: the taller of
- * the heights at the nearest measured widths on each side, since a breakpoint
- * between them can make the page as tall as either. Ported from T3 Code's
- * `measuredHeight` (packages/shared/src/htmlRender.ts).
- */
 export function measuredRenderHeight(heights: Array<[number, number]>, width: number): number {
 	const above = heights.findIndex(([measuredWidth]) => measuredWidth >= width);
 	const high = above === -1 ? heights.length - 1 : above;
@@ -88,11 +76,6 @@ export function measuredRenderHeight(heights: Array<[number, number]>, width: nu
 	return Math.max(heights[low]![1], heights[high]![1]);
 }
 
-/**
- * The file a saved render is written to: its title, without characters a file
- * system refuses, capped at 120. Ported from T3 Code's `htmlRenderFileName`
- * (packages/shared/src/htmlRender.ts).
- */
 export function renderFileName(title: string): string {
 	const name = title
 		.replace(/[\\/:*?"<>|\p{Cc}]+/gu, " ")
@@ -108,8 +91,6 @@ export interface RenderTheme {
 	variables: Record<string, string>;
 }
 
-// Agent-facing names (documented in commands/render.md) -> AO's semantic tokens
-// in frontend/src/styles/tokens.css. getComputedStyle resolves their var() chains.
 const THEME_TOKENS: ReadonlyArray<readonly [string, string]> = [
 	["--background", "--color-bg-primary"],
 	["--foreground", "--color-text-primary"],
@@ -135,8 +116,6 @@ const THEME_TOKENS: ReadonlyArray<readonly [string, string]> = [
 	["--radius", "--radius-md"],
 ];
 
-// ponytail: fixed categorical series for agent pages only (never AO chrome);
-// AO's own --chart-* tokens are grayscale. Swap for tokens once design names some.
 const CHART_SERIES = {
 	dark: ["#2dd4bf", "#fbbf24", "#c084fc", "#fb7185", "#a3e635"],
 	light: ["#0d9488", "#d97706", "#9333ea", "#e11d48", "#65a30d"],
@@ -160,18 +139,12 @@ export function renderThemesEqual(left: RenderTheme, right: RenderTheme): boolea
 	return left.appearance === right.appearance && JSON.stringify(left.variables) === JSON.stringify(right.variables);
 }
 
-/** Where the page shows: inline in the thread, or expanded in the dialog. */
 export type RenderDisplayMode = "inline" | "fullscreen";
 
-/**
- * The fragment a render reads its theme and wrapping choice from before first
- * paint. scrollable lets a page scroll inside a capped frame with a scrollbar.
- */
 export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false): string {
 	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent, openImages: true }))}`;
 }
 
-/** Live theme and wrapping updates; displayMode is the MCP Apps host-context field. */
 export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false) {
 	return {
 		jsonrpc: "2.0",

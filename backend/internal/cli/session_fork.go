@@ -27,8 +27,6 @@ type sessionForkOptionsResponse struct {
 	} `json:"refusal"`
 }
 
-// newSessionForkCommand forks a session at its latest finished turn into a
-// new session with its own worktree.
 func newSessionForkCommand(ctx *commandContext) *cobra.Command {
 	var check bool
 	cmd := &cobra.Command{

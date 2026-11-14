@@ -17,16 +17,8 @@ export const recentNotificationsQueryKey = ["notifications", "history", "all"] a
 export const NOTIFICATION_PAGE_SIZE = 100;
 
 const EVENTSOURCE_CLOSED = 2;
-// HTTP responses and SSE deletes can arrive in either order. Keep recent
-// confirmations for deduplication, but never let that session state grow without bound.
 const MAX_CONFIRMED_NOTIFICATION_DELETIONS = 256;
 
-/**
- * Only these two kinds describe something still waiting on the user.
- * `pr_merged` / `pr_closed_unmerged` report something that already happened.
- * Mirrors NotificationType.NeedsResolution on the backend — used here only to
- * keep `unresolvedCount` accurate on the unread/all caches.
- */
 const UNRESOLVABLE_TYPES = new Set(["needs_input", "ready_to_merge"]);
 
 type NotificationsQueryKey = typeof unreadNotificationsQueryKey | typeof recentNotificationsQueryKey;
@@ -93,13 +85,6 @@ export async function fetchNotificationsPage(
 	};
 }
 
-/**
- * Fired when the panel opens — seeing the notifications is the acknowledgement.
- *
- * Empty `ids` marks every unread row (the all-history panel still shows them).
- * Non-empty `ids` marks exactly those rows so incremental clients can keep later
- * unread pages reachable.
- */
 export async function markAllNotificationsRead(ids: string[]): Promise<number> {
 	const { data, error } = await apiClient.POST("/api/v1/notifications/read-all", {
 		body: ids.length === 0 ? {} : { ids },
@@ -118,9 +103,6 @@ export async function deleteNotification(notification: NotificationDTO): Promise
 	const { data, error, response } = await apiClient.DELETE("/api/v1/notifications/{id}", {
 		params: { path: { id: notification.id } },
 	});
-	// Another window may have cleared the same row before its live event reaches
-	// this one. The requested end state already holds, so confirm the optimistic
-	// removal instead of rolling it back and showing an error.
 	if (response.status === 404) return notification;
 	if (error || !data) throw apiErrorException(error, "Could not clear notification");
 	return data.notification;
@@ -139,10 +121,6 @@ function mergeRecentNotification(queryClient: QueryClient, notification: Notific
 	return inserted;
 }
 
-/**
- * AO resolved the issue behind a notification. Update the row in unread/all
- * caches; the seen state is a separate axis and is deliberately left untouched.
- */
 export function applyResolvedNotification(queryClient: QueryClient, notification: NotificationDTO): boolean {
 	let foundInEveryCache = true;
 	for (const queryKey of [unreadNotificationsQueryKey, recentNotificationsQueryKey] as const) {
@@ -223,7 +201,6 @@ function removeNotificationFromCaches(
 	}
 }
 
-/** Removes a row immediately while retaining enough local state to restore it. */
 export function applyOptimisticNotificationDelete(queryClient: QueryClient, notification: NotificationDTO): void {
 	const states = deletionStates(queryClient);
 	if (states.has(notification.id)) return;
@@ -244,7 +221,6 @@ export function applyOptimisticNotificationDelete(queryClient: QueryClient, noti
 	removeNotificationFromCaches(queryClient, notification, true);
 }
 
-/** Applies the server response or live event exactly once across both caches. */
 export function applyNotificationDeleted(queryClient: QueryClient, notification: NotificationDTO): boolean {
 	const states = deletionStates(queryClient);
 	const current = states.get(notification.id);
@@ -257,7 +233,6 @@ export function applyNotificationDeleted(queryClient: QueryClient, notification:
 	return true;
 }
 
-/** Restores only this row when its request fails and no live delete confirmed it. */
 export function rollbackOptimisticNotificationDelete(queryClient: QueryClient, id: string): boolean {
 	const states = deletionStates(queryClient);
 	const state = states.get(id);
@@ -334,19 +309,6 @@ function mergeNotificationIntoCache(
 	return inserted;
 }
 
-/**
- * Marks notifications read in the React Query caches.
- *
- * Empty `ids` means every unread row — matching `POST /read-all` with no body.
- * That is safe for the all-history panel: read rows remain visible there.
- *
- * Non-empty `ids` marks exactly those rows and keeps unread pagination cursors
- * intact so later pages stay reachable when a client acknowledges incrementally.
- *
- * `updatedCount` is the mutation's server tally. Prefer it over locally cleared
- * rows: later all-list pages can acknowledge unread ids that were never loaded
- * into the unread cache, which would otherwise leave the bell badge stuck.
- */
 export function markAllCachedNotificationsRead(
 	queryClient: QueryClient,
 	ids: string[],
@@ -411,9 +373,6 @@ export function markAllCachedNotificationsRead(
 	}
 }
 
-// The DELETE response and SSE event share a daemon epoch and monotonic sequence.
-// Ignoring older generations prevents an earlier clear response from erasing a
-// notification that arrived after a later clear event.
 export function applyNotificationsCleared(queryClient: QueryClient, clear: NotificationClear): boolean {
 	const latest = latestClearGeneration.get(queryClient);
 	if (latest?.epoch === clear.clearEpoch && latest.sequence >= clear.clearSequence) return false;
@@ -434,9 +393,6 @@ export function applyNotificationsCleared(queryClient: QueryClient, clear: Notif
 	return true;
 }
 
-// A failed background refresh may keep the exact cache installed by a
-// confirmed clear. Only that snapshot should render as confirmed empty; an
-// unrelated cached empty page must still show the load error.
 export function isNotificationsCacheFromClear(queryClient: QueryClient): boolean {
 	const cleared = clearedNotificationSnapshots.get(queryClient);
 	return Boolean(cleared) && queryClient.getQueryData(recentNotificationsQueryKey) === cleared;
@@ -473,25 +429,6 @@ export function keepLatestNotificationsPage(
 	rebaseOversizedFirstPage(queryClient, queryKey);
 }
 
-/**
- * Whether the user can already see a `needs_input` prompt. Main still plays
- * the sound for it (an agent asking is worth hearing even mid-glance) but
- * skips the toast, which would only repeat what is on screen.
- *
- * "Can see it" takes three things: the agent's terminal for that session is
- * the one on screen, this window is visible, and this window has focus.
- *
- * Each check covers a way "looks visible" lies. Visibility alone is not enough
- * — on Windows and Linux an unfocused or fully covered Electron window still
- * reports `visibilityState === "visible"`. The route alone is not enough
- * either: the session pane renders one terminal at a time, so an open shell or
- * reviewer tab hides the agent while the URL still names that session. The
- * caller resolves that, passing the session only while its agent pane shows.
- *
- * Only `needs_input` counts. PR outcomes (`ready_to_merge`, `pr_merged`,
- * `pr_closed_unmerged`) are not visible in the terminal pane, so they still
- * deserve a toast even for the session in the foreground.
- */
 function isWatchingNeedsInputSession(
 	notification: NotificationDTO,
 	visibleAgentSessionId: string | undefined,
@@ -503,7 +440,6 @@ function isWatchingNeedsInputSession(
 
 export function createNotificationsTransport(
 	queryClient: QueryClient,
-	/** The session whose agent terminal is currently on screen, if any. */
 	getVisibleAgentSessionId: () => string | undefined = () => undefined,
 ) {
 	return {
@@ -580,9 +516,6 @@ export function createNotificationsTransport(
 			const receiveLiveNotificationEvent = (event: LiveNotificationEvent) => {
 				if (snapshotRefresh) {
 					snapshotRefresh.events.push(event);
-					// The snapshot may already contain a post-clear row whose create
-					// event was dropped. Reconcile once after replaying the clear so the
-					// buffered reset cannot erase that row permanently.
 					if (event.kind === "cleared" || event.kind === "deleted") snapshotRefresh.dirty = true;
 					return;
 				}
@@ -624,8 +557,6 @@ export function createNotificationsTransport(
 			};
 			notificationReconcilers.set(queryClient, invalidateNotifications);
 
-			// Consecutive scheduled rebuilds since the stream last opened; paces
-			// the retry instead of knocking on a flat cadence forever (#4323).
 			let retries = 0;
 
 			const scheduleRetry = () => {
@@ -641,8 +572,6 @@ export function createNotificationsTransport(
 				if (typeof EventSource === "undefined") return;
 				const baseUrl = getApiBaseUrl();
 				if (source && sourceBaseUrl === baseUrl && source.readyState !== EVENTSOURCE_CLOSED) return;
-				// A new daemon port is a fresh target; it should not inherit the
-				// delay the dead port earned.
 				if (sourceBaseUrl && sourceBaseUrl !== baseUrl) retries = 0;
 				source?.close();
 				source = undefined;
@@ -665,9 +594,6 @@ export function createNotificationsTransport(
 							watched: isWatchingNeedsInputSession(notification, getVisibleAgentSessionId()),
 						});
 					});
-					// AO closed the underlying issue (the session got its input, the
-					// PR stopped waiting on a merge). Patch the row live so an open
-					// panel reflects that without waiting for a refetch.
 					source.addEventListener("notification_resolved", (event) => {
 						const notification = parseNotificationEvent(event);
 						if (!notification) return;

@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// ConversationFindSource reads messages and their visibility facts from one
-// read transaction. Search never reconciles state or acquires a provider lease.
 func (s *Store) ConversationFindSource(ctx context.Context, id string) (domain.ConversationRecord, []domain.ConversationMessage, error) {
 	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -55,7 +53,6 @@ func (s *Store) ConversationFindSource(ctx context.Context, id string) (domain.C
 	return conversationToDomain(conv), messages, nil
 }
 
-// ConversationFindWindow reads bounded context without reconciliation writes.
 func (s *Store) ConversationFindWindow(ctx context.Context, id string, sequence int64) (domain.ConversationFindWindow, error) {
 	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {

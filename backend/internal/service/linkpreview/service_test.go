@@ -93,7 +93,6 @@ func TestPreviewConcurrentSameURLFetchesOnce(t *testing.T) {
 	hits := &atomic.Int32{}
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		// Slow enough that every concurrent caller overlaps the first fetch.
 		time.Sleep(50 * time.Millisecond)
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, `<html><head><title>T</title></head><body></body></html>`)
@@ -123,11 +122,6 @@ func TestPreviewConcurrentSameURLFetchesOnce(t *testing.T) {
 	}
 }
 
-// A tag byte that is neither '>' nor '/' nor a name character (a stray quote,
-// '=' or '<') must not stall the parser: the daemon parses hovered pages on
-// request goroutines with no deadline, so a non-advancing loop spins a core
-// forever and survives the request. Observed 2026-10-04: three hovers, three
-// cores, until the daemon was restarted.
 func TestParseHeadAdvancesPastStrayTagBytes(t *testing.T) {
 	cases := map[string]string{
 		"stray quote after attribute": `<html><head><meta name="description" content="x""><title>T</title></head><body></body></html>`,
@@ -151,7 +145,6 @@ func TestParseHeadAdvancesPastStrayTagBytes(t *testing.T) {
 	}
 }
 
-// htmlOrigin serves a titled page to /page and counts hits.
 func htmlOrigin(t *testing.T, wait <-chan struct{}) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	hits := &atomic.Int32{}
@@ -178,8 +171,6 @@ func waitForHits(t *testing.T, hits *atomic.Int32, want int32) {
 	}
 }
 
-// Leaving a link must cost only that hover: the page was healthy, so the next
-// hover has to get the page, not a cached failure.
 func TestPreviewAbandonedHoverDoesNotPoisonCache(t *testing.T) {
 	release := make(chan struct{})
 	origin, hits := htmlOrigin(t, release)
@@ -222,7 +213,6 @@ func TestPreviewAbandonedHoverDoesNotPoisonCache(t *testing.T) {
 	}
 }
 
-// A second hover that joined the fetch must not fail because the first left.
 func TestPreviewJoinedCallerSurvivesFirstCallerLeaving(t *testing.T) {
 	release := make(chan struct{})
 	origin, hits := htmlOrigin(t, release)
@@ -265,7 +255,6 @@ func TestPreviewStopsReadingAtHeadClose(t *testing.T) {
 		<-bodyDone
 	}))
 	t.Cleanup(origin.Close)
-	// Cleanups run last-first: release the handler before Close waits for it.
 	t.Cleanup(func() { close(bodyDone) })
 
 	svc := New(origin.Client())
@@ -283,7 +272,6 @@ func TestPreviewStopsReadingAtHeadClose(t *testing.T) {
 	}
 }
 
-// oneByteReader forces the head marker to straddle reads.
 type oneByteReader struct{ r io.Reader }
 
 func (o oneByteReader) Read(p []byte) (int, error) { return o.r.Read(p[:1]) }
@@ -325,8 +313,6 @@ type panicTransport struct{}
 
 func (panicTransport) RoundTrip(*http.Request) (*http.Response, error) { panic("fetch bug") }
 
-// The shared fetch runs where no HTTP recover reaches it, so without its own
-// recover this panic would end the test binary, as it would the daemon.
 func TestPreviewPanicBecomesFetchFailure(t *testing.T) {
 	svc := New(&http.Client{Transport: panicTransport{}})
 	if _, err := svc.Preview(context.Background(), "http://example.test/page"); !errors.Is(err, ErrFetchFailed) {

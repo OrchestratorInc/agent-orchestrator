@@ -81,8 +81,6 @@ const allNotifications: NotificationDTO[] = [
 		sessionId: "sess-dead",
 		projectId: "proj-1",
 		prUrl: "",
-		// needs_input: an agent is genuinely paused waiting on this session, so a
-		// terminated backing session should still require restore before opening.
 		type: "needs_input",
 		title: "PR #9 merged",
 		body: "The agent session has ended.",
@@ -278,9 +276,6 @@ beforeEach(() => {
 	vi.spyOn(window, "open").mockImplementation(() => null);
 });
 
-// The runtime tells the transport which session the user is actually watching.
-// Being on the session route is not enough: the pane shows one terminal at a
-// time, so a shell or reviewer tab hides the agent while the URL is unchanged.
 describe("NotificationRuntime", () => {
 	function renderRuntime() {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -313,8 +308,6 @@ describe("NotificationRuntime", () => {
 		expect(renderRuntime()()).toBeUndefined();
 	});
 
-	// The transport connects once and outlives navigation, so the getter has to
-	// read live state rather than close over the value it was created with.
 	it("tracks tab switches without reconnecting the stream", () => {
 		paramsMock.mockReturnValue({ sessionId: "sess-1" });
 		useUiStore.setState({ visibleTerminalKindBySession: { "sess-1": "worker" } });
@@ -518,8 +511,6 @@ describe("NotificationCenter", () => {
 		expect(screen.getByText("Checkout flow needs input")).toBeInTheDocument();
 	});
 
-	// Opening acknowledges loaded unread ids only, so later unread pages stay
-	// fetchable and highlighted when they appear in the all-list.
 	it("acknowledges loaded unread ids on open and keeps showing them highlighted", async () => {
 		renderNotificationCenter();
 		await clickOpen();
@@ -590,8 +581,6 @@ describe("NotificationCenter", () => {
 				},
 			];
 		});
-		// Unread cache only has the first page; unreadCount still includes the
-		// later row that will arrive through the all list.
 		const unreadPage = {
 			notifications: unreadNotifications,
 			nextCursor: "older-unread",
@@ -605,8 +594,6 @@ describe("NotificationCenter", () => {
 				pages: [unreadPage],
 			},
 		};
-		// Mirror mutation onSuccess: decrement the badge from updatedCount even
-		// when the acknowledged id is absent from the unread cache.
 		markAllMock.mockImplementation(async (ids: string[]) => {
 			unreadPage.unreadCount = Math.max(0, unreadPage.unreadCount - ids.length);
 			unreadPage.notifications = unreadPage.notifications.map((item) =>
@@ -845,9 +832,6 @@ describe("NotificationCenter", () => {
 		});
 	});
 
-	// A PR outcome describes work that already finished — there's no paused
-	// agent to resume, so a terminated session behind one should stay directly
-	// viewable instead of gated behind restore.
 	it("opens a terminated session directly for a PR-outcome notification, with no restore option", async () => {
 		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
 			status === "all"

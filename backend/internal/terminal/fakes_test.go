@@ -10,9 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeSource is a scripted terminal Source: Attach hands out fake Streams from
-// an embedded spawner (or a custom attachFn closure); IsAlive is scriptable.
-// attachErr makes Attach fail.
 type fakeSource struct {
 	spawner   *fakeSpawner
 	attachFn  func(ctx context.Context, rows, cols uint16) (ports.Stream, error)
@@ -54,8 +51,6 @@ func (f *fakeSource) setAliveResult(v bool, err error) {
 	f.mu.Unlock()
 }
 
-// fakePTY is a scripted ports.Stream: Read drains the out channel, Write
-// records, Resize records, and Close unblocks reads.
 type fakePTY struct {
 	out    chan []byte
 	closed chan struct{}
@@ -122,16 +117,13 @@ func (p *fakePTY) resizeCalls() [][2]uint16 {
 	return append([][2]uint16(nil), p.resizes...)
 }
 
-// fakeSpawner hands out pre-built fakePTYs in order; once exhausted it returns
-// idle PTYs that block until closed (so a re-attach loop does not busy-spin).
-// It is the attach seam the fakeSource backs: each Attach call is one spawn.
 type fakeSpawner struct {
 	mu      sync.Mutex
 	ptys    []*fakePTY
 	n       int
 	err     error
 	created []*fakePTY
-	sizes   [][2]uint16 // rows×cols passed to each attach call, in order
+	sizes   [][2]uint16
 }
 
 func (f *fakeSpawner) spawn(rows, cols uint16) (ports.Stream, error) {
@@ -164,7 +156,6 @@ func (f *fakeSpawner) spawnSizes() [][2]uint16 {
 	return append([][2]uint16(nil), f.sizes...)
 }
 
-// eventually polls cond until true or the deadline, failing the test otherwise.
 func eventually(t *testing.T, d time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -177,7 +168,6 @@ func eventually(t *testing.T, d time.Duration, cond func() bool) {
 	t.Fatal("condition not met within " + d.String())
 }
 
-// safeBytes is a concurrency-safe byte accumulator for subscriber callbacks.
 type safeBytes struct {
 	mu sync.Mutex
 	b  []byte

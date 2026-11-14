@@ -277,7 +277,6 @@ func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 	workspace := t.TempDir()
 	hooksDir := filepath.Join(workspace, clineHooksDirName, clineHooksSubDir)
 
-	// Pre-seed a user's own hook script; it must survive install.
 	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +293,6 @@ func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must be idempotent (no error, scripts still single).
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +323,6 @@ func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 		}
 	}
 
-	// User-authored hook untouched.
 	data, err := os.ReadFile(userHook)
 	if err != nil {
 		t.Fatal(err)
@@ -375,7 +372,6 @@ func TestUninstallHooksRemovesClineHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own hook; it must survive uninstall.
 	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -665,9 +661,6 @@ func TestContextCancellationIsHonored(t *testing.T) {
 	cancel()
 
 	if _, err := plugin.GetLaunchCommand(ctx, ports.LaunchConfig{}); err == nil {
-		// GetLaunchCommand resolves the cached binary first; ctx.Err is checked
-		// inside ResolveClineBinary only when no cached binary. With a cached
-		// binary it may not error, so we assert the other methods instead.
 		_ = err
 	}
 	if _, err := plugin.GetConfigSpec(ctx); err == nil {
@@ -765,7 +758,6 @@ func TestGetAgentHooksWritesPlatformScriptNames(t *testing.T) {
 		if !hookutil.FileExists(scriptPath) {
 			t.Fatalf("expected AO hook script at %s", scriptPath)
 		}
-		// The other platform's naming must never be written alongside.
 		other := spec.Event + ".ps1"
 		if runtime.GOOS == "windows" {
 			other = spec.Event
@@ -775,9 +767,6 @@ func TestGetAgentHooksWritesPlatformScriptNames(t *testing.T) {
 		}
 	}
 
-	// The generated .gitignore must cover the exact filenames written above,
-	// otherwise (notably the Windows `<Event>.ps1` form) the hooks stay
-	// untracked and keep session worktrees dirty.
 	gitignore, err := os.ReadFile(filepath.Join(hooksDir, ".gitignore"))
 	if err != nil {
 		t.Fatalf("read hooks .gitignore: %v", err)
@@ -798,8 +787,6 @@ func TestGetAgentHooksMigratesLegacyScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed an upgrade workspace: pre-fix marker-owned scripts under the other
-	// platform's name plus an AO-managed .gitignore covering only those names.
 	var gitignore strings.Builder
 	gitignore.WriteString(hookutil.GitignoreSentinel + "\n/.gitignore\n")
 	userLegacy := clineLegacyScriptName(clineManagedHooks[0].Event)
@@ -809,7 +796,6 @@ func TestGetAgentHooksMigratesLegacyScripts(t *testing.T) {
 			t.Fatalf("legacy and current names coincide for %s on %s", spec.Event, runtime.GOOS)
 		}
 		if legacy == userLegacy {
-			// A user-authored file at a legacy path (no marker) must survive.
 			if err := os.WriteFile(filepath.Join(hooksDir, legacy), []byte("#!/usr/bin/env bash\necho user\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}

@@ -18,9 +18,6 @@ func restoreAfter(t *testing.T, chunks ...string) string {
 	return string(m.Restore(nil))
 }
 
-// restoreOver is restoreAfter with the last chunk treated as the ring replay
-// the attacher is about to receive: only what that chunk cannot re-establish
-// comes back.
 func restoreOver(t *testing.T, chunks ...string) string {
 	t.Helper()
 	m := newModeTracker()
@@ -41,11 +38,8 @@ func TestModeTracker_DefaultStateRestoresNothing(t *testing.T) {
 	}
 }
 
-// The handshake Qwen Code 0.23 prints at startup (captured on the #5039
-// reproduction): alternate screen, SGR any-motion mouse, bracketed paste.
 func TestModeTracker_FullScreenHandshake(t *testing.T) {
 	got := restoreAfter(t, "\x1b[?2004h", "banner\n", "\x1b[?1049h\x1b[?25l", "frame\n", "\x1b[?1003h\x1b[?1006h")
-	// Alternate buffer first, then by mode number.
 	want := "\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?2004h"
 	if got != want {
 		t.Fatalf("Restore = %q, want %q", got, want)
@@ -59,10 +53,6 @@ func TestModeTracker_LeavingTheAltScreenClearsIt(t *testing.T) {
 	}
 }
 
-// xterm.js keeps ONE mouse protocol and ONE encoding: a later set replaces the
-// earlier one, and resetting any member turns the slot off even if a different
-// member was the one set. A per-mode set would replay 1003h here and put the
-// late attacher in a state no live client is in.
 func TestModeTracker_MouseSlotsMirrorXterm(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"\x1b[?1000h\x1b[?1003h", "\x1b[?1003h"},
@@ -70,7 +60,6 @@ func TestModeTracker_MouseSlotsMirrorXterm(t *testing.T) {
 		{"\x1b[?1006h\x1b[?1016h", "\x1b[?1016h"},
 		{"\x1b[?1002h\x1b[?1006h\x1b[?1016l", "\x1b[?1002h"},
 		{"\x1b[?9h", "\x1b[?9h"},
-		// 1005 and 1015 are no-ops in xterm.js: neither sets nor clears anything.
 		{"\x1b[?1005h", ""},
 		{"\x1b[?1002h\x1b[?1006h\x1b[?1015l", "\x1b[?1002h\x1b[?1006h"},
 	}
@@ -87,7 +76,6 @@ func TestModeTracker_AltScreenReplaysTheNumberUsed(t *testing.T) {
 		if got := restoreAfter(t, in); got != in {
 			t.Errorf("after %q: Restore = %q, want %q", in, got, in)
 		}
-		// Any member of the group leaves the alternate buffer.
 		if got := restoreAfter(t, in, "\x1b[?47l"); got != "" {
 			t.Errorf("after %q then 47l: Restore = %q, want empty", in, got)
 		}
@@ -113,7 +101,6 @@ func TestModeTracker_DefaultOnModesReplayOnlyWhenReset(t *testing.T) {
 	}
 }
 
-// PTY reads split sequences anywhere, including inside the parameter bytes.
 func TestModeTracker_SequenceSplitAcrossWrites(t *testing.T) {
 	full := "\x1b[?1049h\x1b[?1003h\x1b[?1006h"
 	want := restoreAfter(t, full)
@@ -124,19 +111,12 @@ func TestModeTracker_SequenceSplitAcrossWrites(t *testing.T) {
 	}
 }
 
-// OSC / DCS payloads are skipped up to their terminator, so a title that
-// happens to contain "[?1049h" text is not mistaken for a mode change, and a
-// mode set right after ST is still seen.
 func TestModeTracker_StringPayloadsAreSkipped(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"\x1b]0;[?1049h\x07", ""},
 		{"\x1b]0;title\x1b\\\x1b[?2004h", "\x1b[?2004h"},
 		{"\x1bPq[?1003h\x1b\\", ""},
 		{"\x1b_G[?47h\x1b\\\x1b[?1049h", "\x1b[?1049h"},
-		// BEL is payload inside DCS / APC, not a terminator; an ESC ends every
-		// string kind, so a 7-bit CSI after the BEL is still a real mode set.
-		// (BEL vs ST would only show through 8-bit C1 introducers, which the
-		// tracker does not read.)
 		{"\x1bPq\x07\x1b[?1049h\x1b\\", "\x1b[?1049h"},
 		{"\x1b_G\x07[?2004h\x1b\\\x1b[?47h", "\x1b[?47h"},
 	}
@@ -147,9 +127,6 @@ func TestModeTracker_StringPayloadsAreSkipped(t *testing.T) {
 	}
 }
 
-// DECSTR (CSI ! p) restores keyboard, paste, focus, wrap and cursor defaults
-// but leaves the mouse and the buffer, exactly as xterm.js softReset does;
-// RIS (ESC c) resets everything.
 func TestModeTracker_SoftAndFullReset(t *testing.T) {
 	all := "\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?1h\x1b[?66h\x1b[?1004h\x1b[?2004h\x1b[?7l\x1b[?25l"
 	got := restoreAfter(t, all, "\x1b[!p")
@@ -157,7 +134,6 @@ func TestModeTracker_SoftAndFullReset(t *testing.T) {
 	if got != want {
 		t.Fatalf("after DECSTR: Restore = %q, want %q", got, want)
 	}
-	// RIS leaves a hidden cursor hidden, as xterm.js does.
 	if got := restoreAfter(t, all, "\x1bc"); got != "\x1b[?25l" {
 		t.Fatalf("after RIS: Restore = %q, want only the hidden cursor", got)
 	}
@@ -166,7 +142,6 @@ func TestModeTracker_SoftAndFullReset(t *testing.T) {
 	}
 }
 
-// ESC = and ESC > drive the same application-keypad flag as ?66.
 func TestModeTracker_KeypadEscapesShareTheFlag(t *testing.T) {
 	if got := restoreAfter(t, "\x1b="); got != "\x1b[?66h" {
 		t.Fatalf("after ESC =: Restore = %q, want ?66h", got)
@@ -176,9 +151,6 @@ func TestModeTracker_KeypadEscapesShareTheFlag(t *testing.T) {
 	}
 }
 
-// A real terminal executes C0 controls and ignores DEL inside a sequence
-// without ending it, and aborts only on CAN or SUB. A line discipline or a
-// program interleaving a control byte must not hide the mode from the tracker.
 func TestModeTracker_ControlBytesInsideSequences(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"\x1b\r[?1049h", "\x1b[?1049h"},
@@ -202,8 +174,6 @@ func TestModeTracker_IgnoresAnsiModesAndUnknownPrivateModes(t *testing.T) {
 	}
 }
 
-// A parameter run that never ends (garbage, or a hostile program) is dropped
-// at maxParams and parsing resumes at the next escape.
 func TestModeTracker_OversizedParametersAreDropped(t *testing.T) {
 	junk := "\x1b[?" + strings.Repeat("1;", maxParams) + "h"
 	got := restoreAfter(t, junk, "\x1b[?2004h")
@@ -212,8 +182,6 @@ func TestModeTracker_OversizedParametersAreDropped(t *testing.T) {
 	}
 }
 
-// Restore must produce sequences the tracker itself reads back to the same
-// state, so a client fed prefix+replay and one fed every byte agree.
 func TestModeTracker_RestoreRoundTrips(t *testing.T) {
 	inputs := []string{
 		"\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?25l",
@@ -231,10 +199,6 @@ func TestModeTracker_RestoreRoundTrips(t *testing.T) {
 	}
 }
 
-// The prefix carries only what the replay can no longer say. A mode whose last
-// change is still inside the replay is left to the replay, so an early
-// attacher gets the bare ring and the program's own alternate-screen switch
-// keeps the output before it in the client's normal buffer.
 func TestModeTracker_PrefixCarriesOnlyWhatTheReplayLacks(t *testing.T) {
 	handshake := "\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?2004h"
 	cases := []struct {
@@ -256,8 +220,6 @@ func TestModeTracker_PrefixCarriesOnlyWhatTheReplayLacks(t *testing.T) {
 	}
 }
 
-// Whatever the prefix says, prefix+replay must leave a fresh terminal in the
-// same state as the full stream did.
 func TestModeTracker_PrefixPlusReplayEqualsFullStream(t *testing.T) {
 	streams := [][]string{
 		{"\x1b[?1049h\x1b[?1003h\x1b[?1006h\x1b[?2004h\x1b[?25l", "frame\n\x1b[?2004l\x1b[?2004h"},
@@ -282,12 +244,6 @@ func TestModeTracker_PrefixPlusReplayEqualsFullStream(t *testing.T) {
 	}
 }
 
-// FuzzModeTracker checks three properties on arbitrary byte streams, including
-// ones no program would print: the tracker never panics; feeding the stream in
-// one write or one byte at a time yields the same state (PTY reads split
-// anywhere); and a fresh tracker given prefix+replay for any split point ends
-// in the same state as one that saw every byte, which is the contract Restore
-// exists for.
 func FuzzModeTracker(f *testing.F) {
 	f.Add([]byte("\x1b[?2004h$ qwen\r\n\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[2K\x1b[1Aframe\n"), 12)
 	f.Add([]byte("\x1b]0;title\x1b\\\x1b[?47h\x1b=\x1b[?7l\x1b[!p\x1bc\x1b[?1002;1016h"), 3)
@@ -324,9 +280,6 @@ func FuzzModeTracker(f *testing.F) {
 	})
 }
 
-// BenchmarkModeTracker measures the per-byte cost on the pump path with a
-// realistic TUI frame (styled text, cursor movement, one mode toggle per
-// frame), which is the only place the tracker runs per byte.
 func BenchmarkModeTracker(b *testing.B) {
 	var frame bytes.Buffer
 	for i := 0; i < 40; i++ {

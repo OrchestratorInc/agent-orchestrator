@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// Verbatim cloudflared 2026.7.2 stderr. The hostname is only ever available by
-// scraping this output, so these fixtures are the contract: if a cloudflared
-// upgrade changes the format, this test fails instead of the tunnel silently
-// never becoming ready.
 const cloudflaredStartup = `2026-08-26T20:07:33Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick way to experiment and try it out. However, be aware that these account-less Tunnels have no uptime guarantee.
 2026-08-26T20:07:33Z INF Requesting new quick Tunnel on trycloudflare.com...
 2026-08-26T20:07:38Z INF +--------------------------------------------------------------------------------------------+
@@ -47,9 +43,6 @@ func TestTunnelLogReadsHostnameAndReadiness(t *testing.T) {
 	}
 }
 
-// Measured: cloudflared prints the hostname ~5s before it registers a
-// connection. Advertising the endpoint in that window hands the phone an
-// address that answers HTTP 530, so a URL alone must not count as ready.
 func TestTunnelLogNotReadyOnHostnameAlone(t *testing.T) {
 	partial := `2026-08-26T20:07:38Z INF |  https://ferrari-moderate-internet-lid.trycloudflare.com  |
 2026-08-26T20:07:38Z INF Generated Connector ID: dc21c5eb-e1a4-4636-8fbb-0d688fa3de8d`
@@ -65,9 +58,6 @@ func TestTunnelLogNotReadyOnHostnameAlone(t *testing.T) {
 }
 
 func TestTunnelLogNotReadyWithoutHostname(t *testing.T) {
-	// A registered connection with no hostname parsed means the format changed.
-	// Readiness must require both, so the failure is visible rather than a
-	// tunnel that is "ready" at the empty address.
 	got := feedLines(t, `2026-08-26T20:07:40Z INF Registered tunnel connection connIndex=0 location=bom11 protocol=quic`)
 
 	if got.Ready() {
@@ -94,9 +84,6 @@ func TestParseCloudflaredVersion(t *testing.T) {
 }
 
 func TestCloudflaredVersionOrdersNumerically(t *testing.T) {
-	// cloudflared is CalVer, so the components must compare as numbers. A
-	// lexical comparison would rank 2026.10.0 below 2026.9.0 and reject a
-	// perfectly good binary every October.
 	for _, tc := range []struct {
 		name   string
 		v, min CloudflaredVersion
@@ -116,8 +103,6 @@ func TestCloudflaredVersionOrdersNumerically(t *testing.T) {
 	}
 }
 
-// lookupFor builds a CloudflaredLookup whose filesystem and PATH are entirely
-// injected, so resolution never depends on what the test machine has installed.
 func lookupFor(env, managed, system string, versions map[string]CloudflaredVersion) CloudflaredLookup {
 	present := map[string]bool{}
 	for _, p := range []string{env, managed, system} {
@@ -143,9 +128,6 @@ func lookupFor(env, managed, system string, versions map[string]CloudflaredVersi
 }
 
 func TestResolveCloudflaredPrefersExplicitOverride(t *testing.T) {
-	// AO_CLOUDFLARED_PATH is the escape hatch for CI, enterprise images, and
-	// air-gapped installs. It wins outright, and is not version-gated: the
-	// operator asked for that binary specifically.
 	got := ResolveCloudflared(lookupFor("/opt/cf", "/home/u/.ao/bin/cloudflared", "/usr/local/bin/cloudflared",
 		map[string]CloudflaredVersion{"/opt/cf": {2019, 1, 0}}))
 
@@ -169,9 +151,6 @@ func TestResolveCloudflaredPrefersOurManagedCopyOverSystem(t *testing.T) {
 	}
 }
 
-// A managed copy left by an older pin is downloaded again rather than trusted
-// for existing. One whose version cannot be read is kept, so a slow scan or a
-// noexec mount never loops on the download.
 func TestResolveCloudflaredReplacesAManagedCopyOfAnotherRelease(t *testing.T) {
 	managed := "/home/u/.ao/bin/cloudflared"
 	pinned := CloudflaredVersion{2026, 10, 2}
@@ -198,8 +177,6 @@ func TestResolveCloudflaredReplacesAManagedCopyOfAnotherRelease(t *testing.T) {
 }
 
 func TestResolveCloudflaredReusesARecentSystemInstall(t *testing.T) {
-	// The whole point: if the user already has cloudflared from brew or apt, use
-	// it. Do not download a second copy, and never upgrade theirs.
 	got := ResolveCloudflared(lookupFor("", "", "/opt/homebrew/bin/cloudflared",
 		map[string]CloudflaredVersion{"/opt/homebrew/bin/cloudflared": {2026, 7, 2}}))
 
@@ -212,8 +189,6 @@ func TestResolveCloudflaredReusesARecentSystemInstall(t *testing.T) {
 }
 
 func TestResolveCloudflaredInstallsAlongsideAnOldSystemCopy(t *testing.T) {
-	// Too old to parse reliably, but it is the user's package-managed binary.
-	// We install our own beside it rather than touching theirs.
 	got := ResolveCloudflared(lookupFor("", "", "/usr/bin/cloudflared",
 		map[string]CloudflaredVersion{"/usr/bin/cloudflared": {2021, 3, 1}}))
 
@@ -237,8 +212,6 @@ func TestResolveCloudflaredInstallsWhenNothingIsPresent(t *testing.T) {
 }
 
 func TestResolveCloudflaredIgnoresASystemBinaryOfUnknownVersion(t *testing.T) {
-	// `cloudflared --version` that we cannot parse means we cannot know whether
-	// the log format matches what the scraper expects.
 	got := ResolveCloudflared(lookupFor("", "", "/usr/bin/cloudflared", nil))
 
 	if !got.NeedsInstall {
@@ -264,8 +237,6 @@ func TestReadTunnelPIDAbsentWhenNeverWritten(t *testing.T) {
 	}
 }
 
-// The reason this file exists: a daemon crash must not leave a public tunnel to
-// the machine running unattended. On the next start we kill what we spawned.
 func TestReapStaleTunnelKillsAnOrphanedConnector(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
 	if err := WriteTunnelPID(path, 4242); err != nil {
@@ -274,7 +245,7 @@ func TestReapStaleTunnelKillsAnOrphanedConnector(t *testing.T) {
 
 	killed := 0
 	err := ReapStaleTunnel(path,
-		func(pid int) bool { return pid == 4242 }, // still running, and ours
+		func(pid int) bool { return pid == 4242 },
 		func(pid int) error { killed = pid; return nil },
 	)
 	if err != nil {
@@ -288,9 +259,6 @@ func TestReapStaleTunnelKillsAnOrphanedConnector(t *testing.T) {
 	}
 }
 
-// PIDs are reused. Killing a recorded pid without confirming it is still our
-// cloudflared would eventually kill an unrelated process — potentially one the
-// user cares about far more than a tunnel.
 func TestReapStaleTunnelNeverKillsAnUnconfirmedProcess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
 	if err := WriteTunnelPID(path, 4242); err != nil {
@@ -299,7 +267,7 @@ func TestReapStaleTunnelNeverKillsAnUnconfirmedProcess(t *testing.T) {
 
 	killed := false
 	err := ReapStaleTunnel(path,
-		func(int) bool { return false }, // pid reused by something else
+		func(int) bool { return false },
 		func(int) error { killed = true; return nil },
 	)
 	if err != nil {
@@ -336,8 +304,6 @@ func TestTunnelRuntimeAdvertisesNothingBeforeReady(t *testing.T) {
 	r.Started()
 	r.Line(`2026-08-26T20:07:38Z INF |  https://abc.trycloudflare.com  |`)
 
-	// Hostname known, no connection registered yet: this is the ~5s window in
-	// which the address answers HTTP 530.
 	if got := r.Endpoint(); got != nil {
 		t.Fatalf("advertised %+v during the pre-registration window", got)
 	}
@@ -360,8 +326,6 @@ func TestTunnelRuntimeAdvertisesOnceRegistered(t *testing.T) {
 	}
 }
 
-// The endpoint must disappear the moment the connector dies, or the phone keeps
-// racing an address that is now dead and every attempt costs a full timeout.
 func TestTunnelRuntimeStopsAdvertisingAfterExit(t *testing.T) {
 	r := &TunnelRuntime{}
 	r.Started()
@@ -379,8 +343,6 @@ func TestTunnelRuntimeStopsAdvertisingAfterExit(t *testing.T) {
 	}
 }
 
-// Quick tunnel hostnames rotate on every start. Carrying the previous one into
-// a restart would advertise a dead address that answers 530.
 func TestTunnelRuntimeForgetsTheOldHostnameOnRestart(t *testing.T) {
 	r := &TunnelRuntime{}
 	r.Started()
@@ -419,9 +381,6 @@ func TestTunnelRuntimeSnapshotReportsWhyItIsDown(t *testing.T) {
 }
 
 func TestCloudflaredArgsTargetLoopback(t *testing.T) {
-	// The connector must reach the daemon over loopback. Pointing it at the LAN
-	// bind address would route tunnel traffic back out across the network for
-	// no reason, and would break if the LAN listener is later restricted.
 	args := CloudflaredArgs(3011, 20241)
 
 	joined := strings.Join(args, " ")
@@ -444,8 +403,6 @@ func TestTunnelBackoffGrowsAndCaps(t *testing.T) {
 		t.Errorf("backoff did not grow: %v then %v", first, second)
 	}
 
-	// A connector that cannot start must not be retried forever at speed; the
-	// ceiling keeps a broken install from becoming a busy loop.
 	for _, attempt := range []int{10, 50, 1000} {
 		if got := TunnelBackoff(attempt); got > MaxTunnelBackoff {
 			t.Errorf("attempt %d backed off %v, above the %v cap", attempt, got, MaxTunnelBackoff)
@@ -462,11 +419,6 @@ func TestTunnelBackoffTreatsNegativeAttemptsAsFirst(t *testing.T) {
 	}
 }
 
-// Measured against real cloudflared: the connector reports a registered
-// connection several seconds before its brand-new hostname resolves in DNS. A
-// phone handed the endpoint in that window gets "no such host", so a registered
-// connection is necessary but not sufficient — the address has to be confirmed
-// reachable before it is advertised.
 func TestTunnelRuntimeWaitsForTheHostnameToSettle(t *testing.T) {
 	r := &TunnelRuntime{}
 	r.Started()
@@ -485,8 +437,6 @@ func TestTunnelRuntimeWaitsForTheHostnameToSettle(t *testing.T) {
 	}
 }
 
-// Each run gets a different hostname, so reachability proven for the previous
-// one says nothing about the new one.
 func TestTunnelRuntimeRequiresSettlingAgainAfterRestart(t *testing.T) {
 	r := &TunnelRuntime{}
 	r.Started()
@@ -504,8 +454,6 @@ func TestTunnelRuntimeRequiresSettlingAgainAfterRestart(t *testing.T) {
 	}
 }
 
-// UnsettledHostname is what the runner waits out. Only meaningful once the
-// connector has registered.
 func TestTunnelRuntimeUnsettledHostnameOnlyAfterRegistration(t *testing.T) {
 	r := &TunnelRuntime{}
 	r.Started()
@@ -519,26 +467,18 @@ func TestTunnelRuntimeUnsettledHostnameOnlyAfterRegistration(t *testing.T) {
 		t.Errorf("UnsettledHostname = %q want abc.trycloudflare.com", got)
 	}
 
-	// Once settled there is nothing left to wait on.
 	r.Settled()
 	if got := r.UnsettledHostname(); got != "" {
 		t.Errorf("UnsettledHostname = %q after settling", got)
 	}
 }
 
-// Start cancels the previous runner without waiting for it (deliberately: a
-// blocking Stop deadlocked the disable request). So a replacement can record
-// its pid while the old runner is still unwinding, and an unconditional delete
-// on the way out erases the live connector's pid — after which boot reaping has
-// nothing to find and that connector can never be cleaned up.
 func TestRemoveOwnTunnelPIDFileLeavesAReplacementAlone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
 	if err := WriteTunnelPID(path, 4242); err != nil {
 		t.Fatalf("seed pid: %v", err)
 	}
 
-	// The outgoing runner (pid 1111) cleans up after the replacement (4242)
-	// has already claimed the file.
 	if err := RemoveOwnTunnelPIDFile(path, 1111); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -564,7 +504,6 @@ func TestRemoveOwnTunnelPIDFileClearsItsOwnRecord(t *testing.T) {
 	}
 }
 
-// A clean stop after the file has already been removed is not an error.
 func TestRemoveOwnTunnelPIDFileToleratesAMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
 	if err := RemoveOwnTunnelPIDFile(path, 1111); err != nil {
@@ -572,9 +511,6 @@ func TestRemoveOwnTunnelPIDFileToleratesAMissingFile(t *testing.T) {
 	}
 }
 
-// Start and cleanup belong to different runner goroutines during a restart.
-// They must nevertheless share one lock for the PID path; otherwise cleanup's
-// read-then-remove can erase a replacement written between those operations.
 func TestTunnelPIDOwnersForTheSamePathAreSerializedTogether(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
 	a := newTunnelPIDOwner(path)

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Each import is a fresh module, standing in for an app launch.
 async function launch() {
 	vi.resetModules();
 	return import("./terminal-grid-hint");

@@ -94,11 +94,9 @@ func TestGateCatalogMarksOnlyModelsNewerThanInstalled(t *testing.T) {
 
 func TestGateCatalogUsesContextVariantLearnedRequirement(t *testing.T) {
 	requirements := NewModelVersionRequirements("")
-	// The variant was taught a higher minimum than its base model's seed.
 	if err := requirements.Record("claude-opus-5-5[1m]", "2.1.281"); err != nil {
 		t.Fatal(err)
 	}
-	// An unseeded variant keeps what it learned.
 	if err := requirements.Record("claude-sonnet-9-9[1m]", "2.1.300"); err != nil {
 		t.Fatal(err)
 	}

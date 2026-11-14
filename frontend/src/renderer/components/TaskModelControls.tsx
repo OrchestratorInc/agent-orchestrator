@@ -11,7 +11,6 @@ import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
 
-// The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
 
 export function TaskEffortPicker({
@@ -59,16 +58,12 @@ export function TaskModelPicker({
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
 	hostId?: string;
-	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
 	allowNativeSelection?: boolean;
-	/** Where the listed models come from. */
 	footer?: ReactNode;
-	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
 	modelHint?: { id: string; label: string };
 }) {
 	const { t } = useTranslation();
 
-	// Keep the no-agent placeholder until there is an agent to configure.
 	if (agentId === "") {
 		return (
 			<span
@@ -113,7 +108,6 @@ export function TaskModelPicker({
 			allowCustom={allowNativeSelection && catalog?.allowCustom}
 			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			onCustom={allowNativeSelection ? onModelChange : undefined}
-			// Default sends no model, so the project's or the agent's own applies.
 			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
 			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
@@ -136,7 +130,6 @@ export function TaskModelPicker({
 	);
 }
 
-/** New Task's model and effort controls, with selection state owned by the caller. */
 export function TaskModelSelection(props: TaskComposerModelControl & {
 	effort: string;
 	onEffortChange: (value: string) => void;
@@ -176,7 +169,6 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 				defaultEffort={cursorChoice ? undefined : selected?.defaultEffort}
 				availability={cursorChoice ? "supported" : availability}
 				onChange={cursorChoice ? (next) => pickVariant({ effort: next }) : (next) => {
-					// An effort edit must stay attached to the model whose levels were offered.
 					props.onModelChange(selectedModel);
 					props.onModeChange("");
 					onEffortChange(next || selected?.defaultEffort || "");

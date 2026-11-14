@@ -12,7 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// CreateReport atomically persists one validated pending report and all outputs.
 func (s *Store) CreateReport(ctx context.Context, rec domain.ReportRecord) (domain.ReportRecord, error) {
 	if err := rec.Validate(); err != nil {
 		return domain.ReportRecord{}, err
@@ -49,7 +48,6 @@ func (s *Store) CreateReport(ctx context.Context, rec domain.ReportRecord) (doma
 	return created, nil
 }
 
-// GetReport returns one report by durable ID with its ordered outputs.
 func (s *Store) GetReport(ctx context.Context, id string) (domain.ReportRecord, bool, error) {
 	row, err := s.qr.GetReport(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -65,7 +63,6 @@ func (s *Store) GetReport(ctx context.Context, id string) (domain.ReportRecord, 
 	return rec, true, nil
 }
 
-// ListReportsBySession returns a worker's reports in creation order.
 func (s *Store) ListReportsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReportRecord, error) {
 	rows, err := s.qr.ListReportsBySession(ctx, string(id))
 	if err != nil {
@@ -74,7 +71,6 @@ func (s *Store) ListReportsBySession(ctx context.Context, id domain.SessionID) (
 	return s.reportsWithOutputs(ctx, rows)
 }
 
-// ListReportedPRURLs returns only a worker's structured created-PR outputs.
 func (s *Store) ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error) {
 	urls, err := s.qr.ListReportedPRURLs(ctx, string(id))
 	if err != nil {
@@ -83,8 +79,6 @@ func (s *Store) ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]
 	return urls, nil
 }
 
-// ListReportsByProject is the read-only persisted report projection. Consumers
-// such as Project Summary do not participate in the delivery claim lifecycle.
 func (s *Store) ListReportsByProject(ctx context.Context, id domain.ProjectID) ([]domain.ReportRecord, error) {
 	rows, err := s.qr.ListReportsByProject(ctx, string(id))
 	if err != nil {
@@ -93,8 +87,6 @@ func (s *Store) ListReportsByProject(ctx context.Context, id domain.ProjectID) (
 	return s.reportsWithOutputs(ctx, rows)
 }
 
-// ListPendingReportSchedule returns the earliest pending work regardless of
-// availability so a coordinator can restore the original deadline after restart.
 func (s *Store) ListPendingReportSchedule(ctx context.Context, limit int64) ([]domain.ReportRecord, error) {
 	rows, err := s.qr.ListPendingReportSchedule(ctx, limit)
 	if err != nil {
@@ -103,8 +95,6 @@ func (s *Store) ListPendingReportSchedule(ctx context.Context, limit int64) ([]d
 	return s.reportsWithOutputs(ctx, rows)
 }
 
-// ClaimPendingReportBatch atomically claims every pending report for a project.
-// A due, attention, or piggyback trigger therefore includes earlier batch work.
 func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	if projectID == "" || token == "" || at.IsZero() {
 		return nil, domain.ErrInvalidReport
@@ -140,7 +130,6 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 	return s.reportsWithOutputs(ctx, orderedReportRows(rows))
 }
 
-// AcknowledgeReportBatch completes only the project batch holding token.
 func (s *Store) AcknowledgeReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) (int, error) {
 	if projectID == "" || token == "" || at.IsZero() {
 		return 0, domain.ErrInvalidReport
@@ -156,8 +145,6 @@ func (s *Store) AcknowledgeReportBatch(ctx context.Context, projectID domain.Pro
 	return len(rows), nil
 }
 
-// ReleaseReportBatch returns the matching project batch to pending without
-// moving any report's original deadline later.
 func (s *Store) ReleaseReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
 	if projectID == "" || token == "" || at.IsZero() {
 		return 0, domain.ErrInvalidReport
@@ -173,9 +160,6 @@ func (s *Store) ReleaseReportBatch(ctx context.Context, projectID domain.Project
 	return len(rows), nil
 }
 
-// DeferReportBatch coalesces a throttled urgent retry until it may request the
-// next interruption. Unlike failure release, this intentionally moves its
-// delivery availability later.
 func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
 	if projectID == "" || token == "" || at.IsZero() {
 		return 0, domain.ErrInvalidReport
@@ -191,7 +175,6 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 	return len(rows), nil
 }
 
-// AcquireReportInterrupt durably enforces the per-worker interruption window.
 func (s *Store) AcquireReportInterrupt(ctx context.Context, sessionID domain.SessionID, at time.Time, window time.Duration) (bool, time.Time, error) {
 	if sessionID == "" || at.IsZero() || window <= 0 {
 		return false, time.Time{}, domain.ErrInvalidReport
@@ -218,7 +201,6 @@ func (s *Store) AcquireReportInterrupt(ctx context.Context, sessionID domain.Ses
 	return acquired, next, err
 }
 
-// ListPendingReports returns reports eligible for a later delivery batch.
 func (s *Store) ListPendingReports(ctx context.Context, at time.Time, limit int64) ([]domain.ReportRecord, error) {
 	rows, err := s.qr.ListPendingReports(ctx, gen.ListPendingReportsParams{AvailableAt: at, Limit: limit})
 	if err != nil {
@@ -227,21 +209,18 @@ func (s *Store) ListPendingReports(ctx context.Context, at time.Time, limit int6
 	return s.reportsWithOutputs(ctx, rows)
 }
 
-// ClaimReport atomically fences one pending report to a delivery attempt token.
 func (s *Store) ClaimReport(ctx context.Context, id, token string, at time.Time) (domain.ReportRecord, bool, error) {
 	return s.updateReportClaim(ctx, id, token, at, "claim", func() (gen.Report, error) {
 		return s.qw.ClaimReport(ctx, gen.ClaimReportParams{ID: id, ClaimToken: token, ClaimedAt: nullTime(at)})
 	})
 }
 
-// AcknowledgeReport completes only the delivery attempt holding the current token.
 func (s *Store) AcknowledgeReport(ctx context.Context, id, token string, at time.Time) (domain.ReportRecord, bool, error) {
 	return s.updateReportClaim(ctx, id, token, at, "acknowledge", func() (gen.Report, error) {
 		return s.qw.AcknowledgeReport(ctx, gen.AcknowledgeReportParams{ID: id, ClaimToken: token, AcknowledgedAt: nullTime(at)})
 	})
 }
 
-// ReleaseReport returns the matching token's claim to pending with retry metadata.
 func (s *Store) ReleaseReport(ctx context.Context, id, token string, availableAt time.Time, lastError string) (domain.ReportRecord, bool, error) {
 	return s.updateReportClaim(ctx, id, token, availableAt, "release", func() (gen.Report, error) {
 		return s.qw.ReleaseReport(ctx, gen.ReleaseReportParams{ID: id, ClaimToken: token, AvailableAt: availableAt, LastError: lastError})
@@ -265,7 +244,6 @@ func (s *Store) updateReportClaim(ctx context.Context, id, token string, at time
 	return rec, err == nil, err
 }
 
-// RequeueClaimedReports atomically recovers claims owned by a prior daemon process.
 func (s *Store) RequeueClaimedReports(ctx context.Context) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

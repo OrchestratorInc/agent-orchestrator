@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// mergePRRequest mirrors the daemon merge action request.
 type mergePRRequest struct {
 	PRURL           string `json:"prUrl"`
 	ExpectedHeadSHA string `json:"expectedHeadSha"`

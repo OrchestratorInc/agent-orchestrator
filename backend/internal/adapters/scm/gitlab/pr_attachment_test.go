@@ -51,7 +51,6 @@ func TestStoreAttachments_GitLabUsesProjectUploadsMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Project uploads aren't in the repository: nothing to discard later.
 	if len(got.URLs) != 1 || got.URLs[0] != "https://gitlab.com/-/project/77/uploads/abc123/shot.png" || got.Handle != "" {
 		t.Fatalf("result = %#v", got)
 	}

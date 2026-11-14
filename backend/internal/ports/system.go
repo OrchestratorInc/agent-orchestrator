@@ -7,89 +7,54 @@ import (
 	"time"
 )
 
-// ExecutableFinder resolves command names against the host PATH. Core
-// services depend on this port rather than importing os/exec directly.
 type ExecutableFinder interface {
 	LookPath(file string) (string, error)
 }
 
-// CommandRunner executes an already-resolved argv and streams output to the
-// supplied writers. Callers are responsible for constraining argv to a safe
-// allowlist before it reaches this boundary.
 type CommandRunner interface {
 	Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error
 }
 
-// InstallCommand carries the extra execution policy required for unattended
-// installers. Argv remains server-owned; Env contains only explicit overrides.
 type InstallCommand struct {
-	Argv []string
-	Env  []string
-	// Dir, when set, is the installer's working directory.
-	Dir string
-	// Isolated keeps the daemon's environment out of the installer except for
-	// locale, temp, proxy and TLS settings, so a variable the user exported
-	// (an install directory, a vendor home) cannot redirect it; Env supplies
-	// everything else.
+	Argv     []string
+	Env      []string
+	Dir      string
 	Isolated bool
 }
 
-// InstallCommandRunner executes an installer with closed stdin and controlled
-// noninteractive environment overrides.
 type InstallCommandRunner interface {
 	RunInstall(ctx context.Context, command InstallCommand, stdout, stderr io.Writer) error
 }
 
-// InstallScriptCommand is a daemon-owned remote installer recipe. The caller
-// selects the exact URL, interpreter, and fixed script arguments; the adapter
-// downloads the complete script before executing it.
 type InstallScriptCommand struct {
 	URL         string
 	Interpreter []string
 	Args        []string
 	Env         []string
-	// Isolated runs the script with InstallCommand.Isolated.
-	Isolated bool
+	Isolated    bool
 }
 
-// InstallScriptResult records display-safe evidence about a downloaded script.
 type InstallScriptResult struct {
 	SHA256 string
 }
 
-// InstallScriptRunner downloads and executes a fixed remote installer without
-// exposing script authority to clients.
 type InstallScriptRunner interface {
 	RunInstallScript(ctx context.Context, command InstallScriptCommand, stdout, stderr io.Writer) (InstallScriptResult, error)
 }
 
-// ErrDownloadRejected marks a managed download whose bytes were wrong (a
-// checksum mismatch, an asset over the size limit, an archive without the
-// binary): trying again would fetch the same.
 var ErrDownloadRejected = errors.New("download rejected")
 
-// ManagedBinaryDownload is a daemon-owned release asset installed into AO's
-// own bin directory (<data dir>/bin). SHA256 pins the downloaded bytes and is
-// checked before anything reads them. ArchiveMember names the executable
-// inside a .tar.gz asset; empty means the asset is the executable itself.
 type ManagedBinaryDownload struct {
 	URL           string
 	SHA256        string
 	ArchiveMember string
-	// Name is the file name under the bin directory, e.g. "cloudflared.exe".
-	Name string
+	Name          string
 }
 
-// ManagedBinaryInstaller downloads a pinned release executable into AO's bin
-// directory and returns where it landed. An unverified file never becomes
-// executable or reaches that path.
 type ManagedBinaryInstaller interface {
 	InstallManagedBinary(ctx context.Context, download ManagedBinaryDownload) (string, error)
 }
 
-// NPMInstallCapabilities is one request-scoped npm/Node preflight snapshot.
-// Err is manager-specific so an unavailable npm does not suppress viable
-// Homebrew recipes in the same catalog response.
 type NPMInstallCapabilities struct {
 	NodeVersion    string
 	NPMVersion     string
@@ -99,9 +64,6 @@ type NPMInstallCapabilities struct {
 	Err            error
 }
 
-// HomebrewInstallCapabilities is one request-scoped Homebrew preflight
-// snapshot. Installed package maps come from successful full inventory reads;
-// callers must treat Err as unavailable rather than guessing "not installed".
 type HomebrewInstallCapabilities struct {
 	Prefix         string
 	PrefixWritable bool
@@ -110,29 +72,19 @@ type HomebrewInstallCapabilities struct {
 	Err            error
 }
 
-// InstallCapabilities contains all subprocess-backed package-manager facts
-// used to resolve the server-owned recipe catalog for one request.
 type InstallCapabilities struct {
 	NPM      NPMInstallCapabilities
 	Homebrew HomebrewInstallCapabilities
 }
 
-// InstallCapabilityProbe resolves package-manager state that PATH lookup alone
-// cannot validate safely. Probe must honor ctx and returns one immutable
-// snapshot so recipe resolution never reruns subprocesses per harness.
 type InstallCapabilityProbe interface {
 	Probe(ctx context.Context) (InstallCapabilities, error)
 }
 
-// PathWritableProbe checks whether an install destination or its nearest
-// existing ancestor is writable by the daemon user.
 type PathWritableProbe interface {
 	PathWritable(ctx context.Context, path string) (bool, error)
 }
 
-// AgentInstallJobRecord is the storage-bound representation of a daemon-owned
-// harness installation job. Strings keep the persistence adapter independent
-// of the systeminstall package's domain types.
 type AgentInstallJobRecord struct {
 	Target              string
 	Status              string
@@ -146,8 +98,6 @@ type AgentInstallJobRecord struct {
 	UpdatedAt           time.Time
 }
 
-// AgentInstallJobStore persists the latest harness installation job per
-// target so Settings can recover it after remounts and daemon restarts.
 type AgentInstallJobStore interface {
 	UpsertAgentInstallJob(ctx context.Context, job AgentInstallJobRecord) error
 	GetAgentInstallJob(ctx context.Context, target string) (AgentInstallJobRecord, bool, error)

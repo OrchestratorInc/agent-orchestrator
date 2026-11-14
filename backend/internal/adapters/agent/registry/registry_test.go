@@ -61,13 +61,6 @@ func TestOpenCodeMajorsAreIndependentlySelectable(t *testing.T) {
 	}
 }
 
-// TestGetAgentHooksFootprintIsGitignored enforces a contract every shipped
-// (and future) adapter must hold: any file GetAgentHooks writes into a session
-// worktree must be covered by a sibling AO-managed self-ignoring .gitignore
-// (hookutil.EnsureWorkspaceGitignore). Hook files are untracked, and
-// `git worktree remove` (without --force) refuses on any untracked file — an
-// uncovered hook file makes every one of that adapter's session workspaces
-// permanently undeletable (kill/cleanup can never free them).
 func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 	for _, ha := range Harnessed() {
 		t.Run(string(ha.Harness), func(t *testing.T) {
@@ -276,7 +269,6 @@ func TestEveryProductionHarnessReportsModelOrModeConfig(t *testing.T) {
 	}
 }
 
-// workspaceFiles returns every regular file under root, relative to root.
 func workspaceFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string

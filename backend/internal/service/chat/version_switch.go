@@ -7,15 +7,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// versionSwitchStore records a failed move to a new harness release.
 type versionSwitchStore interface {
 	SetSessionVersionSwitchFailed(ctx context.Context, id domain.SessionID, version string, at time.Time) error
 }
 
-// SwitchToInstalledRelease stops an idle provider that still runs a replaced
-// harness release and starts it again on the installed one right away, so the
-// user finds the session ready and never restarts it themselves. It reports
-// whether the provider was stopped.
 func (s *Service) SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error) {
 	stopped, err := s.HibernateChatForVersionRefresh(ctx, id, minIdle)
 	if err != nil || !stopped {
@@ -25,10 +20,6 @@ func (s *Service) SwitchToInstalledRelease(ctx context.Context, id domain.Sessio
 	return true, nil
 }
 
-// WaitForWake returns once no wake of id is in flight: the provider has
-// started on the installed release and taken what queued meanwhile, or failed
-// to. A move to a new release waits for it so it holds its concurrency permit
-// through the provider's start, not only its stop.
 func (s *Service) WaitForWake(ctx context.Context, id domain.SessionID) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
@@ -47,10 +38,6 @@ func (s *Service) WaitForWake(ctx context.Context, id domain.SessionID) error {
 	}
 }
 
-// switchBeforeSend moves a session still on a replaced release to the
-// installed one before it takes the user's next message, when it has been
-// quiet long enough that its prompt cache is gone. Any work in flight, queued
-// message or pending approval keeps the old release for this message.
 func (s *Service) switchBeforeSend(ctx context.Context, record domain.SessionRecord) bool {
 	if s.versionRefresh == nil || record.StaleBinary == nil || record.StaleBinary.SwitchFailedAt != nil || record.HibernatedAt != nil {
 		return false
@@ -76,8 +63,6 @@ func (s *Service) noteVersionSwitch(id domain.SessionID, version string) {
 	s.versionSwitches[id] = version
 }
 
-// SetVersionSwitchObserver late-binds a callback told how each move of a
-// Chat session to a new release ended ("succeeded" or "failed").
 func (s *Service) SetVersionSwitchObserver(observer func(id domain.SessionID, version, result string)) {
 	s.versionSwitchMu.Lock()
 	defer s.versionSwitchMu.Unlock()
@@ -101,10 +86,6 @@ func (s *Service) takeVersionSwitch(id domain.SessionID) (string, bool) {
 	return version, ok
 }
 
-// versionSwitchFailed handles a failed wake of a session stopped to move it to
-// a new release. Its queued messages stay queued for the user's resume, and
-// the session records the failure so the client can say what happened. It
-// reports false for any other wake, which keeps the usual failure handling.
 func (s *Service) versionSwitchFailed(ctx context.Context, id domain.SessionID, wakeErr error) bool {
 	version, ok := s.takeVersionSwitch(id)
 	if !ok {

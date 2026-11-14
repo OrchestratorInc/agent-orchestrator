@@ -17,17 +17,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// forkSeedApplier writes a fork source's captured files into the fork.
 type forkSeedApplier interface {
 	Apply(ctx context.Context, worktree, ref string) error
 	Delete(ctx context.Context, workspace, ref string) error
-	// RecordBase, UnchangedSince and DiscardChanges let cleanup tell a fork's
-	// inherited uncommitted changes from its own.
 	RecordBase(ctx context.Context, worktree, ref string) error
 	UnchangedSince(ctx context.Context, worktree, ref string) (bool, error)
 	DiscardChanges(ctx context.Context, worktree string) error
-	// RestoreBase writes a fork's starting files back into a recreated
-	// worktree that is still at the fork's start commit.
 	RestoreBase(ctx context.Context, worktree, ref string) (bool, error)
 }
 
@@ -57,9 +52,6 @@ func (gitForkSeeds) DiscardChanges(ctx context.Context, worktree string) error {
 	return forkseed.DiscardChanges(ctx, worktree)
 }
 
-// createForkWorkspace creates the fork's branch at the source's HEAD, then
-// copies in the source's uncommitted and untracked files. A worktree that was
-// created is returned with any error, so the caller rolls it back.
 func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
 	if fork.StartPoint == "" {
 		return ports.WorkspaceInfo{}, nil, errors.New("session fork: missing start point")
@@ -74,16 +66,12 @@ func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork
 	if !fork.KeepSeedRef {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		// The ref is only needed to copy the files; the reaper removes it if
-		// this fails, since a seed ref with no live fork is a leftover.
 		_ = m.forkSeeds.Delete(cleanupCtx, ws.Path, fork.SeedRef)
 	}
 	if applyErr != nil {
 		return ws, nil, fmt.Errorf("session fork: copy source files: %w", applyErr)
 	}
 	m.markForkWorkspace(ws.Path)
-	// Record what the fork starts with, so archiving an unchanged fork can
-	// clean up its worktree instead of keeping the inherited changes.
 	if err := m.forkSeeds.RecordBase(ctx, ws.Path, forkseed.BaseRef(string(cfg.SessionID))); err != nil {
 		m.logger.Warn("session fork: record the fork's starting files", "workspace", ws.Path, "err", err)
 	}
@@ -101,9 +89,6 @@ func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork
 	return ws, nil, nil
 }
 
-// copyForkFiles copies the source's artifacts into the fork's artifact
-// folder, as of the forked turn when the fork has one, and its message
-// attachments into the fork's own store.
 func (m *Manager) copyForkFiles(ctx context.Context, fork *ports.SpawnFork, id domain.SessionID, artifactDir string) error {
 	if artifactDir != "" {
 		var err error
@@ -119,10 +104,6 @@ func (m *Manager) copyForkFiles(ctx context.Context, fork *ports.SpawnFork, id d
 	return m.copyForkAttachments(ctx, fork, id)
 }
 
-// copyForkArtifacts copies the source's artifact files into the fork's own
-// folder, so the fork's links and edits never touch the original's. The
-// version store is not copied: the fork's history of its artifacts starts
-// fresh.
 func (m *Manager) copyForkArtifacts(ctx context.Context, source domain.SessionID, dst string) error {
 	if source == "" {
 		return nil
@@ -138,18 +119,10 @@ type artifactVersionLister interface {
 	ListLatestSessionArtifactVersions(ctx context.Context, id domain.SessionID) ([]domain.SessionArtifactVersion, error)
 }
 
-// copyForkArtifactsAsOf copies the source's artifacts as they were at asOf,
-// for a fork of an older turn. Each file takes its newest saved version
-// modified by then; a file first written later is left out, and one deleted
-// since still comes from its saved version. A file with no saved versions
-// goes by its modification time.
 func (m *Manager) copyForkArtifactsAsOf(ctx context.Context, source domain.SessionID, dst string, asOf time.Time, turnID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	src := m.artifactDir(source)
-	// The list kept as the next turn started holds every artifact under the
-	// path it had, even one a later turn renamed or edited past the version
-	// limit. Turns from before it was kept go by the version store.
 	if turnID != "" {
 		files, found, err := sessionartifacts.TurnArtifacts(src, turnID)
 		if err != nil {
@@ -160,8 +133,6 @@ func (m *Manager) copyForkArtifactsAsOf(ctx context.Context, source domain.Sessi
 		}
 	}
 	lister, _ := m.store.(artifactVersionLister)
-	// Every path the session has had: the files there now, and any saved
-	// in the version store, which keeps deleted ones.
 	paths := map[string]bool{}
 	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -202,8 +173,6 @@ func (m *Manager) copyForkArtifactsAsOf(ctx context.Context, source domain.Sessi
 	return nil
 }
 
-// copyTurnArtifacts copies the artifacts a turn's kept list names from src's
-// kept content into dst.
 func copyTurnArtifacts(ctx context.Context, src, dst string, files map[string]string) error {
 	for rel, sum := range files {
 		if err := ctx.Err(); err != nil {
@@ -220,7 +189,6 @@ func copyTurnArtifacts(ctx context.Context, src, dst string, files map[string]st
 	return nil
 }
 
-// copyArtifactAsOf copies one artifact path as it was at asOf, if it existed.
 func (m *Manager) copyArtifactAsOf(ctx context.Context, lister artifactVersionLister, source domain.SessionID, src, dst, rel string, asOf time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -254,7 +222,7 @@ func (m *Manager) copyArtifactAsOf(ctx context.Context, lister artifactVersionLi
 		}
 	}
 	if chosen == nil {
-		return nil // first written after that turn
+		return nil
 	}
 	blob := filepath.Join(src, sessionartifacts.VersionsDir, "blobs", chosen.SHA256[:2], chosen.SHA256)
 	return copyRegularFileMkdir(blob, target)
@@ -267,10 +235,6 @@ func copyRegularFileMkdir(from, to string) error {
 	return copyRegularFile(from, to)
 }
 
-// copyForkAttachments copies the files attached to the source's messages into
-// the fork's own store; they are placed in the fork's worktree once it exists.
-// A fork of an older turn takes only the attachments its conversation had by
-// then.
 func (m *Manager) copyForkAttachments(ctx context.Context, fork *ports.SpawnFork, id domain.SessionID) error {
 	if fork.SourceSessionID == "" || m.dataDir == "" {
 		return nil
@@ -289,9 +253,6 @@ func (m *Manager) copyForkAttachments(ctx context.Context, fork *ports.SpawnFork
 	return nil
 }
 
-// copyTree copies regular files and folders, skipping symlinks, special
-// files, and a top-level folder named skip. With only set, it copies just the
-// top-level files named there. A missing src is not an error.
 func copyTree(ctx context.Context, src, dst, skip string, only map[string]bool) error {
 	err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -335,10 +296,6 @@ type forkLinkRewriter interface {
 	CopyForkMessageContent(ctx context.Context, sourceConversationID, forkConversationID string) (int, error)
 }
 
-// pointForkLinksAtFork fixes the fork's imported history: the original's
-// artifact links point at the fork's own copies, and pasted images come back
-// from the original's messages. Links to the original session itself are left
-// alone.
 func (m *Manager) pointForkLinksAtFork(ctx context.Context, project domain.ProjectID, source, fork domain.SessionID) {
 	rewriter, ok := m.store.(forkLinkRewriter)
 	if !ok || source == "" {
@@ -354,8 +311,6 @@ func (m *Manager) pointForkLinksAtFork(ctx context.Context, project domain.Proje
 	if _, err := rewriter.RewriteConversationText(ctx, conversation.ID, from, to); err != nil {
 		m.logger.Warn("session fork: point artifact links at the fork", "session", fork, "err", err)
 	}
-	// The agent's history writes pasted images as "[Image]"; take them back
-	// from the original's messages.
 	if original, err := rewriter.ConversationForSession(ctx, source); err != nil {
 		m.logger.Warn("session fork: find the original's conversation", "session", source, "err", err)
 	} else if _, err := rewriter.CopyForkMessageContent(ctx, original.ID, conversation.ID); err != nil {
@@ -383,10 +338,8 @@ func copyRegularFile(from, to string) error {
 type forkOriginKey struct{}
 
 type forkOrigin struct {
-	sourceID domain.SessionID
-	title    string
-	// workspace is the original's worktree, which the copied conversation
-	// names.
+	sourceID  domain.SessionID
+	title     string
 	workspace string
 }
 
@@ -398,8 +351,6 @@ type forkLineageReader interface {
 	GetSessionFork(ctx context.Context, forkID domain.SessionID) (domain.SessionFork, bool, error)
 }
 
-// forkBoundaryPrompt tells a fork's agent that it is a separate session from
-// the one it was copied from, so it doesn't act on the original's PRs.
 func (m *Manager) forkBoundaryPrompt(ctx context.Context, id domain.SessionID) string {
 	origin, ok := ctx.Value(forkOriginKey{}).(forkOrigin)
 	if !ok {
@@ -445,9 +396,6 @@ func (m *Manager) isSessionFork(ctx context.Context, id domain.SessionID) bool {
 	return err == nil && found
 }
 
-// cleanupForkLeftovers removes what a fork copied for itself: its artifact
-// files, its starting-files ref, and the agent's own session file made for it. The original's are
-// never touched.
 func (m *Manager) cleanupForkLeftovers(rec domain.SessionRecord, nativeFile string) {
 	m.cleanupArtifactDir(rec.ID)
 	if project, err := m.loadProject(context.Background(), rec.ProjectID); err == nil && project.Path != "" {
@@ -463,8 +411,6 @@ func (m *Manager) cleanupForkLeftovers(rec domain.SessionRecord, nativeFile stri
 	}
 }
 
-// forkNativeSessionFile is the agent's own session file for a fork, found
-// through the agent's transcript locator. Empty when the agent has none.
 func (m *Manager) forkNativeSessionFile(ctx context.Context, rec domain.SessionRecord) string {
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
@@ -497,8 +443,6 @@ func (m *Manager) forkNativeSessionFile(ctx context.Context, rec domain.SessionR
 	return path
 }
 
-// discardForkConversation removes a native copy made for a fork. Only Claude's
-// copies are files AO places; other agents keep theirs in their own stores.
 func (m *Manager) discardForkConversation(ctx context.Context, harness domain.AgentHarness, providerID, workspace string, env map[string]string) {
 	if harness != domain.HarnessClaudeCode || providerID == "" || workspace == "" || m.claudeSessionCleanup == nil {
 		return
@@ -508,16 +452,10 @@ func (m *Manager) discardForkConversation(ctx context.Context, harness domain.Ag
 	}
 }
 
-// ForkRetrier rebuilds the copy step for a fork whose start failed.
 type ForkRetrier func(ctx context.Context, fork domain.SessionRecord) (*ports.SpawnFork, error)
 
-// SetForkRetrier wires how a failed fork is made again on retry.
 func (m *Manager) SetForkRetrier(retry ForkRetrier) { m.forkRetry = retry }
 
-// dropInheritedForkChanges discards a fork's uncommitted changes when they
-// are only the ones it inherited: its files still match what it started with,
-// and its original is a live session that still holds them. Cleanup then
-// removes the worktree like any clean one. It reports whether it discarded.
 func (m *Manager) dropInheritedForkChanges(ctx context.Context, rec domain.SessionRecord, ws ports.WorkspaceInfo) bool {
 	lineage, ok := m.store.(forkLineageReader)
 	if !ok || ws.Path == "" {
@@ -542,10 +480,6 @@ func (m *Manager) dropInheritedForkChanges(ctx context.Context, rec domain.Sessi
 	return true
 }
 
-// restoreForkStartingFiles puts a fork's starting files back into its worktree
-// after restore recreated it. Archiving drops a fork's inherited changes when
-// it never touched them, so the worktree can be removed; they live on under
-// the fork's starting-files ref until it is deleted.
 func (m *Manager) restoreForkStartingFiles(ctx context.Context, id domain.SessionID, worktree string) {
 	if worktree == "" || !m.isSessionFork(ctx, id) {
 		return

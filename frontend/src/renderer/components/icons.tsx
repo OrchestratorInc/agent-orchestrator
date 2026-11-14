@@ -3,7 +3,6 @@ import type { ComponentType, SVGProps } from "react";
 export type AppIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 export function BrowserIcon(props: SVGProps<SVGSVGElement>) {
-	// Myna UI "globe", matching the app icon set (components/app-icons).
 	return (
 		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="1.2 1.2 21.6 21.6" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" {...props}>
 			<path d="M12 21a9 9 0 1 0 0-18m0 18a9 9 0 1 1 0-18m0 18c2.761 0 3.941-5.163 3.941-9S14.761 3 12 3m0 18c-2.761 0-3.941-5.163-3.941-9S9.239 3 12 3M3.5 9h17m-17 6h17" />
@@ -11,10 +10,6 @@ export function BrowserIcon(props: SVGProps<SVGSVGElement>) {
 	);
 }
 
-// Codex mark: a rounded terminal tile holding a `<` prompt and a caret bar,
-// drawn monochrome in lucide's 24x24 stroke style so it inherits color/size
-// from the slot it sits in (unlike the full-color brand logo, which carries a
-// white background chip and a gradient that won't theme against our surfaces).
 export function CodexIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	return (
 		<svg
@@ -37,11 +32,6 @@ export function CodexIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	);
 }
 
-// Orchestrator mark: a parent node fanning out to three child nodes, drawn in
-// lucide's 24x24 stroke style so it drops into the same slots as the lucide
-// icons (size comes from `className`/the parent's `[&_svg]:size-*`). Lucide has
-// no 1-parent / 3-child hierarchy glyph, so we author this one to match the
-// org-chart icon called for in the design.
 export function OrchestratorIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	return (
 		<svg
@@ -69,28 +59,6 @@ export function OrchestratorIcon({ className, ...props }: SVGProps<SVGSVGElement
 	);
 }
 
-// Subagents mark: IconOven's "Agent robot" (https://iconoven.com/icons/agent-robot),
-// a 24x24 stroke glyph that drops into the same slots as the lucide icons. The eyes
-// are drawn at 4/3 of the stroke, as in the original.
-//
-// MIT License. Copyright (c) 2026 Appic Marketing LLC (IconOven)
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy of
-// this software and associated documentation files (the "Software"), to deal in the
-// Software without restriction, including without limitation the rights to use,
-// copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
-// Software, and to permit persons to whom the Software is furnished to do so,
-// subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-// FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
-// AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 export function SubagentIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	return (
 		<svg
@@ -115,9 +83,6 @@ export function SubagentIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	);
 }
 
-// VS Code's ribbon mark, drawn as a filled 24x24 glyph so it sits in the same
-// slots as the lucide icons. Filled (not stroked) because the mark reads as a
-// solid shape at topbar size; `currentColor` lets the topbar variant tint it.
 export function VSCodeIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	return (
 		<svg
@@ -134,10 +99,6 @@ export function VSCodeIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
 	);
 }
 
-// Editor brand marks, drawn as filled 24x24 glyphs alongside VSCodeIcon so the
-// "Open with" list shows each editor's own logo rather than a stand-in. Paths
-// are simple-icons' (cursor, windsurf, zedindustries); VS Code is hand-authored
-// because simple-icons does not carry that restricted brand.
 function BrandGlyph({
 	d,
 	className,
@@ -215,7 +176,6 @@ export function AntigravityIcon(props: SVGProps<SVGSVGElement>) {
 	return <BrandGlyph d={ANTIGRAVITY_PATH} viewBox="0 0 180 180" {...props} />;
 }
 
-// Compact Finder face, kept as SVG so it sizes exactly like the other menu icons.
 export function FinderIcon(props: SVGProps<SVGSVGElement>) {
 	return (
 		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" {...props}>
@@ -226,8 +186,6 @@ export function FinderIcon(props: SVGProps<SVGSVGElement>) {
 	);
 }
 
-// Ghostty mark from Simple Icons (CC0). Always use this mark: macOS can return
-// a generic application placeholder as a valid native icon for Ghostty.
 export function GhosttyIcon(props: SVGProps<SVGSVGElement>) {
 	return <BrandGlyph d="M12 0C6.7 0 2.4 4.3 2.4 9.6v11.146c0 1.772 1.45 3.267 3.222 3.254a3.18 3.18 0 0 0 1.955-.686 1.96 1.96 0 0 1 2.444 0 3.18 3.18 0 0 0 1.976.686c.75 0 1.436-.257 1.98-.686.715-.563 1.71-.587 2.419-.018.59.476 1.355.743 2.182.699 1.705-.094 3.022-1.537 3.022-3.244V9.601C21.6 4.3 17.302 0 12 0M6.069 6.562a1 1 0 0 1 .46.131l3.578 2.065v.002a.974.974 0 0 1 0 1.687L6.53 12.512a.975.975 0 0 1-.976-1.687L7.67 9.602 5.553 8.38a.975.975 0 0 1 .515-1.818m7.438 2.063h4.7a.975.975 0 1 1 0 1.95h-4.7a.975.975 0 0 1 0-1.95" {...props} />;
 }

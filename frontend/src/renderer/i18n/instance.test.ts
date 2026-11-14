@@ -159,7 +159,6 @@ describe("app i18next instance", () => {
 
 	it("localizes Cloud project setup and settings copy that only had inline English defaults", () => {
 		const german = createAppI18n("de");
-		// The call sites pass an English defaultValue, which must not win over the catalog.
 		expect(german.t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })).toBe("Agent startet in");
 		expect(german.t("cloudRepos.problemLimit", { defaultValue: "A project can have at most {{count}} additional repositories.", count: 5 }))
 			.toBe("Ein Projekt kann höchstens 5 zusätzliche Repositorys haben.");
@@ -229,8 +228,6 @@ describe("app i18next instance", () => {
 			const catalog = allCatalogs[locale] as unknown as Record<keyof typeof enMessages, string | string[]>;
 			for (const key of Object.keys(enMessages) as (keyof typeof enMessages)[]) {
 				const english = variables(enMessages[key]);
-				// i18next always passes count to plural keys, so a locale may add it where English
-				// hardcodes "1" (Russian uses the one form for 21, 31, ...). It may never drop it.
 				const mayAddCount = /_(zero|one|two|few|many|other)$/.test(key) && !english.includes("count");
 				const actual = variables(catalog[key]).filter((name) => !(mayAddCount && name === "count"));
 				expect(actual, `${locale} placeholder mismatch for ${key}`).toEqual(english);

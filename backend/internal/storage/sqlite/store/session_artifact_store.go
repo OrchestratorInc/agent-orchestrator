@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// AddSessionArtifacts registers deliverables with their observed file identity
-// and returns all registered paths, oldest first. Registering a path again keeps
-// its ID and registration time. It returns false for an unknown session.
 func (s *Store) AddSessionArtifacts(ctx context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, registeredAt time.Time) ([]string, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -50,8 +47,6 @@ func (s *Store) AddSessionArtifacts(ctx context.Context, id domain.SessionID, re
 	return registered, found, nil
 }
 
-// ListSessionArtifacts returns the session's artifact rows, by path, with
-// HasVersions set for a scan to plan from.
 func (s *Store) ListSessionArtifacts(ctx context.Context, id domain.SessionID) ([]domain.SessionArtifactRecord, error) {
 	rows, err := s.qr.ListSessionArtifacts(ctx, id)
 	if err != nil {
@@ -66,9 +61,6 @@ func (s *Store) ListSessionArtifacts(ctx context.Context, id domain.SessionID) (
 	return out, nil
 }
 
-// ListSessionArtifactsForSessions returns the artifact rows of each of the
-// given sessions, keyed by session. A row may name a file that no longer
-// exists; reads ignore it until a file is written there again.
 func (s *Store) ListSessionArtifactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error) {
 	out := make(map[domain.SessionID][]domain.SessionArtifactRecord)
 	if len(ids) == 0 {
@@ -90,11 +82,6 @@ func (s *Store) ListSessionArtifactsForSessions(ctx context.Context, ids []domai
 	return out, nil
 }
 
-// ApplySessionArtifactChanges applies one scan's changes to the session's
-// artifact rows in one transaction, and returns the sha256 of each version it
-// deleted so the caller can remove blobs nothing refers to any more. A row
-// that no longer has the path the changes expect fails the whole set with
-// domain.ErrSessionArtifactsChanged.
 func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.SessionID, changes domain.SessionArtifactChanges) ([]string, error) {
 	if changes.Empty() {
 		return nil, nil
@@ -118,15 +105,12 @@ func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.Sessi
 			}
 			freed = append(freed, sums...)
 		}
-		// Moves go through a path no file can have first, so artifacts that
-		// take each other's paths never meet on one.
 		for _, move := range changes.Move {
 			if err := moveSessionArtifact(ctx, q, id, move.ID, move.From, movingPath(move.ID), nil, domain.FileIdentity{}); err != nil {
 				return err
 			}
 		}
 		for _, move := range changes.Move {
-			// Versions left at the path belong to no artifact.
 			sums, err := q.DeleteSessionArtifactPathVersions(ctx, gen.DeleteSessionArtifactPathVersionsParams{SessionID: id, Path: move.To})
 			if err != nil {
 				return err
@@ -156,7 +140,6 @@ func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.Sessi
 			if n == 1 {
 				continue
 			}
-			// Kept for its history, with no file; or changed since it was read.
 			if n, err = q.SetSessionArtifactFile(ctx, gen.SetSessionArtifactFileParams{ID: forget.ID, Path: forget.Path}); err != nil {
 				return err
 			}
@@ -183,8 +166,6 @@ func (s *Store) ApplySessionArtifactChanges(ctx context.Context, id domain.Sessi
 	return freed, nil
 }
 
-// movingPath is where an artifact's row and versions wait during a move. A
-// path in the artifact directory never starts with a NUL byte.
 func movingPath(id string) string {
 	return "\x00moving/" + id
 }
@@ -228,8 +209,6 @@ func sessionArtifactRecord(row gen.SessionArtifact) domain.SessionArtifactRecord
 	return record
 }
 
-// RemoveSessionArtifact forgets the artifact at path, if any, after the user
-// deleted its file.
 func (s *Store) RemoveSessionArtifact(ctx context.Context, id domain.SessionID, path string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -239,7 +218,6 @@ func (s *Store) RemoveSessionArtifact(ctx context.Context, id domain.SessionID, 
 	return nil
 }
 
-// ClearSessionArtifacts forgets every artifact of the session.
 func (s *Store) ClearSessionArtifacts(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

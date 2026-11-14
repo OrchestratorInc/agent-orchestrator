@@ -34,13 +34,11 @@ type asyncChatSpawnRun struct {
 	done   chan struct{}
 }
 
-// beginAsyncChatSpawn publishes the session, records the opening prompt in the
-// durable queue, and hands the rest to the background.
 func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (domain.SessionRecord, int, int, error) {
 	id := in.record.ID
 	rollback := func() {
 		if in.retry {
-			return // the session and its existing queue already belong to the user
+			return
 		}
 		if in.preparation == nil {
 			m.rollbackSpawnSeedRowAfterFailure(ctx, id)
@@ -77,9 +75,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 		}
 	}
 	in.record = rec
-	// Each Setup step has its own limit; the start budget leaves room for all of them.
 	bg, cancel := context.WithTimeout(m.backgroundContext, postCreateBudget(asyncChatSpawnBudget, in.project.Config.PostCreate))
-	// The outcome event reads this start's steps from the request's trace.
 	bg = carrySpawnTrace(ctx, bg)
 	NoteSpawnLaunch(ctx, domain.SessionModeChat, true)
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
@@ -107,25 +103,15 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	return rec, in.promptBytes, in.systemPromptBytes, nil
 }
 
-// asyncChatSpawnBudget bounds a background start so a hung provider leaves a
-// failed session the user can act on rather than a permanent "starting". The
-// project's Setup steps get their own time on top (postCreateBudget: each
-// step's time limit, domain.DefaultScriptStepTimeoutMinutes unless it sets
-// one), so a long Setup step is never cut short.
 const asyncChatSpawnBudget = 10 * time.Minute
 
-// completeAsyncChatSpawn keeps the visible session and queue on failure.
 func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) {
 	id := in.record.ID
 	totalStarted := time.Now()
-	// The naming call is its own provider process. It starts once this
-	// session's provider is up and has its prompt, so it does not compete with
-	// that start for CPU; the branch is kept private from here until it settles.
 	var taskName func() generatedTaskName
 	cancelNaming := context.CancelFunc(func() {})
 	if taskNamingApplies(in.cfg) {
 		m.setBranchNaming(id, true)
-		// Until naming starts, a failed start settles the flag itself.
 		cancelNaming = func() { m.setBranchNaming(id, false) }
 	}
 	namingHandedOff := false
@@ -141,8 +127,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
 	if reusePublishedWorkspace {
 		if missing, _ := workspacePathMissing(in.record.Metadata.WorkspacePath); missing {
-			// A saved worktree that no longer exists (removed by hand, or left
-			// mid-move by an older build) is created again, with every step shown.
 			reusePublishedWorkspace, in.record.ProvisionSteps = false, nil
 		}
 	}
@@ -165,20 +149,14 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 			prepared(err)
 			in.preparation.cancel()
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
-			// The claimed preparation has no timer or cache entry. Keep owning its
-			// cleanup after the visible session fails, even if Create returns late.
 			<-in.preparation.done
 			if in.preparation.workspace.Path != "" {
 				m.cleanupAsyncChatWorkspace(ctx, id, in.preparation.workspace, in.preparation.workspaceProject)
 			}
 			return
 		}
-		// A preparation that failed on its own falls back to a fresh worktree
-		// below; only that attempt's outcome is the spawn's.
 		prepared(nil)
 	}
-	// The foreground response must not wait behind Git, but the background
-	// workspace lifecycle still serializes with spawn, restore and cleanup.
 	releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(in.cfg.ProjectID))
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
@@ -228,12 +206,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "workspace_provision", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepSetup)
-	// Publish the worktree now rather than at the controller commit. Until the
-	// row carries it, every workspace-scoped read answers
-	// SESSION_WORKSPACE_NOT_FOUND, and the provider start that follows is long
-	// enough for the desktop's bounded readiness poll to give up on a session
-	// that is perfectly fine. It also means an interrupted start leaves a row
-	// that knows which worktree to clean up.
 	stageStarted = time.Now()
 	updated, err := m.store.SetSessionProvisionedWorkspace(
 		ctx, id, ws.Branch, ws.Path, ws.RepoPath, m.clock())
@@ -250,9 +222,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "workspace_publish", stageStarted)
-	// A concurrent StageAttachments call must either see this workspace path and
-	// write directly into it, or land in canonical storage before this replay.
-	// This also projects opening attachments saved before the early response.
 	stageStarted = time.Now()
 	if err := m.restoreAttachments(ctx, id, ws); err != nil {
 		m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrSpawnAttachments, err))
@@ -283,16 +252,13 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		prompt:           in.prompt,
 		systemPrompt:     in.systemPrompt,
 		systemPromptFile: in.systemPromptFile,
-		// The opening prompt is already a queued turn; the drain below delivers
-		// it together with anything typed while this was starting.
-		promptQueued: true,
+		promptQueued:     true,
 	}); err != nil {
 		started(err)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
 	started(nil)
-	// The agent owns the checkout now; nothing below touches the workspace.
 	releaseWorkspaceGate()
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
@@ -309,25 +275,17 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "mark_ready", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepAgent)
-	// Only a start that succeeded gets a generated branch name.
 	namingHandedOff = true
 	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
 	m.logAsyncChatSpawnStage(id, "total", totalStarted)
 }
 
-// provisionProgress publishes a start's checklist. Finishing one stage and
-// starting the next is a single write, so the checklist never shows a gap
-// between them. Updates are best effort; a missed completion can replay a stage
-// on retry.
 type provisionProgress struct {
 	m     *Manager
 	id    domain.SessionID
 	steps []domain.SessionProvisionStep
 }
 
-// startProvisionProgress plans the stages this start will run and marks the
-// first one running. A failed start leaves its stage running; readers treat a
-// running stage on a failed session as the stage that failed.
 func (m *Manager) startProvisionProgress(ctx context.Context, id domain.SessionID, plan []domain.SessionProvisionStepID) *provisionProgress {
 	p := &provisionProgress{m: m, id: id, steps: make([]domain.SessionProvisionStep, len(plan))}
 	for i, step := range plan {
@@ -338,8 +296,6 @@ func (m *Manager) startProvisionProgress(ctx context.Context, id domain.SessionI
 	return p
 }
 
-// complete finishes stage id, if it is the one running, and starts the next
-// pending stage. It is a no-op for a stage that is not running.
 func (p *provisionProgress) complete(ctx context.Context, id domain.SessionProvisionStepID) {
 	i := slices.IndexFunc(p.steps, func(step domain.SessionProvisionStep) bool {
 		return step.ID == id && step.Status == domain.SessionProvisionStepRunning
@@ -370,7 +326,6 @@ func (p *provisionProgress) publish(ctx context.Context) {
 	}
 }
 
-// provisionPlan lists the stages completeAsyncChatSpawn will run, in order.
 func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.SessionProvisionStepID {
 	var plan []domain.SessionProvisionStepID
 	if !reusePublishedWorkspace && (!in.retry || len(in.record.ProvisionSteps) == 0) {
@@ -402,17 +357,13 @@ func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, star
 	)
 }
 
-// failAsyncChatSpawn preserves the visible row and queue for retry.
 func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, cause error) {
-	// ctx is the start's own budget: a stage it killed is a timeout.
 	cause = classifySpawnError(ctx, RelabelSpawnTimeout(cause, ctx))
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
-	// The 201 has already gone out, so the request logger never sees this.
 	captureBackgroundFault(cleanupCtx, cause, "chat_spawn", "")
 	m.stopChatBestEffort(cleanupCtx, id)
-	// A failed Setup step already explains itself; the spawn stage prefix is noise.
 	message := cause.Error()
 	var setupErr *SetupStepError
 	if errors.As(cause, &setupErr) {
@@ -424,8 +375,6 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	}
 }
 
-// retryFailedChatSpawn reuses the published session and durable turn queue.
-// Queueing the opening brief again would send the user's task twice.
 func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRecord, releaseHarness func()) (RestoreResult, bool, error) {
 	if (rec.Kind != domain.KindWorker && rec.Kind != domain.KindOrchestrator) || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat || m.chat == nil {
 		return RestoreResult{}, false, fmt.Errorf("retry start %s: %w", rec.ID, ports.ErrChatUnsupported)
@@ -496,9 +445,6 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
-	// The retry reuses the original session id, so this rewrites the same
-	// prompt file the SessionStart hook reads; without it a retried chat
-	// session would start with hooks but no standing instructions.
 	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, rec.Harness, systemPrompt)
 	if err != nil {
 		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
@@ -510,8 +456,6 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
 	}
 	if m.forkRetry != nil && m.isSessionFork(ctx, rec.ID) {
-		// A fork that failed to start is copied again from its original;
-		// a plain restart would leave an empty chat in a blank worktree.
 		fork, err := m.forkRetry(ctx, rec)
 		if err != nil {
 			return RestoreResult{}, false, fmt.Errorf("retry fork %s: %w", rec.ID, err)
@@ -519,13 +463,10 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		cfg.Fork = fork
 	}
 	if rec.Harness == domain.HarnessCodex {
-		// ChatUI can change the saved model independently of effort, and provider
-		// capabilities can change between attempts. Validate the actual pair
-		// without merging today's project defaults back into the saved choices.
 		cfg.EffortOverride = true
 		resolved, err := m.resolveAgentConfig(ctx, cfg, domain.ProjectConfig{})
 		if errors.Is(err, ports.ErrUnsupportedEffort) {
-			cfg.AgentConfig.Effort = "" // use this model's provider default
+			cfg.AgentConfig.Effort = ""
 			resolved, err = m.resolveAgentConfig(ctx, cfg, domain.ProjectConfig{})
 		}
 		if err != nil {
@@ -553,7 +494,6 @@ func (m *Manager) cleanupAsyncChatWorkspace(ctx context.Context, id domain.Sessi
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
 	destroyed := m.destroySpawnWorkspace(cleanupCtx, ws, workspaceProject)
-	// The untimed cleanup script may have outlived the original write budget.
 	cancel()
 	cleanupCtx, cancel = spawnRollbackContext(ctx)
 	defer cancel()
@@ -577,14 +517,8 @@ func (m *Manager) setProvisionState(
 	return m.setProvisionStateCause(ctx, id, state, message, nil)
 }
 
-// ProvisionObserver hears every durable provision-state write of an
-// asynchronous start: provisioning opens an attempt, ready or failed settles
-// it. cause is the failure when the writer had one. It runs on the writer's
-// goroutine, so it must not block.
 type ProvisionObserver func(ctx context.Context, rec domain.SessionRecord, state domain.SessionProvisionState, cause error)
 
-// SetProvisionObserver installs the observer. Call it during wiring, before
-// any spawn runs.
 func (m *Manager) SetProvisionObserver(fn ProvisionObserver) { m.provisionObserver = fn }
 
 func (m *Manager) setProvisionStateCause(
@@ -607,9 +541,6 @@ func (m *Manager) setProvisionStateCause(
 	return rec, err
 }
 
-// FailInterruptedProvisioning marks sessions whose background start did not
-// survive a daemon restart. Without this a row left mid-start reads as
-// "starting" forever: nothing is running that could ever finish it.
 func (m *Manager) FailInterruptedProvisioning(ctx context.Context) error {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
@@ -635,8 +566,6 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 	return retries, errors.Join(failures...)
 }
 
-// runInBackground runs work outside the caller's request. The seam exists so
-// tests can observe a completed spawn without sleeping.
 func (m *Manager) runInBackground(work func()) {
 	m.backgroundWorkers.Add(1)
 	tracked := func() {
@@ -650,8 +579,6 @@ func (m *Manager) runInBackground(work func()) {
 	go tracked()
 }
 
-// WaitBackgroundWorkers waits for daemon-owned spawn and task-preparation work
-// after the daemon context has been cancelled.
 func (m *Manager) WaitBackgroundWorkers(ctx context.Context) error {
 	return waitForWorkers(ctx, &m.backgroundWorkers)
 }

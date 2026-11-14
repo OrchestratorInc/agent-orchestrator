@@ -1,7 +1,3 @@
-// AO Browser Bridge content script. Injected on demand into the session's
-// tabs (isolated world) and answers the service worker's DOM requests. Page
-// JavaScript cannot see this world, its listeners, or its element refs.
-
 import { chromeApi } from "./chrome-api";
 import {
 	annotations,
@@ -112,7 +108,6 @@ function install(): void {
 	const registry = new RefRegistry();
 	chromeApi().runtime.onMessage.addListener((message, sender, sendResponse) => {
 		if (!isRecord(message) || message.aoBridge !== 1) return;
-		// Only the extension's own service worker may drive this script.
 		if (sender.id !== chromeApi().runtime.id || sender.tab) return;
 		try {
 			const result = handleContentRequest(document, registry, message as ContentRequest);

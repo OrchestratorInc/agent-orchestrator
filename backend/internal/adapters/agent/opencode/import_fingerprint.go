@@ -12,22 +12,13 @@ import (
 	"strconv"
 )
 
-// openCodeFingerprintVersion names the fingerprint's inputs, so a stored
-// fingerprint from another definition never matches by accident.
 const openCodeFingerprintVersion = "opencode-v2:"
 
-// Keys an `opencode export`/`import` copy changes, so they are left out: ids
-// and the folder the copy is bound to. Part timestamps live only in table
-// columns, which are not hashed; message times are part of the hashed data.
 var (
 	openCodeCopiedMessageKeys = []string{"id", "sessionID", "parentID", "path"}
 	openCodeCopiedPartKeys    = []string{"id", "sessionID", "messageID"}
 )
 
-// NativeSessionFingerprint pins one session's history: every message's and
-// part's stored content in canonical JSON, minus only what a copy relocates.
-// Messages and their parts are hashed as sorted sets because a copy's new ids
-// may reorder equal timestamps. A session without messages has no fingerprint.
 func NativeSessionFingerprint(ctx context.Context, db *sql.DB, sessionID string) (string, error) {
 	parts := map[string][]string{}
 	partRows, err := db.QueryContext(ctx, `SELECT message_id, data FROM part WHERE session_id = ?`, sessionID)
@@ -98,8 +89,6 @@ func NativeSessionFingerprint(ctx context.Context, db *sql.DB, sessionID string)
 	return openCodeFingerprintVersion + strconv.Itoa(len(messages)) + ":" + hex.EncodeToString(sum.Sum(nil)), nil
 }
 
-// canonicalOpenCodeData re-encodes stored JSON with sorted keys and exact
-// numbers, dropping the top-level keys a copy relocates.
 func canonicalOpenCodeData(data string, drop []string) (string, error) {
 	dec := json.NewDecoder(bytes.NewReader([]byte(data)))
 	dec.UseNumber()
@@ -119,8 +108,6 @@ func canonicalOpenCodeData(data string, drop []string) (string, error) {
 	return string(out), nil
 }
 
-// openCodeSessionFingerprint fingerprints one session in the store at
-// configDir, read-only. A session without messages has no fingerprint.
 func openCodeSessionFingerprint(ctx context.Context, configDir, id string) (string, error) {
 	db, err := openOpenCodeStore(configDir)
 	if err != nil || db == nil {

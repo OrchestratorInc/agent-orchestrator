@@ -9,18 +9,6 @@ const resolveAll: Resolve = (host) => lookup(host, { all: true, verbatim: true }
 
 const SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
 
-/**
- * Whether a request made from agent page `pageUrl` in the chat may go out. A
- * page may load public addresses and its own files on this computer; nothing
- * else here or on its network: not the daemon's API, not another session's
- * origin (a preview origin the daemon trusts, say), not another port.
- * The same rule the render check enforces, here for the reader's frames.
- *
- * ponytail: the name is resolved here and again by Chromium, so a name that
- * changes its answer in between (DNS rebinding) can get past; the check
- * window's proxy connects only to the addresses it checked, if this ever needs
- * the same guarantee.
- */
 export async function agentPageRequestAllowed(requestUrl: string, pageUrl: string, resolve: Resolve = resolveAll): Promise<boolean> {
 	let url: URL;
 	let page: URL;
@@ -37,6 +25,5 @@ export async function agentPageRequestAllowed(requestUrl: string, pageUrl: strin
 	const family = isIP(host);
 	const addresses = family ? [{ address: host, family }] : await resolve(host);
 	if (!addresses.some(({ address, family }) => isLocal(address, family))) return true;
-	// Only the page's own route on the daemon, named as loopback; any other local address is refused.
 	return isOwnPageRequest(page, url);
 }

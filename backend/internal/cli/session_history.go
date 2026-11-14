@@ -20,9 +20,6 @@ type sessionHistoryResponse struct {
 	Offset int                  `json:"offset"`
 }
 
-// newSessionHistoryCommand prints a session's turns in full, newest first. It
-// exists for the agent that took over a session: its handoff note carries the
-// recent turns and points here for anything older.
 func newSessionHistoryCommand(ctx *commandContext) *cobra.Command {
 	var offset, limit int
 	cmd := &cobra.Command{
@@ -60,8 +57,6 @@ func (c *commandContext) printSessionHistory(ctx context.Context, cmd *cobra.Com
 		return err
 	}
 	for index, turn := range response.Turns {
-		// Turn 1 is the oldest, so a number keeps meaning the same turn as the
-		// session grows.
 		header := fmt.Sprintf("## Turn %d of %d", response.Total-response.Offset-index, response.Total)
 		if !turn.At.IsZero() {
 			header += "  " + turn.At.UTC().Format(time.RFC3339)

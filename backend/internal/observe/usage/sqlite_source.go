@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite" // register sqlite driver
+	_ "modernc.org/sqlite"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"

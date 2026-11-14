@@ -4,12 +4,6 @@ import { describe, expect, it } from "vitest";
 import { ContextMeter } from "./ContextMeter";
 import type { ConversationRateLimits, ConversationUsage } from "../../types/conversation";
 
-// The behaviour under test is the threshold encoding, because that is what carries
-// the meaning: a user glances at the fill and the colour, and only reads the digits
-// if something looks wrong. The numbers here are the real ones a live codex
-// app-server reported (18055 of a 258400 window; a pro account at 71% of a 7 day
-// rate limit window).
-
 function usage(over: Partial<ConversationUsage> = {}): ConversationUsage {
 	return {
 		contextUsed: 18055,
@@ -32,7 +26,6 @@ function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLim
 	};
 }
 
-/** The circular fill inside the gauge. */
 function fill(): SVGCircleElement {
 	const inner = screen.getByRole("progressbar").querySelector("circle:last-child");
 	if (!inner) throw new Error("meter has no fill element");
@@ -74,7 +67,6 @@ describe("ContextMeter", () => {
 		});
 
 		it("shifts to the needs-you token from 70%", () => {
-			// Exactly at the boundary, which must warn rather than stay normal.
 			render(<ContextMeter usage={usage({ contextUsed: 180_880 })} />);
 			expect(screen.getByRole("progressbar")).toHaveClass("text-status-needs-you");
 		});
@@ -87,15 +79,12 @@ describe("ContextMeter", () => {
 
 	it("clamps a provider that overreports past its own window", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 300_000 })} />);
-		// Full, not overflowing the track and not claiming 116%.
 		expect(fill()).toHaveAttribute("stroke-dasharray", "100 100");
 		expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
 	});
 
 	it("shows known context without claiming a window the provider did not report", async () => {
 		render(<ContextMeter usage={usage({ contextWindow: 0, contextUsed: 18_055 })} />);
-		// No window means no honest fullness. Drawing an empty bar would claim a
-		// conversation is roomy when it might be nearly full.
 		expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
 		const readout = screen.getByRole("img", { name: "Context 18,055 / unknown" });
 		await userEvent.hover(readout);
@@ -110,23 +99,18 @@ describe("ContextMeter", () => {
 	it("draws a failed turn with zero reported used as an empty 0% ring", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 0, contextWindow: 262_144 })} />);
 		expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
-		// An empty track, not the sliver a nearly-empty conversation gets.
 		expect(fill()).toHaveAttribute("stroke-dasharray", "0 100");
 		expect(screen.queryByText("?")).not.toBeInTheDocument();
 	});
 
 	it("renders nothing before the provider has reported anything", () => {
 		const { container } = render(<ContextMeter />);
-		// Absent is distinct from zero: an empty meter for an unreported conversation
-		// would be a claim AO has not earned.
 		expect(container).toBeEmptyDOMElement();
 	});
 
 	describe("quota warning", () => {
 		it("stays hidden while the account has comfortable headroom", () => {
 			render(<ContextMeter usage={usage()} rateLimits={limits({ primaryUsedPercent: 20 })} />);
-			// A readout that is always present becomes furniture, and this one has to be
-			// noticed on the day it matters.
 			expect(screen.queryByText(/quota/)).not.toBeInTheDocument();
 		});
 
@@ -147,7 +131,6 @@ describe("ContextMeter", () => {
 					rateLimits={limits({ primaryUsedPercent: 30, secondaryUsedPercent: 88 })}
 				/>,
 			);
-			// The tighter window is the one that will actually stop the next turn.
 			expect(screen.getByText("Weekly 88% used")).toBeInTheDocument();
 		});
 
@@ -158,15 +141,10 @@ describe("ContextMeter", () => {
 					rateLimits={limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 })}
 				/>,
 			);
-			// Negative is the daemon's "not reported". Treating it as data would draw a
-			// meter running backwards.
 			expect(screen.queryByText(/quota/)).not.toBeInTheDocument();
 		});
 
 		it("warns on quota even when no usage has been reported yet", () => {
-			// The startup rate-limit read lands before the first turn, so this is the
-			// state a user sees when opening a conversation on a nearly-spent account:
-			// exactly when the warning is most useful.
 			render(<ContextMeter rateLimits={limits({ primaryUsedPercent: 97 })} />);
 			expect(screen.getByText("Session 97% used")).toBeInTheDocument();
 			expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();

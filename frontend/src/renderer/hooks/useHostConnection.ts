@@ -5,7 +5,6 @@ import { useUiStore } from "../stores/ui-store";
 
 const NO_HOSTS: HostId[] = [];
 
-/** Keep the selected host separate from its optional live connection. */
 export function useHostConnection(hostId?: HostId) {
 	const connection = useSyncExternalStore(subscribeConnectedHosts, () => hostId ? connectedHost(hostId) : undefined);
 	return {

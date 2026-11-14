@@ -11,15 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// directHandlePrefix is persisted as part of the opaque runtime handle.
-// Handles written before the direct-host rollout have no prefix and therefore
-// remain permanently routed to tmux. The version leaves room for a future host
-// protocol migration without guessing from session metadata.
 const directHandlePrefix = "ptyhost-v1:"
 
-// routedBackend captures the capabilities the daemon conditionally consumes.
-// Both tmux and the detached PTY host provide them; keeping them on the router
-// avoids silently disabling styled-output safety checks or process supervision.
 type routedBackend interface {
 	Runtime
 	ports.StyledTerminalOutputReader
@@ -54,9 +47,6 @@ func newHybridRuntime(legacy, direct routedBackend, log *slog.Logger, platform s
 	return &hybridRuntime{legacy: legacy, direct: direct, log: log, platform: platform}
 }
 
-// Create opts only new sessions into the native PTY host. If host startup
-// fails before a handle is returned, tmux remains a compatibility fallback so
-// a host-specific problem does not prevent an agent session from starting.
 func (r *hybridRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	handle, err := r.direct.Create(ctx, cfg)
 	if err == nil {
@@ -133,8 +123,6 @@ func (r *hybridRuntime) GetOutput(ctx context.Context, handle ports.RuntimeHandl
 	return backend.GetOutput(ctx, raw, lines)
 }
 
-// ServerPID always asks the legacy (tmux) backend: it's the one shared
-// detached server, regardless of which backend owns any given session.
 func (r *hybridRuntime) ServerPID(ctx context.Context) (int, bool) {
 	return r.legacy.ServerPID(ctx)
 }
@@ -177,9 +165,6 @@ func (r *hybridRuntime) HasSupervisedProcessRecord(ctx context.Context, handle p
 	return backend.HasSupervisedProcessRecord(ctx, raw)
 }
 
-// Restart preserves tmux's in-place restart behavior for every legacy handle.
-// Direct hosts currently restart by replacing only their own host and return a
-// new handle with the same versioned identity.
 func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	backend, raw := r.route(handle)
 	if backend == r.legacy {
@@ -192,8 +177,6 @@ func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle,
 	if err := r.direct.Destroy(ctx, raw); err != nil {
 		return ports.RuntimeHandle{}, err
 	}
-	// Re-enter the normal creation policy so an unavailable replacement host
-	// can still recover the session on tmux and return its unprefixed handle.
 	return r.Create(ctx, cfg)
 }
 
@@ -212,8 +195,6 @@ func (r *hybridRuntime) route(handle ports.RuntimeHandle) (routedBackend, ports.
 
 var _ ports.TerminalForegroundWatcher = (*hybridRuntime)(nil)
 
-// WatchTerminalForeground routes to the backend that owns the handle; tmux
-// handles cannot name their foreground program.
 func (r *hybridRuntime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
 	backend, raw := r.route(handle)
 	watcher, ok := backend.(ports.TerminalForegroundWatcher)
@@ -225,8 +206,6 @@ func (r *hybridRuntime) WatchTerminalForeground(ctx context.Context, handle port
 
 var _ ports.TerminalTitleWatcher = (*hybridRuntime)(nil)
 
-// WatchTerminalTitle routes to the backend that owns the handle; legacy tmux
-// handles have no host to report titles.
 func (r *hybridRuntime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
 	backend, raw := r.route(handle)
 	watcher, ok := backend.(ports.TerminalTitleWatcher)

@@ -20,7 +20,6 @@ import (
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 )
 
-// CodexAccountService is the HTTP controller's account-management boundary.
 type CodexAccountService interface {
 	CachedCodexAccounts(context.Context) (agentsvc.CodexAccounts, error)
 	EnsureCodexAccounts(context.Context, []string, agentsvc.CodexAccountEnsureOptions) (agentsvc.CodexAccounts, error)
@@ -36,10 +35,8 @@ type CodexAccountService interface {
 	GetCodexAccountSwitch(context.Context, string) (domain.CodexAccountSwitch, error)
 }
 
-// CodexAccountsController exposes cached accounts, login, switching, and events.
 type CodexAccountsController struct{ Svc CodexAccountService }
 
-// Register adds request-timeout-bound Codex account routes.
 func (c *CodexAccountsController) Register(r chi.Router) {
 	r.Get("/agents/codex/accounts", c.list)
 	r.Post("/agents/codex/accounts/ensure", c.ensure)
@@ -132,7 +129,6 @@ func writeCodexAccountSwitchError(w http.ResponseWriter, r *http.Request, err er
 	}
 }
 
-// RegisterStreams adds the long-lived Codex account event route.
 func (c *CodexAccountsController) RegisterStreams(r chi.Router) {
 	r.Get("/agents/codex/accounts/events", c.events)
 }
@@ -337,11 +333,8 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// codexAccountStreamRetry is how long an open account stream waits before
-// asking again after account management was unavailable.
 var codexAccountStreamRetry = 30 * time.Second
 
-// SetCodexAccountStreamRetryForTest sets the retry interval and returns a restore function.
 func SetCodexAccountStreamRetryForTest(d time.Duration) func() {
 	previous := codexAccountStreamRetry
 	codexAccountStreamRetry = d
@@ -353,7 +346,6 @@ func codexAccountStreamQuiet(err error) bool {
 	if !errors.As(err, &api) {
 		return false
 	}
-	// Hold the stream for both. Non-stream routes still report setup-incomplete.
 	return api.Code == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" || api.Code == "CODEX_ACCOUNT_SETUP_INCOMPLETE"
 }
 

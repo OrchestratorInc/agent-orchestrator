@@ -31,33 +31,18 @@ import (
 )
 
 const (
-	maxWorkspaceFiles     = 5000
-	maxWorkspaceFileBytes = 256 * 1024
-	maxWorkspaceDiffBytes = 512 * 1024
-	// AO's agent adapters write this marker into self-ignoring .gitignore
-	// files beside their workspace-local control files. Scratch workspaces have
-	// no Git index to hide that infrastructure from the review surfaces, so the
-	// filesystem readers honor the same ownership marker directly.
-	aoManagedGitignoreSentinel = hookutil.GitignoreSentinel
-	// Copilot profiles are ignored through .git/info/exclude in project
-	// worktrees, but standalone workspaces have no Git metadata. The profile
-	// carries its own ownership marker so scratch readers can hide it directly.
+	maxWorkspaceFiles               = 5000
+	maxWorkspaceFileBytes           = 256 * 1024
+	maxWorkspaceDiffBytes           = 512 * 1024
+	aoManagedGitignoreSentinel      = hookutil.GitignoreSentinel
 	aoManagedCopilotProfileSentinel = hookutil.CopilotAgentProfileSentinel
-	// maxWorkspaceImageBytes caps a single image revision streamed to the diff
-	// viewer. Anything larger is refused rather than buffered.
-	maxWorkspaceImageBytes = 16 * 1024 * 1024
-	// maxCommitLogCommits caps a Commits menu to its newest commits. GitHub's
-	// pull request commits API stops at the same 250.
-	maxCommitLogCommits = 250
-	// maxCommitLogBytes caps each of a Commits menu's two git log passes, so a
-	// huge commit cannot become an unbounded in-memory buffer.
-	maxCommitLogBytes = 2 * 1024 * 1024
+	maxWorkspaceImageBytes          = 16 * 1024 * 1024
+	maxCommitLogCommits             = 250
+	maxCommitLogBytes               = 2 * 1024 * 1024
 )
 
-// WorkspaceFileStatus describes a session-worktree file relative to its compare base.
 type WorkspaceFileStatus string
 
-// Workspace file status values reported by the session workspace browser.
 const (
 	WorkspaceFileUnmodified WorkspaceFileStatus = "unmodified"
 	WorkspaceFileModified   WorkspaceFileStatus = "modified"
@@ -66,18 +51,13 @@ const (
 	WorkspaceFileRenamed    WorkspaceFileStatus = "renamed"
 )
 
-// WorkspaceCompareMode describes the Git revision used for workspace diffs.
 type WorkspaceCompareMode string
 
 const (
-	// WorkspaceCompareBase means diffs are against the session's recorded base.
-	WorkspaceCompareBase WorkspaceCompareMode = "base"
-	// WorkspaceCompareHeadFallback means AO could not resolve a base and used the
-	// previous HEAD-only behavior.
+	WorkspaceCompareBase         WorkspaceCompareMode = "base"
 	WorkspaceCompareHeadFallback WorkspaceCompareMode = "head_fallback"
 )
 
-// WorkspaceFiles is the read model for the session workspace file browser.
 type WorkspaceFiles struct {
 	SessionID        domain.SessionID
 	WorkspaceVersion string
@@ -86,36 +66,16 @@ type WorkspaceFiles struct {
 	CompareMode      WorkspaceCompareMode
 	Files            []WorkspaceFileSummary
 	Truncated        bool
-	// Sections splits the same working tree into git-state groups (staged,
-	// unstaged, untracked, committed-since-base), independent of the
-	// base..worktree Files list above. Only populated for single-repo
-	// sessions; workspace-project (multi-repo) and scratch sessions fill only
-	// Uncommitted.
-	Sections WorkspaceFileSections
-	// Commits are the commits between the compare base and HEAD, newest first.
-	Commits []CommitSummary
-	// CommitsTruncated means older commits were left out of Commits.
+	Sections         WorkspaceFileSections
+	Commits          []CommitSummary
 	CommitsTruncated bool
-	// Summary aggregates Files (excluding unmodified entries) into totals for
-	// the panel header.
-	Summary WorkspaceSummary
-	// Degraded means the primary file list was returned but optional Git state
-	// enrichment could not be collected. Callers should keep the file list and
-	// offer a retry for sections/commit metadata.
-	Degraded     bool
-	DegradedCode string
-	// Ahead and Behind are commit counts against the branch's upstream (or
-	// origin/<branch> when no upstream is configured). Nil when neither can
-	// be resolved — that means "no push/pull data," not an error.
-	Ahead  *int
-	Behind *int
+	Summary          WorkspaceSummary
+	Degraded         bool
+	DegradedCode     string
+	Ahead            *int
+	Behind           *int
 }
 
-// WorkspaceFileSections groups the session worktree's changed files by git
-// state: uncommitted (worktree vs HEAD, untracked files included), staged
-// (index vs HEAD), unstaged (worktree vs index), untracked, and committed
-// (HEAD vs the compare base). A partially staged file can appear in both
-// Staged and Unstaged, but only once in Uncommitted.
 type WorkspaceFileSections struct {
 	Uncommitted []WorkspaceFileSummary
 	Staged      []WorkspaceFileSummary
@@ -124,13 +84,8 @@ type WorkspaceFileSections struct {
 	Committed   []WorkspaceFileSummary
 }
 
-// WorkspaceFileSection identifies which of WorkspaceFileSections a
-// GetWorkspaceFile request's diff should be scoped to. A partially staged
-// file has independent staged and unstaged diffs, so the caller must say
-// which one it opened.
 type WorkspaceFileSection string
 
-// Git-state sections a workspace file row can belong to.
 const (
 	WorkspaceFileSectionUncommitted WorkspaceFileSection = "uncommitted"
 	WorkspaceFileSectionStaged      WorkspaceFileSection = "staged"
@@ -139,7 +94,6 @@ const (
 	WorkspaceFileSectionCommitted   WorkspaceFileSection = "committed"
 )
 
-// CommitSummary is one commit between the compare base and HEAD.
 type CommitSummary struct {
 	SHA       string
 	Subject   string
@@ -148,19 +102,12 @@ type CommitSummary struct {
 	Files     []WorkspaceFileSummary
 }
 
-// WorkspaceSummary aggregates the base..worktree diff into totals.
 type WorkspaceSummary struct {
 	Files     int
 	Additions int
 	Deletions int
 }
 
-// WorkspaceManifest is the latency-sensitive workspace review read model.
-// Unlike WorkspaceFiles it contains only changed files and omits complete
-// repository inventory and commit-history enrichment. WorkspaceVersion is
-// deliberately identical to the compatible WorkspaceFiles snapshot so the
-// existing detail, revision, and batch-diff endpoints can fence requests
-// against either read model during migration.
 type WorkspaceManifest struct {
 	SessionID        domain.SessionID
 	WorkspaceVersion string
@@ -177,26 +124,16 @@ type WorkspaceManifest struct {
 	DegradedCode     string
 }
 
-// WorkspaceHistory is the non-critical commit metadata loaded after the
-// latency-sensitive manifest. It deliberately avoids enumerating every file
-// in the repository.
 type WorkspaceHistory struct {
-	SessionID domain.SessionID
-	// View describes whose history this is: the checked-out worktree, another
-	// local branch, or a pull request that is not checked out.
+	SessionID        domain.SessionID
 	View             WorkspaceViewInfo
 	Commits          []CommitSummary
 	CommitsTruncated bool
-	// RangeSummary totals the view's whole range (All commits). Only branch and
-	// pull request views fill it; the checked-out view sums its committed
-	// section instead.
-	RangeSummary *WorkspaceSummary
-	// Ahead and Behind are only filled for the checked-out view.
-	Ahead  *int
-	Behind *int
+	RangeSummary     *WorkspaceSummary
+	Ahead            *int
+	Behind           *int
 }
 
-// WorkspaceFileSummary is one file row in the session workspace browser.
 type WorkspaceFileSummary struct {
 	Path            string
 	PreviousPath    string
@@ -209,7 +146,6 @@ type WorkspaceFileSummary struct {
 	FileFingerprint string
 }
 
-// WorkspaceFileDetail is the selected file's current content and diff.
 type WorkspaceFileDetail struct {
 	SessionID          domain.SessionID
 	Path               string
@@ -236,17 +172,12 @@ type WorkspaceFileDetail struct {
 	fileModTime        time.Time
 }
 
-// UpdateWorkspaceFileInput replaces one existing text file. The fingerprint is
-// required so a UI edit cannot silently overwrite a newer agent-authored copy.
 type UpdateWorkspaceFileInput struct {
 	Path                    string
 	Content                 string
 	ExpectedFileFingerprint string
 }
 
-// WorkspaceWatchPaths returns every worktree that contributes files to a
-// session workspace read model. Workspace projects include child repositories
-// that are deliberately ignored by the parent Git repository.
 func (s *Service) WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -277,10 +208,6 @@ func (s *Service) WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) 
 	return paths, nil
 }
 
-// InvalidateWorkspaceCache purges cached compare-base and git-status data for
-// a session when the workspace SSE filesystem watcher observes a change.
-// Callers sharing an in-flight load may still receive its uncached snapshot;
-// the first request after that load completes recomputes the data.
 func (s *Service) InvalidateWorkspaceCache(id domain.SessionID) {
 	s.workspaceCache.invalidateSession(id)
 	if s.workspaceManifests.markStale(id) {
@@ -288,9 +215,6 @@ func (s *Service) InvalidateWorkspaceCache(id domain.SessionID) {
 	}
 }
 
-// ListWorkspaceFiles returns all tracked and untracked, non-ignored files in a
-// session worktree, annotated with their current git status against the
-// session's recorded base when available.
 func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (WorkspaceFiles, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -312,7 +236,6 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 		if err != nil {
 			return WorkspaceFiles{}, err
 		}
-		// Every scratch file is uncommitted: there is no Git history to compare.
 		return finalizeWorkspaceFiles(WorkspaceFiles{SessionID: id, Files: files, Sections: WorkspaceFileSections{Uncommitted: slices.Clone(files)}, Truncated: truncated}), nil
 	}
 	if projectKind == domain.ProjectKindWorkspace {
@@ -367,10 +290,6 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 	}), nil
 }
 
-// GetWorkspaceHistory loads commit and upstream metadata without paying for
-// the legacy all-files inventory used by the full workspace browser. The zero
-// view reads the checked-out worktree; a branch or pull request view reads
-// that view's revisions only.
 func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID, view WorkspaceView) (WorkspaceHistory, error) {
 	resolved, err := s.resolveWorkspaceView(ctx, id, view)
 	if err != nil {
@@ -415,11 +334,6 @@ func workspaceDegradedCode(err error) string {
 	return "WORKSPACE_GIT_STATE_UNAVAILABLE"
 }
 
-// GetWorkspaceFile returns one session-worktree file's current text content and
-// the git diff for that path. Binary or deleted files omit content. section
-// scopes the diff to the git-state section the caller opened the file from
-// (see WorkspaceFileSection) since a partially staged file's staged and
-// unstaged changes are different diffs.
 func (s *Service) GetWorkspaceFile(ctx context.Context, id domain.SessionID, rawPath string, section WorkspaceFileSection) (WorkspaceFileDetail, error) {
 	target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
 	if err != nil {
@@ -433,8 +347,6 @@ func (s *Service) GetWorkspaceFile(ctx context.Context, id domain.SessionID, raw
 	return finalizeWorkspaceFileDetail(detail), err
 }
 
-// GetWorkspaceFileAtCommit returns the immutable file snapshot and patch for
-// one commit that belongs to the session's compare-base..HEAD range.
 func (s *Service) GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, rawPath, commitSHA string) (WorkspaceFileDetail, error) {
 	current, err := s.ListWorkspaceFiles(ctx, id)
 	if err != nil {
@@ -464,17 +376,11 @@ func (s *Service) GetWorkspaceFileAtCommit(ctx context.Context, id domain.Sessio
 		return WorkspaceFileDetail{}, err
 	}
 	detail = finalizeWorkspaceFileDetail(detail)
-	// A selected commit is historical even when its after-side path still
-	// exists in the current worktree. Never present it as directly editable.
 	detail.Editable = false
 	detail.WorkspaceVersion = current.WorkspaceVersion
 	return detail, nil
 }
 
-// UpdateWorkspaceFile replaces one existing, bounded UTF-8 workspace file and
-// returns its refreshed detail. It deliberately does not create or delete
-// paths; those remain agent/editor workflows rather than implicit viewer side
-// effects.
 func (s *Service) UpdateWorkspaceFile(ctx context.Context, id domain.SessionID, input UpdateWorkspaceFileInput) (WorkspaceFileDetail, error) {
 	if input.ExpectedFileFingerprint == "" {
 		return WorkspaceFileDetail{}, apierr.Invalid("WORKSPACE_FILE_FINGERPRINT_REQUIRED", "expectedFileFingerprint is required", nil)
@@ -532,9 +438,6 @@ func workspaceFileEditable(size int64, binary, deleted bool) bool {
 	return !binary && !deleted && size <= maxWorkspaceFileBytes
 }
 
-// workspaceFileTarget is one resolved workspace path: the worktree that owns
-// it, the display prefix the path carries in a workspace project, and the
-// compare base and change set that worktree is diffed against.
 type workspaceFileTarget struct {
 	root    string
 	prefix  string
@@ -544,14 +447,10 @@ type workspaceFileTarget struct {
 	scratch bool
 }
 
-// resolveWorkspaceFileTarget maps a request path onto the worktree that owns it
-// and that worktree's compare state. Shared by the file detail read model and
-// the raw blob route so both resolve a path the same way.
 func (s *Service) resolveWorkspaceFileTarget(ctx context.Context, id domain.SessionID, rawPath string) (workspaceFileTarget, error) {
 	return s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, true)
 }
 
-// Plain working-tree reads need path confinement, not a repository-wide Git scan.
 func (s *Service) resolveWorkspaceFileTargetWithCompare(ctx context.Context, id domain.SessionID, rawPath string, withCompare bool) (workspaceFileTarget, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -595,17 +494,13 @@ func (s *Service) resolveWorkspaceFileTargetWithCompare(ctx context.Context, id 
 	return workspaceFileTarget{root: rec.Metadata.WorkspacePath, rel: rel, compare: compare, changes: changes}, nil
 }
 
-// WorkspaceFileBlobSide selects which revision of a workspace file to read.
 type WorkspaceFileBlobSide string
 
 const (
-	// WorkspaceBlobBefore is the file as it exists in the compare base.
 	WorkspaceBlobBefore WorkspaceFileBlobSide = "before"
-	// WorkspaceBlobAfter is the file as it exists in the session worktree.
-	WorkspaceBlobAfter WorkspaceFileBlobSide = "after"
+	WorkspaceBlobAfter  WorkspaceFileBlobSide = "after"
 )
 
-// WorkspaceFileBlob is one revision of a workspace file's raw bytes.
 type WorkspaceFileBlob struct {
 	Path      string
 	Side      WorkspaceFileBlobSide
@@ -613,10 +508,6 @@ type WorkspaceFileBlob struct {
 	Data      []byte
 }
 
-// GetWorkspaceFileBlob returns the raw bytes of one side of a workspace file so
-// the diff viewer can render an image change. Only image media types are
-// served: text content already travels in the file detail response, and the
-// diff viewer is this route's only consumer.
 func (s *Service) GetWorkspaceFileBlob(ctx context.Context, id domain.SessionID, rawPath string, side WorkspaceFileBlobSide) (WorkspaceFileBlob, error) {
 	if side != WorkspaceBlobBefore && side != WorkspaceBlobAfter {
 		return WorkspaceFileBlob{}, apierr.Invalid("INVALID_WORKSPACE_BLOB_SIDE", "side must be before or after", nil)
@@ -655,9 +546,6 @@ func (s *Service) GetWorkspaceFileBlob(ctx context.Context, id domain.SessionID,
 			basePath = previous
 		}
 	}
-	// A rename can change the extension, so type the historical bytes by the path
-	// they are read from rather than the worktree path. The controller sends
-	// nosniff, so a mismatched media type makes the browser refuse to render.
 	baseMediaType := workspaceImageMediaType(basePath)
 	if baseMediaType == "" {
 		return WorkspaceFileBlob{}, apierr.Invalid("UNSUPPORTED_WORKSPACE_BLOB", "workspace blobs are only served for image files", nil)
@@ -671,8 +559,6 @@ func (s *Service) GetWorkspaceFileBlob(ctx context.Context, id domain.SessionID,
 	return blob, nil
 }
 
-// workspaceImageMediaTypes are the raster formats the diff viewer previews.
-// SVG is deliberately absent: it is a text file, so it keeps its line diff.
 var workspaceImageMediaTypes = map[string]string{
 	".apng": "image/apng",
 	".avif": "image/avif",
@@ -685,15 +571,10 @@ var workspaceImageMediaTypes = map[string]string{
 	".webp": "image/webp",
 }
 
-// workspaceImageMediaType reports the image media type for a path, or "" when
-// the extension is not a previewable image.
 func workspaceImageMediaType(rel string) string {
 	return workspaceImageMediaTypes[strings.ToLower(path.Ext(rel))]
 }
 
-// workspaceImageDetailMediaType reports the media type the diff viewer should
-// preview a file with. A file that still has readable text keeps its line diff,
-// so only binary (or deleted, where nothing is left to read) paths qualify.
 func workspaceImageDetailMediaType(rel string, binary, deleted bool) string {
 	if !binary && !deleted {
 		return ""
@@ -701,8 +582,6 @@ func workspaceImageDetailMediaType(rel string, binary, deleted bool) string {
 	return workspaceImageMediaType(rel)
 }
 
-// readWorkspaceFileBytes reads a workspace file whole, refusing anything past
-// limit instead of buffering it.
 func readWorkspaceFileBytes(root, rel string, limit int64) ([]byte, error) {
 	file, info, err := confinedWorkspaceFile(root, rel)
 	if err != nil {
@@ -718,9 +597,6 @@ func readWorkspaceFileBytes(root, rel string, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// gitWorkspaceBlob reads one path out of a revision. The object size is asked
-// for first so an oversized blob is refused rather than buffered, matching how
-// readWorkspaceFileBytes stats the worktree copy before reading it.
 func gitWorkspaceBlob(ctx context.Context, root, rev, rel string, limit int64) ([]byte, error) {
 	spec := rev + ":" + rel
 	sizeOut, err := gitWorkspaceOutput(ctx, root, "cat-file", "-s", spec)
@@ -805,11 +681,6 @@ func resolveWorkspaceCompare(ctx context.Context, root, recordedSHA, recordedRef
 	recordedSHA = strings.TrimSpace(recordedSHA)
 	recordedRef = strings.TrimSpace(recordedRef)
 
-	// The best available local candidate: the live, ref-derived merge base
-	// (e.g. origin/main) when it resolves, else the session's spawn-time
-	// recorded base. Both are re-derived through git merge-base — never used
-	// as a raw revision — so a rewritten or unrelated commit can't become the
-	// diff base outright.
 	var localTarget *workspaceCompareTarget
 	if recordedRef != "" && recordedRef != "HEAD" {
 		for _, ref := range workspaceBaseRefCandidates(recordedRef) {
@@ -827,12 +698,6 @@ func resolveWorkspaceCompare(ctx context.Context, root, recordedSHA, recordedRef
 		}
 	}
 
-	// The provider PR's own, independently-synced base. A local
-	// remote-tracking ref can go stale (AO never fetches a session
-	// worktree), so this can be more advanced than the local candidate above
-	// — but it's equally re-derived through merge-base rather than trusted as
-	// a raw revision, since pr.BaseSHA is the target branch's current tip,
-	// not necessarily an ancestor of HEAD.
 	var prTarget *workspaceCompareTarget
 	var prHeadSHA string
 	if pr, ok := selectWorkspaceComparePR(prs, defaultBranch); ok {
@@ -849,16 +714,11 @@ func resolveWorkspaceCompare(ctx context.Context, root, recordedSHA, recordedRef
 			return *localTarget
 		}
 		if gitIsAncestor(ctx, root, localTarget.BaseSHA, prTarget.BaseSHA) {
-			return *prTarget // PR candidate is the more advanced descendant.
+			return *prTarget
 		}
 		if gitIsAncestor(ctx, root, prTarget.BaseSHA, localTarget.BaseSHA) {
-			return *localTarget // Local candidate is the more advanced descendant.
+			return *localTarget
 		}
-		// Neither candidate is an ancestor of the other — divergent
-		// histories, e.g. the target branch was force-pushed to a
-		// replacement line. Only trust the PR snapshot when it describes the
-		// exact commit the Files tab is displaying; otherwise a stale
-		// snapshot could silently outrank a valid local candidate.
 		if head, ok := gitRevision(ctx, root, "HEAD"); ok && prHeadSHA != "" && prHeadSHA == head {
 			return *prTarget
 		}
@@ -989,8 +849,6 @@ func gitMergeBase(ctx context.Context, root, ref string) (string, bool) {
 	return gitMergeBaseOf(ctx, root, "HEAD", ref)
 }
 
-// gitMergeBaseOf is gitMergeBase for two arbitrary revisions rather than
-// HEAD and one, so a view that is not checked out can find its own base.
 func gitMergeBaseOf(ctx context.Context, root, a, b string) (string, bool) {
 	out, err := gitWorkspaceOutput(ctx, root, "merge-base", a, b)
 	if err != nil {
@@ -1000,17 +858,11 @@ func gitMergeBaseOf(ctx context.Context, root, a, b string) (string, bool) {
 	return sha, sha != ""
 }
 
-// gitIsAncestor reports whether ancestor is reachable from descendant
-// (including ancestor == descendant).
 func gitIsAncestor(ctx context.Context, root, ancestor, descendant string) bool {
 	_, err := gitWorkspaceOutput(ctx, root, "merge-base", "--is-ancestor", ancestor, descendant)
 	return err == nil
 }
 
-// mergeBaseCandidate validates a revision-derived compare-base candidate: the
-// revision must exist locally and share a common ancestor with HEAD. It
-// always returns the merge-base SHA, never the raw revision, so a rewritten
-// or unrelated commit can never be used directly as a two-tree diff base.
 func mergeBaseCandidate(ctx context.Context, root, revision string) (string, bool) {
 	revision = strings.TrimSpace(revision)
 	if revision == "" || !gitCommitExists(ctx, root, revision) {
@@ -1019,8 +871,6 @@ func mergeBaseCandidate(ctx context.Context, root, revision string) (string, boo
 	return gitMergeBase(ctx, root, revision)
 }
 
-// gitRevision resolves rev to its full SHA, or ok=false if it cannot be
-// resolved.
 func gitRevision(ctx context.Context, root, rev string) (string, bool) {
 	out, err := gitWorkspaceOutput(ctx, root, "rev-parse", "--verify", rev)
 	if err != nil {
@@ -1083,8 +933,6 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		}
 		baseRef := row.BaseRef
 		if strings.TrimSpace(baseRef) == "" {
-			// Compatibility for sessions created before per-repository base refs
-			// were persisted. New rows always use their adapter-resolved ref.
 			baseRef = defaultBranch
 		}
 		resolve := func(rctx context.Context) workspaceCompareTarget {
@@ -1185,12 +1033,6 @@ func appendWorkspaceFilesWithCap(files, repoFiles []WorkspaceFileSummary, trunca
 	return append(files, repoFiles...), truncated
 }
 
-// workspaceFileSummariesCached resolves the changed-file list for one
-// worktree root, reusing a cached compare+status result when a recent
-// ListWorkspaceFiles/GetWorkspaceFile call for the same session/root already
-// computed it (see workspaceCache). On a cache miss it resolves the compare
-// base, computes git status/diff/numstat, and lists working-tree files
-// concurrently, since none of those git calls depend on each other.
 func (s *Service) workspaceFileSummariesCached(
 	ctx context.Context, id domain.SessionID, root, prefix string, excludePrefixes []string,
 	resolve func(ctx context.Context) workspaceCompareTarget,
@@ -1240,14 +1082,6 @@ func buildWorkspaceFileSummaries(root, prefix string, excludePrefixes, paths []s
 	return files
 }
 
-// resolveWorkspaceChanges resolves the compare base and git status/diff maps
-// for one worktree root, reusing a cached result from a recent list/detail
-// call for the same session/root instead of re-running resolve+
-// workspaceChangeMaps from scratch. On a cache miss, concurrent callers for
-// the same (session, root) — e.g. "Expand All" firing GetWorkspaceFile for
-// every changed file in the same instant — share a single in-flight
-// resolve+workspaceChangeMaps call via singleflight instead of each spawning
-// its own redundant set of git subprocesses.
 func (s *Service) resolveWorkspaceChanges(
 	ctx context.Context, id domain.SessionID, root string,
 	resolve func(ctx context.Context) workspaceCompareTarget,
@@ -1257,9 +1091,6 @@ func (s *Service) resolveWorkspaceChanges(
 		return cached.compare, cached.changes, nil
 	}
 	v, err, _ := s.workspaceGroup.Do(key.String(), func() (any, error) {
-		// A concurrent caller may have already populated the cache while this
-		// call was queued behind the singleflight lock — re-check before
-		// doing the work again.
 		if cached, ok := s.workspaceCache.get(key); ok {
 			return cached, nil
 		}
@@ -1597,10 +1428,6 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 	return files, truncated, nil
 }
 
-// scratchAOManagedNamesIn returns the basenames claimed by an AO-managed
-// .gitignore in dir. Adapter-owned patterns are anchored to that directory and
-// name files only. Missing, malformed, or unreadable markers safely reveal the
-// files instead of failing an otherwise readable workspace-tree request.
 func scratchAOManagedNamesIn(dir string) map[string]struct{} {
 	managed := make(map[string]struct{})
 	marker := filepath.Join(dir, ".gitignore")
@@ -1638,13 +1465,7 @@ func scratchAOManagedCopilotProfile(dir, name, fullPath string) bool {
 	return err == nil && !binary && strings.Contains(content, aoManagedCopilotProfileSentinel)
 }
 
-// scratchDirectoryOnlyAOManaged reports whether a directory contains control
-// files but no user-visible file. This keeps an otherwise empty .kimi,
-// .claude, or similar adapter directory from surviving as a misleading folder
-// in the Files tree after its contents have been filtered.
 func scratchDirectoryOnlyAOManaged(rootResolved, rel string) bool {
-	// AO workspace metadata lives under hidden roots. Avoid recursively probing
-	// ordinary scratch directories just to prove that they are user-visible.
 	rootName := strings.SplitN(rel, "/", 2)[0]
 	if !strings.HasPrefix(rootName, ".") {
 		return false
@@ -1796,9 +1617,6 @@ func resolvedScratchPath(filePath string) (string, bool) {
 	return resolved, err == nil
 }
 
-// gitLsFilesParts runs the `git ls-files` subprocess, kept separate from the
-// (pure, no I/O) merge step in mergeWorkspaceFilePaths so callers can run it
-// concurrently with other independent git calls (see workspaceFileSummariesCached).
 func gitLsFilesParts(ctx context.Context, root string) ([]string, error) {
 	out, err := gitWorkspaceOutput(ctx, root, "ls-files", "-z", "-co", "--exclude-standard")
 	if err != nil {
@@ -1841,13 +1659,9 @@ func mergeWorkspaceFilePaths(parts []string, extraPaths map[string]struct{}) ([]
 }
 
 type workspaceChangeSet struct {
-	statuses map[string]WorkspaceFileStatus
-	counts   map[string][2]int
-	previous map[string]string
-	// untracked holds paths git diff's machinery doesn't know about relative
-	// to base (status "??" from `git status`, absent from `git diff
-	// --name-status`) — computed once here so workspaceFileDiff can tell
-	// whether to synthesize a diff without its own extra git spawn.
+	statuses  map[string]WorkspaceFileStatus
+	counts    map[string][2]int
+	previous  map[string]string
 	untracked map[string]struct{}
 }
 
@@ -1871,7 +1685,6 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
 		if base == "HEAD" {
-			// An unborn HEAD diffs against the empty tree instead of failing.
 			base = headRevOrEmptyTree(gctx, root)
 		}
 		diffStatuses, diffPrevious, counts, err = workspaceDiffStats(gctx, root, base)
@@ -1910,12 +1723,6 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 		if status != WorkspaceFileAdded {
 			continue
 		}
-		// diffStatuses (git diff --name-status against base) is the correct
-		// "does git diff machinery know this path" signal — unlike counts
-		// (git diff --numstat), which deliberately omits binary files
-		// ("-\t-\tpath") even when they ARE tracked relative to base, so
-		// counts membership alone would misclassify a tracked binary Added
-		// file as untracked.
 		if _, ok := diffStatuses[rel]; ok {
 			continue
 		}
@@ -1931,17 +1738,11 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	return workspaceChangeSet{statuses: statuses, counts: counts, previous: previous, untracked: untracked}, nil
 }
 
-// workspaceCommits is the commit list between base and HEAD, newest first,
-// and whether older commits were left out of it.
 type workspaceCommits struct {
 	list      []CommitSummary
 	truncated bool
 }
 
-// workspaceGitState computes the git-state sections, the commit list between
-// base and HEAD, and ahead/behind counts for one worktree root. The four
-// section diffs, the commit log, and the ahead/behind lookup are independent
-// git subprocesses and run concurrently.
 func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSections, workspaceCommits, *int, *int, error) {
 	var sections WorkspaceFileSections
 	var uncommittedTracked []WorkspaceFileSummary
@@ -2001,11 +1802,6 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	return sections, commits, ahead, behind, nil
 }
 
-// workspaceUncommittedTracked lists the tracked changes between HEAD and the
-// worktree, staged or not, so a partially staged file is one row. HEAD is
-// tried first so the common case costs one Git process; an unborn HEAD then
-// diffs against the empty tree, which counts a staged new file's later
-// worktree edits too.
 func workspaceUncommittedTracked(ctx context.Context, root string) ([]WorkspaceFileSummary, error) {
 	statuses, previous, counts, err := workspaceDiffStats(ctx, root, "HEAD")
 	if err != nil {
@@ -2021,10 +1817,6 @@ func workspaceUncommittedTracked(ctx context.Context, root string) ([]WorkspaceF
 	return buildSectionSummaries(root, statuses, counts, previous), nil
 }
 
-// mergeUncommittedFiles combines tracked HEAD..worktree rows with untracked
-// rows into one path-sorted Uncommitted section. Git keeps the two sets
-// disjoint; should a path appear in both, the tracked row wins, as the
-// combined change maps prefer git diff over git status.
 func mergeUncommittedFiles(tracked, untracked []WorkspaceFileSummary) []WorkspaceFileSummary {
 	files := make([]WorkspaceFileSummary, 0, len(tracked)+len(untracked))
 	seen := make(map[string]struct{}, len(tracked))
@@ -2041,10 +1833,6 @@ func mergeUncommittedFiles(tracked, untracked []WorkspaceFileSummary) []Workspac
 	return files
 }
 
-// workspaceUncommittedFiles computes one workspace-project worktree's
-// Uncommitted section, with paths carrying the repository's display prefix.
-// Workspace projects have no other sections, so this runs its own untracked
-// listing instead of sharing workspaceGitSections' one.
 func workspaceUncommittedFiles(ctx context.Context, root, prefix string, excludePrefixes []string) ([]WorkspaceFileSummary, error) {
 	var tracked, untracked []WorkspaceFileSummary
 	g, gctx := errgroup.WithContext(ctx)
@@ -2076,13 +1864,8 @@ func workspaceUncommittedFiles(ctx context.Context, root, prefix string, exclude
 	return files, nil
 }
 
-// workspaceEmptyTrees caches each repository's empty-tree object name, which
-// depends only on the repository's immutable hash algorithm.
 var workspaceEmptyTrees sync.Map
 
-// workspaceEmptyTree names the empty tree in root's object format (SHA-1 or
-// SHA-256). hash-object without -w computes the name and writes nothing; git
-// resolves the empty tree without it existing in the object store.
 func workspaceEmptyTree(ctx context.Context, root string) (string, bool) {
 	if cached, ok := workspaceEmptyTrees.Load(root); ok {
 		if tree, ok := cached.(string); ok {
@@ -2101,10 +1884,6 @@ func workspaceEmptyTree(ctx context.Context, root string) (string, bool) {
 	return tree, true
 }
 
-// headRevOrEmptyTree is the "before" side of the uncommitted scope: HEAD, or
-// the empty tree while HEAD is unborn so every file in the worktree is an
-// addition. It falls back to "HEAD" when neither resolves, which lets the
-// caller's own Git command report the failure.
 func headRevOrEmptyTree(ctx context.Context, root string) string {
 	if _, ok := gitRevision(ctx, root, "HEAD"); ok {
 		return "HEAD"
@@ -2115,8 +1894,6 @@ func headRevOrEmptyTree(ctx context.Context, root string) string {
 	return "HEAD"
 }
 
-// buildSectionSummaries turns a diff's name-status/numstat maps into sorted
-// WorkspaceFileSummary rows.
 func buildSectionSummaries(root string, statuses map[string]WorkspaceFileStatus, counts map[string][2]int, previous map[string]string) []WorkspaceFileSummary {
 	paths := make([]string, 0, len(statuses))
 	for rel := range statuses {
@@ -2141,9 +1918,6 @@ func buildSectionSummaries(root string, statuses map[string]WorkspaceFileStatus,
 	return files
 }
 
-// buildUntrackedSummaries turns a set of untracked paths into sorted
-// WorkspaceFileSummary rows, counting text lines the same way the base..
-// worktree Files list treats an untracked added file.
 func buildUntrackedSummaries(root string, paths []string) []WorkspaceFileSummary {
 	sorted := append([]string(nil), paths...)
 	sort.Strings(sorted)
@@ -2157,8 +1931,6 @@ func buildUntrackedSummaries(root string, paths []string) []WorkspaceFileSummary
 	return files
 }
 
-// workspaceSummaryFromFiles aggregates the base..worktree Files list
-// (excluding unmodified entries) into panel-header totals.
 func workspaceSummaryFromFiles(files []WorkspaceFileSummary) WorkspaceSummary {
 	var summary WorkspaceSummary
 	for _, file := range files {
@@ -2172,7 +1944,6 @@ func workspaceSummaryFromFiles(files []WorkspaceFileSummary) WorkspaceSummary {
 	return summary
 }
 
-// gitUntrackedFiles lists untracked, non-ignored files in the worktree.
 func gitUntrackedFiles(ctx context.Context, root string) ([]string, error) {
 	out, err := gitWorkspaceOutput(ctx, root, "ls-files", "-z", "-o", "--exclude-standard")
 	if err != nil {
@@ -2181,9 +1952,6 @@ func gitUntrackedFiles(ctx context.Context, root string) ([]string, error) {
 	return splitNUL(out), nil
 }
 
-// gitCommitLog lists the commits reachable from HEAD but not base, newest
-// first, up to maxCommitLogCommits of them. truncated reports that older
-// commits were left out.
 func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, bool, error) {
 	commits, changes, counts, truncated, err := gitCommitLogChanges(ctx, root, base+"..HEAD", maxCommitLogCommits, maxCommitLogBytes)
 	if err != nil {
@@ -2196,20 +1964,11 @@ func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, bool
 	return commits, truncated, nil
 }
 
-// gitCommitLogChanges is gitCommitLogChangesArgs for one revision range.
 func gitCommitLogChanges(ctx context.Context, root, revRange string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
 	return gitCommitLogChangesArgs(ctx, root, []string{revRange}, maxCommits, maxBytes)
 }
 
-// gitCommitLogChangesArgs lists up to maxCommits commits selected by revArgs
-// (a range, or e.g. --first-parent and a tip), newest first, with each
-// commit's name-status changes and numstat counts. Both are collected in two
-// Git passes, rather than spawning Git once or twice for every commit, and
-// each pass keeps at most maxBytes of output. A commit either fits whole in
-// both passes or is left out, never listed with part of its files. truncated
-// reports that older commits were left out.
 func gitCommitLogChangesArgs(ctx context.Context, root string, revArgs []string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
-	// Reading one commit past the cap tells a full list from a truncated one.
 	maxCount := "--max-count=" + strconv.Itoa(maxCommits+1)
 	statusArgs := append([]string{"log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z"}, revArgs...)
 	numstatArgs := append([]string{"log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z"}, revArgs...)
@@ -2231,8 +1990,6 @@ func gitCommitLogChangesArgs(ctx context.Context, root string, revArgs []string,
 	counts := parseCommitNumstatLog(wholeCommitChunks(numstatOutput, numstatCapped))
 	truncated := statusCapped || numstatCapped
 	if numstatCapped {
-		// Past the numstat pass's last whole commit, text files would read as
-		// binary for want of counts.
 		for i, commit := range commits {
 			if _, ok := counts[commit.SHA]; !ok {
 				commits = commits[:i]
@@ -2247,9 +2004,6 @@ func gitCommitLogChangesArgs(ctx context.Context, root string, revArgs []string,
 	return commits, changes, counts, truncated, nil
 }
 
-// wholeCommitChunks drops the commit a capped git log pass stopped partway
-// through. Every commit's chunk starts with \x1e, so all output before the
-// last one is whole.
 func wholeCommitChunks(out string, capped bool) string {
 	if !capped {
 		return out
@@ -2303,10 +2057,6 @@ func parseCommitNumstatLog(out string) map[string]map[string][2]int {
 	return result
 }
 
-// gitAheadBehind reports HEAD's commit counts against its upstream, falling
-// back to origin/<branch> when no upstream is configured. Both return values
-// are nil when neither can be resolved (detached HEAD, no remote, git
-// failure) — that means "no push/pull data," not an error worth propagating.
 func gitAheadBehind(ctx context.Context, root string) (*int, *int) {
 	ref, err := gitWorkspaceOutput(ctx, root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
 	upstream := strings.TrimSpace(ref)
@@ -2377,8 +2127,6 @@ func classifyWorkspaceStatus(xy string) WorkspaceFileStatus {
 	}
 }
 
-// workspaceDiffStats obtains status, rename sources and line counts in one
-// Git traversal. Separate name-status and numstat calls each rescan the worktree.
 func workspaceDiffStats(ctx context.Context, root string, revArgs ...string) (map[string]WorkspaceFileStatus, map[string]string, map[string][2]int, error) {
 	args := append([]string{"diff", "--raw", "--numstat", "--find-renames", "-z"}, revArgs...)
 	args = append(args, "--")
@@ -2413,9 +2161,6 @@ func workspaceDiffStats(ctx context.Context, root string, revArgs ...string) (ma
 	return statuses, previous, parseNumstatOutput(strings.Join(parts[index:], "\x00")), nil
 }
 
-// workspaceDiffNameStatus runs `git diff --name-status` with the given
-// revision arguments (e.g. a single base for base..worktree, "--cached" for
-// index..HEAD, or two revisions for a committed range) and parses the result.
 func workspaceDiffNameStatus(ctx context.Context, root string, revArgs ...string) (map[string]WorkspaceFileStatus, map[string]string, error) {
 	return workspaceDiffNameStatusPaths(ctx, root, revArgs, nil)
 }
@@ -2498,8 +2243,6 @@ func classifyNameStatus(status string) WorkspaceFileStatus {
 	}
 }
 
-// workspaceDiffNumstat runs `git diff --numstat` with the given revision
-// arguments; see workspaceDiffNameStatus for the argument forms.
 func workspaceDiffNumstat(ctx context.Context, root string, revArgs ...string) (map[string][2]int, error) {
 	return workspaceDiffNumstatPaths(ctx, root, revArgs, nil)
 }
@@ -2580,11 +2323,6 @@ func workspaceFileDiff(ctx context.Context, root, base, rel string, status Works
 		truncatedDiff, truncated := truncateUTF8(diff, maxWorkspaceDiffBytes)
 		return truncatedDiff, truncated, nil
 	}
-	// staged mirrors the `--cached` diff sections.Staged is built from (index
-	// vs HEAD); unstaged mirrors the bare diff sections.Unstaged is built from
-	// (worktree vs index); uncommitted mirrors sections.Uncommitted (worktree
-	// vs HEAD). Anything else falls back to base..worktree, the combined
-	// change shown before per-section diffs existed.
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--unified=3"}
 	switch section {
 	case WorkspaceFileSectionUncommitted:
@@ -2592,7 +2330,6 @@ func workspaceFileDiff(ctx context.Context, root, base, rel string, status Works
 	case WorkspaceFileSectionStaged:
 		args = append(args, "--cached")
 	case WorkspaceFileSectionUnstaged:
-		// No revision arg: worktree vs index.
 	default:
 		args = append(args, base)
 	}
@@ -2674,10 +2411,6 @@ func confinedWorkspaceFile(root, rel string) (string, os.FileInfo, error) {
 }
 
 func cleanWorkspaceRelativePath(raw string) (string, error) {
-	// Backslash is a path separator only on Windows. Everywhere else it is a
-	// legal filename character, so folding it here makes a file named `a\b.txt`
-	// unopenable — and worse, silently resolves it to `a/b.txt`, a different
-	// file that may well exist.
 	normalized := raw
 	if runtime.GOOS == "windows" {
 		normalized = strings.ReplaceAll(raw, "\\", "/")
@@ -2716,9 +2449,6 @@ func readWorkspaceTextFile(file string, limit int) (string, bool, bool, error) {
 		return "", true, truncated, nil
 	}
 	if !utf8.Valid(data) && truncated {
-		// A bounded preview can end in the middle of a valid multi-byte rune.
-		// Remove only that possible partial suffix; invalid UTF-8 elsewhere is
-		// still classified as binary below.
 		for trim := 1; trim < utf8.UTFMax && trim < len(data); trim++ {
 			if candidate := data[:len(data)-trim]; utf8.Valid(candidate) {
 				data = candidate
@@ -2775,8 +2505,6 @@ func truncateUTF8(in string, limit int) (string, bool) {
 	return in[:end], true
 }
 
-// workspaceGitCommand builds the non-interactive, hook-free Git command every
-// workspace read runs, before any output handling.
 func workspaceGitCommand(ctx context.Context, root string, args ...string) *exec.Cmd {
 	globalArgs := make([]string, 0, 10+len(args))
 	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
@@ -2789,8 +2517,6 @@ func gitWorkspaceOutput(ctx context.Context, root string, args ...string) (strin
 	return gitWorkspaceOutputEnv(ctx, root, nil, args...)
 }
 
-// gitWorkspaceOutputEnv is gitWorkspaceOutput with extra environment entries,
-// such as a scratch GIT_INDEX_FILE.
 func gitWorkspaceOutputEnv(ctx context.Context, root string, env []string, args ...string) (string, error) {
 	cmd := workspaceGitCommand(ctx, root, args...)
 	cmd.Env = append(cmd.Env, env...)
@@ -2805,10 +2531,6 @@ func gitWorkspaceOutputEnv(ctx context.Context, root string, env []string, args 
 			}
 			detail += stdout
 		}
-		// A git command against a worktree whose owning repository has been
-		// deleted from disk fails with an opaque exit-128 the caller can't act
-		// on. Detect that single condition so the session read surface maps to
-		// a clean 404 (PROJECT_FOLDER_MISSING) instead of a raw 500.
 		if workspaceRepoUnavailable(root) {
 			return "", fmt.Errorf("git -C %s %s: %w", root, strings.Join(args, " "), ports.ErrWorkspaceRepoUnavailable)
 		}
@@ -2839,8 +2561,6 @@ func (w *cappedWorkspaceOutput) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// gitWorkspaceOutputCapped drains all output while retaining only a bounded
-// prefix, preventing large diffs from becoming an unbounded in-memory buffer.
 func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args ...string) (string, bool, error) {
 	cmd := workspaceGitCommand(ctx, root, args...)
 	stdout := &cappedWorkspaceOutput{limit: limit}
@@ -2857,11 +2577,6 @@ func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args 
 	return stdout.buffer.String(), stdout.truncated, nil
 }
 
-// classifyWorkspaceGitError keeps repository-read failures actionable at the
-// HTTP boundary. The old code returned raw exec.ExitError values, which the
-// envelope rendered as an indistinguishable INTERNAL_ERROR. Context deadlines
-// remain discoverable by the envelope's transient mapper, while lock/contention
-// failures are explicitly retryable.
 func classifyWorkspaceGitError(ctx context.Context, root, operation string, err error, detail string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -2888,18 +2603,10 @@ func classifyWorkspaceGitError(ctx context.Context, root, operation string, err 
 	return failed
 }
 
-// workspaceGitFailures holds each workspace root and operation's last reported
-// failure state. The desktop polls these reads, so a repository stuck in one
-// broken state answered every poll with a 500 and one Sentry event
-// (AO-DAEMON-9: 13k events from 14 installs). A root reports once per state
-// change; only a successful read of the same operation re-arms it. Separate
-// operations and workspaces cannot re-arm each other.
 type workspaceGitFailureKey struct{ root, operation string }
 
 var workspaceGitFailures sync.Map
 
-// repeatedWorkspaceGitFailure records root's failure state and reports
-// whether it is the one already reported. The state stays in memory.
 func repeatedWorkspaceGitFailure(root, operation string, err error, detail string) bool {
 	code := -1
 	var exitErr *exec.ExitError
@@ -2912,20 +2619,10 @@ func repeatedWorkspaceGitFailure(root, operation string, err error, detail strin
 	return loaded && previous == state
 }
 
-// noteWorkspaceGitReadOK re-arms reporting for root after a read succeeds.
 func noteWorkspaceGitReadOK(root, operation string) {
 	workspaceGitFailures.Delete(workspaceGitFailureKey{root, operation})
 }
 
-// workspaceRepoUnavailable reports whether a worktree root can no longer reach
-// its owning repository on disk. A git worktree keeps a `.git` file at its
-// root whose `gitdir:` line points at the owning repository's common git
-// directory; when that repository has been deleted the pointed-to path no
-// longer exists and git fails with "not a git repository". A plain checkout
-// instead keeps its metadata in a `.git` directory at the root, whose absence
-// is the equivalent signal. Only the genuinely-gone-repository case returns
-// true; any other (available) repository reports false so the original git
-// error keeps its existing semantics.
 func workspaceRepoUnavailable(root string) bool {
 	gitPath := filepath.Join(root, ".git")
 	if data, err := os.ReadFile(gitPath); err == nil {
@@ -2940,9 +2637,6 @@ func workspaceRepoUnavailable(root string) bool {
 		if err != nil || !info.IsDir() {
 			return os.IsNotExist(err)
 		}
-		// A linked worktree's per-worktree gitdir can survive after the common
-		// repository disappears. Git follows commondir and fails every read.
-		// Resolve it relative to gitdir, including on Windows drive paths.
 		commonFile, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
 		if err != nil {
 			return false
@@ -2961,8 +2655,6 @@ func workspaceRepoUnavailable(root string) bool {
 	return os.IsNotExist(err) || err == nil && !info.IsDir()
 }
 
-// parseGitDirFile extracts the path from a git worktree `.git` file's
-// "gitdir: <path>" line.
 func parseGitDirFile(content string) (string, bool) {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)

@@ -65,7 +65,6 @@ func TestSessionHibernationMarkerUsesRevisionAndSurvivesOrdinaryUpdate(t *testin
 		t.Fatalf("get session = %v, %v", ok, err)
 	}
 
-	// A later session write invalidates the idle snapshot used to choose sleep.
 	current := stale
 	current.DisplayName = "new activity"
 	if err := s.UpdateSession(ctx, current); err != nil {

@@ -4,8 +4,6 @@ import { isCloudSignInConfigured } from "./cloud-session";
 
 describe("isCloudSignInConfigured", () => {
   it("is configured by default via the baked WorkOS client id", () => {
-    // The client id ships as a baked default, so with no explicit argument
-    // sign-in is always configured; the cloud offering toggle is the real gate.
     expect(isCloudSignInConfigured(undefined)).toBe(true);
   });
 
@@ -37,8 +35,6 @@ describe("useCloudSession", () => {
     expect(first.result.current.status).toBe("loading");
     await waitFor(() => expect(first.result.current.status).toBe("authenticated"));
 
-    // A view opened afterwards (a new session's screen) must not read as
-    // signed out while its own bridge round trip runs.
     const second = renderHook(() => useCloudSession());
     expect(second.result.current.status).toBe("authenticated");
     expect(second.result.current.session).toEqual(account);
@@ -58,18 +54,15 @@ describe("useCloudSession", () => {
       aoBridge: { cloud: { getSession, onSessionChanged, signIn: () => undefined, signOut: () => Promise.resolve() } },
     }));
     const { useCloudSession } = await import("./cloud-session");
-    // A page of artifact cards mounts together.
     const cards = Array.from({ length: 50 }, () => renderHook(() => useCloudSession()));
     await waitFor(() => expect(cards[0].result.current.status).toBe("authenticated"));
     expect(getSession).toHaveBeenCalledTimes(1);
     expect(onSessionChanged).toHaveBeenCalledTimes(1);
 
-    // Main re-sending the same user (a token refresh) re-renders no card.
     const before = cards[0].result.current.session;
     changeListeners.forEach((listener) => listener({ ...account }));
     expect(cards[0].result.current.session).toBe(before);
 
-    // Signing out reaches every card through the one listener.
     changeListeners.forEach((listener) => listener(null));
     await waitFor(() => expect(cards[49].result.current.status).toBe("unauthenticated"));
     cards.forEach((card) => card.unmount());
@@ -99,7 +92,6 @@ describe("useCloudSession", () => {
     const { useCloudSession } = await import("./cloud-session");
     const card = renderHook(() => useCloudSession());
     expect(getSession).toHaveBeenCalledTimes(1);
-    // Main signs the user out while the read is still on its way back.
     act(() => changeListeners.forEach((listener) => listener(null)));
     expect(card.result.current.status).toBe("unauthenticated");
     await act(async () => answer({ ...account }));

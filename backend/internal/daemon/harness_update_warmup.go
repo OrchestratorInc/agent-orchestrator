@@ -12,17 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
-// watchInstalledHarnessUpdates checks installed harnesses for updates once
-// the startup readiness passes, then again every interval for as long as the
-// daemon runs, so a long-lived daemon notices new releases without a restart.
-// Each pass first refreshes installation observations older than the display
-// policy (binary lookups only, no authentication checks), so it covers
-// harnesses installed outside AO since the last pass. The first pass runs just
-// after warm-up and reuses those observations. The first pass shares in-flight work and cached results with the HTTP
-// endpoint. Later passes force a fresh lookup: a result cached just under one
-// interval ago would otherwise be served again for another interval. A pass
-// submits every installed harness at once; the installer service runs at most
-// two checks at a time, so a pass costs about two CLI version probes of memory.
 func watchInstalledHarnessUpdates(
 	ctx context.Context,
 	readinessDone <-chan struct{},

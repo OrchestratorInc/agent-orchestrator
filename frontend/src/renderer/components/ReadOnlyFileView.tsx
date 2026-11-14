@@ -20,7 +20,6 @@ import { SelectionAskButton } from "./diffs/SelectionAskButton";
 import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
 
-/** How long a revealed line stays marked, matching the chat and settings focus highlights. */
 export const REVEALED_LINE_HIGHLIGHT_MS = 2_000;
 
 export function formatBytes(bytes: number): string {
@@ -36,9 +35,6 @@ function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | 
 	return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
 }
 
-// Renders an untouched (unmodified) workspace file: an agent didn't write
-// this one, so there's no diff to show, just its current content. Binary and
-// oversized files short-circuit before any tokenization is attempted.
 export function ReadOnlyFileView({
 	annotation,
 	annotationRange,
@@ -71,7 +67,6 @@ export function ReadOnlyFileView({
 	commitSha?: string;
 	sessionId: string;
 	hostId?: string;
-	/** Where to load an image file from, when not the workspace blob route (an artifact's raw URL). */
 	imageUrl?: string;
 	side?: "before" | "after";
 }) {
@@ -84,7 +79,6 @@ export function ReadOnlyFileView({
 	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());
-	// The line a reveal brought into view, marked briefly so the eye lands on it.
 	const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
 	const editorInstanceId = useId();
 	const gutterHover = usePersistentGutterUtility(containerRef);
@@ -118,8 +112,6 @@ export function ReadOnlyFileView({
 		const timer = window.setTimeout(() => setHighlightedLine(null), REVEALED_LINE_HIGHLIGHT_MS);
 		return () => window.clearTimeout(timer);
 	}, [highlightedLine]);
-	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
-	// session has a Chat composer; in edit mode a selection belongs to the editor.
 	const askInChat = useAskInChat(sessionId, hostId);
 	const captureSource = fileReferenceSource(source, commitSha);
 	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined && !editing);

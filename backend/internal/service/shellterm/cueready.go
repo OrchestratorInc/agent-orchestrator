@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// cueShellReadiness installs a one-shot startup signal. It never sends input
-// before the shell itself has reached its first prompt.
 type cueShellReadiness struct {
 	argv    []string
 	env     map[string]string
@@ -69,21 +67,16 @@ func prepareCueShellReadiness(dataDir string, argv []string, env map[string]stri
 	result.cleanup = func() { _ = os.Remove(result.file) }
 	switch name {
 	case "fish":
-		// Fish evaluates init commands after the user's configuration. Register
-		// a one-shot prompt event without replacing their prompt or startup files.
 		script := "function _ao_cue_ready --on-event fish_prompt; " +
 			"printf ready > \"$AO_CUE_READY_FILE\"; functions --erase _ao_cue_ready; end"
 		result.argv = append(result.argv, "--init-command", script)
 	case "bash", "bash.exe":
-		// Bash runs PROMPT_COMMAND immediately before rendering the first prompt.
-		// A profile that replaces it will cause a safe timeout.
 		hook := "if [ -z \"$AO_CUE_READY_SENT\" ]; then printf ready > " + shellSingleQuote(result.file) + "; AO_CUE_READY_SENT=1; fi"
 		if previous := getenv("PROMPT_COMMAND"); previous != "" {
 			hook = previous + "; " + hook
 		}
 		result.env["PROMPT_COMMAND"] = hook
 	case "sh", "sh.exe":
-		// An interactive POSIX sh reads ENV before its first prompt.
 		profile := result.file + ".env"
 		content := ""
 		if previous := getenv("ENV"); previous != "" {
@@ -97,8 +90,6 @@ func prepareCueShellReadiness(dataDir string, argv []string, env map[string]stri
 		result.env["ENV"] = profile
 		result.cleanup = func() { _ = os.Remove(result.file); _ = os.Remove(profile) }
 	case "zsh":
-		// Source the user's original startup files before installing a one-shot
-		// precmd hook. Restore ZDOTDIR for subsequent shells.
 		wrapper := result.file + ".zsh"
 		if err := os.Mkdir(wrapper, 0o700); err != nil {
 			result.cleanup()
@@ -131,7 +122,6 @@ func prepareCueShellReadiness(dataDir string, argv []string, env map[string]stri
 		result.env["ZDOTDIR"] = wrapper
 		result.cleanup = func() { _ = os.Remove(result.file); _ = os.RemoveAll(wrapper) }
 	case "pwsh.exe", "powershell.exe":
-		// -Command runs after the profile; preserve the user's prompt function.
 		file := powershellSingleQuote(result.file)
 		script := "$global:aoCueOriginalPrompt = (Get-Command prompt -CommandType Function).ScriptBlock; " +
 			"function global:prompt { if (-not $global:aoCueReadySent) { " +
@@ -139,8 +129,6 @@ func prepareCueShellReadiness(dataDir string, argv []string, env map[string]stri
 			"& $global:aoCueOriginalPrompt }"
 		result.argv = append(result.argv, "-NoExit", "-Command", script)
 	case "cmd.exe":
-		// /K runs a tiny script after cmd AutoRun and remains interactive. Keep
-		// the redirection inside the script so go-pty need only quote its path.
 		script := result.file + ".cmd"
 		if err := os.WriteFile(script, []byte("@echo off\r\necho ready>\""+result.file+"\"\r\n"), 0o600); err != nil {
 			result.cleanup()
@@ -174,7 +162,6 @@ func (s *Service) waitForCueShellReady(ctx context.Context, handle ports.Runtime
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-waitCtx.Done():
-			// Parent cancellation also closes waitCtx; preserve the caller's error.
 			if err := ctx.Err(); err != nil {
 				return err
 			}
