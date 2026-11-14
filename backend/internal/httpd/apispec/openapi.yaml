@@ -1289,51 +1289,6 @@ paths:
         handoff
       tags:
       - agents
-  /api/v1/agents/accounts/sessions/{sessionId}/stay:
-    put:
-      operationId: setSessionStayOnAccount
-      parameters:
-      - description: AO session identifier.
-        in: path
-        name: sessionId
-        required: true
-        schema:
-          description: AO session identifier.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SetSessionStayOnAccountRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SessionAgentAccountsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Keep a session on its account, or let a usage limit move it
-      tags:
-      - agents
   /api/v1/agents/accounts/usage:
     get:
       operationId: getAgentAccountUsage
@@ -15738,6 +15693,15 @@ components:
           type: string
         problem:
           type: string
+        problemKind:
+          enum:
+          - slow
+          - rate_limited
+          - unavailable
+          - cli_missing
+          - other_login
+          - other_org
+          type: string
         provider:
           enum:
           - claude
@@ -19343,6 +19307,8 @@ components:
         annotationOrder:
           format: int64
           type: integer
+        comment:
+          type: string
         fileReference:
           $ref: '#/components/schemas/ConversationFileReferenceRequest'
         mimeType:
@@ -19395,6 +19361,9 @@ components:
       type: object
     ConversationExcerptReferenceRequest:
       properties:
+        comment:
+          maxLength: 4096
+          type: string
         conversationId:
           type: string
         id:
@@ -20517,6 +20486,8 @@ components:
       type: object
     DomainSideReference:
       properties:
+        comment:
+          type: string
         conversationId:
           type: string
         id:
@@ -23327,10 +23298,6 @@ components:
           type: string
         codex:
           type: string
-        stayOnAccount:
-          type: boolean
-      required:
-      - stayOnAccount
       type: object
     SessionArchiveSummary:
       properties:
@@ -24719,15 +24686,6 @@ components:
           - cline
           - autohand
           type: string
-      type: object
-    SetSessionStayOnAccountRequest:
-      properties:
-        stay:
-          type:
-          - "null"
-          - boolean
-      required:
-      - stay
       type: object
     SetTurnAutoResumeRequest:
       properties:

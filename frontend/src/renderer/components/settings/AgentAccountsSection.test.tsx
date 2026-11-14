@@ -184,6 +184,58 @@ it("shows an API-key CLI login as logged in without a subscription and keeps its
 	expect(cliLogin.onLogout).toHaveBeenCalledTimes(1);
 });
 
+function renderWithAccounts(accounts: unknown[]) {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts },
+	}));
+	renderPanel();
+}
+
+const findProblem = (id: string) => waitFor(() => {
+	const note = document.querySelector<HTMLElement>(`[data-agent-account="${id}"] [data-account-problem]`);
+	if (!note) throw new Error("no problem note");
+	return note;
+});
+
+it("says a slow check plainly, keeps the old numbers' age, and puts the CLI's error under Details", async () => {
+	const fetchedAt = new Date(Date.now() - 6 * 60_000).toISOString();
+	renderWithAccounts([{ ...device, problem: "context deadline exceeded", problemKind: "slow", limits: { fetchedAt, windows: [{ id: "five_hour", label: "Session (5h)", usedPercent: 28 }] } }]);
+
+	const note = await findProblem("device-claude");
+	expect(note).toHaveTextContent("Updated 6 minutes ago · Claude Code took too long to report its limits. Trying again shortly.");
+	expect(note).not.toHaveTextContent("context deadline exceeded");
+	expect(note).toHaveClass("text-muted-foreground");
+	expect(note.querySelector("svg")).toBeNull();
+	// The numbers from the last good check stay.
+	expect(screen.getByRole("progressbar", { name: /Session \(5h\)/ })).toBeInTheDocument();
+
+	await userEvent.setup().hover(within(note).getByRole("button", { name: "Details" }));
+	expect(await screen.findByRole("tooltip")).toHaveTextContent("context deadline exceeded");
+});
+
+it("words an older daemon's bare error as a check that will be tried again", async () => {
+	renderWithAccounts([{ ...device, problem: "claude ended without answering get_usage" }]);
+
+	const note = await findProblem("device-claude");
+	expect(note).toHaveTextContent("Couldn't check limits right now. Trying again shortly.");
+	expect(note).not.toHaveTextContent("get_usage");
+});
+
+it("warns when the folder is signed in as another login or the CLI is missing", async () => {
+	renderWithAccounts([
+		{ ...saved, signedIn: false, problem: "the folder is now signed in as c@example.com, not b@example.com", problemKind: "other_login" },
+		{ ...device, problem: "claude: executable file not found in $PATH", problemKind: "cli_missing" },
+	]);
+
+	const other = await findProblem("acct-b");
+	expect(other).toHaveTextContent("This account's folder is now signed in to a different login. Sign in again to use it.");
+	expect(other).toHaveClass("text-warning");
+	expect(other.querySelector("svg")).not.toBeNull();
+	const missing = await findProblem("device-claude");
+	expect(missing).toHaveTextContent("Claude Code isn't installed, so its limits can't be checked.");
+	expect(missing).toHaveClass("text-warning");
+});
+
 it("lists a login the CLI and a saved account share once", async () => {
 	const twin = { ...device, default: false, sameLoginAs: "acct-a" };
 	const savedA = { id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com" };

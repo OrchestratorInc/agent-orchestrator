@@ -663,7 +663,7 @@ export function cloudAnnotationContent(excerpts: readonly ChatDraftExcerptRefere
 				snapshot = displaySnapshot;
 			}
 			return {
-				type: "excerpt", text: excerpt.text, snapshot, annotationId: excerpt.id, annotationOrder: excerpt.order,
+				type: "excerpt", text: excerpt.text, comment: excerpt.comment, snapshot, annotationId: excerpt.id, annotationOrder: excerpt.order,
 				sourceConversationId: excerpt.conversationId, sourceMessageId: excerpt.messageId, sourceRevision: excerpt.revision,
 			};
 		}),
@@ -682,7 +682,7 @@ function eventContent(payload: EventPayload): ConversationContentSummary[] | und
 		const snapshot = isExcerptSnapshot(block.snapshot) ? block.snapshot : undefined;
 		if (block.type === "excerpt" && (typeof block.text === "string" || snapshot?.badgeOnly === true)) {
 			return [{
-				type: "excerpt", text: text(block.text) ?? "", annotationId: text(block.annotationId), annotationOrder: number(block.annotationOrder),
+				type: "excerpt", text: text(block.text) ?? "", comment: text(block.comment), annotationId: text(block.annotationId), annotationOrder: number(block.annotationOrder),
 				sourceConversationId: text(block.sourceConversationId), sourceMessageId: text(block.sourceMessageId), sourceRevision: number(block.sourceRevision), snapshot,
 			}];
 		}

@@ -2023,13 +2023,14 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
 		selection.addRange(range); fireEvent.pointerUp(document.body);
 		button = screen.getByRole("button", { name: "Add to chat" });
-		expect(button).toHaveClass("text-muted-foreground", "hover:text-foreground");
-		expect(button.querySelector("svg")).toBeNull();
-		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");
+		const box = button.closest("[data-chat-selection-actions]");
+		expect(box).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-xl");
+		expect(box).toContainElement(screen.getByRole("textbox", { name: "Comment on the selected text" }));
 		fireEvent.mouseDown(button);
 		expect(selection.toString().trim()).toBe(selectedText);
 		fireEvent.click(button);
 		expect(screen.getByRole("button", { name: "1 annotation" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Annotation 1" })).toHaveTextContent("1");
 		fireEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		expect(screen.getByRole("button", { name: selectedText })).toBeInTheDocument();
 		selection.removeAllRanges();
