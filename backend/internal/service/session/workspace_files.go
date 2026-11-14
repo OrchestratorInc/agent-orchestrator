@@ -1598,32 +1598,54 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 }
 
 // scratchAOManagedNamesIn returns the basenames claimed by an AO-managed
-// .gitignore in dir. Adapter-owned patterns are anchored to that directory and
-// name files only. Missing, malformed, or unreadable markers safely reveal the
-// files instead of failing an otherwise readable workspace-tree request.
+// .gitignore in dir, or in its parent through an entry naming dir's own
+// folder ("/extensions/ao-activity.ts" in .pi/.gitignore claims
+// ao-activity.ts in .pi/extensions; Pi ignores extensions a .gitignore beside
+// them lists, so AO cannot put one there). Adapter-owned patterns are anchored
+// to their directory and name files only. Missing, malformed, or unreadable
+// markers safely reveal the files instead of failing an otherwise readable
+// workspace-tree request.
 func scratchAOManagedNamesIn(dir string) map[string]struct{} {
 	managed := make(map[string]struct{})
+	for _, name := range scratchAOManagedEntries(dir) {
+		if !strings.Contains(name, "/") {
+			managed[name] = struct{}{}
+		}
+	}
+	prefix := filepath.Base(dir) + "/"
+	for _, name := range scratchAOManagedEntries(filepath.Dir(dir)) {
+		if rest, ok := strings.CutPrefix(name, prefix); ok && rest != "" && !strings.Contains(rest, "/") {
+			managed[rest] = struct{}{}
+		}
+	}
+	return managed
+}
+
+// scratchAOManagedEntries returns the anchored entries of an AO-managed
+// .gitignore in dir, relative to dir.
+func scratchAOManagedEntries(dir string) []string {
 	marker := filepath.Join(dir, ".gitignore")
 	info, err := os.Lstat(marker)
 	if err != nil || !info.Mode().IsRegular() {
-		return managed
+		return nil
 	}
 	content, binary, _, err := readWorkspaceTextFile(marker, 64*1024)
 	if err != nil || binary || !strings.Contains(content, aoManagedGitignoreSentinel) {
-		return managed
+		return nil
 	}
+	var entries []string
 	for _, rawLine := range strings.Split(content, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if !strings.HasPrefix(line, "/") || strings.HasPrefix(line, "//") {
 			continue
 		}
 		name := path.Clean(strings.TrimPrefix(line, "/"))
-		if name == "." || name == ".." || strings.Contains(name, "/") {
+		if name == "." || name == ".." || strings.HasPrefix(name, "../") {
 			continue
 		}
-		managed[name] = struct{}{}
+		entries = append(entries, name)
 	}
-	return managed
+	return entries
 }
 
 func scratchAOManagedCopilotProfile(dir, name, fullPath string) bool {

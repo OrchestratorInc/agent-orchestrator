@@ -100,7 +100,9 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			// pi-acp 0.17 uses a long-running daemon. A session-private socket
 			// prevents one project's first-start environment (notably
 			// PI_CODING_AGENT_DIR and provider keys) leaking into another.
-			env["PI_ACP_SOCKET_DIR"] = filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID), "run")
+			env["PI_ACP_SOCKET_DIR"] = sessionRunDir(cfg)
+			// AO's Pi extension listens here for steers (see steer.go).
+			env[steerDirEnv] = sessionRunDir(cfg)
 			if err := prepareStandingInstructions(ctx, cfg); err != nil {
 				return acpdriver.Launch{}, err
 			}
@@ -122,6 +124,7 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 		// pi-acp can exit during its first handshake while its background
 		// daemon starts; the next start finds the daemon up.
 		RetryStartupExit: true,
+		SteerExternal:    steerExternal,
 	}
 }
 

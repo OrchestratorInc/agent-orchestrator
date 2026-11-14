@@ -141,7 +141,10 @@ type conversation struct {
 	extensionMethods  map[string]string
 	// steering is how this agent takes mid-turn guidance. pendingSteers holds
 	// guidance a drain agent has not collected yet; see SteerDrain.
-	steering      steering
+	steering steering
+	// steerChannel is the external steering channel, for a SteerExternal
+	// binding.
+	steerChannel  SteerChannel
 	pendingSteers []*pendingSteer
 	// stoppingTurn is the turn Stop has begun to stop. Steers for it are
 	// refused, so one that arrives while Stop waits for the dispatch lock
@@ -401,6 +404,9 @@ func (c *conversation) start(
 	models *legacySessionModelState,
 	modes *acpsdk.SessionModeState,
 ) {
+	if c.steering.external != nil && capabilities[ports.ChatCapabilitySteer] && !c.externalSteerReady(sessionID) {
+		capabilities[ports.ChatCapabilitySteer] = false
+	}
 	c.mu.Lock()
 	c.sessionID = sessionID
 	c.reportedSessionID = sessionID
