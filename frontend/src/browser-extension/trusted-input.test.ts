@@ -162,3 +162,36 @@ describe("TrustedInput cancellation", () => {
 		expect(fake.counts().attaches).toBe(0);
 	});
 });
+
+describe("TrustedInput without the tab in front", () => {
+	it("emulates focus only while attached and detaches afterwards", async () => {
+		const fake = fakeDebugger();
+		const input = new TrustedInput(fake.chrome);
+		await input.click(7, { x: 5, y: 5 });
+		const methods = fake.calls.map((call) => call.method).filter((method) => !method.startsWith("Input.") && method !== "capture");
+		expect(methods).toEqual(["Page.enable", "Emulation.setFocusEmulationEnabled", "Emulation.setFocusEmulationEnabled", "Page.disable"]);
+		const focus = fake.calls.filter((call) => call.method === "Emulation.setFocusEmulationEnabled").map((call) => call.params.enabled);
+		expect(focus).toEqual([true, false]);
+		expect(fake.counts()).toEqual({ attaches: 1, detaches: 1 });
+	});
+
+	it("captures the tab itself through the debugger", async () => {
+		const fake = fakeDebugger();
+		const send = fake.chrome.debugger.sendCommand;
+		fake.chrome.debugger.sendCommand = (async (target: unknown, method: string, params?: Record<string, unknown>) => {
+			await send(target as never, method, params);
+			return method === "Page.captureScreenshot" ? { data: "iVBORw0KGgo=" } : {};
+		}) as never;
+		const input = new TrustedInput(fake.chrome);
+		expect(await input.screenshot(7)).toBe("iVBORw0KGgo=");
+		expect(fake.calls.find((call) => call.method === "Page.captureScreenshot")?.params).toEqual({ format: "png" });
+		expect(fake.counts()).toEqual({ attaches: 1, detaches: 1 });
+	});
+
+	it("reports an empty screenshot instead of returning nothing", async () => {
+		const fake = fakeDebugger();
+		const input = new TrustedInput(fake.chrome);
+		await expect(input.screenshot(7)).rejects.toMatchObject({ code: "SCREENSHOT_UNAVAILABLE" });
+		expect(fake.counts()).toEqual({ attaches: 1, detaches: 1 });
+	});
+});
