@@ -335,7 +335,15 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		return () => window.clearTimeout(timer);
 	}, [operation?.id, operation?.status, operation?.method, operation?.nativePrompt]);
 	const needsTerminal = running && (operation?.nativePrompt === "terminal_required" || stalled);
-	const choose =(item: components["schemas"]["AgentLoginMethod"]) => {
+	// A verified sign-in closes the panel; the account row shows it connected.
+	// A key left in the user environment keeps the panel open: the account
+	// row does not show that warning. Unmounting disposes the finished
+	// operation, retrying if the host is away.
+	const withdrawFailed = Boolean(operation?.withdrawFailed);
+	useEffect(() => {
+		if (connected && !verifying && !withdrawFailed) onClose();
+	}, [connected, verifying, withdrawFailed, onClose]);
+	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
 		if (locked) return;
 		// Clicking an open credential row again collapses it.
 		setMethodId(item.secret && selectedMethodId === item.id ? "" : item.id);
@@ -653,7 +661,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
 				{needsTerminal && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-				<Button variant={connected ? "primary" : "outline"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
+				{(!connected || withdrawFailed) && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "common.close" : "settings.harness.loginUi.cancel")}</Button>}
 			</div>
 		</div>
 	</section>;

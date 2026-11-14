@@ -4454,7 +4454,6 @@
 	"settings.harness.loginUi.openBrowser": "Open sign-in page",
 	"settings.harness.loginUi.terminal": "Open terminal login",
 	"settings.harness.loginUi.cancel": "Cancel",
-	"settings.harness.loginUi.done": "Done",
 	"settings.harness.loginUi.hints.claude": "Use your Claude subscription.",
 	"settings.harness.loginUi.hints.cline": "Use your Cline account. Some account prompts may still require terminal login.",
 	"settings.harness.loginUi.hints.anthropic_key": "Saved in OpenCode's own credential store.",
