@@ -69,6 +69,16 @@ describe("route builders", () => {
 		expect(fn).toHaveBeenCalled();
 	});
 
+	it("passes an empty legacy machine id to a reconnect form", () => {
+		const route = connectSheetRoute(vi.fn(), "");
+		expect(route.params.hostId).toBe("");
+	});
+
+	it("omits the machine id for a new connection", () => {
+		const route = connectSheetRoute(vi.fn());
+		expect("hostId" in route.params).toBe(false);
+	});
+
 	it("builds the machine-name route and reports a nullable choice", () => {
 		const fn = vi.fn();
 		const route = machineNameSheetRoute({ suggested: "studio-mac", appearance: { symbol: "laptop" }, hostId: "h_new", onSelect: fn });
