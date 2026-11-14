@@ -51,6 +51,8 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-copy-branch": Copy,
 	"current-search-files": FileSearch,
 	"global-home": House,
+	"global-go-to-project": Folder,
+	"global-go-to-session": MessageSquare,
 	"global-automations": CalendarClock,
 	"global-artifacts": Package,
 	"global-new-project": FolderPlus,
