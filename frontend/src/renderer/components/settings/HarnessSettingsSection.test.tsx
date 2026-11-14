@@ -2052,6 +2052,37 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
+	it.each(["unknown", "configured"] as const)("keeps Pool native setup reachable without claiming verified auth: %s", async (authentication) => {
+		const readiness = { agents: [agentReadiness("pool", "Poolside Pool", { authentication })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{
+				agentId: "pool", action: "setup", launchMode: "terminal", available: true,
+				displayCommand: "pool login", logoutCommand: "pool logout",
+			}] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "pool", action: "setup", guidance: "Native Poolside login",
+				terminal: { handleId: "shellterm-pool-setup", title: "Set up Poolside Pool" },
+			} } as never;
+			return { data: readiness } as never;
+		});
+
+		renderSection();
+		const row = await findAgentRow("pool");
+		const setup = await within(row).findByRole("button", { name: authentication === "configured" ? "Open setup" : "Set up" });
+		expect(within(row).getAllByText(authentication === "configured" ? "Configured" : "Unknown").length).toBeGreaterThan(0);
+		expect(within(row).queryByText("Connected")).not.toBeInTheDocument();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+		await userEvent.click(setup);
+		await within(row).findByTestId("inline-terminal-body");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "pool" } } });
+	});
+
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
 		const refreshed = catalogWithInstalled("claude-code", "codex");
 		let current = catalog;

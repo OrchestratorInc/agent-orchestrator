@@ -2199,9 +2199,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsPool := !strings.Contains(schema, "'pool'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsPool {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2215,6 +2216,16 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsPool {
+		// The Pool migration widens any constraint ending in 'fake', so a
+		// database that skipped an earlier harness migration can carry Pool
+		// inside a historical variant. Set it aside like Hermes so the exact
+		// repairs below still match, then append it after them.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''pool'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Pool constraint: %w", err)
+		}
+		needsPool = true
 	}
 	type replacement struct {
 		old string
@@ -2342,6 +2353,11 @@ WHERE type = 'table' AND name = 'sessions'`,
 			return fmt.Errorf("schema repair: widen sessions harness constraint: %w", err)
 		}
 	}
+	if needsPool {
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''pool'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: add Pool: %w", err)
+		}
+	}
 	if _, err := db.Exec(`PRAGMA writable_schema = RESET`); err != nil {
 		return fmt.Errorf("schema repair: reparse sessions harness constraint: %w", err)
 	}
@@ -2388,6 +2404,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'pool'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Pool")
 	}
 	return nil
 }

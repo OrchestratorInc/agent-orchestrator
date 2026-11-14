@@ -57,6 +57,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; Orchestrator forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
 		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
+		{"pool", "Log in to Poolside Pool", "pool", "Native Poolside login; standalone providers use the documented environment settings. Configured credentials are not verified authorization.", "https://docs.poolside.ai/get-started/log-in", "", ActionSetup, []string{"pool", "login"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)

@@ -63,6 +63,9 @@ type Config struct {
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	// ValidateSessionReady checks lazily initialized native context after a
+	// prompt. See acpdriver.Config.ValidateSessionReady.
+	ValidateSessionReady func(context.Context, acpdriver.LaunchConfig, string) error
 	// ResetsConversation: see acpdriver.Config.ResetsConversation.
 	ResetsConversation func([]acpsdk.ContentBlock) bool
 	// SuppressSessionModes: see acpdriver.Config.SuppressSessionModes.
@@ -89,6 +92,8 @@ type Config struct {
 	VersionProbe VersionProbe
 	// QuickStop: see acpdriver.Config.QuickStop.
 	QuickStop bool
+	// Preflight checks provider prerequisites that do not depend on session environment.
+	Preflight func(context.Context) error
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -111,12 +116,19 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 	}
 
 	return acpdriver.Config{
-		Harness:      cfg.Harness,
-		Capabilities: capabilities,
+		Harness:              cfg.Harness,
+		ValidateInitialize:   cfg.ValidateInitialize,
+		ValidateSessionReady: cfg.ValidateSessionReady,
+		Capabilities:         capabilities,
 		Probe: func(ctx context.Context) error {
 			if cfg.Configure == nil {
 				return fmt.Errorf("%w: incomplete native ACP binding for %s",
 					ports.ErrChatDriverUnavailable, cfg.Harness)
+			}
+			if cfg.Preflight != nil {
+				if err := cfg.Preflight(ctx); err != nil {
+					return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+				}
 			}
 			bin, err := plugin.ResolveBinary(ctx)
 			if err != nil {
@@ -177,7 +189,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		LaunchSessionOptions:         cfg.LaunchSessionOptions,
 		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
-		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionMeta:                  cfg.SessionMeta,
 		SessionPreamble:              cfg.SessionPreamble,
 		ResetsConversation:           cfg.ResetsConversation,
