@@ -50,6 +50,35 @@ const gitIcon: Record<SessionGitActionKind, LucideIcon> = {
 	createDraftPR: GitPullRequestDraft,
 };
 
+/**
+ * A Cloud PR card's git step: the control plane merges from the card itself,
+ * so the step stands alone rather than sharing PRActionButton, whose merge,
+ * close and stack actions go to the local daemon.
+ */
+export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
+	const primary = git.primary;
+	if (!git.pending && !primary) return null;
+	const Icon = git.pending ? Loader2 : gitIcon[primary!.kind];
+	const label = git.pending ?? primary!.label;
+	return (
+		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-git-step">
+			<Button
+				aria-busy={git.pending ? "true" : undefined}
+				className="min-w-0 gap-1 px-2 text-xs"
+				disabled={Boolean(git.pending)}
+				onClick={() => primary && git.run(primary.kind)}
+				size="sm"
+				type="button"
+				variant="secondary"
+			>
+				<Icon aria-hidden="true" className={cn("size-icon-sm", git.pending && "animate-spin")} />
+				<span className="truncate">{label}</span>
+			</Button>
+			{git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null}
+		</div>
+	);
+}
+
 /** Refreshes what the inspector shows of the PR after a write to the provider. */
 function useRefreshPR(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();

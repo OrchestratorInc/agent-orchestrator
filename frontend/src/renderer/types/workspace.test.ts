@@ -3,6 +3,7 @@ import { AGENT_OPTIONS } from "@aoagents/product-ui";
 import {
 	sessionWorkspaceReady,
 	attentionZone,
+	canArchiveWorkerSession,
 	canonicalTrackerIssueId,
 	findProjectOrchestrator,
 	newestActiveOrchestrator,
@@ -128,6 +129,20 @@ describe("sessionIsActive", () => {
 		expect(sessionIsActive(sessionWith({ status: "working" }))).toBe(true);
 		expect(sessionIsActive(sessionWith({ status: "pr_open" }))).toBe(true);
 		expect(sessionIsActive(sessionWith({ status: "exited" }))).toBe(true);
+	});
+});
+
+describe("canArchiveWorkerSession", () => {
+	it("lets a live local, remote, or Cloud worker be archived from its own session", () => {
+		expect(canArchiveWorkerSession(sessionWith({ status: "working" }))).toBe(true);
+		expect(canArchiveWorkerSession(sessionWith({ status: "working", hostId: "host-1" }))).toBe(true);
+		expect(canArchiveWorkerSession(sessionWith({ status: "working", cloud: { orgId: "org-1" } }))).toBe(true);
+	});
+
+	it("leaves orchestrators, ended sessions, and sessions shared from another organization alone", () => {
+		expect(canArchiveWorkerSession(sessionWith({ kind: "orchestrator" }))).toBe(false);
+		expect(canArchiveWorkerSession(sessionWith({ isTerminated: true }))).toBe(false);
+		expect(canArchiveWorkerSession(sessionWith({ status: "working", cloud: { orgId: "org-1", shared: true } }))).toBe(false);
 	});
 });
 

@@ -157,6 +157,19 @@ describe("app i18next instance", () => {
 		]);
 	});
 
+	it("localizes Cloud project setup and settings copy that only had inline English defaults", () => {
+		const german = createAppI18n("de");
+		// The call sites pass an English defaultValue, which must not win over the catalog.
+		expect(german.t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })).toBe("Agent startet in");
+		expect(german.t("cloudRepos.problemLimit", { defaultValue: "A project can have at most {{count}} additional repositories.", count: 5 }))
+			.toBe("Ein Projekt kann höchstens 5 zusätzliche Repositorys haben.");
+		const japanese = createAppI18n("ja");
+		expect(japanese.t("coder.template.label", { defaultValue: "Template" })).toBe("テンプレート");
+		expect(japanese.t("cloudRepos.remove", { defaultValue: "Remove {{name}}", name: "acme/web" })).toBe("acme/web を削除");
+		const russian = createAppI18n("ru");
+		expect(russian.t("cloudRepos.problemLimit", { count: 21 })).toBe("У проекта может быть не больше 21 дополнительных репозиториев.");
+	});
+
 	it("provides Chinese copy for the remaining audited shell surfaces", () => {
 		const chinese = createAppI18n("zh-CN");
 		expect(chinese.t("terminal.loadingOutput")).toBe("正在加载最新输出…");

@@ -355,12 +355,13 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(row(list, "Platform").textContent).toContain("Can write");
 		const input = await stageCheckout();
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
+		// The staged chip renders after the pick; wait for it rather than racing a busy runner.
+		await userEvent.click(await within(field).findByRole("button", { name: /Change access: Can watch/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(document.activeElement).toBe(input);
 		await stageCheckout();
-		expect(within(field).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
+		expect(await within(field).findByRole("button", { name: /Change access/ })).toHaveTextContent("Can watch");
 		view.reopen(false);
 		view.reopen(true);
 		await screen.findByText("Platform");

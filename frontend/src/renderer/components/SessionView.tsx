@@ -159,7 +159,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
@@ -706,22 +706,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	>({});
 	const consumedCenterEditingRequestsRef = useRef(new Set<string>());
 	const consumedCenterLineRequestsRef = useRef(new Set<string>());
-	const activeCenterFileRequest = fileTabs.activePath
-		? centerFileRequestsBySession[uiSessionId]?.[fileTabs.activePath]
-		: undefined;
-	const activeCenterFileRequestToken = fileTabs.activePath && activeCenterFileRequest
-		? `${uiSessionId}:${fileTabs.activePath}:${activeCenterFileRequest.key}`
-		: undefined;
-	const activeCenterFileInitialEditing = Boolean(
-		activeCenterFileRequest?.editing
-		&& activeCenterFileRequestToken
-		&& !consumedCenterEditingRequestsRef.current.has(activeCenterFileRequestToken),
-	);
-	const activeCenterFileInitialLine = activeCenterFileRequest?.line != null
-		&& activeCenterFileRequestToken
-		&& !consumedCenterLineRequestsRef.current.has(activeCenterFileRequestToken)
-		? activeCenterFileRequest.line
-		: undefined;
 	const [auxiliaryTabOrderBySession, setAuxiliaryTabOrderBySession] = useState<Record<string, string[]>>({});
 	const auxiliaryTabOrder = auxiliaryTabOrderBySession[uiSessionId] ?? EMPTY_AUXILIARY_TAB_ORDER;
 	const setAuxiliaryTabOrder = useCallback(
@@ -2056,7 +2040,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const base = { tabKey: key, closeShortcut: shown, onClose: () => closePane(key) };
 			if (key === SESSION_TAB_KEY) {
 				if (!session) return { ...base, kind: "plain" };
-				const canArchive = !isOrchestrator && !session.cloud && sessionIsActive(session);
+				const canArchive = !isOrchestrator && canArchiveWorkerSession(session);
 				return { ...base, kind: "session", session, canArchive };
 			}
 			if (filePath) {
@@ -3109,67 +3093,67 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									{renderReviewerChat(retainedReviewerChatId)}
 								</div>
 							) : null}
-							{(session?.cloud ? Boolean(mainActiveFilePath) : fileTabs.openPaths.length > 0) ? (
+							{fileTabs.openPaths.length > 0 ? (
 								<div className="pointer-events-none absolute inset-0">
-					{session?.cloud ? (
-						<div className="pointer-events-auto" style={FULL_PANE_STYLE}>
-						<CloudFileContentPane
-							annotation={fileAnnotation}
-							commitSha={activeCenterFileRequest?.commitSha}
-							initialEditing={activeCenterFileInitialEditing}
-							initialLine={activeCenterFileInitialLine}
-							initialMode={activeCenterFileRequest?.mode ?? "file"}
-							initialRequestKey={activeCenterFileRequest?.key ?? 0}
-							onDirtyChange={setCenterFileDirty}
-							path={mainActiveFilePath!}
-							// Uncommitted is local-only; a cloud review's nearest scope is combined.
-							scope={activeCenterFileRequest?.scope === "uncommitted" ? "combined" : activeCenterFileRequest?.scope}
-							session={session}
-							split={filesSplit}
-						/>
-						</div>
-									) : (
-										<>
-											{fileTabs.openPaths.map((fileKey) => {
-												const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
-												const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
-												// A file view stays mounted here and is only placed over its pane.
-												const paneKey = `file:${fileKey}`;
-												const inPane = Boolean(shownLayout?.leaves.has(paneKey));
-												const visible = inPane || mainActiveFilePath === fileKey;
-												return (
-													<div
-														key={fileKey}
-														className={cn(visible ? "pointer-events-auto overflow-hidden" : "invisible pointer-events-none [content-visibility:hidden]")}
-														data-split-pane={inPane ? paneKey : undefined}
-														inert={!visible ? true : undefined}
-														style={inPane ? paneStyle(paneKey) : FULL_PANE_STYLE}
-													>
-														<SessionFileWorkspace
-															active={visible && !filesPoppedOut}
-															focusRequest={paneFocusRequests[paneKey] ?? 0}
-															fileKey={fileKey}
-															hostId={hostId}
-															source={request?.source} annotationRange={request?.annotationRange}
-															previousPath={request?.previousPath}
-															annotation={fileAnnotation}
-															commitSha={request?.commitSha}
-															initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
-															initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
-															initialMode={request?.mode ?? "file"}
-															initialRequestKey={request?.key ?? 0}
-															onDirtyChange={setCenterFileDirty}
-															onInitialEditingConsumed={markCenterFileEditingConsumed}
-															onInitialLineConsumed={markCenterFileLineConsumed}
-															path={request?.path ?? fileKey}
-															sessionId={sessionId}
-															split={filesSplit}
-															scope={request?.scope}
-														/>
-													</div>
-												);
-											})}
-										</>									)}
+									{fileTabs.openPaths.map((fileKey) => {
+										const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
+										const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
+										// A file view stays mounted here and is only placed over its pane,
+										// for a Cloud session as for a local one: switching tabs keeps
+										// each file's mode, scroll and unsaved edit.
+										const paneKey = `file:${fileKey}`;
+										const inPane = Boolean(shownLayout?.leaves.has(paneKey));
+										const visible = inPane || mainActiveFilePath === fileKey;
+										return (
+											<div
+												key={fileKey}
+												className={cn(visible ? "pointer-events-auto overflow-hidden" : "invisible pointer-events-none [content-visibility:hidden]")}
+												data-split-pane={inPane ? paneKey : undefined}
+												inert={!visible ? true : undefined}
+												style={inPane ? paneStyle(paneKey) : FULL_PANE_STYLE}
+											>
+												{session?.cloud ? (
+													<CloudFileContentPane
+														active={visible && !filesPoppedOut}
+														annotation={fileAnnotation}
+														commitSha={request?.commitSha}
+														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
+														initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
+														initialMode={request?.mode ?? "file"}
+														initialRequestKey={request?.key ?? 0}
+														onDirtyChange={setCenterFileDirty}
+														path={request?.path ?? fileKey}
+														// Uncommitted is local-only; a cloud review's nearest scope is combined.
+														scope={request?.scope === "uncommitted" ? "combined" : request?.scope}
+														session={session}
+														split={filesSplit}
+													/>
+												) : (
+													<SessionFileWorkspace
+														active={visible && !filesPoppedOut}
+														focusRequest={paneFocusRequests[paneKey] ?? 0}
+														fileKey={fileKey}
+														hostId={hostId}
+														source={request?.source} annotationRange={request?.annotationRange}
+														previousPath={request?.previousPath}
+														annotation={fileAnnotation}
+														commitSha={request?.commitSha}
+														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
+														initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
+														initialMode={request?.mode ?? "file"}
+														initialRequestKey={request?.key ?? 0}
+														onDirtyChange={setCenterFileDirty}
+														onInitialEditingConsumed={markCenterFileEditingConsumed}
+														onInitialLineConsumed={markCenterFileLineConsumed}
+														path={request?.path ?? fileKey}
+														sessionId={sessionId}
+														split={filesSplit}
+														scope={request?.scope}
+													/>
+												)}
+											</div>
+										);
+									})}
 								</div>
 							) : null}
 							{/* Every pane of a split has a title bar: it names the pane as the
@@ -3287,6 +3271,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							view={inspectorView}
 							browserView={hostId || inspectorView === "browser" ? browserView : undefined}
 							session={session}
+							standaloneAgent={sessionWorkspace?.standaloneAgent === true}
 						/>
 					</SessionInspectorRail>
 				) : null}

@@ -23,9 +23,11 @@ function localDetail(detail: CloudCpWorkspaceReviewFileResponse): WorkspaceFileD
 }
 
 export function CloudFileContentPane({
-	annotation, baseUrl, client, commitSha, initialEditing = false, initialLine, initialMode = "diff", initialRequestKey = 0,
+	active = true, annotation, baseUrl, client, commitSha, initialEditing = false, initialLine, initialMode = "diff", initialRequestKey = 0,
 	onDirtyChange, orgId, path, scope = "combined", sessionId, split,
 }: {
+	/** False while the view is kept mounted behind another tab: its save shortcut stays off. */
+	active?: boolean;
 	annotation: FileAnnotationModel;
 	baseUrl: string;
 	client: CloudCpClient;
@@ -67,10 +69,10 @@ export function CloudFileContentPane({
 		finally { setSaving(false); }
 	}, [baseUrl, client, commitSha, detail, draft, orgId, path, queryClient, saving, scope, sessionId, t]);
 	useEffect(() => {
-		if (!editing) return;
+		if (!active || !editing) return;
 		const shortcut = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) { event.preventDefault(); if (hasUnsavedChanges) void save(); } };
 		window.addEventListener("keydown", shortcut, true); return () => window.removeEventListener("keydown", shortcut, true);
-	}, [editing, hasUnsavedChanges, save]);
+	}, [active, editing, hasUnsavedChanges, save]);
 
 	if (!path) return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
 	if (query.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;
