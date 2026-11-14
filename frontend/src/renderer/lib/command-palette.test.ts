@@ -250,21 +250,28 @@ describe("buildCommands global", () => {
 });
 
 describe("buildCommands attention", () => {
-	it("includes ready-to-merge AND attention-needing sessions, ordered merge-first", () => {
+	it("lists what the sidebar flags: needs-you first, then review turns, not ready-to-merge", () => {
 		const items = buildCommands({ workspaces: workspaces() });
-		const attention = items.filter((item) => item.group === "attention");
-		const ids = attention.map((item) => item.id);
-		expect(ids).toContain("attention:w-merge");
+		const ids = items.filter((item) => item.group === "attention").map((item) => item.id);
 		expect(ids).toContain("attention:w-action");
+		expect(ids).not.toContain("attention:w-merge");
 		expect(ids).not.toContain("attention:w-working");
-		expect(ids.indexOf("attention:w-merge")).toBeLessThan(ids.indexOf("attention:w-action"));
+		const flagged = ["attention:w-action", "attention:w-pr"].filter((id) => ids.includes(id));
+		expect(ids.slice(0, flagged.length)).toEqual(flagged);
+	});
+
+	it("puts the most recently active first within the same flag", () => {
+		const rows = workspaces();
+		rows[0].sessions.push(session({ id: "w-newer", status: "needs_input", lastInteractionAt: "2026-06-12T00:00:00Z" }));
+		const ids = buildCommands({ workspaces: rows }).filter((item) => item.group === "attention").map((item) => item.id);
+		expect(ids.indexOf("attention:w-newer")).toBeLessThan(ids.indexOf("attention:w-action"));
 	});
 
 	it("omits the current session from Needs attention (already in view)", () => {
-		const items = buildCommands({ workspaces: workspaces(), currentSessionId: "w-merge" });
+		const items = buildCommands({ workspaces: workspaces(), currentSessionId: "w-action" });
 		const ids = new Set(items.map((item) => item.id));
-		expect(ids.has("attention:w-merge")).toBe(false);
-		expect(ids.has("attention:w-action")).toBe(true);
+		expect(ids.has("attention:w-action")).toBe(false);
+		expect(ids.has("session:w-action")).toBe(false);
 	});
 
 	it("leaves archived sessions out of Needs attention", () => {
@@ -284,8 +291,6 @@ describe("buildCommands sessions", () => {
 	it("does not repeat attention or current sessions in the flat Sessions list", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentSessionId: "w-working" });
 		const ids = new Set(items.map((item) => item.id));
-		expect(ids.has("attention:w-merge")).toBe(true);
-		expect(ids.has("session:w-merge")).toBe(false);
 		expect(ids.has("attention:w-action")).toBe(true);
 		expect(ids.has("session:w-action")).toBe(false);
 		expect(ids.has("session:w-working")).toBe(false);

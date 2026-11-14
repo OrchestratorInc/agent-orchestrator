@@ -6,7 +6,6 @@ import {
 	isOrchestratorSession,
 	openPRs,
 	sessionIsActive,
-	sessionNeedsAttention,
 	workerSessions,
 	type AgentProvider,
 	type AttentionZone,
@@ -28,7 +27,7 @@ import type { components } from "../../api/schema";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
-import { getSessionStatusDotView } from "./session-presentation";
+import { getSessionRowMarker, getSessionStatusDotView } from "./session-presentation";
 import { importableProject } from "./session-import";
 import type { ReactNode } from "react";
 import type { MenuEntry } from "../components/menu-model";
@@ -339,6 +338,12 @@ function workspacePlace(workspace: WorkspaceSummary, t: TFunction): string {
 	return workspace.kind === CLOUD_PROJECT_KIND ? `${workspace.name} · ${t("shell.cloudProjectBadge")}` : workspace.name;
 }
 
+/** 0 when the sidebar flags a session red (it needs you), 1 for a review turn, -1 otherwise. */
+function attentionMarkerRank(session: WorkspaceSession): number {
+	const marker = getSessionRowMarker(session);
+	return marker === "attention" ? 0 : marker === "review" ? 1 : -1;
+}
+
 /** When the person last worked in a session, as the sidebar's age shows it. */
 function lastInteraction(session: WorkspaceSession): number {
 	const at = session.lastInteractionAt ?? session.lastUserMessageAt;
@@ -611,18 +616,15 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		});
 	}
 
+	// The sessions the sidebar flags with an alert: first those that need the
+	// person now (input, CI, conflicts, changes requested), then their review
+	// turn, each most recent first. A PR ready to merge waits on nobody.
 	const attentionSessions = workspaces
 		.flatMap((workspace) => workerSessions(workspace.sessions).map((session) => ({ workspace, session })))
-		.filter(
-			({ session }) =>
-				session.id !== currentSessionId &&
-				sessionIsActive(session) &&
-				(attentionZone(session) === "merge" || sessionNeedsAttention(session)),
-		)
-		.sort(
-			(a, b) =>
-				attentionZoneOrder.indexOf(attentionZone(a.session)) - attentionZoneOrder.indexOf(attentionZone(b.session)),
-		);
+		.filter(({ session }) => session.id !== currentSessionId && sessionIsActive(session))
+		.map((entry) => ({ ...entry, rank: attentionMarkerRank(entry.session), at: lastInteraction(entry.session) }))
+		.filter((entry) => entry.rank >= 0)
+		.sort((a, b) => a.rank - b.rank || b.at - a.at);
 
 	const attentionIds = new Set(attentionSessions.map(({ session }) => session.id));
 
