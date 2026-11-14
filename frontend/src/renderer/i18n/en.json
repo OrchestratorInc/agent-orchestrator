@@ -1019,6 +1019,7 @@
 	"inspector.review.notInjected": "Not injected",
 	"inspector.review.rerun": "Re-run review",
 	"inspector.review.openReviewer": "Open",
+	"inspector.review.activeReviewers": "Active reviewers",
 	"inspector.review.requestedByAgent": "Requested by agent",
 	"inspector.review.restoreSession": "Restore review session",
 	"inspector.review.restoringSession": "Restoring review session...",

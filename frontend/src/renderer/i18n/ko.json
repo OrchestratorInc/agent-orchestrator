@@ -1023,6 +1023,7 @@
 	"inspector.review.notInjected": "전송 안 됨",
 	"inspector.review.rerun": "리뷰 다시 실행",
 	"inspector.review.openReviewer": "Open",
+	"inspector.review.activeReviewers": "활성 리뷰어",
 	"inspector.review.requestedByAgent": "Requested by agent",
 	"inspector.review.restoreSession": "리뷰 세션 복원",
 	"inspector.review.restoringSession": "리뷰 세션 복원 중...",

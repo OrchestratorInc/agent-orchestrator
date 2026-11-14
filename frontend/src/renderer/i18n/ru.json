@@ -1035,6 +1035,7 @@
 	"inspector.review.notInjected": "Не передано",
 	"inspector.review.rerun": "Повторить ревью",
 	"inspector.review.openReviewer": "Открыть",
+	"inspector.review.activeReviewers": "Активные ревьюеры",
 	"inspector.review.requestedByAgent": "Запрошено агентом",
 	"inspector.review.restoreSession": "Восстановить сессию ревью",
 	"inspector.review.restoringSession": "Восстановление сессии ревью...",
