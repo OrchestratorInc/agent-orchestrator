@@ -2077,6 +2077,8 @@
 	"settings.harness.models.empty": "Этот агент не сообщил о моделях.",
 	"settings.harness.models.notInstalled": "Установите {{agent}}, чтобы увидеть его модели.",
 	"settings.harness.models.needsLogin": "Войдите в {{agent}}, чтобы загрузить его модели.",
+	"settings.harness.models.manualTitle": "Выбор модели",
+	"settings.harness.models.manual": "{{agent}} принимает идентификаторы моделей вместо списка моделей. Перед запуском задачи настройте провайдера и модель по умолчанию в его CLI.",
 	"settings.harness.models.loadFailed": "Не удалось загрузить модели.",
 	"settings.harness.health.status": "Статус",
 	"settings.harness.health.details": "Подробности",

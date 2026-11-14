@@ -3017,6 +3017,8 @@
 	"settings.harness.models.empty": "Dieses Harness meldet keine Modelle.",
 	"settings.harness.models.notInstalled": "Installiere {{agent}}, um seine Modelle zu sehen.",
 	"settings.harness.models.needsLogin": "Melde dich bei {{agent}} an, um seine Modelle zu laden.",
+	"settings.harness.models.manualTitle": "Modellauswahl",
+	"settings.harness.models.manual": "{{agent}} akzeptiert Modell-IDs, statt eine Modellliste bereitzustellen. Richte vor dem Start einer Aufgabe in seiner CLI einen Anbieter und ein Standardmodell ein.",
 	"settings.harness.models.loadFailed": "Modelle konnten nicht geladen werden.",
 	"settings.harness.health.status": "Status",
 	"settings.harness.health.details": "Details",

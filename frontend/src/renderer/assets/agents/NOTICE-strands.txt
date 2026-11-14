@@ -1,0 +1,10 @@
+Strands Agents brand marks, unmodified from strands-agents/harness-sdk.
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+Source revision: e519d67021b9c009e56e9309edcd94ab87e7156e
+https://github.com/strands-agents/harness-sdk/blob/e519d67021b9c009e56e9309edcd94ab87e7156e/site/src/assets/logo-light.svg
+https://github.com/strands-agents/harness-sdk/blob/e519d67021b9c009e56e9309edcd94ab87e7156e/site/src/assets/logo-dark.svg
+
+The upstream documentation site maps these marks to light and dark themes in
+site/astro.config.mjs at the same revision. The upstream repository license is
+Apache-2.0; its full text is preserved in LICENSE-strands.txt.

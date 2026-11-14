@@ -5,6 +5,8 @@ import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
+import strandsDarkLogo from "../assets/agents/strands-dark.svg";
+import strandsLightLogo from "../assets/agents/strands-light.svg";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 
@@ -61,6 +63,10 @@ describe("AgentAvatar", () => {
 		);
 
 		expect(themeSources("opencode-v2")).toEqual(themeSources("opencode"));
+	});
+	it("renders the official Strands marks for both themes", () => {
+		render(<AgentAvatar provider="strands" />);
+		expect(themeSources("strands")).toEqual([strandsLightLogo, strandsDarkLogo]);
 	});
 	it("renders the official Hermes Agent icon", () => {
 		render(<AgentAvatar provider="hermes" />);
