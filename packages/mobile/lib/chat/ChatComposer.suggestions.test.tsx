@@ -46,6 +46,7 @@ vi.mock("./ComposerSuggestionPanel", () => ({ ComposerSuggestionPanel: "Composer
 
 import { ChatComposer } from "./ChatComposer";
 import { chatSheetRoute } from "./chatSheetRegistry";
+import { encodeResponseDraft } from "./responseQuotes";
 
 const skills = [
 	{ name: "approve", description: "Approve a pending dangerous command", source: "AO" },
@@ -152,5 +153,26 @@ it("reads an unreported caret as the end of text set from outside the field", as
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });
 	const field = renderer.root.findByType(TextInput);
 	await act(async () => { field.props.onFocus(); field.props.onChangeText("/ap"); });
+	expect(labels()).toEqual(["approve"]);
+});
+
+it("keeps the reported caret when a late draft read leaves the typed text in place", async () => {
+	let restore!: (value: string | null) => void;
+	storage.getItem.mockImplementationOnce(() => new Promise<string | null>((done) => { restore = done; }));
+	const p = { ...props(), machine: "machine" } as ComponentProps<typeof ChatComposer>;
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await type("/ap fix", 3);
+	expect(labels()).toEqual(["approve"]);
+	await act(async () => restore(encodeResponseDraft("Saved reply", [])));
+	expect(renderer.root.findByType(TextInput).props.value).toBe("/ap fix");
+	expect(labels()).toEqual(["approve"]);
+});
+
+it("lists skills on focus for a restored / draft", async () => {
+	storage.getItem.mockResolvedValueOnce(encodeResponseDraft("/ap", []));
+	const p = { ...props(), machine: "machine" } as ComponentProps<typeof ChatComposer>;
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	expect(renderer.root.findByType(TextInput).props.value).toBe("/ap");
+	await act(async () => renderer.root.findByType(TextInput).props.onFocus());
 	expect(labels()).toEqual(["approve"]);
 });
