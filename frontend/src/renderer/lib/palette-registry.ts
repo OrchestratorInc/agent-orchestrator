@@ -248,7 +248,8 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 		const prefs = visibility.prefs;
 		const toggle = prefs && entry.id in TOGGLES ? TOGGLES[entry.id as ToggleId] : undefined;
 		const on = Boolean(prefs?.toggles[entry.id as ToggleId]);
-		const choice = prefs && CHOICES[entry.id];
+		const choices = CHOICES[entry.id];
+		const choice = prefs && choices;
 		return {
 			id: `setting:${entry.id}`,
 			group: "settings",
@@ -257,7 +258,7 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 			// A list's option names find the list ("nord" → Color theme ›), not each option.
 			keywords: isPage
 				? [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])]
-				: choice ? [...entry.keywords, ...choice.options(t).map((option) => option.label)] : entry.keywords,
+				: choices ? [...entry.keywords, ...choices.options(t).map((option) => option.label)] : entry.keywords,
 			searchOnly: true,
 			...(toggle ? { toggled: on, keepOpen: true } : {}),
 			...(choice && prefs ? { state: choice.options(t).find((option) => option.value === choice.current(prefs))?.label } : {}),

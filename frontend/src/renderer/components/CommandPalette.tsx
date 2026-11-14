@@ -1284,7 +1284,12 @@ export const CommandPalette = memo(function CommandPalette() {
 				commandProps={{
 					shouldFilter: false,
 					value,
-					onValueChange: setSelectedValue,
+					// cmdk picks the first row in the list after each query; the palette
+					// picks the best match instead, so only a row the person moved to
+					// (arrow keys, pointer) replaces it.
+					onValueChange: (next: string) => {
+						if (userPickRef.current) setSelectedValue(next);
+					},
 					onKeyDownCapture: (event) => {
 						if (isRowNavigationKey(event)) userPickRef.current = true;
 					},

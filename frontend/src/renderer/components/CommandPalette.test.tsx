@@ -518,7 +518,10 @@ describe("CommandPalette workspace file search", () => {
 		useUiStore.setState({ archiveModal: null });
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		await screen.findByPlaceholderText(/search sessions/i);
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		// On a session page the project's actions wait for a search.
+		fireEvent.change(input, { target: { value: "archived" } });
+		await waitFor(() => expect(document.querySelector('[cmdk-item][data-value="current-open-archive"]')).not.toBeNull());
 
 		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-open-archive"]')!);
 
@@ -850,7 +853,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -889,7 +892,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -914,7 +917,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -933,7 +936,7 @@ describe("CommandPalette drill-in + Enter", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -1025,8 +1028,9 @@ describe("CommandPalette actions", () => {
 		ctx.params = {};
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.click(screen.getByText(rowTitle("lib")));
+		// Projects wait for a search.
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "lib" } });
+		fireEvent.click(await screen.findByText(rowTitle("lib")));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-2" } });
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
@@ -1378,7 +1382,7 @@ describe("CommandPalette back navigation", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		fireEvent.change(input, { target: { value: "archived" } });
+		fireEvent.change(input, { target: { value: "archived cleanup" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("archived cleanup");
@@ -1441,7 +1445,7 @@ describe("CommandPalette back navigation", () => {
 			const { rerenderPalette } = renderPalette();
 			act(() => useUiStore.getState().setCommandPaletteOpen(true));
 			const input = await screen.findByPlaceholderText(/search sessions/i);
-			fireEvent.change(input, { target: { value: "archived" } });
+			fireEvent.change(input, { target: { value: "archived cleanup" } });
 			await waitFor(() => {
 				const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 				expect(selected?.textContent).toContain("archived cleanup");
