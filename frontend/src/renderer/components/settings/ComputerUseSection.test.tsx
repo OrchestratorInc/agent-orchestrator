@@ -155,6 +155,33 @@ describe("Orchestrator's own permissions", () => {
 		expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBe(reads);
 	}, 10_000);
 
+	it("still follow the guide when a read fails while it is opening", async () => {
+		document.documentElement.dataset.aoPlatform = "darwin";
+		daemon({ status: () => notInstalled });
+		let grants: { accessibility: boolean; screenRecording: boolean } | undefined = { accessibility: false, screenRecording: false };
+		bridgeMocks.getAppPrivacy.mockImplementation(async () => grants);
+		bridgeMocks.requestAppPrivacy.mockResolvedValue({ accessibility: false, screenRecording: false });
+		let opened: () => void = () => undefined;
+		bridgeMocks.showPrivacyGuide.mockImplementation(() => new Promise<void>((resolve) => { opened = resolve; }));
+		const { client } = renderSection();
+
+		await userEvent.click(await appGear());
+		await waitFor(() => expect(bridgeMocks.showPrivacyGuide).toHaveBeenCalled());
+		// A focus refetch fails before the guide finishes opening.
+		grants = undefined;
+		const readsBefore = bridgeMocks.getAppPrivacy.mock.calls.length;
+		await client.invalidateQueries({ queryKey: ["computer-use", "app-privacy"] });
+		await waitFor(() => expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBeGreaterThan(readsBefore));
+		// The user closes the guide with its X as soon as it is up.
+		bridgeMocks.updatePrivacyGuide.mockResolvedValue(false);
+		opened();
+		await waitFor(() => expect(bridgeMocks.updatePrivacyGuide).toHaveBeenCalledWith("orchestrator", { accessibility: false, screenRecording: false }));
+		await waitFor(() => undefined);
+		const reads = bridgeMocks.getAppPrivacy.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(bridgeMocks.getAppPrivacy.mock.calls.length).toBe(reads);
+	}, 10_000);
+
 	it("show their own failure under their section, not Cua Driver's", async () => {
 		document.documentElement.dataset.aoPlatform = "darwin";
 		daemon({ status: () => notInstalled });

@@ -60,6 +60,9 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	// it never sits beside System Settings with grants nobody updates.
 	const mounted = useRef(true);
 	const guideOpened = useRef(false);
+	// The grants each app's guide was last given. A failed read sends these
+	// instead, so a guide closed from its own side still ends the polling.
+	const lastGranted = useRef<Partial<Record<PrivacyGuideTarget, Record<PrivacyPane, boolean>>>>({});
 	useEffect(() => {
 		mounted.current = true;
 		return () => {
@@ -135,6 +138,9 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	});
 	const showGuide = async (target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>) => {
 		guideOpened.current = true;
+		// Set before awaiting: a read that fails while the guide opens must
+		// still have grants to send once the page starts following it.
+		lastGranted.current[target] = granted;
 		const app = target === "orchestrator" ? "appGuide" : "guide";
 		await aoBridge.app.showPrivacyGuide({
 			target,
@@ -206,7 +212,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	// Only the guided target's own poll re-runs the effect below: the other
 	// query's focus refetches would resend unchanged grants.
 	const guidePolledAt = guiding === "orchestrator" ? appUpdatedAt : guiding === "cuaDriver" ? statusPolledAt : 0;
-	const lastGranted = useRef<Partial<Record<PrivacyGuideTarget, Record<PrivacyPane, boolean>>>>({});
 	useEffect(() => {
 		if (!guiding) return;
 		let granted: Record<PrivacyPane, boolean> | undefined;
