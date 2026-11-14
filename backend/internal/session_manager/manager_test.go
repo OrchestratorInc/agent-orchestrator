@@ -6392,13 +6392,14 @@ func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 }
 
 // The Copilot directive sends new tasks to new workers, like the orchestrator
-// system prompt, but still honours a user message that names a worker.
+// system prompt, but a user message that names a worker wins over both the
+// new-worker rule and task ownership.
 func TestCopilotOrchestratorMessage_NewTaskNewWorkerUnlessNamed(t *testing.T) {
 	directive := copilotOrchestratorMessage("demo", "Give the follow-up to worker demo-3")
 	for _, want := range []string{
-		"If a worker already owns this task or its PR, use ao send",
-		"Give any new task to a new worker",
-		"unless the user message asks for a specific worker; then use ao send to give the task to that worker",
+		"if a worker already owns this task or its PR, use ao send to give that worker the follow-up",
+		"and give any new task to a new worker",
+		"If the user message asks for a specific worker, use ao send to give the task to that worker. Otherwise",
 		"Give the follow-up to worker demo-3",
 	} {
 		if !strings.Contains(directive, want) {
@@ -6450,6 +6451,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"Give each new task to a new worker",
 		"Run `ao spawn` and `ao send` as commands of their own",
 		"only for follow-up on that worker's own task",
+		"explicitly names a worker, give the task or follow-up to that worker, even when another worker owns it",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)

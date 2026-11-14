@@ -5614,7 +5614,7 @@ Your next action for any implementation, fix, UI change, test, PR, or code-revie
 
 ao spawn --project %s --name "<label, max 100 chars>" --prompt "<clear worker task>"
 
-If a worker already owns this task or its PR, use ao send to give that worker the follow-up instead. Give any new task to a new worker, unless the user message asks for a specific worker; then use ao send to give the task to that worker. After spawning or redirecting, report the worker session id and stop. Do not do the worker's task in this orchestrator session.
+If the user message asks for a specific worker, use ao send to give the task to that worker. Otherwise, if a worker already owns this task or its PR, use ao send to give that worker the follow-up, and give any new task to a new worker. After spawning or redirecting, report the worker session id and stop. Do not do the worker's task in this orchestrator session.
 
 USER MESSAGE:
 %s`, project, project, message)
