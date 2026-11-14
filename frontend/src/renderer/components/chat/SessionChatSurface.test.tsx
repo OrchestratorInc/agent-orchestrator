@@ -93,6 +93,7 @@ const sideMocks = vi.hoisted(() => ({
 	show: vi.fn(),
 	addReference: vi.fn(),
 	sides: [] as { id: string; hasWork: boolean }[],
+	loaded: false,
 	activeId: "existing-side" as string | undefined,
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
@@ -1377,6 +1378,30 @@ describe("side command routing", () => {
 		});
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+	});
+
+	it("reports whether the session has side chats only once their list has loaded", () => {
+		const onSideChatsPresentChange = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const surface = () => (
+			<Wrapper client={queryClient}>
+				{/* A fresh session object rerenders the memoized surface. */}
+				<SessionChatSurface session={{ ...session }} onSideChatsPresentChange={onSideChatsPresentChange} />
+			</Wrapper>
+		);
+		try {
+			const view = render(surface());
+			expect(onSideChatsPresentChange).not.toHaveBeenCalled();
+			sideMocks.loaded = true;
+			view.rerender(surface());
+			expect(onSideChatsPresentChange).toHaveBeenLastCalledWith(false);
+			sideMocks.sides = [{ id: "side-1", hasWork: false }];
+			view.rerender(surface());
+			expect(onSideChatsPresentChange).toHaveBeenLastCalledWith(true);
+		} finally {
+			sideMocks.loaded = false;
+			sideMocks.sides = [];
+		}
 	});
 
 	it(
