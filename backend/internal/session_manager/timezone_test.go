@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,6 +47,9 @@ func TestResolveTimeZone(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.HasPrefix(tc.tz, "/") && tc.want != "" {
+				t.Skip("a zoneinfo file path in TZ is a Unix convention")
+			}
 			if got := resolveTimeZone(context.Background(), tc.tz, tc.readlink, tc.readFile); got != tc.want {
 				t.Fatalf("resolveTimeZone(%q) = %q, want %q", tc.tz, got, tc.want)
 			}

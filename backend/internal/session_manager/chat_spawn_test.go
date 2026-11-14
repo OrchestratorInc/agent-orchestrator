@@ -1532,7 +1532,8 @@ func TestChatSpawnPersistsBrowserCapabilityBeforeControllerStart(t *testing.T) {
 func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, _ := newChatManager(launcher)
-	mgr.executable = func() (string, error) { return "/opt/ao/bin/ao", nil }
+	aoExe := filepath.Join(t.TempDir(), "ao") // absolute on every OS
+	mgr.executable = func() (string, error) { return aoExe, nil }
 	mgr.runFilePath = "/ao-test/running.json"
 	mgr.browserCapabilities = &scriptedBrowserCapabilities{issues: []browserCapabilityIssue{
 		{token: "spawn-token", verifier: "spawn-verifier"}, {token: "restore-token", verifier: "restore-verifier"},
@@ -1556,7 +1557,7 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 	}
 
 	want := []ports.ChatMCPServerConfig{{
-		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Name: "ao", Type: "stdio", Command: aoExe, Args: []string{"mcp"},
 		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json", EnvDataDir: mgr.dataDir},
 	}}
 	if mgr.dataDir == "" {

@@ -193,7 +193,7 @@ func TestRenderCheckReplacesItsEarlierScreenshot(t *testing.T) {
 	}
 	link := filepath.Join(dir, "link.png")
 	if err := os.Symlink(secret, link); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := check(link); err == nil {
 		t.Fatal("render --check replaced a symlink")
