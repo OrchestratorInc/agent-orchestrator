@@ -103,6 +103,8 @@ export type CommandAction =
 			matchKind?: string;
 			/** Set when the match is in one of the session's reviewer chats. */
 			reviewId?: string;
+			/** The remote AO machine the session is on; the session opens there. */
+			hostId?: string;
 			/** Matched spans in the snippet; the first is what the message highlights. */
 			highlights?: ReadonlyArray<{ start: number; end: number }>;
 			/** The matched row's conversation sequence; a tool or command match opens at it. */
@@ -959,6 +961,10 @@ export type SessionSearchCommandHit = {
 	sessionMatches?: number;
 	/** Set when the best match is in one of the session's reviewer chats. */
 	reviewId?: string;
+	/** The remote AO machine the session is on; absent for this machine. */
+	hostId?: string;
+	/** That machine's name, shown on the row. */
+	machineLabel?: string;
 };
 
 /**
@@ -988,13 +994,16 @@ export function buildSessionSearchCommands(
 		// steps through. A row found only by its name or metadata has none.
 		const matches = (hit.sessionMatches ?? 0) > 0 ? t("command.sessionMatches", { count: hit.sessionMatches ?? 0 }) : "";
 		return {
-			id: `search:${hit.sessionId}:${hit.messageId || hit.kind}:${index}`,
+			id: `search:${hit.hostId ?? ""}:${hit.sessionId}:${hit.messageId || hit.kind}:${index}`,
 			group: "search" as CommandGroupId,
 			title: sessionName,
-			subtitle: [kindLabel, matches, hit.projectName || hit.projectId, hit.harness].filter(Boolean).join(" · "),
+			// A session on another machine says which one first: the same id can
+			// exist on two machines, and it opens over there.
+			subtitle: [hit.hostId ? hit.machineLabel || hit.hostId : "", kindLabel, matches, hit.projectName || hit.projectId, hit.harness]
+				.filter(Boolean).join(" · "),
 			// The snippet is what the query matched, so it must also be searchable
 			// text for cmdk's own filtering and for a keyword hit.
-			keywords: [hit.snippet, hit.title ?? "", hit.projectName ?? "", hit.harness ?? ""],
+			keywords: [hit.snippet, hit.title ?? "", hit.projectName ?? "", hit.harness ?? "", hit.machineLabel ?? ""],
 			// The best-matching message, its matched words marked by the palette's
 			// own snippet line. A recent session with nothing matched has none.
 			...(hit.snippet
@@ -1002,11 +1011,16 @@ export function buildSessionSearchCommands(
 				: {}),
 			// ⌘↵ copies the command that reopens the session from a terminal: the
 			// daemon's, which restores a terminated session instead of resuming it.
-			secondaryAction: {
-				kind: "copy-resume-command",
-				command: hit.resumeCommand
-					|| `ao session ${hit.sessionState === "terminated" ? "restore" : "resume-agent"} ${hit.sessionId}`,
-			},
+			// It talks to this machine's daemon, so a remote session does not offer it.
+			...(hit.hostId
+				? {}
+				: {
+						secondaryAction: {
+							kind: "copy-resume-command" as const,
+							command: hit.resumeCommand
+								|| `ao session ${hit.sessionState === "terminated" ? "restore" : "resume-agent"} ${hit.sessionId}`,
+						},
+					}),
 			action: {
 				kind: "open-search-result",
 				projectId: hit.projectId,
@@ -1015,6 +1029,7 @@ export function buildSessionSearchCommands(
 				snippet: hit.snippet,
 				...(hit.kind ? { matchKind: hit.kind } : {}),
 				...(hit.reviewId ? { reviewId: hit.reviewId } : {}),
+				...(hit.hostId ? { hostId: hit.hostId } : {}),
 				...(hit.highlights?.length ? { highlights: hit.highlights } : {}),
 				...(hit.seq ? { seq: hit.seq } : {}),
 			},
@@ -1039,7 +1054,9 @@ export function withoutChatHitsCoveredBySessionSearch(
 ): CommandItem[] {
 	const covered = new Set<string>();
 	for (const item of sessionSearchItems) {
-		if (item.action?.kind === "open-search-result") covered.add(item.action.sessionId);
+		// Chat rows are this machine's; a remote session with the same id is a
+		// different session and covers nothing here.
+		if (item.action?.kind === "open-search-result" && !item.action.hostId) covered.add(item.action.sessionId);
 	}
 	if (covered.size === 0) return [...chatItems];
 	return chatItems.filter((item) => {

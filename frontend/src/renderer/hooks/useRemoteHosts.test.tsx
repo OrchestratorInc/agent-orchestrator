@@ -16,6 +16,7 @@ vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControl
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
 import { requestRemoteHostsRefresh, useRemoteHosts } from "./useRemoteHosts";
+import { savedRemoteHosts } from "../lib/saved-remote-hosts";
 
 beforeEach(() => {
 	account.status = "authenticated";
@@ -66,6 +67,12 @@ it("connects both saved boxes and exposes their stable IDs", async () => {
 	await waitFor(() => expect(result.current.hosts).toEqual([
 		{ hostId: "box-a", label: "Box A", url: "http://box-a:3001", status: "connected" },
 		{ hostId: "box-b", label: "Box B", url: "http://box-b:3001", status: "connected" },
+	]));
+	// Search across machines reads the saved machines from here, without
+	// connecting to them a second time.
+	await waitFor(() => expect(savedRemoteHosts()).toEqual([
+		{ hostId: "box-a", label: "Box A", status: "connected" },
+		{ hostId: "box-b", label: "Box B", status: "connected" },
 	]));
 });
 

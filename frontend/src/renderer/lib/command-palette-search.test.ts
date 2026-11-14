@@ -90,6 +90,17 @@ describe("buildSessionSearchCommands", () => {
 		expect(recent?.snippet).toBeUndefined();
 	});
 
+	it("names the machine a remote session is on, opens it there, and offers no local resume command", () => {
+		const [row] = buildSessionSearchCommands([{ ...hit, hostId: "h_azure", machineLabel: "AzureLinux" }], "flaky");
+		expect(row?.subtitle?.startsWith("AzureLinux · ")).toBe(true);
+		expect(row?.action).toMatchObject({ kind: "open-search-result", hostId: "h_azure", sessionId: "proj-1" });
+		// The resume command talks to this machine's daemon.
+		expect(row?.secondaryAction).toBeUndefined();
+		const [local] = buildSessionSearchCommands([hit], "flaky");
+		expect(local?.id).not.toBe(row?.id);
+		expect(local?.action).not.toHaveProperty("hostId");
+	});
+
 	it("gives every row a stable, distinct id even for repeated session matches", () => {
 		const commands = buildSessionSearchCommands([hit, { ...hit }, { ...hit, messageId: "msg-2" }], "flaky");
 		const ids = commands.map((command) => command.id);
@@ -136,6 +147,13 @@ describe("withoutChatHitsCoveredBySessionSearch", () => {
 		const sessionRows = buildSessionSearchCommands([hit], "flaky");
 		const chatRows = buildChatSearchCommands([chatHit("proj-1", "m1", "review-1"), chatHit("proj-1", "m2"), chatHit("proj-9", "m3")] as never);
 		expect(withoutChatHitsCoveredBySessionSearch(chatRows, sessionRows).map((item) => item.id)).toEqual(["message:m3"]);
+	});
+
+	it("does not let a session on another machine hide this machine's chat row", () => {
+		// Session ids repeat across machines: proj-1 on AzureLinux is not proj-1 here.
+		const remoteRows = buildSessionSearchCommands([{ ...hit, hostId: "h_azure", machineLabel: "AzureLinux" }], "flaky");
+		const chatRows = buildChatSearchCommands([chatHit("proj-1", "m1")] as never);
+		expect(withoutChatHitsCoveredBySessionSearch(chatRows, remoteRows)).toHaveLength(1);
 	});
 
 	it("keeps every chat row when there are no session-text rows", () => {

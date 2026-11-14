@@ -44,6 +44,9 @@ const noRecents: SessionSearchResponse = {
  * person opening it to "go back to that session" gets the recent list, the way
  * Raycast and Atuin show recents before a query is typed.
  */
+/** Rows the palette asks each machine for: a launcher, not a results page. */
+export const PALETTE_SESSION_SEARCH_LIMIT = 8;
+
 export function usePaletteSessionSearch(
 	query: string,
 	hostId: HostId = LOCAL_HOST,
@@ -67,7 +70,11 @@ export function usePaletteSessionSearch(
 			// With no words, sort=recent asks the same endpoint for recent sessions.
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/search/sessions", {
 				signal,
-				params: { query: trimmed ? { q: trimmed, limit: 8 } : { sort: "recent", limit: 8 } },
+				params: {
+					query: trimmed
+						? { q: trimmed, limit: PALETTE_SESSION_SEARCH_LIMIT }
+						: { sort: "recent", limit: PALETTE_SESSION_SEARCH_LIMIT },
+				},
 			});
 			// Search is optional: a daemon whose index could not be opened answers
 			// SESSION_SEARCH_UNAVAILABLE. Opening the palette then shows no recents

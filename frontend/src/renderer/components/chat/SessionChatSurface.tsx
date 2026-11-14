@@ -434,19 +434,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const openFind = findNavigation.navigate;
 	const [heldReveal, setHeldReveal] = useState<{ owner: string; reveal: SessionSearchReveal }>();
 	useEffect(() => {
+		// Keyed like the reveal was: this machine's sessions by id, another
+		// machine's by host and id, so a remote target never lands here.
 		const revealPending = () => {
-			const reveal = takeSessionSearchReveal(session.id);
+			const reveal = takeSessionSearchReveal(uiSessionId);
 			if (!reveal) return;
 			// The chat comes forward at once; the match waits for its conversation.
 			onSelectChat?.();
-			setHeldReveal({ owner: session.id, reveal });
+			setHeldReveal({ owner: uiSessionId, reveal });
 		};
 		// The target that opened the session, then every later one: picking another
 		// result in this session keeps the surface mounted, so this effect does not
 		// run again to pick it up.
 		revealPending();
-		return subscribeSessionSearchReveal(session.id, revealPending);
-	}, [onSelectChat, session.id]);
+		return subscribeSessionSearchReveal(uiSessionId, revealPending);
+	}, [onSelectChat, uiSessionId]);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -568,12 +570,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		const { owner, reveal } = heldReveal;
 		setHeldReveal(undefined);
 		// Once per match: StrictMode runs this effect twice with the same one.
-		if (owner !== session.id || appliedReveal.current === reveal) return;
+		if (owner !== uiSessionId || appliedReveal.current === reveal) return;
 		appliedReveal.current = reveal;
 		navigateToAnnotation({ id: crypto.randomUUID(), text: reveal.text, messageId: reveal.messageId, activitySequence: reveal.activitySequence });
 		const word = reveal.text.trim();
 		if (word && reveal.find) openFind({ id: crypto.randomUUID(), query: word, messageId: reveal.messageId });
-	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, session.id]);
+	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, uiSessionId]);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
 	// The model the running agent reports, kept so this chat names it at once the next time it loads.
 	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
