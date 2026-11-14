@@ -2201,7 +2201,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsCoderAgents := !strings.Contains(schema, "'coder-agents'")
+	if !needsNativeAssistant && !needsMemcode && !needsCoderAgents && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2215,6 +2216,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsCoderAgents {
+		// Same normalization as Hermes: the exact historical repairs below do not
+		// know Coder Agents, so remove it first and append it again afterwards.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''coder-agents'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Coder Agents constraint: %w", err)
+		}
+		needsCoderAgents = true
 	}
 	type replacement struct {
 		old string
@@ -2331,6 +2340,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsCoderAgents {
+		repairs = append(repairs, replacement{"'fake'))", "'coder-agents', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2388,6 +2400,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'coder-agents'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Coder Agents")
 	}
 	return nil
 }

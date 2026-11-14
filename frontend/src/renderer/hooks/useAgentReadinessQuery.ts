@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
 import { defaultProjectAgents, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
+import { offersSessions } from "../lib/agent-switch-targets";
+import { settingsQueryKey, type Settings } from "./useSettings";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -87,7 +89,8 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 			// Rank what we have.
 		}
 	}
-	return defaultProjectAgents(agents);
+	const chatHarnesses = queryClient.getQueryData<Settings>(hostId ? ["settings", hostId] : settingsQueryKey)?.chatHarnesses;
+	return defaultProjectAgents(agents.filter((agent) => offersSessions(agent.id, chatHarnesses)));
 }
 
 export function useAgentReadinessQuery(enabled = true, hostId?: string) {

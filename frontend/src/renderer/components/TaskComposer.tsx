@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
+import { CHAT_ONLY_AGENTS, offersSessions } from "../lib/agent-switch-targets";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -481,6 +482,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}, [hostId, projectQuery.data?.id]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
+	// Chat-only agents have no terminal fallback; see offersSessions.
+	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
+	const supportsSessionInterface = useCallback((id: string) => offersSessions(id, chatHarnesses), [chatHarnesses]);
 	// The composer preselects the agent and model a spawn would actually use
 	// instead of parking the controls on a "default" label the user has to
 	// remember. Both resolved values remain directly editable.
@@ -507,6 +511,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		agents: agentCatalog.agents,
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents: [],
+		filter: (candidate) => supportsSessionInterface(candidate.id),
 	}).find(isReadyAgent)?.id ?? "" : "";
 	// A Cloud project without an agent of its own starts with the first agent this
 	// account has connected, shown in the picker, never one picked out of sight.
@@ -516,14 +521,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 		fallbackAgents: [],
 	}).find(isReadyAgent)?.id ?? "" : "";
 	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
-		: configuredProjectAgent || (isCloudProject ? readyCloudAgent : readyFallbackAgent);
+		: (supportsSessionInterface(configuredProjectAgent) ? configuredProjectAgent : "") || (isCloudProject ? readyCloudAgent : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
-		availableAgents?.some((candidate) => candidate.id === rememberedAgent && (hostId ? isLaunchableAgent(candidate) : isReadyAgent(candidate))),
+		supportsSessionInterface(rememberedAgent) && availableAgents?.some((candidate) => candidate.id === rememberedAgent && (hostId ? isLaunchableAgent(candidate) : isReadyAgent(candidate))),
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
-	const selectedAgent = agent || defaultWorkerAgent;
+	const selectedAgent = supportsSessionInterface(agent || defaultWorkerAgent) ? agent || defaultWorkerAgent : "";
 	const accountProvider = agentAccountProviderFor(selectedAgent);
 	const accountId = accountProvider && !isCloudProject ? accountPicks[accountProvider] : undefined;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
@@ -907,9 +912,6 @@ export function useTaskLaunch({ projectId, hostId }: {
 		config: isCloudProject ? undefined : projectQuery.data?.config,
 		catalog: localCatalog,
 	});
-	// A cloud project's Chat-capable harnesses come from the control plane, as a
-	// local project's come from the daemon.
-	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
@@ -1221,7 +1223,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && interfaceMode !== "tui" &&
+					: !CHAT_ONLY_AGENTS.has(selectedAgent) && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -1269,10 +1271,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
-	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const submitMode: TaskLaunchOptions["interfaceMode"] = CHAT_ONLY_AGENTS.has(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			? launch(brief, { interfaceMode: CHAT_ONLY_AGENTS.has(selectedAgent) ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {
@@ -1300,9 +1302,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 			agents,
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
+			filter: (candidate) => supportsSessionInterface(candidate.id),
 		});
 		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, supportsSessionInterface]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.

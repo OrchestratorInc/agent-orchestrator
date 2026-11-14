@@ -34,6 +34,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
+import { useSettings } from "../hooks/useSettings";
+import { offersSessions } from "../lib/agent-switch-targets";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -143,7 +145,8 @@ export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
 	const workspaces = useWorkspaceQuery().data ?? [];
-	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
+	const { settings } = useSettings();
+	const harnesses = (useAgentReadinessQuery().data?.agents ?? []).filter((agent) => offersSessions(agent.id, settings?.chatHarnesses));
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
 	const remove = useDeleteAutomation();
