@@ -1640,6 +1640,7 @@
 	"settings.telemetryEvents.description": "Compartilhe diagnósticos limitados e filtrados para melhorar a confiabilidade.",
 	"settings.telemetryEvents.pending": "A telemetria está desativada localmente. A limpeza do daemon ainda está pendente.",
 	"settings.telemetryEvents.failed": "A limpeza da telemetria falhou. Os relatórios permanecem desativados.",
+	"settings.telemetryEvents.loadFailed": "Não foi possível carregar a preferência de compartilhamento de erros.",
 	"settings.telemetryEvents.veto": "Esta preferência está desativada pelo ambiente.",
 	"settings.telemetryEvents.unsupported": "A ativação não está disponível nesta plataforma.",
 	"settings.telemetryEvents.releaseBlocked": "Os relatórios de erro estão desativados pelo bloqueio de segurança desta versão.",

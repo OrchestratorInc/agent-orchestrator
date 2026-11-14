@@ -1612,6 +1612,7 @@
 	"settings.telemetryEvents.description": "信頼性向上のため、制限されプライバシー保護された診断情報を共有します。",
 	"settings.telemetryEvents.pending": "テレメトリはローカルで無効です。デーモンのクリーンアップを待っています。",
 	"settings.telemetryEvents.failed": "テレメトリのクリーンアップに失敗しました。報告は無効のままです。",
+	"settings.telemetryEvents.loadFailed": "エラー共有の設定を読み込めませんでした。",
 	"settings.telemetryEvents.veto": "この設定は環境によって無効化されています。",
 	"settings.telemetryEvents.unsupported": "このプラットフォームでは有効化できません。",
 	"settings.telemetryEvents.releaseBlocked": "このリリースの安全ゲートによりエラー報告は無効です。",
