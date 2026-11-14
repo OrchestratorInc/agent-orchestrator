@@ -25,7 +25,7 @@ const excerpts: ChatExcerpt[] = [{ conversationId: "conversation", messageId: "s
 let renderer: ReactTestRenderer | undefined;
 let conversation: MobileConversation;
 let supportsExcerpts: boolean | undefined;
-function Harness() { conversation = useMobileConversation(config, "qa-session"); return null; }
+function Harness() { conversation = useMobileConversation(config, "qa-host", "qa-session"); return null; }
 
 beforeEach(() => {
  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

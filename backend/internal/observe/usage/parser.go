@@ -48,6 +48,26 @@ func parseRecordsWithState(
 		parseKimi(source, records, &result)
 	case domain.UsageSourceJCodeLedger:
 		parseJCode(source, records, &result)
+	case domain.UsageSourcePiSession:
+		parsePi(source, records, &result)
+	case domain.UsageSourceOMPSession:
+		parsePiFamily(source, records, ompSessionDialect, &result)
+	case domain.UsageSourceKimchiSession:
+		parsePiFamily(source, records, kimchiSessionDialect, &result)
+	case domain.UsageSourcePrimeAgentSession:
+		parsePiFamily(source, records, primeAgentSessionDialect, &result)
+	case domain.UsageSourceQwenMonthly:
+		parseQwen(source, records, &result)
+	case domain.UsageSourceGooseLedger:
+		parseGoose(source, records, &result)
+	case domain.UsageSourceOpenCodeDB, domain.UsageSourceKiloDB:
+		parseOpenCode(source, records, &result)
+	case domain.UsageSourceGrokUsage:
+		parseGrok(source, records, &result)
+	case domain.UsageSourceDeepSeekSession:
+		parseDeepSeek(source, records, &result)
+	case domain.UsageSourceAgyConversation:
+		parseAgy(source, records, &result)
 	default:
 		result.Cursor.AnomalyCount++
 		result.Cursor.LastErrorCode = domain.UsageErrorUnsupportedSourceFormat
@@ -99,7 +119,13 @@ type parserStateEnvelope struct {
 type parserIntegrityStateV1 struct {
 	Checkpoint                *parserCheckpointV1 `json:"checkpoint,omitempty"`
 	StableTail                *stableTailStateV1  `json:"stable_tail,omitempty"`
+	ConflictSnapshot          *conflictSnapshotV1 `json:"conflict_snapshot,omitempty"`
 	DiscardingOversizedRecord bool                `json:"discarding_oversized_record,omitempty"`
+}
+
+type conflictSnapshotV1 struct {
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mod_time"`
 }
 
 type parserCheckpointV1 struct {
@@ -116,8 +142,9 @@ type stableTailStateV1 struct {
 }
 
 type claudeParserStateV1 struct {
-	ModelID  string `json:"model_id,omitempty"`
-	Provider string `json:"billing_provider,omitempty"`
+	ModelID    string                  `json:"model_id,omitempty"`
+	Provider   string                  `json:"billing_provider,omitempty"`
+	Unfinished *claudeTranscriptRecord `json:"unfinished,omitempty"`
 	// LegacyProvider is the retired "provider" key. A build before #2928 filled
 	// it with the harness name — "claude-code", "openai" — not a billing route,
 	// so decoding must accept it (DisallowUnknownFields) and must never read
@@ -132,6 +159,8 @@ type codexParserStateV1 struct {
 	ModelID        string           `json:"model_id,omitempty"`
 	Provider       string           `json:"billing_provider,omitempty"`
 	LegacyProvider string           `json:"provider,omitempty"` // see claudeParserStateV1
+
+	ServiceTier string `json:"service_tier,omitempty"`
 
 	NativeSessionID     string   `json:"native_session_id,omitempty"`
 	DirectParentID      string   `json:"direct_parent_id,omitempty"`
@@ -201,12 +230,13 @@ func decodeParserState(source domain.UsageSourceRecord) (*parserStateEnvelope, e
 		if err := validateCodexDirectParent(source, state.Codex); err != nil {
 			return nil, err
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourceJCodeLedger:
+	default:
+		if !source.Kind.IsKnown() {
+			return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
+		}
 		if state.Claude != nil || state.Codex != nil {
 			return nil, errors.New("append-only state has invalid parser payload")
 		}
-	default:
-		return nil, fmt.Errorf("unsupported source kind %q", source.Kind)
 	}
 	return &state, nil
 }
@@ -224,11 +254,10 @@ func newParserState(kind domain.UsageSourceKind) (*parserStateEnvelope, error) {
 			PendingSpawnCallIDs: []string{},
 			DiscoveredChildIDs:  []string{},
 		}
-	case domain.UsageSourceKimiWire, domain.UsageSourceJCodeLedger:
-		// Kimi records and jcode messages carry stable native IDs, so no provider-specific
-		// cumulative baseline is required.
 	default:
-		return nil, fmt.Errorf("unsupported source kind %q", kind)
+		if !kind.IsKnown() {
+			return nil, fmt.Errorf("unsupported source kind %q", kind)
+		}
 	}
 	return state, nil
 }
@@ -245,6 +274,11 @@ func validateParserIntegrityState(source domain.UsageSourceRecord, state *parser
 		if tail.Offset != source.ByteOffset || tail.ByteCount <= 0 ||
 			tail.QuietObservations < 0 || tail.QuietObservations > 1 || !validSHA256Digest(tail.SHA256) {
 			return errors.New("invalid stable tail state")
+		}
+	}
+	if conflict := state.ConflictSnapshot; conflict != nil {
+		if conflict.Size < source.ByteOffset || conflict.ModTime.IsZero() {
+			return errors.New("invalid conflict snapshot")
 		}
 	}
 	return nil
@@ -277,10 +311,11 @@ type claudeTranscriptRecord struct {
 }
 
 type claudeNativeUsage struct {
-	InputTokens              int64 `json:"input_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
+	InputTokens              int64           `json:"input_tokens"`
+	CacheCreationInputTokens int64           `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64           `json:"cache_read_input_tokens"`
+	OutputTokens             int64           `json:"output_tokens"`
+	Speed                    json.RawMessage `json:"speed"`
 	CacheCreation            *struct {
 		Ephemeral5mInputTokens int64 `json:"ephemeral_5m_input_tokens"`
 		Ephemeral1hInputTokens int64 `json:"ephemeral_1h_input_tokens"`
@@ -289,6 +324,12 @@ type claudeNativeUsage struct {
 
 func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state *claudeParserStateV1, result *parseResult) {
 	eventsByKey := make(map[string]domain.ModelUsageEvent)
+	countUnfinished := func() {
+		if held := state.Unfinished; held != nil {
+			state.Unfinished = nil
+			emitClaudeEvent(source, *held, 0, state, result, eventsByKey)
+		}
+	}
 	for _, record := range records {
 		var native claudeTranscriptRecord
 		if err := json.Unmarshal(record.Data, &native); err != nil {
@@ -303,72 +344,94 @@ func parseClaude(source domain.UsageSourceContext, records []jsonlRecord, state 
 		if nativeProvider != "" {
 			state.Provider = nativeProvider
 		}
-		if native.Type != "assistant" || !jsonValueReported(native.Message.Usage) ||
-			native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
-			continue
-		}
 		if source.Source.Kind == domain.UsageSourceClaudeMain && native.IsSidechain {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(native.Message.Model), "<synthetic>") {
+		if native.Type == "user" {
+			countUnfinished()
 			continue
 		}
-		var usage claudeNativeUsage
-		if err := json.Unmarshal(native.Message.Usage, &usage); err != nil {
-			recordMalformed(result)
+		if native.Type != "assistant" {
 			continue
 		}
-		var creation5m, creation1h *int64
-		if usage.CacheCreation != nil {
-			creation5m = int64Ptr(usage.CacheCreation.Ephemeral5mInputTokens)
-			creation1h = int64Ptr(usage.CacheCreation.Ephemeral1hInputTokens)
+		if held := state.Unfinished; held != nil && held.Message.ID != native.Message.ID {
+			countUnfinished()
 		}
-		tokens, ok := normalizeAnthropicUsage(
-			usage.InputTokens,
-			usage.CacheCreationInputTokens,
-			usage.CacheReadInputTokens,
-			usage.OutputTokens,
-			creation5m,
-			creation1h,
-		)
-		if !ok {
-			recordMalformed(result)
+		if !jsonValueReported(native.Message.Usage) ||
+			strings.EqualFold(strings.TrimSpace(native.Message.Model), "<synthetic>") {
 			continue
 		}
-		model := firstNonEmpty(native.Message.Model, state.ModelID, source.InitialModelID, "unknown")
-		state.ModelID = model
-		billingProvider := pricing.TrustedClaudeBillingProvider(firstNonEmpty(
-			nativeProvider, state.Provider, source.ProviderHint,
-		))
-		keyID := firstNonEmpty(native.Message.ID, native.UUID, strconv.FormatInt(record.Offset, 10))
-		event := domain.ModelUsageEvent{
-			ProviderID:            domain.UsageProviderAnthropic,
-			BillingProviderID:     billingProvider,
-			BillingProviderSource: domain.ObservedBillingProviderSource(billingProvider),
-			ModelID:               model,
-			MeasurementKind:       domain.UsageMeasurementNativeReported,
-			Tokens:                tokens,
-			ProviderUsageJSON:     boundedProviderUsage(native.Message.Usage),
-			CreatedAt:             parseUsageTimestamp(native.Timestamp),
-			SourceEventKey: stableSourceEventKey(
-				"claude",
-				source.NativeRootID,
-				string(source.Source.Kind),
-				source.Source.SubagentID,
-				source.Source.NativeSessionID,
-				keyID,
-			),
-		}
-		if existing, duplicate := eventsByKey[event.SourceEventKey]; duplicate {
-			if !usageEventsEqual(existing, event) {
-				result.Cursor.AnomalyCount++
-				result.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+		if native.Message.StopReason == nil || strings.TrimSpace(*native.Message.StopReason) == "" {
+			if strings.TrimSpace(native.Message.ID) != "" {
+				held := native
+				state.Unfinished = &held
 			}
 			continue
 		}
-		eventsByKey[event.SourceEventKey] = event
-		result.Events = append(result.Events, event)
+		state.Unfinished = nil
+		emitClaudeEvent(source, native, record.Offset, state, result, eventsByKey)
 	}
+}
+
+func emitClaudeEvent(
+	source domain.UsageSourceContext,
+	native claudeTranscriptRecord,
+	offset int64,
+	state *claudeParserStateV1,
+	result *parseResult,
+	eventsByKey map[string]domain.ModelUsageEvent,
+) {
+	var usage claudeNativeUsage
+	if err := json.Unmarshal(native.Message.Usage, &usage); err != nil {
+		recordMalformed(result)
+		return
+	}
+	var creation5m, creation1h *int64
+	if usage.CacheCreation != nil {
+		creation5m = int64Ptr(usage.CacheCreation.Ephemeral5mInputTokens)
+		creation1h = int64Ptr(usage.CacheCreation.Ephemeral1hInputTokens)
+	}
+	tokens, ok := normalizeAnthropicUsage(
+		usage.InputTokens,
+		usage.CacheCreationInputTokens,
+		usage.CacheReadInputTokens,
+		usage.OutputTokens,
+		creation5m,
+		creation1h,
+	)
+	if !ok {
+		recordMalformed(result)
+		return
+	}
+	model := firstNonEmpty(native.Message.Model, state.ModelID, source.InitialModelID, "unknown")
+	state.ModelID = model
+	nativeProvider := pricing.TrustedClaudeBillingProvider(
+		firstNonEmpty(native.Message.Provider, native.Provider))
+	billingProvider := pricing.TrustedClaudeBillingProvider(firstNonEmpty(
+		nativeProvider, state.Provider, source.ProviderHint,
+	))
+	keyID := firstNonEmpty(native.Message.ID, native.UUID, strconv.FormatInt(offset, 10))
+	event := domain.ModelUsageEvent{
+		ProviderID:            domain.UsageProviderAnthropic,
+		BillingProviderID:     billingProvider,
+		BillingProviderSource: domain.ObservedBillingProviderSource(billingProvider),
+		ModelID:               model,
+		MeasurementKind:       domain.UsageMeasurementNativeReported,
+		Tokens:                tokens,
+		ProviderUsageJSON:     boundedProviderUsage(native.Message.Usage),
+		ServiceTier:           reportedServiceTier(jsonString(usage.Speed)),
+		ProviderMessageID:     providerMessageID(native.Message.ID),
+		CreatedAt:             parseUsageTimestamp(native.Timestamp),
+		SourceEventKey: stableSourceEventKey(
+			"claude",
+			source.NativeRootID,
+			string(source.Source.Kind),
+			source.Source.SubagentID,
+			source.Source.NativeSessionID,
+			keyID,
+		),
+	}
+	result.addEvent(eventsByKey, event)
 }
 
 // canonicalBillingProvider normalizes one observed routing fact into a catalog
@@ -602,11 +665,20 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 	// payload.info is the bounded object; payload.rate_limits is its sibling and
 	// is deliberately never read, so account-level quota state cannot be stored.
 	var payload struct {
-		Type string          `json:"type"`
-		Info json.RawMessage `json:"info"`
+		Type           string          `json:"type"`
+		Info           json.RawMessage `json:"info"`
+		ThreadSettings *struct {
+			ServiceTier string `json:"service_tier"`
+		} `json:"thread_settings"`
 	}
-	if err := json.Unmarshal(envelope.Payload, &payload); err != nil ||
-		payload.Type != "token_count" || !jsonValueReported(payload.Info) {
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		return
+	}
+	if payload.Type == "thread_settings_applied" && payload.ThreadSettings != nil {
+		state.ServiceTier = reportedServiceTier(payload.ThreadSettings.ServiceTier)
+		return
+	}
+	if payload.Type != "token_count" || !jsonValueReported(payload.Info) {
 		return
 	}
 	var info struct {
@@ -690,7 +762,7 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 	// A record that carried no per-event vector still gives up its cache-write
 	// count, because the neutral counters beside it are the same subtraction of
 	// the same two native readings. Persisting it is what keeps a write-rated
-	// model priceable; see codexProviderUsage.
+	// model priceable; see providerUsageWithCacheWrite.
 	var derivedCacheWrite *int64
 	if info.Last == nil {
 		write := selected.CacheWriteInputTokens
@@ -706,7 +778,8 @@ func parseCodexEvent(source domain.UsageSourceContext, envelope codexEnvelope, s
 		ModelID:               model,
 		MeasurementKind:       domain.UsageMeasurementNativeReported,
 		Tokens:                tokens,
-		ProviderUsageJSON:     codexProviderUsage(payload.Info, derivedCacheWrite),
+		ProviderUsageJSON:     providerUsageWithCacheWrite(payload.Info, derivedCacheWrite, nil),
+		ServiceTier:           state.ServiceTier,
 		CreatedAt:             parseUsageTimestamp(envelope.Timestamp),
 		SourceEventKey: stableSourceEventKey(
 			"codex",
@@ -764,6 +837,24 @@ func normalizeOpenAIUsage(input, cachedInput, cacheWriteInput, output int64) (do
 	}, true
 }
 
+func routedUsageProvider(provider string) domain.UsageProviderID {
+	if strings.EqualFold(strings.TrimSpace(provider), "anthropic") {
+		return domain.UsageProviderAnthropic
+	}
+	return domain.UsageProviderOpenAI
+}
+
+func normalizeRoutedUsage(providerID domain.UsageProviderID, input, cacheRead, cacheWrite, output int64) (domain.UsageTokenMetrics, bool) {
+	if providerID == domain.UsageProviderAnthropic {
+		return normalizeAnthropicUsage(input, cacheWrite, cacheRead, output, nil, nil)
+	}
+	total, ok := sumNonNegative(input, cacheRead, cacheWrite)
+	if !ok {
+		return domain.UsageTokenMetrics{}, false
+	}
+	return normalizeOpenAIUsage(total, cacheRead, cacheWrite, output)
+}
+
 func normalizeAnthropicUsage(directInput, cacheCreationInput, cachedInput, output int64, creation5m, creation1h *int64) (domain.UsageTokenMetrics, bool) {
 	uncachedInput, ok := sumNonNegative(directInput, cacheCreationInput)
 	if !ok {
@@ -811,28 +902,19 @@ func isJSONObject(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &object) == nil && object != nil
 }
 
-// codexProviderUsage stores the CLI's own usage object, plus the per-event
-// cache-write count when the CLI reported only cumulative totals.
-//
-// The estimator needs a per-event write bucket to price a model that publishes
-// a cache-write rate — every current gpt-5.6 variant does — and it reads that
-// bucket from last_token_usage, which is optional. On a record without one the
-// counters AO stores are already a delta of two native cumulative readings, and
-// this is that same subtraction over the same readings, so it is derived rather
-// than invented. It is namespaced instead of folded into a last_token_usage the
-// CLI never emitted: a reader must still be able to tell what the provider said
-// from what AO worked out.
-func codexProviderUsage(raw json.RawMessage, derivedCacheWrite *int64) string {
+func providerUsageWithCacheWrite(raw json.RawMessage, write, write1h *int64) string {
 	stored := boundedProviderUsage(raw)
-	if stored == "" || derivedCacheWrite == nil {
+	if stored == "" || write == nil {
 		return stored
 	}
-	derived := json.RawMessage(strconv.FormatInt(*derivedCacheWrite, 10))
 	object := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(stored), &object); err != nil {
 		return stored
 	}
-	object[derivedCacheWriteKey] = derived
+	object[derivedCacheWriteKey] = json.RawMessage(strconv.FormatInt(*write, 10))
+	if write1h != nil {
+		object[derivedCacheWrite1HKey] = json.RawMessage(strconv.FormatInt(*write1h, 10))
+	}
 	encoded, err := json.Marshal(object)
 	if err != nil || len(encoded) > maxProviderUsageBytes {
 		return stored
@@ -840,10 +922,10 @@ func codexProviderUsage(raw json.RawMessage, derivedCacheWrite *int64) string {
 	return string(encoded)
 }
 
-// derivedCacheWriteKey names the one member AO adds to a stored provider usage
-// object. The ao_ prefix is the whole point: nothing reading this object should
-// mistake it for something a provider reported.
-const derivedCacheWriteKey = "ao_derived_cache_write_input_tokens"
+const (
+	derivedCacheWriteKey   = "ao_derived_cache_write_input_tokens"
+	derivedCacheWrite1HKey = "ao_derived_cache_write_1h_input_tokens"
+)
 
 // boundedProviderUsage compacts one provider usage object for durable storage.
 // It returns empty for anything that is not a JSON object or exceeds the bound,
@@ -876,12 +958,40 @@ func codexVectorMatchesDelta(last codexTokenVector, input, cachedInput, cacheWri
 		(last.TotalTokens == 0 || total == 0 || last.TotalTokens == total)
 }
 
+func reportedServiceTier(raw string) string {
+	tier := strings.ToLower(strings.TrimSpace(raw))
+	if len(tier) > 64 {
+		return ""
+	}
+	return tier
+}
+
+func jsonString(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	return value
+}
+
 func parseUsageTimestamp(raw string) time.Time {
 	parsed, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		return time.Time{}
 	}
 	return parsed.UTC()
+}
+
+func (r *parseResult) addEvent(seen map[string]domain.ModelUsageEvent, event domain.ModelUsageEvent) {
+	if existing, duplicate := seen[event.SourceEventKey]; duplicate {
+		if !usageEventsEqual(existing, event) {
+			r.Cursor.AnomalyCount++
+			r.Cursor.LastErrorCode = domain.UsageErrorSourceEventConflict
+		}
+		return
+	}
+	seen[event.SourceEventKey] = event
+	r.Events = append(r.Events, event)
 }
 
 func usageEventsEqual(a, b domain.ModelUsageEvent) bool {
@@ -924,4 +1034,13 @@ func firstNonEmpty(values ...string) string {
 
 func int64Ptr(value int64) *int64 {
 	return &value
+}
+
+func providerMessageID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 256 {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

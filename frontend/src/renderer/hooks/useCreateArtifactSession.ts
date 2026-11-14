@@ -1,8 +1,9 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { buildRankedAgentOptions, DEFAULT_AGENT_PRIORITY_RANK, isReadyAgent } from "../lib/agent-select-options";
 import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { useNavigateToSession } from "../lib/navigate-to-session";
@@ -75,7 +76,7 @@ export function useCreateArtifactSession() {
 						...(harness ? { harness: harness as Harness } : {}),
 					},
 				});
-				if (error) throw new Error(apiErrorMessage(error, t("artifacts.createError")));
+				if (error) throw apiErrorException(error, t("artifacts.createError"));
 				if (!data?.session.id) throw new Error(t("artifacts.createError"));
 				void captureRendererEvent("ao.renderer.artifact_create_succeeded", { scope });
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -108,7 +109,7 @@ async function projectWorkerAgent(queryClient: ReturnType<typeof useQueryClient>
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error("Project config unavailable");
 			return data.project as ProjectAgents;
 		},

@@ -30,12 +30,11 @@ export function BrowserDownloadsSection({ titleHidden }: { titleHidden?: boolean
 					onChange={setQuery}
 					trailing={
 						<Button
-							className="text-settings-muted hover:text-settings-label"
 							disabled={!hasFinished}
 							onClick={() => void clear()}
 							size="sm"
 							type="button"
-							variant="ghost"
+							variant="quiet"
 						>
 							{t("browser.downloads.clearAll")}
 						</Button>

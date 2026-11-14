@@ -164,6 +164,7 @@ func (c *conversation) beginHistoryReplay(sessionID string) {
 	c.sessionID = sessionID
 	c.activeTurn = ""
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -214,7 +215,11 @@ func (c *conversation) finishHistoryReplay() {
 
 	c.historyMu.Lock()
 	if c.history != nil {
-		c.historyEvents = append([]ports.ChatEvent(nil), c.history.events...)
+		events := append([]ports.ChatEvent(nil), c.history.events...)
+		if c.historyReconciler != nil {
+			events = c.historyReconciler(events)
+		}
+		c.historyEvents = events
 		c.historyErr = nil
 		c.historyLoaded = true
 	}
@@ -439,6 +444,7 @@ func (c *conversation) resetHistoryItems(turnID string) {
 	c.mu.Lock()
 	c.activeTurn = turnID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)

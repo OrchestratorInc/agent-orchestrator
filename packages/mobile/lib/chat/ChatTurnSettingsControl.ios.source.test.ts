@@ -7,34 +7,36 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios.tsx", import.meta.url)), "utf8");
 
-describe("iOS turn settings menu anchor", () => {
-	it("keeps a stable left-side anchor as selected labels change", () => {
-		expect(source).toContain("matchContents={{ horizontal: false, vertical: true }}");
-		expect(source).toContain('ignoreSafeArea="all"');
-		expect(source).toContain('host: { alignSelf: "flex-start", width: 220, maxWidth: "100%", height: 44 }');
-		expect(source).toContain('<View pointerEvents="none" accessibilityElementsHidden style={[styles.visibleLabel, disabled && styles.disabledLabel]}>');
-		expect(source).toContain('<RNText numberOfLines={1} style={styles.visibleText}>{label}</RNText>');
-		expect(source).toContain('accessibilityLabel(`Turn settings, ${label}`)');
+describe("iOS chat controls row", () => {
+	// The turn has no settings sheet: everything is in the row's own menus.
+	it("lists the agent's models as checkable items, older versions one level down, then any other setting", () => {
+		expect(source).toContain("{modelChoices.latest.map((choice) => <Choice");
+		expect(source).toContain('<Menu label="Older models"');
+		expect(source).toContain("{modelChoices.older.map((choice) => <Choice");
+		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
+		expect(source).not.toContain("Turn settings");
+	});
+
+	// As the new task's menu: each other agent opens onto its models, default
+	// first. A model chosen there only records the pick (the switch runs with
+	// the next message), and the running agent's model chosen again drops it.
+	it("lists the other agents after the models, each opening onto its models", () => {
+		expect(source).toContain('<Section title="Other agents">');
+		expect(source).toContain('label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}');
+		expect(source).toContain("[{ id: AUTOMATIC_MODEL, label: defaultModelChoice(list?.defaultLabel) }, ...(list?.models ?? [])].map(choice)");
+		expect(source).toContain("onChoose={() => otherAgents.onPick({");
+		expect(source).toContain("if (pending) otherAgents?.onPick(undefined);");
+		expect(source).toContain("<ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />");
+		expect(source.indexOf('<Section title="Other agents">')).toBeLessThan(source.indexOf("{otherRows.map((row) => <SettingPicker"));
 	});
 });
 
-describe("iOS model setting", () => {
-	it("shows a layers symbol on the selector, but only checkmarks in its choices", () => {
-		const symbol = source.slice(source.indexOf("function settingSymbol"));
-		expect(symbol).toContain('if (row.providerKind === "model" || id.includes("model")) return "square.stack.3d.up"');
-		expect(source).toContain('systemImage={choice.selected ? "checkmark" : undefined}');
-	});
-
-	it("does not give the agent selector a model icon", () => {
-		const symbol = source.slice(source.indexOf("function settingSymbol"));
-		expect(symbol).toContain('if (id.includes("agent")) return undefined');
-	});
-});
-
-describe("iOS approvals setting", () => {
-	it("shows the complete dashed-check artwork as one image in the menu row", () => {
-		expect(source).toContain('isApprovalRow(row) ? <ApprovalRowLabel row={row} />');
-		expect(source).toContain('<Image assetName="CircleDashedCheck" />');
+describe("iOS other settings", () => {
+	// A checkmark image on a button is not announced; a picker's choice is.
+	it("offers each as a picker, or a toggle when it is on/off", () => {
+		expect(source).toContain("<Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>");
+		expect(source).toContain("<Toggle label={row.label}");
+		expect(source).not.toContain('systemImage={choice.selected ? "checkmark" : undefined}');
 	});
 });
 

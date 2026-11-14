@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -120,7 +121,7 @@ func TestTerminateRecordsOnSpawnParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.sessions["child"] = domain.SessionRecord{ID: "child", ProjectID: "mer", DisplayName: "Reviewer", CleanupGeneration: 1}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(WithActionCaller(context.Background(), "parent"))
 	cancel()
 	if _, err := svc.Kill(ctx, "child"); err != nil {
 		t.Fatal(err)
@@ -128,6 +129,34 @@ func TestTerminateRecordsOnSpawnParent(t *testing.T) {
 	terminated := actionsNamed(st.activities, actionSessionTerminated)
 	if len(terminated) != 1 || terminated[0].ConversationID != "conv-parent" {
 		t.Fatalf("terminate = %+v, want the parent conversation", terminated)
+	}
+}
+
+// A child archived by the user (or another session) is not the parent's
+// action: it stays out of the parent's chat, where it would read as part of
+// whatever the parent was running then.
+func TestTerminateByOtherCallerStaysOutOfSpawnParent(t *testing.T) {
+	for name, ctx := range map[string]context.Context{
+		"user":          context.Background(),
+		"other session": WithActionCaller(context.Background(), "someone-else"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, st, fc := actionFixture(t)
+			fc.spawnRecord = domain.SessionRecord{ID: "child", ProjectID: "mer", DisplayName: "Reviewer", Harness: "codex"}
+			cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "parent", ClientRequestID: "req-spawn"}
+			if _, _, _, err := svc.Spawn(context.Background(), cfg); err != nil {
+				t.Fatal(err)
+			}
+			st.sessions["child"] = domain.SessionRecord{ID: "child", ProjectID: "mer", DisplayName: "Reviewer", CleanupGeneration: 1}
+			if _, err := svc.Kill(ctx, "child"); err != nil {
+				t.Fatal(err)
+			}
+			for _, activity := range actionsNamed(st.activities, actionSessionTerminated) {
+				if activity.ConversationID == "conv-parent" {
+					t.Fatalf("terminate = %+v, want nothing in the parent conversation", activity)
+				}
+			}
+		})
 	}
 }
 
@@ -331,4 +360,37 @@ func actionsNamed(activities []domain.ConversationActivity, action string) []dom
 		}
 	}
 	return matched
+}
+
+func TestActionJoinsTheCallersRunningTurn(t *testing.T) {
+	spawn := func(t *testing.T, ctx context.Context, running []string) domain.ConversationActivity {
+		t.Helper()
+		svc, st, fc := actionFixture(t)
+		st.runningTurns = map[string][]string{"conv-parent": running}
+		fc.spawnRecord = domain.SessionRecord{ID: "child", ProjectID: "mer", Harness: "codex"}
+		cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, ParentSessionID: "parent", ClientRequestID: "req"}
+		if _, _, _, err := svc.Spawn(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if len(st.activities) != 1 {
+			t.Fatalf("activities = %+v", st.activities)
+		}
+		return st.activities[0]
+	}
+	if got := spawn(t, caller.With(context.Background(), "parent"), []string{"turn-1"}).TurnID; got != "turn-1" {
+		t.Fatalf("own command: turn = %q, want turn-1", got)
+	}
+	// A desktop click, another session's command, or overlapping turns stay on their own.
+	if got := spawn(t, context.Background(), []string{"turn-1"}).TurnID; got != "" {
+		t.Fatalf("no caller: turn = %q", got)
+	}
+	if got := spawn(t, caller.With(context.Background(), "mer-1"), []string{"turn-1"}).TurnID; got != "" {
+		t.Fatalf("other caller: turn = %q", got)
+	}
+	if got := spawn(t, caller.With(context.Background(), "parent"), []string{"turn-1", "turn-2"}).TurnID; got != "" {
+		t.Fatalf("two running turns: turn = %q", got)
+	}
+	if got := spawn(t, caller.With(context.Background(), "parent"), nil).TurnID; got != "" {
+		t.Fatalf("idle: turn = %q", got)
+	}
 }

@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG, type ServerConfig } from "./config";
+import { DEVICE_TOKEN_PREFIX, isPairingSecret, type PairDeviceResult } from "./deviceToken";
 import type { Endpoint } from "./endpoints";
 import { mergeEndpoints } from "./mergeEndpoints";
 import type { Host } from "./hosts";
@@ -40,6 +41,8 @@ export type ConnectDeps = {
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
+	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
+	saveToken?: (hostId: string, token: string, fallbackToken?: string) => Promise<void>;
 };
 
 /**
@@ -59,7 +62,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
 
 	const hostKeyForConfig = host.id === "" ? outcome.hostId : host.id;
-	const config = configForEndpoint(outcome.endpoint, host.token, hostKeyForConfig);
+	let config = configForEndpoint(outcome.endpoint, host.token, hostKeyForConfig);
 
 	// A machine migrated from the single-server config has no id until it
 	// connects once. This is where it learns one, and it is verified from here on.
@@ -69,21 +72,59 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
-	try {
+	let token = host.token;
+	const swapPairingPassword = async (): Promise<PairDeviceResult["kind"] | undefined> => {
+		if (!deps.saveToken || !deps.pair || !isPairingSecret(token)) return undefined;
+		const paired = await deps.pair(config);
+		if (paired.kind !== "paired") return paired.kind;
+		await deps.saveToken(hostKey, paired.token, paired.credential === "password" ? token : undefined);
+		token = paired.token;
+		config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+		return paired.kind;
+	};
+	const refreshEndpoints = async () => {
 		const advertised = await deps.refreshEndpoints(config);
 		// The daemon cannot advertise a client-side NAT or proxy address that just worked.
 		const refreshed = advertised.some((e) => e.kind === outcome.endpoint.kind) &&
 			!advertised.some((e) => e.kind === outcome.endpoint.kind && e.host === outcome.endpoint.host && e.port === outcome.endpoint.port && e.secure === outcome.endpoint.secure)
 			? [...advertised, outcome.endpoint] : advertised;
-		// Merged, not replaced: a kind the daemon omits — a tunnel mid-restart,
-		// above all — is unknown rather than gone. See mergeEndpoints.
+		// Merged, not replaced: a kind the daemon omits, a tunnel mid-restart
+		// above all, is unknown rather than gone. See mergeEndpoints.
 		await deps.saveEndpoints(
 			hostKey,
 			mergeEndpoints(host.endpoints, refreshed),
 		);
-	} catch {
+	};
+
+	// A password the machine just refused would be refused again by the refresh,
+	// one more failure toward its lockout.
+	if (await swapPairingPassword() === "unauthorized") {
+		await deps.touch(hostKey);
+		return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
+	}
+	try {
+		await refreshEndpoints();
+	} catch (error) {
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.
+		//
+		// One failure is acted on: only a release without device tokens, as after a
+		// rollback, refuses this phone's token with BAD_PASSWORD; the kept password works there.
+		const { status, code } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; code?: unknown };
+		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code === "BAD_PASSWORD") {
+			const deviceToken = token;
+			token = host.fallbackToken;
+			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+			try {
+				// The device token is replaced only once the kept password works.
+				await refreshEndpoints();
+				await deps.saveToken(hostKey, token);
+				await swapPairingPassword();
+			} catch {
+				token = deviceToken;
+				config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+			}
+		}
 	}
 	await deps.touch(hostKey);
 

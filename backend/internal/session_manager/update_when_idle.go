@@ -126,7 +126,7 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
-	env, _, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env, _, err := m.launchRuntimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	if err != nil {
 		return false
 	}

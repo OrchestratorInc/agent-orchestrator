@@ -281,6 +281,32 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			throw error;
 		}
 	};
+	// A standalone agent's create is its session's: reported as one, timed
+	// from here to the session's first connection like any other.
+	instrumented.createStandaloneAgent = async (orgId, body, options) => {
+		const requestedAt = Date.now();
+		const provider = body.provider || defaultProvider || "default";
+		try {
+			const response = await client.createStandaloneAgent(orgId, body, options);
+			pendingSessions.set(response.session.id, {
+				requestedAt,
+				provider: response.session.sandboxProvider ?? provider,
+				kind: "worker",
+			});
+			observeCloudSessions([response.session]);
+			return response;
+		} catch (error) {
+			void captureRendererEvent("ao.renderer.cloud_session_failed", {
+				provider,
+				session_kind: "worker",
+				stage: "create",
+				code: errorCode(error),
+				status: errorStatus(error),
+				ttr_ms: Math.max(0, Date.now() - requestedAt),
+			});
+			throw error;
+		}
+	};
 	instrumented.listSessions = async (orgId, query, options) => {
 		const response = await client.listSessions(orgId, query, options);
 		observeCloudSessions(response.items);

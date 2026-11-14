@@ -1,7 +1,7 @@
 // Electron's default browser identity differs from Chrome's in ways bot
 // managers (Cloudflare, Akamai, DataDome, reCAPTCHA) score as automation:
-//   - the user agent carries the app's name/version and an `Electron/x` token,
-//     and an unreduced Chrome version (Chrome sends `Chrome/<major>.0.0.0`);
+//   - the user agent carries the app's name/version and an unreduced Chrome
+//     version (Chrome sends `Chrome/<major>.0.0.0`);
 //   - no `Sec-CH-UA*` request headers at all, while pages still see
 //     `navigator.userAgentData`, an impossible pairing for a real Chrome;
 //   - `Accept-Language` lists only the app locale while `navigator.languages`
@@ -36,11 +36,19 @@ type Brand = { brand: string; version: string };
 
 const configured = new WeakSet<object>();
 
+// Keeps the Electron token: Google refuses sign-in ("This browser or app may
+// not be secure") when an embedded browser claims to be plain Chrome.
 export function browserUserAgent(electronUserAgent: string): string {
 	return electronUserAgent
 		.replace(/\(KHTML, like Gecko\) .*?Chrome\//, "(KHTML, like Gecko) Chrome/")
-		.replace(/ Electron\/\S+/, "")
 		.replace(/Chrome\/(\d+)[\d.]*/, "Chrome/$1.0.0.0");
+}
+
+// session.setUserAgent leaves the process-wide fallback on Electron's default,
+// and Cloudflare Turnstile rejects a page that reports both strings ("There was
+// a problem with verification"). Any edit to the user agent needs this too.
+export function applyUserAgentFallback(target: { userAgentFallback: string }): void {
+	target.userAgentFallback = browserUserAgent(target.userAgentFallback);
 }
 
 // Chromium's GREASE brand list for a build without an embedder brand, seeded
