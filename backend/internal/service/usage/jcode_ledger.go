@@ -28,8 +28,11 @@ type jcodeNativeMessage struct {
 	// model and provider are the session settings in force when jcode saved
 	// this message: its journal entry's meta, or the snapshot's for messages
 	// read from the snapshot. jcode stores no model on the message itself.
-	model    string
-	provider string
+	// journaled marks a tag taken from a journal entry, which outranks the
+	// snapshot's for the same message.
+	model     string
+	provider  string
+	journaled bool
 }
 
 type jcodeNativeSession struct {
@@ -275,6 +278,14 @@ func applyJCodeJournal(ctx context.Context, path string, session *jcodeNativeSes
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return offset, err
 	}
+	index := make(map[string]int, len(session.Messages))
+	for i, message := range session.Messages {
+		if id := strings.TrimSpace(message.ID); id != "" {
+			if _, seen := index[id]; !seen {
+				index[id] = i
+			}
+		}
+	}
 	reader := bufio.NewReader(file)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -294,9 +305,25 @@ func applyJCodeJournal(ctx context.Context, path string, session *jcodeNativeSes
 				session.ProviderKey = *entry.Meta.ProviderKey
 			}
 			for _, message := range entry.AppendMessages {
-				if message.Role == "assistant" && jsonValuePresent(message.TokenUsage) {
-					message.model, message.provider = session.Model, session.ProviderKey
+				if message.Role != "assistant" || !jsonValuePresent(message.TokenUsage) {
+					continue
+				}
+				message.model, message.provider, message.journaled = session.Model, session.ProviderKey, true
+				id := strings.TrimSpace(message.ID)
+				at, seen := index[id]
+				if id == "" || !seen {
+					if id != "" {
+						index[id] = len(session.Messages)
+					}
 					session.Messages = append(session.Messages, message)
+					continue
+				}
+				// jcode can rewrite the snapshot, on the new model, before it
+				// clears the journal, so a message may be in both. The first
+				// entry that saved it names its model; the snapshot's tag and
+				// later replays of the same message do not.
+				if existing := &session.Messages[at]; !existing.journaled {
+					existing.model, existing.provider, existing.journaled = message.model, message.provider, true
 				}
 			}
 		}

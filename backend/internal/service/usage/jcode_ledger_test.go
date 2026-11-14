@@ -19,7 +19,14 @@ const jcodeTestNativeID = "session_elephant_1793375224099_dccf0b8667353cd1"
 // document on a single line, rewritten in place on every save.
 func writeJCodeSession(t *testing.T, home string, messages ...string) {
 	t.Helper()
-	body := `{"id":"` + jcodeTestNativeID + `","title":"t","model":"claude-opus-5-5","provider_key":"claude","working_dir":"/repo","messages":[` + strings.Join(messages, ",") + `]}`
+	writeJCodeSessionAs(t, home, "claude-opus-5-5", "claude", messages...)
+}
+
+// writeJCodeSessionAs writes the snapshot of a session whose current model and
+// provider are model and provider.
+func writeJCodeSessionAs(t *testing.T, home, model, provider string, messages ...string) {
+	t.Helper()
+	body := `{"id":"` + jcodeTestNativeID + `","title":"t","model":"` + model + `","provider_key":"` + provider + `","working_dir":"/repo","messages":[` + strings.Join(messages, ",") + `]}`
 	writeUsageFixture(t, filepath.Join(home, "sessions", jcodeTestNativeID+".json"), body)
 }
 
@@ -288,5 +295,19 @@ func TestCollectorAttributesJCodeUsageToEachJournalEntrysModel(t *testing.T) {
 	mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
 	if got := readLedgerAttribution(t, ledger); got != want {
 		t.Fatalf("recreated ledger attribution = %s\nwant %s", got, want)
+	}
+
+	// jcode can rewrite the snapshot on the session's current model before it
+	// clears the journal, so journaled messages are in both files. The journal
+	// entry that saved each one still names its model; only message_2, which
+	// was never journaled, has no better attribution than the snapshot's.
+	writeJCodeSessionAs(t, jcodeHome, "gpt-5.5", "openai",
+		jcodeUser, jcodeAssistant1, jcodeToolResult, jcodeAssistant2, jcodeUser, jcodeAssistant3, assistant4, assistant5)
+	mustNoError(t, os.Remove(ledger))
+	mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
+	want = "message_2=gpt-5.5/openai,message_4=claude-opus-5-5/claude," +
+		"message_6=gpt-5.5/openai,message_8=gpt-5.5/openai,message_10=claude-opus-5-5/claude"
+	if got := readLedgerAttribution(t, ledger); got != want {
+		t.Fatalf("attribution with messages in both snapshot and journal = %s\nwant %s", got, want)
 	}
 }
