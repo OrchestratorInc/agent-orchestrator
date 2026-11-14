@@ -73,8 +73,10 @@ export function UsageView() {
 	const accounts = useAgentAccounts(tab === "limits");
 	const limitWindows = useUsageLimitWindows(7, tab === "windows");
 	const { read: readFreshLimits, error: freshLimitsError, failedAt: freshLimitsFailedAt } = useFreshAgentAccountsRead();
-	// A poll that succeeds after a failed fresh read has recovered the data, so the failure stops showing.
-	const limitsError = accounts.error ?? (accounts.dataUpdatedAt > freshLimitsFailedAt ? null : freshLimitsError);
+	const limitsError = accounts.error ?? freshLimitsError;
+	// A poll only returns the cached reading, so it can't clear a failed fresh
+	// read; a poll that succeeds after one shows the daemon is back, so retry it.
+	const retryFreshLimits = freshLimitsError !== null && accounts.dataUpdatedAt > freshLimitsFailedAt;
 	const isLimits = tab === "limits";
 	const isWindows = tab === "windows";
 	const refetchReport = report.refetch;
@@ -85,6 +87,9 @@ export function UsageView() {
 	useEffect(() => {
 		readFreshLimits();
 	}, [isLimits, readFreshLimits]);
+	useEffect(() => {
+		if (isLimits && retryFreshLimits) readFreshLimits();
+	}, [isLimits, retryFreshLimits, readFreshLimits]);
 	useEffect(() => {
 		const onFocus = () => {
 			readFreshLimits();

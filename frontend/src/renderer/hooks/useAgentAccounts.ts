@@ -59,8 +59,9 @@ let freshReadAttempt = 0;
 let accountWrites = 0;
 
 /** Reads every account's limits past the daemon's cache, at most once a
- * minute across mounts. A failed read is returned as error, with failedAt so
- * a later successful poll can supersede it, and the next call tries again at once. */
+ * minute across mounts. A failed read is returned as error until a fresh read
+ * succeeds, with failedAt so a caller can retry once a later poll lands, and
+ * the next call tries again at once. */
 export function useFreshAgentAccountsRead() {
 	const queryClient = useQueryClient();
 	const [failure, setFailure] = useState<{ error: Error; at: number } | null>(null);

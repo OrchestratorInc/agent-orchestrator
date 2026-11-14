@@ -86,14 +86,17 @@ describe("UsageView", () => {
 		expect(screen.getByText("Limits content")).toBeInTheDocument();
 	});
 
-	it("stops showing a failed fresh read once a later poll succeeds", async () => {
+	it("keeps a failed fresh read showing and retries it once a later poll succeeds", async () => {
 		const user = userEvent.setup();
 		mocks.freshLimitsError = new Error("Daemon unavailable");
 		mocks.accountsUpdatedAt = 2_000;
 		renderView();
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(1);
 		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByText("Limits content")).toBeInTheDocument();
+		// The poll only carries the cached reading, so the failure stays until a fresh read succeeds.
+		expect(screen.getByRole("alert")).toHaveTextContent("Daemon unavailable");
+		// One read for the view switch, one retry because the poll succeeded after the failure.
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(3);
 	});
 
 	it("refetches spend when the window regains focus", () => {
