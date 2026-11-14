@@ -212,15 +212,22 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	digest := promptDigest(prompt)
+	sameConversation := previous.matches(nativeID)
 	launchPrompt, launchFile := prompt, cfg.SystemPromptFile
-	if digest != "" && previous.PromptDigest == digest && previous.matches(nativeID) {
+	if digest != "" && previous.PromptDigest == digest && sameConversation {
 		launchPrompt, launchFile = "", ""
 	}
 	argv, err := p.baseArgv(ctx, cfg.DataDir, cfg.Session.ID, launchPrompt, launchFile, cfg.Config)
 	if err != nil {
 		return nil, false, err
 	}
-	if err := writeLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: digest}); err != nil {
+	// A call without instructions adds none to the conversation, which still
+	// holds the ones it had. AO's update-when-idle check probes this way.
+	recorded := digest
+	if recorded == "" && sameConversation {
+		recorded = previous.PromptDigest
+	}
+	if err := writeLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded}); err != nil {
 		return nil, false, err
 	}
 	return append(argv, "--session", nativeID), true, nil

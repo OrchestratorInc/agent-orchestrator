@@ -35,8 +35,15 @@ type launchRecord struct {
 
 // matches reports whether this launch's conversation is nativeID: the one it
 // resumed, or the one a fresh launch started (resolved later from the list).
+// A fresh launch whose conversation is not yet resolved may be any.
 func (r launchRecord) matches(nativeID string) bool {
-	return r.NativeID == "" || r.NativeID == nativeID
+	switch {
+	case r.NativeID != "":
+		return r.NativeID == nativeID
+	case r.ResolvedID != "":
+		return r.ResolvedID == nativeID
+	}
+	return true
 }
 
 // sessionClockSkew tolerates Stakpak stamping a session slightly before AO

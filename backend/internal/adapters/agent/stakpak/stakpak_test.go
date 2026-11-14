@@ -166,6 +166,45 @@ func TestRestoreResumesByIDWithoutRepeatingInstructions(t *testing.T) {
 	}
 }
 
+// AO's update-when-idle check calls GetRestoreCommand without instructions to
+// ask whether a live session could resume. That probe must not make the next
+// real resume send instructions the conversation already holds.
+func TestRestoreProbeWithoutInstructionsKeepsTheirRecord(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, nativeA)
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	ctx := context.Background()
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, SystemPrompt: "rules"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{bin, "--session", nativeA}
+	restore := ports.RestoreConfig{
+		DataDir: data,
+		Session: ports.SessionRef{ID: "ao-1", WorkspacePath: ws, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}},
+	}
+	if argv, ok, err := p.GetRestoreCommand(ctx, restore); err != nil || !ok || !slices.Equal(argv, want) {
+		t.Fatalf("probe = %q, %t, %v; want %q", argv, ok, err, want)
+	}
+	restore.SystemPrompt = "rules"
+	argv, ok, err := p.GetRestoreCommand(ctx, restore)
+	if err != nil || !ok || !slices.Equal(argv, want) {
+		t.Fatalf("resume after a probe = %q, %t, %v; want %q without the stored instructions", argv, ok, err, want)
+	}
+}
+
+func TestLaunchRecordMatchesItsOwnConversation(t *testing.T) {
+	const other = "55555555-5555-4555-8555-555555555555"
+	if !(launchRecord{}).matches(nativeA) {
+		t.Fatal("an unresolved fresh launch may be any conversation")
+	}
+	if r := (launchRecord{ResolvedID: nativeA}); !r.matches(nativeA) || r.matches(other) {
+		t.Fatalf("resolved launch %+v must match only %s", r, nativeA)
+	}
+	if r := (launchRecord{NativeID: nativeA, ResolvedID: other}); !r.matches(nativeA) || r.matches(other) {
+		t.Fatalf("resumed launch %+v must match only the conversation it resumed", r)
+	}
+}
+
 func TestRestoreFallsBackWhenStakpakForgotTheConversation(t *testing.T) {
 	bin := fakeStakpak(t, `{"sessions":[]}`, "")
 	argv, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{
