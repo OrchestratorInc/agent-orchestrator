@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -53,26 +53,39 @@ export function useAgentAccounts(enabled = true, hostId?: HostId) {
 
 const freshReadEvery = 60_000;
 let lastFreshRead = Number.NEGATIVE_INFINITY;
+// Counts account changes, such as a removal or a new default, so a slow fresh
+// read started before one doesn't put the older list back.
+let accountWrites = 0;
 
 /** Reads every account's limits past the daemon's cache, at most once a
- * minute across mounts. A failed read is left to the next poll to surface. */
+ * minute across mounts. A failed read is returned as error and the next call
+ * tries again at once. */
 export function useFreshAgentAccountsRead() {
 	const queryClient = useQueryClient();
-	return useCallback(() => {
+	const [error, setError] = useState<Error | null>(null);
+	const read = useCallback(() => {
 		const now = Date.now();
 		if (now - lastFreshRead < freshReadEvery) return;
 		lastFreshRead = now;
+		const writes = accountWrites;
 		void fetchAgentAccounts(true).then(async (accounts) => {
+			setError(null);
 			// A poll still in flight carries the older cached reading; drop it so it can't land after this one.
 			await queryClient.cancelQueries({ queryKey: agentAccountsQueryKey, exact: true }, { revert: false });
-			queryClient.setQueryData(agentAccountsQueryKey, accounts);
-		}, () => undefined);
+			if (writes === accountWrites) queryClient.setQueryData(agentAccountsQueryKey, accounts);
+			else void queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey, exact: true });
+		}, (cause: unknown) => {
+			lastFreshRead = Number.NEGATIVE_INFINITY;
+			setError(cause instanceof Error ? cause : new Error(String(cause)));
+		});
 	}, [queryClient]);
+	return { read, error };
 }
 
 /** Lets tests start each case without a recent fresh read. */
 export function resetFreshAgentAccountsReadForTests() {
 	lastFreshRead = Number.NEGATIVE_INFINITY;
+	accountWrites = 0;
 }
 
 export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
@@ -136,7 +149,14 @@ export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: 
 
 export function useAgentAccountActions(hostId?: HostId) {
 	const queryClient = useQueryClient();
-	const setAccounts = (accounts: AgentAccount[]) => queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
+	const setAccounts = (accounts: AgentAccount[]) => {
+		accountWrites += 1;
+		return queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
+	};
+	const reloadAccounts = () => {
+		accountWrites += 1;
+		return queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
+	};
 	return {
 		refresh: async () => setAccounts(await fetchAgentAccounts(true, hostId)),
 		startLogin: async (provider: AgentAccountProvider) =>
@@ -146,7 +166,7 @@ export function useAgentAccountActions(hostId?: HostId) {
 			unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
 		verifyLogin: async (operationId: string) => {
 			const result = unwrap(await client(hostId).POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));
-			if (result.status === "complete") await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
+			if (result.status === "complete") await reloadAccounts();
 			return result;
 		},
 		cancelLogin: async (operationId: string) => {
@@ -161,7 +181,7 @@ export function useAgentAccountActions(hostId?: HostId) {
 			const result = unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/reset-credit", {
 				params: { path: { accountId } }, body: { idempotencyKey: crypto.randomUUID() },
 			}));
-			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });
+			await reloadAccounts();
 			return result.outcome;
 		},
 		/** Starts the durable move; the shared interface-transition status shows its progress. */

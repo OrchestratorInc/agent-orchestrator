@@ -72,7 +72,8 @@ export function UsageView() {
 	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
 	const limitWindows = useUsageLimitWindows(7, tab === "windows");
-	const readFreshLimits = useFreshAgentAccountsRead();
+	const { read: readFreshLimits, error: freshLimitsError } = useFreshAgentAccountsRead();
+	const limitsError = accounts.error ?? freshLimitsError;
 	const isLimits = tab === "limits";
 	const isWindows = tab === "windows";
 	const refetchReport = report.refetch;
@@ -194,13 +195,13 @@ export function UsageView() {
 							) : isLimits ? (
 								accounts.data ? (
 									<>
-										{staleError(accounts.error)}
+										{staleError(limitsError)}
 										<UsageLimits accounts={accounts.data} now={now} />
 									</>
 								) : accounts.isLoading ? (
 									loading
-								) : accounts.error ? (
-									failed(accounts.error)
+								) : limitsError ? (
+									failed(limitsError)
 								) : (
 									<UsageLimits accounts={[]} now={now} />
 								)

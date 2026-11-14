@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	report: vi.fn(),
 	reportRefetch: vi.fn(),
 	readFreshLimits: vi.fn(),
+	freshLimitsError: null as Error | null,
 	workspaces: [] as Array<{ id: string; name: string; kind?: string }>,
 }));
 
@@ -25,7 +26,7 @@ vi.mock("../../hooks/useUsageReport", () => ({
 }));
 vi.mock("../../hooks/useAgentAccounts", () => ({
 	useAgentAccounts: () => ({ data: [], isLoading: false, isFetching: false, error: null }),
-	useFreshAgentAccountsRead: () => mocks.readFreshLimits,
+	useFreshAgentAccountsRead: () => ({ read: mocks.readFreshLimits, error: mocks.freshLimitsError }),
 }));
 vi.mock("./UsageLimits", () => ({ UsageLimits: () => <p>Limits content</p> }));
 vi.mock("./UsageWindows", () => ({ UsageWindows: () => <p>Windows content</p> }));
@@ -40,6 +41,7 @@ describe("UsageView", () => {
 		mocks.report.mockReset();
 		mocks.reportRefetch.mockReset();
 		mocks.readFreshLimits.mockReset();
+		mocks.freshLimitsError = null;
 		mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "web", name: "Web app" }];
 		useUiStore.setState({ developerMode: false });
 	});
@@ -71,6 +73,15 @@ describe("UsageView", () => {
 		window.dispatchEvent(new Event("focus"));
 		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(3);
 		expect(mocks.reportRefetch).not.toHaveBeenCalled();
+	});
+
+	it("shows a failed fresh limits read on the Limits view", async () => {
+		const user = userEvent.setup();
+		mocks.freshLimitsError = new Error("Daemon unavailable");
+		renderView();
+		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Daemon unavailable");
+		expect(screen.getByText("Limits content")).toBeInTheDocument();
 	});
 
 	it("refetches spend when the window regains focus", () => {
