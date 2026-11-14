@@ -6362,6 +6362,12 @@ func TestACPExplicitScopeOptOutWinsOverProtocol(t *testing.T) {
 	if caps[ports.ChatCapabilityImages] || caps[ports.ChatCapabilityNestedAgents] || !caps[ports.ChatCapabilityHistory] {
 		t.Fatalf("scoped capabilities: %v", caps)
 	}
+	// Bindings without an explicit opt-out, such as Claude Code's, keep what the
+	// protocol declares.
+	shared := conversationCapabilities(ports.ChatCapabilities{ports.ChatCapabilityStreaming: true}, init, steeringFor(Config{}))
+	if !shared[ports.ChatCapabilityImages] || !shared[ports.ChatCapabilityNestedAgents] || !shared[ports.ChatCapabilityHistory] {
+		t.Fatalf("unscoped capabilities: %v", shared)
+	}
 }
 
 func TestACPResumedLazyContextValidation(t *testing.T) {
