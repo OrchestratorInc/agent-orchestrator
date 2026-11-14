@@ -159,6 +159,40 @@ export type ChatMessageFocusRequest = {
 	nonce: number;
 };
 
+/**
+ * A chat whose agent refused its login, waiting while the user logs in from the
+ * Agents page. A login that takes there closes the page; the chat then sends
+ * its refused message again when that is safe, or says the user is in.
+ */
+export type LoginReturn = {
+	sessionId: string;
+	agentId: string;
+	/** The remote host whose login is being fixed; omitted for this computer. */
+	hostId?: string;
+	/**
+	 * The account the session runs on, by id (the computer's own login is one
+	 * too). A login to another account does not fix the session, so it does not
+	 * count. Unknown for a remote host, whose accounts this app cannot read.
+	 */
+	accountId?: string;
+	/**
+	 * The account is still being read. A login that takes meanwhile is held until
+	 * it is known, since only that account's login fixes the session.
+	 */
+	accountPending?: boolean;
+	/** A login that took while the account was read, by the account it signed in. */
+	heldLogin?: { accountId?: string };
+	/** When the login took. */
+	loggedInAt?: number;
+	/** The chat has seen the login and sent nothing again: it says the user is in. */
+	settled?: boolean;
+	/**
+	 * The refused message the chat saw the login for. A refusal of another one
+	 * (the message sent again, refused once more) means the login did not fix it.
+	 */
+	turnId?: string;
+};
+
 /** What the archive modal shows. */
 export type ArchiveModalRequest = {
 	/** The project it starts scoped to; unset shows every project on the host. */
@@ -315,6 +349,20 @@ export type UiState = {
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
+	loginReturn: LoginReturn | null;
+	/** Remember a chat whose agent refused its login while that login is fixed. */
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled" | "turnId">) => void;
+	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
+	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
+	/**
+	 * The account the waiting chat's session runs on, once read; only its login
+	 * counts. None (no account of its own, or the read failed) lets any login count.
+	 */
+	setLoginReturnAccount: (sessionId: string, accountId: string | undefined) => void;
+	/** The waiting chat saw the login for this refused message and sent nothing again. */
+	settleLoginReturn: (sessionId: string, turnId?: string) => void;
+	/** Drop the waiting chat, or only when it is this session's. */
+	clearLoginReturn: (sessionId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -444,6 +492,17 @@ function initialChatSendKeyMode(): ChatSendKeyMode {
 function syncDeveloperModeToUpdater(enabled: boolean): void {
 	const request = aoBridge.updateSettings?.setMacDifferentialUpdates?.(enabled);
 	void request?.catch(() => undefined);
+}
+
+/** The waiting chat's login took: mark when, and close global settings back to the chat. */
+function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
+	const modal = state.settingsModal;
+	// A login only finishes while the Agents page shows it, so closing global
+	// settings here returns the user to the chat they came from.
+	return {
+		loginReturn: { ...waiting, loggedInAt: Date.now() },
+		...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
+	};
 }
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
@@ -663,6 +722,31 @@ export const useUiStore = create<UiState>((set, get) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
+	loginReturn: null,
+	startLoginReturn: (intent) => set({ loginReturn: intent }),
+	completeLoginReturn: (agentId, hostId, accountId) => set((state) => {
+		const waiting = state.loginReturn;
+		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
+		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
+		// Settings reports a login once: kept until the account is known, then matched.
+		if (waiting.accountPending) return { loginReturn: { ...waiting, heldLogin: accountId ? { accountId } : {} } };
+		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
+		return loginTaken(state, waiting);
+	}),
+	setLoginReturnAccount: (sessionId, accountId) => set((state) => {
+		if (state.loginReturn?.sessionId !== sessionId || state.loginReturn.loggedInAt !== undefined) return {};
+		const { heldLogin, ...waiting } = state.loginReturn;
+		const known: LoginReturn = { ...waiting, accountPending: false, ...(accountId ? { accountId } : {}) };
+		// A login held while the account was read counts now, by the same rule as any.
+		const counts = heldLogin && (known.accountId === undefined || known.accountId === heldLogin.accountId);
+		return counts ? loginTaken(state, known) : { loginReturn: known };
+	}),
+	settleLoginReturn: (sessionId, turnId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
+			? { loginReturn: { ...state.loginReturn, settled: true, ...(turnId ? { turnId } : {}) } }
+			: {}),
+	clearLoginReturn: (sessionId) => set((state) =>
+		!state.loginReturn || (sessionId !== undefined && state.loginReturn.sessionId !== sessionId) ? {} : { loginReturn: null }),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;
