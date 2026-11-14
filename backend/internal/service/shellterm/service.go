@@ -37,6 +37,16 @@ type ShellRuntime interface {
 	IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 }
 
+// TerminalInputForgetter drops one terminal's input bookkeeping in the
+// terminal mux. *terminal.Manager satisfies it. Shell terminals destroy their
+// own runtimes (Session Manager never sees them) and every tab gets a fresh
+// random handle id, so without this each closed tab would leave one input
+// timestamp behind forever (#5691). It waits on the terminal's write fence, so
+// it returns ctx's error if ctx ends first.
+type TerminalInputForgetter interface {
+	ForgetTerminalInput(ctx context.Context, terminalID string) error
+}
+
 // ProjectRootLocator resolves a project id to the directory a shell should
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
@@ -68,6 +78,12 @@ type Service struct {
 	previewCapabilities *browser.Authority
 	pendingPreviewMu    sync.Mutex
 	pendingPreview      map[domain.SessionID]string
+	hiddenAuthMu        sync.RWMutex
+	hiddenAuthTerminals map[string]struct{}
+
+	// inputForgetter is told to drop a shell's terminal input timestamp once
+	// its runtime is confirmed destroyed. Set once at boot; nil skips it.
+	inputForgetter TerminalInputForgetter
 
 	// now and newHandleID are injectable so tests can assert on exact ids and
 	// timestamps without a clock or entropy dependency.
@@ -96,27 +112,33 @@ type Service struct {
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
 
-	agents AgentTracker // set once at boot; nil without agent detection
+	trackers []TerminalTracker // set once at boot
 }
 
-// AgentTracker follows the agent, if any, running in a user shell.
-type AgentTracker interface {
+// TerminalTracker follows user shells as they open and close: the agent
+// running in one, or the title its program sets.
+type TerminalTracker interface {
 	TrackShellTerminal(handleID string)
 	UntrackShellTerminal(handleID string)
 }
 
-// SetAgentTracker registers every open shell for agent detection. Watches start
-// only while a client subscribes. Call once at boot, before serving requests.
-func (s *Service) SetAgentTracker(ctx context.Context, tracker AgentTracker) {
-	s.agents = tracker
+// SetTerminalTrackers registers every open user shell with each tracker, and
+// later ones as they open. Call once at boot, before serving requests.
+func (s *Service) SetTerminalTrackers(ctx context.Context, trackers ...TerminalTracker) {
+	s.trackers = trackers
+	if len(trackers) == 0 {
+		return
+	}
 	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
 	if err != nil {
-		s.log.Warn("shell terminal agent tracking: list terminals failed", "err", err)
+		s.log.Warn("shell terminal tracking: list terminals failed", "err", err)
 		return
 	}
 	for _, rec := range recs {
 		if !rec.Transient {
-			tracker.TrackShellTerminal(rec.HandleID)
+			for _, tracker := range trackers {
+				tracker.TrackShellTerminal(rec.HandleID)
+			}
 		}
 	}
 }
@@ -224,11 +246,33 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 		log:                 log,
 		previewCapabilities: browser.NewAuthority(),
 		pendingPreview:      make(map[domain.SessionID]string),
+		hiddenAuthTerminals: make(map[string]struct{}),
 		now:                 time.Now,
 		newHandleID:         newShellTerminalHandleID,
 		executable:          agentlaunch.Executable,
 		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
+	}
+}
+
+// SetTerminalInputForgetter wires the terminal mux so a shell's input
+// timestamp is dropped once its runtime is confirmed destroyed. Call once at
+// boot, before serving requests.
+func (s *Service) SetTerminalInputForgetter(f TerminalInputForgetter) {
+	s.inputForgetter = f
+}
+
+// forgetTerminalInput tells the terminal mux, if wired, to drop handleID's
+// input timestamp. Call it only after the runtime is confirmed destroyed: a
+// live runtime may still hold a draft the timestamp guards. A failure (ctx
+// ended while it waited on the write fence) only leaves one stale timestamp,
+// so it is logged and teardown goes on.
+func (s *Service) forgetTerminalInput(ctx context.Context, handleID string) {
+	if s.inputForgetter == nil {
+		return
+	}
+	if err := s.inputForgetter.ForgetTerminalInput(ctx, handleID); err != nil {
+		s.log.Warn("shell terminal: forget input timestamp failed", "handleId", handleID, "error", err)
 	}
 }
 
@@ -413,6 +457,12 @@ const authWorkspaceDirectoryName = "auth-workspace"
 // coding agents start in a dedicated workspace so they cannot mistake the
 // daemon's database/config/runtime directory for a project.
 func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTerminalInput) (ShellTerminal, error) {
+	if in.HideFromList {
+		// Serialize the persistent row and the in-memory hide marker against a
+		// concurrent terminal-list read. A list can see neither half alone.
+		s.hiddenAuthMu.Lock()
+		defer s.hiddenAuthMu.Unlock()
+	}
 	if err := validateOpenCommandTerminalInput(in); err != nil {
 		return ShellTerminal{}, err
 	}
@@ -447,6 +497,9 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 	})
 	if err != nil {
 		return ShellTerminal{}, err
+	}
+	if in.HideFromList {
+		s.hiddenAuthTerminals[terminal.HandleID] = struct{}{}
 	}
 	if len(in.InitialInputReadyStates) > 0 {
 		go s.sendInitialInputWhenReady(context.WithoutCancel(ctx), ports.RuntimeHandle{ID: terminal.HandleID}, in.InitialInput, in.InitialInputReadyStates, in.SendInitialInputOnReadyTimeout)
@@ -762,8 +815,10 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	}
 	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", cfg.workingDir)
 	// Login terminals run an agent CLI on purpose; only user shells are tracked.
-	if s.agents != nil && !cfg.transient {
-		s.agents.TrackShellTerminal(handle.ID)
+	if !cfg.transient {
+		for _, tracker := range s.trackers {
+			tracker.TrackShellTerminal(handle.ID)
+		}
 	}
 	return shellTerminalFromRecord(rec), nil
 }
@@ -867,6 +922,9 @@ func (s *Service) CloseShellTerminal(ctx context.Context, handleID string) error
 		return fmt.Errorf("close shell terminal %s: %w", handleID, err)
 	}
 	if !found {
+		s.hiddenAuthMu.Lock()
+		delete(s.hiddenAuthTerminals, handleID)
+		s.hiddenAuthMu.Unlock()
 		return apierr.NotFound("SHELL_TERMINAL_NOT_FOUND", "No such shell terminal: "+handleID)
 	}
 
@@ -884,6 +942,9 @@ func (s *Service) CloseShellTerminal(ctx context.Context, handleID string) error
 		return apierr.Conflict("SHELL_TERMINAL_STILL_RUNNING",
 			"The shell process is still running; try closing it again in a moment", nil)
 	}
+	s.hiddenAuthMu.Lock()
+	delete(s.hiddenAuthTerminals, handleID)
+	s.hiddenAuthMu.Unlock()
 	return nil
 }
 
@@ -897,12 +958,25 @@ func (s *Service) CloseShellTerminal(ctx context.Context, handleID string) error
 // internal/terminal applies on attach — so a transient runtime hiccup cannot
 // silently delete a working terminal.
 func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]ShellTerminal, error) {
+	s.hiddenAuthMu.RLock()
 	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+	hidden := make(map[string]struct{}, len(s.hiddenAuthTerminals))
+	for id := range s.hiddenAuthTerminals {
+		hidden[id] = struct{}{}
+	}
+	s.hiddenAuthMu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("list shell terminals: %w", err)
 	}
 	out := make([]ShellTerminal, 0, len(recs))
 	for _, rec := range recs {
+		_, hide := hidden[rec.HandleID]
+		if hide {
+			// Guided login owns this terminal until its monitor observes the
+			// child exit and closes the host. Pruning it here can make that
+			// observation disappear before the login operation completes.
+			continue
+		}
 		alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 		if err != nil {
 			s.log.Warn("shell terminal liveness probe failed; keeping row",
@@ -979,10 +1053,10 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 }
 
 // destroyConfirmed handles explicit teardown and confirmed child exit. It
-// destroys the runtime and deletes the row only once host death is confirmed,
-// so CloseShellTerminal, ReapShellTerminalsFromPreviousAppRuns,
-// and BeginSessionTeardown can't each independently forget a shell that
-// actually survived.
+// destroys the runtime and, only once host death is confirmed, forgets the
+// terminal's input timestamp and deletes the row, so CloseShellTerminal,
+// ReapShellTerminalsFromPreviousAppRuns, and BeginSessionTeardown can't each
+// independently forget a shell that actually survived.
 //
 //   - A clean Destroy is confirmed dead.
 //   - A Destroy error is followed by an IsAlive check; an IsAlive error is
@@ -999,9 +1073,12 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	if stillAlive {
 		return true, destroyErr
 	}
-	if s.agents != nil {
-		s.agents.UntrackShellTerminal(handleID)
+	for _, tracker := range s.trackers {
+		tracker.UntrackShellTerminal(handleID)
 	}
+	// Death is confirmed: nothing reads a destroyed shell's input timestamp,
+	// and its random handle id never comes back.
+	s.forgetTerminalInput(ctx, handleID)
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)
 	} else if deleted {

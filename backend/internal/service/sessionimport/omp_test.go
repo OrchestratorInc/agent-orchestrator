@@ -124,7 +124,7 @@ func TestOMPNativeIDFromPath(t *testing.T) {
 
 func TestOMPDiscoverImportAndRefresh(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := canonical(t.TempDir())
 	cwd := t.TempDir()
 	encodedCWD, err := json.Marshal(cwd)
 	if err != nil {

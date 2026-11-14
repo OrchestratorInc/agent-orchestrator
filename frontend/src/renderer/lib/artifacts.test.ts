@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -171,33 +171,82 @@ describe("filterArtifactGroups", () => {
 	const names = (filtered: ReturnType<typeof filterArtifactGroups>) => filtered.flatMap((group) => group.rows.map((row) => row.name));
 
 	it("matches the file name or the session title, case-insensitively", () => {
-		expect(names(filterArtifactGroups(groups, { query: "USER-FLOW", projectId: "" }))).toEqual(["artifacts-user-flow.html"]);
-		expect(names(filterArtifactGroups(groups, { query: "pricing", projectId: "" }))).toEqual(["notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "USER-FLOW" }))).toEqual(["artifacts-user-flow.html"]);
+		expect(names(filterArtifactGroups(groups, { query: "pricing" }))).toEqual(["notes.md"]);
 	});
 
 	it("keeps only the chosen project's group", () => {
-		expect(filterArtifactGroups(groups, { query: "", projectId: "px0" }).map((group) => group.id)).toEqual(["px0"]);
+		expect(filterArtifactGroups(groups, { query: "", projectIds: ["px0"] }).map((group) => group.id)).toEqual(["px0"]);
 	});
 
 	it("keeps only artifacts on this machine or only cloud ones", () => {
-		expect(filterArtifactGroups(groups, { query: "", projectId: "", location: "local" }).map((group) => group.id)).toEqual(["px0", "ao"]);
-		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
+		expect(filterArtifactGroups(groups, { query: "", location: "local" }).map((group) => group.id)).toEqual(["px0", "ao"]);
+		expect(names(filterArtifactGroups(groups, { query: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
 	});
 
 	it("keeps only the chosen file type, together with the other filters", () => {
-		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", type: "document" }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md", "report.pdf"]);
-		expect(names(filterArtifactGroups(groups, { query: "", projectId: "ao", type: "document" }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
-		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", type: "image" }))).toEqual(["chart.png"]);
-		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", location: "cloud", type: "video" }))).toEqual(["demo.mp4"]);
-		expect(filterArtifactGroups(groups, { query: "", projectId: "", location: "local", type: "video" })).toEqual([]);
+		expect(names(filterArtifactGroups(groups, { query: "", types: ["document"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md", "report.pdf"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectIds: ["ao"], types: ["document"] }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", types: ["image"] }))).toEqual(["chart.png"]);
+		expect(names(filterArtifactGroups(groups, { query: "", location: "cloud", types: ["video"] }))).toEqual(["demo.mp4"]);
+		expect(filterArtifactGroups(groups, { query: "", location: "local", types: ["video"] })).toEqual([]);
+	});
+
+	it("keeps only public artifacts, or only ones not shared", () => {
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}`, shareAccess: "anyone" as const } : row) }));
+		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["public"] }))).toEqual(["notes.md", "chart.png"]);
+		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html"]);
+		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], sharings: ["public"] }))).toEqual(["notes.md"]);
+	});
+
+	it("tells a private link apart from a public one, once the link list says who it opens for", () => {
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
+		const withAccess = withShareAccess(shared, new Map([["https://share.test/notes.md", "restricted" as const], ["https://share.test/chart.png", "anyone" as const]]));
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["shared"] }))).toEqual(["notes.md"]);
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public"] }))).toEqual(["chart.png"]);
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public", "shared"] }))).toEqual(["notes.md", "chart.png"]);
+		// Before the list is read, who a published file's link opens for is not
+		// known: it counts under neither Public nor Shared privately.
+		expect(withShareAccess(shared, new Map())).toEqual(shared);
+		expect(filterArtifactGroups(shared, { query: "", sharings: ["public", "shared"] })).toEqual([]);
+		expect(artifactSharing({ shareUrl: "https://share.test/x" })).toBeUndefined();
+		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "anyone" })).toBe("public");
+		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "restricted" })).toBe("shared");
 	});
 
 	it("keeps a project's rows of the chosen type when the query names the project", () => {
-		expect(names(filterArtifactGroups(groups, { query: "agent-orch", projectId: "", type: "document" }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "agent-orch", types: ["document"] }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
+	});
+
+	it("keeps cloud artifacts, whose publishing is unknown, out of both Public and Not shared", () => {
+		// The cloud file list carries no public link, so chart.png may well be published.
+		expect(names(filterArtifactGroups(groups, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", sharings: ["public", "private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
+	});
+
+	it("keeps rows matching any value chosen in a filter, and every filter together", () => {
+		expect(filterArtifactGroups(groups, { query: "", projectIds: ["px0", "ao"] }).map((group) => group.id)).toEqual(["px0", "ao"]);
+		expect(names(filterArtifactGroups(groups, { query: "", types: ["image", "video"] }))).toEqual(["chart.png", "demo.mp4"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectIds: ["cloud", "px0"], types: ["image", "video"] }))).toEqual(["chart.png", "demo.mp4"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectIds: ["px0"], types: ["image"] }))).toEqual([]);
 	});
 
 	it("returns nothing when no row matches", () => {
-		expect(filterArtifactGroups(groups, { query: "pricing", projectId: "px0" })).toEqual([]);
+		expect(filterArtifactGroups(groups, { query: "pricing", projectIds: ["px0"] })).toEqual([]);
+	});
+});
+
+describe("groupArtifactsByProject share access", () => {
+	it("keeps the access recorded with a published file's link", () => {
+		const [group] = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [
+				{ ...artifact("a.html", "2026-10-11T10:00:00Z", "html"), shareUrl: "https://viewer.test/artifact/a", shareAccess: "restricted" },
+				{ ...artifact("b.html", "2026-10-10T10:00:00Z", "html"), shareAccess: "anyone" },
+			])]),
+		]);
+		expect(group.rows.map((row) => [row.name, row.shareAccess])).toEqual([["a.html", "restricted"], ["b.html", undefined]]);
+		expect(artifactSharing(group.rows[0])).toBe("shared");
 	});
 });
 

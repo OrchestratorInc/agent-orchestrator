@@ -1957,6 +1957,88 @@ func TestCloseShellTerminalDestroysRuntimeAndDeletesRecord(t *testing.T) {
 	}
 }
 
+func TestGuidedAuthTerminalStaysOutOfNormalTerminalList(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	hidden, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Terminal fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("listed=%+v, hidden=%s", listed, hidden.HandleID)
+	}
+	delete(rt.aliveByHandle, hidden.HandleID) // Native login command exited.
+	listed, err = svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil || len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("list after native exit=%+v err=%v", listed, err)
+	}
+	if observed, err := svc.ObserveAuthTerminal(t.Context(), hidden.HandleID); err != nil || observed.Alive {
+		t.Fatalf("guided login lost exit observation: %+v, %v", observed, err)
+	}
+	if err := svc.CloseShellTerminal(t.Context(), hidden.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.hiddenAuthTerminals[hidden.HandleID]; ok {
+		t.Fatal("hidden handle retained after close")
+	}
+}
+
+func TestGuidedAuthTerminalObservationAndInputArePrivate(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "private terminal frame"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	term, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ObserveAuthTerminal(t.Context(), term.HandleID)
+	if err != nil || got.Output != rt.output || !got.Alive {
+		t.Fatalf("observation=%+v err=%v", got, err)
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "\x1b[B" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no menu key sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "3"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "3" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no digit sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "arbitrary"); err == nil {
+		t.Fatal("accepted arbitrary PTY input")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "0"); err == nil {
+		t.Fatal("accepted a digit outside the fixed action set")
+	}
+	if _, err := svc.ObserveAuthTerminal(t.Context(), "missing"); err == nil {
+		t.Fatal("observed unrelated PTY")
+	}
+}
+
 func TestCloseShellTerminalReturnsNotFoundForUnknownHandle(t *testing.T) {
 	svc := newTestService(newFakeShellRuntime(), &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 
@@ -1996,6 +2078,142 @@ func TestCloseShellTerminalKeepsRowWhenRuntimeStaysAlive(t *testing.T) {
 	}
 	if len(st.records) != 1 || st.records[0].HandleID != term.HandleID {
 		t.Fatalf("records = %+v, want the still-alive shell's row kept", st.records)
+	}
+}
+
+// fakeTerminalInputForgetter records which terminals the service told the
+// terminal mux to forget.
+type fakeTerminalInputForgetter struct {
+	forgotten []string
+	err       error
+}
+
+func (f *fakeTerminalInputForgetter) ForgetTerminalInput(_ context.Context, terminalID string) error {
+	f.forgotten = append(f.forgotten, terminalID)
+	return f.err
+}
+
+// TestCloseShellTerminalForgetsInputTimestampOnceDestroyed pins #5691 for
+// shell tabs: shellterm destroys its own runtimes, so Session Manager's
+// forgetter never runs for them, and every tab gets a fresh random id. Without
+// a forget here each closed tab leaves one terminal-mux input entry forever.
+func TestCloseShellTerminalForgetsInputTimestampOnceDestroyed(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A destroy that errors but leaves the runtime confirmed dead is still a
+// confirmed destroy, so the entry goes.
+func TestCloseShellTerminalForgetsInputTimestampWhenDestroyErrorsButRuntimeIsGone(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	rt.destroyErr = errors.New("tmux: no such session")
+	delete(rt.aliveByHandle, term.HandleID)
+
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+}
+
+// A forget that gives up (its context ended on the write fence) only leaves a
+// stale timestamp behind: the shell is confirmed dead, so its row still goes.
+func TestCloseShellTerminalDeletesRowWhenForgettingInputFails(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{err: context.DeadlineExceeded}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err != nil {
+		t.Fatalf("CloseShellTerminal: %v", err)
+	}
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
+	}
+	if len(st.records) != 0 {
+		t.Fatalf("records = %v, want the row deleted", st.records)
+	}
+}
+
+// A shell that survives Destroy keeps its row, and so keeps its input
+// timestamp: the runtime (and any draft typed into it) is still live.
+func TestCloseShellTerminalKeepsInputTimestampWhenRuntimeStaysAlive(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	rt.destroyErr = errors.New("tmux: kill-session refused")
+
+	if err := svc.CloseShellTerminal(context.Background(), term.HandleID); err == nil {
+		t.Fatal("CloseShellTerminal succeeded, want a conflict for a live runtime")
+	}
+	if len(forgetter.forgotten) != 0 {
+		t.Fatalf("forgotten = %v, want nothing while the runtime is alive", forgetter.forgotten)
+	}
+}
+
+// Session teardown drains scoped shells through the same confirmed-destroy
+// path, so their entries go too.
+func TestBeginSessionTeardownForgetsDestroyedShellInputTimestamps(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
+		"portfolio-3": {projectID: "portfolio"},
+	}}
+	svc := newTestServiceWithSessions(rt, st, projects, sessions)
+	forgetter := &fakeTerminalInputForgetter{}
+	svc.SetTerminalInputForgetter(forgetter)
+
+	term, err := svc.OpenShellTerminal(ctx, OpenShellTerminalInput{SessionID: "portfolio-3"})
+	if err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	release, err := svc.BeginSessionTeardown(ctx, "portfolio-3")
+	if err != nil {
+		t.Fatalf("BeginSessionTeardown: %v", err)
+	}
+	release()
+
+	if !slices.Equal(forgetter.forgotten, []string{term.HandleID}) {
+		t.Fatalf("forgotten = %v, want [%s]", forgetter.forgotten, term.HandleID)
 	}
 }
 

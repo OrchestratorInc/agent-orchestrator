@@ -72,6 +72,11 @@ vi.mock("../hooks/useCloudCp", () => ({
 		userId: "u-1",
 	}),
 }));
+// These tests are about the live preview a card draws before it is cached; the cached image path has its own tests.
+vi.mock("./ArtifactSnapshotThumbnail", async () => {
+	const { ArtifactThumbnail } = await import("./ArtifactThumbnail");
+	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
+});
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, feedbackRequestKey, initialEditing, onEditingChange, path, rawUrl, readOnly, save, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; initialEditing?: boolean; onEditingChange?: (editing: boolean) => void; path: string; rawUrl?: string; readOnly?: boolean; save?: typeof capturedSave.current; sendMessage?: (message: string) => Promise<void> }) => (capturedSave.current = save,
 		<div data-editing={initialEditing ? "true" : "false"} data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-read-only={readOnly ? "true" : "false"} data-saves={save ? "true" : "false"} data-testid="artifact-view">
@@ -95,6 +100,12 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useCloudArtifacts")>()),
 	useCloudArtifactAccess: cloudAccessMock,
+}));
+
+const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
+vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./ShareArtifactPopover")>()),
+	useReconciledShareLinks: () => shareAccessMock.current,
 }));
 
 const artifacts: SessionArtifact[] = [
@@ -369,6 +380,30 @@ describe("SessionArtifactsView", () => {
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
 		artifactFileChangesMock.mockReset();
+	});
+
+	it("marks each published card by who its link opens for, as on the Artifacts page", () => {
+		shareAccessMock.current = new Map([["https://viewer.test/artifact/notes", "restricted"], ["https://viewer.test/artifact/report", "anyone"]]);
+		const files = artifacts.map((file, index) => index === 0 ? { ...file, shareUrl: "https://viewer.test/artifact/notes" }
+			: index === 1 ? { ...file, shareUrl: "https://viewer.test/artifact/report" } : file);
+		renderView(<SessionArtifactsView session={session(files)} />);
+		const card = (name: RegExp) => screen.getByRole("button", { name }).closest("li")!;
+		const privateMark = within(card(/^notes\.md/)).getByRole("img", { name: "Shared privately" });
+		expect(privateMark).toHaveClass("text-status-in-review");
+		expect(privateMark.querySelector("svg")).toHaveClass("icon-link");
+		const publicMark = within(card(/^report\.html/)).getByRole("img", { name: "Published" });
+		expect(publicMark).toHaveClass("text-success");
+		expect(publicMark.querySelector("svg")).toHaveClass("icon-globe");
+		expect(within(card(/^plan\.md/)).queryByRole("img")).toBeNull();
+		shareAccessMock.current = new Map();
+	});
+
+	it("marks a card by the access recorded with its link before the link list is read", () => {
+		const files = artifacts.map((file, index) => index === 0 ? { ...file, shareUrl: "https://viewer.test/artifact/notes", shareAccess: "anyone" as const } : file);
+		renderView(<SessionArtifactsView session={session(files)} />);
+		const mark = within(screen.getByRole("button", { name: /^notes\.md/ }).closest("li")!).getByRole("img", { name: "Published" });
+		expect(mark).toHaveClass("text-success");
+		expect(mark.querySelector("svg")).toHaveClass("icon-globe");
 	});
 
 	it("follows an open local file's changes on disk only while it is open", async () => {
@@ -728,6 +763,56 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^notes\.md/ })).toBeInTheDocument();
+	});
+
+	it("says a requested file is not listed yet, and opens it once the session lists it", () => {
+		// A chat link to a file the agent just wrote opens Artifacts before the
+		// session's list has it.
+		const request = { key: 1, path: "notes/fresh.md" };
+		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
+		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+
+		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" }])} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+	});
+
+	it("opens a requested file listed under a new name, not the not-listed-yet note", () => {
+		// A link written before the agent renamed the file names its old path.
+		const request = { key: 1, path: "notes/draft.md" };
+		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
+		expect(screen.getByText(/notes\/draft\.md isn't in this session's artifacts yet/)).toBeInTheDocument();
+
+		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "final.md", path: "notes/final.md", size: 5, updatedAt: "2026-09-24T00:00:00Z", previousPaths: ["notes/draft.md"] }])} />);
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/final.md");
+	});
+
+	it("returns to the gallery, not the not-listed-yet note, when the open file leaves the list", async () => {
+		// Deleted from the viewer's menu, or by the agent: the file is gone, not on its way.
+		const view = renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		const remaining = artifacts.filter((artifact) => artifact.path !== "notes.md");
+		view.rerender(<SessionArtifactsView session={session(remaining)} />);
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+
+		// A requested file that was listed and then removed goes back to the gallery too.
+		const request = { key: 1, path: "notes/fresh.md" };
+		const fresh: SessionArtifact = { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" };
+		view.rerender(<SessionArtifactsView request={request} session={session([...remaining, fresh])} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+		view.rerender(<SessionArtifactsView request={request} session={session(remaining)} />);
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+	});
+
+	it("returns to the gallery from a requested file that is not listed", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "missing.md" }} session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^notes\.md/ })).toBeInTheDocument();
 	});
 

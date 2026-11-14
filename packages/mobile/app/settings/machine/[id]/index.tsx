@@ -120,7 +120,7 @@ export default function MachineDetailScreen() {
 			// act on whatever is on top. The notice waits for the list instead.
 			if (!navigation.isFocused()) return;
 			// Back to Settings, which says what happened: the list under this page
-			// on iOS (a page opened by a link has it too), the tab on Android.
+			// (a page opened by a link has it too).
 			backOr(router, "/settings");
 		} catch (error) {
 			haptics.error();

@@ -42,6 +42,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
@@ -49,6 +50,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecyclelog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/notify"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
@@ -57,6 +59,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -80,6 +83,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
+	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/terminaltitle"
@@ -139,6 +143,7 @@ var _ interface {
 	sessionmanager.TerminalInputGate
 	sessionmanager.TerminalInputObserver
 	sessionmanager.TerminalInputFencer
+	sessionmanager.TerminalInputForgetter
 } = (*terminal.Manager)(nil)
 
 // daemonShutdownContext separates worker cancellation from signal cleanup.
@@ -152,7 +157,7 @@ func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals co
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run(buildVersion string) error {
+func Run(buildVersion string) (retErr error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -172,7 +177,38 @@ func Run(buildVersion string) error {
 	}
 	ignoreBrokenPipeSignal()
 
-	log := newLogger()
+	// Persistent lifecycle record under <dataDir>/logs. stderr belongs to the
+	// desktop app and is lost with it, so without this a daemon exit or crash
+	// left no evidence of why.
+	// Beside the desktop's logs (normally ~/.ao/logs), next to running.json.
+	logRoot := cfg.DataDir
+	if cfg.RunFilePath != "" {
+		logRoot = filepath.Dir(cfg.RunFilePath)
+	}
+	lifecycle := lifecyclelog.Open(logRoot, cfg.Telemetry.AppVersion)
+	startedAt := time.Now()
+	startFields := lifecyclelog.ProcessContext()
+	startFields["owner"] = os.Getenv("AO_OWNER")
+	startFields["port"] = cfg.Port
+	if err := lifecycle.InstallCrashOutput(); err != nil {
+		startFields["crashOutput"] = "unavailable"
+	}
+	lifecycle.Record("daemon_start", startFields)
+	defer func() {
+		fields := map[string]any{"uptimeMs": time.Since(startedAt).Milliseconds()}
+		if recovered := recover(); recovered != nil {
+			fields["panic"] = true
+			lifecycle.RecordError("daemon_exit", fmt.Errorf("panic: %v", recovered), fields)
+			panic(recovered)
+		}
+		if retErr != nil {
+			lifecycle.RecordError("daemon_exit", retErr, fields)
+			return
+		}
+		lifecycle.Record("daemon_exit", fields)
+	}()
+
+	log, openLogFile := newDaemonLogger()
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -236,6 +272,7 @@ func Run(buildVersion string) error {
 	if err != nil {
 		return err
 	}
+	openLogFile(cfg.DataDir)
 	defer func() { _ = dataDirLock.Release() }()
 
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
@@ -253,7 +290,7 @@ func Run(buildVersion string) error {
 	// in any project can read the ao CLI catalog from a stable absolute path.
 	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
 	if err := skillassets.Install(cfg.DataDir); err != nil {
-		log.Warn("install using-ao skill", "err", err)
+		log.Warn("install AO skills", "err", err)
 	}
 	// Before any session starts: an AppImage remounts under a new path on every
 	// launch, so sessions get a link under the data dir that follows it.
@@ -660,7 +697,12 @@ func Run(buildVersion string) error {
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
+	// The mode-aware messenger, so a Chat original is told as a chat message.
+	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
+		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
+	}
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
 	}); ok {
@@ -890,17 +932,21 @@ func Run(buildVersion string) error {
 	// behind them. They reuse the same runtime adapter (and therefore the same
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
-	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
+	var shellTrackers []shelltermsvc.TerminalTracker
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
-		shellTermSvc.SetAgentTracker(ctx, shellAgents)
+		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
 	// Titles are followed whether or not any terminal UI is open.
 	if rt, ok := runtimeAdapter.(ports.TerminalTitleWatcher); ok {
-		go terminaltitle.NewManager(rt, store, cfg.AppRunID, log).Run(ctx)
+		titles := terminaltitle.NewManager(ctx, rt, store, log)
+		shellTrackers = append(shellTrackers, titles)
+		go titles.Run(ctx, cdcPipe.Broadcaster)
 	}
+	shellTermSvc.SetTerminalTrackers(ctx, shellTrackers...)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
 	defer agentAuthSvc.Close()
@@ -1008,15 +1054,24 @@ func Run(buildVersion string) error {
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)
 	if prReader != nil && prMerger != nil {
 		prActions = prsvc.NewActionService(prsvc.ActionDeps{
-			Store:        store,
-			Merger:       prMerger,
-			Reader:       prReader,
-			Resolver:     prReader,
-			Writer:       store,
-			MergeWriter:  store,
-			ThreadWriter: store,
-			Lifecycle:    lcStack.LCM,
-			Logger:       log,
+			Store:         store,
+			Merger:        prMerger,
+			Reader:        prReader,
+			Resolver:      prReader,
+			Writer:        store,
+			MergeWriter:   store,
+			ThreadWriter:  store,
+			StateChanger:  prReader,
+			StateWriter:   store,
+			Commenter:     prReader,
+			CommentWriter: store,
+			Refresher:     reviewRefresher,
+			Attachments:   prReader,
+			Stacker:       prReader,
+			HeadChecks:    prReader,
+			Details:       store,
+			Lifecycle:     lcStack.LCM,
+			Logger:        log,
 		})
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")
@@ -1174,6 +1229,7 @@ func Run(buildVersion string) error {
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
 		Projects:           projectSvc,
 		ArtifactVersions:   lcStack.ArtifactVersions,
@@ -1195,6 +1251,7 @@ func Run(buildVersion string) error {
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,
+		ClientTimeZone:     clienttz.NewRecorder(ctx, cfg.DataDir),
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
 		DeviceAccess:       bs,
@@ -1329,7 +1386,10 @@ func Run(buildVersion string) error {
 		log.Warn("supervisor: listener unavailable; frontend-death auto-stop disabled", "err", err)
 	} else {
 		log.Info("supervisor: listening", "addr", addr)
-		sup := supervisor.New(supervisorGrace, srv.RequestShutdownAfterDesktopExit, log)
+		sup := supervisor.New(supervisorGrace, func() {
+			lifecycle.Record("supervisor_link_lost", map[string]any{"graceMs": supervisorGrace.Milliseconds()})
+			srv.RequestShutdownAfterDesktopExit()
+		}, log)
 		go func() {
 			defer sentryobs.RecoverBackground()
 			if err := sup.Serve(ctx, ln); err != nil {
@@ -1415,6 +1475,7 @@ func Run(buildVersion string) error {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
+				reapForkSeeds(ctx, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
@@ -1455,6 +1516,12 @@ func Run(buildVersion string) error {
 						log.Warn("usage-limit auto-resume failed", "err", err)
 					}
 				})
+				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
+					if err := chatSvc.HandoffUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit account handoff failed", "err", err)
+					}
+				})
 				select {
 				case <-ctx.Done():
 					return
@@ -1467,6 +1534,17 @@ func Run(buildVersion string) error {
 			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 		}()
 	})
+
+	shutdownFields := map[string]any{"stopAgents": srv.StopAgentsRequested()}
+	if cause := context.Cause(ctx); cause != nil && ctx.Err() != nil {
+		shutdownFields["cause"] = "signal"
+		shutdownFields["signal"] = cause.Error()
+	} else if runErr != nil {
+		shutdownFields["cause"] = "server_error"
+	} else {
+		shutdownFields["cause"] = "requested"
+	}
+	lifecycle.RecordError("daemon_shutdown_begin", runErr, shutdownFields)
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
 	// srv.Run returning. Desktop exit, including loss of its supervisor, requests
@@ -1694,10 +1772,22 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	}
 }
 
-// newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later.
-func newLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// newDaemonLogger returns the daemon's slog logger. It writes to stderr so
+// supervisors can capture it separately from any structured stdout protocol
+// added later, and, from when openFile is called, to $AO_DATA_DIR/daemon.log so
+// the log outlives the process that read it. Run opens the file only after it
+// holds the data-dir lock (see deferredLogFile).
+func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
+	file := &deferredLogFile{}
+	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return log, func(dataDir string) {
+		rotating, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
+		if err != nil {
+			log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
+			return
+		}
+		file.attach(rotating)
+	}
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
@@ -1761,7 +1851,11 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{
 			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
-			DeviceEnv: func() map[string]string { return claudePlugin.RuntimeCredentialEnv(cfg.DataDir) },
+			// The daemon exports AO's saved keys to itself; the account check
+			// must not see one Claude Code's sessions never get.
+			DeviceEnv: func(ctx context.Context) map[string]string {
+				return claudePlugin.RuntimeCredentialEnv(cfg.DataDir, providerkeys.HoldBack(ctx, nil, cfg.DataDir, "claude-code"))
+			},
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}

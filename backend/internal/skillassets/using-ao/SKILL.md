@@ -1,7 +1,7 @@
 ---
 name: using-ao
-description: "Catalog of the Orchestrator `ao` CLI: spawning workers, managing sessions and projects, creating reusable Cues, sending messages, controlling the shared browser, previewing pages, and daemon control. Use when using the ao CLI, creating Cues, spawning workers, or managing Orchestrator-managed sessions in an Orchestrator workspace."
-trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning workers, managing sessions/projects, sending messages, controlling or previewing pages."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers importing existing agent sessions."
+trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog
@@ -30,6 +30,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 | `start` | Fetch (if needed) and open the Orchestrator desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
+| `triage` | Collect diagnostics and draft a problem report, even offline | Reporting a bug | [commands/triage.md](commands/triage.md) |
 | `doctor` | Run local health checks | Diagnosing Orchestrator setup problems | [commands/doctor.md](commands/doctor.md) |
 | `import` | Import projects from a legacy Orchestrator install | Migrating from the old flat-file store | [commands/import.md](commands/import.md) |
 | `version` | Print version information | Checking installed version | - |
@@ -37,6 +38,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 
 ## Conventions
 
+- For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
@@ -48,9 +50,11 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 - When the user asks to bring a repository's Conductor settings (scripts, run actions, environment variables, prompt) into Orchestrator, read [commands/conductor.md](commands/conductor.md) first.
 - `--agent` is an alias for `--harness` on `ao spawn`.
 - Every command accepts `-h / --help` for the full flag list.
-- For frontend launch, preview selection, or artifact handoff, read
+- For frontend launch or preview selection, read
   [commands/preview.md](commands/preview.md) before acting. Its static-file,
-  project-runtime, and automatic-handoff rules are load-bearing.
+  project-runtime, and artifact rules are load-bearing: artifacts render in the
+  Artifacts tab after `ao artifact add`, never through `ao preview` unless the
+  user explicitly asks to see one in the Browser panel.
 - For page inspection, interaction, or request diagnosis, read
   [commands/browser.md](commands/browser.md). It defines shared-tab behavior
   and the opt-in network policy.

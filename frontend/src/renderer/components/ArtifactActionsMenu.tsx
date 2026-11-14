@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, EyeOff, FolderOpen, Link, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -89,14 +89,18 @@ export function ArtifactActionsMenu({
 	className,
 	children,
 }: {
-	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl" | "updatedAt">;
+	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl" | "updatedAt" | "shareUrl">;
 	downloadUrl?: string;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
 	/** Draws the icon-only trigger as a vertical ellipsis. */
 	verticalDots?: boolean;
-	/** Adds a Share item to an icon-only menu; it opens the share panel under the trigger. */
+	/**
+	 * Adds Publish to an icon-only menu, or Copy public link and Unpublish once
+	 * the artifact is published; Publish and Unpublish open the publish panel
+	 * under the trigger.
+	 */
 	share?: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	variant?: "default" | "sidebar";
 	onEdit?: () => void;
@@ -117,6 +121,8 @@ export function ArtifactActionsMenu({
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [shareOpen, setShareOpen] = useState(false);
+	const [shareIntent, setShareIntent] = useState<"publish" | "unpublish">("publish");
+	const published = Boolean(artifact.shareUrl);
 	const sharing = useRef(false);
 	const shareAvailable = useShareAvailable();
 	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
@@ -208,6 +214,15 @@ export function ArtifactActionsMenu({
 		}
 	};
 	const copyable = owner && !fileMediaKind(artifact.path);
+	/** Copies the artifact's public link, showing why below the menu if the clipboard refuses. */
+	const copyPublicLink = async (url: string) => {
+		setCopyError("");
+		try {
+			await aoBridge.clipboard.writeText(url);
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		}
+	};
 
 	const error = open.error?.message || browser.error?.message || copyError;
 	const resetOpen = open.reset;
@@ -294,7 +309,7 @@ export function ArtifactActionsMenu({
 			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 				{iconOnly ? (
 					canShare && share ? (
-						<ShareArtifactMenuPopover file={share} name={artifact.name} onOpenChange={setShareOpen} open={shareOpen}>
+						<ShareArtifactMenuPopover file={share} intent={shareIntent} name={artifact.name} onOpenChange={setShareOpen} open={shareOpen}>
 							<span className="inline-flex">{menuTrigger}</span>
 						</ShareArtifactMenuPopover>
 					) : <span className="inline-flex">{menuTrigger}</span>
@@ -312,12 +327,24 @@ export function ArtifactActionsMenu({
 				>
 					{/* The caller's rows come first and end with their own separator, if any render. */}
 					{children}
-					{onTogglePin || onOpenInSession || canShare ? (
+					{onTogglePin || onOpenInSession || canShare || published ? (
 						<>
-							{canShare ? (
-								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareOpen(true); }}>
+							{canShare && !published ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareIntent("publish"); setShareOpen(true); }}>
 									<Share aria-hidden="true" />
 									{t("artifacts.share.publish")}
+								</DropdownMenuItem>
+							) : null}
+							{artifact.shareUrl ? (
+								<DropdownMenuItem onSelect={() => void copyPublicLink(artifact.shareUrl ?? "")}>
+									<Link aria-hidden="true" />
+									{t("artifacts.share.copyPublicLink")}
+								</DropdownMenuItem>
+							) : null}
+							{canShare && published ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareIntent("unpublish"); setShareOpen(true); }}>
+									<EyeOff aria-hidden="true" />
+									{t("artifacts.share.unpublish")}
 								</DropdownMenuItem>
 							) : null}
 							{onTogglePin ? (
@@ -389,8 +416,8 @@ export function ArtifactActionsMenu({
 							) : null}
 							{local || copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 							<DropdownMenuItem
-								className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
 								onSelect={confirmDelete}
+								variant="destructive"
 							>
 								<Trash2 aria-hidden="true" />
 								{t("artifacts.delete")}

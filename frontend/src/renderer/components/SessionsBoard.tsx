@@ -9,10 +9,10 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, Archive, RotateCw } from "@/components/app-icons";
+import { AlertTriangle, Archive, RotateCw, WifiOff } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
@@ -37,7 +37,9 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
-import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { noDragStyle, PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { formatTimeCompact } from "../lib/format-time";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
@@ -47,6 +49,8 @@ import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
+import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { cn } from "../lib/utils";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
@@ -74,6 +78,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const queryClient = useQueryClient();
 	const shell = useShellMaybe();
 	const connected = useConnectedHosts().includes(hostId ?? "");
+	const hostOffline = Boolean(hostId) && !connected;
+	const savedHost = hostId ? shell?.remoteHosts?.find((host) => host.hostId === hostId) : undefined;
+	const hostLabel = hostId ? labelForHost(hostId) ?? savedHost?.label ?? hostId : undefined;
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
@@ -132,13 +139,18 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
+	// A Cloud standalone agent has no board: its one session is the agent.
+	// Arriving on its project (archiving it from Pinned) leaves for Home.
+	useEffect(() => {
+		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
+	}, [navigate, workspace?.standaloneAgent]);
 	useSessionShortcut("open-orchestrator", () => {
-		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
+		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || isScratchpadWorkspace(workspace) || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
 	useSessionMenuAvailable(
 		"open-orchestrator",
-		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
 	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
@@ -245,6 +257,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			{memoryLight}
 			{guest ? null : <ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />}
 		</>
+	) : hostOffline ? (
+		<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
 	) : memoryLight ?? undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
@@ -264,13 +278,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						data-testid="board-topbar-label"
 					>
 						{boardLabel}
-						{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
+						{hostLabel ? <span className="truncate text-muted-foreground">· {hostLabel}</span> : null}
 					</PageTopbarTitle>
 				)}
 				actions={showWelcome ? undefined : actions}
 			/>
-			{hostId && !connected ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("remote.hostOffline")}</p> : null}
-			{hostId && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
+			{connected && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}
 			{hostId && projectId && connected && workspace && !orchestrator && !hasConfiguredOrchestratorAgent(workspace) ? (
 				<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
@@ -279,7 +292,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				</div>
 			) : null}
 
-			<div className="min-h-0 flex-1 overflow-hidden">
+			<div className={cn("min-h-0 flex-1 overflow-hidden", hostOffline && workspace && "opacity-75")} data-host-offline={hostOffline && workspace ? "" : undefined}>
 				{projectId && !guest && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
@@ -314,6 +327,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			) : null}
 				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
 					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
+				) : hostOffline && !workspace ? (
+					<div className="flex h-full min-h-0 items-center justify-center overflow-y-auto" data-testid="board-host-offline-empty">
+						<div className="flex w-full max-w-xl flex-col items-center px-4 pb-empty-offset-y text-center">
+							<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{hostLabel}</h2>
+							<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t(hostOfflineReasonKey(savedHost))}</p>
+						</div>
+					</div>
 				) : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
@@ -345,24 +365,62 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			</div>
 
 			{hasArchive ? (
-				<div className="flex h-9 shrink-0 items-center border-t border-border px-2">
+				// Even 4px gap to the divider and the panel's bottom and left edges; the
+				// 30px button puts its text on the same line as the sidebar's Sign in.
+				<div className="flex shrink-0 items-center border-t border-border p-1">
 					<Button
 						aria-haspopup="dialog"
-						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
 						// The shell's archive modal, the same one the sidebar and Cmd+K open.
 						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
-						size="xs"
+						// The xs button at 30px (no Button size is 30).
+						className="h-7.5 gap-1 px-2 text-xs"
+						size="none"
 						type="button"
 						variant="quiet"
 					>
 						<Archive className="size-icon-sm" aria-hidden="true" />
-						{t("shell.archive")}
+						{t("shell.archivedSessions")}
 						<span className="tabular-nums text-passive">{archivedCount}</span>
 					</Button>
 				</div>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
+		</div>
+	);
+}
+
+function hostOfflineReasonKey(host: RemoteHost | undefined) {
+	return host?.failureReason === "unauthorized" ? "remote.hostUnauthorized" as const
+		: host?.failureReason === "incompatible" ? "remote.hostIncompatible" as const
+		: "remote.hostOffline" as const;
+}
+
+function HostOfflineStatus({ host, label, updatedAt }: { host: RemoteHost | undefined; label: string; updatedAt?: number }) {
+	const { t } = useTranslation();
+	const shell = useShellMaybe();
+	const action = host?.status === "connecting"
+		? <Button type="button" size="sm" variant="secondary" disabled>{t("terminal.connecting")}</Button>
+		: host?.failureReason === "unauthorized"
+			? <Button type="button" size="sm" variant="secondary" onClick={() => useUiStore.getState().openGlobalSettings("remoteHosts", { preserveProject: true })}>{t("remote.editHost", { label })}</Button>
+			: <Button type="button" size="sm" variant="secondary" aria-label={t("remote.retryHost", { label })} disabled={!shell?.retryRemoteHosts} onClick={() => shell?.retryRemoteHosts?.()}>
+				<RotateCw className="size-3.5" aria-hidden="true" />
+				{t("remote.retry")}
+			</Button>;
+	return (
+		<div className="flex min-w-0 items-center gap-2 text-xs" data-testid="board-host-offline" role="status" style={noDragStyle}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex shrink-0 items-center gap-1.5 text-warning" tabIndex={0}>
+						<WifiOff className="size-icon-sm" aria-hidden="true" />
+						{t("remote.offline")}
+					</span>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-72">{t(hostOfflineReasonKey(host))}{updatedAt ? ` ${t("remote.offlineCopy")}` : ""}</TooltipContent>
+			</Tooltip>
+			{updatedAt ? <span className="truncate text-muted-foreground">· {t("shell.updatedAt", { time: formatTimeCompact(new Date(updatedAt).toISOString()) })}</span> : null}
+			{action}
 		</div>
 	);
 }

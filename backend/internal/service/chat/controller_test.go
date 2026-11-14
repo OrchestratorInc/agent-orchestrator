@@ -3198,6 +3198,17 @@ func newHarnessWithConversationAndStoreForHarness(
 	agentHarness domain.AgentHarness,
 ) *harness {
 	t.Helper()
+	return newHarnessInWorkspace(t, conv, wrapStore, agentHarness, t.TempDir())
+}
+
+func newHarnessInWorkspace(
+	t *testing.T,
+	conv ports.ChatConversation,
+	wrapStore func(*sqlite.Store) chatsvc.Store,
+	agentHarness domain.AgentHarness,
+	workspace string,
+) *harness {
+	t.Helper()
 	st := openStore(t)
 	if agentHarness != domain.HarnessCodex {
 		record, found, err := st.GetSession(context.Background(), testSession)
@@ -3271,7 +3282,7 @@ func newHarnessWithConversationAndStoreForHarness(
 		SessionID:     testSession,
 		ProjectID:     testProject,
 		Harness:       agentHarness,
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: workspace,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -6903,6 +6914,8 @@ func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
 	for _, kind := range []ports.ChatEventKind{ports.ChatEventTurnCompleted, ports.ChatEventCompacted} {
 		t.Run(string(kind), func(t *testing.T) {
 			conv := newCompactingConversation()
+			sent := make(chan struct{}, 1)
+			conv.onSend = func(string) { sent <- struct{}{} }
 			h := newHarnessWithConversation(t, conv)
 			ctx := context.Background()
 			if _, err := h.svc.Compact(ctx, testSession); err != nil {
@@ -6915,6 +6928,13 @@ func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
 			})
+			// Claiming a queued turn publishes Running before SendTurn crosses
+			// the provider boundary. Wait for that boundary, not just the row.
+			select {
+			case <-sent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued turn never reached the provider after compaction")
+			}
 			if got := conv.sentTexts(); len(got) != 1 || got[0] != "after compact" {
 				t.Fatalf("provider messages = %v", got)
 			}

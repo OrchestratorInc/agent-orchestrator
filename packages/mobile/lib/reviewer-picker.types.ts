@@ -24,7 +24,16 @@ export type ReviewerPickerProps = {
 	selectedModel: string;
 	onSelectModel: (id: string) => void;
 	busy: boolean;
+	/** False where the reviewer's model cannot be chosen at all (Orchestrator Cloud). */
+	modelChoice?: boolean;
 };
+
+/** The reviewer section's footer, naming the model only where one can be picked. */
+export function reviewerSectionFooter(reviewer: ReviewerPickerProps | undefined): string {
+	return reviewer?.modelChoice === false
+		? "Choose who runs the next Orchestrator review."
+		: "Choose who runs the next Orchestrator review and which model it uses.";
+}
 
 export function reviewerLabel(reviewers: readonly ReviewerPickerOption[], id: string): string {
 	return reviewers.find((item) => item.id === id)?.label || id;

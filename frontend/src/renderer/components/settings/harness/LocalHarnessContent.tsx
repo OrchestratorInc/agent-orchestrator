@@ -3,9 +3,10 @@ import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert }
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
-import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
+import { agentAccountProviderFor, agentAccountsQueryKeyFor, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
+import { CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import {
 	agentReadinessQueryKeyForHost,
 	cacheAgentReadiness,
@@ -33,6 +34,7 @@ import {
 	type HarnessInUse,
 	type InstallJob,
 } from "../../../hooks/useHarnessUpdates";
+import { useInvalidateProviderKeys, useProviderKeys } from "../../../hooks/useProviderKeys";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hooks/useShellTerminals";
 import { AgentCheckError } from "../../../lib/agent-check-error";
 import { agentLoginKey, isAgentLoginPending, pendingAgentLogins, subscribeAgentLogins } from "../../../lib/agent-login-lifecycle";
@@ -51,7 +53,9 @@ import { Pressable } from "../../ui/pressable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
+import { cloudNeedsAttention, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
+import { HarnessSavedKeys } from "./HarnessSavedKeys";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
@@ -169,12 +173,43 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// The API has no durable update history. Only record verified updates we
 	// actually observed here; a restored job/check timestamp is not an update date.
 	const [lastUpdatedAt, setLastUpdatedAt] = useState<Partial<Record<AgentId, string>>>({});
+	// AO Cloud runs some of these harnesses too: its side is a second line of
+	// the same harness's row, and one Update covers both.
+	const cloud = useCloudHarnessVersions();
+	const [cloudPending, setCloudPending] = useState<ReadonlySet<AgentId>>(new Set());
+	const cloudPendingRef = useRef(new Set<AgentId>());
+	const [cloudErrors, setCloudErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const cloudState = (agentId: AgentId): HarnessCloudState | undefined => !cloud.expected || !CLOUD_VERSIONED_HARNESSES.has(agentId) ? undefined : {
+		details: describeCloudHarness(cloud.data, agentId),
+		loading: cloud.isPending,
+		pending: cloudPending.has(agentId),
+		error: cloudErrors[agentId],
+	};
+	const runCloudChange = async (agentId: AgentId, change: (agentId: AgentId) => Promise<{ error?: string }>) => {
+		if (cloudPendingRef.current.has(agentId)) return;
+		cloudPendingRef.current.add(agentId);
+		setCloudPending(new Set(cloudPendingRef.current));
+		setCloudErrors((current) => ({ ...current, [agentId]: undefined }));
+		try {
+			const result = await change(agentId);
+			if (mountedRef.current && result.error) setCloudErrors((current) => ({ ...current, [agentId]: result.error }));
+		} finally {
+			cloudPendingRef.current.delete(agentId);
+			if (mountedRef.current) setCloudPending(new Set(cloudPendingRef.current));
+		}
+	};
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
 	const agentAuthPlans = useMemo(() => new Map(authPlans.data?.map((plan) => [plan.agentId, plan]) ?? []), [authPlans.data]);
 	const readinessAgents = useMemo(() => new Map(agents.data?.agents.map((agent) => [agent.id, agent]) ?? []), [agents.data]);
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
+	// Saved provider keys, fetched only while a panel that offers one is open,
+	// or while a harness that is not installed is open: its saved keys can
+	// only be removed from its page.
+	const providerKeys = useProviderKeys(hostId, Boolean(uiLoginAgent && agentAuthPlans.get(uiLoginAgent)?.methods?.some((method) => method.id.startsWith("env_") || method.id === "gemini_api_key"))
+		|| Boolean(selectedAgentId && agents.data && !agents.error && !installed.has(selectedAgentId)));
+	const invalidateProviderKeys = useInvalidateProviderKeys(hostId);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
 		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
 		const options = agentModelsQueryOptions(agentId, "", hostId, true);
@@ -512,6 +547,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		void startAgentOperation(agentId, method, "update");
 	};
 
+	// The one Update a harness's row offers: AO Cloud's side starts at once
+	// (it only saves the release new Cloud sessions run), this host's as before.
+	const requestCombinedUpdate = (agentId: AgentId) => {
+		if (cloudState(agentId)?.details?.actionable) void runCloudChange(agentId, cloud.startUpdate);
+		requestUpdate(agentId);
+	};
+
 	const verifyInstall = async (agentId: AgentId) => {
 		if (!beginAction(agentId)) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
@@ -545,7 +587,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login", terminal = false): Promise<boolean> => {
 		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
-		if (action === "login" && !terminal && agentAuthPlans.get(agentId)?.methods?.length) {
+		const authPlan = agentAuthPlans.get(agentId);
+		// Any plan with inline methods opens the Account login panel; a plan
+		// without methods falls back to its terminal or documentation flow.
+		if (action === "login" && !terminal && authPlan?.methods?.length) {
 			uiLoginAgentRef.current = agentId;
 			setUiLoginAgent(agentId);
 			return true;
@@ -632,11 +677,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// changed, and returns whether the CLI is logged in by any method, an API
 	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
-		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		const provider = agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
-		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
+		const accounts = await fetchAgentAccounts(true, hostId).catch(() => undefined);
 		if (!accounts) return undefined;
-		queryClient.setQueryData(agentAccountsQueryKey, accounts);
+		queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
 		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
@@ -768,23 +813,46 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return <HarnessAccountTab
 			details={details}
 			hostId={hostId}
+			cloud={cloudState(agentId)}
+			onCloudUpdate={() => void runCloudChange(agentId, cloud.startUpdate)}
+			onCloudReset={() => void runCloudChange(agentId, cloud.resetVersion)}
 			loginPanel={uiLoginAgent === agentId ? <HarnessLoginPanel
 				key={agentId}
 				agentId={agentId}
 				methods={agentAuthPlans.get(agentId)?.methods ?? []}
 				hostId={hostId}
+				providerKeys={providerKeys.data}
+				providerKeysError={providerKeys.isError ? providerKeys.error.message : undefined}
+				onRetryProviderKeys={() => void providerKeys.refetch()}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
 				onClose={closeUILogin}
 				onTerminal={async () => { closeUILogin(); await startAuth(agentId, "login", true); }}
-				onVerify={async () => {
+				onVerify={async (methodId) => {
+					if (methodId.startsWith("env_")) {
+						// A saved key proves local configuration, never provider acceptance.
+						await checkAuth(agentId, { fresh: true }).catch(() => undefined);
+						return "configured";
+					}
 					for (let attempt = 0; attempt < AUTH_VERIFY_ATTEMPTS; attempt++) {
 						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
 						const cliLoggedIn = await refreshCliLogin(agentId);
 						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
+						// A saved key, or a native sign-in whose harness can only report
+						// its own credentials as present (Gemini, Hermes, MiMo Code),
+						// counts as configured, never as verified.
+						if (agentAuthPlans.get(agentId)?.methods?.some((method) => method.id === methodId && (method.secret || method.id === "native")) && result?.agent?.authStatus === "configured") return "configured";
 					}
 					return false;
 				}}
+			/> : undefined}
+			savedKeys={!details.isInstalled && !details.installationPending ? <HarnessSavedKeys
+				key={agentId}
+				agentId={agentId}
+				hostId={hostId}
+				providerKeys={providerKeys.data}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
 			/> : undefined}
 			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
 			copied={copiedAgent === agentId}
@@ -794,7 +862,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onInstall={(methodId) => void startAgentOperation(agentId, methodId, "install")}
 			onSelectMethod={(methodId) => setSelectedMethods((current) => ({ ...current, [agentId]: methodId }))}
 			onCopyCommand={(command) => void copyText(agentId, command)}
-			onUpdate={() => requestUpdate(agentId)}
+			onUpdate={() => requestCombinedUpdate(agentId)}
 			onViewSessions={(waiting) => setInUseSessions({ agentId, inUse: waiting })}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
@@ -846,6 +914,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
+							const cloudSide = cloudState(agentId);
+							const localUpdate = details.isInstalled && details.updateAvailable;
+							const cloudUpdate = Boolean(cloudSide?.details?.actionable);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
 							return <Pressable key={agentId}
@@ -869,14 +940,17 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+								{/* AO Cloud's side shares it: one mark per harness, whichever places it covers. */}
+								{details.busy || cloudSide?.pending ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.busy ? details.progressLabel : t("settings.harness.updating")}</span></span>
 									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
+									: localUpdate || cloudUpdate ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
+										aria-label={localUpdate && cloudUpdate ? (hostId ? t("settings.harness.cloud.updatesAvailableBoth", { host: labelForHost(hostId) ?? hostId }) : t("settings.harness.cloud.updatesAvailableBothLocal"))
+											: localUpdate ? t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })
+											: t("settings.harness.cloud.versionAvailable", { version: versionLabel(cloudSide!.details!.latestVersion!) })}
 										role="img"
 									/>
-									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
+									: details.listTone === "error" || cloudNeedsAttention(cloudSide) ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
 							</Pressable>;
 						})}
