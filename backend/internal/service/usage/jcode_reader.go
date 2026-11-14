@@ -107,6 +107,11 @@ func decodeJCodeSession(ctx context.Context, decoder *json.Decoder) (jcodeNative
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return native, errJCodeSnapshotShape
 	}
+	// The snapshot records only the session's current model, which may follow
+	// the messages in the file; it is the best attribution its messages have.
+	for i := range native.Messages {
+		native.Messages[i].model, native.Messages[i].provider = native.Model, native.ProviderKey
+	}
 	return native, nil
 }
 

@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -122,4 +123,37 @@ func TestIngestorCountsJCodeLedgerOncePerMessage(t *testing.T) {
 	restarted := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
 	ingestSourceFully(ctx, t, restarted, source.ID)
 	assertTokenAggregate(t, store, session.ID, 26544+225+26830+108)
+}
+
+// TestJCodeModelSwitchKeepsPerModelUsage drives the collector, ingestor and
+// store over a jcode session whose journal switches from Claude to GPT: one
+// export covers both turns, and each turn's tokens stay on its own model.
+func TestJCodeModelSwitchKeepsPerModelUsage(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	const nativeID = "session_elephant_1793375224099_dccf0b8667353cd1"
+	store, session := seedUsageTestSession(t, t.TempDir(), "usage", domain.HarnessJCode, domain.ActivityActive, nativeID, now)
+	jcodeHome := t.TempDir()
+	claude := `{"id":"message_2","role":"assistant","content":[],"timestamp":"2026-10-30T15:41:21.634Z","token_usage":{"prompt_tokens":26544,"input_tokens":423,"output_tokens":225,"cache_read_input_tokens":18804,"cache_creation_input_tokens":7317}}`
+	gpt := `{"id":"message_4","role":"assistant","content":[],"timestamp":"2026-10-30T15:42:00.000Z","token_usage":{"prompt_tokens":1000,"input_tokens":1000,"output_tokens":50,"cache_read_input_tokens":600}}`
+	writeLine(t, filepath.Join(jcodeHome, "sessions", nativeID+".json"),
+		`{"id":"`+nativeID+`","model":"claude-opus-5-5","provider_key":"claude","messages":[]}`)
+	writeLine(t, filepath.Join(jcodeHome, "sessions", nativeID+".journal.jsonl"),
+		`{"meta":{"model":"claude-opus-5-5","provider_key":"claude"},"append_messages":[`+claude+`]}`+"\n"+
+			`{"meta":{"model":"gpt-5.5","provider_key":"openai"},"append_messages":[`+gpt+`]}`+"\n")
+	collector := usagesvc.NewCollector(store, usagesvc.SourceRoots{JCodeHome: jcodeHome, JCodeLedger: t.TempDir()}, nil)
+	mustNoError(t, collector.RecordHook(ctx, session.ID, usagesvc.HookSignal{
+		Harness: domain.HarnessJCode, Event: "stop", NativeSessionID: nativeID,
+	}))
+
+	ingestAllWatchable(ctx, t, store, NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }}))
+	aggregates, err := store.ListUsageModelAggregates(ctx, session.ID)
+	mustNoError(t, err)
+	got := map[string]int64{}
+	for _, aggregate := range aggregates {
+		got[aggregate.ModelID] += tokenValue(aggregate.Tokens.InputTokens) + tokenValue(aggregate.Tokens.OutputTokens)
+	}
+	if len(got) != 2 || got["claude-opus-5-5"] != 26544+225 || got["gpt-5.5"] != 1000+50 {
+		t.Fatalf("per-model tokens = %v, aggregates = %+v", got, aggregates)
+	}
 }

@@ -1,5 +1,5 @@
 -- Add JCode to the sessions harness constraint without changing usage bindings.
--- Allocated by npm run migration:create after 20261028124744441.
+-- Allocated after main's latest migration, 20261114072016988.
 -- +goose NO TRANSACTION
 -- +goose Up
 -- +goose StatementBegin

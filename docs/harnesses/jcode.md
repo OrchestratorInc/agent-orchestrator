@@ -107,9 +107,15 @@ lists and reasoning effort are rejected rather than silently ignored.
   command again. This happens however the daemon stopped (`server stop`,
   SIGKILL, or after `jcode debug cancel`), so AO cannot prevent it.
 - **Token usage per model switch.** jcode stores token usage on each assistant
-  message but not that message's model; AO attributes each message to the
-  session's model when it exports it (on every hook), so a `/model` switch
-  inside a single turn is attributed to the new model.
+  message but not that message's model. Each journal entry is one save and
+  records the session's model and provider beside the messages it appends, so
+  AO attributes every journaled message to its own entry's model, however many
+  turns one export covers (a missed hook, backfill, a recreated ledger). Two
+  cases remain approximate: a `/model` switch inside a single turn is
+  attributed to the model of the save after it, and messages read only from
+  the snapshot take the snapshot's model. jcode rewrites the snapshot on a
+  provider switch, so turns not yet exported when that happens move to the new
+  provider.
 - **Chat.** `jcode acp` was tested live with a signed-in provider. A project
   `.jcode/prompt-overlay.md` does reach the model (an ACP session answered
   with an instruction only the overlay contained), and `session/load` replays

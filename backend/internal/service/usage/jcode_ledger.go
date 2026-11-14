@@ -3,6 +3,7 @@ package usage
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,11 @@ type jcodeNativeMessage struct {
 	Role       string          `json:"role"`
 	Timestamp  string          `json:"timestamp"`
 	TokenUsage json.RawMessage `json:"token_usage"`
+	// model and provider are the session settings in force when jcode saved
+	// this message: its journal entry's meta, or the snapshot's for messages
+	// read from the snapshot. jcode stores no model on the message itself.
+	model    string
+	provider string
 }
 
 type jcodeNativeSession struct {
@@ -62,8 +68,9 @@ type jcodeLedgerLine struct {
 // again and a journal may repeat snapshot messages, so messages are matched by
 // their native id, which jcode keeps unique per session: a
 // message is exported once, whatever happens to the native file. A message is
-// attributed to the session's model at export time; exports run on every hook,
-// so that is the model of the turn that just ran.
+// attributed to the model and provider of the save that recorded it, so turns
+// on different models keep their own attribution even when one export covers
+// several of them (a missed hook, backfill, or a recreated ledger).
 func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessionID domain.SessionID) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -149,8 +156,8 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string, sessio
 			ID:         id,
 			SessionID:  nativeID,
 			Timestamp:  message.Timestamp,
-			Model:      native.Model,
-			Provider:   native.ProviderKey,
+			Model:      cmp.Or(message.model, native.Model),
+			Provider:   cmp.Or(message.provider, native.ProviderKey),
 			TokenUsage: message.TokenUsage,
 		})
 		if err != nil {
@@ -252,8 +259,9 @@ func readJCodeSession(ctx context.Context, path string) (jcodeNativeSession, err
 	return session, err
 }
 
-// applyJCodeJournal adds the journal's messages to the snapshot's and takes
-// the latest model and provider it records. An incomplete final line keeps its
+// applyJCodeJournal adds the journal's messages to the snapshot's, each tagged
+// with its own entry's model and provider, and leaves the session on the
+// latest model and provider it records. An incomplete final line keeps its
 // cursor position so the next hook can retry after jcode finishes writing it.
 func applyJCodeJournal(ctx context.Context, path string, session *jcodeNativeSession, offset int64) (int64, error) {
 	file, err := os.Open(path) //nolint:gosec // jcode's own journal for a validated id
@@ -276,16 +284,20 @@ func applyJCodeJournal(ctx context.Context, path string, session *jcodeNativeSes
 		var entry jcodeJournalEntry
 		valid := len(bytes.TrimSpace(line)) == 0 || json.Unmarshal(line, &entry) == nil
 		if valid {
-			for _, message := range entry.AppendMessages {
-				if message.Role == "assistant" && jsonValuePresent(message.TokenUsage) {
-					session.Messages = append(session.Messages, message)
-				}
-			}
+			// Each entry is one save: its meta is the session as saved with
+			// the messages it appends, so those messages take its model and
+			// provider rather than whatever a later entry switches to.
 			if entry.Meta.Model != nil && strings.TrimSpace(*entry.Meta.Model) != "" {
 				session.Model = *entry.Meta.Model
 			}
 			if entry.Meta.ProviderKey != nil && strings.TrimSpace(*entry.Meta.ProviderKey) != "" {
 				session.ProviderKey = *entry.Meta.ProviderKey
+			}
+			for _, message := range entry.AppendMessages {
+				if message.Role == "assistant" && jsonValuePresent(message.TokenUsage) {
+					message.model, message.provider = session.Model, session.ProviderKey
+					session.Messages = append(session.Messages, message)
+				}
 			}
 		}
 		if valid || readErr == nil {

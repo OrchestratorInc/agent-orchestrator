@@ -220,3 +220,73 @@ func TestFinalizeSessionExportsJCodeUsageSavedAfterLastHook(t *testing.T) {
 		t.Fatalf("ledger ids after finalize = %s", got)
 	}
 }
+
+func readLedgerAttribution(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	var lines []string
+	for _, raw := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var line struct {
+			ID, Model, Provider string
+		}
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatalf("ledger line %q: %v", raw, err)
+		}
+		lines = append(lines, line.ID+"="+line.Model+"/"+line.Provider)
+	}
+	return strings.Join(lines, ",")
+}
+
+// A /model switch is recorded in the journal entry of the next save, so the
+// messages each entry appends belong to that entry's model and provider. One
+// export covering turns on two models (a missed hook, backfill, or a
+// recreated ledger) must not move the earlier turns onto the later model.
+func TestCollectorAttributesJCodeUsageToEachJournalEntrysModel(t *testing.T) {
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessJCode, jcodeTestNativeID, false)
+	jcodeHome := t.TempDir()
+	ledgerRoot := filepath.Join(t.TempDir(), "jcode", "usage")
+	writeJCodeSession(t, jcodeHome, jcodeUser, jcodeAssistant1)
+	const (
+		claudeMeta    = `"meta":{"model":"claude-opus-5-5","provider_key":"claude","status":"active"}`
+		openAIMeta    = `"meta":{"model":"gpt-5.5","provider_key":"openai","status":"active"}`
+		unchangedMeta = `"meta":{"model":null,"provider_key":null,"status":"active"}`
+		assistant4    = `{"id":"message_8","role":"assistant","content":[],"timestamp":"2026-10-30T15:43:00.000Z","token_usage":{"prompt_tokens":900,"input_tokens":900,"output_tokens":4,"cache_read_input_tokens":0}}`
+		assistant5    = `{"id":"message_10","role":"assistant","content":[],"timestamp":"2026-10-30T15:44:00.000Z","token_usage":{"prompt_tokens":40,"input_tokens":40,"output_tokens":2,"cache_read_input_tokens":0}}`
+	)
+	journalPath := filepath.Join(jcodeHome, "sessions", jcodeTestNativeID+".journal.jsonl")
+	journal := `{` + claudeMeta + `,"append_messages":[` + jcodeToolResult + `,` + jcodeAssistant2 + `]}` + "\n" +
+		`{` + openAIMeta + `,"append_messages":[` + jcodeUser + `,` + jcodeAssistant3 + `]}` + "\n" +
+		`{` + unchangedMeta + `,"append_messages":[` + assistant4 + `]}` + "\n"
+	writeUsageFixture(t, journalPath, journal)
+	collector := NewCollector(store, SourceRoots{JCodeHome: jcodeHome, JCodeLedger: ledgerRoot}, nil)
+	ctx := context.Background()
+	hook := HookSignal{Harness: domain.HarnessJCode, Event: "stop", NativeSessionID: jcodeTestNativeID}
+
+	mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
+	ledger := filepath.Join(ledgerRoot, jcodeTestNativeID+".jsonl")
+	want := "message_2=claude-opus-5-5/claude,message_4=claude-opus-5-5/claude," +
+		"message_6=gpt-5.5/openai,message_8=gpt-5.5/openai"
+	if got := readLedgerAttribution(t, ledger); got != want {
+		t.Fatalf("ledger attribution = %s\nwant %s", got, want)
+	}
+
+	// Switching back applies only to the turn saved after the switch.
+	writeUsageFixture(t, journalPath, journal+`{`+claudeMeta+`,"append_messages":[`+assistant5+`]}`+"\n")
+	mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
+	want += ",message_10=claude-opus-5-5/claude"
+	if got := readLedgerAttribution(t, ledger); got != want {
+		t.Fatalf("ledger attribution after switching back = %s\nwant %s", got, want)
+	}
+
+	// A recreated ledger re-exports every message with its own attribution,
+	// not the session's latest model.
+	mustNoError(t, os.Remove(ledger))
+	mustNoError(t, collector.RecordHook(ctx, session.ID, hook))
+	if got := readLedgerAttribution(t, ledger); got != want {
+		t.Fatalf("recreated ledger attribution = %s\nwant %s", got, want)
+	}
+}

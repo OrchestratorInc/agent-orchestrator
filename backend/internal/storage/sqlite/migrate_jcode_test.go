@@ -7,12 +7,15 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-const beforeJCodeVersion = 20261028124744441
+const (
+	beforeJCodeVersion = 20261114072016988
+	jcodeVersion       = 20261114172702974
+)
 
-// TestMigration20261030135805920AllowsJCodeAndReverses mirrors the Hermes
+// TestMigrationAllowJCodeHarnessAllowsJCodeAndReverses mirrors the Hermes
 // coverage: JCode becomes insertable, unknown harnesses stay rejected, and the
 // down migration restores the exact prior constraint once no JCode row remains.
-func TestMigration20261030135805920AllowsJCodeAndReverses(t *testing.T) {
+func TestMigrationAllowJCodeHarnessAllowsJCodeAndReverses(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, beforeJCodeVersion)
 	var before string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
@@ -23,7 +26,7 @@ func TestMigration20261030135805920AllowsJCodeAndReverses(t *testing.T) {
 	if _, err := db.Exec(insert, "early", 1, "jcode"); err == nil || !strings.Contains(err.Error(), "CHECK") {
 		t.Fatalf("jcode insert before migration = %v; want CHECK failure", err)
 	}
-	upTo(t, db, 20261030135805920)
+	upTo(t, db, jcodeVersion)
 	mustExec(t, db, insert, "jc-session", 2, "jcode")
 	mustExec(t, db, insert, "hermes-session", 3, "hermes")
 	if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
@@ -48,7 +51,7 @@ func TestMigration20261030135805920AllowsJCodeAndReverses(t *testing.T) {
 }
 
 func TestJCodeSchemaRepairAddsMissingHarness(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261030135805920)
+	db := openMigratedDatabaseCopy(t, jcodeVersion)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''jcode'', ', '') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -61,26 +64,27 @@ func TestJCodeSchemaRepairAddsMissingHarness(t *testing.T) {
 	}
 }
 
-// TestJCodeMigratesOverOpenUsageKinds covers an install that already ran
-// main's open usage-kind migration before this branch's earlier-numbered
-// JCode harness migration existed: goose applies the gap out of order, and
-// jcode usage bindings and ledger sources need no further constraint change.
-func TestJCodeMigratesOverOpenUsageKinds(t *testing.T) {
-	const openUsageKindsVersion = 20261103030401452
-	db := openMigratedDatabaseCopy(t, openUsageKindsVersion)
-	mustExec(t, db, `PRAGMA writable_schema = ON`)
-	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''jcode'', ', '') WHERE type = 'table' AND name = 'sessions'`)
-	mustExec(t, db, `PRAGMA writable_schema = RESET`)
-	mustExec(t, db, `DELETE FROM goose_db_version WHERE version_id = 20261030135805920`)
+// TestJCodeMigrationAfterEarlierBranchNumber covers a development database
+// that applied this branch's migration under its earlier number,
+// 20261030135805920: the renumbered migration finds JCode already allowed and
+// changes nothing, and main's open usage-kind CHECKs accept JCode usage rows.
+func TestJCodeMigrationAfterEarlierBranchNumber(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, jcodeVersion)
+	var before string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `DELETE FROM goose_db_version WHERE version_id = ?`, jcodeVersion)
+	mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (20261030135805920, 1)`)
 	if err := migrate(db); err != nil {
-		t.Fatalf("migrate over open usage kinds: %v", err)
+		t.Fatalf("migrate a database that applied the earlier number: %v", err)
+	}
+	var after string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
+		t.Fatalf("sessions schema changed on reapply: %v\n%s\nwant\n%s", err, after, before)
 	}
 	mustExec(t, db, `INSERT INTO projects (id, path, registered_at) VALUES ('ju-project', '/tmp/ju-project', CURRENT_TIMESTAMP)`)
 	mustExec(t, db, `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES ('ju-1', 'ju-project', 1, 'jcode', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
 	mustExec(t, db, `INSERT INTO usage_bindings (session_id, harness, native_root_id, state, updated_at) VALUES ('ju-1', 'jcode', 'session_x_1_0000000000000000', 'active', CURRENT_TIMESTAMP)`)
 	mustExec(t, db, `INSERT INTO usage_sources (binding_id, kind, artifact_path, state, updated_at) VALUES ((SELECT id FROM usage_bindings WHERE harness = 'jcode'), 'jcode_ledger', '/tmp/ledger.jsonl', 'active', CURRENT_TIMESTAMP)`)
-	var applied int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 20261030135805920 AND is_applied = 1`).Scan(&applied); err != nil || applied != 1 {
-		t.Fatalf("jcode harness migration applied rows = %d, %v", applied, err)
-	}
 }
