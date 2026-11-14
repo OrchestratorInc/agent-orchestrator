@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
@@ -1426,6 +1428,9 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
+	if rest, ok := strings.CutPrefix(branch, "ao/dev/"); ok {
+		branch = "ao/" + rest
+	}
 	base := "ao/" + string(sr.session.ID)
 	if branch == base {
 		return true
@@ -1433,6 +1438,17 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
+	}
+	if len(suffix) >= 36 {
+		if _, err := uuid.Parse(suffix[:36]); err == nil {
+			if len(suffix) == 36 {
+				return true
+			}
+			suffix, ok = strings.CutPrefix(suffix[36:], "-")
+			if !ok {
+				return false
+			}
+		}
 	}
 	// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
 	// Do not treat arbitrary topics, another session ID, or padded numbers as

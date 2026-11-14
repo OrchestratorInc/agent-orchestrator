@@ -6156,6 +6156,10 @@ func DefaultSpawnBranch(id domain.SessionID, kind domain.SessionKind, prefix str
 	if projectKind == domain.ProjectKindScratch {
 		return ""
 	}
+	// Local session IDs can repeat across installations.
+	if kind != domain.KindOrchestrator {
+		id = domain.SessionID(string(id) + "-" + uuid.NewString())
+	}
 	branchNamespace := generatedBranchNamespace(dataDir)
 	if projectKind == domain.ProjectKindWorkspace {
 		return aoBranch(branchNamespace, string(id))
