@@ -13,6 +13,12 @@ import (
 
 // CreateAutomation persists a validated automation definition.
 func (s *Store) CreateAutomation(ctx context.Context, rec domain.Automation) (domain.Automation, error) {
+	if rec.TemplateID == "" {
+		rec.TemplateID = domain.AutomationTemplateCustom
+	}
+	if rec.UseCase == "" {
+		rec.UseCase = domain.AutomationUseCaseUnknown
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.InsertAutomation(ctx, automationToInsert(rec)); err != nil {
@@ -93,8 +99,12 @@ func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bo
 	rows, err := s.qw.UpdateAutomation(ctx, gen.UpdateAutomationParams{
 		DisplayName: rec.DisplayName,
 		Prompt:      rec.Prompt,
+		UseCase:     rec.UseCase,
 		Kind:        rec.Kind,
 		Harness:     rec.Harness,
+		Model:       rec.Model,
+		Mode:        rec.Mode,
+		Effort:      rec.Effort,
 		RruleText:   rec.RRuleText,
 		Timezone:    rec.Timezone,
 		Enabled:     rec.Enabled,
@@ -212,12 +222,17 @@ func (s *Store) ClaimNextAutomationRun(ctx context.Context, now, leaseExpiresAt 
 
 func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 	return gen.InsertAutomationParams{
+		TemplateID:  rec.TemplateID,
 		ID:          rec.ID,
 		ProjectID:   rec.ProjectID,
 		DisplayName: rec.DisplayName,
 		Prompt:      rec.Prompt,
+		UseCase:     rec.UseCase,
 		Kind:        rec.Kind,
 		Harness:     rec.Harness,
+		Model:       rec.Model,
+		Mode:        rec.Mode,
+		Effort:      rec.Effort,
 		RruleText:   rec.RRuleText,
 		Timezone:    rec.Timezone,
 		Enabled:     rec.Enabled,
@@ -234,8 +249,13 @@ func automationFromGen(row gen.Automation) domain.Automation {
 		ProjectID:   row.ProjectID,
 		DisplayName: row.DisplayName,
 		Prompt:      row.Prompt,
+		TemplateID:  row.TemplateID,
+		UseCase:     row.UseCase,
 		Kind:        row.Kind,
 		Harness:     row.Harness,
+		Model:       row.Model,
+		Mode:        row.Mode,
+		Effort:      row.Effort,
 		RRuleText:   row.RruleText,
 		Timezone:    row.Timezone,
 		Enabled:     row.Enabled,

@@ -26,6 +26,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessOpenCode,
 		domain.HarnessOpenCodeV2,
 		domain.HarnessDroid,
+		domain.HarnessGrok,
 		domain.HarnessKimi,
 		domain.HarnessKimchi,
 		domain.HarnessPi,
@@ -35,6 +36,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
+		domain.HarnessHermes,
 	} {
 		if !r.SupportsChat(harness) {
 			t.Errorf("%s has no chat driver", harness)
@@ -49,7 +51,6 @@ func TestShippedChatDrivers(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
 		domain.HarnessCodeBuddy, // Candidate ACP binding remains unqualified and unregistered.
-		domain.HarnessHermes,    // TUI-only until a chat driver is qualified
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -27,7 +28,11 @@ func supportedVersion(output string) bool {
 func checkVersion(ctx context.Context, binary string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	output, err := aoprocess.CommandContext(ctx, binary, "--version").Output()
+	cmd := aoprocess.CommandContext(ctx, binary, "--version")
+	// The npm launcher is `#!/usr/bin/env node`; a daemon PATH without the
+	// user's Node manager would fail the probe though Gemini works in a shell.
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, binary)
+	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("gemini: check CLI version: %w", err)
 	}

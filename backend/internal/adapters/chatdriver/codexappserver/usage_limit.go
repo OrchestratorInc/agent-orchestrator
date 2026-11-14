@@ -22,8 +22,9 @@ type usageLimitTracker struct {
 	ambiguous bool
 	// Codex can report a terminal error separately, then complete without an
 	// attached error. Preserve that quota refusal on the durable failed turn.
-	failureTurnID string
-	failure       error
+	failureTurnID   string
+	failure         error
+	failureResetsAt time.Time
 }
 
 func (u *usageLimitTracker) observe(n notification, rootThread string, now time.Time) {
@@ -96,23 +97,23 @@ func (u *usageLimitTracker) decorate(ev ports.ChatEvent, now time.Time) ports.Ch
 		return ev
 	}
 	if ev.ProviderTurnID == u.turnID && errors.Is(ev.Err, errCodexUsageLimitExceeded) && !u.ambiguous && u.resetAt.After(now) {
-		ev.Err = ports.NewChatProviderFailure("Usage limit exceeded; resets "+u.resetAt.UTC().Format(time.RFC3339), ev.Err.Error(), ev.Err)
+		ev.UsageLimitResetsAt = u.resetAt
 	}
 	if ev.Kind == ports.ChatEventError {
-		u.failureTurnID, u.failure = "", nil
+		u.failureTurnID, u.failure, u.failureResetsAt = "", nil, time.Time{}
 		if errors.Is(ev.Err, errCodexUsageLimitExceeded) {
-			u.failureTurnID, u.failure = ev.ProviderTurnID, ev.Err
+			u.failureTurnID, u.failure, u.failureResetsAt = ev.ProviderTurnID, ev.Err, ev.UsageLimitResetsAt
 		}
 	}
 	if ev.Kind == ports.ChatEventTurnCompleted {
 		if ev.Err == nil && ev.TurnState == domain.TurnStateFailed && ev.ProviderTurnID == u.failureTurnID {
-			ev.Err = u.failure
+			ev.Err, ev.UsageLimitResetsAt = u.failure, u.failureResetsAt
 		}
 		switch ev.ProviderTurnID {
 		case u.turnID:
 			*u = usageLimitTracker{threadID: u.threadID}
 		case u.failureTurnID:
-			u.failureTurnID, u.failure = "", nil
+			u.failureTurnID, u.failure, u.failureResetsAt = "", nil, time.Time{}
 		}
 	}
 	return ev

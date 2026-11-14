@@ -99,11 +99,15 @@ export type BrowserDaemonOwnershipDecision =
 	| { action: "replace"; keepAlive: boolean };
 
 /**
- * A daemon can authenticate to only the Electron launch that handed it the
- * memory-only browser runtime token. Reuse within that launch is safe. Across
- * launches we replace it gracefully, preserving the original persistence mode:
- * app-owned daemons remain app-owned; persistent/headless daemons remain alive
- * after the window closes.
+ * A daemon belongs to the Electron launch that reported its app run id: reuse
+ * within that launch is safe, and across launches we replace it gracefully,
+ * preserving the original persistence mode (app-owned daemons remain app-owned;
+ * persistent/headless daemons remain alive after the window closes).
+ *
+ * This is a daemon ownership/lifecycle decision, not an authentication one. The
+ * browser runtime token is derived from the data dir and survives an app restart
+ * (see browser-runtime-token.ts), so a kept-alive daemon still accepts this app
+ * after a relaunch; replacing it no longer exists to repair a token mismatch.
  */
 export function browserDaemonOwnershipDecision(
 	currentAppRunId: string,
@@ -111,4 +115,76 @@ export function browserDaemonOwnershipDecision(
 ): BrowserDaemonOwnershipDecision {
 	if (existing.appRunId === currentAppRunId) return { action: "attach" };
 	return { action: "replace", keepAlive: existing.owner !== "app" };
+}
+
+export type BrowserRuntimeRecoveryDecision =
+	| { action: "wait" }
+	| { action: "replace"; reason: string };
+
+/**
+ * The daemon closed the link without accepting the hello. A current broker
+ * explains itself with helloRejected; a daemon predating that frame just hangs
+ * up, and both mean the same thing to us.
+ */
+export const HANDSHAKE_CLOSED_BEFORE_ACCEPT = "closed-before-accept";
+
+/**
+ * Refusals a retry cannot repair. A daemon that rejects this app's token, or
+ * drops the link before accepting it, would refuse identically forever, so the
+ * daemon itself has to be retired. Anything else (a version skew, a daemon that
+ * never answered) may resolve without killing a healthy daemon.
+ */
+const UNRECOVERABLE_HANDSHAKE_REASONS: ReadonlySet<string> = new Set([
+	"invalid-token",
+	HANDSHAKE_CLOSED_BEFORE_ACCEPT,
+]);
+
+/**
+ * A daemon the app merely adopted holds the runtime token from whoever started
+ * it, so an unrecoverable refusal cannot be retried away: it means this daemon
+ * can never drive our browser panel for the rest of the launch. Retiring it and
+ * spawning our own is the only recovery, and it is limited to that case.
+ *
+ * Waits when the app spawned the daemon itself (our token was handed to it, so a
+ * refusal means something is wrong that a restart would not fix), when the
+ * refusal is recoverable, and after one attempt per launch so a daemon that keeps
+ * refusing cannot be replaced in a loop.
+ */
+export function browserRuntimeRecoveryDecision(input: {
+	rejectedReason: string | null;
+	spawnedHere: boolean;
+	attempted: boolean;
+}): BrowserRuntimeRecoveryDecision {
+	if (input.rejectedReason === null) return { action: "wait" };
+	if (!UNRECOVERABLE_HANDSHAKE_REASONS.has(input.rejectedReason)) return { action: "wait" };
+	if (input.spawnedHere) return { action: "wait" };
+	if (input.attempted) return { action: "wait" };
+	return { action: "replace", reason: input.rejectedReason };
+}
+
+/**
+ * Whether the startup path must retire an existing daemon instead of attaching.
+ *
+ * `forceRequested` is sticky by design: the renderer's first daemon.getStatus()
+ * can attach while boot is still awaiting the login-shell environment, so a
+ * forced replacement requested during that window must be honored by the startup
+ * already in flight rather than dropped by the memoized promise.
+ */
+export function shouldReplaceDaemonForStartup(input: {
+	ownership: BrowserDaemonOwnershipDecision;
+	forceRequested: boolean;
+}): boolean {
+	return input.forceRequested || input.ownership.action === "replace";
+}
+
+/**
+ * The persistence mode to hand the replacement. A forced replacement adopts no
+ * lifetime guidance from the daemon it retires (it may not even have one), so it
+ * keeps the daemon alive exactly like a forced keep-alive launch.
+ */
+export function keepAliveForReplacement(input: {
+	ownership: BrowserDaemonOwnershipDecision;
+	forceRequested: boolean;
+}): boolean {
+	return input.forceRequested ? true : input.ownership.action === "replace" && input.ownership.keepAlive;
 }

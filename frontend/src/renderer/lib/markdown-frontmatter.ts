@@ -12,6 +12,15 @@ export type MarkdownFrontmatter = {
 
 const OPENING = /^(?:\uFEFF)?---[ \t]*\r?\n/;
 
+/** Hide opening YAML metadata in rendered documents, leaving incomplete blocks intact. */
+export function stripMarkdownFrontmatter(content: string): string {
+	const opening = OPENING.exec(content);
+	if (!opening) return content;
+	const rest = content.slice(opening[0].length);
+	const closing = /(?:^|\r?\n)---[ \t]*(?:\r?\n|$)/.exec(rest);
+	return closing ? rest.slice(closing.index + closing[0].length) : content;
+}
+
 export function isMarkdownPreviewPath(path: string): boolean {
 	const bare = path.split(/[?#]/, 1)[0] ?? "";
 	return /\.(?:md|markdown)$/i.test(bare);

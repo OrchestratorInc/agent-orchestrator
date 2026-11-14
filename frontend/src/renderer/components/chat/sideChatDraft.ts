@@ -18,8 +18,16 @@ export type SideChatDraft = {
 	attachments: ChatDraftAttachment[];
 	references: ChatDraftExcerptReference[];
 	pendingDelivery?: SideDeliveryReceipt;
- // Keep the last acknowledged main-composer handoff for retries after remount.
- lastHandoffDelivery?: SideDeliveryReceipt;
+	// A source-side command owns its destination and frozen request across retries.
+	pendingCommand?: {
+		creationKey: string;
+		destinationId?: string;
+		accepted?: boolean;
+		cancelRequested?: boolean;
+		receipt: SideDeliveryReceipt;
+	};
+	// Keep the last acknowledged main-composer handoff for retries after remount.
+	lastHandoffDelivery?: SideDeliveryReceipt;
 };
 
 export function emptySideChatDraft(): SideChatDraft {

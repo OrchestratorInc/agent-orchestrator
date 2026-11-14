@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,41 @@ func TestCloneRetriesTemporaryFailureWithoutChangingDestination(t *testing.T) {
 	}
 	if temporary, _ := filepath.Glob(filepath.Join(parent, ".ao-clone-*")); len(temporary) != 0 {
 		t.Fatalf("left temporary checkouts: %v", temporary)
+	}
+}
+
+// The stream reports git's steps, and a retry, as phases only: none of git's
+// text (which can hold a credentialed URL) reaches the caller.
+func TestCloneWithProgressReportsGitPhasesAndRetries(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	count := cloneTestGit(t, `case " $* " in *" --progress "*) ;; *) echo 'fatal: missing --progress' >&2; exit 2;; esac
+printf 'remote: Counting objects: 100%% (3/3), done.\nReceiving objects:  50%% (1/2)\r' >&2
+if [ "$n" -lt 2 ]; then echo 'fatal: connection reset' >&2; exit 128; fi
+printf 'Receiving objects: 100%% (2/2), done.\nwarning: redirecting to https://user:secret@example.test/\nResolving deltas: 100%% (1/1), done.\n' >&2
+exec 2>/dev/null`)
+	var got []projectsvc.CloneProgress
+	_, err := m.PrepareCloneWithProgress(t.Context(), projectsvc.CloneInput{RemoteURL: (&url.URL{Scheme: "file", Path: source}).String(), DestinationParent: t.TempDir()}, func(progress projectsvc.CloneProgress) {
+		got = append(got, progress)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	percent := func(value int) *int { return &value }
+	want := []projectsvc.CloneProgress{
+		{Phase: projectsvc.ClonePhaseCountingObjects, Attempt: 1, Percent: percent(100)},
+		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 1, Percent: percent(50)},
+		{Phase: projectsvc.ClonePhaseRetrying, Attempt: 2},
+		{Phase: projectsvc.ClonePhaseCountingObjects, Attempt: 2, Percent: percent(100)},
+		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 2, Percent: percent(50)},
+		{Phase: projectsvc.ClonePhaseReceivingObjects, Attempt: 2, Percent: percent(100)},
+		{Phase: projectsvc.ClonePhaseResolvingDeltas, Attempt: 2, Percent: percent(100)},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("progress = %+v, want %+v", got, want)
+	}
+	if data, _ := os.ReadFile(count); strings.TrimSpace(string(data)) != "2" {
+		t.Fatalf("attempts = %s, want 2", data)
 	}
 }
 

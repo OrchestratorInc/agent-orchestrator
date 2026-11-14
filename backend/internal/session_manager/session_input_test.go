@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
 func newInputLeaseTestManager() *Manager {
@@ -145,4 +146,34 @@ func TestOptedInInputIsSerializedAndAdoptionFailsClosed(t *testing.T) {
 		t.Fatal("admission did not reopen after release")
 	}
 	release()
+}
+
+// Lifecycle's guard holds no input lease of its own. Its nudge to a TUI
+// session reaches the pane through Session Manager's send, whose guard holds
+// the lease, so an exclusive operation still keeps the write out. The refusal
+// must come back as an error, which makes the observer retry the nudge,
+// rather than as a silent drop.
+func TestLifecycleNudgeDuringExclusiveOperationIsRetryable(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
+	pane := &fakeMessenger{}
+	m := New(Deps{Store: st, Messenger: pane})
+	lifecycleGuard := sessionguard.New(st, managerMessenger{m}, nil)
+
+	if err := m.beginAgentOperation(context.Background(), "s1", agentOperationKill); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycleGuard.Nudge(context.Background(), "s1", "There are merge conflicts on your PR"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("nudge during an exclusive operation = %v, want ErrOperationInProgress", err)
+	}
+	if len(pane.msgs) != 0 {
+		t.Fatalf("pane written during an exclusive operation: %v", pane.msgs)
+	}
+	m.endAgentOperation("s1", agentOperationKill)
+	if _, err := lifecycleGuard.Nudge(context.Background(), "s1", "There are merge conflicts on your PR"); err != nil {
+		t.Fatalf("retried nudge: %v", err)
+	}
+	if len(pane.msgs) != 1 {
+		t.Fatalf("retried nudge pane writes = %v, want one", pane.msgs)
+	}
 }

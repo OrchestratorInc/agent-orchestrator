@@ -153,7 +153,7 @@ func (s *Service) promptSuggestionSnapshot(ctx context.Context, id domain.Sessio
 	for {
 		var rows ConversationRows
 		if s.pageReader != nil {
-			rows, err = s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, before, 200)
+			rows, err = s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, before, 0, 200)
 		} else {
 			// Production always supplies the bounded page reader; focused fakes can
 			// retain the existing full reader.

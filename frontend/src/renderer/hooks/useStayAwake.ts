@@ -1,11 +1,14 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./useAwake";
 
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
-type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean };
+// idleFallback: the sidebar asked for wake, not specifically closed-lid wake,
+// so a lid setup failure must still leave idle wake on.
+type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean; idleFallback?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
 
 /** The desktop and mobile controls share intent, pending state, and ownership. */
@@ -17,7 +20,7 @@ export function useStayAwake(enabled = true) {
 		enabled,
 		queryFn: async ({ signal }) => {
 			const { data, error } = await apiClient.GET("/api/v1/mobile/status", { signal });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Mobile status is unavailable");
 			return data;
 		},
@@ -46,16 +49,42 @@ export function useStayAwake(enabled = true) {
 	const pauseReason = awake.state?.paused ? awake.state.reason : undefined;
 	const reason = pauseReason === "low_battery" || pauseReason === "critical_heat" || pauseReason === "battery_unknown"
 		? pauseReason : undefined;
+	const latestChange = () => cache.getMutationCache().findAll({ mutationKey, status: "pending" }).at(-1)?.state.variables as Change | undefined;
+	const currentState = () => cache.getQueryData<AwakeState>(awakeQueryKey) ?? awake.state;
 	const mutation = useMutation({
 		mutationKey,
+		scope: { id: "stay-awake-toggle" },
 		mutationFn: async (change: Change) => {
-			// Cancel an older status read before writing the authoritative response.
+			// Serialize writes across controls and coalesce clicks made while a request
+			// is in flight. The newest pending intent is what the user sees.
+			const isLatest = () => latestChange() === change;
+			if (!isLatest()) return;
 			await cache.cancelQueries({ queryKey: mobileStatusQueryKey });
+			if (!isLatest()) return;
+			const current = currentState();
+			const currentLid = current?.sessions?.some((s) => !s.endedAt && s.lidClosed)
+				|| (!current?.paused && current?.rules?.some((r) => r.enabled && !r.suppressed && r.lidClosed)) || current?.lidActive;
 			const updateMobile = async (on: boolean, lidClosed: boolean) => {
 				const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: on, lidClosed } });
-				if (error) throw new Error(apiErrorMessage(error));
+				if (error) throw apiErrorException(error);
 				if (!data) throw new Error("Mobile status is unavailable");
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
+			};
+			// The lid POST answers before the native helper acknowledges its lease
+			// (two-second scan), so its response says "starting". Re-read until the
+			// helper settles; otherwise that transient reason stays cached.
+			const confirmLid = async () => {
+				const deadline = Date.now() + 5_000;
+				while (isLatest() && cache.getQueryData<MobileStatus>(mobileStatusQueryKey)?.keepAwake?.lidReason === "starting" && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 500));
+					try {
+						const { data } = await apiClient.GET("/api/v1/mobile/status");
+						if (!data) break;
+						cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
+					} catch {
+						break;
+					}
+				}
 			};
 			const start = async () => {
 				let latest = await awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: false } });
@@ -63,7 +92,7 @@ export function useStayAwake(enabled = true) {
 				// on its next two-second scan. Keep the shared intent pending until
 				// that acknowledgement instead of flashing an inactive warning.
 				const deadline = Date.now() + 5_000;
-				while (!latest.active && !latest.paused && (!latest.reason || latest.reason === "starting" || latest.reason === "helper_unavailable") && Date.now() < deadline) {
+				while (isLatest() && !latest.active && !latest.paused && (!latest.reason || latest.reason === "starting" || latest.reason === "helper_unavailable") && Date.now() < deadline) {
 					await new Promise((resolve) => setTimeout(resolve, 500));
 					let timeout: number | undefined;
 					try {
@@ -82,8 +111,8 @@ export function useStayAwake(enabled = true) {
 				}
 			};
 			const ensureDesktop = async () => {
-				if (awake.state?.paused) await awake.actAsync({ kind: "resume" });
-				if (sessions.length > 0) return;
+				if (currentState()?.paused) await awake.actAsync({ kind: "resume" });
+				if (currentState()?.sessions?.some((s) => !s.endedAt)) return;
 				try {
 					await start();
 				} catch (e) {
@@ -102,22 +131,32 @@ export function useStayAwake(enabled = true) {
 				const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(false, false)]);
 				for (const result of results) if (result.status === "rejected") throw result.reason;
 			} else if (change.lidClosed === false) {
-				if (desktopLid) {
+				if (currentLid) {
 					// Retire legacy desktop lid owners and replace them with idle-only wake.
 					const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(true, false)]);
 					for (const result of results) if (result.status === "rejected") throw result.reason;
 					await start();
 				} else await updateMobile(true, false);
+			} else if (change.lidClosed === true) {
+				// Reject a failed lid opt-in before creating or resuming desktop ownership.
+				try {
+					await updateMobile(true, true);
+				} catch (e) {
+					if (!change.idleFallback) throw e;
+					// Helper setup can fail (launchctl, incompatible helper). The
+					// sidebar worked without the helper before, so keep idle wake.
+					await ensureDesktop();
+					return;
+				}
+				await ensureDesktop();
+				await confirmLid();
 			} else {
 				await ensureDesktop();
-				// Main toggle is idle-only. Closed-lid wake requires the explicit option.
-				if (change.lidClosed === true || change.rememberMobile) await updateMobile(true, change.lidClosed === true);
+				if (change.rememberMobile) await updateMobile(true, false);
 			}
 		},
 	});
 	const change = (next: Change) => {
-		// The cache guard also covers two calls before React renders the disabled UI.
-		if (cache.isMutating({ mutationKey }) > 0 || awake.busy) return;
 		mutation.mutate(next);
 	};
 	return {
@@ -125,12 +164,25 @@ export function useStayAwake(enabled = true) {
 		active,
 		attention: on && !active && !busy,
 		reason: desktopOn ? reason : undefined,
+		stopBatteryPercent: awake.state?.settings?.stopBatteryPercent ?? 10,
 		lidOn: intent ? intent.on && (intent.lidClosed ?? false) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed),
+		toggle: () => {
+			const current = currentState();
+			const mobileState = cache.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			const requested = current?.sessions?.some((s) => !s.endedAt)
+				|| (!current?.paused && current?.rules?.some((r) => r.enabled && !r.suppressed))
+				|| current?.active || mobileState?.keepAwake?.enabled || mobileState?.keepAwake?.active;
+			const on = !(latestChange()?.on ?? requested);
+			// Sidebar and Settings are one switch: where closed-lid wake is
+			// supported, turning on here arms the same mode Settings shows.
+			change(on && mobileState?.keepAwake?.lidSupported ? { on, lidClosed: true, idleFallback: true } : { on });
+		},
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
 		busy,
 		error: mutation.error instanceof Error ? mutation.error.message : null,
 		supported: awakeCapability(awake.state, "idle")?.available ?? false,
-		starting: intent?.on === true && !active,
+		starting: intent?.on === true,
+		stopping: intent?.on === false,
 	};
 }

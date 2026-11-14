@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { AoBridge } from "../src/preload";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
+import { cloneStream } from "./support/clone-stream";
 import { installFakeAgent } from "./support/fake-bridge";
 
 for (const role of ["Worker agent", "Orchestrator agent"] as const) {
@@ -22,10 +23,10 @@ for (const role of ["Worker agent", "Orchestrator agent"] as const) {
 					remoteUrl: "https://example.com/example.git", path: "/repos/example",
 					exists: false, canUseExisting: false,
 				} });
-			} else if (pathname === "/api/v1/projects/clone/prepare") {
-				await route.fulfill({ json: {
+			} else if (pathname === "/api/v1/projects/clone/prepare/stream") {
+				await route.fulfill(cloneStream({ result: {
 					path: "/repos/example", remoteUrl: "https://example.com/example.git", preparationId: "prep-management",
-				} });
+				} }));
 			} else if (pathname === "/api/v1/projects/clone/cleanup") {
 				cleanupRequests.push(route.request().postDataJSON());
 				await route.fulfill({ status: 204 });

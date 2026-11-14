@@ -1,7 +1,7 @@
 // Run by TestBrowserBoundaryElectron against the real Go router and in-memory
 // terminals. This exercises Chromium's actual Origin and fetch metadata, not
 // a renderer mock. It does not launch the complete AO desktop application.
-const { app, BrowserWindow, protocol } = require("electron");
+const { app, BrowserWindow, net, protocol } = require("electron");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 // Load production TypeScript in Electron's main process for this transport test.
@@ -24,6 +24,12 @@ protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: t
 const result = (code) => { console.log(`AO_BOUNDARY_RESULT:${code}`); app.exit(code); };
 app.whenReady().then(async () => {
  protocol.handle("app", () => new Response("<title>boundary fixture</title>"));
+ // The main process reaches the daemon with Node fetch, which sends no browser
+ // fetch metadata. Electron net.fetch sends Sec-Fetch-Site without Origin.
+ const mainNative = await fetch(base + "/api/v1/shell-terminals").then(r => r.status);
+ assert.equal(mainNative, 200, "main-process Node fetch reaches the daemon");
+ const mainNet = await net.fetch(base + "/api/v1/shell-terminals").then(r => r.status);
+ assert.equal(mainNet, 403, "main-process net.fetch is refused as a browser request");
  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
  await win.loadURL("app://renderer/index.html");
  const created = await win.webContents.executeJavaScript(`fetch(${JSON.stringify(base + "/api/v1/shell-terminals")}, { method: "POST" }).then(r => r.status)`);
@@ -96,6 +102,7 @@ app.whenReady().then(async () => {
   assert(attempts.every(status => status === 0 || status === 403), `${fixture} browser cannot reach shell or mux: ${attempts}`);
  }
  win.destroy();
+ console.log("Main-process Node fetch reached the daemon; net.fetch refused.");
  console.log("Packaged renderer REST/mux, media and render navigations passed; untrusted and sandboxed browser requests refused.");
  result(0);
 }).catch(error => { console.error(error); result(1); });

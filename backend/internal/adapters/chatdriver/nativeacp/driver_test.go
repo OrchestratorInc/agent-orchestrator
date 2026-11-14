@@ -3,6 +3,7 @@ package nativeacp
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -131,6 +132,28 @@ func TestBindingMapsPluginDiscoveryAndAuth(t *testing.T) {
 			t.Fatalf("Probe: %v", err)
 		}
 	})
+}
+
+func TestBindingForwardsSessionMetadata(t *testing.T) {
+	var received acpdriver.LaunchConfig
+	cfg := buildConfig(fakePlugin{}, Config{
+		Harness: domain.HarnessGrok,
+		SessionMeta: func(in acpdriver.LaunchConfig) map[string]any {
+			received = in
+			return map[string]any{"rules": in.SystemPrompt, "autoMode": in.Permissions == ports.PermissionModeAuto}
+		},
+	}, nil)
+	if cfg.SessionMeta == nil {
+		t.Fatal("native binding dropped the session metadata hook")
+	}
+	launch := acpdriver.LaunchConfig{SessionID: "grok-1", SystemPrompt: "AO system rules", Permissions: ports.PermissionModeAuto}
+	want := map[string]any{"rules": "AO system rules", "autoMode": true}
+	if got := cfg.SessionMeta(launch); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(received, launch) {
+		t.Fatalf("metadata = %#v, input = %#v; want %#v, %#v", got, received, want, launch)
+	}
+	if cfg.SessionPreamble != nil {
+		t.Fatal("session metadata must not inject a first-message preamble")
+	}
 }
 
 func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {

@@ -1,41 +1,17 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
-import { StickyNote } from "lucide-react";
+import { StickyNote } from "@/components/app-icons";
 import { useEffect, useMemo } from "react";
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { labelForHost } from "../lib/host-clients";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, STANDALONE_PROJECT_KIND } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, isScratchpadWorkspace, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-
-function repositoryOwnerAvatar(repo: string): { owner: string; url: string } | null {
-	const value = repo.trim();
-	const scp = value.match(/^[^/@:\s]+@([^/:\s]+):(.+)$/);
-	let host: string;
-	let pathname: string;
-	if (scp?.[1] && scp[2]) {
-		host = scp[1].toLowerCase();
-		pathname = scp[2];
-	} else {
-		try {
-			const parsed = new URL(value.includes("://") ? value : `https://${value}`);
-			host = parsed.hostname.toLowerCase();
-			pathname = parsed.pathname;
-		} catch {
-			return null;
-		}
-	}
-	const owner = pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.replace(/\.git$/, "");
-	if (!owner) return null;
-	const encodedOwner = encodeURIComponent(owner);
-	if (host === "github.com") return { owner, url: `https://github.com/${encodedOwner}.png?size=64` };
-	if (host === "gitlab.com") return { owner, url: `https://gitlab.com/-/avatar?username=${encodedOwner}` };
-	if (host === "bitbucket.org") return { owner, url: `https://bitbucket.org/account/${encodedOwner}/avatar/64/` };
-	return { owner, url: `https://unavatar.io/${encodeURIComponent(host)}/${encodedOwner}` };
-}
+import { type CanonicalGitHubRepo, repositoryOwnerAvatar } from "../lib/repository-avatar";
 
 function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; url: string }; className: string }) {
 	return (
@@ -70,9 +46,10 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces({ subscribed: open }).data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	const projects = useMemo(() => workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND,
-	), [workspaces]);
+	// This dialog serves cloud projects only for now; every other project starts
+	// from the new chat page.
+	// Cloud standalone agents are the Scratchpad's, not projects to start a task in.
+	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND && !isScratchpadWorkspace(workspace)), [workspaces]);
 	const localProjects = useMemo(() => hostId ? [] : projects.filter((project) => project.kind !== CLOUD_PROJECT_KIND), [hostId, projects]);
 	const localProjectDetails = useQueries({
 		queries: localProjects.map((project) => ({
@@ -83,7 +60,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 				const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
 					params: { path: { id: project.id } },
 				});
-				if (error) throw new Error(apiErrorMessage(error));
+				if (error) throw apiErrorException(error);
 				if (data?.status !== "ok") return undefined;
 				return data.project;
 			},
@@ -95,12 +72,15 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		const details = detailsIndex >= 0 ? localProjectDetails[detailsIndex]?.data : undefined;
 		const primaryRepo = details && "repo" in details && typeof details.repo === "string" ? details.repo : "";
 		const workspaceRepos = details && "workspaceRepos" in details ? details.workspaceRepos ?? [] : project.workspaceRepos ?? [];
-		const repositories = [
-			...(primaryRepo ? [{ repo: primaryRepo }] : []),
+		const canonical = details && "canonicalRepo" in details
+			? { repo: details.canonicalRepo, ownerAvatarUrl: details.canonicalOwnerAvatarUrl }
+			: undefined;
+		const repositories: { repo: string; canonical?: CanonicalGitHubRepo }[] = [
+			...(primaryRepo ? [{ repo: primaryRepo, canonical }] : []),
 			...workspaceRepos,
 		];
-		const avatars = repositories.flatMap(({ repo }) => {
-			const avatar = repositoryOwnerAvatar(repo);
+		const avatars = repositories.flatMap(({ repo, canonical }) => {
+			const avatar = repositoryOwnerAvatar(repo, canonical);
 			if (!avatar) return [];
 			const identity = `${new URL(avatar.url).hostname}/${avatar.owner.toLowerCase()}`;
 			if (seen.has(identity)) return [];
@@ -113,10 +93,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const selectedProject = projects.find((project) => project.id === selectedProjectId);
 	const selectedProjectName = selectedProject?.name ?? t("standalone.workspaceName");
 	const selectedProjectAvatar = projectAvatars.get(selectedProjectId)?.[0];
-	const projectOptions = [
-		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
-		...projects.map((project) => ({ value: project.id, label: project.name })),
-	];
+	const projectOptions = projects.map((project) => ({ value: project.id, label: project.name }));
 	useEffect(() => {
 		if (!open) return;
 		for (const avatars of projectAvatars.values()) {
@@ -130,17 +107,18 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		<Dialog.Root open={open && !settingsOpen} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in data-[state=closed]:animate-overlay-out" />
-				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
+				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-(--color-border-overlay) overlay-glass p-0 text-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
 					{/* The selected project is the dialog title; the composer remains the main surface. */}
 					<Dialog.Title className="settings-dialog-title flex flex-wrap items-center gap-x-1.5 px-3 pt-3">
 						<SettingsOptionMenu
+							triggerVariant="ghost"
 							aria-label={t("newTask.project")}
 							value={selectedProjectId}
 							options={projectOptions}
 							onChange={(value) => onProjectChange?.(value)}
 							menuAlign="start"
 							menuClassName="w-48 max-h-72"
-							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md bg-transparent! px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground hover:bg-interactive-hover! hover:text-foreground data-[state=open]:bg-transparent! data-[state=open]:hover:bg-interactive-hover! data-[state=open]:text-foreground"
+							triggerClassName="w-fit max-w-[45vw] min-w-0 gap-1 rounded-md px-1! py-0! text-[length:inherit]! font-semibold leading-[inherit]! text-foreground"
 							menuItemClassName="gap-1!"
 							renderTrigger={() => (
 								<span className="inline-flex min-w-0 items-center gap-1.5">
