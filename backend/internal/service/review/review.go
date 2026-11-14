@@ -64,11 +64,10 @@ func reviewErrorKind(err error) string {
 // Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
-	// SweepReviewRunsAfterRestart settles the runs the previous daemon left
-	// active. It runs once at startup, after RecoverChatReviewers.
-	SweepReviewRunsAfterRestart(ctx context.Context) error
-	// RunReviewSupervisor owns every active review run until ctx is done.
-	RunReviewSupervisor(ctx context.Context)
+	// ReviewerObserver is the review side of the runtime reaper: the reaper
+	// probes reviewers serving an in-progress run and this reduces each pass
+	// into review-run transitions.
+	ReviewerObserver() ports.ReviewerObserver
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
@@ -116,16 +115,10 @@ func (s *Service) RecoverChatReviewers(ctx context.Context) error {
 	return s.engine.RecoverChatReviewers(ctx)
 }
 
-// SweepReviewRunsAfterRestart settles review runs the previous daemon left
-// active: re-adoptable reviewers keep their runs, the rest fail with
-// daemon_restarted and their orphaned reviewer is destroyed.
-func (s *Service) SweepReviewRunsAfterRestart(ctx context.Context) error {
-	return s.engine.SweepActiveRunsAfterRestart(ctx)
-}
-
-// RunReviewSupervisor runs the review run supervisor until ctx is done.
-func (s *Service) RunReviewSupervisor(ctx context.Context) {
-	s.engine.RunSupervisor(ctx)
+// ReviewerObserver returns the engine as the runtime reaper's reviewer
+// observer.
+func (s *Service) ReviewerObserver() ports.ReviewerObserver {
+	return s.engine
 }
 
 // Store is the review_run persistence surface owned by the service submit path.
@@ -830,7 +823,7 @@ func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID
 		return fmt.Errorf("%w: review session %q", ErrNotFound, reviewSessionID)
 	}
 	if s.engine != nil && signal.State != "" {
-		// Activity is evidence for the run supervisor, never run state itself.
+		// Activity is evidence for the run lifecycle, never run state itself.
 		review.ReviewerActivityState = signal.State
 		if signal.LaunchID != "" {
 			review.ReviewerLaunchID = signal.LaunchID
