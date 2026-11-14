@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
@@ -1128,6 +1128,31 @@ describe("remember project permissions", () => {
 		rerender(<TurnSettingsBar {...props} rememberPermissionsError="Could not save project default" />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not save project default");
 		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeEnabled();
+	});
+
+	it("shows a settings error inside the picker row, so the composer does not grow", async () => {
+		const message = "the agent rejected that model because the account cannot use it";
+		const props = { models: [], settings: {}, onChange: vi.fn() };
+		const { rerender } = render(<TurnSettingsBar {...props} />);
+		const bar = screen.getByRole("group", { name: "Turn settings" });
+		const row = bar.firstElementChild as HTMLElement;
+		expect(bar.children).toHaveLength(1);
+		expect(row).toHaveClass("h-7");
+		expect(row).toContainElement(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+
+		rerender(<TurnSettingsBar {...props} error={message} rememberPermissionsError="Could not save project default" />);
+		const alert = screen.getByRole("alert");
+		expect(row).toContainElement(alert);
+		// The row stays the only child of the bar: nothing is stacked under it.
+		expect(bar.children).toHaveLength(1);
+		expect(alert).toHaveTextContent(message);
+		expect(alert).toHaveTextContent("Could not save project default");
+		// However narrow the row, the warning icon keeps its room.
+		expect(alert).toHaveClass("min-w-3.5");
+		// The line truncates to the free space; keyboard focus opens the whole message.
+		expect(alert).toHaveAttribute("tabindex", "0");
+		act(() => alert.focus());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(`${message} · Could not save project default`);
 	});
 
 	it("matches the remembered mode against the provider mode instead of stale native settings", async () => {
