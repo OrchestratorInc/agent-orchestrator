@@ -169,7 +169,7 @@ import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
-import { useSideChatsAvailable } from "../lib/side-chats";
+import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
 	inspectorMaxWidthCss,
@@ -613,20 +613,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const [sideChatsPresence, setSideChatsPresence] = useState<{ key: string; present: boolean }>();
-	const sideChatsPresent = sideChatsPresence?.key === uiSessionId ? sideChatsPresence.present : undefined;
-	const handleSideChatsPresentChange = useCallback(
-		(present: boolean) => setSideChatsPresence({ key: uiSessionId, present }),
-		[uiSessionId],
-	);
-	// The Side chat tab shows only while the session has a side chat. Selecting it
-	// (a new side chat opening) keeps it until the new chat is listed.
-	const showSideChatTab = sideChatsAvailable && (sideChatsPresent === true || inspectorView === "sideChat");
-	// Closing the last side chat, or finding none, returns the rail to Summary.
-	useEffect(() => {
-		if (sideChatsPresent !== false) return;
-		if (useUiStore.getState().inspectorSessions[uiSessionId]?.view === "sideChat") setInspectorViewForSession(uiSessionId, "summary");
-	}, [setInspectorViewForSession, sideChatsPresent, uiSessionId]);
+	const { showTab: showSideChatTab, onSideChatsChange } = useSideChatTab(uiSessionId, sideChatsAvailable);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
@@ -2985,7 +2972,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								<>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
-									onSideChatsPresentChange={handleSideChatsPresentChange}
+									onSideChatsChange={onSideChatsChange}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}

@@ -94,6 +94,7 @@ const sideMocks = vi.hoisted(() => ({
 	addReference: vi.fn(),
 	sides: [] as { id: string; hasWork: boolean }[],
 	loaded: false,
+	pending: false,
 	activeId: "existing-side" as string | undefined,
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
@@ -1380,26 +1381,31 @@ describe("side command routing", () => {
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
 	});
 
-	it("reports whether the session has side chats only once their list has loaded", () => {
-		const onSideChatsPresentChange = vi.fn();
+	it("reports whether the session has side chats, and is creating one, only once their list has loaded", () => {
+		const onSideChatsChange = vi.fn();
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const surface = () => (
 			<Wrapper client={queryClient}>
 				{/* A fresh session object rerenders the memoized surface. */}
-				<SessionChatSurface session={{ ...session }} onSideChatsPresentChange={onSideChatsPresentChange} />
+				<SessionChatSurface session={{ ...session }} onSideChatsChange={onSideChatsChange} />
 			</Wrapper>
 		);
 		try {
 			const view = render(surface());
-			expect(onSideChatsPresentChange).not.toHaveBeenCalled();
+			expect(onSideChatsChange).not.toHaveBeenCalled();
 			sideMocks.loaded = true;
 			view.rerender(surface());
-			expect(onSideChatsPresentChange).toHaveBeenLastCalledWith(false);
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: false });
+			sideMocks.pending = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: true });
+			sideMocks.pending = false;
 			sideMocks.sides = [{ id: "side-1", hasWork: false }];
 			view.rerender(surface());
-			expect(onSideChatsPresentChange).toHaveBeenLastCalledWith(true);
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: true, creating: false });
 		} finally {
 			sideMocks.loaded = false;
+			sideMocks.pending = false;
 			sideMocks.sides = [];
 		}
 	});
