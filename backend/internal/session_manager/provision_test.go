@@ -600,6 +600,85 @@ func TestResolveChatAgentConfigValidatesClaudeEffort(t *testing.T) {
 	}
 }
 
+// TestResolveAgentConfigValidatesPiEffort covers effort resolution for the Pi
+// and Prime Agent harnesses: a level the model advertises starts, no effort
+// needs no catalog, an explicitly requested unsupported level is rejected, and an
+// inherited level that is unsupported or has no resolvable model is cleared
+// rather than failing the launch.
+func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
+	// Pi and Prime Agent advertise per-model thinking levels as efforts and
+	// consume them at launch via `--thinking`, so a level the model offers must
+	// select and start, while a level it does not offer is still rejected.
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+			{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"minimal", "low", "medium", "high", "xhigh"}},
+		}}}}
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: "high"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if err != nil {
+			t.Fatalf("harness %q supported effort error = %v, want nil", harness, err)
+		}
+		if resolved.Effort != "high" {
+			t.Fatalf("harness %q effort = %q, want high", harness, resolved.Effort)
+		}
+
+		// A launch without an effort starts unchanged.
+		resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol"},
+		}, domain.ProjectConfig{})
+		if err != nil || resolved.Effort != "" {
+			t.Fatalf("harness %q no-effort launch = %#v, %v", harness, resolved, err)
+		}
+
+		// An explicitly requested level the model does not offer is still rejected.
+		_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: "max"}, EffortOverride: true,
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q unsupported effort error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+
+		// A level the request carries itself is explicit even without the override
+		// flag, so an unsupported choice is rejected rather than silently cleared.
+		_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: "max"},
+		}, domain.ProjectConfig{})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("harness %q request-supplied unsupported effort error = %v, want ErrUnsupportedEffort", harness, err)
+		}
+
+		// An inherited (not explicitly requested) level the model does not offer is
+		// cleared silently rather than failing the launch: these harnesses only
+		// began honoring effort now, so stale role/project config must not break.
+		resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol"},
+		}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "max"}}})
+		if err != nil || resolved.Effort != "" {
+			t.Fatalf("harness %q inherited unsupported effort = %#v, %v, want cleared", harness, resolved, err)
+		}
+	}
+
+	// An inherited effort with no model and no catalog default clears silently
+	// instead of returning ErrModelCapabilitiesUnavailable.
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+			{ID: "openai/gpt-6.1-sol", Efforts: []string{"low", "high"}},
+		}}}}
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+		}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
+		if err != nil || resolved.Effort != "" {
+			t.Fatalf("harness %q inherited effort without a resolvable model = %#v, %v, want cleared", harness, resolved, err)
+		}
+	}
+}
+
 func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "sonnet", IsDefault: true, Efforts: []string{"low", "high"}},
@@ -652,7 +731,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and hermes") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, and prime-agent") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the

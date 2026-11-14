@@ -8150,6 +8150,35 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 }
 
+// TestSpawn_TUIPiInheritedEffortIsValidated asserts a Pi or Prime Agent TUI
+// spawn validates an effort inherited from role settings: a level the model
+// advertises reaches the adapter, and a stale one is cleared before --thinking.
+func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for inherited, want := range map[string]string{"high": "high", "max": ""} {
+			m, st, _, _ := newManager()
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+			}}})
+			project := st.projects["mer"]
+			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
+			st.projects["mer"] = project
+
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
+			}); err != nil {
+				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
+			}
+			if agent.lastConfig.Effort != want {
+				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			}
+		}
+	}
+}
+
 func TestSpawn_RejectsFreshClaudeAuthInWorkspaceLaunchContext(t *testing.T) {
 	m, st, rt, ws := newManager()
 	project := st.projects["mer"]
