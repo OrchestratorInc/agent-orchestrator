@@ -72,17 +72,28 @@ func plan(in policyInput) []PlannedAction {
 			if !retry {
 				reason += "; kept before because it had changes"
 			}
+			// git worktree remove does not refuse on ignored files, so a .env
+			// or local database only the worktree holds keeps it from going
+			// automatically; the user can still remove it after seeing them.
+			kept := describeKept(wt.KeptIgnored, wt.IgnoredUnknown)
+			if kept != "" {
+				reason += "; " + kept
+			}
 			out = append(out, PlannedAction{
 				Kind: domain.StorageCleanEndedWorktrees, Target: wt.Path, SessionID: sess.ID, Bytes: wt.Bytes,
-				Reason: reason, Automatic: auto && retry && due,
+				Reason: reason, Automatic: auto && retry && due && kept == "",
 			})
 		case WorktreeOrphan:
 			// Only a clean git worktree is offered, and never automatically:
 			// AO cannot tell whose work an unowned folder holds.
 			if wt.GitWorktree && wt.Clean {
+				reason := "no session owns this worktree and it has no changes"
+				if kept := describeKept(wt.KeptIgnored, wt.IgnoredUnknown); kept != "" {
+					reason += "; " + kept
+				}
 				out = append(out, PlannedAction{
 					Kind: domain.StorageCleanOrphanWorktrees, Target: wt.Path, ProjectID: wt.ProjectID, Bytes: wt.Bytes,
-					Reason: "no session owns this worktree and it has no changes",
+					Reason: reason,
 				})
 			}
 		}

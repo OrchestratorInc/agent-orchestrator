@@ -1,6 +1,7 @@
 package storagemgr
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,32 @@ func TestOffloadNeverPlannedForProtectedSessions(t *testing.T) {
 			actions := plan(policyInput{Now: policyNow, Settings: st, Snapshot: &scanSnapshot{Sessions: []sessionView{sess}, Worktrees: []WorktreeUsage{wt}}})
 			if _, ok := findAction(actions, domain.StorageCleanOffload, wt.Path); ok {
 				t.Fatalf("offload planned for %s: %+v", name, actions)
+			}
+		})
+	}
+}
+
+func TestEndedWorktreeHoldingIgnoredFilesIsNeverAutomatic(t *testing.T) {
+	settings := domain.DefaultStorageSettings()
+	sess := sessionView{ID: "e-9", Terminated: true, EndedAt: policyNow.Add(-30 * day)}
+	for _, tc := range []struct {
+		name    string
+		kept    []string
+		unknown bool
+		reason  string
+	}{
+		{name: "env file", kept: []string{".env", "local.db"}, reason: "holds ignored files that cannot be rebuilt: .env, local.db"},
+		{name: "unchecked", unknown: true, reason: "its ignored files could not be checked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wt := WorktreeUsage{Path: "/w/e-9", SessionID: sess.ID, State: WorktreeEnded, Bytes: 100, KeptIgnored: tc.kept, IgnoredUnknown: tc.unknown}
+			actions := plan(policyInput{Now: policyNow, Settings: settings, Snapshot: &scanSnapshot{Sessions: []sessionView{sess}, Worktrees: []WorktreeUsage{wt}}})
+			action, ok := findAction(actions, domain.StorageCleanEndedWorktrees, "/w/e-9")
+			if !ok || action.Automatic {
+				t.Fatalf("action=%+v ok=%v, want offered but not automatic", action, ok)
+			}
+			if !strings.Contains(action.Reason, tc.reason) {
+				t.Fatalf("reason = %q, want it to name %q", action.Reason, tc.reason)
 			}
 		})
 	}
