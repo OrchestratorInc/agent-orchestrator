@@ -75,11 +75,12 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
 	if (twins.length === 0) return name;
 	const org = (peer: Pick<AgentAccount, "orgId" | "orgName">) => peer.orgId ?? `name:${peer.orgName ?? ""}`;
-	const otherOrgs = twins.filter((twin) => org(twin) !== org(account));
+	const orgKnown = (peer: Pick<AgentAccount, "orgId" | "orgName">) => Boolean(peer.orgId || peer.orgName);
+	const otherOrgs = orgKnown(account) ? twins.filter((twin) => orgKnown(twin) && org(twin) !== org(account)) : [];
 	const parts = [name];
 	if (otherOrgs.length > 0 && account.orgName) parts.push(account.orgName);
 	if (account.orgId && otherOrgs.some((twin) => (twin.orgName ?? "") === (account.orgName ?? ""))) parts.push(account.orgId.slice(0, 8));
-	if (account.device && twins.some((twin) => org(twin) === org(account))) parts.push(t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] }));
+	if (account.device && twins.some((twin) => !otherOrgs.includes(twin))) parts.push(t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] }));
 	return parts.join(" · ");
 }
 

@@ -47,6 +47,13 @@ describe("agentAccountLabel", () => {
 		expect(agentAccountLabel({ ...device, orgName: undefined }, [device, { ...acme, orgName: undefined }], t)).toBe("a@example.com · Claude Code CLI login");
 	});
 
+	it("does not treat a signed-out account's unknown organization as another organization", () => {
+		const cli = { ...device, orgId: "de6f970e-1", orgName: "a@example.com's Organization" };
+		const signedOut = { id: "acct-s", provider: "claude" as const, device: false, email: "a@example.com", signedIn: false };
+		expect(agentAccountLabel(cli, [cli, signedOut], t)).toBe("a@example.com · Claude Code CLI login");
+		expect(agentAccountLabel(signedOut, [cli, signedOut], t)).toBe("a@example.com");
+	});
+
 	it("adds the organization ID when names cannot tell organizations apart", () => {
 		const one = { ...acme, orgId: "1a2b3c4d-0000-4000-8000-000000000001" };
 		const two = { ...acme, id: "acct-2", orgId: "9f8e7d6c-0000-4000-8000-000000000002" };
