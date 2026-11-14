@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
+import { CLONE_PREPARE_ROUTES, cloneStream } from "./support/clone-stream";
 import { installFakeAgent } from "./support/fake-bridge";
 
 const remoteUrl = "https://github.com/acme/example.git";
@@ -43,10 +44,13 @@ test.beforeEach(async ({ page }) => {
 
 test("clone URL is normalized and failed registration keeps the checkout @T0", async ({ page }, testInfo) => {
 	let clones = 0;
-	await page.route("**/api/v1/projects/clone/prepare", async (route) => {
+	await page.route("**/api/v1/projects/clone/prepare/stream", async (route) => {
 		clones++;
 		expect(route.request().postDataJSON().remoteUrl).toBe(remoteUrl);
-		await route.fulfill({ json: { path: checkout, remoteUrl, preparationId: "prepared" } });
+		await route.fulfill(cloneStream(
+			{ progress: { phase: "receiving_objects", attempt: 1 } },
+			{ result: { path: checkout, remoteUrl, preparationId: "prepared" } },
+		));
 	});
 	await page.route("**/api/v1/projects", async (route) => {
 		if (route.request().method() !== "POST") return route.fallback();
@@ -68,7 +72,7 @@ test("clone URL is normalized and failed registration keeps the checkout @T0", a
 test("destination conflict offers reuse without cloning @T0", async ({ page }, testInfo) => {
 	let clones = 0;
 	await page.route("**/api/v1/projects/clone/check", (route) => route.fulfill({ json: { remoteUrl, path: checkout, exists: true, canUseExisting: true } }));
-	await page.route("**/api/v1/projects/clone/prepare", async (route) => { clones++; await route.abort(); });
+	await page.route(CLONE_PREPARE_ROUTES, async (route) => { clones++; await route.abort(); });
 	await openClone(page);
 	await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
 	await expect(page.getByText(`A folder already exists at ${checkout}.`, { exact: false })).toBeVisible();
@@ -90,7 +94,7 @@ test("reuse validation failure preserves inputs and offers retry @T0", async ({ 
 			await route.fulfill({ json: validation });
 		}
 	});
-	await page.route("**/api/v1/projects/clone/prepare", async (route) => { clones++; await route.abort(); });
+	await page.route(CLONE_PREPARE_ROUTES, async (route) => { clones++; await route.abort(); });
 	await openClone(page);
 	await page.getByRole("button", { name: "Use existing checkout", exact: true }).click();
 	const dialog = page.getByRole("dialog", { name: "Clone a Git repository" });
@@ -106,7 +110,7 @@ test("reuse validation failure preserves inputs and offers retry @T0", async ({ 
 test("cloning shows status and Cancel keeps inputs for retry @T0", async ({ page }, testInfo) => {
 	let release: () => void = () => undefined;
 	const pending = new Promise<void>((resolve) => { release = resolve; });
-	await page.route("**/api/v1/projects/clone/prepare", async (route) => {
+	await page.route("**/api/v1/projects/clone/prepare/stream", async (route) => {
 		await pending;
 		await route.abort().catch(() => undefined);
 	});

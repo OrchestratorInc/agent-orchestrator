@@ -27,9 +27,12 @@ type legacyACPTransport struct {
 	output *io.PipeWriter
 	nextID atomic.Uint64
 
-	mu      sync.Mutex
-	pending map[string]chan legacyACPResponse
-	models  *legacySessionModelState
+	mu                    sync.Mutex
+	pending               map[string]chan legacyACPResponse
+	models                *legacySessionModelState
+	toolCallToRPCID       map[string]string
+	latestPermissionRPCID string
+	pendingAnswers        map[string]map[string]string
 }
 
 type lockedWriteCloser struct {
@@ -69,12 +72,18 @@ func newLegacyACPTransport(stdin io.WriteCloser) (*legacyACPTransport, io.WriteC
 	writer := &lockedWriteCloser{inner: stdin}
 	sdkReader, sdkWriter := io.Pipe()
 	transport := &legacyACPTransport{
-		writer:  writer,
-		reader:  sdkReader,
-		output:  sdkWriter,
-		pending: make(map[string]chan legacyACPResponse),
+		writer:          writer,
+		reader:          sdkReader,
+		output:          sdkWriter,
+		pending:         make(map[string]chan legacyACPResponse),
+		toolCallToRPCID: make(map[string]string),
+		pendingAnswers:  make(map[string]map[string]string),
 	}
-	return transport, writer, sdkReader
+	rewriter := &permissionResponseRewriter{
+		inner:     writer,
+		transport: transport,
+	}
+	return transport, rewriter, sdkReader
 }
 
 func (t *legacyACPTransport) forward(source io.Reader, notification func(string, json.RawMessage) bool) {
@@ -113,6 +122,22 @@ func (t *legacyACPTransport) intercept(line []byte, notification func(string, js
 	if (len(envelope.ID) == 0 || bytes.Equal(envelope.ID, []byte("null"))) &&
 		envelope.Method != "" && notification(envelope.Method, envelope.Params) {
 		return true
+	}
+
+	if envelope.Method == "session/request_permission" && len(envelope.ID) > 0 {
+		var req struct {
+			ToolCall struct {
+				ToolCallID string `json:"toolCallId"`
+			} `json:"toolCall"`
+		}
+		_ = json.Unmarshal(envelope.Params, &req)
+		rawID := string(bytes.TrimSpace(envelope.ID))
+		t.mu.Lock()
+		if req.ToolCall.ToolCallID != "" {
+			t.toolCallToRPCID[req.ToolCall.ToolCallID] = rawID
+		}
+		t.latestPermissionRPCID = rawID
+		t.mu.Unlock()
 	}
 
 	var requestID string
@@ -159,10 +184,21 @@ func (t *legacyACPTransport) modelState() *legacySessionModelState {
 }
 
 func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID string) error {
-	_, err := t.request(ctx, "session/set_model", map[string]string{"sessionId": sessionID, "modelId": modelID})
+	return t.call(ctx, "session/set_model", map[string]string{
+		"sessionId": sessionID,
+		"modelId":   modelID,
+	})
+}
+
+// call sends one request whose method the pinned SDK will not send, because it
+// lacks ACP's underscore extension prefix, and waits for its error or success.
+// The result body is not read.
+func (t *legacyACPTransport) call(ctx context.Context, method string, params any) error {
+	_, err := t.request(ctx, method, params)
 	return err
 }
 
+// request is call for a method whose result body the caller reads.
 func (t *legacyACPTransport) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -202,4 +238,78 @@ func (t *legacyACPTransport) removePending(requestID string) {
 	t.mu.Lock()
 	delete(t.pending, requestID)
 	t.mu.Unlock()
+}
+
+func (t *legacyACPTransport) registerAnswersForToolCall(toolCallID string, answers map[string]string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rpcID := t.toolCallToRPCID[toolCallID]
+	if rpcID == "" {
+		rpcID = t.latestPermissionRPCID
+	}
+	if rpcID != "" {
+		t.pendingAnswers[rpcID] = answers
+	}
+}
+
+func (t *legacyACPTransport) hasPendingAnswers() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.pendingAnswers) > 0
+}
+
+func (t *legacyACPTransport) rewriteResponse(data []byte) []byte {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Result map[string]any  `json:"result"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil || len(envelope.ID) == 0 || envelope.Result == nil {
+		return data
+	}
+
+	rpcID := string(bytes.TrimSpace(envelope.ID))
+	t.mu.Lock()
+	answers, ok := t.pendingAnswers[rpcID]
+	if ok {
+		delete(t.pendingAnswers, rpcID)
+	}
+	t.mu.Unlock()
+
+	if !ok || len(answers) == 0 {
+		return data
+	}
+
+	var rawMsg map[string]any
+	if err := json.Unmarshal(data, &rawMsg); err != nil {
+		return data
+	}
+	envelope.Result["answers"] = answers
+	rawMsg["result"] = envelope.Result
+	modifiedLine, err := json.Marshal(rawMsg)
+	if err != nil {
+		return data
+	}
+	return append(modifiedLine, '\n')
+}
+
+type permissionResponseRewriter struct {
+	inner     *lockedWriteCloser
+	transport *legacyACPTransport
+}
+
+func (r *permissionResponseRewriter) Write(data []byte) (int, error) {
+	if r.transport != nil && r.transport.hasPendingAnswers() {
+		data = r.transport.rewriteResponse(data)
+	}
+	return r.inner.Write(data)
+}
+
+func (r *permissionResponseRewriter) Close() error {
+	return r.inner.Close()
 }

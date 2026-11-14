@@ -26,6 +26,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessOpenCode,
 		domain.HarnessOpenCodeV2,
 		domain.HarnessDroid,
+		domain.HarnessGrok,
 		domain.HarnessKimi,
 		domain.HarnessKimchi,
 		domain.HarnessPi,
@@ -35,7 +36,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
-		domain.HarnessMiniMaxCode,
+		domain.HarnessHermes,
 	} {
 		if !r.SupportsChat(harness) {
 			t.Errorf("%s has no chat driver", harness)
@@ -46,10 +47,11 @@ func TestShippedChatDrivers(t *testing.T) {
 	}
 
 	// Every other harness stays TUI-only, and asking for chat must be refused with a
-	// typed answer rather than quietly producing a terminal session.
+	// typed answer rather than quietly producing a terminal session. MiniMax Code
+	// has an ACP binding, but Chat admission stays gated until it is qualified.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
-		domain.HarnessHermes, // TUI-only until a chat driver is qualified
+		domain.HarnessMiniMaxCode,
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

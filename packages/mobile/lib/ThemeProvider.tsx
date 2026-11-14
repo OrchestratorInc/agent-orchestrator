@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from "expo-modules-core";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Appearance, Platform, useColorScheme } from "react-native";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { Appearance, AppState, Platform, processColor, StatusBar, useColorScheme } from "react-native";
+import { composeThemeFor } from "./composeTheme";
 import { themeFor, type ColorScheme, type Theme } from "./theme";
 import {
 	DEFAULT_PREFERENCE,
@@ -106,11 +107,43 @@ export function ThemeProvider({ children, initial }: { children: ReactNode; init
 	//
 	// Guarded like the window colour above, because the module is native and a
 	// build made before it would have nothing to bind to.
+	//
+	// The status bar's icons are set here too, not only by the root <StatusBar>:
+	// React Native drops a style change that arrives while no activity is
+	// attached, and <StatusBar> only sends again when the style changes, so a
+	// scheme flip that lands then would leave black icons on a dark screen (or
+	// the reverse) until the next flip. Both bars are re-applied each time the
+	// app comes forward as well as on every scheme change.
 	useEffect(() => {
 		if (Platform.OS !== "android") return;
-		const navigationBar = requireOptionalNativeModule<{ setStyle(style: "light" | "dark"): Promise<void> }>("ExpoNavigationBar");
-		void navigationBar?.setStyle(scheme === "dark" ? "light" : "dark").catch(() => {});
+		const applySystemBars = () => {
+			StatusBar.setBarStyle(scheme === "dark" ? "light-content" : "dark-content");
+			const navigationBar = requireOptionalNativeModule<{ setStyle(style: "light" | "dark"): Promise<void> }>("ExpoNavigationBar");
+			void navigationBar?.setStyle(scheme === "dark" ? "light" : "dark").catch(() => {});
+		};
+		applySystemBars();
+		const subscription = AppState.addEventListener("change", (state) => {
+			if (state === "active") applySystemBars();
+		});
+		return () => subscription.remove();
 	}, [scheme]);
+
+	// Compose controls draw in this palette and family rather than the
+	// wallpaper's colours and Roboto. Optional for the same reason as above: a
+	// build without the `@expo/ui` patch has no `setAppTheme`. A layout effect,
+	// so the Hosts in the first frame after a theme change already have it.
+	useLayoutEffect(() => {
+		if (Platform.OS !== "android") return;
+		const expoUI = requireOptionalNativeModule<{ setAppTheme?(options: object): void }>("ExpoUI");
+		if (!expoUI?.setAppTheme) return;
+		const compose = composeThemeFor(theme, scheme === "dark");
+		const colors: Record<string, number> = {};
+		for (const [role, color] of Object.entries(compose.colors)) {
+			const argb = processColor(color);
+			if (typeof argb === "number") colors[role] = argb;
+		}
+		expoUI.setAppTheme({ ...compose, colors });
+	}, [theme, scheme]);
 
 	const value = useMemo<ThemeState>(
 		() => ({ theme, scheme, preference, setPreference, style, setStyle }),

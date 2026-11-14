@@ -37,7 +37,7 @@ async function allowedReadPath(input: string): Promise<string> {
 		const rel = relative(root, actual);
 		if (rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel))) return actual;
 	}
-	throw new Error("read path is outside the checkout and AO prompt directory");
+	throw new Error("read path is outside the checkout and Orchestrator prompt directory");
 }
 
 function safeRef(value: string | undefined, fallback: string): string {
@@ -59,10 +59,10 @@ function pathWithin(root: string, path: string): boolean {
 
 async function activeManifest(): Promise<ReviewManifest> {
 	const pointerPath = await realpath(manifestPointer);
-	if (pointerPath !== manifestPointer) throw new Error("active manifest pointer must be a regular AO-owned path");
+	if (pointerPath !== manifestPointer) throw new Error("active manifest pointer must be a regular Orchestrator-owned path");
 	const manifestPath = await realpath((await readFile(pointerPath, "utf8")).trim());
 	const manifestRoot = await realpath(join(dirname(pointerPath), "manifests"));
-	if (!pathWithin(manifestRoot, manifestPath)) throw new Error("active manifest is outside the AO manifest directory");
+	if (!pathWithin(manifestRoot, manifestPath)) throw new Error("active manifest is outside the Orchestrator manifest directory");
 	const parsed = JSON.parse(await readFile(manifestPath, "utf8")) as ReviewManifest;
 	if (parsed.version !== 1 || parsed.workerSessionId !== workerSession || !Array.isArray(parsed.tasks) || parsed.tasks.length === 0) {
 		throw new Error("invalid active review manifest");
@@ -83,7 +83,7 @@ async function authorizedTask(runId: string, prUrl: string, targetSha: string): 
 	const manifest = await activeManifest();
 	const task = manifest.tasks.find((candidate) => candidate.runId === runId);
 	if (!task || task.prUrl !== prUrl || task.targetSha !== targetSha) {
-		throw new Error("run, pull request, and target commit are not an exact active AO review task");
+		throw new Error("run, pull request, and target commit are not an exact active Orchestrator review task");
 	}
 	return task;
 }
@@ -92,7 +92,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "ao_read",
 		label: "Read",
-		description: "Read a UTF-8 file from the review checkout or the AO-owned review prompt directory. Cannot write files.",
+		description: "Read a UTF-8 file from the review checkout or the Orchestrator-owned review prompt directory. Cannot write files.",
 		parameters: Type.Object({ path: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 4000 })) }),
 		async execute(_id, params) {
 			try {
@@ -158,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "github_post_review",
 		label: "Post GitHub review",
-		description: "Post one COMMENT review, including optional inline findings, to the exact run, pull request, and target commit authorized by AO's active manifest. Returns the GitHub review id.",
+		description: "Post one COMMENT review, including optional inline findings, to the exact run, pull request, and target commit authorized by Orchestrator's active manifest. Returns the GitHub review id.",
 		parameters: Type.Object({ runId: Type.String(), prUrl: Type.String(), targetSha: Type.String(), body: Type.String(), comments: Type.Optional(Type.Array(Type.Object({ path: Type.String(), line: Type.Integer({ minimum: 1 }), body: Type.String() }))) }),
 		async execute(_id, params, signal) {
 			let dir = "";
@@ -182,14 +182,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "ao_review_submit",
-		label: "Submit AO review",
-		description: "Submit structured results for run ids in AO's exact active review manifest. The worker session is fixed by AO.",
+		label: "Submit Orchestrator review",
+		description: "Submit structured results for run ids in Orchestrator's exact active review manifest. The worker session is fixed by Orchestrator.",
 		parameters: Type.Object({ reviews: Type.Array(Type.Object({ runId: Type.String(), verdict: Type.Union([Type.Literal("approved"), Type.Literal("changes_requested")]), githubReviewId: Type.Optional(Type.String()), body: Type.String() }), { minItems: 1 }) }),
 		async execute(_id, params, signal) {
 			let dir = "";
 			try {
 				const manifest = await activeManifest();
-				for (const review of params.reviews) if (!manifest.tasks.some((task) => task.runId === review.runId)) throw new Error(`run ${review.runId} is not in the active AO review manifest`);
+				for (const review of params.reviews) if (!manifest.tasks.some((task) => task.runId === review.runId)) throw new Error(`run ${review.runId} is not in the active Orchestrator review manifest`);
 				dir = await mkdtemp(join(promptRoot, "ao-submit-"));
 				const input = join(dir, "reviews.json");
 				await writeFile(input, JSON.stringify({ reviews: params.reviews }), { mode: 0o600 });

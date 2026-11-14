@@ -1,92 +1,40 @@
-import { Feather } from "./icons";
-import { useRef } from "react";
-import { Pressable, StyleSheet } from "react-native";
-import { useTheme } from "./ThemeProvider";
-import type { NativeHeaderButtonIcon } from "./native-header-button";
-import { iconSize, radius, space } from "./tokens";
+import { Badge, BadgedBox, Host, Icon, IconButton } from "@expo/ui/jetpack-compose";
+import { testID } from "@expo/ui/jetpack-compose/modifiers";
+import { nativeHeaderGlyphs, type NativeHeaderButtonProps } from "./native-header-button.types";
+import { useTheme, useThemeState } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
+import { iconSize } from "./tokens";
 
-const icons: Record<NativeHeaderButtonIcon, keyof typeof Feather.glyphMap> = {
-	menu: "menu",
-	bell: "bell",
-	close: "x",
-	check: "check",
-	back: "chevron-left",
-	more: "more-horizontal",
-	add: "plus",
-	trash: "trash-2",
-};
+export type { NativeHeaderButtonIcon, NativeHeaderButtonProps } from "./native-header-button.types";
 
-const TAP_SLOP = space.md;
-const PRESS_FALLBACK_DELAY_MS = 32;
-
-export function NativeHeaderButton({
-	icon,
-	label,
-	onPress,
-}: {
-	icon: NativeHeaderButtonIcon;
-	label: string;
-	onPress: () => void;
-}) {
+/**
+ * Material 3's icon button: a 48dp target with the system's ripple around a
+ * 24dp Material Symbol, and M3's badge for an unread dot. Compose owns the
+ * touch, so a press lands even while the header is moving with the page.
+ */
+export function NativeHeaderButton({ icon, label, onPress, badge = 0 }: NativeHeaderButtonProps) {
 	const t = useTheme();
-	const pressSequence = useRef(0);
-	const pressHandledSequence = useRef(-1);
-	const pressCancelledSequence = useRef(-1);
-	const pressStart = useRef({ x: 0, y: 0 });
-	const pressMaxMovement = useRef(0);
+	const { scheme } = useThemeState();
+	const glyph = (
+		<Icon
+			source={materialDrawable(nativeHeaderGlyphs[icon].android)}
+			size={iconSize.xl}
+			tint={t.textSecondary}
+			contentDescription={label}
+		/>
+	);
 	return (
-		<Pressable
-			testID={`header-${icon}`}
-			accessibilityRole="button"
-			accessibilityLabel={label}
-			hitSlop={{ top: space.sm, right: space.md, bottom: space.sm, left: space.xl }}
-			android_ripple={{ color: t.accentTint, borderless: true, radius: 22 }}
-			onTouchStart={(event) => {
-				pressSequence.current += 1;
-				pressStart.current = { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY };
-				pressMaxMovement.current = 0;
-			}}
-			onTouchMove={(event) => {
-				const dx = event.nativeEvent.pageX - pressStart.current.x;
-				const dy = event.nativeEvent.pageY - pressStart.current.y;
-				pressMaxMovement.current = Math.max(pressMaxMovement.current, Math.hypot(dx, dy));
-			}}
-			onTouchEnd={() => {
-				const sequence = pressSequence.current;
-				const movement = pressMaxMovement.current;
-				setTimeout(() => {
-					if (pressHandledSequence.current === sequence) return;
-					if (pressCancelledSequence.current === sequence) return;
-					if (movement > TAP_SLOP) return;
-					pressHandledSequence.current = sequence;
-					onPress();
-				}, PRESS_FALLBACK_DELAY_MS);
-			}}
-			onTouchCancel={() => {
-				pressCancelledSequence.current = pressSequence.current;
-			}}
-			onPress={() => {
-				pressHandledSequence.current = pressSequence.current;
-				onPress();
-			}}
-			style={({ pressed }) => [
-				styles.button,
-				{ backgroundColor: pressed ? t.accentTint : t.bgElevatedHover, borderColor: t.borderStrong },
-			]}
-		>
-			<Feather name={icons[icon]} size={iconSize.lg} color={t.textSecondary} />
-		</Pressable>
+		<Host matchContents colorScheme={scheme}>
+			<IconButton onClick={onPress} modifiers={[testID(`header-${icon}`)]}>
+				{badge > 0 ? (
+					<BadgedBox>
+						{glyph}
+						<BadgedBox.Badge>
+							<Badge containerColor={t.red} />
+						</BadgedBox.Badge>
+					</BadgedBox>
+				) : glyph}
+			</IconButton>
+		</Host>
 	);
 }
-
-const styles = StyleSheet.create({
-	button: {
-		width: 44,
-		height: 44,
-		borderRadius: radius.pill, borderCurve: "continuous",
-		borderWidth: StyleSheet.hairlineWidth,
-		alignItems: "center",
-		justifyContent: "center",
-		overflow: "hidden",
-	},
-});

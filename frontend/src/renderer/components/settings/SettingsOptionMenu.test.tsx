@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { previewDocumentThemeStyle, type ThemeStyle } from "../../lib/theme";
+import { useUiStore } from "../../stores/ui-store";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 
 describe("SettingsOptionMenu", () => {
@@ -74,6 +76,71 @@ describe("SettingsOptionMenu", () => {
 		unmount();
 
 		expect(onHighlight).toHaveBeenLastCalledWith(null);
+	});
+
+	it.each(["select", "escape"])("ignores hover previews during the closing animation after %s", async (dismiss) => {
+		// JSDOM has no CSS animations or live computed styles. Keep Radix's real
+		// Presence mounted through the same exit animation as the desktop menu.
+		const getComputedStyle = window.getComputedStyle.bind(window);
+		const styles = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+			const style = getComputedStyle(element, pseudo);
+			if (element.getAttribute("role") === "menu") {
+				Object.defineProperty(style, "animationName", {
+					get: () => element.getAttribute("data-state") === "closed" ? "popover-out" : "popover-in",
+				});
+			}
+			return style;
+		});
+		useUiStore.setState({ themeStyle: "github" });
+		const ThemePicker = () => {
+			const value = useUiStore((state) => state.themeStyle);
+			return (
+				<SettingsOptionMenu<ThemeStyle>
+					aria-label="Color theme"
+					value={value}
+					options={[
+						{ value: "github", label: "GitHub" },
+						{ value: "nord", label: "Nord" },
+						{ value: "dracula", label: "Dracula" },
+					]}
+					onChange={(next) => useUiStore.getState().setThemeStyle(next)}
+					onHighlight={(next) => previewDocumentThemeStyle(next, useUiStore.getState().themeStyle)}
+				/>
+			);
+		};
+		try {
+			render(<ThemePicker />);
+			await userEvent.click(screen.getByRole("button", { name: "Color theme" }));
+			await userEvent.hover(screen.getByRole("menuitem", { name: "Nord" }));
+			expect(document.documentElement.dataset.styleTheme).toBe("nord");
+			if (dismiss === "select") {
+				await userEvent.click(screen.getByRole("menuitem", { name: "Nord" }));
+			} else {
+				await userEvent.keyboard("{Escape}");
+			}
+			const saved = dismiss === "select" ? "nord" : "github";
+			expect(screen.getByRole("button", { name: "Color theme" })).toHaveTextContent(dismiss === "select" ? "Nord" : "GitHub");
+			expect(screen.getByRole("menu")).toHaveAttribute("data-state", "closed");
+			await userEvent.hover(screen.getByRole("menuitem", { name: "Dracula" }));
+			expect(useUiStore.getState().themeStyle).toBe(saved);
+			expect(document.documentElement.dataset.styleTheme).toBe(saved);
+
+			// Finish the exit, reopen, and make sure previews work for the next visit.
+			fireEvent(screen.getByRole("menu"), Object.assign(new Event("animationend", { bubbles: true }), { animationName: "popover-out" }));
+			expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Color theme" }));
+			await userEvent.hover(screen.getByRole("menuitem", { name: "Dracula" }));
+			expect(document.documentElement.dataset.styleTheme).toBe("dracula");
+			await userEvent.keyboard("{Escape}");
+			expect(document.documentElement.dataset.styleTheme).toBe(saved);
+		} finally {
+			cleanup();
+			styles.mockRestore();
+			previewDocumentThemeStyle(null, "orchestrate");
+			delete document.documentElement.dataset.styleTheme;
+			useUiStore.setState({ themeStyle: "orchestrate" });
+			window.localStorage.removeItem("ao.theme-style");
+		}
 	});
 
 	it("keeps an action footer outside the shrinking options region", async () => {

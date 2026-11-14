@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SideLaunchRecovery, type SideLaunchAttachment } from "./side-launch-recovery";
 import type { SideLaunchSnapshot } from "./side-close";
 import { SideCloseRecovery } from "./side-close";
+import { resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
+
+const sentryCapture = vi.fn();
 
 const attachment: SideLaunchAttachment = { generation: 1, pid: 11, port: 3002, appRunId: "run" };
 const controllers: SideLaunchRecovery[] = [];
@@ -16,8 +19,46 @@ function setup(snapshot?: SideLaunchSnapshot) {
 	controllers.push(recovery);
 	return { recovery, fetcher, ...options };
 }
-beforeEach(() => vi.useFakeTimers());
-afterEach(() => { for (const controller of controllers.splice(0)) controller.setAttachment(undefined); vi.useRealTimers(); });
+beforeEach(() => { vi.useFakeTimers(); resetMainErrorCaptureForTests(); sentryCapture.mockClear(); setMainErrorSink(sentryCapture); });
+afterEach(() => { for (const controller of controllers.splice(0)) controller.setAttachment(undefined); resetMainErrorCaptureForTests(); vi.useRealTimers(); });
+
+it("reports one restore fault when recovery and background waiters observe the same error", async () => {
+	const { recovery, onRestore } = setup({ appRunId: "run", sides: [{ sessionId: "private-session", sideId: "private-side" }] } as unknown as SideLaunchSnapshot);
+	const error = new TypeError("private restore failure");
+	onRestore.mockImplementation(() => { throw error; });
+	recovery.setAttachment(attachment);
+	recovery.captureInBackground(); recovery.captureInBackground();
+	await vi.advanceTimersByTimeAsync(0);
+	expect(sentryCapture).toHaveBeenCalledExactlyOnceWith({ category: "side_chat", reason: "recovery", error });
+});
+
+it("reports a background snapshot decoding fault after recovery completed", async () => {
+	const { recovery, fetcher } = setup();
+	recovery.setAttachment(attachment); await recovery.ensureReady();
+	const error = new SyntaxError("private snapshot body");
+	fetcher.mockResolvedValue({ ...ok(), json: async () => { throw error; } } as Response);
+	recovery.captureInBackground();
+	await vi.advanceTimersByTimeAsync(0);
+	expect(sentryCapture).toHaveBeenCalledExactlyOnceWith({ category: "side_chat", reason: "recovery", error });
+});
+
+it.each([401, 403, 404, 408, 429, 503, 504])("keeps expected side-chat HTTP %i state out of Sentry", async code => {
+	const { recovery, fetcher } = setup(); fetcher.mockResolvedValue(status(code));
+	recovery.setAttachment(attachment); recovery.captureInBackground();
+	await vi.advanceTimersByTimeAsync(0);
+	expect(sentryCapture).not.toHaveBeenCalled();
+});
+
+it("keeps network loss, timeout and attachment replacement out of Sentry", async () => {
+	const { recovery, fetcher } = setup(); fetcher.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+	recovery.setAttachment(attachment); recovery.captureInBackground();
+	await vi.advanceTimersByTimeAsync(0);
+	fetcher.mockImplementationOnce((_url, init) => hung(init!.signal!));
+	await vi.advanceTimersByTimeAsync(6_000);
+	recovery.setAttachment(undefined);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(sentryCapture).not.toHaveBeenCalled();
+});
 
 it("recovers once and adds no requests or timers while healthy", async () => {
 	const { recovery, fetcher, onReady } = setup();

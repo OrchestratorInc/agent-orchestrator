@@ -77,7 +77,7 @@ func checkActions(tool string, arguments map[string]any) error {
 		stepTool, known := batchTool(name, stepArguments)
 		if !known {
 			return actionRefused("COMPUTER_USE_STEP_UNSUPPORTED", name, index+1,
-				"AO checks every step before the driver runs it and does not know this tool. Use one of: "+batchableList+".")
+				"Orchestrator checks every step before the driver runs it and does not know this tool. Use one of: "+batchableList+".")
 		}
 		if err := checkAction(stepTool, stepArguments, arguments, index+1); err != nil {
 			return err
@@ -159,7 +159,7 @@ func checkAction(tool string, arguments, batch map[string]any, step int) error {
 	}
 	if arguments["scope"] == "desktop" || targetKind(arguments) == "desktop" {
 		return actionRefused("COMPUTER_USE_DESKTOP_SCOPE_DISABLED", tool, step,
-			"AO does not act on the whole screen, which may be in use. Pass the pid and window_id of the window you read with get_window_state instead of scope \"desktop\".")
+			"Orchestrator does not act on the whole screen, which may be in use. Pass the pid and window_id of the window you read with get_window_state instead of scope \"desktop\".")
 	}
 	if has(arguments, "element_token") {
 		return nil
@@ -178,11 +178,11 @@ func checkAction(tool string, arguments, batch map[string]any, step int) error {
 // foregroundRefusal explains why AO refuses foreground delivery: the driver
 // raises the window and sends real input to whatever has focus, which may be
 // the window the user is typing in.
-const foregroundRefusal = "AO does not send foreground input: the driver would raise the window and send real keys and clicks to whatever has focus, which may be the user's own window. Act in the background; if the window is not rendering, ask the user, then bring it to the front with bring_to_front."
+const foregroundRefusal = "Orchestrator does not send foreground input: the driver would raise the window and send real keys and clicks to whatever has focus, which may be the user's own window. Act in the background; if the window is not rendering, ask the user, then bring it to the front with bring_to_front."
 
 // foregroundAdvice replaces the driver's own suggestion to retry an action
 // with delivery_mode "foreground", which AO refuses.
-const foregroundAdvice = "AO refuses delivery_mode \"foreground\". If the action did not land because the window is not rendering, ask the user, then bring it to the front with bring_to_front and act again."
+const foregroundAdvice = "Orchestrator refuses delivery_mode \"foreground\". If the action did not land because the window is not rendering, ask the user, then bring it to the front with bring_to_front and act again."
 
 // adviceKeys are the result fields where the driver gives advice. The window's
 // tree is left out: an app's own labels can mention "foreground".
@@ -295,7 +295,7 @@ func actionRefused(code, tool string, step int, message string) error {
 // driverRefusalHints add AO's advice to driver refusals whose own suggestion
 // would be unsafe or misleading for an agent.
 var driverRefusalHints = map[string]string{
-	"desktop_scope_disabled": "AO does not act on the whole screen: pass the pid and window_id of the window you read with get_window_state, not scope \"desktop\".",
+	"desktop_scope_disabled": "Orchestrator does not act on the whole screen: pass the pid and window_id of the window you read with get_window_state, not scope \"desktop\".",
 }
 
 // missingArgument is the driver's plain-text answer to arguments its schema

@@ -111,7 +111,7 @@ func checkLegacyDatabasePath(dataDir string) error {
 		return fmt.Errorf("inspect legacy database: %w", readErr)
 	}
 	if n == len(header) && string(header[:]) == "SQLite format 3\x00" {
-		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop AO and recover the legacy database explicitly before retrying", legacy, intended)
+		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop Orchestrator and recover the legacy database explicitly before retrying", legacy, intended)
 	}
 	return nil
 }
@@ -146,16 +146,46 @@ func Open(dataDir string) (*Store, error) {
 		_ = writeDB.Close()
 		return nil, err
 	}
-
-	readDB, err := sql.Open("sqlite", dsn)
+	store, err := withSearchIndex(dataDir, dsn, writeDB)
 	if err != nil {
 		_ = writeDB.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+// withSearchIndex opens the reader pool beside an open, migrated writer, then
+// the optional session search index (search_db.go).
+//
+// The index never decides whether the store opens: one that cannot be opened
+// is recorded on the store (SessionSearchUnavailable) and search stays off,
+// while every other read and write works as usual.
+func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
+	readDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
 	}
 	readDB.SetMaxOpenConns(maxReaders)
 	readDB.SetMaxIdleConns(maxReaders)
+	store := sqlitestore.NewStore(writeDB, readDB)
 
-	return sqlitestore.NewStore(writeDB, readDB), nil
+	if sessionSearchSwitchedOff() {
+		store.SetSearchUnavailable(errSessionSearchOff)
+		return store, nil
+	}
+	searchDB, reset, err := openSearchWriter(dataDir, writeDB)
+	if err != nil {
+		store.SetSearchUnavailable(fmt.Errorf("open session search index: %w", err))
+		return store, nil
+	}
+	searchReaders, err := openSearchReaders(dataDir, dsn)
+	if err != nil {
+		_ = searchDB.Close()
+		store.SetSearchUnavailable(fmt.Errorf("open session search readers: %w", err))
+		return store, nil
+	}
+	store.SetSearchIndex(searchDB, searchReaders, reset)
+	return store, nil
 }
 
 // OpenReadOnly opens an existing SQLite database under dataDir without creating
@@ -282,15 +312,12 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 		)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	store, err := withSearchIndex(dataDir, dsn, writeDB)
 	if err != nil {
 		_ = writeDB.Close()
-		return nil, fmt.Errorf("open sqlite reader: %w", err)
+		return nil, err
 	}
-	readDB.SetMaxOpenConns(maxReaders)
-	readDB.SetMaxIdleConns(maxReaders)
-
-	return sqlitestore.NewStore(writeDB, readDB), nil
+	return store, nil
 }
 
 func migrate(db *sql.DB) error {
@@ -1660,6 +1687,19 @@ SELECT (SELECT COUNT(*) FROM sqlite_master
 	if kimiUsageShape == 2 {
 		return nil
 	}
+	var openUsageShape int
+	if err := db.QueryRow(`
+SELECT (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_bindings'
+          AND instr(COALESCE(sql, ''), 'trim(harness)') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_sources'
+          AND instr(COALESCE(sql, ''), 'trim(kind)') > 0)`).Scan(&openUsageShape); err != nil {
+		return err
+	}
+	if openUsageShape == 2 {
+		return nil
+	}
 
 	_, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 117`)
 	return err
@@ -2062,6 +2102,10 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
+	// another migration first, and generated message reads select this column.
+	{version: 199, table: "conversation_messages", column: "continuation",
+		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
@@ -2105,7 +2149,7 @@ func reconcileSchema(db *sql.DB) error {
 		return fmt.Errorf("schema verification: inspect session revision fence: %w", err)
 	}
 	if revisionColumn > 0 && revisionTrigger != 1 {
-		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting AO")
+		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting Orchestrator")
 	}
 	return nil
 }

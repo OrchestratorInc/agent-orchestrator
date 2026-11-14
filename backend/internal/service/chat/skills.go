@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"os"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -21,7 +22,8 @@ var ErrSkillsUnsupported = errors.New("chat driver cannot list skills")
 // without AO being told. A list AO cached at build time would offer commands that
 // no longer exist and hide ones the user just wrote.
 func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.ChatSkill, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 	controller, err := s.Controller(id)
@@ -32,5 +34,10 @@ func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.Chat
 	if !ok {
 		return nil, ErrSkillsUnsupported
 	}
-	return lister.ListSkills(ctx)
+	skills, err := lister.ListSkills(ctx)
+	if err != nil {
+		return nil, err
+	}
+	home, _ := os.UserHomeDir()
+	return withSkillMetadata(skills, skillRoots(record.Metadata.WorkspacePath, home)), nil
 }

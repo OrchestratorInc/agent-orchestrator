@@ -62,7 +62,9 @@ WHERE handled_by_session_id = sqlc.arg(session_id) AND usage_limit_auto_resume =
 
 -- Each usage event counts for the account its session used when the event
 -- happened; an event older than the session's first binding counts for that
--- first account. Days are UTC calendar days.
+-- first account. Days are UTC calendar days. A non-empty session_id limits the
+-- sum to that session's events (folded into deleted_session_account_usage
+-- before the session is deleted).
 -- name: AgentAccountUsageSince :many
 SELECT
     CAST(COALESCE(
@@ -87,5 +89,25 @@ FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
 WHERE e.created_at >= sqlc.arg(since)
   AND b.harness IN ('claude-code', 'codex')
+  AND (CAST(sqlc.arg(session_id) AS TEXT) = '' OR b.session_id = CAST(sqlc.arg(session_id) AS TEXT))
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3;
+
+-- name: DeletedSessionAccountUsageSince :many
+SELECT account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+FROM deleted_session_account_usage
+WHERE day >= CAST(sqlc.arg(since_day) AS TEXT)
+ORDER BY day, account_id, model_id;
+
+-- name: AddDeletedSessionAccountUsage :exec
+INSERT INTO deleted_session_account_usage (
+    account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+) VALUES (
+    sqlc.arg(account_id), sqlc.arg(day), sqlc.arg(model_id), sqlc.arg(input_tokens),
+    sqlc.arg(cached_input_tokens), sqlc.arg(output_tokens), sqlc.arg(estimated_cost_nanos)
+)
+ON CONFLICT (account_id, day, model_id) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    estimated_cost_nanos = estimated_cost_nanos + excluded.estimated_cost_nanos;

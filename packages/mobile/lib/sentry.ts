@@ -1,181 +1,190 @@
-// Mobile Sentry sink (@sentry/react-native), mirroring the desktop renderer sink
-// so both classify errors identically. No-op until BOTH hold:
-//   1. a DSN is configured via EXPO_PUBLIC_SENTRY_DSN, and
-//   2. the @sentry/react-native SDK is installed.
-//
-// The SDK is intentionally NOT added to package.json yet: @sentry/react-native
-// is a native module, so installing it correctly means `npx expo install
-// @sentry/react-native` (to pick the SDK-54-compatible version) plus a prebuild
-// cycle to regenerate the committed native projects, and the config plugin for
-// source maps. Adding it without that would leave the committed ios/ prebuild
-// inconsistent. Ship steps, in order:
-//   1. `npx expo install @sentry/react-native`  (do not hand-pin the version),
-//      then point loadSdk() below at the real import
-//   2. add the @sentry/react-native Expo config plugin, then `npx expo prebuild`
-//   3. wire source-map upload at EAS build time AND on every `eas update`
-//      (the Sentry Expo plugin does both), and set `dist` to the running
-//      expo-updates id so an OTA bundle's maps resolve
-//   4. set EXPO_PUBLIC_SENTRY_DSN and update the store Data-Safety / App-Privacy
-//      declarations (a second processor gates the mobile release)
-// Until then this file compiles and runs as a no-op with no native dependency.
-
-import { classifyError, type ClassifyInput, type Triage } from "./observability";
+import type { ErrorEvent, StackFrame } from "@sentry/react-native";
+import { classifyError, type ClassifyInput } from "./observability";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
-type SentryLike = {
-	init: (opts: Record<string, unknown>) => void;
-	captureException: (err: unknown, hint?: Record<string, unknown>) => void;
-	captureMessage: (msg: string, hint?: Record<string, unknown>) => void;
-	addBreadcrumb: (crumb: Record<string, unknown>) => void;
-};
+const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);
+const INSTALL_ID = /^ins_[0-9a-f-]{36}$/;
 
-let sentry: SentryLike | null = null;
-let initStarted = false;
+let initialized = false;
+let permitted = false;
+let initPromise: Promise<void> | null = null;
+let sentry: typeof import("@sentry/react-native") | null = null;
+let pairedInstallId: string | null = null;
+let daemonVersion: string | undefined;
+let observabilityContext: MobileObservabilityContext = {};
+let consentGeneration = 0;
+const allowedEventIds = new Set<string>();
 
 function dsn(): string {
-	try {
-		return process.env.EXPO_PUBLIC_SENTRY_DSN?.trim() || DEFAULT_SENTRY_DSN;
-	} catch {
-		return DEFAULT_SENTRY_DSN;
-	}
+	const override = process.env.EXPO_PUBLIC_SENTRY_DSN;
+	return override === undefined ? DEFAULT_SENTRY_DSN : override.trim();
 }
 
-const LOCAL_URL = /(?:\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|100\.\d+\.\d+\.\d+|[^\s/]+\.ts\.net)(?::\d+)?\S*)/gi;
-const HOME_PATH = /\/(?:Users|home|data\/data)\/[^\s"']+/g;
-function scrub(value: unknown): unknown {
-	if (typeof value === "string") return value.replace(LOCAL_URL, "[redacted-url]").replace(HOME_PATH, "[redacted-path]");
-	return value;
-}
-function scrubEvent(event: Record<string, unknown>): Record<string, unknown> {
-	if (typeof event.message === "string") event.message = scrub(event.message) as string;
-	const exception = event.exception as { values?: Array<{ value?: unknown }> } | undefined;
-	for (const v of exception?.values ?? []) if (typeof v.value === "string") v.value = scrub(v.value);
-	return event;
+function environment(channel?: string): string {
+	return channel === "production" ? "stable" : channel === "preview" ? "preview" : "development";
 }
 
-export type MobileObservabilityContext = { release?: string; distinctId?: string; daemonVersion?: string };
-let ctx: MobileObservabilityContext = {};
-
-// A nightly/edge/pr release is not stable; keep those out of stable release
-// health. release on mobile is version@build.
-function channelOf(release: string): string {
-	const v = release.toLowerCase();
-	if (v.includes("nightly")) return "nightly";
-	if (v.includes("edge") || v.includes("pr")) return "development";
-	return "stable";
+function safeFrame(frame: StackFrame): StackFrame {
+	return {
+		function: "mobile_frame",
+		lineno: Number.isSafeInteger(frame.lineno) && (frame.lineno ?? 0) > 0 ? frame.lineno : undefined,
+		colno: Number.isSafeInteger(frame.colno) && (frame.colno ?? 0) > 0 ? frame.colno : undefined,
+	};
 }
 
-/**
- * The mobile app talks to the user's own daemon over Tailscale, which can be
- * older than the app. A mobile issue is uninterpretable without knowing which
- * daemon produced the failure, so it rides every event as a tag. Set it once
- * the paired daemon's version is known (desktop bundles its daemon, so this is
- * mobile-only).
- */
+export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null {
+	if (!permitted) return null;
+	if (event.tags?.["ao.consent_generation"] !== String(consentGeneration)) return null;
+	const category = typeof event.tags?.["ao.category"] === "string" && SAFE_CATEGORIES.has(event.tags["ao.category"])
+		? event.tags["ao.category"] : "other";
+	const severity = typeof event.tags?.["ao.severity"] === "string" && /^P[0-3]$/.test(event.tags["ao.severity"])
+		? event.tags["ao.severity"] : undefined;
+	const title = event.message === "Mobile API error" ? "Mobile API error" : "Mobile error";
+	const values = event.exception?.values?.map((value) => ({
+		type: "MobileError",
+		value: "Mobile error",
+		stacktrace: value.stacktrace?.frames ? { frames: value.stacktrace.frames.map(safeFrame) } : undefined,
+	}));
+	const clean: ErrorEvent = {
+		type: undefined,
+		event_id: event.event_id,
+		timestamp: event.timestamp,
+		level: event.level,
+		platform: "javascript",
+		release: observabilityContext.release,
+		environment: environment(observabilityContext.channel),
+		message: title,
+		exception: values?.length ? { values } : undefined,
+		tags: {
+			"ao.platform": "mobile",
+			"ao.category": category,
+			...(severity ? { "ao.severity": severity } : {}),
+			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
+		},
+		fingerprint: ["mobile", title, category],
+		user: pairedInstallId ? { id: pairedInstallId } : undefined,
+	};
+	if (clean.event_id) allowedEventIds.add(clean.event_id);
+	return clean;
+}
+
+export type MobileObservabilityContext = { release?: string; channel?: string };
+
+export function setMobileSentryContext(context: MobileObservabilityContext): void {
+	observabilityContext = context;
+	if (permitted) void initMobileSentry();
+}
+
 export function setMobileDaemonVersion(version: string): void {
-	ctx = { ...ctx, daemonVersion: version };
+	daemonVersion = version;
 }
 
-// Stub until @sentry/react-native is installed (ship steps above). Not a
-// computed import(): Metro rejects those in app code at bundle time.
-async function loadSdk(): Promise<SentryLike | null> {
-	return null;
+export function setMobileSentryPairedInstallId(id: string | null): void {
+	pairedInstallId = id && INSTALL_ID.test(id) ? id : null;
+	sentry?.setUser(pairedInstallId ? { id: pairedInstallId } : null);
 }
 
-/** Initialize once. No DSN or no SDK → stays a no-op forever. */
-export async function initMobileSentry(context: MobileObservabilityContext = {}): Promise<void> {
-	ctx = context;
-	if (initStarted || sentry) return;
-	const d = dsn();
-	if (!d) return;
-	initStarted = true;
-	try {
-		const mod = await loadSdk();
-		if (!mod) return;
-		mod.init({
-			dsn: d,
-			release: context.release,
-			environment: channelOf(context.release ?? ""),
-			enableAutoSessionTracking: false,
-			// No PII (no device name, no IP-derived fields we can avoid).
-			sendDefaultPii: false,
-			// Deny-by-default. @sentry/react-native auto-captures fetch/XHR
-			// breadcrumbs with FULL URLs — on mobile that is the user's Tailscale
-			// host, exactly what must never leave the device. Cap breadcrumbs to
-			// zero (none retained or sent) and turn off auto performance/HTTP
-			// tracing rather than relying on scrubbing. Events reach Sentry only
-			// through our capture seams with safe enum/id tags.
-			maxBreadcrumbs: 0,
-			enableAutoPerformanceTracing: false,
-			tracesSampleRate: 0,
-			beforeSend: (event: Record<string, unknown>) => scrubEvent(event),
-			beforeBreadcrumb: (crumb: Record<string, unknown> | null) => (crumb ? scrubEvent(crumb) : crumb),
-		});
-		sentry = mod;
-	} catch {
-		sentry = null;
+export function setMobileSentryConsent(allowed: boolean): void {
+	if (permitted !== allowed) {
+		consentGeneration++;
+		allowedEventIds.clear();
 	}
+	permitted = allowed;
+	if (!allowed) {
+		pairedInstallId = null;
+		sentry?.setUser(null);
+	}
+	if (allowed) void initMobileSentry();
+}
+
+export function initMobileSentry(): Promise<void> {
+	if (initialized || !permitted || process.env.EXPO_PUBLIC_AO_TELEMETRY_DISABLED === "1") return Promise.resolve();
+	if (initPromise) return initPromise;
+	const configuredDsn = dsn();
+	if (!configuredDsn) return Promise.resolve();
+	const generation = consentGeneration;
+	initPromise = initialize(configuredDsn, generation).finally(() => {
+		initPromise = null;
+		if (permitted && !initialized && generation !== consentGeneration) void initMobileSentry();
+	});
+	return initPromise;
+}
+
+async function initialize(configuredDsn: string, generation: number): Promise<void> {
+	let sdk: typeof import("@sentry/react-native");
+	let makeFetchTransport: typeof import("@sentry/browser")["makeFetchTransport"];
+	try {
+		[{ default: sdk }, { makeFetchTransport }] = await Promise.all([
+			import("@sentry/react-native").then((module) => ({ default: module })),
+			import("@sentry/browser"),
+		]);
+	} catch {
+		return;
+	}
+	if (!permitted || generation !== consentGeneration) return;
+	sdk.init({
+		dsn: configuredDsn,
+		release: observabilityContext.release,
+		environment: environment(observabilityContext.channel),
+		sendDefaultPii: false,
+		enableNative: false,
+		enableAutoSessionTracking: false,
+		enableAutoPerformanceTracing: false,
+		enableCaptureFailedRequests: false,
+		tracesSampleRate: 0,
+		maxBreadcrumbs: 0,
+		maxQueueSize: 1,
+		// TelemetryManager owns uncaught JS capture so it can attach the consent
+		// generation before Sentry's duplicate-event guard sees the exception.
+		integrations: (defaults) => defaults.filter((integration) => integration.name !== "ReactNativeErrorHandlers"),
+		// The native transport persists offline envelopes without a consent-aware
+		// purge. The fetch transport discards failed sends and checks consent again.
+		transport: (options) => {
+			const guardedFetch: typeof fetch = (...args) =>
+				permitted ? fetch(...args) : Promise.reject(new Error("Telemetry disabled"));
+			const transport = makeFetchTransport(options, guardedFetch);
+			return {
+				send: (envelope) => {
+					const ids = envelope[1]
+						.filter(([header]) => header.type === "event")
+						.map(([, payload]) => (payload as { event_id?: unknown }).event_id)
+						.filter((id): id is string => typeof id === "string");
+					if (!permitted || !ids.length || ids.some((id) => !allowedEventIds.has(id))) return Promise.resolve({});
+					for (const id of ids) allowedEventIds.delete(id);
+					return transport.send(envelope);
+				},
+				flush: (timeout) => permitted ? transport.flush(timeout) : Promise.resolve(true),
+			};
+		},
+		beforeSend: sanitizeMobileSentryEvent,
+	});
+	sentry = sdk;
+	initialized = true;
+	sdk.setUser(pairedInstallId ? { id: pairedInstallId } : null);
 }
 
 type CaptureMeta = ClassifyInput & { operation?: string; surface?: string; domain?: string; requestId?: string };
 
-function tagsFor(meta: CaptureMeta, triage: Triage) {
-	return {
-		platform: "mobile",
-		surface: meta.surface,
-		domain: meta.domain,
-		operation: meta.operation,
-		category: meta.category,
-		code: meta.code,
-		http_status: meta.httpStatus,
-		apierr_kind: meta.kind,
-		// Correlates with the daemon's own request_id tag on the matching capture.
-		request_id: meta.requestId,
-		severity: triage.severity,
-		owner: triage.owner,
-		daemon_version: ctx.daemonVersion,
-	};
-}
-
-// Collapse id-like path segments to :id so the operation is a low-cardinality
-// route template, never a per-request value (no session ids in tags, no tag
-// cardinality blow-up). Mirrors the renderer's normalizeApiOperation.
-function normalizePath(path: string): string {
-	return path
-		.split("/")
-		.map((seg) => (/^[0-9]+$/.test(seg) || /^[0-9a-fA-F-]{6,}$/.test(seg) ? ":id" : seg))
-		.join("/");
-}
-
 export function captureMobileException(error: unknown, meta: CaptureMeta = {}): void {
-	if (!sentry) return;
+	if (!initialized || !permitted) return;
 	const triage = classifyError(meta);
-	const tags = tagsFor(meta, triage);
-	if (triage.report) sentry.captureException(error, { level: triage.level, tags });
-	else sentry.addBreadcrumb({ category: "handled", level: triage.level, message: String((error as Error)?.message ?? error), data: tags });
+	if (!triage.report) return;
+	sentry?.captureException(error, {
+		level: triage.level,
+		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+	});
 }
 
-/** Capture a classified API failure from the mobile request helper. */
-export function captureMobileApiError(
-	path: string,
-	category: string,
-	status?: number,
-	code?: string,
-	requestId?: string,
-): void {
-	if (!sentry) return;
-	const template = normalizePath(path.split("?")[0]);
-	// domain = first meaningful path segment (…/api/v1/<domain>/…)
-	const parts = template.split("/").filter(Boolean);
-	const domain = parts.includes("v1") ? parts[parts.indexOf("v1") + 1] : parts[0];
-	const meta: CaptureMeta = { operation: template, domain, category, httpStatus: status, code, requestId };
-	const triage = classifyError(meta);
-	const tags = tagsFor(meta, triage);
-	if (triage.report) sentry.captureMessage(`${meta.operation} failed: ${category}${status ? ` (${status})` : ""}`, { level: triage.level, tags });
-	else sentry.addBreadcrumb({ category: "api", level: triage.level, message: `${meta.operation} ${category}`, data: tags });
+export function captureMobileApiError(_path: string, category: string, status?: number, code?: string, _requestId?: string): void {
+	if (!initialized || !permitted) return;
+	const triage = classifyError({ category, httpStatus: status, code });
+	if (!triage.report) return;
+	sentry?.captureMessage("Mobile API error", {
+		level: triage.level,
+		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+	});
 }
 
-/** Map an HTTP status to a transport category. */
 export function httpCategory(status: number): string {
 	return status >= 500 ? "http_5xx" : "http_4xx";
 }

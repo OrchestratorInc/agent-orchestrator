@@ -3,7 +3,6 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import {
-	AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED,
 	parseTelemetryPolicyDiskRecord,
 	telemetryPolicySnapshot,
 	type TelemetryPolicyDiskRecord,
@@ -50,7 +49,7 @@ export function resolveDesktopDataDir(
 }
 
 export class TelemetryPolicyAuthority {
-	readonly durabilitySupported: boolean;
+	readonly durabilitySupported = true;
 	private readonly policyPath: string;
 	private record: TelemetryPolicyDiskRecord;
 	private current: TelemetryPolicySnapshot;
@@ -61,13 +60,11 @@ export class TelemetryPolicyAuthority {
 		dataDir: string;
 		packagedDefault: boolean;
 		platform?: NodeJS.Platform;
-		productionEnabled?: boolean;
 		fs?: TelemetryPolicyFileSystem;
 		now?: () => Date;
 		newGeneration?: () => string;
 	}) {
 		this.policyPath = path.join(options.dataDir, TELEMETRY_POLICY_FILE);
-		this.durabilitySupported = (options.platform ?? process.platform) !== "win32";
 		this.record = this.newRecord(false);
 		this.current = this.snapshotOf(this.record, false);
 	}
@@ -77,7 +74,6 @@ export class TelemetryPolicyAuthority {
 	async load(): Promise<TelemetryPolicySnapshot> {
 		if (this.loaded) return this.snapshot();
 		this.loaded = true;
-		if (!this.durabilitySupported) return this.snapshot();
 		const fs = this.options.fs ?? nodeTelemetryPolicyFileSystem;
 		await fs.mkdir(this.options.dataDir);
 		let stat: PolicyStat;
@@ -92,7 +88,7 @@ export class TelemetryPolicyAuthority {
 			await this.replace(record);
 			return this.snapshot();
 		}
-		if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) return this.snapshot();
+		if (stat.isSymbolicLink() || !stat.isFile() || ((this.options.platform ?? process.platform) !== "win32" && (stat.mode & 0o077) !== 0)) return this.snapshot();
 		let raw: string;
 		try { raw = await fs.readFile(this.policyPath); } catch { return this.snapshot(); }
 		const parsed = parseTelemetryPolicyDiskRecord(raw);
@@ -105,10 +101,6 @@ export class TelemetryPolicyAuthority {
 
 	async setEventsEnabled(eventsEnabled: boolean): Promise<TelemetryPolicySnapshot> {
 		if (!this.loaded) await this.load();
-		if (!this.durabilitySupported) {
-			this.current = { ...this.current, eventsEnabled: false, acknowledged: false };
-			throw new Error("telemetry policy durable replacement is unsupported on Windows");
-		}
 		if (!this.writable) throw new Error("telemetry policy authority is unsafe and cannot be replaced");
 		const record = this.newRecord(eventsEnabled);
 		this.record = record;
@@ -120,9 +112,6 @@ export class TelemetryPolicyAuthority {
 	async retryPendingReplacement(): Promise<TelemetryPolicySnapshot> {
 		if (!this.loaded) await this.load();
 		if (this.current.acknowledged) return this.snapshot();
-		if (!this.durabilitySupported) {
-			throw new Error("telemetry policy durable replacement is unsupported on Windows");
-		}
 		if (!this.writable) throw new Error("telemetry policy authority is unsafe and cannot be replaced");
 		await this.replace(this.record);
 		return this.snapshot();
@@ -130,20 +119,15 @@ export class TelemetryPolicyAuthority {
 
 	private newRecord(eventsEnabled: boolean): TelemetryPolicyDiskRecord {
 		return {
-			schema_version: 2,
+			schema_version: 1,
 			events_enabled: eventsEnabled,
 			consent_generation: (this.options.newGeneration ?? randomUUID)(),
-			consent_production_enabled: this.productionEnabled(),
 			updated_at: (this.options.now?.() ?? new Date()).toISOString(),
 		};
 	}
 
-	private productionEnabled(): boolean {
-		return this.options.productionEnabled ?? AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED;
-	}
-
 	private snapshotOf(record: TelemetryPolicyDiskRecord, acknowledged: boolean): TelemetryPolicySnapshot {
-		return telemetryPolicySnapshot(record, acknowledged, this.productionEnabled());
+		return telemetryPolicySnapshot(record, acknowledged);
 	}
 
 	private async replace(record: TelemetryPolicyDiskRecord): Promise<void> {
@@ -156,8 +140,14 @@ export class TelemetryPolicyAuthority {
 			await handle.sync();
 			await handle.close();
 			handle = undefined;
-			await fs.rename(temporary, this.policyPath);
-			await fs.syncDirectory(this.options.dataDir);
+			for (let attempt = 0; ; attempt++) {
+				try { await fs.rename(temporary, this.policyPath); break; }
+				catch (error) {
+					if ((this.options.platform ?? process.platform) !== "win32" || attempt >= 5 || !isWindowsFileLock(error)) throw error;
+					await new Promise((resolve) => setTimeout(resolve, 20 * 2 ** attempt));
+				}
+			}
+			if ((this.options.platform ?? process.platform) !== "win32") await fs.syncDirectory(this.options.dataDir);
 			this.current = this.snapshotOf(record, true);
 		} finally {
 			if (handle) await handle.close().catch(() => undefined);
@@ -168,4 +158,9 @@ export class TelemetryPolicyAuthority {
 
 function isNotFound(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ENOENT";
+}
+
+function isWindowsFileLock(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error &&
+		((error as { code?: string }).code === "EPERM" || (error as { code?: string }).code === "EBUSY");
 }

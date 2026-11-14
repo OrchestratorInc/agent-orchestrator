@@ -922,6 +922,33 @@ func (q *Queries) ListPRsBySession(ctx context.Context, sessionID domain.Session
 	return items, nil
 }
 
+const listRepositoryRenames = `-- name: ListRepositoryRenames :many
+SELECT host, old_name, name FROM repository_renames
+`
+
+func (q *Queries) ListRepositoryRenames(ctx context.Context) ([]RepositoryRename, error) {
+	rows, err := q.db.QueryContext(ctx, listRepositoryRenames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RepositoryRename{}
+	for rows.Next() {
+		var i RepositoryRename
+		if err := rows.Scan(&i.Host, &i.OldName, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const movePRAliasChecks = `-- name: MovePRAliasChecks :exec
 UPDATE OR IGNORE pr_checks SET pr_url = ?1 WHERE pr_url = ?2
 `
@@ -1020,6 +1047,39 @@ func (q *Queries) MovePRAliasReviews(ctx context.Context, arg MovePRAliasReviews
 	return err
 }
 
+const recordWorkerPRUsage = `-- name: RecordWorkerPRUsage :exec
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported, closed_reported)
+SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
+        THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
+        ELSE pr.url END,
+    sessions.project_id,
+    CASE WHEN ?1 = 0 THEN 1 ELSE 0 END,
+    CASE WHEN ?1 = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END,
+    CASE WHEN ?1 = 0 AND pr.pr_state = 'closed' THEN 1 ELSE 0 END
+FROM pr JOIN sessions ON sessions.id = pr.session_id
+WHERE pr.url = ?2 AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
+ON CONFLICT(pr_key) DO UPDATE SET
+    associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
+    merged_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
+        THEN 1 ELSE usage_pr_measurement.merged_reported END,
+    closed_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'closed'
+        THEN 1 ELSE usage_pr_measurement.closed_reported END
+`
+
+type RecordWorkerPRUsageParams struct {
+	ExportAllowed interface{}
+	PRURL         string
+}
+
+// While export is not allowed, every outcome observed (association, merge,
+// close) is consumed here, so a later opt-in never exports the off interval.
+func (q *Queries) RecordWorkerPRUsage(ctx context.Context, arg RecordWorkerPRUsageParams) error {
+	_, err := q.db.ExecContext(ctx, recordWorkerPRUsage, arg.ExportAllowed, arg.PRURL)
+	return err
+}
+
 const repointPRAliases = `-- name: RepointPRAliases :exec
 UPDATE pr_url_alias
 SET canonical_url = ?1
@@ -1088,6 +1148,22 @@ type UpdatePRLastNudgeSignatureParams struct {
 
 func (q *Queries) UpdatePRLastNudgeSignature(ctx context.Context, arg UpdatePRLastNudgeSignatureParams) error {
 	_, err := q.db.ExecContext(ctx, updatePRLastNudgeSignature, arg.LastNudgeSignature, arg.URL)
+	return err
+}
+
+const upgradeWorkerPRUsageIdentity = `-- name: UpgradeWorkerPRUsageIdentity :exec
+UPDATE OR IGNORE usage_pr_measurement
+SET pr_key = (SELECT pr.provider || ':' || pr.host || ':' || pr.provider_id FROM pr WHERE pr.url = ?1)
+WHERE pr_key IN (
+    SELECT alias_url FROM pr_url_alias WHERE canonical_url = ?1
+    UNION SELECT ?1
+)
+AND EXISTS (SELECT 1 FROM pr WHERE pr.url = ?1
+    AND pr.provider <> '' AND pr.provider_id <> '')
+`
+
+func (q *Queries) UpgradeWorkerPRUsageIdentity(ctx context.Context, prUrl string) error {
+	_, err := q.db.ExecContext(ctx, upgradeWorkerPRUsageIdentity, prUrl)
 	return err
 }
 
@@ -1348,5 +1424,22 @@ type UpsertPRAliasParams struct {
 
 func (q *Queries) UpsertPRAlias(ctx context.Context, arg UpsertPRAliasParams) error {
 	_, err := q.db.ExecContext(ctx, upsertPRAlias, arg.AliasURL, arg.CanonicalURL)
+	return err
+}
+
+const upsertRepositoryRename = `-- name: UpsertRepositoryRename :exec
+INSERT INTO repository_renames(host, old_name, name)
+VALUES (?1, ?2, ?3)
+ON CONFLICT(host, old_name) DO UPDATE SET name = excluded.name
+`
+
+type UpsertRepositoryRenameParams struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
+func (q *Queries) UpsertRepositoryRename(ctx context.Context, arg UpsertRepositoryRenameParams) error {
+	_, err := q.db.ExecContext(ctx, upsertRepositoryRename, arg.Host, arg.OldName, arg.Name)
 	return err
 }

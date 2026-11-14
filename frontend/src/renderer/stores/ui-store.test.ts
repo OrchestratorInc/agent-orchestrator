@@ -66,8 +66,8 @@ describe("global settings deep links", () => {
 			focusAgentId: "codex",
 		});
 
-		useUiStore.getState().openGlobalSettings("agents");
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "agents" });
+		useUiStore.getState().openGlobalSettings("mobile");
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile" });
 	});
 
 	it("preserves project settings only for explicit recovery navigation", () => {
@@ -86,6 +86,17 @@ describe("global settings deep links", () => {
 		});
 		useUiStore.getState().closeSettings();
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "project-1" });
+	});
+
+	it("drops a pending account sign-in when settings close or project settings open", () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", loginAccountId: "acct-b" });
+		expect(useUiStore.getState().accountLogin).toBe("acct-b");
+		useUiStore.getState().closeSettings();
+		expect(useUiStore.getState().accountLogin).toBeNull();
+
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", loginAccountId: "acct-b" });
+		useUiStore.getState().openProjectSettings("project-1");
+		expect(useUiStore.getState().accountLogin).toBeNull();
 	});
 });
 
@@ -131,6 +142,28 @@ describe("cloud review cleanup", () => {
 async function bootStore() {
 	return (await import("./ui-store")).useUiStore;
 }
+
+describe("chat send key preference", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+		useUiStore.setState({ chatSendKeyMode: "enter" });
+	});
+
+	it("defaults to Enter sends, including for an invalid saved value", async () => {
+		expect((await bootStore()).getState().chatSendKeyMode).toBe("enter");
+		vi.resetModules();
+		window.localStorage.setItem("ao.chatSendKeyMode", "invalid");
+		expect((await bootStore()).getState().chatSendKeyMode).toBe("enter");
+	});
+
+	it.each(["enter", "mod-enter"] as const)("persists %s across a renderer restart", async (mode) => {
+		useUiStore.getState().setChatSendKeyMode(mode);
+		expect(useUiStore.getState().chatSendKeyMode).toBe(mode);
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe(mode);
+		expect((await bootStore()).getState().chatSendKeyMode).toBe(mode);
+	});
+});
 
 describe("Cloud review persistence", () => {
 	beforeEach(() => {
@@ -200,19 +233,19 @@ describe("navigation gestures", () => {
 		useUiStore.setState({ navigationGestures: false });
 	});
 
-	it("is off by default", async () => {
-		expect((await bootStore()).getState().navigationGestures).toBe(false);
+	it("is on by default", async () => {
+		expect((await bootStore()).getState().navigationGestures).toBe(true);
 	});
 
 	it("restores the saved choice after restarting", async () => {
-		useUiStore.getState().setNavigationGestures(true);
-		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("true");
+		useUiStore.getState().setNavigationGestures(false);
+		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("false");
 		let store = await bootStore();
-		expect(store.getState().navigationGestures).toBe(true);
-		store.getState().setNavigationGestures(false);
+		expect(store.getState().navigationGestures).toBe(false);
+		store.getState().setNavigationGestures(true);
 		vi.resetModules();
 		store = await bootStore();
-		expect(store.getState().navigationGestures).toBe(false);
+		expect(store.getState().navigationGestures).toBe(true);
 	});
 });
 
@@ -379,5 +412,24 @@ describe("palette search requests", () => {
 		expect(useUiStore.getState().chatMessageFocusRequest).not.toBeNull();
 		useUiStore.getState().clearChatMessageFocusRequest(request!.nonce);
 		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
+	});
+});
+
+describe("retired new sidebar design switch", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("boots into the one sidebar design for someone who had switched it off", async () => {
+		window.localStorage.setItem("ao.developerMode", "true");
+		window.localStorage.setItem("ao.newSidebarDesign", "false");
+
+		const state = (await bootStore()).getState();
+
+		expect(state).not.toHaveProperty("newSidebarDesign");
+		expect(state).not.toHaveProperty("setNewSidebarDesign");
+		expect(window.localStorage.getItem("ao.newSidebarDesign")).toBeNull();
+		expect(document.documentElement.hasAttribute("data-legacy-status-colors")).toBe(false);
 	});
 });

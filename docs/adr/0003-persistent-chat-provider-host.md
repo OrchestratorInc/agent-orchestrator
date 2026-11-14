@@ -41,8 +41,13 @@ Codex app-server uses the original raw protocol profile:
 - Controller-generation checks in SQLite remain the projection fence. The
   transport additionally rejects concurrent attachment, preventing two live
   daemon controllers from writing the provider connection.
-- Normal daemon shutdown—including window-close supervisor shutdown, full app
-  quit, and updater handoff—detaches. Explicit session kill, controller
+- Normal daemon shutdown—including window-close supervisor shutdown and updater
+  handoff—detaches. Desktop exit requests process shutdown while retaining
+  session history and worktrees; it targets only the app-owned daemon identified
+  by the desktop's run record. Unexpected desktop death has the same effect
+  after the supervisor grace period. Updates and planned relaunches request
+  daemon replacement before disconnecting, preserving provider processes.
+  Explicit session kill, controller
   replacement, or durable orphan reconciliation sends authenticated shutdown.
 - Deliberate detach does not project `ActivityExited`, settle the active turn, or
   fail pending input. A live reconnect also skips the native-history settled

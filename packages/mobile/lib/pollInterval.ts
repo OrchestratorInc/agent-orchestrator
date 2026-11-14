@@ -1,4 +1,5 @@
 import type { ServerConfig } from "./config";
+import { isQuickTunnelHost } from "./staleTunnel";
 
 /**
  * How often to poll, given which endpoint won the race.
@@ -10,8 +11,9 @@ import type { ServerConfig } from "./config";
  * Measured against a real tunnel: the body is forwarded in ~128 KB chunks, so
  * a few-hundred-byte chat event is never pushed through on its own. A reply
  * that took the agent two seconds sat unseen for over a minute, while the same
- * conversation was instant over the LAN. Until that path carries a stream —
- * a named tunnel, or a relay — polling faster is what keeps it usable.
+ * conversation was instant over the LAN. Until that path carries a stream,
+ * polling faster is what keeps it usable. A named tunnel already carries one,
+ * so it keeps the normal interval.
  *
  * See docs/adr/0004-cloudflare-tunnel-for-remote-mobile-access.md — this is a
  * stopgap, and the exit condition is concrete: conversation events move to the
@@ -25,12 +27,12 @@ import type { ServerConfig } from "./config";
 export const DIRECT_POLL_MS = 8_000;
 
 /**
- * Over the tunnel the poll is the only live signal, so it has to be quick
+ * Over a quick tunnel the poll is the only live signal, so it has to be quick
  * enough to feel immediate. Deliberately a stopgap: it costs battery and data,
  * and it applies only while that path is in use.
  */
 export const TUNNEL_POLL_MS = 2_000;
 
 export function pollIntervalFor(cfg: ServerConfig | null): number {
-	return cfg?.endpointKind === "tunnel" ? TUNNEL_POLL_MS : DIRECT_POLL_MS;
+	return cfg?.endpointKind === "tunnel" && isQuickTunnelHost(cfg.host) ? TUNNEL_POLL_MS : DIRECT_POLL_MS;
 }

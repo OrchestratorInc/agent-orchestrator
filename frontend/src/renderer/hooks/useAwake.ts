@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import {
 	useIsMutating,
 	useMutation,
@@ -5,7 +6,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 
 export type AwakeState = components["schemas"]["AwakeState"];
 export type AwakeSettings = components["schemas"]["AwakeSettings"];
@@ -31,7 +32,7 @@ export function useAwake(enabled = true, detailed = false) {
 			const { data, error } = detailed
 				? await apiClient.GET("/api/v1/awake/observations")
 				: await apiClient.GET("/api/v1/awake");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Stay Awake status is unavailable");
 			return data;
 		},
@@ -88,7 +89,7 @@ export function useAwake(enabled = true, detailed = false) {
 						});
 				}
 			})();
-			if (result.error) throw new Error(apiErrorMessage(result.error));
+			if (result.error) throw apiErrorException(result.error);
 			if (!result.data) throw new Error("Stay Awake status is unavailable");
 			return result.data;
 		},

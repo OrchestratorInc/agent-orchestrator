@@ -69,12 +69,18 @@ func (s *DenylistSink) Close(ctx context.Context) error {
 	return s.next.Close(ctx)
 }
 
-// blocks reports whether an event name is silenced. Both the internal name and
-// the exported PostHog alias are checked, so an operator can type either the
-// name they see in PostHog ("ao.v2.app.active") or the one in the source
-// ("ao.app.active") and get the result they expect.
+// EventDenied reports whether names (the kill-switch list) silences event,
+// with the same matching DenylistSink applies.
+func EventDenied(names []string, event string) bool {
+	s, ok := NewDenylistSink(NoopSink{}, names).(*DenylistSink)
+	return ok && s.blocks(event)
+}
+
+// blocks reports whether an event name is silenced. The current name and every
+// name it was exported under before the rename are checked, so a kill-switch
+// entry written as "ao.v2.app.active" or "ao.session.*" keeps working.
 func (s *DenylistSink) blocks(name string) bool {
-	for _, candidate := range []string{name, remoteEventName(name)} {
+	for _, candidate := range append([]string{name}, legacyEventNames[name]...) {
 		lowered := strings.ToLower(strings.TrimSpace(candidate))
 		if lowered == "" {
 			continue

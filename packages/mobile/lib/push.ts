@@ -201,6 +201,27 @@ function easProjectId(): string | undefined {
 	return extra?.eas?.projectId ?? Constants.easConfig?.projectId;
 }
 
+/**
+ * The Expo push token for this install, for a registrar other than a daemon
+ * (Orchestrator Cloud). Null when this build or device cannot receive pushes, or when
+ * permission is not granted and `ask` is false.
+ */
+export async function expoPushToken({ ask }: { ask: boolean }): Promise<string | null> {
+	if (!Device.isDevice) return null;
+	await ensureAndroidChannel();
+	const current = await Notifications.getPermissionsAsync();
+	let status = current.status;
+	if (status !== "granted" && ask && current.canAskAgain) status = (await Notifications.requestPermissionsAsync()).status;
+	if (status !== "granted") return null;
+	const projectId = easProjectId();
+	if (!projectId) return null;
+	try {
+		return (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+	} catch {
+		return null;
+	}
+}
+
 // Acquire the Expo push token and register it with the daemon. Returns the token
 // on success, or a typed reason on failure so the UI can say something accurate —
 // notably distinguishing "this build can't mint a token" from "the server wasn't

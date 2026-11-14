@@ -3,6 +3,25 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 
 /** Host-qualified sessions with an in-flight optimistic kill. */
 const optimisticKillIds = new Set<string>();
+// Bumped on every change, so memoized lists that apply the kills (the sidebar's
+// remote hosts) rebuild when a kill starts or ends, not only when data arrives.
+let optimisticKillVersion = 0;
+const optimisticKillListeners = new Set<() => void>();
+
+function notifyOptimisticKillChange() {
+	optimisticKillVersion += 1;
+	for (const listener of optimisticKillListeners) listener();
+}
+
+/** useSyncExternalStore source for the set of in-flight optimistic kills. */
+export function subscribeOptimisticSessionKills(listener: () => void): () => void {
+	optimisticKillListeners.add(listener);
+	return () => optimisticKillListeners.delete(listener);
+}
+
+export function optimisticSessionKillsVersion(): number {
+	return optimisticKillVersion;
+}
 
 function sessionKey(sessionId: string, hostId?: string): string {
 	return refKey({ host: hostId ?? LOCAL_HOST, id: sessionId });
@@ -21,11 +40,14 @@ function markTerminated(sessionId: string, hostId?: string) {
 }
 
 export function trackOptimisticSessionKill(sessionId: string, hostId?: string): void {
-	optimisticKillIds.add(sessionKey(sessionId, hostId));
+	const key = sessionKey(sessionId, hostId);
+	if (optimisticKillIds.has(key)) return;
+	optimisticKillIds.add(key);
+	notifyOptimisticKillChange();
 }
 
 export function clearOptimisticSessionKill(sessionId: string, hostId?: string): void {
-	optimisticKillIds.delete(sessionKey(sessionId, hostId));
+	if (optimisticKillIds.delete(sessionKey(sessionId, hostId))) notifyOptimisticKillChange();
 }
 
 export function applyTerminatedSession(

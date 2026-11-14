@@ -20,8 +20,13 @@ describe("pollIntervalFor", () => {
 	// live stream cannot deliver over that path, which leaves polling as the
 	// only thing that moves the UI — so it has to be quick enough to feel live.
 	it("polls quickly over the tunnel, where the event stream cannot deliver", () => {
-		expect(pollIntervalFor(cfg({ endpointKind: "tunnel" }))).toBe(TUNNEL_POLL_MS);
+		expect(pollIntervalFor(cfg({ endpointKind: "tunnel", host: "old.trycloudflare.com" }))).toBe(TUNNEL_POLL_MS);
 		expect(TUNNEL_POLL_MS).toBeLessThan(DIRECT_POLL_MS);
+	});
+
+	// Measured: a named tunnel delivered each 30-byte stream heartbeat on time.
+	it("keeps the normal interval over a named tunnel, which streams", () => {
+		expect(pollIntervalFor(cfg({ endpointKind: "tunnel", host: "h-0d483066194a12a5dc17.useao.dev" }))).toBe(DIRECT_POLL_MS);
 	});
 
 	// Direct paths stream fine, so the poll is only a backstop and should stay
