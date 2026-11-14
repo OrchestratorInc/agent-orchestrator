@@ -2397,9 +2397,6 @@ WHERE type = 'table' AND name = 'sessions'`,
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
 	}
-	if !strings.Contains(schema, "'neovate'") {
-		return fmt.Errorf("schema repair: sessions harness constraint is missing Neovate Code")
-	}
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
 	}
@@ -2408,6 +2405,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'neovate'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Neovate Code")
 	}
 	return nil
 }

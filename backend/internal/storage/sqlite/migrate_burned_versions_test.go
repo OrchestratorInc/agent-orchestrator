@@ -206,7 +206,7 @@ var shippedMigrations = map[int64]string{
 	202: "0202_allow_memcode_harness.sql",
 	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
-	209: "0209_allow_neovate_harness.sql",
+	// 0209 was an unmerged Neovate candidate; retain its reservation.
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
 	212: "0212_session_runtime_released.sql",
@@ -267,6 +267,7 @@ var shippedMigrations = map[int64]string{
 	20261113111818788: "20261113111818788_clear_switched_model_reroutes.sql",
 	20261113173435236: "20261113173435236_session_search.sql",
 	20261114072016988: "20261114072016988_drop_session_account_pins.sql",
+	20261114173957269: "20261114173957269_allow_neovate_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -282,8 +283,9 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	// 203 was used by the historical Hermes candidate and must not be reused.
-	return v == 22 || v == 203
+	// 203 and 209 were used by the historical Hermes and Neovate candidates and
+	// must not be reused.
+	return v == 22 || v == 203 || v == 209
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
