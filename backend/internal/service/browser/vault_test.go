@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -237,5 +238,38 @@ func TestCredentialFillsNeedTheApprovalGate(t *testing.T) {
 	}
 	if runtime.action != "" {
 		t.Fatalf("dispatched %q", runtime.action)
+	}
+}
+
+func TestCredentialFillRefusedWhenTheApprovalCannotBeAudited(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	rt := &vaultRuntime{describe: describedDemo()}
+	authority := NewAuthority()
+	token, verifier, err := authority.Issue("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(fakeSessions{session: domain.Session{SessionRecord: domain.SessionRecord{
+		ID: "s1", ProjectID: "proj-a", Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: verifier},
+	}}}, rt, authority)
+	dir := t.TempDir()
+	gate, err := approval.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.UseApprovals(gate, 5*time.Second)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	answerNext(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "login", nil); err == nil {
+		t.Fatal("login succeeded although the approval could not be audited")
+	}
+	if got := strings.Join(rt.calls, ","); got != "vault-describe" {
+		t.Fatalf("calls = %s", got)
 	}
 }
