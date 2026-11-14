@@ -38,6 +38,16 @@ export type CueDefinitionInput = Schemas["CueDefinitionInput"];
 export type InvokeCueInput = Schemas["InvokeCueInput"];
 export type InvokeCueResult = Schemas["InvokeCueResult"];
 
+export type Automation = Schemas["Automation"];
+export type AutomationRun = Schemas["AutomationRun"];
+export type AutomationRunStatus = Schemas["AutomationRunStatus"];
+export type AutomationHarness = Schemas["AutomationHarness"];
+export type AutomationList = Schemas["AutomationList"];
+export type AutomationRunList = Schemas["AutomationRunList"];
+export type AutomationSubscription = Schemas["AutomationSubscription"];
+export type CreateAutomationInput = Schemas["CreateAutomationInput"];
+export type UpdateAutomationInput = Schemas["UpdateAutomationInput"];
+
 export type GitHubInstallationStatus = Schemas["GitHubInstallationStatus"];
 export type GitHubSyncStatus = Schemas["GitHubSyncStatus"];
 export type GitHubInstallation = Schemas["GitHubInstallation"];
