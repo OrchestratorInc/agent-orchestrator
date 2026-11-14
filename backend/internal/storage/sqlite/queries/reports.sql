@@ -40,6 +40,13 @@ WHERE project_id = ? AND delivery_state = 'pending'
 ORDER BY available_at, created_at, id
 LIMIT ?;
 
+-- name: ListPendingReportsOfDoneProjects :many
+SELECT * FROM reports
+WHERE delivery_state = 'pending' AND project_id IN (
+  SELECT project_id FROM reports WHERE delivery_state = 'pending' AND state = 'done'
+)
+ORDER BY project_id, available_at, created_at, id;
+
 -- name: AssignPendingReportsToBatch :exec
 UPDATE reports
 SET delivery_batch_id = sqlc.arg(delivery_batch_id)

@@ -289,7 +289,14 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
+func (s *coordinatorStore) setSessions(sessions ...domain.SessionRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = sessions
+}
 func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var recs []domain.SessionRecord
 	for _, rec := range s.sessions {
 		if rec.ProjectID == project {
@@ -299,6 +306,8 @@ func (s *coordinatorStore) ListSessions(_ context.Context, project domain.Projec
 	return recs, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, rec := range s.sessions {
 		if rec.ID == id {
 			return rec, true, nil
@@ -321,23 +330,47 @@ func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]
 	}
 	return pending, nil
 }
+func (s *coordinatorStore) ListPendingReportsOfDoneProjects(context.Context) ([]domain.ReportRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done := map[domain.ProjectID]bool{}
+	for _, rec := range s.reports {
+		if rec.DeliveryState == domain.ReportPending && rec.State == domain.ReportDone {
+			done[rec.ProjectID] = true
+		}
+	}
+	var pending []domain.ReportRecord
+	for _, rec := range s.reports {
+		if rec.DeliveryState == domain.ReportPending && done[rec.ProjectID] {
+			pending = append(pending, rec)
+		}
+	}
+	sortReports(pending)
+	return pending, nil
+}
 func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	batchID := ""
-	for i := range s.reports {
-		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
-			batchID = s.reports[i].DeliveryBatchID
-			if batchID == "" {
-				batchID = "report-batch:" + s.reports[i].ID
-			}
-			break
+	// Like the store: the project's earliest scheduled report names the batch,
+	// and unbatched reports join it only when that report is unbatched too.
+	var scheduled []domain.ReportRecord
+	for _, rec := range s.reports {
+		if rec.ProjectID == project && rec.DeliveryState == domain.ReportPending {
+			scheduled = append(scheduled, rec)
 		}
+	}
+	if len(scheduled) == 0 {
+		return nil, nil
+	}
+	sortReports(scheduled)
+	batchID := scheduled[0].DeliveryBatchID
+	if batchID == "" {
+		batchID = "report-batch:" + scheduled[0].ID
 	}
 	var claimed []domain.ReportRecord
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportPending {
-			if s.reports[i].DeliveryBatchID != "" && s.reports[i].DeliveryBatchID != batchID {
+			if s.reports[i].DeliveryBatchID != batchID && (s.reports[i].DeliveryBatchID != "" || scheduled[0].DeliveryBatchID != "") {
 				continue
 			}
 			s.reports[i].DeliveryBatchID = batchID
@@ -412,13 +445,18 @@ type coordinatorSubmission struct {
 	message, key string
 }
 type coordinatorDelivery struct {
+	mu           sync.Mutex
 	submissions  []coordinatorSubmission
 	interrupts   []domain.SessionID
 	submitErr    error
 	submitErrFor map[domain.SessionID]error
+	attempts     int
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.attempts++
 	if d.submitErr != nil {
 		return d.submitErr
 	}
@@ -427,6 +465,11 @@ func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID,
 	}
 	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
 	return nil
+}
+func (d *coordinatorDelivery) submitted() []coordinatorSubmission {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]coordinatorSubmission(nil), d.submissions...)
 }
 func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.SessionID) error {
 	d.interrupts = append(d.interrupts, target)

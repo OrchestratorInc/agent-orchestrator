@@ -817,7 +817,9 @@ func Run(buildVersion string) (retErr error) {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone := reportCoordinator.Start(ctx)
+	unsubscribeReportActivity := cdcPipe.Broadcaster.Subscribe(forwardReportActivity(reportCoordinator))
 	defer func() {
+		unsubscribeReportActivity()
 		stop()
 		<-reportDeliveryDone
 	}()
