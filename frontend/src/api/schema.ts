@@ -5227,6 +5227,8 @@ export interface components {
             plan?: string;
             problem?: string;
             /** @enum {string} */
+            problemKind?: "slow" | "rate_limited" | "unavailable" | "cli_missing" | "other_login" | "other_org";
+            /** @enum {string} */
             provider: "claude" | "codex";
             sameLoginAs?: string;
             signedIn: boolean;

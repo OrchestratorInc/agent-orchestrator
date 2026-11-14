@@ -15693,6 +15693,15 @@ components:
           type: string
         problem:
           type: string
+        problemKind:
+          enum:
+          - slow
+          - rate_limited
+          - unavailable
+          - cli_missing
+          - other_login
+          - other_org
+          type: string
         provider:
           enum:
           - claude
