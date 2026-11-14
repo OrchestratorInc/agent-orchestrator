@@ -56,6 +56,10 @@ func (*Service) List(ctx context.Context, path string) (Listing, error) {
 	if err != nil {
 		switch {
 		case errors.Is(err, os.ErrNotExist):
+			// Windows reports reading a file as a directory as a missing path.
+			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+				return Listing{}, apierr.Invalid("FS_NOT_A_DIRECTORY", "not a directory", nil)
+			}
 			return Listing{}, apierr.NotFound("FS_NOT_FOUND", "no such directory on the daemon host")
 		case errors.Is(err, os.ErrPermission):
 			return Listing{}, apierr.Forbidden("FS_FORBIDDEN", "the daemon may not read that directory")

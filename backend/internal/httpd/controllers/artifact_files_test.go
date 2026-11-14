@@ -237,7 +237,7 @@ func TestArtifactFileRouteServesOnlyRegularFilesInsideTheDirectory(t *testing.T)
 	}
 	srv, dir := artifactFileServer(t, map[string]string{"report/index.html": "<p>report</p>"})
 	if err := os.Symlink(outside, filepath.Join(dir, "escape.html")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	// One byte past the cap; sparse, so cheap.
 	if err := os.WriteFile(filepath.Join(dir, "huge.html"), nil, 0o600); err != nil {

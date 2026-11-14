@@ -9,9 +9,12 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 )
 
 // DefaultPort is the LAN listener's default port for the Connect Mobile
@@ -130,7 +133,7 @@ func writeFileAtomic(path string, b []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := replaceFile(tmpName, path); err != nil {
 		return err
 	}
 	// The rename on disk too, so a power loss cannot bring back the old file
@@ -140,6 +143,20 @@ func writeFileAtomic(path string, b []byte) error {
 		_ = dir.Close()
 	}
 	return nil
+}
+
+// replaceFile renames tmp over path. Windows refuses to replace a file that a
+// reader (a status poll) has open, so there the rename is retried briefly.
+func replaceFile(tmp, path string) error {
+	err := os.Rename(tmp, path)
+	if runtime.GOOS != "windows" {
+		return err
+	}
+	for attempt := 0; attempt < 25 && errors.Is(err, os.ErrPermission); attempt++ {
+		time.Sleep(10 * time.Millisecond)
+		err = os.Rename(tmp, path)
+	}
+	return err
 }
 
 const pwAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"

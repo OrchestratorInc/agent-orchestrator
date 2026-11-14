@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -109,6 +110,9 @@ func TestEnsureIdentityCreatesAndPersistsAHostID(t *testing.T) {
 }
 
 func TestEnsureIdentityWritesOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no POSIX permission bits")
+	}
 	path := filepath.Join(t.TempDir(), "mobile", "identity.json")
 	if _, err := EnsureIdentityFor(path, []net.Interface{iface("en0", "aa:bb:cc:dd:ee:01")}); err != nil {
 		t.Fatalf("EnsureIdentity: %v", err)

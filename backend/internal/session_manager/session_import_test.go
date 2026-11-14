@@ -20,6 +20,9 @@ import (
 )
 
 func TestImportCopiesDirtyGitStateWithoutChangingSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture needs POSIX file names (a newline), symlinks and exec bits")
+	}
 	for _, linked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "checkout", true: "linked-worktree"}[linked], func(t *testing.T) {
 			ctx := context.Background()
@@ -498,6 +501,7 @@ func (providerHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) {
 func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	m := &Manager{agents: providerHomeAgents{}}
 	rec := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
@@ -522,7 +526,7 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(source, "projects"), filepath.Join(account, "projects")); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 	rec.Metadata.ImportSource.ConfigDir = source
 	rec.Metadata.NativeTranscriptPath = transcript

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,7 +164,13 @@ func snapshot(ctx context.Context, root, path string) (*sql.DB, *sql.Tx, string,
 	if err != nil {
 		return nil, nil, "", err
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	// A Windows path (C:/...) needs a leading slash, or the URI reads C: as
+	// its host and SQLite refuses it.
+	uriPath := filepath.ToSlash(path)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
 	db, err := sql.Open("sqlite", u.String()+"?mode=ro&_pragma=busy_timeout(1000)")
 	if err != nil {
 		return nil, nil, "", err
