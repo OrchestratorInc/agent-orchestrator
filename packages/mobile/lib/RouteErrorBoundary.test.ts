@@ -48,6 +48,7 @@ const screenRoutes = [
 
 const sheetRoutes = [
 	"cloud/new-project.tsx",
+	"sheets/account.tsx",
 	"sheets/agent.tsx",
 	"sheets/artifact-history.tsx",
 	"sheets/cloud-plan.tsx",

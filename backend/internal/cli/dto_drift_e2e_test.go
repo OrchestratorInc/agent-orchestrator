@@ -230,6 +230,7 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 			"--issue", "ISS-1",
 			"--name", "my worker",
 			"--model", "gpt-5.6-sol",
+			"--account", "acct-work",
 			"--output", "artifact",
 		})
 		if err := root.Execute(); err != nil {
@@ -257,6 +258,9 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 		}
 		if got.AgentConfig.Model != "gpt-5.6-sol" {
 			t.Errorf("AgentConfig.Model = %q, want %q (CLI json:\"model\" vs SpawnSessionRequest)", got.AgentConfig.Model, "gpt-5.6-sol")
+		}
+		if got.AgentAccountID != "acct-work" {
+			t.Errorf("AgentAccountID = %q, want %q (CLI json:\"accountId\" vs SpawnSessionRequest)", got.AgentAccountID, "acct-work")
 		}
 		if got.RequestedOutput != "artifact" {
 			t.Errorf("RequestedOutput = %q, want %q (CLI json:\"requestedOutput\" vs SpawnSessionRequest)", got.RequestedOutput, "artifact")

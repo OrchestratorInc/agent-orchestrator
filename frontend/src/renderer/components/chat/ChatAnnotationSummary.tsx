@@ -16,6 +16,7 @@ export interface ChatAnnotationSummaryItem {
 	fileReference?: ChatFileReference;
 	order?: number;
 	text: string;
+	comment?: string;
 	conversationId?: string;
 	id?: string;
 	messageId?: string;
@@ -211,5 +212,9 @@ function ChatExcerptPreview({ annotation, index, disabled, onNavigate }: { annot
 		</Pressable>
 		{text ? <pre ref={preview} id={previewId} className={cn("whitespace-pre-wrap break-words font-sans text-xs leading-5 select-text", expanded ? "max-h-48 overflow-auto" : "line-clamp-6")}>{expanded ? text : shortened + (clipped ? "…" : "")}</pre> : null}
 		{clipped || overflow ? <Button type="button" variant="link" disabled={disabled} className="mt-1 text-xs text-muted-foreground" aria-expanded={expanded} aria-controls={previewId} onClick={() => setExpanded(value => !value)}>{t(expanded ? "chat.fileAnnotationShowLess" : "chat.fileAnnotationShowMore")}</Button> : null}
+		{annotation.comment ? <p className="mt-1.5 flex gap-1.5 whitespace-pre-wrap break-words text-xs font-medium leading-5 text-foreground select-text">
+			<MessageSquareQuote aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+			<span className="min-w-0">{annotation.comment}</span>
+		</p> : null}
 	</div>;
 }
