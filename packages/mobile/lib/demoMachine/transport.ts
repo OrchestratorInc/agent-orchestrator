@@ -85,14 +85,18 @@ function jittered(ms: number): number {
 	return ms <= 0 ? 0 : Math.round(ms * (0.8 + Math.random() * 0.4));
 }
 
-/** Waits out the network, or fails the way React Native's fetch does. */
+/**
+ * Waits out the network, or fails the way React Native's fetch does. The
+ * machine is checked again once the delay is up: one switched off while a
+ * request was on its way does not answer it.
+ */
 function travel(signal: AbortSignal | null | undefined, ms = jittered(DEMO_NETWORKS[network].latencyMs)): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) return reject(abortError());
 		const offline = network === "offline";
 		const timer = setTimeout(() => {
 			signal?.removeEventListener("abort", onAbort);
-			if (offline) reject(new TypeError("Network request failed"));
+			if (offline || network === "offline") reject(new TypeError("Network request failed"));
 			else resolve();
 		}, offline ? 200 : ms);
 		function onAbort() {
@@ -101,6 +105,37 @@ function travel(signal: AbortSignal | null | undefined, ms = jittered(DEMO_NETWO
 		}
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
+}
+
+/**
+ * Frames on one stream or socket, each held for the network's delay but handed
+ * over in the order they were sent, as TCP does: a frame never arrives before
+ * one sent ahead of it, however the jitter falls.
+ */
+export function orderedDelivery() {
+	const pending: { due: number; deliver(): void }[] = [];
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let lastDue = 0;
+	const pump = () => {
+		timer = null;
+		const now = Date.now();
+		while (pending.length > 0 && pending[0].due <= now) pending.shift()!.deliver();
+		if (pending.length > 0) timer = setTimeout(pump, pending[0].due - now);
+	};
+	return {
+		send(deliver: () => void, delayMs = jittered(DEMO_NETWORKS[network].latencyMs / 2)): void {
+			const due = Math.max(Date.now() + delayMs, lastDue);
+			lastDue = due;
+			pending.push({ due, deliver });
+			if (!timer) timer = setTimeout(pump, Math.max(0, pending[0].due - Date.now()));
+		},
+		/** Drops every frame not yet handed over. */
+		clear(): void {
+			if (timer) clearTimeout(timer);
+			timer = null;
+			pending.length = 0;
+		},
+	};
 }
 
 /** Answers one request to the demo machine. */
@@ -141,7 +176,7 @@ export async function demoEventStream(_input: unknown, init?: { signal?: AbortSi
 	const queue: Uint8Array[] = [];
 	let waiting: ((result: { done: boolean; value?: Uint8Array }) => void) | null = null;
 	let closed = false;
-	const timers = new Set<ReturnType<typeof setTimeout>>();
+	const delivery = orderedDelivery();
 
 	const push = (chunk: Uint8Array) => {
 		if (closed) return;
@@ -156,7 +191,7 @@ export async function demoEventStream(_input: unknown, init?: { signal?: AbortSi
 		closed = true;
 		stopEvents();
 		stopNetwork();
-		for (const timer of timers) clearTimeout(timer);
+		delivery.clear();
 		if (waiting) {
 			const resolve = waiting;
 			waiting = null;
@@ -165,11 +200,7 @@ export async function demoEventStream(_input: unknown, init?: { signal?: AbortSi
 	};
 	const stopEvents = source.onEvent((event: DemoEvent) => {
 		// Frames arrive late on a slow link, but in order and at the same cadence.
-		const timer = setTimeout(() => {
-			timers.delete(timer);
-			push(encoder.encode(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`));
-		}, jittered(DEMO_NETWORKS[network].latencyMs / 2));
-		timers.add(timer);
+		delivery.send(() => push(encoder.encode(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`)));
 	});
 	// Switching to "Machine off" drops the stream, so the app's reconnect runs.
 	const stopNetwork = subscribeDemoNetwork(() => { if (network === "offline") close(); });
@@ -205,7 +236,7 @@ function base64(text: string): string {
  * The /mux socket: opens, accepts subscriptions quietly, and gives a terminal
  * a banner and an echo so a TUI worker shows something.
  */
-class DemoSocket {
+export class DemoSocket {
 	static readonly CONNECTING = 0;
 	static readonly OPEN = 1;
 	static readonly CLOSING = 2;
@@ -216,6 +247,7 @@ class DemoSocket {
 	onerror: ((event: unknown) => void) | null = null;
 	onclose: ((event: unknown) => void) | null = null;
 	private readonly stopNetwork: () => void;
+	private readonly delivery = orderedDelivery();
 
 	constructor(readonly url: string) {
 		this.stopNetwork = subscribeDemoNetwork(() => { if (network === "offline") this.close(); });
@@ -245,7 +277,7 @@ class DemoSocket {
 		let msg: { ch?: string; type?: string; id?: string; data?: string };
 		try { msg = JSON.parse(raw) as typeof msg; } catch { return; }
 		if (msg.ch !== "terminal" || !msg.id) return;
-		const reply = (frame: object) => setTimeout(() => this.onmessage?.({ data: JSON.stringify(frame) }), jittered(DEMO_NETWORKS[network].latencyMs / 2));
+		const reply = (frame: object) => this.delivery.send(() => this.onmessage?.({ data: JSON.stringify(frame) }));
 		if (msg.type === "open") {
 			reply({ ch: "terminal", id: msg.id, type: "opened" });
 			reply({ ch: "terminal", id: msg.id, type: "data", data: base64(`\x1b[1;32mdemo machine\x1b[0m · ${msg.id}\r\nThis terminal echoes what you type.\r\n$ `) });
@@ -258,6 +290,7 @@ class DemoSocket {
 		if (this.readyState === DemoSocket.CLOSED) return;
 		this.readyState = DemoSocket.CLOSED;
 		this.stopNetwork();
+		this.delivery.clear();
 		this.onclose?.({ code: 1000 });
 	}
 }

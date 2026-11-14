@@ -107,6 +107,13 @@ export default function SettingsScreen() {
 		});
 		return () => { current = false; };
 	}, []));
+	// The demo machine is paired and forgotten without leaving this page, so its
+	// section asks for the list and the default marker again itself.
+	const reloadMachines = useCallback(async () => {
+		const [hosts, active] = await Promise.all([loadHosts(), activeHost()]);
+		setPairedHosts(hosts);
+		setSelectedHostId(active?.id ?? null);
+	}, []);
 
 	// A machine forgotten on its own page leaves word of it for the list it
 	// returns to.
@@ -277,7 +284,7 @@ export default function SettingsScreen() {
 					<FeatureRequestRow />
 				</SettingsSection>
 
-				{__DEV__ ? <DemoMachineSection /> : null}
+				{__DEV__ ? <DemoMachineSection onMachinesChanged={reloadMachines} /> : null}
 				{/* Last, and never in a release build. */}
 				{__DEV__ ? (
 					<SettingsSection title="Developer" footer="Development builds only. Adds fake machines to the machine chips and the Machines list above, to check how the app looks with many machines. Nothing is paired, saved or sent anywhere.">
@@ -306,7 +313,7 @@ const DEMO_NETWORK_OPTIONS: readonly SettingsOption<DemoNetwork>[] = (Object.key
  * generated projects, workers and chats, and a network delay to choose, for
  * checking the app on a slow link without a daemon.
  */
-function DemoMachineSection() {
+function DemoMachineSection({ onMachinesChanged }: { onMachinesChanged(): Promise<void> }) {
 	const { hostStates, reloadConfig, reloadHostMetadata, switchHost } = useApp();
 	const network = useDemoNetwork();
 	const paired = hostStates.some((host) => host.hostId === DEMO_HOST_ID);
@@ -325,6 +332,8 @@ function DemoMachineSection() {
 				await reloadConfig();
 			}
 		} finally {
+			// Even after a step failed: the machine may already be saved or gone.
+			await onMachinesChanged().catch(() => {});
 			setBusy(false);
 		}
 	};

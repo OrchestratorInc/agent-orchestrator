@@ -73,7 +73,7 @@ export function demoWorkspace(sessionId: string): DemoFile[] {
 	MODULES.forEach((name, index) => {
 		const folder = FOLDERS[(seed + index) % FOLDERS.length];
 		const path = folder === "docs" ? `docs/${name}.md` : `${folder}/${name}.ts`;
-		const lines = 60 + ((seed >> index) % 140);
+		const lines = 60 + ((seed >>> index) % 140);
 		const content = folder === "docs"
 			? Array.from({ length: Math.ceil(lines / 3) }, (_, n) => `## ${name} note ${n + 1}\n\nHow the ${name} module behaves on a slow link, part ${n + 1}.\n`).join("\n")
 			: source(name, lines);

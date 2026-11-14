@@ -23,6 +23,8 @@ const fixtures = vi.hoisted(() => ({
 	pushStatus: { supported: true, granted: false, canAskAgain: true, registered: false },
 	emulating: false,
 	setEmulated: vi.fn(),
+	activeId: null as string | null,
+	switchHost: vi.fn(async (id: string) => { fixtures.activeId = id; }),
 }));
 vi.mock("./native-header-button", async () => {
 	const React = await import("react");
@@ -80,7 +82,16 @@ vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({
 	signOut: async () => { await fixtures.signOut(); await fixtures.clearAccountHosts(); },
 }) }));
 vi.mock("./config", () => ({ isConfigured: () => false }));
-vi.mock("./hosts", () => ({ activeHost: async () => fixtures.hosts[0], loadHosts: async () => fixtures.hosts }));
+vi.mock("./hosts", () => ({ activeHost: async () => fixtures.hosts.find((host) => host.id === fixtures.activeId) ?? fixtures.hosts[0], loadHosts: async () => [...fixtures.hosts] }));
+// The development build's demo machine: pairing it saves a machine and makes it the default.
+vi.mock("./demoMachine", () => ({
+	DEMO_HOST_ID: "demo",
+	DEMO_NETWORKS: { fast: { label: "Fast", latencyMs: 30 } },
+	addDemoMachine: async () => { fixtures.hosts.push({ ...fixtures.hosts[0]!, id: "demo", name: "Demo machine", lastConnected: 3 }); },
+	removeDemoMachine: async () => { fixtures.hosts = fixtures.hosts.filter((host) => host.id !== "demo"); },
+	chooseDemoNetwork: vi.fn(),
+	useDemoNetwork: () => "fast",
+}));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: fixtures.select, success: vi.fn(), error: vi.fn() } }));
 vi.mock("./inAppUpdates", () => ({ checkStore: fixtures.checkStore, openOrStartUpdate: fixtures.openOrStartUpdate }));
 vi.mock("./storeUpdatePrompt", () => ({ promptStoreUpdate: fixtures.prompt }));
@@ -93,6 +104,7 @@ vi.mock("./store", () => ({
 	useApp: () => ({
 		config: fixtures.config, configured: false, selectedHostName: "Dev", connection: "closed", activeEndpoints: [],
 		hostStates: fixtures.hostStates, reloadConfig: fixtures.reloadConfig,
+		reloadHostMetadata: async () => {}, switchHost: fixtures.switchHost,
 	}),
 }));
 vi.mock("./ThemeProvider", () => ({
@@ -117,6 +129,7 @@ beforeEach(() => {
 	fixtures.reloadConfig.mockClear();
 	fixtures.setEmulated.mockClear();
 	fixtures.emulating = false;
+	fixtures.activeId = null;
 	fixtures.reloadConfig.mockImplementation(async () => null);
 	fixtures.hostStates = [];
 	fixtures.hosts = [DEV];
@@ -190,6 +203,22 @@ describe("Settings", () => {
 		act(() => fake.props.onPress());
 		expect(fixtures.push).not.toHaveBeenCalled();
 		expect(root.findByType("ToastHost" as never).props.toast.current.text).toMatch(/fake machine for this development build/);
+	});
+
+	// Settings stays open while the demo machine is paired and forgotten, so the
+	// list and its default marker follow without leaving the page.
+	it("lists the demo machine, and the new default, as soon as it is switched on or off", async () => {
+		vi.stubGlobal("__DEV__", true);
+		const root = await renderSettings();
+		const machine = (label: string) => rowsOf(section(root, "Machines")).find((node) => node.props.label === label);
+		const toggle = rowsOf(section(root, "Demo machine")).find((node) => node.props.label === "Demo machine")!;
+		await act(async () => toggle.props.onValueChange(true));
+		expect(fixtures.switchHost).toHaveBeenCalledWith("demo");
+		expect(machine("Demo machine")?.props.status).toMatch(/· Default$/);
+		expect(machine("Dev")?.props.status).not.toMatch(/Default/);
+		await act(async () => toggle.props.onValueChange(false));
+		expect(machine("Demo machine")).toBeUndefined();
+		expect(machine("Dev")?.props.status).toBe("Unreachable");
 	});
 
 	// The fixture's default machine has no working config, so its repair row shows.
