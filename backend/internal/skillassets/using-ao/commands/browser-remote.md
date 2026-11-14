@@ -22,6 +22,23 @@ ao browser tab list
 ao browser --help
 ```
 
+To run several commands in one call, use `ao browser batch` with one
+`agent-browser` command per line (see "Do a multi-step task in one call" in
+[browser.md](browser.md)). Orchestrator forwards each line as its own command and stops at
+the first one that fails; on a remote host a step fails only when the command
+itself reports an error, so add a `wait` after steps that should change the
+page.
+
+```bash
+ao browser batch <<'EOF'
+open http://localhost:5173/search
+fill @e2 "invoice 42"
+press Enter
+wait --text "Results"
+get text body
+EOF
+```
+
 Use refs from the latest snapshot. Refresh after navigation or DOM changes.
 Use `ao browser --help` for the installed command syntax and output formats.
 Check the page after an action; command success alone does not prove the app

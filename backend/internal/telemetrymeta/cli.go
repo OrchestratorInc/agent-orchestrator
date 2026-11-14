@@ -132,6 +132,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao browser status":                         {},
 	"ao browser tabs":                           {},
 	"ao browser target":                         {},
+	"ao browser batch":                          {},
 	"ao browser chrome":                         {},
 	"ao browser chrome remove":                  {},
 	"ao browser chrome setup":                   {},

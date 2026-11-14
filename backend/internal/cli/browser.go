@@ -626,6 +626,7 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 
 	cmd.AddCommand(newBrowserTargetCommand(ctx, &jsonOutput))
 	cmd.AddCommand(newBrowserChromeCommand(ctx, &jsonOutput))
+	cmd.AddCommand(newBrowserBatchCommand(ctx, &jsonOutput))
 
 	for _, action := range []string{"console", "errors"} {
 		cmd.AddCommand(&cobra.Command{
@@ -708,6 +709,9 @@ func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, arg
 	resp, err := c.browserAction(cmd.Context(), action, args)
 	if err != nil {
 		return err
+	}
+	if c.browserResultObserver != nil {
+		c.browserResultObserver(action, resp.Result)
 	}
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), resp)
