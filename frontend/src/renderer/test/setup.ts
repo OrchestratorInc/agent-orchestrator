@@ -528,6 +528,10 @@ if (typeof window !== "undefined") {
 			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,
 		},
+		sessionLinks: {
+			onOpen: () => () => undefined,
+			takePending: async () => null,
+		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
 			requestBinary: async () => ({ status: 401, headers: {}, body: new Uint8Array() }),

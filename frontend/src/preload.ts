@@ -84,6 +84,7 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
+import type { SessionDeepLinkEvent } from "./main/session-deep-link";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -1044,6 +1045,20 @@ const api = {
 		// The context a sign-in that just completed added (CloudSignInContext),
 		// with its account, taken once; null when there is none.
 		takePendingSignIn: () => ipcRenderer.invoke("cloud:takePendingSignIn") as Promise<CloudPendingSignIn | null>,
+	},
+	// ao://sessions/<project>/<session> links opened from outside the app. The
+	// main process has already validated and canonicalised them; the renderer
+	// only navigates (or reports the failure).
+	sessionLinks: {
+		onOpen: (listener: (link: SessionDeepLinkEvent) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, link: SessionDeepLinkEvent) => listener(link);
+			ipcRenderer.on("session-link:open", wrapped);
+			return () => {
+				ipcRenderer.off("session-link:open", wrapped);
+			};
+		},
+		// One that arrived before the listener was installed, taken once.
+		takePending: () => ipcRenderer.invoke("session-link:take") as Promise<SessionDeepLinkEvent | null>,
 	},
 	// Cloud control-plane transport. The CP has no CORS and the WorkOS bearer
 	// token lives only in the main process, so every CP call is proxied through
