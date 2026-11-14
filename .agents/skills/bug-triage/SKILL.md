@@ -1,6 +1,6 @@
 ---
 name: bug-triage
-description: Help clarify human bug reports, search for duplicates, and gather diagnostic evidence separately from a concise issue draft.
+description: Help clarify human bug reports, search for duplicates, and gather diagnostic evidence, including harness install, login, auth, and model diagnostics, separately from a concise issue draft.
 ---
 
 # Bug triage
@@ -94,10 +94,79 @@ Collect only what helps explain this symptom:
 | Session or terminal state | Affected session's daemon state, relevant log excerpt, runtime details |
 | Daemon or CLI failure | Version/status, exact command and error, relevant daemon logs |
 | Persisted state mismatch | Relevant rows and schema from a read-only SQLite query |
+| Harness install, login/auth, or models | Harness Health diagnostics and that harness's cached readiness, install job, and advisory (below) |
 
 Locate logs for the affected process rather than assuming `~/.ao/daemon.log` is current.
 The daemon logs to `$AO_DATA_DIR/daemon.log`; that older file only covers keep-alive
 launches. Record missing evidence instead of enabling logging just to create it.
+
+### Harness, login, auth, install, and model problems
+
+When a report involves an agent harness (Claude Code, Codex, OpenCode, and so on),
+such as a failed install or update, a login that works in a terminal but not in AO, an
+unexpected `unauthorized` or `configured (unverified)` state, missing or wrong models,
+or a session whose agent fails to launch, collect that harness's diagnostics from the
+affected host. They name the executable, the credential source, and the check that
+failed, which usually decides where the bug is.
+
+Ask the reporter for the in-app report first; it reflects their own app and host:
+Settings → Harness → the harness → Health → **Copy diagnostics**. For a failed install
+or update, Account → **Show diagnostics** → **Copy diagnostics** adds the install
+method, expected destination, error, and installer output. The text covers the host,
+installation and authentication state, each auth check step, installed and latest
+versions, maintenance method, executable path, and a memory/CPU reading. For a remote
+host, that copy comes from the remote daemon; the local API below describes only the
+local host.
+
+On the affected machine, read the same evidence from the daemon. It is a loopback,
+no-auth service; take the port from the affected binary's `status --json`:
+
+```bash
+port=$(ao status --json | jq -r .port)
+api="http://127.0.0.1:$port/api/v1/agents"
+h=claude-code  # affected harness id
+curl -fsS "$api/readiness" | jq --arg h "$h" '.agents[] | select(.id == $h)'
+curl -fsS "$api/install-jobs" | jq --arg h "$h" '.jobs[] | select(.target == $h)'
+curl -fsS "$api/installers" | jq --arg h "$h" '.agents[] | select(.agentId == $h)'
+curl -fsS "$api/$h/update-advisory"
+curl -fsS "$api/$h/models?catalogOnly=true"
+```
+
+- `readiness` returns cached installation and authentication observations without
+  running native checks. `authentication.diagnostics[]` lists each auth check's
+  `method`, `code`, `reason`, `nextStep`, `source`, `provider`, `httpStatus`,
+  `exitCode`, `cached`, and `checkedAt`. With `authentication.reasonCode` and
+  `freshness`, it is the main evidence for login and auth reports. Codes are authored
+  classifications, not raw CLI output.
+- `install-jobs` holds the latest install, update, or verify job: `status`, `method`,
+  `command`, `expectedDestination`, `error`, and the tail of installer `output`.
+- `installers` shows the resolved install plan and why a method is unavailable.
+- `update-advisory` reports installed and latest versions, `binaryPath`, and update
+  `status`/`reason`. It serves a cached result, but runs a version probe and package
+  lookup when nothing is cached yet; record that when it happens.
+- `models?catalogOnly=true` returns the persisted model catalog, and may start a first
+  discovery when none is cached. See `docs/harnesses/model-catalogs.md` for catalog
+  sources and what **Configured** does and does not prove.
+
+For a launch failure in a known session, add the harness, model, and state fields from
+`session get <id> --json` and the relevant daemon log lines. When the reporter says
+login works in their terminal, compare that terminal's executable, user, host, and
+config directory or environment overrides with the diagnostics: AO checks run in its
+own process environment.
+
+Don't call the `POST` agent routes (`readiness/ensure`, `refresh`, `probe`, `verify`,
+`models/refresh`, `install`, `auth`, `logout`), `?refresh=true`, or `agent ls` just to
+collect evidence: they run native install or auth checks, model discovery, or change
+state. Don't run the harness's own login, logout, auth status, doctor, or update
+commands; they can refresh tokens or rewrite credential stores. Running `--version` on
+the executable reported above is fine when the advisory has no version. If a fresh check
+would help, ask the reporter to press **Check again** on the Health tab, and note when.
+
+`authentication.account` can hold the account email, name, organization, and plan;
+`source` paths and installer output can include usernames and home directories. Keep
+the source kind and path shape (for example `~/.claude/.credentials.json`) and redact
+identity unless the reporter agrees it matters. Never open or attach the credential
+files, keychain entries, or environment values these diagnostics point to.
 
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
 actual database location and schema, open it read-only, and select only relevant rows
