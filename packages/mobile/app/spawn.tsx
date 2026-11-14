@@ -128,23 +128,41 @@ export default function SpawnScreen() {
 	// The prompt and attachments are saved as they change, so they survive the
 	// phone closing the app in the background (see spawnDraft). A draft from
 	// before comes back when the page opens empty; starting the task clears it.
+	// It is saved for the machine picked and the account signed in, so another
+	// account, or the same phone after that machine is forgotten, never finds it.
 	const draftSaver = useRef(createSpawnDraftSaver()).current;
-	const draftRestored = useRef(false);
-	const startedRef = useRef(false);
+	// State, not a ref: what was typed while the saved draft was being read is
+	// saved as soon as the read is done.
+	const [draftRestored, setDraftRestored] = useState(false);
+	// The draft a Start began a task with: cleared rather than saved again, until
+	// the prompt or attachments change (on a page kept open after it started).
+	const startedDraft = useRef<{ prompt: string; attachments: readonly SpawnAttachment[] } | null>(null);
+	const promptRef = useRef(prompt);
+	promptRef.current = prompt;
+	const draftAccountId = cloudState.account?.id ?? null;
+	const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);
 	useEffect(() => {
-		if (!draftRestored.current || startedRef.current) return;
-		draftSaver.schedule({ prompt, attachments });
-	}, [attachments, draftSaver, prompt]);
+		if (!draftRestored) return;
+		const started = startedDraft.current;
+		if (started && started.prompt === prompt && started.attachments === attachments) return;
+		startedDraft.current = null;
+		const request = requestRef.current;
+		draftSaver.schedule({ prompt, attachments, owner: draftOwner, ...(request ? { request: { id: request.id, payload: request.payload } } : {}) });
+	}, [attachments, draftOwner, draftRestored, draftSaver, prompt]);
 	useEffect(() => {
 		let active = true;
 		void loadSpawnDraft().then((draft) => {
 			if (!active || !draft) return;
-			setPrompt((current) => current || draft.prompt);
-			if (!attachmentsRef.current.length && draft.attachments.length) {
-				attachmentsRef.current = draft.attachments;
-				setAttachments(draft.attachments);
-			}
-		}).finally(() => { if (active) draftRestored.current = true; });
+			// Text typed or files added before the draft was read are the page's
+			// now: the old draft neither replaces nor joins them.
+			if (promptRef.current || attachmentsRef.current.length) return;
+			setPrompt(draft.prompt);
+			attachmentsRef.current = draft.attachments;
+			setAttachments(draft.attachments);
+			// The Start it last sent: sent again unchanged, it reuses the request id,
+			// so a task started before the app was closed is not started twice.
+			if (draft.request) requestRef.current = { ...draft.request, attachments: draft.attachments };
+		}).finally(() => { if (active) setDraftRestored(true); });
 		const subscription = AppState.addEventListener("change", (state) => { if (state !== "active") void draftSaver.flush(); });
 		return () => {
 			active = false;
@@ -684,9 +702,15 @@ export default function SpawnScreen() {
 			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
 				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
 			}
-			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
+			// The request id is on the phone before the request leaves: closed
+			// after the daemon took the task but before the draft is cleared, the
+			// restored draft's Start reuses it, and the daemon answers with that task.
+			const sent = requestRef.current;
+			draftSaver.schedule({ prompt, attachments: attachmentsRef.current, owner: draftOwner, request: { id: sent.id, payload: sent.payload } });
+			await draftSaver.flush();
+			const session = await spawn({ ...request, clientRequestId: sent.id });
 			// Started: the draft goes, so the next New task opens empty.
-			startedRef.current = true;
+			startedDraft.current = { prompt, attachments: attachmentsRef.current };
 			void draftSaver.cancel().then(clearSpawnDraft).catch(() => {});
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			else rememberLastProject(selectedHostId, projectId);

@@ -65,6 +65,13 @@ vi.mock("./chat/eventCursor", () => ({
 		calls.push(`clearEventCursor:${host.id}`);
 	}),
 }));
+// What the app kept across being closed for that machine (board, New task
+// draft, review comments, last screen) goes with it.
+vi.mock("./forgetLocalState", () => ({
+	forgetMachineState: vi.fn(async (id: string) => {
+		calls.push(`forgetMachineState:${id}`);
+	}),
+}));
 vi.mock("./onboardingStore", () => ({
 	clearOnboardingSkipped: vi.fn(async () => {
 		calls.push("clearOnboardingSkipped");
@@ -89,6 +96,7 @@ describe("forgetPairedHost", () => {
 			"unpairFromServer",
 			"removeHost:h_other",
 			"clearEventCursor:h_other",
+			"forgetMachineState:h_other",
 		]);
 		expect(calls).not.toContain("clearConfig");
 		expect(calls).not.toContain("clearOnboardingSkipped");
@@ -105,7 +113,7 @@ describe("forgetPairedHost", () => {
 	it("hides a manually paired machine from the signed-in account before removing it", async () => {
 		accountId = "user-a";
 		await forgetPairedHost(other);
-		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other"]);
+		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other", "forgetMachineState:h_other"]);
 	});
 
 	it("preserves pairing when hiding it from account sync cannot be persisted", async () => {
@@ -118,7 +126,7 @@ describe("forgetPairedHost", () => {
 	it("unpairs sign-out removals without hiding them on the next sign-in", async () => {
 		accountId = "user-a";
 		await forgetPairedHost(other, { ignoreAccount: false });
-		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other"]);
+		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other", "forgetMachineState:h_other"]);
 	});
 });
 
@@ -140,6 +148,7 @@ describe("forgetServer", () => {
 			"unpairFromServer",
 			"removeHost:h_active",
 			"clearEventCursor:h_active",
+			"forgetMachineState:h_active",
 			"clearConfig",
 			"clearOnboardingSkipped",
 		]);

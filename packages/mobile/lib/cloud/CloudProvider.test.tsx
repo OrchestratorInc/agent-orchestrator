@@ -10,6 +10,7 @@ const fixtures = vi.hoisted(() => ({
 	unregister: undefined as unknown as Fn,
 	register: undefined as unknown as Fn,
 	forgetDrafts: undefined as unknown as Fn,
+	forgetAccountState: undefined as unknown as Fn,
 	accountChanged: undefined as undefined | ((account: { id: string; email: string } | null) => void),
 	signOutOfAccount: undefined as unknown as Fn,
 }));
@@ -31,6 +32,7 @@ vi.mock("../account", () => ({
 vi.mock("../accountHosts", () => ({ clearAccountHosts: async () => {}, syncAccountHosts: async () => {} }));
 vi.mock("../appStatePoll", () => ({ shouldPoll: () => false }));
 vi.mock("./drafts", () => ({ forgetCloudDrafts: (...args: unknown[]) => fixtures.forgetDrafts(...args) }));
+vi.mock("../forgetLocalState", () => ({ forgetAccountState: (...args: unknown[]) => fixtures.forgetAccountState(...args) }));
 vi.mock("./push", () => ({
 	registerCloudPush: (...args: unknown[]) => fixtures.register(...args),
 	unregisterCloudPush: (...args: unknown[]) => fixtures.unregister(...args),
@@ -67,6 +69,7 @@ beforeEach(() => {
 	fixtures.unregister = vi.fn(async () => true);
 	fixtures.register = vi.fn(async () => ({ ok: true }));
 	fixtures.forgetDrafts = vi.fn(async () => {});
+	fixtures.forgetAccountState = vi.fn(async () => {});
 	fixtures.signOutOfAccount = vi.fn(async () => {});
 	fixtures.client = {
 		getMe: vi.fn(async () => me("a")),
@@ -156,8 +159,11 @@ describe("CloudProvider", () => {
 		expect(fixtures.forgetDrafts).not.toHaveBeenCalled();
 		await act(async () => { fixtures.accountChanged?.({ id: "u2", email: "v@example.com" }); await flush(); });
 		expect(fixtures.forgetDrafts).toHaveBeenCalledTimes(1);
+		// With what the app kept across being closed while that account was signed in.
+		expect(fixtures.forgetAccountState).toHaveBeenLastCalledWith("u1");
 		await act(async () => { fixtures.accountChanged?.(null); await flush(); });
 		expect(fixtures.forgetDrafts).toHaveBeenCalledTimes(2);
+		expect(fixtures.forgetAccountState).toHaveBeenLastCalledWith("u2");
 	});
 
 	// The clearing runs in the background: the next account's Cloud screens,
