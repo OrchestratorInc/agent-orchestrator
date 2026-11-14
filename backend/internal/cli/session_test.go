@@ -938,9 +938,9 @@ func TestSessionClaimPR_UsesCurrentSessionFromEnv(t *testing.T) {
 	if !strings.Contains(out, "claimed PR #142") {
 		t.Fatalf("unexpected output: %s", out)
 	}
-	// The reviewer hint names the claimed session, so it works from any shell.
-	if !strings.Contains(out, "`ao session pr-feedback demo-1 --ci off --reviews off --auto-review off`") {
-		t.Fatalf("claim output missing session-specific pr-feedback hint: %s", out)
+	// The reviewer hint names the claimed session and PR, so it works from any shell.
+	if !strings.Contains(out, "`ao session claim-pr demo-1 https://github.com/aoagents/agent-orchestrator/pull/142 --review`") {
+		t.Fatalf("claim output missing session-specific --review hint: %s", out)
 	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
@@ -1229,8 +1229,10 @@ func TestSessionKill_SendsCallerSession(t *testing.T) {
 	}
 }
 
-// prFeedbackServer is a fake daemon that records each API request with its body.
-func prFeedbackServer(t *testing.T) (*httptest.Server, func() []string) {
+// reviewClaimServer is a fake daemon for review claims. It records each API
+// request with its body, reports the session's switches as all on, and
+// refuses the claim when refuseClaim is set.
+func reviewClaimServer(t *testing.T, refuseClaim bool) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var got []string
@@ -1241,15 +1243,27 @@ func prFeedbackServer(t *testing.T) (*httptest.Server, func() []string) {
 			got = append(got, strings.TrimSpace(r.Method+" "+r.URL.Path+" "+string(body)))
 			mu.Unlock()
 		}
+		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1":
-			_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "working", false)+`}`)
+			sess := strings.TrimSuffix(sessionJSON("demo-1", "demo", "worker", "working", false), "}") +
+				`,"autoInjectCI":true,"autoInjectReview":true,"autoReviewEnabled":true}`
+			_, _ = io.WriteString(w, `{"session":`+sess+`}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-1/auto-inject-"):
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1"}`)
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-1/auto-review":
 			_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "working", false)+`}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/pr/claim":
+			if refuseClaim {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(w, `{"error":"conflict","code":"PR_CLAIMED_BY_ACTIVE_SESSION","message":"PR is already claimed by active session demo-2 (omit --no-takeover to steal)"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
 		default:
-			_, _ = io.WriteString(w, `{}`)
+			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -1260,65 +1274,82 @@ func prFeedbackServer(t *testing.T) (*httptest.Server, func() []string) {
 	}
 }
 
-func TestSessionPRFeedback_TurnsEverySwitchOffForTheCurrentSession(t *testing.T) {
+func TestSessionClaimPRReview_TurnsEverySwitchOffBeforeTheClaim(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "demo-1")
 	cfg := setConfigEnv(t)
-	srv, requests := prFeedbackServer(t)
+	srv, requests := reviewClaimServer(t, false)
 	writeRunFileFor(t, cfg, srv)
 
-	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "pr-feedback", "--ci", "off", "--reviews", "off", "--auto-review", "off")
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "claim-pr", "142", "--no-takeover", "--review")
 	if err != nil {
-		t.Fatalf("pr-feedback failed: %v stderr=%s", err, errOut)
+		t.Fatalf("claim-pr --review failed: %v stderr=%s", err, errOut)
 	}
 	want := []string{
+		"GET /api/v1/sessions/demo-1",
+		"GET /api/v1/projects/demo",
 		"GET /api/v1/sessions/demo-1",
 		`PATCH /api/v1/sessions/demo-1/auto-inject-ci {"autoInjectCI":false}`,
 		`PATCH /api/v1/sessions/demo-1/auto-inject-review {"autoInjectReview":false}`,
 		`PUT /api/v1/sessions/demo-1/auto-review {"enabled":false}`,
+		`POST /api/v1/sessions/demo-1/pr/claim {"pr":"https://github.com/aoagents/agent-orchestrator/pull/142","allowTakeover":false}`,
 	}
 	if got := requests(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests=%#v want %#v", got, want)
 	}
-	if !strings.Contains(out, "session demo-1: automatic fixing of CI failures and merge conflicts off, automatic fixing of review comments off, native auto-review off") {
+	if !strings.Contains(out, "claimed PR #142") || !strings.Contains(out, "reviewing: automatic fixing of CI failures, merge conflicts and review comments and native auto-review are off") {
 		t.Fatalf("unexpected output: %s", out)
 	}
 }
 
-func TestSessionPRFeedback_ChangesOnlyTheSwitchPassed(t *testing.T) {
+func TestSessionClaimPRReviewFalse_TurnsFixingBackOnToTakeOver(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, requests := prFeedbackServer(t)
+	srv, requests := reviewClaimServer(t, false)
 	writeRunFileFor(t, cfg, srv)
 
-	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "pr-feedback", "demo-1", "--reviews", "on")
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "claim-pr", "demo-1", "142", "--review=false")
 	if err != nil {
-		t.Fatalf("pr-feedback failed: %v stderr=%s", err, errOut)
+		t.Fatalf("claim-pr --review=false failed: %v stderr=%s", err, errOut)
 	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
+		"GET /api/v1/projects/demo",
+		"GET /api/v1/sessions/demo-1",
+		`PATCH /api/v1/sessions/demo-1/auto-inject-ci {"autoInjectCI":true}`,
 		`PATCH /api/v1/sessions/demo-1/auto-inject-review {"autoInjectReview":true}`,
+		`POST /api/v1/sessions/demo-1/pr/claim {"pr":"https://github.com/aoagents/agent-orchestrator/pull/142","allowTakeover":true}`,
 	}
 	if got := requests(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests=%#v want %#v", got, want)
 	}
-	if !strings.Contains(out, "automatic fixing of review comments on") || strings.Contains(out, "CI failures") {
+	if !strings.Contains(out, "taken over: automatic fixing of CI failures, merge conflicts and review comments is on") {
 		t.Fatalf("unexpected output: %s", out)
 	}
 }
 
-func TestSessionPRFeedback_UsageErrors(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "demo-1")
-	setConfigEnv(t)
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{
-		{args: []string{"session", "pr-feedback"}, want: "pass at least one of --ci on|off, --reviews on|off, --auto-review on|off"},
-		{args: []string{"session", "pr-feedback", "--auto-review", "yes"}, want: `--auto-review must be on or off, got "yes"`},
-		{args: []string{"session", "pr-feedback", "--ci", "maybe"}, want: `--ci must be on or off, got "maybe"`},
-	} {
-		_, _, err := executeCLI(t, Deps{}, tc.args...)
-		if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("args=%v err=%v exit=%d, want usage error %q", tc.args, err, ExitCode(err), tc.want)
-		}
+// A refused review claim must not leave the session's switches off, because
+// they cover every PR the session owns.
+func TestSessionClaimPRReview_RestoresSwitchesWhenTheClaimIsRefused(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := reviewClaimServer(t, true)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "claim-pr", "demo-1", "142", "--no-takeover", "--review")
+	if err == nil || !strings.Contains(err.Error(), "already claimed by active session demo-2") {
+		t.Fatalf("err=%v, want the refused claim", err)
+	}
+	want := []string{
+		"GET /api/v1/sessions/demo-1",
+		"GET /api/v1/projects/demo",
+		"GET /api/v1/sessions/demo-1",
+		`PATCH /api/v1/sessions/demo-1/auto-inject-ci {"autoInjectCI":false}`,
+		`PATCH /api/v1/sessions/demo-1/auto-inject-review {"autoInjectReview":false}`,
+		`PUT /api/v1/sessions/demo-1/auto-review {"enabled":false}`,
+		`POST /api/v1/sessions/demo-1/pr/claim {"pr":"https://github.com/aoagents/agent-orchestrator/pull/142","allowTakeover":false}`,
+		`PATCH /api/v1/sessions/demo-1/auto-inject-ci {"autoInjectCI":true}`,
+		`PATCH /api/v1/sessions/demo-1/auto-inject-review {"autoInjectReview":true}`,
+		`PUT /api/v1/sessions/demo-1/auto-review {"enabled":true}`,
+	}
+	if got := requests(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("requests=%#v want %#v", got, want)
 	}
 }

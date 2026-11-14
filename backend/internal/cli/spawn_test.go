@@ -139,11 +139,11 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 	}
 }
 
-// TestSpawnNoPRFeedbackTurnsSwitchesOffBeforeClaim: a reviewer spawned with
-// --no-pr-feedback must have every switch off before the PR is claimed, so the
+// TestSpawnReviewTurnsSwitchesOffBeforeClaim: a reviewer spawned with
+// --review must have every switch off before the PR is claimed, so the
 // claimed PR's CI failures and review comments never reach the agent and the
 // native reviewer never starts on it.
-func TestSpawnNoPRFeedbackTurnsSwitchesOffBeforeClaim(t *testing.T) {
+func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -183,9 +183,9 @@ func TestSpawnNoPRFeedbackTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	t.Cleanup(srv.Close)
 	writeRunFileFor(t, cfg, srv)
 
-	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--no-takeover", "--no-pr-feedback")
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-142", "--claim-pr", "142", "--no-takeover", "--review")
 	if err != nil {
-		t.Fatalf("spawn --no-pr-feedback failed: %v stderr=%s", err, errOut)
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
 	}
 	want := []string{
 		"GET /api/v1/projects/demo",
@@ -335,6 +335,13 @@ func TestSpawnClaimPRFailureRollsBackSession(t *testing.T) {
 func TestSpawnNoTakeoverRequiresClaimPR(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "worker", "--no-takeover")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--no-takeover requires --claim-pr") {
+		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
+	}
+}
+
+func TestSpawnReviewRequiresClaimPR(t *testing.T) {
+	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "worker", "--review")
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--review requires --claim-pr") {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
 	}
 }

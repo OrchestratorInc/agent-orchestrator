@@ -129,15 +129,16 @@ func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	}
 }
 
-func TestEmbeddedReviewGuidanceClaimsWithPRFeedbackOff(t *testing.T) {
+func TestEmbeddedReviewGuidanceUsesReviewClaims(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want string
 	}{
-		{"using-ao/commands/review.md", "ao spawn --claim-pr <pr-ref> --no-takeover --no-pr-feedback"},
-		{"using-ao/commands/review.md", "ao session pr-feedback --ci on --reviews on"},
-		{"using-ao/commands/spawn.md", `--name "review-pr-88" --claim-pr 88 --no-takeover --no-pr-feedback`},
-		{"using-ao/commands/session.md", "ao session pr-feedback [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]"},
+		{"using-ao/commands/review.md", "ao spawn --claim-pr <pr-ref> --no-takeover --review"},
+		{"using-ao/commands/review.md", "ao session claim-pr <pr-ref> --review=false"},
+		{"using-ao/commands/spawn.md", `--name "review-pr-88" --claim-pr 88 --no-takeover --review`},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --no-takeover --review"},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --review=false"},
 		{"using-ao/commands/session.md", "do not commit, push, rebase, or otherwise change it unless the user explicitly asks"},
 	} {
 		body, err := files.ReadFile(tc.path)

@@ -324,10 +324,8 @@ ao session cleanup --dry-run
 ### ao session claim-pr
 
 Attach an existing PR to the current Orchestrator-managed session, or target another session explicitly.
-Use this for authorized implementation continuation. Reviewing someone else's PR
-also claims it, after turning automatic fixing off with `ao session pr-feedback`
-(see below), so the session gets none of that PR's CI failures, merge
-conflicts, or review comments.
+Use this for authorized implementation continuation, or with `--review` to
+review someone else's PR (see below).
 
 **Syntax:**
 ```
@@ -345,7 +343,21 @@ Git fail after replacing the index and working files. Verify `git status`, the
 branch, and `HEAD` after switching, even if Git reports failure. Stop on
 unexpected changes; continuing in a different worktree leaves Orchestrator displaying
 the original checkout. Review-only work should use the PR revision view or
-read-only revision diffs without claiming or switching the session's checkout.
+read-only revision diffs without switching the session's checkout.
+
+A review claim (`--review`) is the same claim made for review instead of work.
+Before claiming, it turns off the session's "Automatically fix CI failures" and
+"Automatically fix review comments" switches and its native auto-review, so the
+session gets none of the PR's CI failures, merge conflicts, or review comments,
+and Orchestrator's reviewer never starts on it. These are the switches the
+session inspector shows, and they cover every PR the session owns, so use a
+session that owns no other PR. If the claim is refused, the switches go back to
+what they were. The PR is not the user's: do not commit, push, rebase, or
+otherwise change it unless the user explicitly asks.
+
+To take the PR over, claim it again with `--review=false`. That turns CI and
+review-comment fixing back on and leaves native auto-review off. Review comments
+posted while fixing was off are never sent, so read them on the PR.
 
 **Flags:**
 
@@ -354,6 +366,7 @@ read-only revision diffs without claiming or switching the session's checkout.
 | `--json` | Output as JSON | - |
 | `--no-takeover` | Refuse if another active session owns the PR | - |
 | `-p, --project string` | Project id to scope the lookup | - |
+| `--review` | Claim to review the PR: turn off automatic CI and review-comment fixing and native auto-review first. `--review=false` turns fixing back on to take the PR over | Switches unchanged |
 
 **Examples:**
 
@@ -372,54 +385,13 @@ ao session claim-pr mer-3 88
 ao session claim-pr 88 --no-takeover
 ```
 
----
-
-### ao session pr-feedback
-
-Choose which feedback on its PRs Orchestrator sends a session for the agent to
-act on. It turns the session's "Automatically fix CI failures" and
-"Automatically fix review comments" switches, and its native auto-review, on or
-off. These are the same switches the session inspector shows.
-
-**Syntax:**
-```
-ao session pr-feedback [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]
-```
-
-With no session id, `AO_SESSION_ID` supplies the session. Pass at least one of
-`--ci`, `--reviews`, and `--auto-review`.
-
-- `--ci off` stops CI failures and merge conflicts for every PR the session owns.
-- `--reviews off` stops review comments and change requests that arrive after
-  the change. Comments posted while it is off are never sent, even after it is
-  turned back on, so read them on the PR.
-- `--auto-review off` stops Orchestrator's native reviewer from starting on its
-  own for the session's PRs.
-
-To review someone else's PR, turn all three off before claiming it, and use a
-session that owns no other PR, because the switches cover all of the session's
-PRs. The PR is not the user's: do not commit, push, rebase, or otherwise change
-it unless the user explicitly asks. To take it over, turn `--ci` and
-`--reviews` back on.
-
-**Flags:**
-
-| Flag | Meaning | Default / Required |
-|---|---|---|
-| `--ci on\|off` | Send the session CI failures and merge conflicts for its PRs | Unchanged |
-| `--reviews on\|off` | Send the session new review comments and change requests | Unchanged |
-| `--auto-review on\|off` | Let Orchestrator's native reviewer start on its own for the session's PRs | Unchanged |
-| `-p, --project string` | Project id to scope the lookup | - |
-
-**Examples:**
-
 ```bash
-# Review someone else's PR from the current worker
-ao session pr-feedback --ci off --reviews off --auto-review off
-ao session claim-pr 88 --no-takeover
+# Review someone else's PR 88 from the current worker
+ao session claim-pr 88 --no-takeover --review
 ```
 
 ```bash
-# Take the PR over
-ao session pr-feedback --ci on --reviews on
+# Take that PR over
+ao session claim-pr 88 --review=false
 ```
+
