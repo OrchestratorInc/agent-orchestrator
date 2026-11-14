@@ -564,6 +564,8 @@
 	"command.newProject": "Nouveau projet",
 	"command.newTask": "Nouvelle tâche",
 	"command.noResults": "Aucun résultat.",
+	"command.matchCount_one": "{{count}} résultat",
+	"command.matchCount_other": "{{count}} résultats",
 	"awake.title": "Rester éveillé",
 	"command.goToProject": "Aller au projet",
 	"command.goToSession": "Aller à la session",

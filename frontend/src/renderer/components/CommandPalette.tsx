@@ -596,11 +596,12 @@ export const CommandPalette = memo(function CommandPalette() {
 				const workspace = findChatWorkspace(hit.sessionId);
 				return {
 					title: workspace?.sessions.find((session) => session.id === hit.sessionId)?.title,
-					place: workspace?.name,
+					// The project is named only when it is not the one on screen.
+					place: workspace && workspace.id !== currentProjectId ? workspace.name : undefined,
 				};
 			});
 		},
-		[chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
+		[currentProjectId, chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
 	);
 
 	const groups = useMemo(() => {
@@ -1501,7 +1502,7 @@ function PaletteRow({
 			) : keys ? (
 				<CommandShortcut keys={keys} />
 			) : item.state && !opensPicker ? (
-				<span className="shrink-0 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.state}</span>
+				<span className="shrink-0 text-caption tabular-nums text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.state}</span>
 			) : opensPicker ? (
 				<span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
 					{item.state}

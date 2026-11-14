@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildChatSearchCommands,
 	buildCommands,
 	buildFileSessionCommands,
 	bestMatch,
@@ -1042,5 +1043,27 @@ describe("context menu rows", () => {
 		expect(items[1]?.disabled).toBe(true);
 		expect(items[2]?.action).toEqual({ kind: "open-view", view: { mode: "menu-submenu", sessionId: "s1", entryId: "session-open-in", title: "Open in" } });
 		expect(findSubmenuEntries(entries, "session-open-in")?.map((entry) => entry.id)).toEqual(["open-finder"]);
+	});
+});
+
+describe("chat search rows", () => {
+	const hit = (messageId: string, sessionId: string, text: string) => ({ messageId, sessionId, projectId: "proj-1", title: `Chat ${sessionId}`, text });
+
+	it("shows one row per chat, its best match first, with how many matched", () => {
+		const rows = buildChatSearchCommands([
+			hit("m1", "s1", "first \x02up\x03"),
+			hit("m2", "s1", "second \x02up\x03"),
+			hit("m3", "s2", "other \x02up\x03"),
+			hit("m4", "s1", "third \x02up\x03"),
+		]);
+		expect(rows.map((row) => row.id)).toEqual(["message:m1", "message:m3"]);
+		expect(rows[0]?.state).toBe("3 matches");
+		expect(rows[1]?.state).toBeUndefined();
+	});
+
+	it("reads a multi-line match as one line", () => {
+		const [row] = buildChatSearchCommands([hit("m1", "s1", "line one\n\n  line \x02two\x03")]);
+		expect(row?.snippet?.text).toBe("line one line two");
+		expect(row?.snippet?.highlights).toEqual([{ start: 14, end: 17 }]);
 	});
 });

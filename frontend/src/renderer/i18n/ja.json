@@ -561,6 +561,8 @@
 	"command.newProject": "新しいプロジェクト",
 	"command.newTask": "新しいタスク",
 	"command.noResults": "結果がありません。",
+	"command.matchCount_one": "{{count}} 件一致",
+	"command.matchCount_other": "{{count}} 件一致",
 	"awake.title": "スリープ防止",
 	"command.goToProject": "プロジェクトへ移動",
 	"command.goToSession": "セッションへ移動",

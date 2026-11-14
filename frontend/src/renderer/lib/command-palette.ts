@@ -310,8 +310,18 @@ export function buildChatSearchCommands(
 	/** The chat's session title, used when the chat has none, and where it lives, shown beside it. */
 	context?: (hit: ConversationSearchHit) => { title?: string; place?: string },
 ): CommandItem[] {
-	return hits.map((hit) => {
-		const snippet = markedSnippet(hit.text);
+	// One row per chat: its best match (the daemon ranks hits), with how many
+	// more of its messages matched, rather than a row per message.
+	const chats = new Map<string, { hit: ConversationSearchHit; count: number }>();
+	for (const hit of hits) {
+		const key = hit.reviewId ? `review:${hit.reviewId}` : `session:${hit.sessionId}`;
+		const chat = chats.get(key);
+		if (chat) chat.count += 1;
+		else chats.set(key, { hit, count: 1 });
+	}
+	return [...chats.values()].map(({ hit, count }) => {
+		// Line breaks and runs of spaces read as one line in a row.
+		const snippet = markedSnippet(hit.text.replace(/\s+/g, " ").trim());
 		const { title, place } = context?.(hit) ?? {};
 		const subtitle = [place, hit.reviewId ? t("terminal.reviewer") : undefined].filter(Boolean).join(" · ");
 		return {
@@ -319,6 +329,7 @@ export function buildChatSearchCommands(
 			group: "messages",
 			title: hit.title || title || t("command.chatFallback"),
 			subtitle: subtitle || undefined,
+			...(count > 1 ? { state: t("command.matchCount", { count }) } : {}),
 			contentMatch: true,
 			snippet,
 			action: {

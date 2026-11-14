@@ -558,6 +558,8 @@
 	"command.newProject": "New project",
 	"command.newTask": "New task",
 	"command.noResults": "No results.",
+	"command.matchCount_one": "{{count}} match",
+	"command.matchCount_other": "{{count}} matches",
 	"awake.title": "Stay Awake",
 	"command.goToProject": "Go to project",
 	"command.goToSession": "Go to session",

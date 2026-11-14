@@ -561,6 +561,8 @@
 	"command.newProject": "新建项目",
 	"command.newTask": "新建任务",
 	"command.noResults": "没有结果。",
+	"command.matchCount_one": "{{count}} 处匹配",
+	"command.matchCount_other": "{{count}} 处匹配",
 	"awake.title": "保持唤醒",
 	"command.goToProject": "前往项目",
 	"command.goToSession": "前往会话",

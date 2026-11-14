@@ -561,6 +561,8 @@
 	"command.newProject": "Neues Projekt",
 	"command.newTask": "Neue Aufgabe",
 	"command.noResults": "Keine Ergebnisse.",
+	"command.matchCount_one": "{{count}} Treffer",
+	"command.matchCount_other": "{{count}} Treffer",
 	"awake.title": "Wach bleiben",
 	"command.goToProject": "Zu Projekt wechseln",
 	"command.goToSession": "Zu Sitzung wechseln",
