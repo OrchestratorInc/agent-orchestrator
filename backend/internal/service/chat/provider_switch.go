@@ -195,9 +195,9 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "the source Chat controller is not ready", Cause: err}
 	}
 	if source.harness == request.TargetHarness {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalAlreadyActive, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}
 	}
-	if source.busy() {
+	if !request.Force && source.busy() {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
 	}
 	// The target runs under the chat's own permission mode, so an agent that only
@@ -216,7 +216,7 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	}
 	if pending, pendingErr := s.store.HasPendingConversationInteractions(ctx, conversation.ID); pendingErr != nil {
 		return pendingErr
-	} else if pending {
+	} else if pending && !request.Force {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "answer the pending provider interaction before switching"}
 	}
 	started := time.Now()
@@ -224,7 +224,11 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if err != nil {
 		return err
 	}
-	if err := source.BeginIdleBranchHandoff(ctx); err != nil {
+	beginHandoff := source.BeginIdleBranchHandoff
+	if request.Force {
+		beginHandoff = source.BeginForcedBranchHandoff
+	}
+	if err := beginHandoff(ctx); err != nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: err.Error(), Cause: err}
 	}
 	abortSource := true

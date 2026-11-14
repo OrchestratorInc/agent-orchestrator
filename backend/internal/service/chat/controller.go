@@ -2556,6 +2556,37 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 	return nil
 }
 
+// BeginForcedBranchHandoff fences intake even mid-turn, cancelling the queue and interrupting the turn.
+func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
+	c.sendMu.Lock()
+	c.mu.Lock()
+	if c.handoff != controllerHandoffNone {
+		c.mu.Unlock()
+		c.sendMu.Unlock()
+		return ErrControllerHandoff
+	}
+	c.handoff = controllerHandoffIdleBranch
+	c.branchHandoffDone = make(chan struct{})
+	active := c.pendingTurnID != ""
+	c.mu.Unlock()
+	err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+	c.sendMu.Unlock()
+	if err != nil {
+		c.AbortHandoff()
+		return fmt.Errorf("cancel queued turns before forced handoff: %w", err)
+	}
+	if active {
+		interruptCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		defer cancel()
+		if err := c.interruptForHandoff(interruptCtx); err != nil {
+			c.log.Warn("interrupt before forced handoff failed", "session", c.sessionID, "error", err)
+		}
+	}
+	return nil
+}
+
+var forcedHandoffInterruptLimit = 5 * time.Second
+
 // AbortHandoff reopens source intake when a drain is cancelled before the source
 // controller is stopped. Any queued work resumes through the ordinary drain.
 func (c *Controller) AbortHandoff() {

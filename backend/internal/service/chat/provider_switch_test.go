@@ -93,8 +93,8 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 		IdempotencyKey: "switch-once",
 	})
 	var refusal *domain.ProviderSwitchError
-	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported {
-		t.Fatalf("repeated switch error = %v, want an unsupported refusal", err)
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalAlreadyActive {
+		t.Fatalf("repeated switch error = %v, want an already_active refusal", err)
 	}
 
 	record, found, err := h.st.GetSession(ctx, testSession)
@@ -133,6 +133,53 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 	}
 	if !foundMarker {
 		t.Fatalf("the switch marker was not committed with the branch")
+	}
+}
+
+func TestForcedProviderSwitchStopsTheRunningTurnAndQueue(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "long task", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "queued behind it", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send queued: %v", err)
+	}
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		states := map[domain.TurnState]int{}
+		for _, turn := range snapshot.Turns {
+			states[turn.State]++
+		}
+		return states[domain.TurnStateRunning] == 1 && states[domain.TurnStateQueued] == 1
+	})
+
+	var refusal *domain.ProviderSwitchError
+	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "plain"})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+		t.Fatalf("plain switch = %v, want a busy refusal", err)
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "forced", Force: true,
+	}); err != nil {
+		t.Fatalf("forced switch: %v", err)
+	}
+
+	if record, found, err := h.st.GetSession(ctx, testSession); err != nil || !found || record.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("session = %+v found=%v err=%v, want it on Claude", record, found, err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatalf("read conversation: %v", err)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	for _, turn := range snapshot.Turns {
+		if turn.State == domain.TurnStateRunning || turn.State == domain.TurnStateQueued {
+			t.Fatalf("turn %s is still %s after a forced switch", turn.ID, turn.State)
+		}
 	}
 }
 

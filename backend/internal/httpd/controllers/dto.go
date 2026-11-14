@@ -3475,6 +3475,7 @@ type ProviderSwitchRequest struct {
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+	Force          bool   `json:"force,omitempty"`
 	// Message is sent to the new agent as its first turn once the switch
 	// completes, in the same request. Attachments are sent separately.
 	Message *SendConversationMessageRequest `json:"message,omitempty"`

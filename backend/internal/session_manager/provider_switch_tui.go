@@ -39,7 +39,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "terminated sessions must be restored before switching"}
 	}
 	if rec.Harness == target {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is already active"}
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalAlreadyActive, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}
 	}
 	if rec.NeedsImportResume() {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "open the imported chat before switching providers"}
@@ -53,10 +53,10 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if !ok || targetAgent == nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s is not available for Terminal UI", target)}
 	}
-	if rec.Activity.State == domain.ActivityActive {
+	if !request.Force && rec.Activity.State == domain.ActivityActive {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
 	}
-	if rec.Activity.State == domain.ActivityWaitingInput || rec.Activity.State == domain.ActivityBlocked {
+	if !request.Force && (rec.Activity.State == domain.ActivityWaitingInput || rec.Activity.State == domain.ActivityBlocked) {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "answer the pending provider interaction before switching"}
 	}
 
@@ -76,7 +76,13 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		releaseInput = func() {}
 	}
 	defer releaseInput()
-	if err := m.prepareSourceHandoff(ctx, rec, domain.SessionInterfaceTransitionDrain, lastInputAt); err != nil {
+	policy := domain.SessionInterfaceTransitionDrain
+	if request.Force {
+		policy = domain.SessionInterfaceTransitionInterrupt
+	}
+	if err := m.prepareSourceHandoff(ctx, rec, policy, lastInputAt); err != nil && request.Force {
+		m.logger.Warn("interrupt before forced provider switch failed", "session", id, "error", err)
+	} else if err != nil {
 		kind := domain.ProviderSwitchRefusalBusy
 		if errors.Is(err, errDrainDecisionPending) {
 			kind = domain.ProviderSwitchRefusalPendingInteraction

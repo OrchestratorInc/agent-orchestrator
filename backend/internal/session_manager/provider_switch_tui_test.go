@@ -205,3 +205,44 @@ func TestPreflightTUISwitchTargetAcceptsAOSavedLogin(t *testing.T) {
 		t.Fatalf("preflight without a data directory = %v, want the native sign-in refusal", err)
 	}
 }
+
+func TestForcedTUISwitchInterruptsAWorkingAgent(t *testing.T) {
+	ctx := context.Background()
+	settle, poll := tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll
+	tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll = 20*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll = settle, poll })
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rec := mkLive("mer-1")
+	rec.Harness, rec.Mode, rec.Kind = domain.HarnessClaudeCode, domain.SessionModeTUI, domain.KindWorker
+	rec.Metadata.Branch, rec.Metadata.AgentSessionID = "branch", "source-native"
+	st.sessions[rec.ID] = rec
+	runtime := &childProbeRuntime{fakeRuntime: &fakeRuntime{}, childAlive: true}
+	runtime.onInterrupt = func(ports.RuntimeHandle) {
+		current := st.sessions[rec.ID]
+		current.Activity.State = domain.ActivityExited
+		st.sessions[rec.ID] = current
+	}
+	m := New(Deps{Runtime: runtime, Agents: singleAgent{agent: &recordingAgent{}},
+		Workspace: &fakeWorkspace{}, Store: &launchOptionsFakeStore{fakeStore: st}, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	var refusal *domain.ProviderSwitchError
+	err := m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessMuse})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+		t.Fatalf("plain switch = %v, want a busy refusal", err)
+	}
+	err = m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalAlreadyActive || !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("switch to the running agent = %v, want already_active", err)
+	}
+	if err := m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessMuse, Force: true}); err != nil {
+		t.Fatalf("forced switch: %v", err)
+	}
+	if len(runtime.interrupts) != 1 {
+		t.Fatalf("interrupts = %v, want the working agent interrupted once", runtime.interrupts)
+	}
+	if got := st.sessions[rec.ID].Harness; got != domain.HarnessMuse {
+		t.Fatalf("harness = %q, want the switch target", got)
+	}
+}

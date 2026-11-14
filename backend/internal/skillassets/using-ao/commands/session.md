@@ -74,9 +74,11 @@ ao session ls [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `-a, --all` | Include orchestrator sessions | - |
+| `--agent string` | Only sessions running this agent, for example `claude-code` | - |
 | `--include-terminated` | Include terminated sessions | - |
 | `--json` | Output as JSON | - |
 | `-p, --project string` | Filter by project ID | - |
+| `-q, --quiet` | Print only session ids, one per line | - |
 
 **Examples:**
 
@@ -309,6 +311,50 @@ ao session resume-agent <id> [flags]
 ```bash
 ao session exit-agent mer-3
 ao session resume-agent mer-3
+```
+
+---
+
+### ao session switch
+
+Switch a session to another agent in place, for example from Claude Code to
+Codex when Claude is down. The session keeps its worktree, branch, and
+conversation. The new agent starts from a handoff note of the work so far.
+Works for Chat and Terminal UI sessions on this machine.
+
+A session whose agent is working or waiting on an approval is refused.
+`--force` stops the current turn, cancels queued messages and pending
+approvals, and switches anyway. Use it when the agent is stuck.
+
+Switching to the agent already running succeeds and changes nothing. Run
+`ao agent ls` for the agents you can switch to.
+
+**Syntax:**
+```
+ao session switch <id> --agent <agent> [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--agent string` | Agent to switch to, for example `codex` or `claude-code` | Required |
+| `--effort string` | Reasoning effort the new agent starts with | Agent default |
+| `--force` | Stop the current turn, queued messages, and pending approvals, then switch | - |
+| `-m, --message string` | Message to send to the new agent after the switch, as `ao send` does | - |
+| `--model string` | Model the new agent starts on | Agent default |
+| `--permission string` | `default`, `accept-edits`, `auto`, or `bypass-permissions` | Session's mode |
+
+**Examples:**
+
+```bash
+# Move mer-3 to Codex
+ao session switch mer-3 --agent codex
+```
+
+```bash
+# Claude is down: move every Claude session to Codex, even mid-turn
+ao session ls --agent claude-code -q | xargs -n1 ao session switch --agent codex --force -m "Claude is down. Take over."
 ```
 
 ---

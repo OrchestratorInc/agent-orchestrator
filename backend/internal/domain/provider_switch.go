@@ -17,6 +17,7 @@ const (
 	ProviderSwitchRefusalUnsupported        ProviderSwitchRefusalKind = "unsupported"
 	ProviderSwitchRefusalUnavailable        ProviderSwitchRefusalKind = "unavailable"
 	ProviderSwitchRefusalRecoveryRequired   ProviderSwitchRefusalKind = "recovery_required"
+	ProviderSwitchRefusalAlreadyActive      ProviderSwitchRefusalKind = "already_active"
 )
 
 // ProviderSwitchRequest is what a switch to another provider asks for.
@@ -35,6 +36,7 @@ type ProviderSwitchRequest struct {
 	// terminal target. See AgentLaunchOptions.
 	Ultracode         bool
 	AutoCompactWindow string
+	Force             bool
 	// HandoffNote is the note the target provider starts with. The switch
 	// front door builds it; it is never accepted from a client.
 	HandoffNote string
