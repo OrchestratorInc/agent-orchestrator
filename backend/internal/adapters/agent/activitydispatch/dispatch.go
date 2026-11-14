@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/jcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
@@ -62,6 +63,7 @@ var Derivers = map[string]DeriveFunc{
 	"prime-agent":  primeagent.DeriveActivityState,
 	"mimo-code":    mimocode.DeriveActivityState,
 	"memcode":      memcode.DeriveActivityState,
+	"jcode":        jcode.DeriveActivityState,
 	"amp":          amp.DeriveActivityState,
 	"pi":           pi.DeriveActivityState,
 	"auggie":       auggie.DeriveActivityState,

@@ -38,8 +38,12 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 		TargetKimi:     {env: map[string]string{"KIMI_INSTALL_DIR": dir, "KIMI_CODE_HOME": dir + "/.install-home/.kimi-code", "KIMI_VERSION": "1.19.3", "KIMI_NO_MODIFY_PATH": "1"}},
 		TargetGoose:    {env: map[string]string{"GOOSE_BIN_DIR": dir + "/bin", "GOOSE_VERSION": "v1.19.3", "CONFIGURE": "false"}},
 		TargetMemcode:  {env: map[string]string{"MEMCODE_INSTALL_DIR": dir + "/bin", "MEMCODE_VERSION": "v1.19.3"}},
-		TargetFX:       {env: map[string]string{"FX_INSTALL_DIR": dir + "/bin"}, args: []string{"v1.19.3"}},
-		TargetOMP:      {env: map[string]string{"PI_INSTALL_DIR": dir + "/bin"}, args: []string{"--binary", "--ref", "v1.19.3"}},
+		TargetJCode: {env: map[string]string{
+			"JCODE_INSTALL_DIR": dir + "/bin", "JCODE_VERSION": "v1.19.3",
+			"JCODE_SKIP_SERVER_RELOAD": "1", "JCODE_NO_TELEMETRY": "1",
+		}},
+		TargetFX:  {env: map[string]string{"FX_INSTALL_DIR": dir + "/bin"}, args: []string{"v1.19.3"}},
+		TargetOMP: {env: map[string]string{"PI_INSTALL_DIR": dir + "/bin"}, args: []string{"--binary", "--ref", "v1.19.3"}},
 		TargetQwen: {env: map[string]string{
 			"QWEN_INSTALL_LIB_DIR": dir + "/lib", "QWEN_INSTALL_BIN_DIR": dir + "/bin",
 			"QWEN_INSTALL_VERSION": "1.19.3", "QWEN_INSTALL_METHOD": "standalone", "QWEN_NO_MODIFY_PATH": "1",

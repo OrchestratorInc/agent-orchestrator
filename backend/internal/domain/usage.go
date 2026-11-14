@@ -28,6 +28,9 @@ const (
 	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
 	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
 	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
+	// UsageSourceJCodeLedger is AO's append-only copy of the token_usage
+	// jcode stores on each assistant message of its native session file.
+	UsageSourceJCodeLedger UsageSourceKind = "jcode_ledger"
 )
 
 // AllUsageSourceKinds lists every certified usage artifact shape.
@@ -47,6 +50,7 @@ var AllUsageSourceKinds = []UsageSourceKind{
 	UsageSourceGrokUsage,
 	UsageSourceDeepSeekSession,
 	UsageSourceAgyConversation,
+	UsageSourceJCodeLedger,
 }
 
 // IsKnown reports whether k is a certified usage source kind.

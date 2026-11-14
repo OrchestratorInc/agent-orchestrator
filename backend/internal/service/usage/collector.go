@@ -81,6 +81,12 @@ type SourceRoots struct {
 	DeepSeekSessions    string
 	AgyCLIConversations string
 	AgyACPConversations string
+	// JCodeHome is jcode's state root, whose sessions/<id>.json files carry
+	// per-message token_usage. JCodeLedger is AO's directory of append-only
+	// usage ledgers derived from them (jcode rewrites its session file, which
+	// the JSONL ingestor cannot tail).
+	JCodeHome   string
+	JCodeLedger string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -112,6 +118,10 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	}
 	ompAgentDir := piFamilyAgentDir(home, "PI_CODING_AGENT_DIR", ".omp", "agent")
 	kimchiAgentDir := piFamilyAgentDir(home, "KIMCHI_CODING_AGENT_DIR", ".config", "kimchi", "harness")
+	jcodeHome := strings.TrimSpace(os.Getenv("JCODE_HOME"))
+	if jcodeHome == "" {
+		jcodeHome = filepath.Join(home, ".jcode")
+	}
 	return SourceRoots{
 		ClaudeProjects:      filepath.Join(claudeHome, "projects"),
 		CodexSessions:       filepath.Join(codexHome, "sessions"),
@@ -130,6 +140,8 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 		DeepSeekSessions:    filepath.Join(deepseekHome(home), "sessions"),
 		AgyCLIConversations: filepath.Join(agyGeminiHome(home), agyCLIStorageDir, "conversations"),
 		AgyACPConversations: filepath.Join(agyGeminiHome(home), agyACPStorageDir, "conversations"),
+		JCodeHome:           jcodeHome,
+		JCodeLedger:         filepath.Join(dataDir, "jcode", "usage"),
 	}, nil
 }
 
@@ -280,6 +292,7 @@ func resolveQwenStoragePath(path, home, workspace string) string {
 }
 
 type collectorStore interface {
+	GetProject(context.Context, string) (domain.ProjectRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
 	UpsertUsageBinding(context.Context, domain.UsageBindingRecord) (domain.UsageBindingRecord, error)
@@ -309,6 +322,8 @@ type Collector struct {
 	codexLogicalSourceLimit int
 	now                     func() time.Time
 	logger                  *slog.Logger
+	jcodeMu                 sync.Mutex
+	jcodeReads              map[string]*jcodeReadState
 	mu                      *semaphore.Weighted
 	// discoveryAfterID is where the next bounded reconcile pass resumes,
 	// guarded by mu. Unchanged bindings are not rewritten, so their updated_at
@@ -448,6 +463,12 @@ func (c *Collector) FinalizeSession(
 		return err
 	}
 	for _, binding := range bindings {
+		if binding.Harness == domain.HarnessJCode {
+			// jcode's last turn can be saved after its last hook.
+			if _, err := c.syncJCodeLedger(ctx, binding.NativeRootID, binding.SessionID); err != nil {
+				return err
+			}
+		}
 		if _, err := c.reactivateLatestSources(ctx, binding.ID, now); err != nil {
 			return err
 		}
@@ -2609,6 +2630,11 @@ func validateSourceAttribution(
 			filepath.Base(sessionDir) != binding.NativeRootID || subagentID != wantSubagent {
 			return rejected()
 		}
+	case domain.UsageSourceJCodeLedger:
+		if binding.Harness != domain.HarnessJCode || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != binding.NativeRootID+".jsonl" {
+			return rejected()
+		}
 	case domain.UsageSourcePiSession, domain.UsageSourceOMPSession, domain.UsageSourceKimchiSession,
 		domain.UsageSourcePrimeAgentSession, domain.UsageSourceDeepSeekSession:
 		family, known := piFamilyForKind(kind)
@@ -2698,6 +2724,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.CodexSessions, c.roots.CodexArchived}
 	case domain.HarnessKimi:
 		return []string{c.roots.KimiHome}
+	case domain.HarnessJCode:
+		return []string{c.roots.JCodeLedger}
 	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent, domain.HarnessDeepSeek:
 		family, _ := piFamilyForHarness(harness)
 		return c.piFamilyRoots(family)
@@ -2726,6 +2754,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceCodexRollout, true
 	case domain.HarnessKimi:
 		return domain.UsageSourceKimiWire, true
+	case domain.HarnessJCode:
+		return domain.UsageSourceJCodeLedger, true
 	case domain.HarnessPi:
 		return domain.UsageSourcePiSession, true
 	case domain.HarnessOMP:
@@ -2797,6 +2827,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverCodexPath(ctx, nativeID, "")
 	case domain.HarnessKimi:
 		return c.discoverKimiPath(ctx, nativeID)
+	case domain.HarnessJCode:
+		return c.syncJCodeLedger(ctx, nativeID, sessionID)
 	case domain.HarnessPi, domain.HarnessOMP, domain.HarnessKimchi, domain.HarnessPrimeAgent, domain.HarnessDeepSeek:
 		family, _ := piFamilyForHarness(harness)
 		return c.discoverPiFamilyPath(ctx, family, nativeID)

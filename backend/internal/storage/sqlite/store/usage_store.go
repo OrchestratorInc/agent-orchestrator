@@ -1223,7 +1223,8 @@ func validateUsageEvent(harness domain.AgentHarness, event domain.ModelUsageEven
 	if harness == domain.HarnessPi || harness == domain.HarnessOMP || harness == domain.HarnessKimchi ||
 		harness == domain.HarnessPrimeAgent ||
 		harness == domain.HarnessGoose || harness == domain.HarnessOpenCode || harness == domain.HarnessKilocode ||
-		harness == domain.HarnessGrok || harness == domain.HarnessDeepSeek || harness == domain.HarnessAgy {
+		harness == domain.HarnessGrok || harness == domain.HarnessDeepSeek || harness == domain.HarnessAgy ||
+		harness == domain.HarnessJCode {
 		validProvider = event.ProviderID == domain.UsageProviderOpenAI ||
 			event.ProviderID == domain.UsageProviderAnthropic
 	}

@@ -2129,6 +2129,7 @@ func TestSourceKindForHarness(t *testing.T) {
 		{harness: domain.HarnessClaudeCode, want: domain.UsageSourceClaudeMain, ok: true},
 		{harness: domain.HarnessCodex, want: domain.UsageSourceCodexRollout, ok: true},
 		{harness: domain.HarnessKimi, want: domain.UsageSourceKimiWire, ok: true},
+		{harness: domain.HarnessJCode, want: domain.UsageSourceJCodeLedger, ok: true},
 		{harness: domain.HarnessPi, want: domain.UsageSourcePiSession, ok: true},
 		{harness: domain.HarnessQwen, want: domain.UsageSourceQwenMonthly, ok: true},
 		{harness: domain.HarnessOMP, want: domain.UsageSourceOMPSession, ok: true},

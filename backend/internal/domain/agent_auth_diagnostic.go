@@ -106,6 +106,8 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 		d.Reason = "Signed in. The stored access token has expired; the harness renews it with its refresh token the next time it runs, so no action is needed."
 	case "provider_accepted":
 		d.Reason = "The provider accepted the selected credential."
+	case "local_provider_available":
+		d.Reason = "The selected local provider needs no credential. Its server answered on this machine with the selected model installed."
 	case "provider_rejected":
 		d.Reason = "The provider rejected the selected credential."
 		d.NextStep = "Check the credential source below. An environment credential can override a stored login; update that source or log in again."

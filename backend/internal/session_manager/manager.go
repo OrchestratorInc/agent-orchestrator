@@ -7599,6 +7599,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	metadata[ports.MetadataKeyNativeTranscriptPath] = meta.NativeTranscriptPath
 	ref := ports.SessionRef{
 		ID:            string(id),
+		Env:           env,
 		WorkspacePath: workspacePath,
 		Metadata:      metadata,
 	}

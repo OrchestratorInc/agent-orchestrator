@@ -894,14 +894,18 @@ type RestoreConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	// Env is the environment the runtime layers over the daemon's own for the
-	// resumed process, as LaunchConfig.Env is for a launch.
+	// resumed process, as LaunchConfig.Env is for a launch. It includes
+	// provider state roots, so restore eligibility inspects the same state as
+	// the runtime.
 	Env map[string]string
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.
 type SessionRef struct {
-	ID            string
-	Metadata      map[string]string
+	ID       string
+	Metadata map[string]string
+	// Env is the session's provider environment, including native state roots.
+	Env           map[string]string
 	WorkspacePath string
 	// DataDir is AO's isolated state root. Native lifecycle commands must use it
 	// as their stable working/configuration root, never the session worktree.

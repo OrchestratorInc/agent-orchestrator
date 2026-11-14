@@ -46,6 +46,8 @@ func parseRecordsWithState(
 		result.pendingCodexSpawnCalls = len(state.Codex.PendingSpawnCallIDs)
 	case domain.UsageSourceKimiWire:
 		parseKimi(source, records, &result)
+	case domain.UsageSourceJCodeLedger:
+		parseJCode(source, records, &result)
 	case domain.UsageSourcePiSession:
 		parsePi(source, records, &result)
 	case domain.UsageSourceOMPSession:

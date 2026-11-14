@@ -84,6 +84,20 @@ func TestBusyHarnessSessionsKeepsATerminalThatCannotResume(t *testing.T) {
 	}
 }
 
+func TestUpdateResumePreflightPreservesLaunchEnvironment(t *testing.T) {
+	agent := &recordingAgent{}
+	mgr, store, _ := newExitedResumeManager(t, &fakeRuntime{}, agent)
+	project := store.projects[string(chatTestProject)]
+	project.Config.Env = map[string]string{"JCODE_HOME": t.TempDir()}
+	store.projects[string(chatTestProject)] = project
+	if !mgr.terminalResumesNatively(context.Background(), store.sessions["mer-1"]) {
+		t.Fatal("native restore preflight failed")
+	}
+	if got := agent.lastRestore.Env["JCODE_HOME"]; got != project.Config.Env["JCODE_HOME"] {
+		t.Fatalf("preflight home = %q, want project home %q", got, project.Config.Env["JCODE_HOME"])
+	}
+}
+
 func TestResumeAfterUpdateDeliversWhatQueuedWhileStopped(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, _ := newChatManager(launcher)
