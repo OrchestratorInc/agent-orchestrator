@@ -1018,6 +1018,7 @@
 	"inspector.review.notInjected": "Nicht eingespeist",
 	"inspector.review.rerun": "Review erneut ausführen",
 	"inspector.review.openReviewer": "Open",
+	"inspector.review.activeReviewers": "Aktive Reviewer",
 	"inspector.review.requestedByAgent": "Requested by agent",
 	"inspector.review.restoreSession": "Review-Sitzung wiederherstellen",
 	"inspector.review.restoringSession": "Review-Sitzung wird wiederhergestellt...",

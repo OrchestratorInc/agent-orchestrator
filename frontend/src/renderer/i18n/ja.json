@@ -1018,6 +1018,7 @@
 	"inspector.review.notInjected": "未送信",
 	"inspector.review.rerun": "レビューを再実行",
 	"inspector.review.openReviewer": "Open",
+	"inspector.review.activeReviewers": "アクティブなレビュアー",
 	"inspector.review.requestedByAgent": "Requested by agent",
 	"inspector.review.restoreSession": "レビューセッションを復元",
 	"inspector.review.restoringSession": "レビューセッションを復元中...",

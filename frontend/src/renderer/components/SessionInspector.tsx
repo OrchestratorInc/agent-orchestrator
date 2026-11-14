@@ -109,6 +109,7 @@ import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
+import { REVIEWER_GROUP, REVIEWER_ROW, REVIEWER_ROW_LABEL, REVIEWER_ROW_TRIGGER, ReviewerModelEffortRows, type ReviewerModelConfig } from "./ReviewerModelEffortRows";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -1764,6 +1765,29 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 type ReviewerHarness = NonNullable<components["schemas"]["TriggerReviewRequest"]["harness"]>;
 type AgentCatalog = components["schemas"]["AgentReadinessResponse"];
 
+/**
+ * The project-level reviewer model/mode/effort the daemon puts under a session's
+ * own reviewer settings when the session reviews with the same agent (see
+ * projectReviewerSelection and DefaultWorkerReviewer in the daemon). An empty
+ * session field means "use this", not the model's own default.
+ */
+function inheritedReviewerConfig(config: ProjectConfig | undefined, harness: string): ReviewerModelConfig {
+	const reviewer = config?.reviewers?.[0];
+	if (reviewer) {
+		if (reviewer.harness !== harness) return {};
+		const { model, mode, effort } = reviewer.agentConfig ?? {};
+		return { model: model || undefined, mode: mode || undefined, effort: effort || undefined };
+	}
+	const worker = config?.worker?.agent ?? "";
+	// The project's default worker reviews with its own model and effort, but only
+	// when that agent reviews as itself.
+	if (!worker || WORKER_DEFAULT_REVIEWERS[worker] !== worker || worker !== harness) return {};
+	return {
+		model: config?.worker?.agentConfig?.model || config?.agentConfig?.model || undefined,
+		effort: config?.worker?.agentConfig?.effort || config?.agentConfig?.effort || undefined,
+	};
+}
+
 function resolveDefaultReviewerHarness(config: ProjectConfig | undefined, workerHarness: WorkspaceSession["provider"]): ReviewerHarness {
 	const configuredHarness = config?.reviewers?.[0]?.harness;
 	if (configuredHarness) return configuredHarness as ReviewerHarness;
@@ -2926,6 +2950,7 @@ function ReviewPanel({
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
+	const reviewerControlsLocked = reviewRunning || autoReviewEnabled || isKilling || isSwitchingReviewer || isTriggering || isCancelling;
 	const reviewLive = reviewHasLiveActivity(openReviewStates, reviewerActivityState, hasReviewerSession);
 	const reviewHasRun = reviewRunning || Boolean(latest);
 	const runAction = reviewSessionRunAction(openReviewStates, isTriggering);
@@ -3012,8 +3037,10 @@ function ReviewPanel({
 							</div>
 						</div>
 					) : (
-					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-						<span className="min-w-0 text-sm text-settings-label">
+					// Agent, model, and effort: one grouped list, a row each.
+					<div className={cn(REVIEWER_GROUP, "my-1")}>
+					<div className={REVIEWER_ROW}>
+						<span className={REVIEWER_ROW_LABEL}>
 							{t("inspector.selectReviewerAgent")}
 						</span>
 						<ReviewerSelect
@@ -3021,17 +3048,28 @@ function ReviewPanel({
 							agents={agentCatalog?.agents}
 							contentAlign="end"
 							defaultHarness={resolvedDefaultHarness}
-							disabled={reviewRunning || autoReviewEnabled || isKilling || isSwitchingReviewer || isTriggering || isCancelling}
+							disabled={reviewerControlsLocked}
+							harnessOnly
 							onChange={(next) => onReviewerHarnessPreviewChange(next as ReviewerHarness | "")}
 							onConfigChange={(harness, config) => onReviewerOverrideChange(harness as ReviewerHarness | "", config)}
-							model={reviewerModel}
-							mode={reviewerMode}
-							effort={reviewerEffort}
 							hostId={hostId}
 							projectId={session.workspaceId}
-							triggerClassName="review-run-agent-select ml-auto h-control-md w-auto min-w-0 shrink-0 justify-end px-2 text-right text-xs"
+							triggerVariant="ghost"
+							triggerClassName={REVIEWER_ROW_TRIGGER}
 							value={reviewerOverride}
 						/>
+					</div>
+					<ReviewerModelEffortRows
+						agentId={reviewerOverride || resolvedDefaultHarness}
+						projectId={session.workspaceId}
+						hostId={hostId}
+						model={reviewerModel}
+						mode={reviewerMode}
+						effort={reviewerEffort}
+						inherited={inheritedReviewerConfig(config, reviewerOverride || resolvedDefaultHarness)}
+						disabled={reviewerControlsLocked}
+						onChange={(next) => onReviewerOverrideChange(reviewerOverride, next)}
+					/>
 					</div>
 					)}
 					{/* Several reviewers can work on one worker at once (an agent may
@@ -3039,7 +3077,10 @@ function ReviewPanel({
 					    shows one at a time, so each live reviewer gets a row to open it
 					    whenever any of them is not the selected reviewer. */}
 					{activeReviewers.some((surface) => surface.reviewId !== reviewerSurface?.reviewId)
-						? activeReviewers.map((surface) => (
+						? <>
+							{/* Labelled, so these rows do not read as stray lines under the reviewer box. */}
+							<p className="mt-2 mb-0.5 text-xs text-settings-muted">{t("inspector.review.activeReviewers")}</p>
+							{activeReviewers.map((surface) => (
 								<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1" key={surface.reviewId}>
 									<span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
 										<AgentAvatar className="size-4" decorative provider={surface.harness} />
@@ -3056,7 +3097,8 @@ function ReviewPanel({
 										{t("inspector.review.openReviewer")}
 									</Button>
 								</div>
-							))
+							))}
+						</>
 						: null}
 					<InspectorPolicyRow
 						checked={autoReviewEnabled}

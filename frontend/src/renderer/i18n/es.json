@@ -1030,6 +1030,7 @@
 	"inspector.review.notInjected": "No inyectado",
 	"inspector.review.rerun": "Volver a ejecutar la revisión",
 	"inspector.review.openReviewer": "Open",
+	"inspector.review.activeReviewers": "Revisores activos",
 	"inspector.review.requestedByAgent": "Requested by agent",
 	"inspector.review.restoreSession": "Restaurar sesión de revisión",
 	"inspector.review.restoringSession": "Restaurando sesión de revisión...",

@@ -3792,6 +3792,8 @@ describe("SessionInspector summary reviews", () => {
 
     const openButtons = await screen.findAllByRole("button", { name: "Open" });
     expect(openButtons).toHaveLength(2);
+    // The rows sit under a heading so they do not read as stray lines.
+    expect(screen.getByText("Active reviewers")).toBeInTheDocument();
     await userEvent.click(openButtons[1]!);
     expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
   });
@@ -3817,6 +3819,7 @@ describe("SessionInspector summary reviews", () => {
 
     await screen.findByTestId("review-run-summary");
     expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Active reviewers")).not.toBeInTheDocument();
   });
 
   // An agent can ask a reviewer other than the selected one. The selected
@@ -4628,20 +4631,19 @@ describe("SessionInspector summary reviews", () => {
     );
     await openReviewsSection();
 
-    await userEvent.click(await screen.findByRole("button", { name: /Select reviewer agent/ }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /codex/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer model" }));
     await waitFor(() =>
-      expect(screen.getByRole("menuitem", { name: "GPT-5 Mini" })).toBeInTheDocument(),
+      expect(screen.getByRole("menuitem", { name: /GPT-5 Mini/ })).toBeInTheDocument(),
     );
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(0);
-    await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5 Mini" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5 Mini/ }));
 
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(
         "/api/v1/sessions/{sessionId}/reviews/switch",
         {
           params: { path: { sessionId: "sess-1" } },
-          body: { harness: undefined, agentConfig: { model: "gpt-5-mini", permissions: "bypass-permissions" } },
+          body: { harness: "codex", agentConfig: { model: "gpt-5-mini", permissions: "bypass-permissions" } },
         },
       ),
     );
@@ -4684,29 +4686,232 @@ describe("SessionInspector summary reviews", () => {
     );
     await openReviewsSection();
 
-    await userEvent.click(await screen.findByRole("button", { name: /Select reviewer agent/ }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /codex/i }));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+    // Agent, model, and effort are three separate controls.
+    expect(await screen.findByRole("button", { name: /Select reviewer agent/ })).toHaveTextContent("Codex");
+    expect(await screen.findByRole("button", { name: "Reviewer model" })).toHaveTextContent("GPT-5 Mini");
+    const effortPicker = await screen.findByRole("button", { name: "Effort" });
+    // Nothing chosen yet: the model's reported default effort is shown.
+    expect(effortPicker).toHaveTextContent("Low");
+    await userEvent.click(effortPicker);
+    expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Low", "Medium", "High"]);
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(
         "/api/v1/sessions/{sessionId}/reviews/switch",
         {
           params: { path: { sessionId: "sess-1" } },
-          body: { harness: undefined, agentConfig: { model: "gpt-5-mini", effort: "high", permissions: "bypass-permissions" } },
+          body: { harness: "codex", agentConfig: { model: "gpt-5-mini", effort: "high", permissions: "bypass-permissions" } },
         },
       ),
     );
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /Select reviewer agent/ })).toHaveTextContent("High"),
-    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High"));
     await userEvent.click(screen.getByRole("button", { name: "Review latest commit" }));
 
     await waitFor(() =>
       expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0]?.[1].body).toEqual({
+        harness: "codex",
         agentConfig: { model: "gpt-5-mini", effort: "high" },
       }),
     );
+  });
+
+  it("keeps the reviewer effort when the new model offers it and drops it when not", async () => {
+    getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+      if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
+        return {
+          data: {
+            agentId: "codex",
+            selectionMode: "catalog",
+            models: [
+              { id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
+              { id: "gpt-5-mini", label: "GPT-5 Mini", efforts: ["low", "medium"], defaultEffort: "low" },
+            ],
+            allowCustom: false,
+            source: "official-catalog",
+            fetchedAt: "2026-08-30T00:00:00Z",
+            stale: false,
+          },
+          error: undefined,
+        };
+      }
+      return commonGetsResponder([], "reviewer-pane", [reviewState(3, "needs_review", "sha-1")])(path);
+    });
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(
+      <SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex", reviewerConfig: { effort: "high" } })} />,
+    );
+    await openReviewsSection();
+
+    // GPT-5 Mini has no High, so picking it drops the effort; a model pick saves once.
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer model" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /GPT-5 Mini/ }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/reviews/switch", {
+        params: { path: { sessionId: "sess-1" } },
+        body: { harness: "codex", agentConfig: { model: "gpt-5-mini" } },
+      }),
+    );
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(1);
+  });
+
+  it("can clear a reviewer effort when the model reports no default effort", async () => {
+    getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+      if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
+        return {
+          data: {
+            agentId: "codex",
+            selectionMode: "catalog",
+            models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"] }],
+            allowCustom: false,
+            source: "official-catalog",
+            fetchedAt: "2026-08-30T00:00:00Z",
+            stale: false,
+          },
+          error: undefined,
+        };
+      }
+      return commonGetsResponder([], "reviewer-pane", [reviewState(3, "needs_review", "sha-1")])(path);
+    });
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(
+      <SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex", reviewerConfig: { effort: "high" } })} />,
+    );
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Effort" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Clear effort" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/reviews/switch", {
+        params: { path: { sessionId: "sess-1" } },
+        body: { harness: "codex", agentConfig: undefined },
+      }),
+    );
+  });
+
+  // By default: Project Settings → Reviewer sets Codex effort to High; the model's own default is Medium.
+  const projectReviewerEffortGets = (
+    projectAgentConfig: Record<string, string> = { effort: "high" },
+    models: unknown[] = [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "medium", "high"], defaultEffort: "medium" }],
+  ) =>
+    getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+      if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
+        return {
+          data: {
+            agentId: "codex",
+            selectionMode: "catalog",
+            models,
+            allowCustom: false,
+            source: "official-catalog",
+            fetchedAt: "2026-08-30T00:00:00Z",
+            stale: false,
+          },
+          error: undefined,
+        };
+      }
+      if (path === "/api/v1/projects/{id}") {
+        return {
+          data: {
+            status: "ok",
+            project: {
+              id: "ws-1", kind: "git", name: "my-app", path: "/repo", repo: "my-app", defaultBranch: "main",
+              config: { reviewers: [{ harness: "codex", agentConfig: projectAgentConfig }] },
+            },
+          },
+        };
+      }
+      return commonGetsResponder([], "reviewer-pane", [reviewState(3, "needs_review", "sha-1")])(path);
+    });
+
+  it("shows the project's reviewer effort and saves the model's default level explicitly over it", async () => {
+    projectReviewerEffortGets();
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex" })} />);
+    await openReviewsSection();
+
+    // No session effort: the run inherits the project's High, so that is what shows and is ticked.
+    const effortPicker = await screen.findByRole("button", { name: "Effort" });
+    await waitFor(() => expect(effortPicker).toHaveTextContent("High"));
+    await userEvent.click(effortPicker);
+    expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemradio", { name: "Medium" })).toHaveAttribute("aria-checked", "false");
+
+    // Medium is the model's default, but clearing would fall back to High, so it is saved as picked.
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Medium" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/reviews/switch", {
+        params: { path: { sessionId: "sess-1" } },
+        body: { harness: "codex", agentConfig: { effort: "medium" } },
+      }),
+    );
+  });
+
+  it("lists the efforts of the project's reviewer model, not the catalog default's", async () => {
+    // The project reviews with GPT-5 Mini; the catalog default GPT-5 offers different levels.
+    projectReviewerEffortGets({ model: "gpt-5-mini" }, [
+      { id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
+      { id: "gpt-5-mini", label: "GPT-5 Mini", efforts: ["low", "medium", "max"], defaultEffort: "medium" },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex" })} />);
+    await openReviewsSection();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("GPT-5 Mini"));
+    const effortPicker = screen.getByRole("button", { name: "Effort" });
+    // GPT-5 Mini's reported default, not GPT-5's.
+    expect(effortPicker).toHaveTextContent("Medium");
+    await userEvent.click(effortPicker);
+    expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Low", "Medium", "Max"]);
+  });
+
+  it("clears a session reviewer effort back to the project's", async () => {
+    projectReviewerEffortGets();
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(
+      <SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex", reviewerConfig: { effort: "medium" } })} />,
+    );
+    await openReviewsSection();
+
+    const effortPicker = await screen.findByRole("button", { name: "Effort" });
+    expect(effortPicker).toHaveTextContent("Medium");
+    await userEvent.click(effortPicker);
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Clear effort" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/reviews/switch", {
+        params: { path: { sessionId: "sess-1" } },
+        body: { harness: "codex", agentConfig: undefined },
+      }),
+    );
+  });
+
+  it("hides the reviewer effort row for a model that reports no effort levels", async () => {
+    getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+      if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
+        return {
+          data: {
+            agentId: "codex",
+            selectionMode: "catalog",
+            models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
+            allowCustom: false,
+            source: "official-catalog",
+            fetchedAt: "2026-08-30T00:00:00Z",
+            stale: false,
+          },
+          error: undefined,
+        };
+      }
+      return commonGetsResponder([], "reviewer-pane", [reviewState(3, "needs_review", "sha-1")])(path);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex" })} />);
+    await openReviewsSection();
+
+    expect(await screen.findByRole("button", { name: "Reviewer model" })).toHaveTextContent("GPT-5");
+    expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
   });
 
   it("sends the session's saved reviewer effort with the run", async () => {
@@ -4769,20 +4974,19 @@ describe("SessionInspector summary reviews", () => {
     );
     await openReviewsSection();
 
-    await userEvent.click(await screen.findByRole("button", { name: /Select reviewer agent/ }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /codex/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer model" }));
     await waitFor(() =>
-      expect(screen.getByRole("menuitem", { name: "GPT-5 Mini" })).toBeInTheDocument(),
+      expect(screen.getByRole("menuitem", { name: /GPT-5 Mini/ })).toBeInTheDocument(),
     );
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(0);
 
-    await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5 Mini" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5 Mini/ }));
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith(
         "/api/v1/sessions/{sessionId}/reviews/switch",
         {
           params: { path: { sessionId: "sess-1" } },
-          body: { harness: undefined, agentConfig: { model: "gpt-5-mini", permissions: "bypass-permissions" } },
+          body: { harness: "codex", agentConfig: { model: "gpt-5-mini", permissions: "bypass-permissions" } },
         },
       ),
     );
@@ -4833,7 +5037,7 @@ describe("SessionInspector summary reviews", () => {
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(1);
   });
 
-  it("shows suggested reviewer models after reopening the selected reviewer picker", async () => {
+  it("shows the selected reviewer's suggested models in the reviewer model picker", async () => {
     getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
       if (path === "/api/v1/agents/{agent}/models") {
         const agent = options?.params?.path?.agent ?? "";
@@ -4889,11 +5093,9 @@ describe("SessionInspector summary reviews", () => {
         },
       ),
     );
-    await userEvent.click(await screen.findByRole("button", { name: /Select reviewer agent/ }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /^opencode$/i }));
-    expect(await screen.findByRole("menuitem", { name: "Suggested A" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /^custom opencode model$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /custom opencode/i })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer model" }));
+    expect(await screen.findByRole("menuitem", { name: /Suggested A/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Suggested B/ })).toBeInTheDocument();
   });
 
   it("allows selecting a text-selection reviewer harness without exposing custom reviewer entry", async () => {
@@ -4969,14 +5171,13 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
-    await userEvent.click(await screen.findByRole("button", { name: /Select reviewer agent/ }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /codex/i }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer model" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("menuitem", { name: "GPT-5 Mini" })).toBeInTheDocument(),
+      expect(screen.getByRole("menuitem", { name: /GPT-5 Mini/ })).toBeInTheDocument(),
     );
     expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(0);
-    await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5 Mini" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /GPT-5 Mini/ }));
     await waitFor(() =>
       expect(postMock).toHaveBeenLastCalledWith(
         "/api/v1/sessions/{sessionId}/reviews/switch",
