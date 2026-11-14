@@ -116,12 +116,15 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
+	// Neovate's setup is a provider login (an API key or account sign-in), so a
+	// saved credential reads as a connection rather than local configuration.
+	const credentialLabel = agentId === "neovate" ? "settings.harness.loggedIn" : "settings.harness.configured";
 	const unverifiedProvider = readinessAgent?.authentication.diagnostics?.some((step) => step.method === "provider_validation"
 		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
 		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
 	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
 	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
-		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : isSetupAction ? "settings.harness.configured" : "settings.harness.installed")
+		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : isSetupAction ? credentialLabel : "settings.harness.installed")
 		: authStatus === "authorized" ? t("settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))

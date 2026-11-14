@@ -97,6 +97,7 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	// is the built-in shell; the full name resolves on every platform.
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
+	"neovate":      {BinaryName: "neovate"},
 	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
 }
 

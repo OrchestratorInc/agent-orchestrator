@@ -362,6 +362,11 @@ func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, sc
 // published version and exceeds the metadata limit for popular harnesses
 // such as Claude Code (1.5 MB).
 func npmLatestTag(ctx context.Context, client *http.Client, pkg string) (string, error) {
+	// A scoped package's leading @ is part of its name; a later @ introduces
+	// the install version/tag and must not enter the registry package path.
+	if version := strings.LastIndex(pkg, "@"); version > 0 {
+		pkg = pkg[:version]
+	}
 	var distTags map[string]string
 	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
 		return "", err

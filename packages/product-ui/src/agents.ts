@@ -37,6 +37,7 @@ export const AGENT_OPTIONS = [
 	"deepseek-harness",
 	"openhands",
 	"command-code",
+	"neovate",
 	"memcode",
 	"hermes",
 ] as const;
@@ -86,6 +87,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"deepseek-harness": "DeepSeek",
 	openhands: "OpenHands",
 	"command-code": "Command Code",
+	neovate: "Neovate Code",
 	memcode: "memcode",
 	"hermes": "Hermes Agent",
 };

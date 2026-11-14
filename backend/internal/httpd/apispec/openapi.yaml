@@ -20285,6 +20285,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - memcode
           - hermes
           - fake
@@ -21067,6 +21068,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - memcode
           - hermes
           - cloudflared
@@ -25309,6 +25311,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - memcode
           - hermes
           type: string

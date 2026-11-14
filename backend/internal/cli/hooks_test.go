@@ -1109,6 +1109,7 @@ func TestHookSemanticAcceptanceFacts(t *testing.T) {
 		domain.HarnessPi,
 		domain.HarnessAmp,
 		domain.HarnessPrimeAgent,
+		domain.HarnessNeovate,
 	} {
 		t.Run(string(harness), func(t *testing.T) {
 			got := hookSemanticAcceptanceFacts(

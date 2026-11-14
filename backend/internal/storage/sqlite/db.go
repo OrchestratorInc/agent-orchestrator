@@ -2102,6 +2102,11 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// Pre-merge Neovate builds used 0195 for their harness constraint. Main
+	// owns 0195 for requested_output; recover its column when that number was
+	// recorded by those builds without changing existing output values.
+	{version: 195, table: "sessions", column: "requested_output",
+		addDDL: `ALTER TABLE sessions ADD COLUMN requested_output TEXT NOT NULL DEFAULT ''`},
 	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
 	// another migration first, and generated message reads select this column.
 	{version: 199, table: "conversation_messages", column: "continuation",
@@ -2201,7 +2206,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsNeovate := !strings.Contains(schema, "'neovate'")
+	if !needsNativeAssistant && !needsNeovate && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2215,6 +2221,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
+	}
+	if !needsNeovate {
+		// Neovate is also added after the exact historical repairs, so normalize
+		// it the same way as Hermes and append it again below.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''neovate'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Neovate constraint: %w", err)
+		}
+		needsNeovate = true
 	}
 	type replacement struct {
 		old string
@@ -2331,6 +2345,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsNeovate {
+		repairs = append(repairs, replacement{"'fake'))", "'neovate', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2388,6 +2405,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'neovate'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Neovate Code")
 	}
 	return nil
 }

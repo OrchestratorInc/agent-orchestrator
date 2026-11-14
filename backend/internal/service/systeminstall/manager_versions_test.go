@@ -374,3 +374,17 @@ func TestNodeManagersReadRegistryWithoutStartingManager(t *testing.T) {
 		})
 	}
 }
+
+// Registry metadata belongs to the package, even when installation is pinned.
+func TestNpmLatestTagForPinnedNeovatePackage(t *testing.T) {
+	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if got, want := request.URL.Path, "/-/package/@neovate/code/dist-tags"; got != want {
+			t.Fatalf("registry path = %q, want %q", got, want)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"latest":"0.28.5"}`)), Header: make(http.Header)}, nil
+	})}
+	got, err := npmLatestTag(t.Context(), client, "@neovate/code@0.28.5")
+	if err != nil || got != "0.28.5" {
+		t.Fatalf("latest = %q, err = %v", got, err)
+	}
+}

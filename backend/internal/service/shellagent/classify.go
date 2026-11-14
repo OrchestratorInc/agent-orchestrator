@@ -54,6 +54,7 @@ var executableHarness = map[string]domain.AgentHarness{
 	"openhands":    domain.HarnessOpenHands,
 	"command-code": domain.HarnessCommandCode,
 	"cmdc":         domain.HarnessCommandCode,
+	"neovate":      domain.HarnessNeovate,
 	"hermes":       domain.HarnessHermes,
 }
 
