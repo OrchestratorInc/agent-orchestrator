@@ -48,8 +48,10 @@ describe("navigation surfaces", () => {
 	// items are native bar items too, declared from the page, so nothing waits a
 	// frame to be measured and swapped in.
 	it("sets the session header title and items natively", () => {
-		expect(session).toContain("headerTitle: () => (");
+		expect(session).toContain("headerTitle: () => {");
 		expect(session).toContain('<Stack.Toolbar placement="right">');
+		// Android floats the "⋯" on a pill of its own, set as the bar's item.
+		expect(session).toContain('headerRight: menuReady ? () => <HeaderPillButton icon="more"');
 		expect(session).not.toContain("resetHeaderRightForSwap");
 	});
 });

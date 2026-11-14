@@ -28,7 +28,7 @@ export function largeTitleCollapsed(y: number): boolean {
  * so there the hook adds nothing and hands `onScroll` back as given.
  *
  * The list runs on under the bar, which is always backed by its frost (see
- * `frost`): solid behind the bar's items, then fading into the page, so rows
+ * `frost`): nearly opaque behind the bar's items, then fading into the page, so rows
  * passing under it dissolve rather than meet a hard edge. The frost used to
  * come up only once the list moved, and the bar read as see-through at rest.
  *
