@@ -71,7 +71,7 @@ vi.mock("expo-router", async () => {
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
 vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
-vi.mock("../api", () => ({ mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
+vi.mock("../api", () => ({ ApiError: class ApiError extends Error {}, apiRequest: vi.fn(() => new Promise(() => {})), mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("../InlineBanner", async () => ({ InlineBanner: await host("InlineBanner") }));
