@@ -5,6 +5,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import { aoBridge } from "../../lib/bridge";
 
 const { get, post, put, remove, patch } = vi.hoisted(() => ({
 	get: vi.fn(),
@@ -299,6 +300,30 @@ describe("side delivery draft ownership", () => {
 		});
 		expect(hook.result.current.sides).toEqual([]);
 		expect(put.mock.calls.length).toBe(savedCount);
+	});
+
+	it("ignores an older empty side list that lands after a newer one", async () => {
+		let refresh!: () => void;
+		const listen = vi.spyOn(aoBridge.sideChats, "onPendingClosesChanged").mockImplementation(((listener: () => void) => {
+			refresh = listener;
+			return () => {};
+		}) as typeof aoBridge.sideChats.onPendingClosesChanged);
+		onTestFinished(() => listen.mockRestore());
+		const lists: ((sides: object[]) => void)[] = [];
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation((path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return new Promise((resolve) => lists.push((sides) => resolve({ data: { sides } })));
+			return originalGet(path, ...args);
+		});
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[1]([{ id: "side", sessionId: "session", state: "ready" }]));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await act(async () => lists[0]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+		expect(hook.result.current.activeId).toBe("side");
 	});
 });
 

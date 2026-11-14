@@ -434,6 +434,7 @@ export function useIndependentSideChats(
 	useEffect(() => setLoadingOlder(false), [sessionId, activeId, enabled]);
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const sessionRef = useRef(sessionId);
+	const listRequestRef = useRef(0);
 	sessionRef.current = enabled ? sessionId : "";
 	const creationScope = useMemo(() => ({ active: true, pending: new Set<symbol>() }), [sessionId, enabled]);
 	const creationScopeRef = useRef(creationScope);
@@ -468,16 +469,17 @@ export function useIndependentSideChats(
 
 	const refreshList = useCallback(async () => {
 		if (!enabled) return;
+		const requestId = ++listRequestRef.current;
 		const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", {
 			params: { path: { sessionId } },
 		});
-		if (sessionRef.current !== sessionId) return;
+		if (sessionRef.current !== sessionId || requestId !== listRequestRef.current) return;
 		if (requestError) {
 			setError(apiErrorMessage(requestError));
 			return;
 		}
 		const closes = await aoBridge.sideChats.getPendingCloses(sessionId);
-		if (sessionRef.current !== sessionId) return;
+		if (sessionRef.current !== sessionId || requestId !== listRequestRef.current) return;
 		setPendingCloses(closes);
 		closingSidesRef.current = new Set([...closes.map((side) => side.id), ...closeRequests.current]);
 		const nextSides = Array.isArray(data?.sides) ? data.sides.filter((side) => !closedSidesRef.current.has(side.id)) : [];
