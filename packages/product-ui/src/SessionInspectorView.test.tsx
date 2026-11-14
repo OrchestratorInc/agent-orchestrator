@@ -90,6 +90,37 @@ describe("SessionInspectorShellView", () => {
     rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
     expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
   });
+  it("adds closable task tabs after the fixed tabs and walks them with the keyboard", () => {
+    const onViewChange = vi.fn();
+    const onTaskTabSelect = vi.fn();
+    const onTaskTabClose = vi.fn();
+    const taskTabs = [
+      { id: "dev", label: "Dev server", closeLabel: "Close Dev server", icon: <svg /> },
+      { id: "tests", label: "Running tests", closeLabel: "Close Running tests", icon: <svg /> },
+    ];
+    render(<SessionInspectorShellView
+      activeView="task" activeTaskTab="dev" ariaLabel="Session inspector" browserPoppedOut={false}
+      tabs={tabs} onViewChange={onViewChange} taskTabs={taskTabs} taskView={<div data-testid="task-slot" />}
+      onTaskTabSelect={onTaskTabSelect} onTaskTabClose={onTaskTabClose}
+    />);
+    const dev = screen.getByRole("tab", { name: "Dev server" });
+    expect(dev).toHaveAttribute("aria-selected", "true");
+    expect(dev).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: "Running tests" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getAllByRole("tab").filter((tab) => tab.getAttribute("aria-selected") === "true")).toHaveLength(1);
+    expect(screen.getByTestId("task-slot").parentElement).toHaveClass("p-0", "overflow-hidden");
+
+    fireEvent.keyDown(dev, { key: "ArrowRight" });
+    expect(onTaskTabSelect).toHaveBeenCalledWith("tests");
+    fireEvent.keyDown(dev, { key: "ArrowLeft" });
+    expect(onViewChange).toHaveBeenCalledWith(tabs[tabs.length - 1].id);
+    fireEvent.keyDown(dev, { key: "Delete" });
+    expect(onTaskTabClose).toHaveBeenCalledWith("dev");
+    fireEvent.click(screen.getByRole("button", { name: "Close Running tests" }));
+    expect(onTaskTabClose).toHaveBeenLastCalledWith("tests");
+    fireEvent.click(screen.getByRole("tab", { name: "Running tests" }));
+    expect(onTaskTabSelect).toHaveBeenLastCalledWith("tests");
+  });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
     render(<SessionInspectorShellView

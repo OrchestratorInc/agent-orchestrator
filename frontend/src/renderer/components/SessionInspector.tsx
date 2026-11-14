@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
-import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
+import { Chat, CheckWaves, Folder, List, Package, SquareTerminal } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -50,6 +50,9 @@ import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { useBackgroundTasks } from "../hooks/useBackgroundTasks";
+import { BackgroundTaskPanel } from "./BackgroundTaskPanel";
+import { backgroundTaskName, supportsLocalBackgroundTasks } from "./BackgroundTasks";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -218,6 +221,16 @@ export const SessionInspector = memo(function SessionInspector({
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
+	// Background tasks opened from the composer, each in its own closable tab.
+	const uiKey = session ? sessionUiKey(session.id, hostId) : "";
+	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
+	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
+	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
+	const tasksReading = useBackgroundTasks(session?.id ?? "", Boolean(session && taskTabs?.length && supportsLocalBackgroundTasks(session)), true).data;
+	useEffect(() => {
+		// An unavailable reading says nothing about the tasks; keep what the tabs last saw.
+		if (uiKey && tasksReading && tasksReading.availability !== "unavailable") useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
+	}, [tasksReading, uiKey]);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -268,7 +281,9 @@ export const SessionInspector = memo(function SessionInspector({
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
-	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	const view: InspectorView = requestedView === "task"
+		? (activeTaskTab ? "task" : "summary")
+		: availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
@@ -364,6 +379,19 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				tabs={tabs}
+				taskTabs={taskTabs?.map((tab) => {
+					const name = backgroundTaskName(tab.task, t);
+					return { id: tab.task.id, label: name, closeLabel: t("backgroundTasks.closeTab", { name }), icon: <SquareTerminal aria-hidden="true" /> };
+				})}
+				activeTaskTab={activeTaskTab?.task.id}
+				onTaskTabSelect={(id) => {
+					useUiStore.getState().selectTaskTab(uiKey, id);
+					setView("task");
+				}}
+				onTaskTabClose={(id) => useUiStore.getState().closeTaskTab(uiKey, id)}
+				taskView={session && activeTaskTab ? (
+					<BackgroundTaskPanel isVisible={isInspectorVisible} key={activeTaskTab.task.id} sessionId={session.id} tab={activeTaskTab} />
+				) : undefined}
 			/>
 		</div>
 	);

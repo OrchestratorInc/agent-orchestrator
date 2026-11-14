@@ -56,6 +56,7 @@ import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from 
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
+import type { BackgroundTask } from "../../hooks/useBackgroundTasks";
 import { useUiStore } from "../../stores/ui-store";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
@@ -420,6 +421,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
+	// A background task opens in its own temporary side-panel tab.
+	const openBackgroundTask = useCallback((task: BackgroundTask) => {
+		useUiStore.getState().openTaskTab(uiSessionId, task);
+	}, [uiSessionId]);
 	const openSideInspector = () => {
 		const ui = useUiStore.getState();
 		ui.setInspectorView(uiSessionId, "sideChat");
@@ -753,7 +758,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
+				composerNotice={<>{!hostId ? <SessionBackgroundTasks session={session} onOpenTask={openBackgroundTask} /> : null}{interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}

@@ -72,3 +72,31 @@ export function useStopBackgroundTask(sessionId: string) {
 		onSettled: () => queryClient.invalidateQueries({ queryKey: backgroundTasksQueryRoot }),
 	});
 }
+
+export type BackgroundTaskOutput = components["schemas"]["BackgroundTaskOutputResponse"];
+
+export const backgroundTaskOutputQueryKey = (sessionId: string, taskId: string) => ["background-task-output", sessionId, taskId] as const;
+
+/**
+ * One task's latest output (the daemon keeps the last 200 lines). Polls every
+ * second while `live`; otherwise reads once. Unchanged output keeps the same
+ * object, so an idle task does not re-render its tab.
+ */
+export function useBackgroundTaskOutput(sessionId: string, taskId: string, { enabled, live }: { enabled: boolean; live: boolean }) {
+	return useQuery({
+		queryKey: backgroundTaskOutputQueryKey(sessionId, taskId),
+		enabled,
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", {
+				params: { path: { sessionId, taskId } }, signal,
+			});
+			if (error) throw error;
+			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
+				throw new Error("Invalid background task output response");
+			}
+			return data;
+		},
+		refetchInterval: live ? 1_000 : false,
+		retry: false,
+	});
+}

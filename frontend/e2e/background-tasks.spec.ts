@@ -19,7 +19,9 @@ const queued = [
 	"and update the changelog",
 ];
 
-async function openWorker(page: Page, fixture: { tasks: Task[] }, stops: string[] = []) {
+type Fixture = { tasks: Task[]; output?: (taskId: string) => { output: string; truncated?: boolean } | undefined };
+
+async function openWorker(page: Page, fixture: Fixture, stops: string[] = []) {
 	await page.emulateMedia({ reducedMotion: "reduce" });
 	await installFakeAgent(page, {
 		projectId,
@@ -33,6 +35,10 @@ async function openWorker(page: Page, fixture: { tasks: Task[] }, stops: string[
 			await route.fulfill({ json: { sessions: [reading] } });
 		} else if (path === `/api/v1/sessions/${sessionId}/background-tasks`) {
 			await route.fulfill({ json: reading });
+		} else if (path.startsWith(`/api/v1/sessions/${sessionId}/background-tasks/`) && path.endsWith("/output")) {
+			const taskId = decodeURIComponent(path.split("/").at(-2) ?? "");
+			const output = fixture.output?.(taskId);
+			await route.fulfill({ json: { sessionId, taskId, availability: output ? "ready" : "unavailable", output: output?.output ?? "", truncated: output?.truncated } });
 		} else if (path.startsWith(`/api/v1/sessions/${sessionId}/background-tasks/`) && path.endsWith("/stop")) {
 			const taskId = decodeURIComponent(path.split("/").at(-2) ?? "");
 			fixture.tasks = fixture.tasks.map((task) => task.id === taskId
@@ -164,7 +170,7 @@ test("several tasks fold to a count and open in place without moving into the qu
 	const rows = tab.getByRole("listitem");
 	await expect(rows).toHaveCount(3);
 	await expect(rows.nth(2)).toContainText("Run the Go linter");
-	await expect(rows.nth(2).getByRole("button")).toHaveCount(0);
+	await expect(rows.nth(2).getByRole("button", { name: /^Stop/ })).toHaveCount(0);
 	await expect(tab.getByRole("button", { name: /^Stop/ })).toHaveCount(2);
 	// Grown in the flow: the queue's footprint moved up, the composer did not.
 	await expectStacked(page, tab);
@@ -174,4 +180,64 @@ test("several tasks fold to a count and open in place without moving into the qu
 	const screenshot = testInfo.outputPath("background-tasks-open.png");
 	await page.screenshot({ path: screenshot });
 	await testInfo.attach("open task list beside an open queue", { path: screenshot, contentType: "image/png" });
+});
+
+test("a task opens in its own side panel tab that follows its output @T0", async ({ page }, testInfo) => {
+	let ticks = 60;
+	const lines = () => Array.from({ length: ticks }, (_, i) => `tick-${i + 1}`).join("\n");
+	const fixture: Fixture = {
+		tasks: [
+			{ id: "dev", kind: "shell", description: "npm run dev -- --port 3000", command: "npm run dev -- --port 3000", state: "running", startedAt: ago(12), stoppable: true },
+			{ id: "tests", kind: "shell", description: "npm test -- --watch", command: "npm test -- --watch", state: "running", startedAt: ago(9), stoppable: true },
+		],
+		output: (taskId) => (taskId === "dev" ? { output: lines() } : { output: "" }),
+	};
+	await openWorker(page, fixture);
+	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
+	const strip = page.getByRole("region", { name: "Background tasks" });
+	await strip.getByRole("button", { name: /2 running/ }).click();
+	await strip.getByRole("button", { name: /^Dev server on port 3000/ }).click();
+
+	const devTab = page.getByRole("tab", { name: "Dev server on port 3000" });
+	await expect(devTab).toHaveAttribute("aria-selected", "true");
+	const panel = page.getByRole("region", { name: "Dev server on port 3000" });
+	await expect(panel.getByText("npm run dev -- --port 3000")).toBeVisible();
+	const output = panel.getByRole("region", { name: "Output" });
+	const atBottom = () => output.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight <= 8);
+	await expect(output).toContainText("tick-60");
+	await expect.poll(atBottom).toBe(true);
+
+	// New lines arrive in view.
+	ticks = 120;
+	await expect(output).toContainText("tick-120", { timeout: 5_000 });
+	await expect.poll(atBottom).toBe(true);
+	const following = testInfo.outputPath("background-task-tab.png");
+	await page.screenshot({ path: following });
+	await testInfo.attach("task tab following its output", { path: following, contentType: "image/png" });
+
+	// Reading back holds the text still while lines keep arriving.
+	await output.evaluate((element) => { element.scrollTop = 0; });
+	const jump = panel.getByRole("button", { name: "Jump to latest" });
+	await expect(jump).toBeVisible();
+	ticks = 150;
+	await page.waitForTimeout(2_500);
+	await expect(output).not.toContainText("tick-150");
+	expect(await output.evaluate((element) => element.scrollTop)).toBe(0);
+	const reading = testInfo.outputPath("background-task-tab-held.png");
+	await page.screenshot({ path: reading });
+	await testInfo.attach("task tab held while reading back", { path: reading, contentType: "image/png" });
+	await jump.click();
+	await expect(output).toContainText("tick-150");
+	await expect.poll(atBottom).toBe(true);
+	await expect(jump).toHaveCount(0);
+
+	// A second task opens a second tab; closing tabs shows the neighbour, then leaves task tabs.
+	await strip.getByRole("button", { name: /^Running tests/ }).click();
+	await expect(page.getByRole("tab", { name: "Running tests" })).toHaveAttribute("aria-selected", "true");
+	await expect(page.getByRole("region", { name: "Running tests" }).getByText("No output yet")).toBeVisible();
+	await page.getByRole("button", { name: "Close Running tests" }).click();
+	await expect(devTab).toHaveAttribute("aria-selected", "true");
+	await page.getByRole("button", { name: "Close Dev server on port 3000" }).click();
+	await expect(page.getByRole("tab", { name: /Dev server/ })).toHaveCount(0);
+	await expect(page.getByRole("region", { name: "Dev server on port 3000" })).toHaveCount(0);
 });
