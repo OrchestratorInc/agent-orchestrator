@@ -251,9 +251,10 @@ func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSetting
 		return fmt.Errorf("%w: Docker Agent effort must be configured natively", ports.ErrChatCapabilityUnavailable)
 	}
 	// Docker Agent's filesystem annotations do not distinguish read and edit
-	// requests accurately enough to promise AO's accept-edits policy.
+	// requests accurately enough to promise AO's accept-edits policy. The typed
+	// error keeps accept-edits out of the advertised permission modes.
 	if ports.NormalizePermissionMode(settings.Approval) == ports.PermissionModeAcceptEdits {
-		return fmt.Errorf("%w: Docker Agent does not support AO accept-edits", ports.ErrChatCapabilityUnavailable)
+		return fmt.Errorf("%w: Docker Agent does not support AO accept-edits", ports.ErrChatPermissionModeUnsupported)
 	}
 	model := strings.TrimSpace(settings.Model)
 	if model != "" && model != "default" && !strings.HasPrefix(model, "model:") {

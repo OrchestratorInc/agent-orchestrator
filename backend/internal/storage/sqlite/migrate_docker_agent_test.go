@@ -17,7 +17,7 @@ func TestDockerAgentMigrationAllowsDockerAgentAndReversesBothHistoricalSchemas(t
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 20261019220421514)
+			db := openMigratedDatabaseCopy(t, 20261114072016988)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
 				// 'codewhale' in every variant the Docker Agent migration rewrites, so anchor
@@ -26,7 +26,7 @@ func TestDockerAgentMigrationAllowsDockerAgentAndReversesBothHistoricalSchemas(t
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 20261019220421514)
+			upTo(t, db, 20261114072016988)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -37,20 +37,20 @@ func TestDockerAgentMigrationAllowsDockerAgentAndReversesBothHistoricalSchemas(t
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 20261021083138547)
+			upTo(t, db, 20261114173247220)
 			if _, err := db.Exec(insert, "docker-session", 3, "docker-agent"); err != nil {
 				t.Fatalf("insert docker-agent session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261021083138547 {
-				t.Fatalf("migration version = %d, err = %v; want 20261021083138547", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261114173247220 {
+				t.Fatalf("migration version = %d, err = %v; want 20261114173247220", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'docker-agent'`)
-			downTo(t, db, 20261019220421514)
+			downTo(t, db, 20261114072016988)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -72,7 +72,7 @@ func TestDockerAgentRepairsBurnedHistoryBeforeAppending(t *testing.T) {
 	for _, base := range []int64{26, 53, 54, 82, 95, 155, 163, 164, 165, 166, 167, 193, 194} {
 		t.Run(fmt.Sprint(base), func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, base)
-			for _, v := range []int64{165, 205, 20261021083138547} {
+			for _, v := range []int64{165, 205, 20261021083138547, 20261114173247220} {
 				if v > base {
 					mustExec(t, db, `INSERT INTO goose_db_version (version_id,is_applied) VALUES (?,1)`, v)
 				}

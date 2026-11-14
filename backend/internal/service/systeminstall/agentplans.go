@@ -273,11 +273,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetDockerAgent:
 		// Docker publishes the standalone CLI as a Homebrew formula; AO installs
 		// and updates to its latest release (Chat admits v1.150.0 or newer).
-		manual := manualPlan(target, "Install the latest official standalone Docker Agent binary (v1.150.0 or newer). Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])
+		// Its Chat binding is Unix only, so Windows gets no install route.
 		if s.goos == "darwin" || s.goos == "linux" {
+			manual := manualPlan(target, "Install the latest official standalone Docker Agent binary (v1.150.0 or newer). Docker Desktop is optional; Orchestrator supports native ACP Chat only.", agentDocumentationURLs[target])
 			plans = []Plan{s.planBrew(target, "docker-agent"), manual}
 		} else {
-			plans = []Plan{manual}
+			plans = []Plan{manualPlan(target, "Orchestrator runs Docker Agent Chat on macOS and Linux only.", agentDocumentationURLs[target])}
 		}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {

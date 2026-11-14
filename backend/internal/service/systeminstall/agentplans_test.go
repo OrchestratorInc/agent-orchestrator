@@ -334,6 +334,14 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 	}
 }
 
+func TestDockerAgentWindowsPlanStatesPlatformRestriction(t *testing.T) {
+	plan := newTestService("windows", "winget", "npm").planAgent(TargetDockerAgent)
+	if !plan.Unsupported || plan.Method != "manual" || len(plan.Command) != 0 ||
+		!strings.Contains(plan.Reason, "macOS and Linux only") {
+		t.Fatalf("Windows Docker Agent plan = %+v, want an unsupported manual plan naming the platform limit", plan)
+	}
+}
+
 func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
 	s := newTestService("darwin", "brew", "npm")
 	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}

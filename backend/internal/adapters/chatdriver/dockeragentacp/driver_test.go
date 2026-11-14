@@ -215,6 +215,24 @@ func TestUnsupportedTurnSettingsAreRejected(t *testing.T) {
 	}
 }
 
+func TestAdvertisedPermissionModesExcludeAcceptEdits(t *testing.T) {
+	if err := validateTurnSettings("", ports.ChatTurnSettings{Approval: ports.PermissionModeAcceptEdits}); !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+		t.Fatalf("accept-edits error = %v; want ErrChatPermissionModeUnsupported", err)
+	}
+	checker, ok := New(installedPlugin{}, nil).(ports.ChatPermissionModeChecker)
+	if !ok {
+		t.Fatal("Docker Agent driver does not report its permission modes")
+	}
+	if checker.SupportsPermissionMode(ports.PermissionModeAcceptEdits) {
+		t.Fatal("accept-edits advertised although launch refuses it")
+	}
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		if !checker.SupportsPermissionMode(mode) {
+			t.Fatalf("%s not advertised", mode)
+		}
+	}
+}
+
 func TestSessionOptionsLeaveDefaultModelToNativeConfig(t *testing.T) {
 	for _, model := range []string{"", "default", " default "} {
 		if options := sessionOptions(ports.ChatTurnSettings{Model: model}); options != nil {

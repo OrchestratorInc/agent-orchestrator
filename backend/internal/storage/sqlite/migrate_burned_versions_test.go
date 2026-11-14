@@ -219,7 +219,6 @@ var shippedMigrations = map[int64]string{
 	20261020090353460: "20261020090353460_allow_ao_action_activity.sql",
 	20261020131539535: "20261020131539535_provider_switching.sql",
 	20261021051727800: "20261021051727800_conversation_batch_members.sql",
-	20261021083138547: "20261021083138547_allow_docker_agent_harness.sql",
 	20261021142844923: "20261021142844923_index_conversation_activity_provider_item_lookup.sql",
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
@@ -267,6 +266,7 @@ var shippedMigrations = map[int64]string{
 	20261113111818788: "20261113111818788_clear_switched_model_reroutes.sql",
 	20261113173435236: "20261113173435236_session_search.sql",
 	20261114072016988: "20261114072016988_drop_session_account_pins.sql",
+	20261114173247220: "20261114173247220_allow_docker_agent_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -283,7 +283,9 @@ var shippedMigrations = map[int64]string{
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
 	// 203 was used by the historical Hermes candidate and must not be reused.
-	return v == 22 || v == 203
+	// 20261021083138547 was used by unmerged Docker Agent builds before the
+	// migration moved above main's latest version.
+	return v == 22 || v == 203 || v == 20261021083138547
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every
