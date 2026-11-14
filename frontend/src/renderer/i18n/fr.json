@@ -5113,7 +5113,7 @@
 	"settings.passwords.save": "Enregistrer",
 	"settings.passwords.saveFailed": "Impossible d'enregistrer le mot de passe.",
 	"settings.passwords.deleteTitle": "Supprimer {{label}} ?",
-	"settings.passwords.deleteDescription": "Les agents ne pourront plus se connecter avec. Les autorisations de ses sites sont aussi supprimées.",
+	"settings.passwords.deleteDescription": "Les agents ne pourront plus se connecter avec.",
 	"settings.passwords.deleteConfirm": "Supprimer",
 	"settings.passwords.deleteFailed": "Impossible de supprimer le mot de passe.",
 	"settings.passwords.activity": "Activité de connexion",

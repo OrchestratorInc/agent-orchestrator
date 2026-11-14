@@ -6815,7 +6815,7 @@ describe("browser view host credential fills", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const filler = createCredentialFiller({ store, approve: async () => "allow-once" });
+		const filler = createCredentialFiller({ store });
 		const page = setupHost(runtime, { credentialFiller: filler });
 		const inserted: string[] = [];
 		const original = page.debuggerSendCommand.getMockImplementation()!;
@@ -6845,6 +6845,7 @@ describe("browser view host credential fills", () => {
 			itemId: item.id,
 			field: "password",
 			projectId: "proj",
+			approvedOrigin: ORIGIN,
 		});
 		expect(inserted).toEqual([PASSWORD]);
 		expect(JSON.stringify(result)).not.toContain(PASSWORD);
@@ -6859,11 +6860,28 @@ describe("browser view host credential fills", () => {
 			get: { value: PASSWORD },
 			snapshot: { snapshot: `- textbox "Password": ${PASSWORD} [ref=e2]`, refs: {} },
 		});
-		await host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "proj" });
+		await host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "proj", approvedOrigin: ORIGIN });
 		const value = await host.execute("sess-1", "get", { property: "value", ref: "e2" });
 		const snapshot = await host.execute("sess-1", "snapshot", {});
 		expect(JSON.stringify([value, snapshot])).not.toContain(PASSWORD);
 		expect(JSON.stringify(snapshot)).toContain("••••");
+	});
+
+	it("describes the fill for the approval prompt without the secret or a focus", async () => {
+		const { host, item, inserted, runtime } = await setupVaultHost({});
+		const described = await host.execute("sess-1", "vault-describe", { action: "login", projectId: "proj" });
+		expect(described).toMatchObject({ origin: ORIGIN, item: { id: item.id, username: "alice" } });
+		expect(JSON.stringify(described)).not.toContain(PASSWORD);
+		expect(inserted).toEqual([]);
+		expect(vi.mocked(runtime.runAction).mock.calls.map((call) => call[1])).not.toContain("focus");
+	});
+
+	it("refuses a fill the daemon did not approve", async () => {
+		const { host, item, inserted } = await setupVaultHost({});
+		await expect(
+			host.execute("sess-1", "fill-secret", { ref: "e2", itemId: item.id, field: "password", projectId: "proj" }),
+		).rejects.toThrow(/not approved/);
+		expect(inserted).toEqual([]);
 	});
 
 	it("refuses fills without a daemon-stamped project", async () => {

@@ -4974,7 +4974,7 @@
 	"settings.passwords.save": "保存",
 	"settings.passwords.saveFailed": "无法保存密码。",
 	"settings.passwords.deleteTitle": "删除 {{label}}？",
-	"settings.passwords.deleteDescription": "智能体将无法再用它登录。其网站的授权也会一并移除。",
+	"settings.passwords.deleteDescription": "智能体将无法再用它登录。",
 	"settings.passwords.deleteConfirm": "删除",
 	"settings.passwords.deleteFailed": "无法删除密码。",
 	"settings.passwords.activity": "登录记录",

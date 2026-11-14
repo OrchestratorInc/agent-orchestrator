@@ -5113,7 +5113,7 @@
 	"settings.passwords.save": "Salvar",
 	"settings.passwords.saveFailed": "Não foi possível salvar a senha.",
 	"settings.passwords.deleteTitle": "Excluir {{label}}?",
-	"settings.passwords.deleteDescription": "Os agentes não poderão mais entrar com ela. As aprovações dos sites dela também são removidas.",
+	"settings.passwords.deleteDescription": "Os agentes não poderão mais entrar com ela.",
 	"settings.passwords.deleteConfirm": "Excluir",
 	"settings.passwords.deleteFailed": "Não foi possível excluir a senha.",
 	"settings.passwords.activity": "Atividade de login",

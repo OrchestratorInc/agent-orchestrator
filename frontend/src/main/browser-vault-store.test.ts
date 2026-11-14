@@ -97,15 +97,10 @@ describe("VaultStore", () => {
     expect(await store.candidates("https://evil.example.com/", "proj-a")).toHaveLength(0);
   });
 
-  it("remembers per-site approval and forgets it when the item is deleted", async () => {
+  it("deletes an item", async () => {
     const item = await addDemo();
-    expect(await store.isApproved(item.id, "http://localhost:4173")).toBe(false);
-    await store.approve(item.id, "http://localhost:4173");
-    expect(await store.isApproved(item.id, "http://localhost:4173")).toBe(true);
-    expect(await store.isApproved(item.id, "http://localhost:9999")).toBe(false);
     await store.delete(item.id);
     expect(await store.list()).toEqual([]);
-    expect(await store.isApproved(item.id, "http://localhost:4173")).toBe(false);
   });
 
   it("appends an audit trail without secrets, newest first", async () => {

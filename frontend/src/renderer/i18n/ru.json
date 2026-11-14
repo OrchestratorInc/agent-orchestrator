@@ -5226,7 +5226,7 @@
 	"settings.passwords.save": "Сохранить",
 	"settings.passwords.saveFailed": "Не удалось сохранить пароль.",
 	"settings.passwords.deleteTitle": "Удалить {{label}}?",
-	"settings.passwords.deleteDescription": "Агенты больше не смогут входить с ним. Разрешения для его сайтов тоже удаляются.",
+	"settings.passwords.deleteDescription": "Агенты больше не смогут входить с ним.",
 	"settings.passwords.deleteConfirm": "Удалить",
 	"settings.passwords.deleteFailed": "Не удалось удалить пароль.",
 	"settings.passwords.activity": "Активность входа",

@@ -1,8 +1,7 @@
 // Fills vault secrets into a page at the edge. The plaintext goes from the
 // vault straight into CDP Input.insertText; callers get back only a mask, and
 // the session's redactor scrubs the value from every later result.
-import { SECRET_MASK, createRedactor, type Redactor } from "./browser-vault";
-import type { CredentialApprover } from "./browser-vault-approval";
+import { SECRET_MASK, createRedactor, normalizeVaultOrigin, type Redactor } from "./browser-vault";
 import type { VaultField, VaultItemSummary, VaultStore } from "./browser-vault-store";
 
 export type CdpLike = {
@@ -16,12 +15,20 @@ export type FillTarget = {
   projectId: string;
   /** The top-level page URL, read live. */
   pageURL: () => string;
+  pageTitle?: () => string;
   /** The command's cancellation; a late approval must not type anything. */
   signal?: AbortSignal;
+  /**
+   * The origin the user approved in the daemon's approval gate. Fills refuse
+   * without it, and refuse any page that is not on it.
+   */
+  approvedOrigin?: string;
+  /** `ao browser login <origin>`: the page must still be on this origin. */
+  requestedOrigin?: string;
 };
 
 type Frame = { id: string; url: string };
-type FocusProbe = { tag: string; type: string } | null;
+type FocusProbe = { tag: string; type: string; visible?: boolean } | null;
 
 const WORLD = "ao-vault";
 
@@ -29,7 +36,10 @@ const WORLD = "ao-vault";
 const PROBE = `/*ao-vault:probe*/(() => {
   const el = document.activeElement;
   if (!document.hasFocus() || !el) return null;
-  return { tag: el.tagName, type: (el.getAttribute("type") || "").toLowerCase() };
+  const r = el.getBoundingClientRect();
+  const s = getComputedStyle(el);
+  const visible = r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) > 0 && !el.disabled && !el.readOnly;
+  return { tag: el.tagName, type: (el.getAttribute("type") || "").toLowerCase(), visible };
 })()`;
 
 const SELECT = `/*ao-vault:select*/(() => {
@@ -88,10 +98,7 @@ class FillRefused extends Error {
 
 export type CredentialFiller = ReturnType<typeof createCredentialFiller>;
 
-export function createCredentialFiller(options: {
-  store: VaultStore;
-  approve: CredentialApprover;
-}) {
+export function createCredentialFiller(options: { store: VaultStore }) {
   const redactors = new Map<string, Redactor>();
   const redactorFor = (sessionId: string) => {
     let redactor = redactors.get(sessionId);
@@ -157,19 +164,6 @@ export function createCredentialFiller(options: {
     return hits[0];
   };
 
-  const ensureApproved = async (target: FillTarget, item: VaultItemSummary, origin: string) => {
-    if (await options.store.isApproved(item.id, origin)) return;
-    const decision = await options.approve({
-      kind: "credential-fill",
-      sessionId: target.sessionId,
-      origin,
-      itemLabel: item.label,
-      username: item.username,
-    });
-    if (decision === "deny") throw new FillRefused("The user declined this sign-in", "user declined");
-    if (decision === "allow-always") await options.store.approve(item.id, origin);
-  };
-
   /** Fills one field into whatever field currently holds focus. */
   const fillFocused = async (target: FillTarget, item: VaultItemSummary, field: VaultField) => {
     const topURL = target.pageURL();
@@ -186,8 +180,16 @@ export function createCredentialFiller(options: {
     if (field !== "password" && !TEXTUAL_TYPES.has(probe.type) && !(field === "totp" && probe.type === "password")) {
       throw new FillRefused(`The focused field cannot take a ${field}`, "wrong field type");
     }
+    if (probe.visible === false) {
+      throw new FillRefused("The focused field is hidden or not editable", "field not visible");
+    }
     const origin = originOf(topURL);
-    await ensureApproved(target, item, origin);
+    if (!target.approvedOrigin) {
+      throw new FillRefused("This fill was not approved in Orchestrator", "not approved");
+    }
+    if (origin !== target.approvedOrigin) {
+      throw new FillRefused(`The page is on ${origin}, not the approved ${target.approvedOrigin}`, "origin changed");
+    }
     const ensureLive = () => {
       if (target.signal?.aborted) throw new FillRefused("The command was cancelled before the fill", "cancelled");
     };
@@ -242,7 +244,52 @@ export function createCredentialFiller(options: {
     }
   };
 
+  /** Refuses when `login <origin>` was asked for and the page is elsewhere. */
+  const checkRequestedOrigin = (target: FillTarget) => {
+    if (!target.requestedOrigin) return;
+    let requested: string;
+    try {
+      requested = normalizeVaultOrigin(target.requestedOrigin);
+    } catch {
+      throw new FillRefused(`${target.requestedOrigin} is not a site`, "invalid origin");
+    }
+    const page = originOf(target.pageURL());
+    if (page !== requested) {
+      throw new FillRefused(`The page is on ${page}, not ${requested}; it may have redirected`, "origin mismatch");
+    }
+  };
+
   return {
+    /**
+     * What a fill would use, for the approval prompt: the page origin and the
+     * item's label and username. Never a secret.
+     */
+    async describe(target: FillTarget, request: { action: string; itemId?: string }) {
+      checkRequestedOrigin(target);
+      const pageURL = target.pageURL();
+      const origin = originOf(pageURL);
+      const base = { origin, pageUrl: pageURL, pageTitle: target.pageTitle?.() ?? "" };
+      let item: VaultItemSummary;
+      if (request.itemId) {
+        item = await itemFor(request.itemId);
+        checkProject(item, target.projectId);
+        if (!item.origins.includes(origin)) {
+          throw new FillRefused(`"${item.label}" is not saved for ${origin}`, "origin mismatch");
+        }
+      } else {
+        const candidates = await options.store.candidates(pageURL, target.projectId);
+        if (!candidates.length) throw new FillRefused(`No saved credential for ${origin}`, "no candidate");
+        if (candidates.length > 1) {
+          return {
+            ...base,
+            candidates: candidates.map((c) => ({ id: c.id, label: c.label, username: c.username, hasTotp: c.hasTotp })),
+          };
+        }
+        item = candidates[0];
+      }
+      return { ...base, item: { id: item.id, label: item.label, username: item.username } };
+    },
+
     async fillSecret(target: FillTarget, request: { itemId: string; field: VaultField }) {
       return audited(target, request.itemId, request.field, async () => {
         const item = await itemFor(request.itemId);
@@ -270,6 +317,7 @@ export function createCredentialFiller(options: {
       }
       const chosen = itemId;
       return audited(target, chosen, "login", async () => {
+        checkRequestedOrigin(target);
         const item = await itemFor(chosen);
         checkProject(item, target.projectId);
         const topFrame = (await frames(target.cdp))[0];

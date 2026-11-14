@@ -4992,7 +4992,7 @@
 	"settings.passwords.save": "保存",
 	"settings.passwords.saveFailed": "パスワードを保存できませんでした。",
 	"settings.passwords.deleteTitle": "{{label}} を削除しますか？",
-	"settings.passwords.deleteDescription": "エージェントはこのパスワードでサインインできなくなります。サイトへの許可も削除されます。",
+	"settings.passwords.deleteDescription": "エージェントはこのパスワードでサインインできなくなります。",
 	"settings.passwords.deleteConfirm": "削除",
 	"settings.passwords.deleteFailed": "パスワードを削除できませんでした。",
 	"settings.passwords.activity": "サインイン履歴",

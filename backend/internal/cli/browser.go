@@ -294,14 +294,19 @@ func newBrowserCommand(ctx *commandContext) *cobra.Command {
 
 	var loginItem string
 	login := &cobra.Command{
-		Use:   "login",
+		Use:   "login [origin]",
 		Short: "Sign in to the current page with a saved credential",
 		Long: "Find the sign-in fields on the current page and type the saved credential\n" +
 			"for its exact origin: username and password, or the TOTP code on a\n" +
-			"second-factor page. Secrets never reach the agent. Submit the form yourself.",
-		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+			"second-factor page. Secrets never reach the agent. Submit the form yourself.\n\n" +
+			"With [origin], refuse unless the page is exactly on it (a redirect to another\n" +
+			"site is refused). The first use per site waits for the user's approval.",
+		Args: rangeArgs(0, 1),
+		RunE: func(cmd *cobra.Command, positional []string) error {
 			args := map[string]any{}
+			if len(positional) == 1 {
+				args["origin"] = strings.TrimSpace(positional[0])
+			}
 			if item := strings.TrimSpace(loginItem); item != "" {
 				args["itemId"] = item
 			}

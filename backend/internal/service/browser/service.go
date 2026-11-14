@@ -25,10 +25,6 @@ var actions = map[string]struct{}{
 	"fill-secret": {}, "login": {},
 }
 
-// credentialActions type vault secrets into the page. The browser runtime that
-// shows the page resolves the secret itself; only an item id travels here.
-var credentialActions = map[string]struct{}{"fill-secret": {}, "login": {}}
-
 type sessionReader interface {
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 }
@@ -120,29 +116,12 @@ func (s *Service) Execute(
 		return result, action, err
 	}
 	target := s.targetFor(sessionID)
-	if _, ok := credentialActions[action]; ok {
-		if target == TargetChrome {
-			return browserruntime.Result{}, action, apierr.Invalid(
-				"BROWSER_VAULT_CHROME_UNSUPPORTED",
-				"Saved credentials fill only in the Orchestrator Browser panel for now",
-				nil,
-			)
-		}
-		if session.ProjectID == "" {
-			return browserruntime.Result{}, action, apierr.Invalid(
-				"BROWSER_VAULT_UNAVAILABLE",
-				"Saved credentials need a session that belongs to a project",
-				nil,
-			)
-		}
-		// The project scopes which credentials may fill. It comes from the
-		// session record, never from the caller.
-		stamped := make(map[string]interface{}, len(args)+1)
-		for key, value := range args {
-			stamped[key] = value
-		}
-		stamped["projectId"] = string(session.ProjectID)
-		args = stamped
+	if _, ok := credentialActions[action]; ok && target == TargetChrome {
+		return browserruntime.Result{}, action, apierr.Invalid(
+			"BROWSER_VAULT_CHROME_UNSUPPORTED",
+			"Saved credentials fill only in the Orchestrator Browser panel for now",
+			nil,
+		)
 	}
 	if target == TargetChrome {
 		// Chrome mode acts with the user's real identity; keep an audit line
@@ -153,6 +132,16 @@ func (s *Service) Execute(
 	// Consequential actions (pay, send, post, delete...) wait for the user.
 	if err := s.preflight(ctx, sessionID, rt, action, args); err != nil {
 		return browserruntime.Result{}, action, err
+	}
+	if _, ok := credentialActions[action]; ok {
+		stamped, final, err := s.credentialPreflight(ctx, session, rt, action, args)
+		if err != nil || final != nil {
+			if final == nil {
+				final = &browserruntime.Result{}
+			}
+			return *final, action, err
+		}
+		args = stamped
 	}
 	result, err := rt.Execute(ctx, sessionID, action, args)
 	return result, action, err

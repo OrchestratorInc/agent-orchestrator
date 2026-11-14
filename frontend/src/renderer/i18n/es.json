@@ -5113,7 +5113,7 @@
 	"settings.passwords.save": "Guardar",
 	"settings.passwords.saveFailed": "No se pudo guardar la contraseña.",
 	"settings.passwords.deleteTitle": "¿Eliminar {{label}}?",
-	"settings.passwords.deleteDescription": "Los agentes ya no podrán iniciar sesión con ella. También se quitan las aprobaciones de sus sitios.",
+	"settings.passwords.deleteDescription": "Los agentes ya no podrán iniciar sesión con ella.",
 	"settings.passwords.deleteConfirm": "Eliminar",
 	"settings.passwords.deleteFailed": "No se pudo eliminar la contraseña.",
 	"settings.passwords.activity": "Actividad de inicio de sesión",

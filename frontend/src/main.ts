@@ -225,7 +225,6 @@ import {
 	type BrowserProfileIpc,
 	type BrowserProfileMenuItem,
 } from "./main/browser-profile-ipc";
-import { createDialogApprover } from "./main/browser-vault-approval";
 import { createCredentialFiller } from "./main/browser-vault-fill";
 import { registerBrowserVaultIpc } from "./main/browser-vault-ipc";
 import { VaultStore } from "./main/browser-vault-store";
@@ -370,13 +369,8 @@ const browserVaultStore = new VaultStore({
 		decrypt: (data) => Buffer.from(safeStorage.decryptString(data), "base64"),
 	},
 });
-const browserCredentialFiller = createCredentialFiller({
-	store: browserVaultStore,
-	approve: createDialogApprover(
-		(window, options) => (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)),
-		() => mainWindow ?? undefined,
-	),
-});
+// Fills are approved in the daemon's approval gate before they reach here.
+const browserCredentialFiller = createCredentialFiller({ store: browserVaultStore });
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the

@@ -4992,7 +4992,7 @@
 	"settings.passwords.save": "Speichern",
 	"settings.passwords.saveFailed": "Das Passwort konnte nicht gespeichert werden.",
 	"settings.passwords.deleteTitle": "{{label}} löschen?",
-	"settings.passwords.deleteDescription": "Agents können sich damit nicht mehr anmelden. Freigaben für seine Websites werden ebenfalls entfernt.",
+	"settings.passwords.deleteDescription": "Agents können sich damit nicht mehr anmelden.",
 	"settings.passwords.deleteConfirm": "Löschen",
 	"settings.passwords.deleteFailed": "Das Passwort konnte nicht gelöscht werden.",
 	"settings.passwords.activity": "Anmeldeaktivität",

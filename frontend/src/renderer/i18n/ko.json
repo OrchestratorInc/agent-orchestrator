@@ -4992,7 +4992,7 @@
 	"settings.passwords.save": "저장",
 	"settings.passwords.saveFailed": "비밀번호를 저장하지 못했습니다.",
 	"settings.passwords.deleteTitle": "{{label}}을(를) 삭제할까요?",
-	"settings.passwords.deleteDescription": "에이전트가 더 이상 이 비밀번호로 로그인할 수 없습니다. 사이트 승인도 함께 제거됩니다.",
+	"settings.passwords.deleteDescription": "에이전트가 더 이상 이 비밀번호로 로그인할 수 없습니다.",
 	"settings.passwords.deleteConfirm": "삭제",
 	"settings.passwords.deleteFailed": "비밀번호를 삭제하지 못했습니다.",
 	"settings.passwords.activity": "로그인 활동",

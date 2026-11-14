@@ -4987,6 +4987,7 @@ export function createBrowserViewHost(
             return stopNetworkCapture(networkEntryFor(session), "stopped");
           case "network-clear":
             return clearNetworkCapture(networkEntryFor(session));
+          case "vault-describe":
           case "fill-secret":
           case "login": {
             const filler = options.credentialFiller;
@@ -4997,40 +4998,45 @@ export function createBrowserViewHost(
             if (!projectId) {
               throw browserError("BROWSER_VAULT_UNAVAILABLE", "Credential fills need a project");
             }
+            const optional = (key: string) =>
+              typeof args[key] === "string" && args[key] ? (args[key] as string) : undefined;
+            const describedAction = action === "vault-describe" ? optional("action") : action;
+            const field = args.field;
+            if (describedAction === "fill-secret" && field !== "username" && field !== "password" && field !== "totp") {
+              throw browserError("INVALID_ARGUMENT", "field must be username, password, or totp");
+            }
+            if (describedAction === "fill-secret" && !optional("itemId")) {
+              throw browserError("INVALID_ARGUMENT", "item is required");
+            }
+            // fill-secret types into the field at <ref>: focus it first so the
+            // filler checks that exact element (type, visibility, frame origin).
             if (action === "fill-secret") {
-              const field = args.field;
-              if (field !== "username" && field !== "password" && field !== "totp") {
-                throw browserError("INVALID_ARGUMENT", "field must be username, password, or totp");
-              }
-              const itemId = stringArg(args, "itemId", "INVALID_ARGUMENT", "item is required");
               await runNative("focus", {
                 ref: stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
               });
-              const target = activeEntry(session);
-              await ensureDebugger(target);
-              return filler.fillSecret(
-                {
-                  cdp: target.view.webContents.debugger,
-                  sessionId,
-                  projectId,
-                  pageURL: () => target.view.webContents.getURL(),
-                  signal,
-                },
-                { itemId, field },
-              );
             }
             const target = activeEntry(session);
             await ensureDebugger(target);
-            return filler.login(
-              {
-                cdp: target.view.webContents.debugger,
-                sessionId,
-                projectId,
-                pageURL: () => target.view.webContents.getURL(),
-                signal,
-              },
-              { itemId: typeof args.itemId === "string" && args.itemId ? args.itemId : undefined },
-            );
+            const fillTarget = {
+              cdp: target.view.webContents.debugger,
+              sessionId,
+              projectId,
+              pageURL: () => target.view.webContents.getURL(),
+              pageTitle: () => target.view.webContents.getTitle(),
+              signal,
+              approvedOrigin: optional("approvedOrigin"),
+              requestedOrigin: optional("origin"),
+            };
+            if (action === "vault-describe") {
+              return filler.describe(fillTarget, { action: describedAction ?? "login", itemId: optional("itemId") });
+            }
+            if (action === "fill-secret") {
+              return filler.fillSecret(fillTarget, {
+                itemId: optional("itemId")!,
+                field: field as "username" | "password" | "totp",
+              });
+            }
+            return filler.login(fillTarget, { itemId: optional("itemId") });
           }
           case "console":
             return normalizeNativeMessages(await runNative(action), action);

@@ -1,9 +1,8 @@
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { SECRET_MASK } from "./browser-vault";
-import type { CredentialApprover } from "./browser-vault-approval";
 import { createCredentialFiller, type CdpLike, type FillTarget } from "./browser-vault-fill";
 import { VaultStore, type VaultKeyProtector } from "./browser-vault-store";
 
@@ -15,7 +14,7 @@ const protector: VaultKeyProtector = {
 const PASSWORD = "Tr0ub4dor&3-secret";
 const ORIGIN = "http://localhost:4173";
 
-type FakeField = { tag: string; type: string; role?: "username" | "password" | "totp" };
+type FakeField = { tag: string; type: string; role?: "username" | "password" | "totp"; visible?: boolean };
 type FakeFrame = {
   id: string;
   url: string;
@@ -53,7 +52,7 @@ function fakeCdp(frames: FakeFrame[]) {
         const frame = contexts.get(params.contextId as number)!;
         const expression = String(params.expression);
         if (expression.includes("ao-vault:probe")) {
-          return { result: { value: frame.focused ? { tag: frame.focused.tag, type: frame.focused.type } : null } };
+          return { result: { value: frame.focused ? { tag: frame.focused.tag, type: frame.focused.type, visible: frame.focused.visible ?? true } : null } };
         }
         if (expression.includes("ao-vault:find")) {
           const roles: Record<string, number> = {};
@@ -82,7 +81,6 @@ function fakeCdp(frames: FakeFrame[]) {
 
 describe("credential filler", () => {
   let store: VaultStore;
-  let approver: ReturnType<typeof vi.fn<CredentialApprover>>;
   let itemId: string;
 
   beforeEach(async () => {
@@ -98,16 +96,15 @@ describe("credential filler", () => {
         allowedProjects: ["proj"],
       })
     ).id;
-    approver = vi.fn<CredentialApprover>(async () => "allow-always");
   });
 
   const target = (frames: FakeFrame[], pageURL = frames[0].url): FillTarget & ReturnType<typeof fakeCdp> => {
     const fake = fakeCdp(frames);
-    return { ...fake, sessionId: "s1", projectId: "proj", pageURL: () => pageURL };
+    return { ...fake, sessionId: "s1", projectId: "proj", pageURL: () => pageURL, approvedOrigin: ORIGIN };
   };
 
   it("types the password into the focused field and returns only a mask", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]);
     const result = await filler.fillSecret(t, { itemId, field: "password" });
     expect(t.inserted).toEqual([PASSWORD]);
@@ -118,7 +115,7 @@ describe("credential filler", () => {
   });
 
   it("scrubs a filled secret from later results for the session", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]);
     await filler.fillSecret(t, { itemId, field: "password" });
     const leaked = { value: PASSWORD, body: `password=${encodeURIComponent(PASSWORD)}` };
@@ -154,7 +151,7 @@ describe("credential filler", () => {
     ],
     ["a visible text box for a password", [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "text" } }]],
   ] as const)("refuses %s and audits it", async (_name, frames) => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = target(frames.map((f) => ({ ...f })) as FakeFrame[]);
     await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow();
     expect(t.inserted).toEqual([]);
@@ -162,68 +159,73 @@ describe("credential filler", () => {
   });
 
   it("refuses a project the item is not allowed in", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = { ...target([{ id: "top", url: `${ORIGIN}/`, focused: { tag: "INPUT", type: "password" } }]), projectId: "other" };
     await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/project/i);
     expect(t.inserted).toEqual([]);
   });
 
-  it("asks once per site, remembers allow-always, and stops on deny", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
-    const frames = (): FakeFrame[] => [{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }];
-    await filler.fillSecret(target(frames()), { itemId, field: "password" });
-    await filler.fillSecret(target(frames()), { itemId, field: "password" });
-    expect(approver).toHaveBeenCalledTimes(1);
-    expect(approver.mock.calls[0][0]).toMatchObject({ kind: "credential-fill", origin: ORIGIN, sessionId: "s1", itemLabel: "Demo" });
-
-    const denyStore = new VaultStore({ dir: await mkdtemp(path.join(os.tmpdir(), "ao-vault-deny-")), protector });
-    const denied = (await denyStore.save({ origins: [ORIGIN], username: "a", password: PASSWORD, allowedProjects: [] })).id;
-    const deny = vi.fn<CredentialApprover>(async () => "deny");
-    const t = target(frames());
-    await expect(createCredentialFiller({ store: denyStore, approve: deny }).fillSecret(t, { itemId: denied, field: "password" })).rejects.toThrow(/declined/i);
+  it("refuses a fill the daemon did not approve", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = { ...target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]), approvedOrigin: undefined };
+    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/not approved/i);
     expect(t.inserted).toEqual([]);
-    expect((await denyStore.readAudit())[0]).toMatchObject({ outcome: "denied", reason: "user declined" });
-    expect(await denyStore.isApproved(denied, ORIGIN)).toBe(false);
+    expect((await store.readAudit())[0]).toMatchObject({ outcome: "denied", reason: "not approved" });
   });
 
-  it("allow-once fills without remembering the site", async () => {
-    const once = vi.fn<CredentialApprover>(async () => "allow-once");
-    const filler = createCredentialFiller({ store, approve: once });
-    await filler.fillSecret(target([{ id: "top", url: `${ORIGIN}/`, focused: { tag: "INPUT", type: "password" } }]), { itemId, field: "password" });
-    expect(await store.isApproved(itemId, ORIGIN)).toBe(false);
-  });
-
-  it("refuses when the page navigates away while approval is pending", async () => {
-    let url = `${ORIGIN}/login`;
-    const filler = createCredentialFiller({
-      store,
-      approve: async () => {
-        url = "https://evil.test/";
-        return "allow-once";
-      },
-    });
-    const t = { ...target([{ id: "top", url, focused: { tag: "INPUT", type: "password" } }]), pageURL: () => url };
-    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/origin/i);
+  it("refuses when the page is not on the approved origin", async () => {
+    const other = (await store.save({ origins: ["http://localhost:5000"], username: "a", password: "x-pass-1234", allowedProjects: [] })).id;
+    const filler = createCredentialFiller({ store });
+    const t = target([{ id: "top", url: "http://localhost:5000/", focused: { tag: "INPUT", type: "password" } }]);
+    await expect(filler.fillSecret(t, { itemId: other, field: "password" })).rejects.toThrow(/approved/i);
     expect(t.inserted).toEqual([]);
   });
 
-  it("does not type after the command was cancelled while approval was pending", async () => {
+  it("refuses a hidden or read-only focused field", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password", visible: false } }]);
+    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/hidden/i);
+    expect(t.inserted).toEqual([]);
+  });
+
+  it("does not type after the command was cancelled", async () => {
     const controller = new AbortController();
-    const filler = createCredentialFiller({
-      store,
-      approve: async () => {
-        controller.abort();
-        return "allow-always";
-      },
-    });
+    controller.abort();
+    const filler = createCredentialFiller({ store });
     const t = { ...target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]), signal: controller.signal };
     await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/cancel/i);
     expect(t.inserted).toEqual([]);
     expect((await store.readAudit())[0]).toMatchObject({ outcome: "denied", reason: "cancelled" });
   });
 
+  it("describes a fill with the label and username only", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = { ...target([{ id: "top", url: `${ORIGIN}/login` }]), pageTitle: () => "Sign in" };
+    const described = await filler.describe(t, { action: "login" });
+    expect(described).toEqual({
+      origin: ORIGIN,
+      pageUrl: `${ORIGIN}/login`,
+      pageTitle: "Sign in",
+      item: { id: itemId, label: "Demo", username: "alice" },
+    });
+    expect(JSON.stringify(described)).not.toContain(PASSWORD);
+    await expect(filler.describe(target([{ id: "top", url: "https://evil.test/" }]), { action: "fill-secret", itemId })).rejects.toThrow(/not saved for/);
+    await expect(filler.describe({ ...target([{ id: "top", url: `${ORIGIN}/` }]), projectId: "other" }, { action: "login", itemId })).rejects.toThrow(/project/i);
+  });
+
+  it("login <origin> refuses a page that redirected elsewhere", async () => {
+    const filler = createCredentialFiller({ store });
+    const redirected = { ...target([{ id: "top", url: "https://sso.evil.test/login" }]), requestedOrigin: "http://localhost:4173" };
+    await expect(filler.describe(redirected, { action: "login" })).rejects.toThrow(/redirected/);
+    await expect(filler.login({ ...redirected, approvedOrigin: ORIGIN }, {})).rejects.toThrow();
+    const same = { ...target([{ id: "top", url: `${ORIGIN}/login` }]), requestedOrigin: "http://localhost:4173/login" };
+    await expect(filler.describe(same, { action: "login" })).resolves.toMatchObject({ origin: ORIGIN });
+    const wrongScheme = { ...target([{ id: "top", url: `${ORIGIN}/login` }]), requestedOrigin: "localhost:4173" };
+    await expect(filler.describe(wrongScheme, { action: "login" })).rejects.toThrow(/not https:\/\/localhost:4173/);
+  });
+
   it("login fills username then password on the matching page", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = target([
       {
         id: "top",
@@ -241,7 +243,7 @@ describe("credential filler", () => {
   });
 
   it("login fills a TOTP code on a second-factor page", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = target([{ id: "top", url: `${ORIGIN}/2fa`, fields: [{ tag: "INPUT", type: "text", role: "totp" }] }]);
     const result = await filler.login(t, {});
     expect(t.inserted).toEqual([expect.stringMatching(/^\d{6}$/)]);
@@ -251,7 +253,7 @@ describe("credential filler", () => {
 
   it("login lists candidates without secrets when several items match", async () => {
     await store.save({ origins: [ORIGIN], username: "bob", password: "other-pass-123", allowedProjects: [] });
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     const t = target([{ id: "top", url: `${ORIGIN}/login`, fields: [] }]);
     const result = (await filler.login(t, {})) as { candidates: { username: string }[] };
     expect(result.candidates.map((c) => c.username).sort()).toEqual(["alice", "bob"]);
@@ -260,7 +262,7 @@ describe("credential filler", () => {
   });
 
   it("login reports when no saved credential matches the page", async () => {
-    const filler = createCredentialFiller({ store, approve: approver });
+    const filler = createCredentialFiller({ store });
     await expect(filler.login(target([{ id: "top", url: "https://nowhere.test/" }]), {})).rejects.toThrow(/no saved credential/i);
   });
 });

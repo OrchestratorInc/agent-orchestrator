@@ -4972,7 +4972,7 @@
 	"settings.passwords.save": "Save",
 	"settings.passwords.saveFailed": "Could not save the password.",
 	"settings.passwords.deleteTitle": "Delete {{label}}?",
-	"settings.passwords.deleteDescription": "Agents will no longer be able to sign in with it. Approvals for its sites are removed too.",
+	"settings.passwords.deleteDescription": "Agents will no longer be able to sign in with it.",
 	"settings.passwords.deleteConfirm": "Delete",
 	"settings.passwords.deleteFailed": "Could not delete the password.",
 	"settings.passwords.activity": "Sign-in activity",

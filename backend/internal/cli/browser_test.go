@@ -1000,4 +1000,10 @@ func TestBrowserLoginOutput(t *testing.T) {
 	if capture.body.Args["itemId"] != "i2" {
 		t.Fatalf("login item = %#v", capture.body.Args)
 	}
+	if _, _, err := executeCLI(t, deps, "browser", "login", "https://app.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if capture.body.Args["origin"] != "https://app.example.test" {
+		t.Fatalf("login origin = %#v", capture.body.Args)
+	}
 }

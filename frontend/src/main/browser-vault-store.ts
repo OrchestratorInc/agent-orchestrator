@@ -3,7 +3,7 @@
 // key.bin     a random 256-bit data key, wrapped by the OS keychain
 //             (Electron safeStorage). Wrapping the same data key to another
 //             machine's host key is the seam for future vault sync.
-// items.sealed every item and per-site approval, AES-256-GCM under the data key.
+// items.sealed every item, AES-256-GCM under the data key.
 // audit.jsonl one line per fill attempt; never holds a secret.
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFile, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -59,7 +59,7 @@ type StoredItem = Omit<VaultItemSummary, "hasPassword" | "hasTotp"> & {
   totpSeed?: string;
 };
 
-type Contents = { items: StoredItem[]; approvals: Record<string, string[]> };
+type Contents = { items: StoredItem[] };
 
 const AUDIT_READ_LIMIT = 500;
 
@@ -107,11 +107,8 @@ export class VaultStore {
         createdAt: existing?.createdAt ?? time,
         updatedAt: time,
       };
-      if (existing) {
-        contents.items[contents.items.indexOf(existing)] = item;
-        // Approval was for the old site list; keep it only for sites still listed.
-        contents.approvals[item.id] = (contents.approvals[item.id] ?? []).filter((o) => origins.includes(o));
-      } else contents.items.push(item);
+      if (existing) contents.items[contents.items.indexOf(existing)] = item;
+      else contents.items.push(item);
       return summarize(item);
     });
   }
@@ -119,7 +116,6 @@ export class VaultStore {
   delete(id: string): Promise<void> {
     return this.mutate((contents) => {
       contents.items = contents.items.filter((item) => item.id !== id);
-      delete contents.approvals[id];
     });
   }
 
@@ -152,19 +148,6 @@ export class VaultStore {
     if (request.field === "password") return item.password;
     if (!item.totpSeed) throw new Error("This credential has no TOTP seed");
     return totpCode(item.totpSeed, this.now());
-  }
-
-  async isApproved(itemId: string, origin: string): Promise<boolean> {
-    return (await this.read()).approvals[itemId]?.includes(origin) ?? false;
-  }
-
-  approve(itemId: string, origin: string): Promise<void> {
-    return this.mutate((contents) => {
-      if (!contents.items.some((item) => item.id === itemId)) throw new Error("Credential not found");
-      const list = contents.approvals[itemId] ?? [];
-      if (!list.includes(origin)) list.push(origin);
-      contents.approvals[itemId] = list;
-    });
   }
 
   async audit(entry: Omit<VaultAuditEntry, "time" | "itemLabel">): Promise<void> {
@@ -233,7 +216,7 @@ export class VaultStore {
     try {
       sealed = await readFile(path.join(this.dir, "items.sealed"), "utf8");
     } catch {
-      return { items: [], approvals: {} };
+      return { items: [] };
     }
     const key = await this.dataKey(false);
     if (!key) throw new Error("Vault key is missing");

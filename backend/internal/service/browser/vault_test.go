@@ -2,7 +2,13 @@ package browser
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -36,30 +42,6 @@ func vaultService(t *testing.T, projectID domain.ProjectID) (*Service, *argsRunt
 	return service, runtime, token
 }
 
-func TestCredentialFillsCarryTheSessionsOwnProject(t *testing.T) {
-	for _, action := range []string{"fill-secret", "login"} {
-		service, runtime, token := vaultService(t, "proj-a")
-		// An agent cannot claim another project's credentials.
-		args := map[string]interface{}{"itemId": "i1", "projectId": "proj-b"}
-		if _, got, err := service.Execute(context.Background(), "s1", token, action, args); err != nil || got != action {
-			t.Fatalf("%s: action=%q err=%v", action, got, err)
-		}
-		if runtime.action != action || runtime.args["projectId"] != "proj-a" || runtime.args["itemId"] != "i1" {
-			t.Fatalf("%s dispatched %q with %v", action, runtime.action, runtime.args)
-		}
-	}
-}
-
-func TestCredentialFillsStampProjectEvenWithoutArgs(t *testing.T) {
-	service, runtime, token := vaultService(t, "proj-a")
-	if _, _, err := service.Execute(context.Background(), "s1", token, "login", nil); err != nil {
-		t.Fatal(err)
-	}
-	if runtime.args["projectId"] != "proj-a" {
-		t.Fatalf("args = %v", runtime.args)
-	}
-}
-
 func TestCredentialFillsNeedAProject(t *testing.T) {
 	service, runtime, token := vaultService(t, "")
 	if _, _, err := service.Execute(context.Background(), "s1", token, "fill-secret", map[string]interface{}{"projectId": "x"}); apiErrorCode(err) != "BROWSER_VAULT_UNAVAILABLE" {
@@ -90,5 +72,170 @@ func TestCredentialFillsAreRefusedInChromeMode(t *testing.T) {
 	}
 	if len(chrome.actions) != 0 {
 		t.Fatalf("Chrome extension received %v", chrome.actions)
+	}
+}
+
+// vaultRuntime answers vault-describe like the Electron panel and records the
+// arguments of every other action.
+type vaultRuntime struct {
+	mu       sync.Mutex
+	describe map[string]interface{}
+	err      error
+	calls    []string
+	last     map[string]interface{}
+}
+
+func (r *vaultRuntime) Status() browserruntime.Status { return browserruntime.Status{Connected: true} }
+
+func (r *vaultRuntime) Execute(_ context.Context, _ domain.SessionID, action string, args map[string]interface{}) (browserruntime.Result, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, action)
+	if action == vaultDescribeAction {
+		if r.err != nil {
+			return browserruntime.Result{}, r.err
+		}
+		return browserruntime.Result{Value: r.describe}, nil
+	}
+	r.last = args
+	return browserruntime.Result{Value: map[string]interface{}{"filled": true, "value": "••••"}}, nil
+}
+
+func describedDemo() map[string]interface{} {
+	return map[string]interface{}{
+		"origin": "http://localhost:4173", "pageUrl": "http://localhost:4173/login", "pageTitle": "Sign in",
+		"item": map[string]interface{}{"id": "i1", "label": "Demo app", "username": "alice@example.test"},
+	}
+}
+
+func gatedVaultService(t *testing.T, rt *vaultRuntime) (*Service, *approval.Gate, string) {
+	t.Helper()
+	authority := NewAuthority()
+	token, verifier, err := authority.Issue("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(fakeSessions{session: domain.Session{SessionRecord: domain.SessionRecord{
+		ID: "s1", ProjectID: "proj-a", Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: verifier},
+	}}}, rt, authority)
+	gate, err := approval.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.UseApprovals(gate, 5*time.Second)
+	return svc, gate, token
+}
+
+// answer decides the next prompt and returns what it asked.
+func answerNext(t *testing.T, gate *approval.Gate, decision approval.Decision) <-chan approval.Pending {
+	t.Helper()
+	events, stop := gate.Subscribe()
+	asked := make(chan approval.Pending, 1)
+	go func() {
+		defer stop()
+		for ev := range events {
+			if ev.Type == approval.EventRequested && ev.Pending != nil {
+				asked <- *ev.Pending
+				_ = gate.Decide(ev.Pending.ID, decision)
+				return
+			}
+		}
+	}()
+	return asked
+}
+
+func TestCredentialFillAsksTheApprovalGateWithoutTheSecret(t *testing.T) {
+	rt := &vaultRuntime{describe: describedDemo()}
+	svc, gate, token := gatedVaultService(t, rt)
+	asked := answerNext(t, gate, approval.DecisionAllowSite)
+
+	args := map[string]interface{}{"ref": "e3", "itemId": "i1", "field": "password", "approvedOrigin": "https://evil.test"}
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "fill-secret", args); err != nil {
+		t.Fatal(err)
+	}
+	prompt := <-asked
+	if prompt.Kind != approval.KindCredentialUse || prompt.Category != approval.CategoryCredential || prompt.Site != "http://localhost:4173" {
+		t.Fatalf("prompt = %+v", prompt.Request)
+	}
+	for _, want := range []string{"alice@example.test", "Demo app", "http://localhost:4173"} {
+		if !strings.Contains(prompt.Action, want) {
+			t.Fatalf("prompt action %q missing %q", prompt.Action, want)
+		}
+	}
+	if rt.last["approvedOrigin"] != "http://localhost:4173" || rt.last["projectId"] != "proj-a" {
+		t.Fatalf("dispatched args = %v", rt.last)
+	}
+	if got := strings.Join(rt.calls, ","); got != "vault-describe,fill-secret" {
+		t.Fatalf("calls = %s", got)
+	}
+
+	// The site is remembered: a second fill does not ask again.
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "fill-secret", args); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := gate.Audit(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Decision != approval.DecisionSiteAllowed {
+		t.Fatalf("audit = %+v", entries)
+	}
+}
+
+func TestCredentialFillRefusedWhenDeniedEvenWithApprovalsOff(t *testing.T) {
+	rt := &vaultRuntime{describe: describedDemo()}
+	svc, gate, token := gatedVaultService(t, rt)
+	if err := gate.SetSessionMode("s1", approval.ModeOff); err != nil {
+		t.Fatal(err)
+	}
+	answerNext(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "login", nil)
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if got := strings.Join(rt.calls, ","); got != "vault-describe" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestCredentialLoginListsCandidatesWithoutAsking(t *testing.T) {
+	rt := &vaultRuntime{describe: map[string]interface{}{
+		"origin":     "http://localhost:4173",
+		"candidates": []interface{}{map[string]interface{}{"id": "i1", "label": "A", "username": "a"}},
+	}}
+	svc, _, token := gatedVaultService(t, rt)
+	result, _, err := svc.Execute(context.Background(), "s1", token, "login", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _ := result.Value.(map[string]interface{})
+	if _, ok := value["candidates"]; !ok {
+		t.Fatalf("result = %v", result.Value)
+	}
+	if got := strings.Join(rt.calls, ","); got != "vault-describe" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+func TestCredentialDescribeFailureNeverPrompts(t *testing.T) {
+	rt := &vaultRuntime{err: apierr.Invalid("BROWSER_VAULT_NO_MATCH", "No saved credential for https://evil.test", nil)}
+	svc, gate, token := gatedVaultService(t, rt)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "login", nil)
+	if apiErrorCode(err) != "BROWSER_VAULT_NO_MATCH" {
+		t.Fatalf("err = %v", err)
+	}
+	if len(gate.Pending()) != 0 {
+		t.Fatal("prompted")
+	}
+}
+
+func TestCredentialFillsNeedTheApprovalGate(t *testing.T) {
+	service, runtime, token := vaultService(t, "proj-a")
+	_, _, err := service.Execute(context.Background(), "s1", token, "login", nil)
+	if apiErrorCode(err) != "BROWSER_VAULT_UNAVAILABLE" {
+		t.Fatalf("err = %v", err)
+	}
+	if runtime.action != "" {
+		t.Fatalf("dispatched %q", runtime.action)
 	}
 }

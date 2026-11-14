@@ -100,7 +100,7 @@ ao browser click <ref> [--human] [--json]
 ao browser dblclick <ref> [--json]
 ao browser focus <ref> [--json]
 ao browser fill <ref> <text> [--json]
-ao browser login [--item <id>] [--json]
+ao browser login [origin] [--item <id>] [--json]
 ao browser fill-secret <ref> --item <id> [--field username|password|totp | --totp] [--json]
 ao browser type <ref> <text> [--json]
 ao browser press <key> [--json]
@@ -233,14 +233,16 @@ ao browser click e7              # submit the form yourself
 ```
 
 `login` fills only on an exact origin match (scheme, host and port) and only in
-this project. When several saved credentials match it lists their ids; rerun
+this project. Pass the origin you expect (`ao browser login https://app.example.com`)
+to refuse a page that redirected somewhere else. When several saved credentials match it lists their ids; rerun
 with `--item <id>`. For a field `login` cannot find, use
 `ao browser fill-secret <ref> --item <id> [--field username|--totp]`.
 
 Output only ever shows `••••`. Filled passwords and codes are also masked in
 later `snapshot`, `get value`, console and network output. The first fill per
-site waits for the user to approve it in the desktop app; if they decline, the
-command fails, so ask them in chat instead of retrying. Saved credentials work
+site waits for the user to approve it in Orchestrator's approval prompt; if they
+decline or do not answer, the command fails, so ask them in chat instead of
+retrying. Saved credentials work
 in the Browser panel only, not in Chrome mode yet.
 
 ## Chrome mode: the user's own Chrome
