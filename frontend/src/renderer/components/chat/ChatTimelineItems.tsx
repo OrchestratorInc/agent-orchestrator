@@ -1673,7 +1673,7 @@ export function ActivityRow({
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} retry={activity.detail.retry} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
-	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
+	else if (artifactRef) content = <RenderFrame artifact={artifactRef} foldKey={activity.id} />;
 	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;

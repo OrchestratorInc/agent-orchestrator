@@ -1,6 +1,7 @@
 import { apiErrorException } from "../../lib/api-error-exception";
-import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ChevronRight, Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
+import { motion, useReducedMotion } from "motion/react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import {
@@ -23,6 +24,7 @@ import type { ArtifactRef, RenderRef } from "../../types/conversation";
 import { BrowserIcon } from "../icons";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatImageDialog } from "./ChatImage";
 import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
@@ -57,6 +59,22 @@ interface FramePage {
 // page up to ARTIFACT_FRAME_MAX_HEIGHT, past which it scrolls inside the frame.
 const ARTIFACT_FRAME_HEIGHT = 400;
 const ARTIFACT_FRAME_MAX_HEIGHT = 640;
+
+/**
+ * Artifact cards the reader folded, by card. A long chat virtualizes turns that
+ * scroll away, so a card remounts; starting from the remembered fold keeps it
+ * shut instead of reopening the page each time it comes back into view.
+ */
+const foldedArtifacts = new Set<string>();
+/** Bounds the memory above; the oldest entries go first. */
+const REMEMBERED_FOLDS = 200;
+
+function rememberFold(key: string, folded: boolean) {
+	foldedArtifacts.delete(key);
+	if (!folded) return;
+	foldedArtifacts.add(key);
+	if (foldedArtifacts.size > REMEMBERED_FOLDS) foldedArtifacts.delete(foldedArtifacts.values().next().value as string);
+}
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
@@ -269,9 +287,26 @@ function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; pat
 	);
 }
 
-/** A render, or an HTML artifact, inline in its turn and expandable to a dialog sized to the page. */
-export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
+/**
+ * A render, or an HTML artifact, inline in its turn and expandable to a dialog
+ * sized to the page. An artifact's card header folds the page away; `foldKey`
+ * names the card (its activity), so a fold survives a remount without folding
+ * a later report of the same file.
+ */
+export function RenderFrame(props: ({ render: RenderRef } | { artifact: ArtifactRef }) & { foldKey?: string }) {
 	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
+	const frameId = useId();
+	const foldKey = "artifact" in props ? `${props.foldKey ?? ""}\n${props.artifact.url}` : undefined;
+	const [folded, setFolded] = useState(() => foldKey !== undefined && foldedArtifacts.has(foldKey));
+	// A card that comes back folded loads its page only once the reader opens it.
+	const [frameMounted, setFrameMounted] = useState(!folded);
+	const toggleFold = () => {
+		const next = !folded;
+		setFolded(next);
+		if (!next) setFrameMounted(true);
+		if (foldKey !== undefined) rememberFold(foldKey, next);
+	};
 	const remoteHost = useChatRemoteHost();
 	const render = "render" in props ? props.render : undefined;
 	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
@@ -368,33 +403,65 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 		<div className="group/render relative min-w-0">
 			{"artifact" in props ? (
 				<div className="flex h-8 items-center gap-1.5 text-xs" data-testid="artifact-card-header">
-					<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-					<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
-					<span className="min-w-0 flex-1 truncate text-muted-foreground">{page.title}</span>
+					{/* The header is the fold, like a turn's "Worked for" line; its
+					    chevron stays visible so the card reads as foldable. */}
+					<Pressable
+						aria-expanded={!folded}
+						aria-controls={frameId}
+						onClick={toggleFold}
+						className="group/fold flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+						<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
+						{/* A flex row never draws this space; it keeps the toggle's name "Artifact <name>". */}{" "}
+						<span className="min-w-0 truncate text-muted-foreground group-hover/fold:text-foreground">{page.title}</span>
+						<ChevronRight
+							aria-hidden="true"
+							className={cn(
+								"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/fold:text-muted-foreground motion-reduce:transition-none",
+								!folded && "rotate-90",
+							)}
+						/>
+					</Pressable>
 					{links && "artifact" in props ? (
 						<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => undefined} />
 					) : null}
 				</div>
 			) : null}
-			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
-			<div
-				className={cn(
-					"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
-					"artifact" in props ? "top-9" : "top-1",
-				)}
-			>
-				{wrapAction}
-				{browserPanelAction}
-				<RenderAction
-					label={t("chat.render.expand")}
-					onClick={() => {
-						setShowSource(false);
-						setExpanded(true);
-					}}
+			{"artifact" in props ? (
+				<motion.div
+					id={frameId}
+					initial={false}
+					animate={folded ? { height: 0, opacity: 0 } : { height: "auto", opacity: 1 }}
+					transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+					inert={folded}
+					className="overflow-hidden"
 				>
-					<Maximize2 className="size-3.5" />
-				</RenderAction>
-			</div>
+					{frameMounted ? <RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} /> : null}
+				</motion.div>
+			) : (
+				<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
+			)}
+			{folded ? null : (
+				<div
+					className={cn(
+						"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
+						"artifact" in props ? "top-9" : "top-1",
+					)}
+				>
+					{wrapAction}
+					{browserPanelAction}
+					<RenderAction
+						label={t("chat.render.expand")}
+						onClick={() => {
+							setShowSource(false);
+							setExpanded(true);
+						}}
+					>
+						<Maximize2 className="size-3.5" />
+					</RenderAction>
+				</div>
+			)}
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent
 					aria-describedby={undefined}
