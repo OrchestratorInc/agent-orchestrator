@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,7 +34,22 @@ func (f fakeLimitStore) ListAgentAccounts(context.Context) ([]domain.AgentAccoun
 	return f.saved, nil
 }
 
-func TestLimitHistoryLoginNoAccountHoldsStopsEarly(t *testing.T) {
+func loginStates(t *testing.T, reader *LimitHistoryReader) map[string][]string {
+	t.Helper()
+	history, err := reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	out := map[string][]string{}
+	for _, login := range history.Logins {
+		for _, span := range login.Windows {
+			out[login.Email] = append(out[login.Email], span.State)
+		}
+	}
+	return out
+}
+
+func TestLimitHistoryShowsOnlyLoginsAnAccountHolds(t *testing.T) {
 	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
 	reset := now.AddDate(0, 0, 2)
 	weekly := func(account, email string, readAt time.Time) domain.AgentLimitReading {
@@ -53,23 +69,10 @@ func TestLimitHistoryLoginNoAccountHoldsStopsEarly(t *testing.T) {
 	}, nil)
 	reader.now = func() time.Time { return now }
 
-	history, err := reader.History(context.Background(), 7)
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
-	want := map[string]string{
-		"gone@example.com": domain.UsageLimitSpanPartial,
-		"kept@example.com": domain.UsageLimitSpanOpen,
-		"new@example.com":  domain.UsageLimitSpanOpen,
-		"old@example.com":  domain.UsageLimitSpanPartial,
-	}
-	if len(history.Logins) != len(want) {
-		t.Fatalf("logins = %+v, want %d", history.Logins, len(want))
-	}
-	for _, login := range history.Logins {
-		if len(login.Windows) != 1 || login.Windows[0].State != want[login.Email] {
-			t.Errorf("%s windows = %+v, want one %s week", login.Email, login.Windows, want[login.Email])
-		}
+	got := loginStates(t, reader)
+	want := map[string][]string{"kept@example.com": {domain.UsageLimitSpanOpen}, "new@example.com": {domain.UsageLimitSpanOpen}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("logins = %v, want %v", got, want)
 	}
 }
 
@@ -77,48 +80,44 @@ type fakeConfirmedLogins map[string]domain.AgentAccountIdentityCheck
 
 func (f fakeConfirmedLogins) ConfirmedLogins() map[string]domain.AgentAccountIdentityCheck { return f }
 
-func TestLimitHistoryConfirmedIdentityWinsOverLastReading(t *testing.T) {
+func TestLimitHistoryHidesASignedOutLoginUntilItIsBack(t *testing.T) {
 	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
-	reset := now.AddDate(0, 0, 2)
-	weekly := func(account string, provider domain.AgentAccountProvider, email string) domain.AgentLimitReading {
+	weekly := func(account string, provider domain.AgentAccountProvider, email string, reset, readAt time.Time) domain.AgentLimitReading {
 		return domain.AgentLimitReading{
 			AccountID: account, Provider: provider, Email: email, WindowID: "seven_day",
-			DurationMinutes: 10080, UsedPercent: 40, ResetsAt: &reset, ReadAt: now.Add(-2 * time.Hour),
+			DurationMinutes: 10080, UsedPercent: 40, ResetsAt: &reset, ReadAt: readAt,
 		}
 	}
 	claude, codex := domain.AgentAccountProviderClaude, domain.AgentAccountProviderCodex
-	reader := NewLimitHistoryReader(fakeLimitStore{
-		fakeLimitReadings: fakeLimitReadings{
-			weekly("device-claude", claude, "a@example.com"),
-			weekly("acct-out", claude, "out@example.com"),
-			weekly("acct-unread", claude, "unread@example.com"),
-			weekly("device-codex", codex, "c@example.com"),
-		},
-		saved: []domain.AgentAccount{{ID: "acct-out", Provider: claude}, {ID: "acct-unread", Provider: claude}},
-	}, fakeConfirmedLogins{
+	lastWeek, thisWeek, readAt := now.AddDate(0, 0, -5), now.AddDate(0, 0, 2), now.Add(-2*time.Hour)
+	confirmed := fakeConfirmedLogins{
 		"device-claude": {SignedIn: true, Email: "b@example.com"},
 		"acct-out":      {},
 		"device-codex":  {SignedIn: true, Email: "C@Example.com"},
-	})
+	}
+	reader := NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			weekly("device-claude", claude, "a@example.com", lastWeek, lastWeek.Add(-time.Minute)),
+			weekly("device-claude", claude, "a@example.com", thisWeek, readAt),
+			weekly("acct-out", claude, "out@example.com", thisWeek, readAt),
+			weekly("acct-unread", claude, "unread@example.com", thisWeek, readAt),
+			weekly("device-codex", codex, "c@example.com", thisWeek, readAt),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-out", Provider: claude}, {ID: "acct-unread", Provider: claude}},
+	}, confirmed)
 	reader.now = func() time.Time { return now }
 
-	history, err := reader.History(context.Background(), 7)
-	if err != nil {
-		t.Fatalf("History: %v", err)
+	got := loginStates(t, reader)
+	want := map[string][]string{"unread@example.com": {domain.UsageLimitSpanOpen}, "c@example.com": {domain.UsageLimitSpanOpen}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("while a@ and out@ are signed out: logins = %v, want %v", got, want)
 	}
-	want := map[string]string{
-		"a@example.com":      domain.UsageLimitSpanPartial,
-		"out@example.com":    domain.UsageLimitSpanPartial,
-		"unread@example.com": domain.UsageLimitSpanOpen,
-		"c@example.com":      domain.UsageLimitSpanOpen,
-	}
-	if len(history.Logins) != len(want) {
-		t.Fatalf("logins = %+v, want %d", history.Logins, len(want))
-	}
-	for _, login := range history.Logins {
-		if len(login.Windows) != 1 || login.Windows[0].State != want[login.Email] {
-			t.Errorf("%s windows = %+v, want one %s week", login.Email, login.Windows, want[login.Email])
-		}
+
+	confirmed["device-claude"] = domain.AgentAccountIdentityCheck{SignedIn: true, Email: "a@example.com"}
+	got = loginStates(t, reader)
+	want["a@example.com"] = []string{domain.UsageLimitSpanFinal, domain.UsageLimitSpanOpen}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("after a@ is back: logins = %v, want %v", got, want)
 	}
 }
 
@@ -138,8 +137,8 @@ func TestLimitHistoryWindows(t *testing.T) {
 	}
 	jitter := at(5, 0).Add(700 * time.Millisecond)
 	readings := fakeLimitReadings{
-		read("device-claude", "max@example.com", "five_hour", 300, 10, ptr(at(5, 0)), at(1, 0)),
-		read("device-claude", "max@example.com", "five_hour", 300, 15, &jitter, at(4, 57)),
+		read("acct-max", "max@example.com", "five_hour", 300, 10, ptr(at(5, 0)), at(1, 0)),
+		read("acct-max", "max@example.com", "five_hour", 300, 15, &jitter, at(4, 57)),
 		read("device-claude", "team@example.com", "five_hour", 300, 20, ptr(at(12, 0)), at(8, 0)),
 		read("acct-team", "Team@Example.com", "five_hour", 300, 46, ptr(at(12, 0)), at(9, 0)),
 		read("device-claude", "team@example.com", "five_hour", 300, 30, ptr(at(18, 0)), at(16, 0)),
@@ -153,7 +152,10 @@ func TestLimitHistoryWindows(t *testing.T) {
 		{AccountID: "device-codex", Provider: domain.AgentAccountProviderCodex, Email: "c@example.com", WindowID: "codex:Weekly",
 			DurationMinutes: 10080, UsedPercent: 1, ResetsAt: ptr(at(6, 35).AddDate(0, 0, 7)), ReadAt: at(6, 35)},
 	}
-	reader := NewLimitHistoryReader(readings, nil)
+	reader := NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: readings,
+		saved:             []domain.AgentAccount{{ID: "acct-max", Provider: domain.AgentAccountProviderClaude}},
+	}, nil)
 	reader.now = func() time.Time { return now }
 
 	history, err := reader.History(context.Background(), 7)

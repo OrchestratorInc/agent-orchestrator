@@ -128,10 +128,13 @@ func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, no
 			continue
 		}
 		key := readingLogin(reading)
+		if !held[key] {
+			continue
+		}
 		byLogin[key] = append(byLogin[key], reading)
 	}
 	logins := make([]domain.UsageLimitLogin, 0, len(byLogin))
-	for key, group := range byLogin {
+	for _, group := range byLogin {
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
 		latest := group[len(group)-1]
 		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: latest.AccountID, Windows: []domain.UsageLimitSpan{}}
@@ -147,7 +150,7 @@ func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, no
 			byWindow[reading.WindowID] = append(byWindow[reading.WindowID], reading)
 		}
 		for _, id := range order {
-			login.Windows = append(login.Windows, limitSpans(byWindow[id], held[key], now)...)
+			login.Windows = append(login.Windows, limitSpans(byWindow[id], now)...)
 		}
 		sort.SliceStable(login.Windows, func(i, j int) bool { return login.Windows[i].ResetsAt.Before(login.Windows[j].ResetsAt) })
 		logins = append(logins, login)
@@ -161,7 +164,7 @@ func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, no
 	return logins
 }
 
-func limitSpans(readings []domain.AgentLimitReading, held bool, now time.Time) []domain.UsageLimitSpan {
+func limitSpans(readings []domain.AgentLimitReading, now time.Time) []domain.UsageLimitSpan {
 	var spans []domain.UsageLimitSpan
 	var hours []string
 	for _, reading := range readings {
@@ -212,7 +215,7 @@ func limitSpans(readings []domain.AgentLimitReading, held bool, now time.Time) [
 			continue
 		}
 		switch {
-		case held && span.ResetsAt.After(now):
+		case span.ResetsAt.After(now):
 			span.State = domain.UsageLimitSpanOpen
 		case span.ResetsAt.Sub(span.LastReadAt) <= finalWithin:
 			span.State = domain.UsageLimitSpanFinal
