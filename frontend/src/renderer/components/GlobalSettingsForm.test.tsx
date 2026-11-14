@@ -709,6 +709,25 @@ describe("GlobalSettingsForm", () => {
 			.toBeInTheDocument();
 	});
 
+	it("keeps the channel-switch guidance drawn when the headline already names the target", async () => {
+		let emit: (s: { state: string; version?: string; requestId?: string }) => void = () => undefined;
+		updOnStatus.mockImplementation((cb: (s: unknown) => void) => {
+			emit = cb as typeof emit;
+			return () => undefined;
+		});
+		renderForm();
+		await userEvent.click(await screen.findByLabelText("Updates channel"));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Nightly (Pre-release)" }));
+		await waitFor(() => expect(updCheck).toHaveBeenCalledWith(expect.objectContaining({ requestId: expect.stringMatching(/^channel-update-/) })));
+		const requestId = updCheck.mock.calls.at(-1)?.[0]?.requestId;
+		// A plain version goes in the headline, so the status has no line of its
+		// own; the guidance shares its container and must not be hidden with it.
+		act(() => emit({ state: "available", version: "1.5.0", requestId }));
+		expect(await screen.findByText("Update and restart to switch to Nightly.")).toBeInTheDocument();
+		expect(screen.getByTestId("update-target-version")).toHaveTextContent("v1.5.0");
+		expect(screen.getByTestId("update-status-line")).not.toHaveClass("sr-only");
+	});
+
 	it("auto-saves when automatic updates are toggled", async () => {
 		renderForm();
 		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
@@ -781,7 +800,10 @@ describe("GlobalSettingsForm", () => {
 				finishCheck = resolve;
 			}),
 		);
+		// Start from a state that shows a status line, so the check has one to keep.
+		updGetStatus.mockResolvedValue({ state: "not-available" });
 		renderForm();
+		await screen.findByText("You're on the latest version.");
 		const button = await screen.findByRole("button", { name: "Check for updates" });
 
 		await userEvent.click(button);
@@ -792,7 +814,7 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		// The slot keeps one description line while the button owns the feedback.
+		// The slot keeps the line it had while the button owns the feedback.
 		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
@@ -877,7 +899,11 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		const formatted = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium" }).format(checkedAt);
+		// Read out by assistive tech, and the Check button's tooltip, which
+		// keyboard focus opens as well as hover.
 		expect(await screen.findByTestId("update-checked-at")).toHaveTextContent(formatted);
+		act(() => screen.getByRole("button", { name: "Check for updates" }).focus());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(formatted);
 		expect(screen.getByTestId("update-status-line")).toHaveTextContent("You're on the latest version.");
 	});
 
@@ -1014,7 +1040,7 @@ it("keeps running version separate while live download progress becomes install 
 	act(() => emit({ state: "downloading", version: "2.0.0", percent: 42, transferred: 42_000_000, total: 100_000_000 }));
 	expect(statusLine.getByText("Downloading… 42%")).toBeVisible();
 	expect(screen.getByText("42.0 / 100.0 MB")).toBeVisible();
-	expect(screen.getByText("Updating to v2.0.0")).toBeVisible();
+	expect(screen.getByTestId("update-target-version")).toHaveTextContent("v2.0.0");
 	expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
 	act(() => emit({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } }));
 	expect(statusLine.getByText("Preparing update…")).toBeVisible();

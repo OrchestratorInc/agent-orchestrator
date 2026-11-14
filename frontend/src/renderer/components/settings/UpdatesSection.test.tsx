@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { UpdatesSection } from "./UpdatesSection";
 import { useUiStore } from "../../stores/ui-store";
@@ -136,7 +136,7 @@ it("keeps restart available when native staging has stalled", async () => {
 	} satisfies UpdateStatus);
 	renderUpdates();
 
-	expect(await screen.findByText(/0.13.7/)).toBeVisible();
+	expect(await screen.findByText("Updating to v0.13.7-nightly.202610101220")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Restart & install" })).toBeVisible();
 	expect(screen.getByText("Downloaded. Restart to finish updating.")).toBeVisible();
 });
@@ -199,7 +199,7 @@ it("shows a rewritten error status in the person's language (#5755)", async () =
 	}
 });
 
-it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {
+it.each(["downloaded", "error"] as const)("keeps focus on the live status while downloading until the update reaches %s", async (state) => {
 	let emit: (status: UpdateStatus) => void = () => undefined;
 	updOnStatus.mockImplementation((listener: typeof emit) => {
 		emit = listener;
@@ -211,25 +211,24 @@ it.each(["downloaded", "error"] as const)("shows updating feedback immediately u
 	const update = await screen.findByRole("button", { name: "Update to v9.9.9" });
 	update.focus();
 	fireEvent.click(update);
-	const updating = screen.getByRole("button", { name: "Updating… Update to v9.9.9" });
-	expect(updating).toBeVisible();
-	expect(updating).toHaveAttribute("aria-disabled", "true");
-	expect(updating).not.toBeDisabled();
-	expect(updating).toHaveFocus();
-	fireEvent.click(updating);
+	// The button leaves once clicked, so it cannot be pressed twice; focus
+	// waits on the live status line, which now carries the download.
+	const statusLine = screen.getByTestId("update-status-line");
+	expect(update).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /Update to v9\.9\.9/ })).toBeNull();
+	expect(statusLine).toHaveFocus();
 	expect(updDownload).toHaveBeenCalledTimes(1);
-	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
+	expect(statusLine).toHaveAttribute("aria-busy", "true");
 
 	act(() => emit({ state: "downloading", version: "9.9.9", percent: 42 }));
-	expect(screen.getByRole("button", { name: "Updating… Update to v9.9.9" })).toHaveFocus();
-	expect(updating).toHaveTextContent(/^Updating…$/);
+	expect(statusLine).toHaveFocus();
 	expect(screen.getByRole("progressbar")).toHaveAttribute("value", "42");
+	expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
 	act(() => emit({ state: "preparing", version: "9.9.9" }));
-	expect(screen.getByRole("button", { name: "Updating… Update to v9.9.9" })).toHaveFocus();
+	expect(statusLine).toHaveFocus();
 
 	act(() => emit({ state, version: "9.9.9", ...(state === "error" ? { message: "Download failed" } : {}) }));
-	expect(updating).not.toBeInTheDocument();
-	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "false");
+	expect(statusLine).toHaveAttribute("aria-busy", "false");
 	if (state === "downloaded") expect(screen.getByRole("button", { name: "Restart & install" })).toHaveFocus();
 	else {
 		expect(screen.getByText("Download failed")).toBeVisible();
@@ -238,18 +237,110 @@ it.each(["downloaded", "error"] as const)("shows updating feedback immediately u
 	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
 });
 
+it("offers only Update beside an available update", async () => {
+	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9" } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Update to v9.9.9" })).toBeVisible();
+	expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
+});
+
+it.each([
+	["a check failed", { checkError: "net::ERR_INTERNET_DISCONNECTED" }],
+	["checks keep failing", { checksFailing: true }],
+	["checks have gone stale", { staleCheckNudge: true }],
+] as const)("keeps Check for updates beside Update when %s", async (_label, failure) => {
+	// Update would fetch the earlier offer; only Check retries the check itself.
+	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9", ...failure } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Update to v9.9.9" })).toBeVisible();
+	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+});
+
+it("names the staged build on Restart when a newer one is only available", async () => {
+	// Restart installs the staged 2.0.0; the headline and Update are about 3.0.0.
+	updGetStatus.mockResolvedValue({
+		state: "available",
+		version: "3.0.0",
+		staged: { version: "2.0.0", stagedAt: 1, escalated: false, ready: true },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Update to v3.0.0" })).toBeVisible();
+	expect(screen.getByTestId("update-target-version")).toHaveTextContent("v3.0.0");
+	expect(screen.getByRole("button", { name: "Restart & install v2.0.0" })).toBeVisible();
+});
+
+it("leaves Restart unlabelled when it installs the version in the headline", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "2.0.0",
+		staged: { version: "2.0.0", stagedAt: 1, escalated: false, ready: true },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Restart & install" })).toBeVisible();
+	expect(screen.queryByTestId("update-staged-version")).toBeNull();
+});
+
+it("hands focus on when Check for updates is removed under it", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	updGetStatus.mockResolvedValue({ state: "not-available" } satisfies UpdateStatus);
+	renderUpdates();
+
+	const check = await screen.findByRole("button", { name: "Check for updates" });
+	check.focus();
+	// A background check finds an update: Check gives way to Update.
+	act(() => emit({ state: "available", version: "9.9.9" }));
+	expect(check).not.toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Update to v9.9.9" })).toHaveFocus();
+});
+
+it("does not take focus from elsewhere when Check for updates is removed", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	updGetStatus.mockResolvedValue({ state: "not-available" } satisfies UpdateStatus);
+	renderUpdates();
+
+	await screen.findByRole("button", { name: "Check for updates" });
+	const elsewhere = screen.getByRole("switch", { name: "Automatic updates" });
+	elsewhere.focus();
+	act(() => emit({ state: "downloading", version: "9.9.9", percent: 10 }));
+	expect(elsewhere).toHaveFocus();
+});
+
+it("formats the downloaded size with the active locale's decimal separator", async () => {
+	updGetStatus.mockResolvedValue({ state: "downloading", version: "9.9.9", percent: 57, transferred: 142_700_000, total: 250_400_000 } satisfies UpdateStatus);
+	await appI18n.changeLanguage("de");
+	try {
+		renderUpdates();
+		expect(await screen.findByText(/142,7/)).toBeInTheDocument();
+		expect(screen.getByText(/250,4/)).toBeInTheDocument();
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
+});
+
 it.each(["downloading", "preparing"] as const)("shows an existing %s update without a click", async (state) => {
 	updGetStatus.mockResolvedValue({ state, version: "9.9.9" } satisfies UpdateStatus);
 	renderUpdates();
 
-	const updating = await screen.findByRole("button", { name: "Updating… Update to v9.9.9" });
-	expect(updating).toBeVisible();
-	expect(updating).toHaveAttribute("aria-disabled", "true");
-	expect(updating).not.toBeDisabled();
-	expect(updating).not.toHaveFocus();
-	fireEvent.click(updating);
+	// The status line alone carries a download already under way: no button
+	// to press, and nothing takes focus.
+	const statusLine = await screen.findByTestId("update-status-line");
+	await waitFor(() => expect(statusLine).toHaveAttribute("aria-busy", "true"));
+	expect(screen.queryByRole("button", { name: /Update to v9\.9\.9/ })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
+	expect(statusLine).not.toHaveFocus();
 	expect(updDownload).not.toHaveBeenCalled();
-	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
 });
 
 it.each(["downloaded", "error"] as const)("does not steal focus when an update reaches %s", async (state) => {
