@@ -6,6 +6,7 @@ import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
+import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -35,7 +36,7 @@ import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { agentLabel } from "../../lib/agent-options";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { cloudModelLabel } from "../../lib/agent-model-choices";
-import { ComposerErrorNotice, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { ComposerErrorNotice, switchEffort, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useCloudAgentSwitch, type AgentSwitchTransition } from "../../hooks/useCloudAgentSwitch";
 import { apiErrorMessage } from "../../lib/api-client";
@@ -51,6 +52,12 @@ import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliver
 
 type EventPayload = {
 	attempt?: unknown;
+	/**
+	 * chat.turn_interrupted: why a turn ended before it started (deleted,
+	 * interface_switch); chat.turn_aborted: author_cannot_write for a message
+	 * the control plane did not run.
+	 */
+	reason?: unknown;
 	/** chat.user_message: the files the message carries. */
 	attachments?: unknown;
 	/** workspace.setup */
@@ -136,6 +143,25 @@ export function effectiveApprovalMode(harness: string, wanted: ApprovalMode, off
 	return order.slice(start).find((mode) => offered.includes(mode));
 }
 
+// Claude's session modes, as the approval modes the composer names them.
+const CLAUDE_MODE_APPROVAL = new Map<string, ApprovalMode>([
+	["default", "default"],
+	["acceptEdits", "accept-edits"],
+	["auto", "auto"],
+	["bypassPermissions", "bypass-permissions"],
+]);
+
+/**
+ * The approval mode deciding `approval` with `decisionId` leaves Plan mode
+ * for, or undefined. Claude asks before it leaves Plan mode (its ExitPlanMode
+ * tool, an ACP switch_mode request) with one option per mode it can carry on
+ * in, and "plan" to keep planning.
+ */
+function planExitApprovalMode(approval: ConversationItem | undefined, decisionId: string): ApprovalMode | undefined {
+	if (approval?.kind !== "activity" || approval.activityKind !== "approval" || approval.detail?.toolKind !== "switch_mode") return undefined;
+	return CLAUDE_MODE_APPROVAL.get(decisionId);
+}
+
 /**
  * The session's approval modes a model can run. A worker that does not say
  * which modes a model offers (an older one) leaves every mode the session allows.
@@ -170,6 +196,21 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 function writeCloudTurnSettings(key: string, settings: CloudTurnSettings) {
 	const { approvalMode, ...rest } = settings;
 	localStorage.setItem(key, JSON.stringify(approvalMode ? { ...rest, approvalMode, approvalModeChosen: true } : rest));
+}
+
+// An agent switch starts the new agent on the model and effort picked for it.
+// They become the session's choice for that agent, so its composer shows them
+// and its next message sends them. Otherwise the agent has nothing chosen, and
+// the settings bar fills in its model's default effort as a pick (Claude's
+// "high" after a switch made on "low"), which the next message then sends.
+function rememberAgentSwitchPick(key: string, pick: PendingAgentSwitch) {
+	const reasoningEffort = switchEffort(pick);
+	if (!pick.model && !reasoningEffort) return;
+	try {
+		writeCloudTurnSettings(key, { ...readCloudTurnSettings(key), model: pick.model || undefined, reasoningEffort });
+	} catch {
+		// Storage unavailable: the composer falls back to the agent's own model.
+	}
 }
 
 // The model and effort the session's worker last reported as its own, so a
@@ -250,6 +291,44 @@ export function lastChosenChatSettings(events: readonly CloudCpClientEvent[] | u
 function eventTurnID(event: CloudCpClientEvent): string | undefined {
 	const turnID = eventPayload(event).turnId;
 	return typeof turnID === "string" && turnID !== "" ? turnID : undefined;
+}
+
+/**
+ * The turns of the messages this viewer sent: the ones a queued edit
+ * (editQueuedMessage) may change, which the control plane allows only their
+ * author. A message an orchestrator or automation sent has no author.
+ */
+export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefined, viewerUserId: string | undefined): Set<string> {
+	const turns = new Set<string>();
+	if (!viewerUserId) return turns;
+	for (const event of events ?? []) {
+		const turnID = eventTurnID(event);
+		if (event.type === "chat.user_message" && turnID && eventPayload(event).authorUserId === viewerUserId) turns.add(turnID);
+	}
+	return turns;
+}
+
+/**
+ * What a refused delete of a queued message says (cancelTurn), or undefined
+ * when there is nothing left to delete: the agent already ran it, and the
+ * dock lets it go with the next read.
+ */
+function queuedDeleteRefusal(error: unknown): Error | undefined {
+	if (!(error instanceof CloudCpError)) return error instanceof Error ? error : new Error("The message could not be deleted. Try again.");
+	switch (error.code) {
+		case "TURN_FINISHED":
+			return undefined;
+		case "TURN_NOT_QUEUED":
+			// deleteQueuedMessage left the turn as it was: the agent took it, or it
+			// was stopped or ended otherwise.
+			return new Error("This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead.");
+		case "SESSION_TERMINATED":
+			return new Error("This session has ended, so this message can no longer be deleted.");
+		case "forbidden":
+			return new Error("Only the person who sent this message, whoever started the session, or a workspace admin can delete it.");
+		default:
+			return error;
+	}
 }
 
 export function appendCloudEvents(existing: CloudCpClientEvent[], incoming: CloudCpClientEvent[]): CloudCpClientEvent[] {
@@ -671,7 +750,7 @@ export function cloudAnnotationContent(excerpts: readonly ChatDraftExcerptRefere
 				snapshot = displaySnapshot;
 			}
 			return {
-				type: "excerpt", text: excerpt.text, snapshot, annotationId: excerpt.id, annotationOrder: excerpt.order,
+				type: "excerpt", text: excerpt.text, comment: excerpt.comment, snapshot, annotationId: excerpt.id, annotationOrder: excerpt.order,
 				sourceConversationId: excerpt.conversationId, sourceMessageId: excerpt.messageId, sourceRevision: excerpt.revision,
 			};
 		}),
@@ -690,7 +769,7 @@ function eventContent(payload: EventPayload): ConversationContentSummary[] | und
 		const snapshot = isExcerptSnapshot(block.snapshot) ? block.snapshot : undefined;
 		if (block.type === "excerpt" && (typeof block.text === "string" || snapshot?.badgeOnly === true)) {
 			return [{
-				type: "excerpt", text: text(block.text) ?? "", annotationId: text(block.annotationId), annotationOrder: number(block.annotationOrder),
+				type: "excerpt", text: text(block.text) ?? "", comment: text(block.comment), annotationId: text(block.annotationId), annotationOrder: number(block.annotationOrder),
 				sourceConversationId: text(block.sourceConversationId), sourceMessageId: text(block.sourceMessageId), sourceRevision: number(block.sourceRevision), snapshot,
 			}];
 		}
@@ -716,6 +795,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const turnPatches = new Map<string, (DiffFile & { patch: string })[]>();
 	const steerableTurns = new Set<string>();
 	const items: ConversationItem[] = [];
+	// A person's message by its turn, for an edit made while it was queued.
+	const humanMessages = new Map<string, ConversationMessage>();
+	// Which turns' prompts and starts are loaded, to tell a turn that ended
+	// before the agent started on it from one that ran.
+	const promptedTurns = new Set<string>();
+	const startedTurns = new Set<string>();
+	// Queued messages the person deleted (turn_interrupted of reason deleted).
+	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
 	// Live Setup and Cleanup logs. A run with step events replaces the older
 	// one-line workspace.setup summary the worker still sends after it; workers
@@ -738,6 +825,22 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
+		if (event.type === "chat.user_message_edited") {
+			// The edit of a message still queued: it reads as edited, in place,
+			// and starts nothing of its own. One whose message is not loaded has
+			// it rewritten already when that page loads.
+			const edited = humanMessages.get(eventTurnID(event) ?? "");
+			const text = eventPayload(event).text;
+			if (edited && typeof text === "string") {
+				const attachments = eventAttachments(event);
+				edited.text = text;
+				delete edited.content;
+				if (attachments.length > 0) edited.cloudAttachments = attachments;
+				else delete edited.cloudAttachments;
+				edited.revision += 1;
+			}
+			continue;
+		}
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
 			// A turn starts with its prompt. One whose first event here is any
@@ -756,10 +859,12 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
 		}
+		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
+			startedTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
 			steerableTurns.add(turnID);
@@ -770,6 +875,36 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			turn.completedAt = event.createdAt;
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
+			// No agent started on it: its prompt is loaded with no start after it
+			// (a turn starts after its prompt), or it ended at attempt 0, never
+			// claimed, which holds on a page without its prompt too.
+			// The control plane marks a message it did not run (reason
+			// author_cannot_write), which holds on a page holding only its end.
+			const notRun = event.type === "chat.turn_aborted" && eventPayload(event).reason === "author_cannot_write";
+			const neverStarted = notRun || (!startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0));
+			if (event.type === "chat.turn_interrupted" && eventPayload(event).reason === "deleted") {
+				// The person took the queued message back: it leaves the
+				// conversation, as a local chat drops a queued message deleted from
+				// its dock. Any other ending (a switch to the terminal, an older
+				// event, a reason this desktop does not know) keeps the person's
+				// text, shown interrupted as local shows a queue its Stop ended.
+				turn.state = "cancelled";
+				delete turn.startedAt;
+				withdrawnTurns.add(turnID);
+			} else if (neverStarted) {
+				// Ended before it ran: it did no work to time (a page without its
+				// prompt took its first event for its start).
+				delete turn.startedAt;
+				if (event.type === "chat.turn_aborted") {
+					// Refused when its turn came: not run, with the reason, rather than
+					// a run that failed.
+					turn.notRun = true;
+					if (turn.errorMessage) {
+						const reason = turn.errorMessage.replace(/^Not run:\s*/i, "");
+						turn.errorMessage = reason.charAt(0).toUpperCase() + reason.slice(1);
+					}
+				}
+			}
 		}
 		if (event.type === "chat.approval_requested") {
 			const payload = eventPayload(event);
@@ -936,7 +1071,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const senderSessionId = automation && typeof payload.senderSessionId === "string" ? payload.senderSessionId : undefined;
 			const senderProjectId = automation && typeof payload.senderProjectId === "string" ? payload.senderProjectId : undefined;
 			const senderDisplayName = automation && typeof payload.senderDisplayName === "string" ? payload.senderDisplayName : undefined;
-			items.push({
+			const message: ConversationMessage = {
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				authorName: automation ? undefined : promptAuthorName(payload, viewerUserId),
@@ -949,7 +1084,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				senderSessionId, senderProjectId, senderDisplayName,
 				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
-			});
+			};
+			items.push(message);
+			if (!automation && turnID) humanMessages.set(turnID, message);
 			continue;
 		}
 		if (!text) continue;
@@ -1009,6 +1146,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			approval.revision += 1;
 		}
 	}
+	// A withdrawn message shows nowhere: not its bubble, its files or its edits.
+	const shownItems = withdrawnTurns.size > 0 ? items.filter((item) => !item.turnId || !withdrawnTurns.has(item.turnId)) : items;
 	const orderedTurns = [...turns.values()];
 	// The first durable send may wait briefly for the worker to claim it. It is
 	// the active request; only later messages should appear in the queue. While
@@ -1029,7 +1168,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
 		conversationId: `cloud:${session.id}`, sessionId: session.id, harness: session.provider, mode: "chat",
-		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items,
+		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems,
 		latestSequence: events.at(-1)?.sequence ?? 0, oldestSequence: events[0]?.sequence ?? 1,
 		hasMoreBefore: partial, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
 		...(usage ? { usage } : {}),
@@ -1536,6 +1675,78 @@ export function CloudSessionChatSurface({
 			void invalidate();
 		},
 	});
+	// A queued message is edited in place while the agent has not started on
+	// it. The composer hands over the message with its kept and added files
+	// listed by reference, as it sends one; the files go as attachment ids.
+	const editQueued = useMutation({
+		mutationFn: async ({ turnId, text }: { turnId: string; text: string }) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			const message = cloudMessageAttachments(text, undefined, []);
+			try {
+				return await client.editQueuedMessage(cloud.orgId, session.id, turnId, {
+					text: message.text,
+					...(message.attachmentIds.length ? { attachmentIds: message.attachmentIds } : {}),
+				});
+			} catch (error) {
+				// The agent took the message, it was stopped, or its session ended
+				// meanwhile: the queue editor lets go of it, keeping the edit's text,
+				// as it does for a local turn that is no longer queued.
+				if (error instanceof CloudCpError && (error.code === "TURN_NOT_QUEUED" || error.code === "SESSION_TERMINATED")) {
+					const reason = error.code === "SESSION_TERMINATED"
+						? "This session has ended, so this message can no longer be edited." : error.message;
+					throw Object.assign(new Error(reason), { code: "CHAT_TURN_NOT_QUEUED" });
+				}
+				// Any other refusal (a text too long, files the worker cannot take)
+				// left the message as it was, so the editor gets the edit back with
+				// the reason. A server error, a rate limit or no answer stays
+				// pending for the editor to retry.
+				if (error instanceof CloudCpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) {
+					throw Object.assign(new Error(error.message), { code: "CHAT_QUEUED_EDIT_REFUSED" });
+				}
+				throw error;
+			}
+		},
+		onSuccess: () => void invalidate(),
+	});
+	const queuedEditOffered = offering.features.includes(QUEUED_EDIT_FEATURE) && !readOnly && session.isTerminated !== true;
+	const ownTurns = useMemo(() => ownMessageTurns(eventsQuery.data, me), [eventsQuery.data, me]);
+	// Only the author's own message, and only one whose text alone is what the
+	// agent receives. The control plane takes an edit of a message with quotes
+	// or captures but drops them, and they are inlined in the text the agent
+	// gets, which the composer cannot rebuild, so such a message offers no Edit.
+	const canEditQueuedMessage = useCallback(
+		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
+		[ownTurns],
+	);
+	// A queued message is taken back before the agent starts on it. Where the
+	// control plane offers queued-delete, that never stops a turn the agent
+	// took meanwhile (deleteQueuedMessage, 409 TURN_NOT_QUEUED), as a local
+	// chat's Delete does; an older one only stops turns (cancelTurn). It lets
+	// whoever may direct the turn do it: the message's author, whoever
+	// started the session, the organization's owners and admins, and the
+	// composer lease holder.
+	const queuedDeleteOffered = offering.features.includes(QUEUED_DELETE_FEATURE);
+	const cancelQueued = useMutation({
+		mutationFn: async (turnId: string) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			try {
+				if (queuedDeleteOffered) await client.deleteQueuedMessage(cloud.orgId, session.id, turnId);
+				else await client.cancelTurn(cloud.orgId, session.id, turnId);
+			} catch (error) {
+				const refusal = queuedDeleteRefusal(error);
+				if (refusal) throw refusal;
+			}
+		},
+		onSettled: () => void invalidate(),
+	});
+	const directsEveryTurn = Boolean(cloud && (
+		(me && cloud.createdByUserId === me) || lease.holding ||
+		(!cloud.shared && offering.org?.id === cloud.orgId && (offering.org.role === "owner" || offering.org.role === "admin"))
+	));
+	const canCancelQueuedMessage = useCallback(
+		(message: ConversationMessage) => Boolean(message.turnId && (directsEveryTurn || ownTurns.has(message.turnId))),
+		[directsEveryTurn, ownTurns],
+	);
 	// A pick the session no longer allows (its mode dropped while Chat was
 	// open) is neither sent nor shown. One the selected model cannot run shows
 	// as the mode that runs instead, the one the worker would step down to.
@@ -1637,9 +1848,20 @@ export function CloudSessionChatSurface({
 		onSettled: () => void invalidate(),
 	});
 	const decide = useMutation({
-		mutationFn: async ({ requestId, decisionId }: { requestId: string; decisionId: string }) => {
+		mutationFn: async ({ requestId, decisionId }: { requestId: string; decisionId: string; key: string; leavesPlanFor?: ApprovalMode }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			await client.decideChatApproval(cloud.orgId, session.id, requestId, decisionId);
+		},
+		// An approved plan ends Plan mode, as it does in local Chat: the agent
+		// carries on in the mode it was approved with, and so do later turns.
+		onSuccess: (_, { key, leavesPlanFor }) => {
+			if (!leavesPlanFor || settingsRef.current.key !== key) return;
+			const current = settingsRef.current.settings;
+			updateSettings({
+				...current,
+				executionMode: "agent",
+				approvalMode: sessionApprovalModes.includes(leavesPlanFor) ? leavesPlanFor : current.approvalMode,
+			});
 		},
 		onSettled: () => void invalidate(),
 	});
@@ -1831,7 +2053,10 @@ export function CloudSessionChatSurface({
 				if (mode) updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
 			rememberedPermissionMode={rememberedMode.key === projectKey ? rememberedMode.mode : readRememberedApprovalMode(projectKey)}
-			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
+			onDecide={(requestId, decisionId) => decide.mutate({
+				requestId, decisionId, key: settingsKey,
+				leavesPlanFor: planExitApprovalMode(snapshot.items.find((item) => item.kind === "activity" && item.requestId === requestId), decisionId),
+			})}
 			busy={send.isPending}
 			controllerTransitioning={controllerTransitioning}
 			newWorkDisabled={newWorkDisabled}
@@ -1874,6 +2099,12 @@ export function CloudSessionChatSurface({
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}
+			onEditQueuedTurn={queuedEditOffered ? (turnId, text) => editQueued.mutateAsync({ turnId, text }) : undefined}
+			canEditQueuedMessage={canEditQueuedMessage}
+			editQueuedTurnPendingTurnId={editQueued.isPending ? editQueued.variables?.turnId : undefined}
+			onCancelQueuedTurn={readOnly || session.isTerminated === true ? undefined : (turnId) => cancelQueued.mutateAsync(turnId)}
+			canCancelQueuedMessage={canCancelQueuedMessage}
+			cancelQueuedTurnPendingTurnId={cancelQueued.isPending ? cancelQueued.variables : undefined}
 			showSteerButton
 			excerptsEnabled
 			fileReferencesEnabled
@@ -1912,6 +2143,13 @@ export function CloudSessionChatSurface({
 				return cloudSwitch.start(pendingSwitch).then(
 					() => {
 						setChosenSwitch(undefined);
+						if (cloud) {
+							const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
+							rememberAgentSwitchPick(targetKey, pendingSwitch);
+							// Settings held from an earlier spell on that agent (a switch back) are
+							// stale now: drop them, so the agent's saved choice is read once it runs.
+							setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
+						}
 						return sendMessage(true);
 					},
 					(error: unknown) => {

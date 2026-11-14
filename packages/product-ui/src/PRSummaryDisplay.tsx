@@ -323,7 +323,7 @@ export function PRCardStatusSummary({
 			<div className={cn("border-t border-border pt-2", className)}>
 				<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
 					{rows.map((status) => (
-						<StatusRow externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
+						<StatusRow dot externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
 					))}
 				</div>
 				<div className="mt-2 border-t border-border pt-2">
@@ -414,12 +414,15 @@ export function PRCardStatusSummary({
 
 function StatusRow({
 	details,
+	dot = false,
 	externalLink: ExternalLink,
 	reviewDetailsAction,
 	status,
 }: {
 	/** What opens from this row (such as which checks failed). */
 	details?: ReactNode;
+	/** A coloured dot before the label. The PR view's rows go without: the label's colour already says it. */
+	dot?: boolean;
 	externalLink: ExternalLinkComponent;
 	reviewDetailsAction?: ReactNode;
 	status: PRCardStatus;
@@ -429,10 +432,27 @@ function StatusRow({
 	const reduceMotion = useReducedMotion();
 	// The checks row says its counts instead of a verdict; their glyphs carry the state.
 	const tally = status.checks && status.checks.counts.length > 0 ? status.checks : undefined;
+	// Without a dot, a review or conflicts row reads like the checks row: what it
+	// is about, then a glyph and where it stands.
+	const fact = !dot && !tally ? status.fact : undefined;
+	const plain = tally || fact;
+	const line = tally
+		? <ChecksTally tally={tally} />
+		: fact
+			? (
+				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
+					<span>{fact.title}</span>
+					<span className="inline-flex min-w-0 items-center gap-1" data-state={fact.state}>
+						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
+						<span className="min-w-0 truncate">{fact.value}</span>
+					</span>
+				</span>
+			)
+			: undefined;
 	return (
 		<div className="min-w-0">
-			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", tally ? "text-foreground" : toneClass[status.tone])}>
-				{tally ? null : <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />}
+			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", plain ? "text-foreground" : toneClass[status.tone])}>
+				{dot && !tally ? <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} /> : null}
 				{details ? (
 					<>
 						<button
@@ -440,13 +460,13 @@ function StatusRow({
 							aria-expanded={open}
 							className={cn(
 								"inline-flex min-w-0 items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-								tally ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
+								plain ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
 							)}
 							onClick={() => setOpen((value) => !value)}
 							type="button"
 						>
-							{tally ? <ChecksTally tally={tally} /> : <span className="min-w-0 truncate">{status.label}</span>}
-							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", tally && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
+							{line ?? <span className="min-w-0 truncate">{status.label}</span>}
+							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", plain && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
 						</button>
 						{status.href ? (
 							<ExternalLink
@@ -458,14 +478,14 @@ function StatusRow({
 							</ExternalLink>
 						) : null}
 					</>
-				) : tally ? (
-					<ChecksTally tally={tally} />
+				) : line ? (
+					line
 				) : (
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}
 			</div>
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-				<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-xs leading-4">
+				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot && "pl-4")}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
@@ -569,11 +589,11 @@ function ReadinessFacts({
 	const leadMore = lead ? details?.[lead.key] : readiness.detail;
 	const more = leadMore || others.length > 0 ? (
 		<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
-			{leadMore ? <div className="min-w-0 pl-4 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
+			{leadMore ? <div className="min-w-0 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
 			{others.map((status) => (
 				<div className="min-w-0" key={status.key}>
 					<StatusRow externalLink={externalLink} reviewDetailsAction={reviewDetailsAction} status={status} />
-					{details?.[status.key] ? <div className="mt-1 min-w-0 pl-4">{details[status.key]}</div> : null}
+					{details?.[status.key] ? <div className="mt-1 min-w-0">{details[status.key]}</div> : null}
 				</div>
 			))}
 		</div>

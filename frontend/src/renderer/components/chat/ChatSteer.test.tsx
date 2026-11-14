@@ -69,7 +69,7 @@ describe("ChatComposer steering", () => {
 		expect(screen.queryByText(/steer/i)).not.toBeInTheDocument();
 	});
 
-	it("steers the next queued message on empty Enter", async () => {
+	it("steers the next queued message on Cmd/Ctrl+Enter in the empty composer, not on plain Enter", async () => {
 		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(
 			<ChatComposer
@@ -89,8 +89,96 @@ describe("ChatComposer steering", () => {
 
 		await userEvent.click(screen.getByRole("combobox"));
 		await userEvent.keyboard("{Enter}");
+		await act(async () => {});
+		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
 
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
+	});
+
+	it("does not steer the message just queued when Cmd/Ctrl+Enter follows right after sending", async () => {
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatComposer
+				onSend={onSend}
+				willQueue
+				onSteer={vi.fn()}
+				canSteer
+				queuedDock={
+					<QueuedMessageDock
+						messages={[queuedMessage("queued-1", "just queued")]}
+						canSteer
+						onPromoteQueuedTurn={onPromoteQueuedTurn}
+					/>
+				}
+			/>,
+		);
+		const field = screen.getByRole("combobox");
+
+		await typeInLexicalEditor(field, "just queued");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("just queued"));
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await userEvent.keyboard("{Enter}");
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
+		await act(async () => {});
+
+		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
+	});
+
+	it("does not steer the next queued message from a held Enter key", async () => {
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatComposer
+				onSend={vi.fn()}
+				willQueue
+				onSteer={vi.fn()}
+				canSteer
+				queuedDock={
+					<QueuedMessageDock
+						messages={[queuedMessage("queued-1", "first")]}
+						canSteer
+						onPromoteQueuedTurn={onPromoteQueuedTurn}
+					/>
+				}
+			/>,
+		);
+
+		fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", ctrlKey: true, repeat: true });
+		await act(async () => {});
+
+		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
+	});
+
+	it("keeps the next row's Steer button and its key hint while typing", async () => {
+		render(
+			<ChatComposer
+				onSend={vi.fn()}
+				willQueue
+				onSteer={vi.fn()}
+				canSteer
+				queuedDock={
+					<QueuedMessageDock
+						messages={[queuedMessage("queued-1", "first"), queuedMessage("queued-2", "next")]}
+						canSteer
+						onPromoteQueuedTurn={vi.fn().mockResolvedValue(undefined)}
+					/>
+				}
+			/>,
+		);
+		const nextRow = screen.getByTestId("queued-message-queued-1");
+		const steerButtons = () =>
+			within(nextRow).getAllByRole("button", { name: "Steer this queued message into the running turn" });
+		expect(steerButtons()).toHaveLength(1);
+		expect(nextRow.querySelector("[data-enter-steers]")).not.toBeNull();
+
+		await typeInLexicalEditor(screen.getByRole("combobox"), "a draft");
+
+		expect(steerButtons()).toHaveLength(1);
+		// Still the visible button, not the hover-only one that is transparent at rest.
+		expect(steerButtons()[0]).not.toHaveClass("opacity-0");
+		expect(nextRow.querySelector("[data-enter-steers]")).not.toBeNull();
 	});
 
 	it("drains every queued steer request that arrives while a promotion is pending", async () => {
@@ -742,7 +830,7 @@ describe("ChatWorkspace steering", () => {
 		expect(within(dock).getByText("second queued")).toBeVisible();
 	});
 
-	it("shows the standard steer action on the next row and hover steer on later rows", () => {
+	it("shows the same steer action on every queued row", () => {
 		render(
 			<ChatWorkspace
 				snapshot={withQueuedMessages()}
@@ -762,7 +850,7 @@ describe("ChatWorkspace steering", () => {
 			within(screen.getByTestId("queued-message-queued-2")).getByRole("button", {
 				name: "Steer this queued message into the running turn",
 			}),
-		).toBeInTheDocument();
+		).not.toHaveClass("opacity-0");
 	});
 
 	it("does not show delivery indicators in the composer for a running turn without a pending approval", () => {

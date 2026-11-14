@@ -4,6 +4,7 @@ import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import type { Theme } from "../../lib/theme";
 import { groupedRowPosition } from "../../lib/groupedRow";
 import { PRCard, PRSectionHeader } from "../../lib/PRCard";
+import { MenuRowWidthScope } from "../../lib/useMenuRowWidth";
 import { PRFilterControl } from "../../lib/pr-filter-control";
 import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
 import { collectPRs, prFilterCounts, prInFilter, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
@@ -33,7 +34,14 @@ type Filter = PRListFilter;
 
 type PRsParams = { hostId?: string; projectId?: string };
 
+// Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
+// set of rows, and the ones past the list's first render batch are sized on
+// their first frame.
 export default function PRsScreen() {
+	return <MenuRowWidthScope><PRList /></MenuRowWidthScope>;
+}
+
+function PRList() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();

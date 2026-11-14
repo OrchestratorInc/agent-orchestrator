@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"runtime"
 	"time"
 
@@ -55,6 +56,22 @@ type HandoffNoteInput struct {
 	// HistoryFiles point at the agent's own record for an agent whose answers
 	// AO did not record, because it reports no turns through hooks.
 	HistoryFiles []HandoffHistoryFile
+	// Fork, when set, makes this a fork's note: the agent starts a new session
+	// copied from that one instead of taking it over.
+	Fork *HandoffFork
+	// TerminalOutput is the end of the session's terminal screen, for agents
+	// whose turns AO may not have recorded.
+	TerminalOutput string
+	// Inherited is the note the session itself started with, when it was a
+	// fork given its conversation as text: the conversation from before it,
+	// which its own turns don't hold.
+	Inherited string
+}
+
+// HandoffFork names the session a text-handoff fork was copied from.
+type HandoffFork struct {
+	SourceSessionID SessionID
+	SourceTitle     string
 }
 
 // HandoffHistoryFile is one agent's own record of this session and how to read it.
@@ -79,11 +96,16 @@ func handoffNoteCharLimit(goos string) int {
 	return ProviderSwitchMaxBootstrapChars
 }
 
-// handoffFullHistory points the agent at the whole conversation.
-const handoffFullHistory = "Run `ao session history` to read the conversation in full when you need something this note does not show."
+// handoffFullHistory points the agent at the whole conversation, and
+// handoffForkFullHistory a fork's agent at the original session's.
+const (
+	handoffFullHistory     = "Run `ao session history` to read the conversation in full when you need something this note does not show."
+	handoffForkFullHistory = "Run `ao session history %s` to read the original session's conversation in full when you need something this note does not show."
+)
 
 // BuildHandoffNote renders the note a provider receives when it takes over a
-// session (handoffnote.Build, which AO Cloud's agent switch shares). It is
+// session, or a text-handoff fork's agent starts with (handoffnote.Build,
+// which AO Cloud's agent switch shares). It is
 // deterministic and never asks a model to summarise: the latest turn is kept,
 // the five before it are clipped to a budget, up to fifteen older ones become
 // one line each, and anything beyond that is only counted.
@@ -100,11 +122,18 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 	for index, file := range in.HistoryFiles {
 		history[index] = handoffnote.HistoryFile{Harness: string(file.Harness), Path: file.Path, Read: file.Read, RequestsOnly: file.RequestsOnly}
 	}
+	fullHistory := handoffFullHistory
+	var fork *handoffnote.Fork
+	if in.Fork != nil {
+		fork = &handoffnote.Fork{SourceSessionID: string(in.Fork.SourceSessionID), SourceTitle: in.Fork.SourceTitle}
+		fullHistory = fmt.Sprintf(handoffForkFullHistory, in.Fork.SourceSessionID)
+	}
 	return handoffnote.Build(handoffnote.Input{
 		SwitchID: in.SwitchID, SourceHarness: string(in.SourceHarness), TargetHarness: string(in.TargetHarness),
 		SessionTitle: in.SessionTitle, Project: in.Project, WorkspacePath: in.WorkspacePath, Branch: in.Branch,
 		At: in.At, OriginalTask: in.OriginalTask, ChangedFiles: in.ChangedFiles,
 		ArtifactDir: in.ArtifactDir, Artifacts: artifacts, Turns: turns, Terminal: in.Terminal,
-		HistoryFiles: history, FullHistory: handoffFullHistory, MaxChars: handoffNoteMaxChars,
+		HistoryFiles: history, Fork: fork, TerminalOutput: in.TerminalOutput, Inherited: in.Inherited,
+		FullHistory: fullHistory, MaxChars: handoffNoteMaxChars,
 	})
 }

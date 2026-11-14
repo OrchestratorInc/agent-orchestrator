@@ -22,6 +22,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
+	conversationQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -726,6 +727,153 @@ describe("provider catalog controller epochs", () => {
 
 		expect(queryClient.getQueryData(queryKey)).toBeUndefined();
 	});
+
+	it("keeps loaded options usable when a later poll fails", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		getMock.mockResolvedValueOnce({ data: { options: [{ id: "model", currentValue: "a" }] }, error: undefined });
+		const Wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+
+		getMock.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } });
+		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+		expect(queryClient.getQueryState(queryKey)?.status).toBe("error");
+		expect(result.current).toMatchObject({ loaded: true, error: undefined, options: [{ id: "model", currentValue: "a" }] });
+	});
+});
+
+describe("config options read while the cached snapshot outlived the controller", () => {
+	function catalogWrapper(queryClient: QueryClient) {
+		return function Wrapper({ children }: { children: ReactNode }) {
+			return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		};
+	}
+
+	beforeEach(() => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+	});
+
+	it("reports no error when an opening read is refused because the controller is not running, then loads", async () => {
+		// Opening a chat whose cached snapshot still says "ready" enables the read
+		// before the daemon's own answer arrives; the agent has gone to sleep since.
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		getMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		});
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
+		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.status).toBe("error"));
+		expect(result.current).toMatchObject({ loaded: false, error: undefined, options: [] });
+		// The snapshot that enabled the read is out of date, so it is read again.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: conversationQueryKey("ao-1") });
+
+		// A poll that gets the same answer does not reload the conversation again.
+		getMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		});
+		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
+		const snapshotReloads = invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify(filters?.queryKey) === JSON.stringify(conversationQueryKey("ao-1")));
+		expect(snapshotReloads).toHaveLength(1);
+		expect(result.current.error).toBeUndefined();
+
+		// The controller is back: the next read brings the catalog.
+		getMock.mockResolvedValueOnce({ data: { options: [{ id: "model", currentValue: "a" }] }, error: undefined });
+		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		expect(result.current).toMatchObject({ error: undefined, options: [{ id: "model", currentValue: "a" }] });
+	});
+
+	it("reloads the snapshot again for a new conflict after the read was turned off", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		const notRunning = {
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		};
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const snapshotReloads = () => invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify(filters?.queryKey) === JSON.stringify(conversationQueryKey("ao-1"))).length;
+		getMock.mockResolvedValueOnce(notRunning);
+		const { rerender } = renderHook(({ enabled }) => useConversationConfigOptions("ao-1", enabled), {
+			wrapper: catalogWrapper(queryClient),
+			initialProps: { enabled: true },
+		});
+		await waitFor(() => expect(snapshotReloads()).toBe(1));
+
+		// The refreshed snapshot reported the agent asleep, which turns the read off.
+		rerender({ enabled: false });
+		// It reports "ready" again, and the daemon still disagrees: a new conflict.
+		getMock.mockResolvedValueOnce(notRunning);
+		rerender({ enabled: true });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("idle"));
+		expect(snapshotReloads()).toBe(2);
+	});
+
+	it("reloads the snapshot for a new conflict when a read from before the turn-off answered late", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		const notRunning = {
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		};
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const snapshotReloads = () => invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify(filters?.queryKey) === JSON.stringify(conversationQueryKey("ao-1"))).length;
+		let answerLate!: (value: typeof notRunning) => void;
+		getMock.mockReturnValueOnce(new Promise((resolve) => { answerLate = resolve; }));
+		const { rerender } = renderHook(({ enabled }) => useConversationConfigOptions("ao-1", enabled), {
+			wrapper: catalogWrapper(queryClient),
+			initialProps: { enabled: true },
+		});
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+
+		// The read is turned off while its request is still out, then it answers "not running".
+		rerender({ enabled: false });
+		await act(async () => { answerLate(notRunning); });
+		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.status).toBe("error"));
+		expect(snapshotReloads()).toBe(1);
+
+		// Turned on again, the next conflict is a new one and reloads the snapshot again.
+		getMock.mockResolvedValueOnce(notRunning);
+		rerender({ enabled: true });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(snapshotReloads()).toBe(2));
+	});
+
+	it("still reports a catalog read that failed for any other reason", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } });
+		apiErrorMessageMock.mockReturnValue("remote daemon unreachable");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
+		await waitFor(() => expect(result.current.error).toBe("remote daemon unreachable"));
+		expect(result.current.loaded).toBe(false);
+	});
+
+	it("still reports a pick the daemon refused because the controller is not running", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		getMock.mockResolvedValue({ data: { options: [{ id: "model", type: "select", currentValue: "a", choices: [{ value: "a" }, { value: "b" }] }] }, error: undefined });
+		patchMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		});
+		apiErrorMessageMock.mockReturnValue("the agent controller for this session is not running");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+
+		await act(async () => {
+			await result.current.setOption("model", { value: "b" }).catch(() => undefined);
+		});
+		await waitFor(() => expect(result.current.error).toBe("the agent controller for this session is not running"));
+	});
 });
 
 describe("useConversation snapshot mapping", () => {
@@ -1011,6 +1159,31 @@ describe("conversation branching commands", () => {
 		).toBe(false);
 	});
 
+	it("asks the daemon to restore files only when the confirmation listed them", async () => {
+		postMock.mockResolvedValue({ data: { turnsDiscarded: 1 }, error: undefined });
+		getMock.mockResolvedValueOnce({ data: { filesRestorable: true, files: [], totalFiles: 0, commitsSince: 0, planId: "plan-1" }, error: undefined });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await act(async () => {
+			await expect(result.current.previewRollback("turn-2")).resolves.toMatchObject({ filesRestorable: true, planId: "plan-1" });
+			await result.current.rollback("turn-2", "plan-1");
+			await result.current.rollback("turn-3");
+		});
+
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-2" } }, signal: expect.any(AbortSignal) },
+		);
+		expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-2" } }, body: { restoreFiles: true, planId: "plan-1" } },
+		);
+		expect(postMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-3" } }, body: { restoreFiles: false } },
+		);
+	});
+
 	it("returns a typed non-acceptance for a durably rejected inline edit", async () => {
 		apiErrorCodeMock.mockReturnValue("CHAT_EDIT_REJECTED");
 		apiErrorMessageMock.mockReturnValue("provider rejected edited prompt");
@@ -1210,6 +1383,17 @@ describe("steering refusals", () => {
 		await waitFor(() => {
 			expect(result.current.steerRefusal).toMatch(/a compaction turn is running/);
 			expect(result.current.steerRefusal).toMatch(/Try again once it finishes/);
+		});
+	});
+
+	// Daemon messages usually end without a full stop, so the advice would run on.
+	it("ends the daemon's sentence before the advice", async () => {
+		apiErrorMessageMock.mockReturnValueOnce("the agent did not collect the guidance within 5s");
+		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE");
+		await waitFor(() => {
+			expect(result.current.steerRefusal).toBe(
+				"the agent did not collect the guidance within 5s. Try again once it finishes.",
+			);
 		});
 	});
 
