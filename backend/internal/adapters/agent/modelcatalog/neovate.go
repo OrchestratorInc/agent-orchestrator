@@ -63,7 +63,11 @@ func neovateEnvModels(env map[string]string) []ports.AgentModelInfo {
 // neovateAllModels returns every built-in model. One whose provider has no
 // credentials stays selectable: Neovate rejects it until /login stores a key.
 func neovateAllModels() []ports.AgentModelInfo {
-	var models []ports.AgentModelInfo
+	total := 0
+	for _, provider := range neovateBuiltInProviders {
+		total += len(provider.models)
+	}
+	models := make([]ports.AgentModelInfo, 0, total)
 	for _, provider := range neovateBuiltInProviders {
 		models = append(models, neovateProviderModels(provider.id)...)
 	}
