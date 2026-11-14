@@ -1521,6 +1521,14 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 		if rec.Branch != "" {
 			recreateBranch = rec.Branch
 		}
+	} else if cfg.LastBranch != "" && cfg.LastBranch != cfg.Branch {
+		exists, err := w.refExists(ctx, repo, "refs/heads/"+cfg.LastBranch)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+		if _, elsewhere := findWorktreeByBranch(records, cfg.LastBranch); exists && !elsewhere {
+			recreateBranch = cfg.LastBranch
+		}
 	}
 	if nonEmpty, err := pathExistsNonEmpty(path); err != nil {
 		return ports.WorkspaceInfo{}, err

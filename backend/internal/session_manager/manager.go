@@ -317,6 +317,11 @@ type ReviewerTerminator interface {
 	RestoreReviewer(ctx context.Context, workerID domain.SessionID) error
 }
 
+// BranchStateRecorder records the branch a session's worktree has checked out.
+type BranchStateRecorder interface {
+	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
+}
+
 type runtimeController interface {
 	Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error)
 	Destroy(ctx context.Context, handle ports.RuntimeHandle) error
@@ -432,6 +437,7 @@ type Manager struct {
 	backgroundTaskUsage BackgroundTaskUsage
 	usageFlusher        UsageFlusher
 	importArchive       ImportArchiveRefresher
+	branchStates        BranchStateRecorder
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -693,6 +699,11 @@ type UsageFlusher interface {
 // SetUsageFlusher completes daemon wiring before request handling begins.
 func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
 	m.usageFlusher = flusher
+}
+
+// SetBranchStateRecorder completes daemon wiring before request handling begins.
+func (m *Manager) SetBranchStateRecorder(recorder BranchStateRecorder) {
+	m.branchStates = recorder
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -2992,6 +3003,11 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		}
 		releaseTerminals = release
 	}
+	if ws.Path != "" && !workspaceProject && m.branchStates != nil {
+		if err := m.branchStates.ReconcileSessionBranchState(ctx, id); err != nil {
+			m.logger.Warn("kill: record worktree branch failed", "sessionID", id, "error", err)
+		}
+	}
 	freed := false
 	if ws.Path != "" {
 		// Persist terminal intent before user commands can wait indefinitely.
@@ -3365,6 +3381,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 }
 
 func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo) (RestoreResult, error) {
+	if rec.Metadata.Branch != "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
+		ws.Branch = rec.Metadata.Branch
+	}
 	result, err := m.relaunchSession(ctx, "restore", rec, project, ws, nil)
 	if err != nil {
 		return RestoreResult{}, err
@@ -4850,6 +4869,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 			Kind:          rec.Kind,
 			SessionPrefix: sessionPrefix(project),
 			Branch:        rec.Metadata.Branch,
+			LastBranch:    lastCheckedOutBranch(rec),
 			BaseBranch:    project.Config.WorktreeBaseBranch(),
 			BaseRef:       rec.Metadata.DiffBaseRef,
 			Path:          rec.Metadata.WorkspacePath,
@@ -4976,6 +4996,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			Kind:          rec.Kind,
 			SessionPrefix: sessionPrefix(project),
 			Branch:        rec.Metadata.Branch,
+			LastBranch:    lastCheckedOutBranch(rec),
 			BaseBranch:    project.Config.WorktreeBaseBranch(),
 			BaseRef:       rec.Metadata.DiffBaseRef,
 			Path:          rec.Metadata.WorkspacePath,
@@ -7829,6 +7850,16 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 
 func runtimeHandle(meta domain.SessionMetadata) ports.RuntimeHandle {
 	return ports.RuntimeHandle{ID: meta.RuntimeHandleID}
+}
+
+func lastCheckedOutBranch(rec domain.SessionRecord) string {
+	if rec.BranchState == nil {
+		return ""
+	}
+	if rec.BranchState.Branch != "" {
+		return rec.BranchState.Branch
+	}
+	return strings.TrimPrefix(rec.BranchState.RemoteBranch, "origin/")
 }
 
 func workspaceInfo(rec domain.SessionRecord) ports.WorkspaceInfo {

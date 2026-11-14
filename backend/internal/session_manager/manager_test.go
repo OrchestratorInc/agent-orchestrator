@@ -1272,7 +1272,8 @@ type fakeWorkspace struct {
 	calls []string
 	// sharedLog, when non-nil, receives entries alongside calls so ordering
 	// tests can compare workspace calls against store calls in one sequence.
-	sharedLog *[]string
+	sharedLog      *[]string
+	restoredBranch string
 }
 
 type fetchDefaultBranchCall struct {
@@ -1426,7 +1427,11 @@ func (w *fakeWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) 
 		w.calls = append(w.calls, entry)
 		return ports.WorkspaceInfo{Path: cfg.Path, Branch: cfg.Branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: cfg.RepoPath}, nil
 	}
-	return w.Create(ctx, cfg)
+	info, err := w.Create(ctx, cfg)
+	if w.restoredBranch != "" {
+		info.Branch = w.restoredBranch
+	}
+	return info, err
 }
 func (w *fakeWorkspace) ForceDestroy(_ context.Context, info ports.WorkspaceInfo) error {
 	entry := "ForceDestroy:" + string(info.SessionID)
@@ -4387,6 +4392,34 @@ func TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose(t *testing.T) 
 
 // A nil closer (SetShellTerminalCloser never called, e.g. a daemon boot path
 // that skips shellterm) must be a no-op, not a nil-pointer panic.
+type fakeBranchStateRecorder struct {
+	st    *fakeStore
+	ws    *fakeWorkspace
+	calls []string
+}
+
+func (f *fakeBranchStateRecorder) ReconcileSessionBranchState(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, fmt.Sprintf("%s terminated=%v destroyed=%d", id, f.st.sessions[id].IsTerminated, f.ws.destroyed))
+	return nil
+}
+
+func TestKill_RecordsTheWorktreeBranchBeforeTeardown(t *testing.T) {
+	m, st, _, ws := newManager()
+	recorder := &fakeBranchStateRecorder{st: st, ws: ws}
+	m.SetBranchStateRecorder(recorder)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if want := []string{"mer-1 terminated=false destroyed=0"}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Fatalf("branch records = %v, want %v", recorder.calls, want)
+	}
+	if ws.destroyed != 1 || !st.sessions["mer-1"].IsTerminated {
+		t.Fatalf("destroyed=%d terminated=%v, want the kill to finish", ws.destroyed, st.sessions["mer-1"].IsTerminated)
+	}
+}
+
 func TestKill_NilShellTerminalCloserIsNoop(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4852,6 +4885,44 @@ func TestRestore_ReopensTerminal(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Fatal("restore should relaunch")
+	}
+}
+
+func TestRestorePassesTheLastCheckedOutBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state *domain.SessionBranchState
+		want  string
+	}{
+		{"recorded branch", &domain.SessionBranchState{Branch: "b/pr", RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"pushed before the branch was recorded", &domain.SessionBranchState{RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"never observed", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+			rec := st.sessions["mer-1"]
+			rec.BranchState = tc.state
+			st.sessions["mer-1"] = rec
+			if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			if got := ws.restoreConfigs[0]; got.Branch != "b" || got.LastBranch != tc.want {
+				t.Fatalf("workspace restore branch %q, last branch %q; want %q and %q", got.Branch, got.LastBranch, "b", tc.want)
+			}
+		})
+	}
+}
+
+func TestRestoreOnTheLastBranchKeepsTheSessionBranch(t *testing.T) {
+	m, st, _, ws := newManager()
+	ws.restoredBranch = "b/pr"
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b/root", AgentSessionID: "agent-x"})
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Branch; got != "b/root" {
+		t.Fatalf("session branch after restore = %q, want b/root", got)
 	}
 }
 

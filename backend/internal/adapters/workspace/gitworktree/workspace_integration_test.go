@@ -64,6 +64,54 @@ func TestWorkspaceIntegrationCreateRestoreDestroy(t *testing.T) {
 	}
 }
 
+func TestWorkspaceIntegrationRestoreUsesLastCheckedOutBranch(t *testing.T) {
+	git := requireGit(t)
+	const sessionBranch, prBranch = "ao/sess/root", "ao/sess/fix"
+	cases := []struct {
+		name  string
+		after func(t *testing.T, repo string)
+		want  string
+	}{
+		{"branch still exists", func(*testing.T, string) {}, prBranch},
+		{"branch deleted", func(t *testing.T, repo string) { runGit(t, git, repo, "branch", "-D", prBranch) }, sessionBranch},
+		{"branch checked out elsewhere", func(t *testing.T, repo string) { runGit(t, git, repo, "switch", prBranch) }, sessionBranch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			repo := setupOriginClone(t, git, tmp)
+			ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+			ctx := context.Background()
+			cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: sessionBranch}
+			info, err := ws.Create(ctx, cfg)
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			runGit(t, git, info.Path, "switch", "-c", prBranch)
+			runGit(t, git, info.Path, "commit", "--allow-empty", "-m", "agent work")
+			if err := ws.Destroy(ctx, info); err != nil {
+				t.Fatalf("destroy: %v", err)
+			}
+			tc.after(t, repo)
+
+			cfg.Path, cfg.LastBranch = info.Path, prBranch
+			restored, err := ws.Restore(ctx, cfg)
+			if err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			if restored.Branch != tc.want {
+				t.Fatalf("restored.Branch = %q, want %q", restored.Branch, tc.want)
+			}
+			if got := gitOutput(t, git, restored.Path, "branch", "--show-current"); got != tc.want {
+				t.Fatalf("worktree has %q checked out, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWorkspaceIntegrationExplicitNewBranchRejectsExistingName(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()

@@ -142,13 +142,13 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		}
 	}
 	rec := target.rec
-	fingerprint := local + " " + remote + " " + base + " " + baseRef
+	fingerprint := target.branch + " " + local + " " + remote + " " + base + " " + baseRef
 	if rec.BranchState != nil && s.branchTips[rec.ID] == fingerprint {
 		return nil
 	}
 
 	root := rec.Metadata.WorkspacePath
-	state := domain.SessionBranchState{Head: local}
+	state := domain.SessionBranchState{Branch: target.branch, Head: local}
 	switch {
 	case base != "" && baseRef != "":
 		// One call counts both sides, so reading how far behind the base the
