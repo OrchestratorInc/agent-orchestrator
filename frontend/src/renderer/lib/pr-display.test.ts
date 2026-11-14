@@ -412,7 +412,7 @@ describe("prCardPresentation", () => {
 	// to treat it like "not observed yet" and wait on checks that never arrive.
 	describe("a PR whose commit has no checks", () => {
 		const noChecks = (overrides: Partial<SessionPRSummary> = {}) =>
-			summary({ ci: { autoInjectCI: true, state: "none", failingChecks: [] }, ...overrides });
+			summary({ ci: { autoInjectCI: true, state: "none", failingChecks: [], checks: [] }, ...overrides });
 
 		it("resolves to mergeable when the provider says it is mergeable", () => {
 			const presentation = prCardPresentation(noChecks());
@@ -479,7 +479,7 @@ describe("prCardPresentation", () => {
 
 	it("keeps waiting for checks that have not been observed yet", () => {
 		const presentation = prCardPresentation(
-			summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [] } }),
+			summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] } }),
 		);
 
 		expect(presentation.readiness?.label).toBe("Checking merge readiness");

@@ -29,7 +29,7 @@ function detectProviderFromUrl(url: string): "github" | "gitlab" {
 }
 
 const prStateRank: Record<PRState, number> = { open: 0, draft: 1, merged: 2, closed: 3 };
-const ciStates = new Set<SessionPRSummary["ci"]["state"]>(["unknown", "pending", "passing", "failing"]);
+const ciStates = new Set<SessionPRSummary["ci"]["state"]>(["unknown", "pending", "passing", "failing", "none"]);
 const reviewDecisions = new Set<SessionPRSummary["review"]["decision"]>([
 	"none",
 	"approved",
@@ -366,7 +366,7 @@ function mergeReadinessRows(pr: SessionPRSummary, options: { noChecks?: boolean 
 	} else if (pr.ci.state === "pending") {
 		rows.push(withChecks(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], undefined, true)));
 	} else {
-		rows.push(cardStatus("ci", options.noChecks && pr.ci.state === "unknown" ? "pr.tab.noChecks" : "pr.card.checksUnknown", "passive"));
+		rows.push(cardStatus("ci", pr.ci.state === "none" || (options.noChecks && pr.ci.state === "unknown") ? "pr.tab.noChecks" : "pr.card.checksUnknown", "passive"));
 	}
 	rows.push(reviewReadinessRow(pr));
 	return rows;

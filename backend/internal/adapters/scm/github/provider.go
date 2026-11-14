@@ -158,6 +158,9 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 		return out, scmObserveError(err)
 	}
 
+	if err := p.confirmNoRollupCI(ctx, ports.SCMRepo{Owner: owner, Name: repo}, gq); err != nil {
+		return out, scmObserveError(err)
+	}
 	p.markCancelledGateFailures(ctx, owner, repo, gq)
 	out.CI = ciSummaryFromGraphQL(gq)
 	out.Review = reviewDecisionFromGraphQL(gq)
@@ -689,6 +692,58 @@ func checkRunKey(n map[string]any) string {
 		return ""
 	}
 	return strings.Join([]string{str(workflow["name"]), str(run["event"]), str(n["name"])}, "\x00")
+}
+
+// A null rollup also occurs before queued workflows create check runs. Only
+// provider evidence may turn that absence into a settled no-checks result.
+func noRollupCIState(pr map[string]any) domain.CIState {
+	if ci, ok := pr["noRollupCI"].(domain.CIState); ok {
+		return ci
+	}
+	return domain.CIUnknown
+}
+
+func (p *Provider) confirmNoRollupCI(ctx context.Context, repo ports.SCMRepo, pr map[string]any) error {
+	sha := firstNonEmpty(str(pr["headRefOid"]), latestCommitOID(pr))
+	if statusRollup(pr) != nil || sha == "" {
+		return nil
+	}
+	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "actions", "runs"), url.Values{"head_sha": {sha}, "per_page": {"100"}}, nil)
+	if err != nil {
+		return fmt.Errorf("github scm: read head workflows: %w", err)
+	}
+	var runs struct {
+		TotalCount   int `json:"total_count"`
+		WorkflowRuns []struct {
+			Status string `json:"status"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(resp.Body, &runs); err != nil {
+		return fmt.Errorf("github scm: decode head workflows: %w", err)
+	}
+	// Unread pages could contain a waiting workflow too.
+	if runs.TotalCount > len(runs.WorkflowRuns) {
+		pr["noRollupCI"] = domain.CIPending
+		return nil
+	}
+	for _, run := range runs.WorkflowRuns {
+		if run.Status != "completed" {
+			pr["noRollupCI"] = domain.CIPending
+			return nil
+		}
+	}
+	facts, err := p.HeadChecks(ctx, repo, sha)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if p.now != nil {
+		now = p.now()
+	}
+	if facts.Started == 0 && facts.Statuses == 0 && !facts.Since.IsZero() && !now.Before(facts.Since.Add(2*time.Minute)) {
+		pr["noRollupCI"] = domain.CINone
+	}
+	return nil
 }
 
 // statusRollup extracts the commits[0].commit.statusCheckRollup blob

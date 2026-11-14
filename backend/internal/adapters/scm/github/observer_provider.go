@@ -294,6 +294,9 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 				return nil, err
 			}
 		}
+		if err := p.confirmNoRollupCI(ctx, ref.Repo, pr); err != nil {
+			return nil, err
+		}
 		p.markCancelledGateFailures(ctx, ref.Repo.Owner, ref.Repo.Name, pr)
 		out[i] = scmObservationFromGraphQL(ref, pr)
 		switch {
