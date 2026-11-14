@@ -36,7 +36,11 @@ import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { agentLabel } from "../../lib/agent-options";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { cloudModelLabel } from "../../lib/agent-model-choices";
-import type { AgentSwitchProps } from "./AgentSwitchPicker";
+import { ComposerErrorNotice, switchEffort, type AgentSwitchProps, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { AGENT_SWITCH_FAILED } from "./ChatComposer";
+import { useCloudAgentSwitch, type AgentSwitchTransition } from "../../hooks/useCloudAgentSwitch";
+import { apiErrorMessage } from "../../lib/api-client";
+import { apiErrorException } from "../../lib/api-error-exception";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { AdaptiveStreamPacingContext } from "./ChatTimelineItems";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../../shared/cloud-binary";
@@ -192,6 +196,21 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 function writeCloudTurnSettings(key: string, settings: CloudTurnSettings) {
 	const { approvalMode, ...rest } = settings;
 	localStorage.setItem(key, JSON.stringify(approvalMode ? { ...rest, approvalMode, approvalModeChosen: true } : rest));
+}
+
+// An agent switch starts the new agent on the model and effort picked for it.
+// They become the session's choice for that agent, so its composer shows them
+// and its next message sends them. Otherwise the agent has nothing chosen, and
+// the settings bar fills in its model's default effort as a pick (Claude's
+// "high" after a switch made on "low"), which the next message then sends.
+function rememberAgentSwitchPick(key: string, pick: PendingAgentSwitch) {
+	const reasoningEffort = switchEffort(pick);
+	if (!pick.model && !reasoningEffort) return;
+	try {
+		writeCloudTurnSettings(key, { ...readCloudTurnSettings(key), model: pick.model || undefined, reasoningEffort });
+	} catch {
+		// Storage unavailable: the composer falls back to the agent's own model.
+	}
 }
 
 // The model and effort the session's worker last reported as its own, so a
@@ -494,6 +513,55 @@ function modelUnavailableActivity(event: CloudCpClientEvent, sessionAgent: strin
 		activityKind: "system", status: "completed",
 		summary: appI18n.t("chat.cloudModelUnavailableNotice", { model, agent: agentLabel(harness) }),
 		detail: { event: "session.model_unavailable" },
+		createdAt: event.createdAt,
+	};
+}
+
+/**
+ * While an agent switch runs, the transcript ends with its "Switching" line, as
+ * a local switch draws one, until the control plane's "Switched" line for it
+ * arrives.
+ */
+function withRunningAgentSwitch(items: ConversationItem[], running: (AgentSwitchTransition & { id: string; createdAt: string }) | undefined): ConversationItem[] {
+	if (!running?.targetHarness) return items;
+	const switchedAt = Date.parse(running.createdAt);
+	const arrived = items.some((item) =>
+		item.kind === "activity" && item.detail?.event === "provider_switch" &&
+		item.detail.targetHarness === running.targetHarness && Date.parse(item.createdAt) >= switchedAt);
+	if (arrived) return items;
+	const last = items.reduce((highest, item) => Math.max(highest, item.sequence), 0);
+	const marker: ConversationActivity = {
+		kind: "activity", id: `cloud-agent-switching-${running.id}`, sequence: last + 0.5, revision: 0,
+		activityKind: "system", status: "running",
+		summary: appI18n.t("agentSwitch.switching"),
+		detail: {
+			event: "provider_switch", switching: true,
+			sourceHarness: running.sourceHarness, targetHarness: running.targetHarness,
+			sourceModel: running.sourceModel, targetModel: running.targetModel, targetEffort: running.targetReasoningEffort,
+		},
+		createdAt: running.createdAt,
+	};
+	return [...items, marker];
+}
+
+/** Where the session's agent changed: the "Switched" line a local provider switch draws. */
+function agentSwitchedActivity(event: CloudCpClientEvent): ConversationActivity | undefined {
+	const payload = eventPayload(event) as Record<string, unknown>;
+	const text = (key: string) => {
+		const value = payload[key];
+		return typeof value === "string" && value ? value : undefined;
+	};
+	const sourceHarness = text("sourceHarness");
+	const targetHarness = text("targetHarness");
+	if (!sourceHarness || !targetHarness) return undefined;
+	return {
+		kind: "activity", id: `cloud-agent-switched-${event.sequence}`, sequence: event.sequence, revision: 1,
+		activityKind: "system", status: "completed",
+		summary: appI18n.t("agentSwitch.switchedFromTo", { from: agentLabel(sourceHarness), to: agentLabel(targetHarness) }),
+		detail: {
+			event: "provider_switch", sourceHarness, targetHarness,
+			sourceModel: text("sourceModel"), targetModel: text("targetModel"), targetEffort: text("targetReasoningEffort"),
+		},
 		createdAt: event.createdAt,
 	};
 }
@@ -961,6 +1029,22 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			if (activity) items.push(activity);
 			continue;
 		}
+		if (event.type === "chat.agent_switched") {
+			const activity = agentSwitchedActivity(event);
+			if (!activity) continue;
+			// A message sent while the switch ran was held for the new agent, which
+			// answers it: the line goes above it, where a local switch (done before
+			// the message is sent) draws it.
+			const held = items.findIndex((item) => item.kind === "message" && item.role === "user" &&
+				item.turnId !== undefined && turns.get(item.turnId)?.state === "queued");
+			if (held >= 0) {
+				activity.sequence = items[held].sequence - 0.5;
+				items.splice(held, 0, activity);
+			} else {
+				items.push(activity);
+			}
+			continue;
+		}
 		if (event.type === "workspace.setup") {
 			// The newest setup run that began before this summary is the run it summarizes.
 			let covering = -1;
@@ -1337,8 +1421,9 @@ export function CloudSessionChatSurface({
 		// A deleted session has no worker and cannot be resumed (only restored),
 		// so it is not asked. Keying on the worker generation reloads the
 		// catalog for each new worker, including the one a restore starts,
-		// instead of keeping an answer from a worker that is gone.
-		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.terminalGeneration ?? ""],
+		// instead of keeping an answer from a worker that is gone. An agent
+		// switch keeps the worker generation, so the agent keys it too.
+		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.provider, session.terminalGeneration ?? ""],
 		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
 			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
@@ -1546,9 +1631,12 @@ export function CloudSessionChatSurface({
 			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
 	const send = useMutation({
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] } }) => {
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
-			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			// A message sent with an agent switch goes to the new agent, which
+			// starts on the model and effort the switch named: the old agent's
+			// picks are not its.
+			const selectedSettings: CloudTurnSettings = !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
 			// worker derives it from the session's mode. A pick the turn's model
 			// cannot run is sent as the mode the composer shows in its place.
@@ -1678,15 +1766,27 @@ export function CloudSessionChatSurface({
 	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
 	const startStopped = startFailed && !rerunning;
+	// Choosing another agent only records the choice; the switch runs with the next message.
+	const cloudSwitch = useCloudAgentSwitch(session);
+	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const pendingSwitch = chosenSwitch?.harness !== session.provider ? chosenSwitch : undefined;
+	// A pick whose agent the session now runs is done; one is dropped when another tab
+	// comes forward, so a message typed on coming back cannot go to an agent no longer meant.
+	useEffect(() => {
+		if (chosenSwitch && (chosenSwitch.harness === session.provider || !chatInFront)) setChosenSwitch(undefined);
+	}, [chatInFront, chosenSwitch, session.provider]);
+	const [switchError, setSwitchError] = useState<unknown>();
+	const runningSwitch = cloudSwitch.running;
 	const snapshot = useMemo(() => {
 		const projected = toSnapshot(session, eventsQuery.data ?? [], me, { partial: history?.hasOlder });
 		// A failed Setup is reported by the checklist while the start is failed, as a
 		// failed local start does; once a retry passes, only the Setup that passed stays.
-		const items = withoutFailedSetupAttempts(projected.items, startFailed);
+		const failedSetupDropped = withoutFailedSetupAttempts(projected.items, startFailed);
+		const items = withRunningAgentSwitch(failedSetupDropped, runningSwitch);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, history?.hasOlder, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	}, [eventsQuery.data, history?.hasOlder, me, runningSwitch, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.
@@ -1872,17 +1972,21 @@ export function CloudSessionChatSurface({
 		},
 	});
 	// The composer's agent and model picker, with the agent's mark, as a local
-	// chat has. A Cloud session keeps the agent it started with, so the picker
-	// offers only its models; another agent is a new task.
+	// chat has. Where the control plane can switch the session's agent, choosing
+	// another one records the choice and the next message switches to it, as a
+	// local chat does; otherwise the picker offers only the session's models.
 	// Its models are Cloud's for the account (cloudOrgId), as every Cloud picker's are.
+	const agentSwitchAllowed = cloudSwitch.available && !readOnly;
 	const agentSwitch = useMemo<AgentSwitchProps>(() => ({
 		projectId: session.workspaceId,
 		cloudOrgId: cloud?.orgId,
-		agents: [{ id: session.provider, label: agentLabel(session.provider) }],
-		onPendingChange: () => undefined,
-		disabled: true,
+		agents: agentSwitchAllowed ? cloudSwitch.agents : [{ id: session.provider, label: agentLabel(session.provider) }],
+		pending: agentSwitchAllowed ? pendingSwitch : undefined,
+		onPendingChange: agentSwitchAllowed ? setChosenSwitch : () => undefined,
+		// Switching is refused while the agent is working or a switch runs.
+		disabled: !agentSwitchAllowed || Boolean(activeTurn) || cloudSwitch.switching,
 		harnessView: "cloud",
-	}), [cloud?.orgId, session.provider, session.workspaceId]);
+	}), [activeTurn, agentSwitchAllowed, cloud?.orgId, cloudSwitch.agents, cloudSwitch.switching, pendingSwitch, session.provider, session.workspaceId]);
 	// The worker runs its own Claude Code, so this computer's CLI version gates nothing here.
 	const { models: choiceModels, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model, undefined, true, false);
 	// With no list of the session's own yet, Claude's choices come from the device's
@@ -1972,7 +2076,13 @@ export function CloudSessionChatSurface({
 							: modelsError
 			}
 			headerActions={headerActions}
-			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
+			composerNotice={switchError ? (
+				<ComposerErrorNotice
+					title={appI18n.t("agentSwitch.couldNotSwitch")}
+					message={apiErrorMessage(switchError)}
+					onDismiss={() => setSwitchError(undefined)}
+				/>
+			) : live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
@@ -2016,13 +2126,38 @@ export function CloudSessionChatSurface({
 					: cloudMessageAttachments(text, displayText, fileReferences);
 				const content = cloudAnnotationContent(excerpts, fileReferences);
 				const agentText = numbered ? message.text + formatNumberedAnnotations(excerpts ?? [], fileReferences) : excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
-				return send.mutateAsync({
+				const sendMessage = (afterSwitch?: boolean) => send.mutateAsync({
 					// A message of only files and captures or quotes starts with them.
 					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
 					attachmentIds: message.attachmentIds,
 					clientMessageId,
 					...(content.length ? { display: { text: message.displayText, content } } : {}),
+					...(afterSwitch ? { afterSwitch } : {}),
 				});
+				// A new message replaces an earlier switch's failure.
+				setSwitchError(undefined);
+				if (!pendingSwitch) return sendMessage();
+				// The switch starts first; the message, sent while it runs, waits for
+				// the new agent. Nothing was sent if the switch is refused, so the
+				// draft stays and the pick is dropped.
+				return cloudSwitch.start(pendingSwitch).then(
+					() => {
+						setChosenSwitch(undefined);
+						if (cloud) {
+							const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
+							rememberAgentSwitchPick(targetKey, pendingSwitch);
+							// Settings held from an earlier spell on that agent (a switch back) are
+							// stale now: drop them, so the agent's saved choice is read once it runs.
+							setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
+						}
+						return sendMessage(true);
+					},
+					(error: unknown) => {
+						setChosenSwitch(undefined);
+						setSwitchError(error);
+						throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
+					},
+				);
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}

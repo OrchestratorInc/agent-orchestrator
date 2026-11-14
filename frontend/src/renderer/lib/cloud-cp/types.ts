@@ -108,6 +108,12 @@ export interface CloudCpMeResponse {
 	 */
 	chatHarnesses?: string[];
 	/**
+	 * Harnesses a running session can switch its coding agent to (an interface
+	 * transition with targetHarness). Absent or empty on a control plane that
+	 * cannot switch a session's agent.
+	 */
+	agentSwitchHarnesses?: string[];
+	/**
 	 * The organization the app works in: the one the sign-in token's WorkOS
 	 * organization maps to, else organizations[0]. Absent on an older control
 	 * plane.
@@ -858,6 +864,12 @@ export interface CloudCpInterfaceTransition {
 	errorCode?: string;
 	errorDetail?: string;
 	noticeAcknowledgedAt?: string;
+	/** An agent switch's agents and models; absent on an interface-only switch. */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetReasoningEffort?: string;
 	createdAt: string;
 	updatedAt: string;
 	completedAt?: string;
@@ -876,6 +888,8 @@ export interface CloudCpStartInterfaceTransitionRequest {
 	policy: "drain" | "interrupt";
 	model?: string;
 	reasoningEffort?: string;
+	/** Switches the session's agent to this harness, in targetMode (which may be its current one). */
+	targetHarness?: string;
 }
 
 export interface CloudCpStartInterfaceTransitionResponse {
