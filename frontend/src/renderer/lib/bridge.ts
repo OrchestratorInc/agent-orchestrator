@@ -192,6 +192,7 @@ export const aoBridge: AoBridge =
 				unavailableReason: "Desktop app is required to open a workspace.",
 			}),
 			getEditors: async () => ({ editors: [], preferredEditorId: "cursor" }),
+			setNeovimTerminal: async () => { throw new Error("Neovim terminal selection is available in the desktop app."); },
 			setPreferredEditor: async () => {
 				throw new Error("Desktop app is required to choose an editor.");
 			},

@@ -55,7 +55,7 @@ import { DesktopTelemetryController } from "./main/desktop-telemetry-controller"
 import { TelemetryIdentityController } from "./main/telemetry-identity";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
-import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
+import { readEditorSettings, writeEditorPreference, writeNeovimTerminalPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
@@ -1552,6 +1552,8 @@ const editorHandoff = createEditorHandoff({
 	resolveWorkspace: resolveSessionWorkspaceForDesktop,
 	resolveArtifactDir: resolveSessionArtifactDirForDesktop,
 	readPreference: async () => (await readEditorSettings(editorStateDir())).preferredEditorId,
+	readNeovimTerminal: async () => (await readEditorSettings(editorStateDir())).neovimTerminal,
+	writeNeovimTerminal: async (terminal) => { await writeNeovimTerminalPreference(editorStateDir(), terminal); },
 	writePreference: async (editorId) => {
 		await writeEditorPreference(editorStateDir(), editorId);
 	},
@@ -3220,6 +3222,10 @@ ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => 
 ipcMain.handle("editorHandoff:getEditors", (event) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.getEditors();
+});
+ipcMain.handle("editorHandoff:setNeovimTerminal", (event, terminal: unknown) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.setNeovimTerminal(terminal);
 });
 ipcMain.handle("editorHandoff:setPreferredEditor", (event, editorId: unknown) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");

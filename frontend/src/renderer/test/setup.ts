@@ -272,6 +272,7 @@ if (typeof window !== "undefined") {
 			}),
 			getEditors: async () => ({ editors: [{ id: "cursor", name: "Cursor", kind: "editor" }], preferredEditorId: "cursor" }),
 			setPreferredEditor: async (editorId) => editorId,
+			setNeovimTerminal: async (terminal) => terminal,
 			open: async ({ targetId }) => {
 				if (targetId === "file-manager") return { id: "file-manager", name: "Finder", kind: "file_manager" };
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };

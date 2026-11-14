@@ -20,6 +20,7 @@ vi.mock("../../hooks/useSettings", () => ({
 vi.mock("../../hooks/useEditorHandoff", () => ({
 	useEditorPreference: () => ({ data: { editors: [] }, isPending: false, isError: false }),
 	useSetPreferredEditor: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
+	useSetNeovimTerminal: () => ({ mutate: vi.fn(), isPending: false, error: null }),
 }));
 
 // The real rows read the cloud gate and the CLI link; this file covers retention.

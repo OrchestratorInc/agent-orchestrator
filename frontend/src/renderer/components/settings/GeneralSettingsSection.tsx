@@ -23,9 +23,9 @@ import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
-import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
+import { useEditorPreference, useSetPreferredEditor, useSetNeovimTerminal } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
-import type { EditorId } from "../../../shared/editor-handoff";
+import type { EditorId, NeovimTerminalId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -107,6 +107,38 @@ function DefaultEditorRow() {
 				placeholder={t("editor.chooseEditor")}
 				onChange={(editorId) => setPreferredEditor.mutate(editorId as EditorId)}
 				disabled={preference.isPending || setPreferredEditor.isPending || editors.length === 0}
+			/>
+		</SettingsRow>
+	);
+}
+
+function NeovimTerminalRow() {
+	const { t } = useTranslation();
+	const preference = useEditorPreference();
+	const save = useSetNeovimTerminal();
+	const state = preference.data?.neovimTerminal;
+	// Older desktops and other platforms do not offer this capability.
+	if (!state) return null;
+	const installed = state.targets.some((target) => target.id === state.selected);
+	const name = state.selected === "iterm2" ? "iTerm2" : state.selected === "ghostty" ? "Ghostty" : "Terminal";
+	const options: SettingsOption<NeovimTerminalId>[] = state.targets.map((target) => ({
+		value: target.id as NeovimTerminalId,
+		label: target.name,
+		icon: <TargetIcon target={target} className="size-icon-sm shrink-0" />,
+	}));
+	if (!installed) options.unshift({ value: state.selected, label: t("settings.neovimTerminal.missing", { name }), disabled: true });
+	const error = save.error?.message ?? (preference.isError ? t("settings.defaultEditor.loadFailed") : !installed ? t("settings.neovimTerminal.missing", { name }) : null);
+	return (
+		<SettingsRow
+			label={t("settings.neovimTerminal.label")}
+			description={error ? <span role="alert" className="text-error">{error}</span> : t("settings.neovimTerminal.description")}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.neovimTerminal.label")}
+				value={state.selected}
+				options={options}
+				onChange={(terminal) => save.mutate(terminal)}
+				disabled={preference.isPending || save.isPending}
 			/>
 		</SettingsRow>
 	);
@@ -450,6 +482,7 @@ export function GeneralSettingsSection({
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
 				<DefaultEditorRow />
+				<NeovimTerminalRow />
 				<SettingsRow label={t("settings.chatSendKey.label")}>
 					<SettingsOptionMenu
 						aria-label={t("settings.chatSendKey.label")}
