@@ -20,6 +20,7 @@
 	"dictation.upgrade.exploreDetail": "Просмотр и поиск всех локальных моделей.",
 	"dictation.upgrade.allowAccess": "Разрешите доступ, когда macOS спросит…",
 	"dictation.upgrade.ready": "Диктовка готова",
+	"dictation.upgrade.downloading": "Загрузка {{model}}. Диктовка будет готова после завершения.",
 	"settings.dictation": "Диктовка",
 	"dictation.sounds": "Воспроизводить звуки",
 	"dictation.soundsDescription": "Короткий щелчок при начале и конце диктовки.",

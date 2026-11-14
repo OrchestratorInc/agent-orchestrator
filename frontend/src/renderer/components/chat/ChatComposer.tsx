@@ -2658,6 +2658,8 @@ export const ChatComposer = memo(function ChatComposer({
 											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
 											onClick={() => {
+												// A download blocks dictation; Settings has its percentage and Cancel.
+												if (downloadingModel) return useUiStore.getState().openGlobalSettings("dictation");
 												editor.current?.focus();
 												if (dictating) dictation.toggle();
 												else void dictationUpgrade.requestStart(dictation.toggle);
@@ -2667,7 +2669,7 @@ export const ChatComposer = memo(function ChatComposer({
 												dictating
 													? "Finish dictation"
 													: downloadingModel
-														? `Downloading dictation model, ${downloadPercent}%`
+														? `Downloading dictation model, ${downloadPercent}%. Open Dictation settings`
 														: "Dictate"
 											}
 											aria-pressed={dictating}
@@ -2691,7 +2693,7 @@ export const ChatComposer = memo(function ChatComposer({
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : downloadingModel ? `Downloading dictation model… ${downloadPercent}%` : "Dictate"}</TooltipContent>
+								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : downloadingModel ? `Downloading dictation model… ${downloadPercent}%. Click for details.` : "Dictate"}</TooltipContent>
 							</Tooltip>
 						) : null}
 						<Tooltip>

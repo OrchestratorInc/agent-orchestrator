@@ -20,6 +20,7 @@
 	"dictation.upgrade.exploreDetail": "すべてのローカルモデルを閲覧・検索できます。",
 	"dictation.upgrade.allowAccess": "macOS の確認が出たら許可してください…",
 	"dictation.upgrade.ready": "音声入力の準備ができました",
+	"dictation.upgrade.downloading": "{{model}} をダウンロード中です。完了すると音声入力を使えます。",
 	"settings.dictation": "音声入力",
 	"dictation.sounds": "サウンドを再生",
 	"dictation.soundsDescription": "音声入力の開始時と終了時に短いクリック音を鳴らします。",

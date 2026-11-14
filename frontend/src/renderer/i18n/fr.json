@@ -20,6 +20,7 @@
 	"dictation.upgrade.exploreDetail": "Parcourez et recherchez tous les modèles locaux.",
 	"dictation.upgrade.allowAccess": "Autorisez l’accès quand macOS le demande…",
 	"dictation.upgrade.ready": "La dictée est prête",
+	"dictation.upgrade.downloading": "Téléchargement de {{model}}. La dictée sera prête à la fin.",
 	"settings.dictation": "Dictée",
 	"dictation.sounds": "Jouer des sons",
 	"dictation.soundsDescription": "Un court clic au début et à la fin de la dictée.",
