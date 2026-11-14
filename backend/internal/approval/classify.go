@@ -176,6 +176,10 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 		if !strings.EqualFold(strings.TrimSpace(target.Key), "enter") {
 			return Verdict{}
 		}
+		if role == "button" || role == "link" || role == "menuitem" {
+			// Enter on a focused control activates it, exactly like a click.
+			return classifyRisk("click", role, name, target)
+		}
 		if target.IsSubmit {
 			return classifySubmit(normalize(target.SubmitName), target, true)
 		}

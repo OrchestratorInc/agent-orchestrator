@@ -23,6 +23,7 @@ import {
 	waitFor,
 	type WaitKind,
 } from "./dom-actions";
+import { describeApprovalTarget } from "../shared/browser-approval-describe";
 import { BridgeError, isRecord } from "./protocol";
 import { buildSnapshot, RefRegistry } from "./snapshot";
 
@@ -91,6 +92,15 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 			return { annotations: annotations(document, registry), dpr: document.defaultView?.devicePixelRatio ?? 1 };
 		case "frameOffset":
 			return frameOffset(element());
+		case "describe":
+			// The approval gate's read of what an action would act on.
+			return {
+				facts: request.ref
+					? describeApprovalTarget(document, { mode: "element" }, element())
+					: describeApprovalTarget(document, { mode: "focused" }),
+				viewport: { width: document.defaultView?.innerWidth ?? 0, height: document.defaultView?.innerHeight ?? 0 },
+				dpr: document.defaultView?.devicePixelRatio ?? 1,
+			};
 		default:
 			throw new BridgeError("INVALID_ARGUMENT", `Unknown content operation: ${request.op}`);
 	}

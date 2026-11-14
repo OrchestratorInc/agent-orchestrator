@@ -1,3 +1,4 @@
+import { describePanelApprovalTarget } from "./browser-approval-panel";
 import {
   sanitizeBrowserTitle,
   sanitizeBrowserURL,
@@ -334,6 +335,10 @@ export function shouldHandleAppShortcutInBrowserContext(
   );
 }
 
+// Isolated world for the approval gate's element read; page scripts cannot
+// patch the DOM APIs it uses.
+const APPROVAL_DESCRIBE_WORLD_ID = 1013;
+
 type BrowserWebContents = Pick<
   WebContents,
   | "id"
@@ -343,6 +348,7 @@ type BrowserWebContents = Pick<
   | "clearHistory"
   | "debugger"
   | "executeJavaScript"
+  | "executeJavaScriptInIsolatedWorld"
   | "focus"
   | "findInPage"
   | "mainFrame"
@@ -4987,6 +4993,37 @@ export function createBrowserViewHost(
               ...native,
               messages: [...native.messages, ...browserSignalMessages(session)],
             };
+          }
+          case "describe": {
+            // Internal: the daemon's approval gate asks what a click, act,
+            // or Enter would act on before it lets the action run.
+            const describeEntry = activeEntry(session);
+            await describeEntry.ready;
+            const contents = describeEntry.view.webContents;
+            return describePanelApprovalTarget({
+              action: typeof args.action === "string" ? args.action : "",
+              ref: typeof args.ref === "string" ? args.ref : undefined,
+              instruction:
+                typeof args.instruction === "string" ? args.instruction : undefined,
+              nth:
+                typeof args.nth === "number" && Number.isFinite(args.nth)
+                  ? Math.trunc(args.nth)
+                  : undefined,
+              snapshot: async () => {
+                const result = await runNative("snapshot", { interactive: true });
+                return { refs: result.refs };
+              },
+              page: {
+                url: contents.getURL(),
+                title: contents.getTitle(),
+                evaluate: (code) =>
+                  contents.executeJavaScriptInIsolatedWorld(APPROVAL_DESCRIBE_WORLD_ID, [{ code }]),
+                capture: async (rect) => {
+                  const image = await contents.capturePage(rect);
+                  return image.isEmpty() ? undefined : image.toPNG().toString("base64");
+                },
+              },
+            });
           }
           default:
             throw browserError(

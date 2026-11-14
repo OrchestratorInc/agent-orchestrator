@@ -1,0 +1,270 @@
+package browser
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+// scriptedRuntime answers describe with a fixed element and records every
+// action it receives.
+type scriptedRuntime struct {
+	mu          sync.Mutex
+	actions     []string
+	describe    map[string]interface{}
+	describeErr error
+}
+
+func (r *scriptedRuntime) Status() browserruntime.Status { return browserruntime.Status{Connected: true} }
+
+func (r *scriptedRuntime) Execute(_ context.Context, _ domain.SessionID, action string, _ map[string]interface{}) (browserruntime.Result, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.actions = append(r.actions, action)
+	if action == describeAction {
+		if r.describeErr != nil {
+			return browserruntime.Result{}, r.describeErr
+		}
+		return browserruntime.Result{Value: r.describe}, nil
+	}
+	return browserruntime.Result{RequestID: "r1"}, nil
+}
+
+func (r *scriptedRuntime) received() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.actions)
+}
+
+func placeOrder() map[string]interface{} {
+	return map[string]interface{}{
+		"target": map[string]interface{}{
+			"role": "button", "name": "Place order", "tag": "button", "isSubmit": true,
+			"formMethod": "post", "pageUrl": "https://shop.example/checkout", "pageTitle": "Checkout",
+		},
+		"image": "iVBORw0KGgo=",
+	}
+}
+
+func approvalService(t *testing.T, rt *scriptedRuntime) (*Service, *approval.Gate, string) {
+	t.Helper()
+	authority := NewAuthority()
+	token, verifier, err := authority.Issue("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(fakeSessions{session: domain.Session{SessionRecord: domain.SessionRecord{
+		ID: "s1", Metadata: domain.SessionMetadata{BrowserCapabilityVerifier: verifier},
+	}}}, rt, authority)
+	gate, err := approval.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.UseApprovals(gate, 2*time.Second)
+	return svc, gate, token
+}
+
+// answer decides the next pending request and returns it.
+func answer(t *testing.T, gate *approval.Gate, decision approval.Decision) <-chan approval.Pending {
+	t.Helper()
+	out := make(chan approval.Pending, 1)
+	go func() {
+		for range 400 {
+			if list := gate.Pending(); len(list) > 0 {
+				_ = gate.Decide(list[0].ID, decision)
+				out <- list[0]
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		close(out)
+	}()
+	return out
+}
+
+func TestRiskyClickWaitsAndDenyBlocksDispatch(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, gate, token := approvalService(t, rt)
+	asked := answer(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if got := rt.received(); !slices.Equal(got, []string{describeAction}) {
+		t.Fatalf("runtime received %v; the click must not be dispatched", got)
+	}
+	pending := <-asked
+	if pending.Action != `Click "Place order" on shop.example` || pending.Category != approval.CategoryPayment ||
+		pending.Site != "shop.example" || pending.Image == "" || pending.Reason == "" || pending.SessionID != "s1" {
+		t.Fatalf("prompt = %+v", pending)
+	}
+}
+
+func TestRiskyClickAllowedDispatches(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.received(); !slices.Equal(got, []string{describeAction, "click"}) {
+		t.Fatalf("runtime received %v", got)
+	}
+}
+
+func TestBenignClickNeverAsks(t *testing.T) {
+	rt := &scriptedRuntime{describe: map[string]interface{}{"target": map[string]interface{}{
+		"role": "link", "name": "Home", "pageUrl": "https://shop.example/",
+	}}}
+	svc, gate, token := approvalService(t, rt)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gate.Pending()) != 0 {
+		t.Fatal("benign click asked")
+	}
+	if entries, _ := gate.Audit(10); len(entries) != 0 {
+		t.Fatalf("benign click audited: %+v", entries)
+	}
+}
+
+func TestEveryGatedActionPathIsChecked(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		args   map[string]interface{}
+	}{
+		{"click", map[string]interface{}{"ref": "e4"}},
+		{"dblclick", map[string]interface{}{"ref": "e4"}},
+		{"act", map[string]interface{}{"instruction": "place order button"}},
+		{"press", map[string]interface{}{"key": "Enter"}},
+	} {
+		t.Run(tc.action, func(t *testing.T) {
+			rt := &scriptedRuntime{describe: placeOrder()}
+			svc, gate, token := approvalService(t, rt)
+			answer(t, gate, approval.DecisionDeny)
+			_, _, err := svc.Execute(context.Background(), "s1", token, tc.action, tc.args)
+			if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+				t.Fatalf("err = %v", err)
+			}
+			if slices.Contains(rt.received(), tc.action) {
+				t.Fatalf("%s dispatched after deny", tc.action)
+			}
+		})
+	}
+}
+
+func TestNonActingActionsSkipDescribe(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, _, token := approvalService(t, rt)
+	for _, tc := range []struct {
+		action string
+		args   map[string]interface{}
+	}{
+		{"snapshot", nil},
+		{"fill", map[string]interface{}{"ref": "e2", "text": "hi"}},
+		{"press", map[string]interface{}{"key": "Tab"}},
+		{"act", map[string]interface{}{"instruction": "card number", "action": "fill", "value": "4242"}},
+	} {
+		if _, _, err := svc.Execute(context.Background(), "s1", token, tc.action, tc.args); err != nil {
+			t.Fatalf("%s: %v", tc.action, err)
+		}
+	}
+	if slices.Contains(rt.received(), describeAction) {
+		t.Fatalf("describe ran for a non-acting action: %v", rt.received())
+	}
+}
+
+func TestChromeModeIsGated(t *testing.T) {
+	panel := &scriptedRuntime{}
+	chrome := &scriptedRuntime{describe: placeOrder()}
+	svc, gate, token := approvalService(t, panel)
+	targets, err := OpenTargetStore(filepath.Join(t.TempDir(), "targets.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.UseChrome(chrome, targets, nil)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "target", map[string]interface{}{"target": "chrome"}); err != nil {
+		t.Fatal(err)
+	}
+	answer(t, gate, approval.DecisionDeny)
+	_, _, err = svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if got := chrome.received(); !slices.Equal(got, []string{describeAction}) {
+		t.Fatalf("chrome received %v", got)
+	}
+	if len(panel.received()) != 0 {
+		t.Fatalf("panel received %v", panel.received())
+	}
+}
+
+func TestApprovalTimeoutDenies(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, gate, token := approvalService(t, rt)
+	svc.UseApprovals(gate, 30*time.Millisecond)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_APPROVAL_TIMEOUT" {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(rt.received(), "click") {
+		t.Fatal("click dispatched after timeout")
+	}
+	entries, _ := gate.Audit(1)
+	if len(entries) != 1 || entries[0].Decision != approval.DecisionTimeout {
+		t.Fatalf("audit = %+v", entries)
+	}
+}
+
+func TestDescribeFailureFallsBackToArguments(t *testing.T) {
+	// An older Chrome extension does not know describe; the instruction text
+	// alone still flags an obviously risky act.
+	rt := &scriptedRuntime{describeErr: browserruntime.CommandError{Code: "INVALID_ARGUMENT", Message: "Unsupported browser action: describe"}}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionDeny)
+	_, _, err := svc.Execute(context.Background(), "s1", token, "act", map[string]interface{}{"instruction": "click the place order button"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDescribeIsNotAgentCallable(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, _, token := approvalService(t, rt)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, describeAction, nil); apiErrorCode(err) != "BROWSER_ACTION_UNSUPPORTED" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestModeOffSkipsTheGate(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, gate, token := approvalService(t, rt)
+	if err := gate.SetSessionMode("s1", approval.ModeOff); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.received(); !slices.Equal(got, []string{"click"}) {
+		t.Fatalf("runtime received %v", got)
+	}
+}
+
+func TestPreflightForBatchSteps(t *testing.T) {
+	rt := &scriptedRuntime{describe: placeOrder()}
+	svc, gate, _ := approvalService(t, rt)
+	answer(t, gate, approval.DecisionDeny)
+	err := svc.Preflight(context.Background(), "s1", "click", map[string]interface{}{"ref": "e4"})
+	var denied *ApprovalError
+	if !errors.As(err, &denied) || denied.Decision != approval.DecisionDeny {
+		t.Fatalf("err = %v", err)
+	}
+}

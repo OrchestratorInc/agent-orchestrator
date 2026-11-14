@@ -12,6 +12,7 @@
     {"category": "payment", "target": {"action": "click", "role": "button", "name": "Send money", "pageUrl": "https://bank.example/send"}},
     {"category": "payment", "target": {"action": "click", "role": "button", "name": "Continue", "isSubmit": true, "formMethod": "post", "formHasPayment": true, "pageUrl": "https://shop.example/checkout"}},
     {"category": "payment", "target": {"action": "press", "key": "Enter", "role": "textbox", "name": "Card number", "isSubmit": true, "formMethod": "post", "formHasPayment": true, "pageUrl": "https://shop.example/checkout"}},
+    {"category": "payment", "target": {"action": "press", "key": "Enter", "role": "button", "name": "Place order", "pageUrl": "https://shop.example/checkout"}},
     {"category": "payment", "target": {"action": "act", "instruction": "click the place order button", "pageUrl": "https://shop.example/checkout"}},
     {"category": "message", "target": {"action": "click", "role": "button", "name": "Send", "pageUrl": "https://mail.example/compose"}},
     {"category": "message", "target": {"action": "click", "role": "button", "name": "Send message", "pageUrl": "https://chat.example/dm"}},

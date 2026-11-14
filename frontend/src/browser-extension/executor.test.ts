@@ -551,6 +551,35 @@ describe("Executor", () => {
 		expect(synthetic).toBe(1);
 	});
 
+	it("describes an action's target for the approval gate without dispatching input", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		const before = fake.debuggerCalls.length;
+
+		expect(await run("describe", { action: "click", ref: buy })).toMatchObject({
+			target: { role: "button", name: "Buy now", tag: "button", pageUrl: "https://shop.test/", pageTitle: "Shop" },
+			untrustedExternalContent: true,
+		});
+		expect(await run("describe", { action: "act", instruction: "the buy now button" })).toMatchObject({
+			target: { role: "button", name: "Buy now", instruction: "the buy now button" },
+		});
+		expect(await run("describe", { action: "act", instruction: "the checkout button" })).toEqual({
+			target: { pageUrl: "https://shop.test/", pageTitle: "Shop", instruction: "the checkout button" },
+			untrustedExternalContent: true,
+		});
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("describe", { action: "press", key: "Enter" })).toMatchObject({
+			target: { role: "textbox", name: "Search", isSubmit: false },
+		});
+		expect(clicks).toBe(0);
+		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
+	});
+
 	it("resolves act instructions and reports unmatched ones with the snapshot", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);

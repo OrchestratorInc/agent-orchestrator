@@ -3,6 +3,7 @@
 // policy, and returns the same result shapes as AO's Browser panel.
 
 import { matchInstruction, type ActCandidate } from "../main/browser-act-matcher";
+import { approvalCropRect, type ApprovalElementFacts } from "../shared/browser-approval-describe";
 import { sanitizeBrowserTitle, sanitizeBrowserURL } from "../shared/browser-sanitize";
 import type { ChromeApi, Tab } from "./chrome-api";
 import type { Approval, ConsentManager } from "./consent";
@@ -12,7 +13,7 @@ import type { Annotation, Geometry } from "./dom-actions";
 import type { NetworkCapture } from "./network";
 import { evaluateUrl, parsePolicy, type SitePolicy, trustedInputAllowed } from "./policy";
 import { BridgeError, isRecord, stringArg } from "./protocol";
-import { annotatePng, base64ToBytes, bytesToBase64, MAX_SCREENSHOT_BYTES, pngSize } from "./screenshot";
+import { annotatePng, base64ToBytes, bytesToBase64, cropPng, MAX_SCREENSHOT_BYTES, pngSize } from "./screenshot";
 import { groupTitle, type ActiveTab, type SessionTabRegistry, type SessionTabs } from "./sessions";
 import type { RefInfo } from "./snapshot";
 import type { TrustedInput } from "./trusted-input";
@@ -178,6 +179,8 @@ export class Executor {
 				}, { allowBlocked: true });
 			case "screenshot":
 				return this.screenshot(ctx, args.annotate === true);
+			case "describe":
+				return this.describe(ctx, args);
 			case "network-start":
 				return this.withPage(ctx, async (page) =>
 					this.deps.network.start(ctx.sessionId, page.logicalId, page.tabId, Math.min(300, Math.max(1, Number(args.durationSeconds) || 60))),
@@ -841,6 +844,50 @@ export class Executor {
 				throw new BridgeError("BROWSER_TARGET_CHANGED", "Chrome showed another tab while capturing the session's tab; retry the screenshot");
 			}
 		}
+	}
+
+	/**
+	 * Internal: what a click, act, or Enter would act on, for the daemon's
+	 * approval gate. It reads and captures; it never dispatches input.
+	 */
+	private async describe(ctx: Context, args: Record<string, unknown>): Promise<unknown> {
+		const action = typeof args.action === "string" ? args.action : "";
+		const instruction = typeof args.instruction === "string" ? args.instruction : undefined;
+		const nth = typeof args.nth === "number" && Number.isFinite(args.nth) ? Math.trunc(args.nth) : undefined;
+		return this.withPage(ctx, async (page) => {
+			const fresh = await this.refreshed(page);
+			const pageFacts = {
+				pageUrl: sanitizeBrowserURL(fresh.tab.url ?? ""),
+				pageTitle: sanitizeBrowserTitle(fresh.tab.title ?? ""),
+				...(instruction ? { instruction } : {}),
+			};
+			let ref = action !== "press" && typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined;
+			if (action === "act") {
+				const snapshot = await this.rawSnapshot(ctx, fresh, true);
+				const match = matchInstruction(instruction ?? "", snapshot.refs, { nth });
+				ref = match.outcome === "matched" ? match.candidate.ref : undefined;
+			}
+			if (action !== "press" && !ref) return { target: pageFacts, untrustedExternalContent: true };
+			const described = (await this.content(fresh, ctx, { op: "describe", ...(ref ? { ref } : {}) })) as {
+				facts: ApprovalElementFacts | null;
+				viewport: { width: number; height: number };
+				dpr: number;
+			};
+			let image: string | undefined;
+			const crop = approvalCropRect(described.facts?.rect, described.viewport);
+			if (crop) {
+				try {
+					image = bytesToBase64(await cropPng(base64ToBytes(await this.captureTab(ctx, fresh)), crop, described.dpr || 1));
+				} catch {
+					// The prompt still shows the page, action, and reason.
+				}
+			}
+			return {
+				target: { ...(described.facts ?? {}), ...pageFacts },
+				...(image ? { image } : {}),
+				untrustedExternalContent: true,
+			};
+		});
 	}
 
 	private async screenshot(ctx: Context, annotate: boolean): Promise<unknown> {
