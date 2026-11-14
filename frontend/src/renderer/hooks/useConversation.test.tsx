@@ -22,6 +22,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
+	conversationQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -742,6 +743,78 @@ describe("provider catalog controller epochs", () => {
 		await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
 		expect(queryClient.getQueryState(queryKey)?.status).toBe("error");
 		expect(result.current).toMatchObject({ loaded: true, error: undefined, options: [{ id: "model", currentValue: "a" }] });
+	});
+});
+
+describe("config options read while the cached snapshot outlived the controller", () => {
+	function catalogWrapper(queryClient: QueryClient) {
+		return function Wrapper({ children }: { children: ReactNode }) {
+			return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		};
+	}
+
+	beforeEach(() => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+	});
+
+	it("reports no error when an opening read is refused because the controller is not running, then loads", async () => {
+		// Opening a chat whose cached snapshot still says "ready" enables the read
+		// before the daemon's own answer arrives; the agent has gone to sleep since.
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		getMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		});
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
+		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.status).toBe("error"));
+		expect(result.current).toMatchObject({ loaded: false, error: undefined, options: [] });
+		// The snapshot that enabled the read is out of date, so it is read again.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: conversationQueryKey("ao-1") });
+
+		// A poll that gets the same answer does not reload the conversation again.
+		getMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		});
+		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
+		const snapshotReloads = invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify(filters?.queryKey) === JSON.stringify(conversationQueryKey("ao-1")));
+		expect(snapshotReloads).toHaveLength(1);
+		expect(result.current.error).toBeUndefined();
+
+		// The controller is back: the next read brings the catalog.
+		getMock.mockResolvedValueOnce({ data: { options: [{ id: "model", currentValue: "a" }] }, error: undefined });
+		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		expect(result.current).toMatchObject({ error: undefined, options: [{ id: "model", currentValue: "a" }] });
+	});
+
+	it("still reports a catalog read that failed for any other reason", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } });
+		apiErrorMessageMock.mockReturnValue("remote daemon unreachable");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
+		await waitFor(() => expect(result.current.error).toBe("remote daemon unreachable"));
+		expect(result.current.loaded).toBe(false);
+	});
+
+	it("still reports a pick the daemon refused because the controller is not running", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		getMock.mockResolvedValue({ data: { options: [{ id: "model", type: "select", currentValue: "a", choices: [{ value: "a" }, { value: "b" }] }] }, error: undefined });
+		patchMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		});
+		apiErrorMessageMock.mockReturnValue("the agent controller for this session is not running");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+
+		await act(async () => {
+			await result.current.setOption("model", { value: "b" }).catch(() => undefined);
+		});
+		await waitFor(() => expect(result.current.error).toBe("the agent controller for this session is not running"));
 	});
 });
 

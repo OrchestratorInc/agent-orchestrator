@@ -1672,9 +1672,17 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// The catalog the agent last returned, which a queued pick is checked against before it is sent.
 		confirmed: undefined as ChatConfigOption[] | undefined,
 	});
+	// Set once a "not running" answer has asked for a fresh snapshot, so a poll that
+	// keeps getting it does not reload the conversation every time.
+	const snapshotRefreshed = useRef(false);
+	const readEnabled = Boolean(sessionId) && enabled;
+	// Turned off means the snapshot caught up; a later conflict is a new one.
+	useEffect(() => {
+		if (!readEnabled) snapshotRefreshed.current = false;
+	}, [readEnabled]);
 	const query = useQuery({
 		queryKey,
-		enabled: Boolean(sessionId) && enabled,
+		enabled: readEnabled,
 		retry: false,
 		// ACP can push a replacement catalog when one option changes. Until the
 		// renderer consumes daemon change events, a light poll keeps those updates
@@ -1687,7 +1695,18 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 					params: { path: { sessionId: sessionId as string } },
 				},
 			);
-			if (error) throw error;
+			if (error) {
+				// The snapshot that enabled this read says the controller is up and the
+				// daemon says it is not, so the snapshot is out of date. Read it again:
+				// its real state turns this read off and names the state in the chat.
+				if (apiErrorCode(error) === "CHAT_CONTROLLER_NOT_READY" && !snapshotRefreshed.current) {
+					snapshotRefreshed.current = true;
+					if (hostId) refreshRemoteConversationOnce(queryClient, sessionId as string, hostId);
+					else void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId as string) });
+				}
+				throw error;
+			}
+			snapshotRefreshed.current = false;
 			return (data?.options ?? []) as ChatConfigOption[];
 		},
 	});
@@ -1779,13 +1798,23 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		return { controllerEpoch, options };
 	}
 
+	// The read is enabled from the snapshot's controller state, and a cached snapshot
+	// can still say "ready" after the controller went away (an open whose cached page
+	// is shown while it refetches, or a sleeping agent). The daemon then answers 409
+	// CHAT_CONTROLLER_NOT_READY: that is the controller's state, which the refreshed
+	// snapshot and its controller notice report, not a failure of this catalog. Left
+	// unloaded, the bar keeps the saved settings until the poll or the next enabled
+	// read brings the catalog. A failed pick is still always shown.
+	const readError = query.error && !query.data && apiErrorCode(query.error) !== "CHAT_CONTROLLER_NOT_READY"
+		? query.error
+		: undefined;
 	return {
 		options: query.data ?? [],
 		loaded: query.data !== undefined,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || (query.error && !query.data) ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		error: mutation.error || readError ? apiErrorMessage(mutation.error ?? readError) : undefined,
 	};
 }
 
