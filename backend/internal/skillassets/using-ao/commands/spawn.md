@@ -39,7 +39,7 @@ Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`,
 
 `command-code` is Terminal UI only: spawn it with `--agent command-code --mode tui`.
 
-`freebuff` is Terminal UI only: spawn it with `--agent freebuff --mode tui`.
+`freebuff` is Terminal UI only, and its sessions cannot start yet: Freebuff has no private channel for standing instructions, so spawn and restore fail with `STANDING_INSTRUCTIONS_UNSUPPORTED`.
 
 ## Examples
 

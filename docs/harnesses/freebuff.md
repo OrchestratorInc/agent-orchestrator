@@ -39,9 +39,13 @@ Freebuff has no prompt argument, so AO types the first turn once the composer
 shows `Enter a coding task`. A model queue can delay that, so AO waits up to 60
 seconds.
 
-Freebuff has no system-prompt input. AO sends its standing instructions with
-the task as one first turn, under `## AO Standing Instructions` and
-`## AO Task` headings. A restored conversation keeps them in its history.
+Freebuff has no system-prompt input, and AO has not qualified another private
+channel for its standing instructions (worker and orchestrator role, project
+rules). AO never sends them as a visible user turn, so it refuses to start or
+restore any Freebuff session that carries them, before writing any Freebuff
+state, with `STANDING_INSTRUCTIONS_UNSUPPORTED`. In practice every AO worker
+and orchestrator session carries standing instructions, so Freebuff sessions
+cannot start until a private channel is qualified with live evidence.
 AO terminal messages, including follow-ups and lifecycle notifications, use
 Freebuff's native bracketed paste handler to preserve multiline text. Large
 messages appear as a native pasted-text attachment. Terminal escape sequences
@@ -101,5 +105,7 @@ unattended terminal refresh on a new release.
 
 ## Not supported
 
+- Sessions with AO standing instructions: Freebuff has no qualified private
+  system-prompt channel.
 - Chat (ACP) mode and reviewer sessions.
 - Per-session tool allow/deny lists: Freebuff has no such input.

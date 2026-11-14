@@ -5,8 +5,11 @@
 // `login` subcommand: there is no prompt argument, model flag or
 // system-prompt flag. AO therefore:
 //
-//   - launches `freebuff --cwd <workspace>` and types the first turn after the
-//     composer is ready, carrying AO's standing instructions in that turn;
+//   - launches `freebuff --cwd <workspace>` and pastes the task as the first
+//     turn after the composer is ready;
+//   - refuses any session that carries AO's standing instructions, because
+//     Freebuff has no private channel for them and AO never sends them as a
+//     visible user turn;
 //   - seeds the canonical model under a startup guard, then pins the choice
 //     through the running TUI's /model picker before releasing that guard;
 //     reasoning effort and selection are confirmed before the first turn;
@@ -98,6 +101,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := refuseStandingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
+		return nil, err
+	}
 	workspace, err := validateWorkspace(cfg.WorkspacePath)
 	if err != nil {
 		return nil, err
@@ -111,37 +117,39 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 
 // GetPromptDeliveryStrategy keeps task text out of argv: Freebuff has no
 // prompt argument, so the first turn is typed once the composer is ready.
-func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
+// It is the first adapter call of a spawn, so a session carrying standing
+// instructions fails here, before any native state or process exists.
+func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, cfg ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := refuseStandingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return "", err
 	}
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// BuildAfterStartPrompt sends AO's standing instructions with the task as one
-// clearly marked first turn, because Freebuff has no per-session
-// system-prompt input. A restored conversation keeps them in its history.
+// BuildAfterStartPrompt returns only the task. Standing instructions never
+// enter a visible user turn.
 func (p *Plugin) BuildAfterStartPrompt(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if standing == "" && cfg.SystemPromptFile != "" {
-		data, err := os.ReadFile(cfg.SystemPromptFile)
-		if err != nil {
-			return "", fmt.Errorf("freebuff: read standing instructions: %w", err)
-		}
-		standing = strings.TrimSpace(string(data))
+	if err := refuseStandingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
+		return "", err
 	}
-	task := strings.TrimSpace(cfg.Prompt)
-	if standing == "" {
-		return task, nil
+	return strings.TrimSpace(cfg.Prompt), nil
+}
+
+// refuseStandingInstructions fails a session that carries AO's private
+// standing instructions. Freebuff has no system-prompt flag, file or config
+// channel AO has qualified, and pasting them into the conversation would make
+// private instructions visible.
+func refuseStandingInstructions(systemPrompt, systemPromptFile string) error {
+	if strings.TrimSpace(systemPrompt) != "" || strings.TrimSpace(systemPromptFile) != "" {
+		return fmt.Errorf("freebuff: %w", ports.ErrStandingInstructionsUnsupported)
 	}
-	if task == "" {
-		return "## AO Standing Instructions\n\n" + standing +
-			"\n\nFollow these instructions for the rest of this session. Reply briefly that you are ready, then wait for a task.", nil
-	}
-	return "## AO Standing Instructions\n\n" + standing + "\n\n## AO Task\n\n" + task, nil
+	return nil
 }
 
 // GetAgentHooks is a no-op: Freebuff has no hook system.
@@ -154,6 +162,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, _ ports.WorkspaceHookConfig)
 // `--continue` fall back to whichever chat is most recent.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if err := refuseStandingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return nil, false, err
 	}
 	workspace, err := validateWorkspace(cfg.Session.WorkspacePath)

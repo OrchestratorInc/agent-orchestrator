@@ -59,6 +59,10 @@ func (p *Plugin) BeginStartup(ctx context.Context, cfg ports.LaunchConfig) (func
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Refuse before touching the shared config directory or native settings.
+	if err := refuseStandingInstructions(cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(cfg.SessionID) == "" {
 		return nil, errors.New("freebuff: native startup requires an AO session id")
 	}

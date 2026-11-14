@@ -3997,6 +3997,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	releaseStartup, err := acquireAgentStartup(ctx, agent, ports.LaunchConfig{
 		DataDir: m.dataDir, SessionID: string(rec.ID), WorkspacePath: launchPath,
 		Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, Env: env,
+		SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile,
 	})
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: prepare native startup: %w", operation, rec.ID, err)

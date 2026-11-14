@@ -23,6 +23,10 @@ var (
 	// ErrAgentVersionTooOld means the provider rejected the selected model
 	// because the installed agent CLI predates it; updating the CLI fixes it.
 	ErrAgentVersionTooOld = errors.New("agent CLI is too old for the selected model")
+	// ErrStandingInstructionsUnsupported means the session carries AO's private
+	// standing instructions but the harness has no qualified native channel for
+	// them. AO refuses the launch rather than sending them as a visible turn.
+	ErrStandingInstructionsUnsupported = errors.New("agent has no private channel for standing instructions")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor

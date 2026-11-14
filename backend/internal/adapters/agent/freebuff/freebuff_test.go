@@ -3,6 +3,7 @@ package freebuff
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,26 +70,65 @@ func TestLaunchWithoutModelLeavesSettingsUntouched(t *testing.T) {
 	}
 }
 
-func TestBuildAfterStartPromptCarriesStandingInstructions(t *testing.T) {
-	p := New()
-	got, err := p.BuildAfterStartPrompt(context.Background(), ports.LaunchConfig{SystemPrompt: "Be careful.", Prompt: "Fix the bug."})
-	if err != nil {
-		t.Fatal(err)
+func TestBuildAfterStartPromptSendsOnlyTheTask(t *testing.T) {
+	got, err := New().BuildAfterStartPrompt(context.Background(), ports.LaunchConfig{Prompt: " Fix the bug.\n"})
+	if err != nil || got != "Fix the bug." {
+		t.Fatalf("prompt = %q, %v", got, err)
 	}
-	if got != "## AO Standing Instructions\n\nBe careful.\n\n## AO Task\n\nFix the bug." {
-		t.Fatalf("prompt = %q", got)
-	}
-	got, _ = p.BuildAfterStartPrompt(context.Background(), ports.LaunchConfig{Prompt: "Fix the bug."})
-	if got != "Fix the bug." {
-		t.Fatalf("prompt without instructions = %q", got)
-	}
+}
+
+// Freebuff has no private system-prompt channel, so a session carrying AO's
+// standing instructions is refused at every entry point rather than sending
+// them as a visible user turn, and before any native state is written.
+func TestStandingInstructionsAreRefusedNotPasted(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "config")
+	t.Setenv(configDirEnv, dir)
+	t.Setenv("CODEBUFF_API_KEY", "")
+	workspace := t.TempDir()
 	file := filepath.Join(t.TempDir(), "standing.md")
-	if err := os.WriteFile(file, []byte("From file.\n"), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte("Private.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = p.BuildAfterStartPrompt(context.Background(), ports.LaunchConfig{SystemPromptFile: file})
-	if !strings.HasPrefix(got, "## AO Standing Instructions\n\nFrom file.") || strings.Contains(got, "## AO Task") {
-		t.Fatalf("promptless prompt = %q", got)
+	for name, instructions := range map[string]ports.LaunchConfig{
+		"inline": {SystemPrompt: "Private."},
+		"file":   {SystemPromptFile: file},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := pluginWithBinary(t)
+			cfg := instructions
+			cfg.SessionID, cfg.WorkspacePath, cfg.Prompt = "fb-1", workspace, "Fix the bug."
+			refused := func(step string, err error) {
+				t.Helper()
+				if !errors.Is(err, ports.ErrStandingInstructionsUnsupported) {
+					t.Fatalf("%s err = %v, want ErrStandingInstructionsUnsupported", step, err)
+				}
+			}
+			_, err := p.GetPromptDeliveryStrategy(context.Background(), cfg)
+			refused("delivery strategy", err)
+			prompt, err := p.BuildAfterStartPrompt(context.Background(), cfg)
+			refused("first turn", err)
+			if strings.Contains(prompt, "Private.") {
+				t.Fatalf("standing instructions reached the visible turn: %q", prompt)
+			}
+			release, err := p.BeginStartup(context.Background(), cfg)
+			if release != nil {
+				release()
+			}
+			refused("startup", err)
+			_, err = p.GetLaunchCommand(context.Background(), cfg)
+			refused("launch", err)
+			_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Session:      ports.SessionRef{ID: "fb-1", WorkspacePath: workspace},
+				SystemPrompt: cfg.SystemPrompt, SystemPromptFile: cfg.SystemPromptFile,
+			})
+			refused("restore", err)
+			if ok {
+				t.Fatal("restore reported a resumable command")
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("refused startup touched the native config directory: %v", err)
+			}
+		})
 	}
 }
 

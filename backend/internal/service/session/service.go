@@ -2099,6 +2099,9 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_AUTH_REQUIRED", "The agent is installed but the project credential was rejected", nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
 		return apierr.Invalid("UNSUPPORTED_EFFORT", err.Error(), nil)
+	case errors.Is(err, ports.ErrStandingInstructionsUnsupported):
+		return apierr.Invalid("STANDING_INSTRUCTIONS_UNSUPPORTED",
+			"This agent has no private channel for Orchestrator's standing instructions, so Orchestrator will not start it.", nil)
 	case errors.Is(err, ports.ErrModelCapabilitiesUnavailable):
 		return apierr.Invalid("MODEL_CAPABILITIES_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrRuntimeWorkspaceCwdMismatch):
