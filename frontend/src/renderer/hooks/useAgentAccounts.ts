@@ -1,5 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -48,6 +49,26 @@ export async function fetchAgentAccounts(refresh = false, hostId?: HostId) {
 /** Every account with its limits. The daemon reuses a reading for five minutes. */
 export function useAgentAccounts(enabled = true, hostId?: HostId) {
 	return useQuery({ queryKey: agentAccountsQueryKeyFor(hostId), queryFn: () => fetchAgentAccounts(false, hostId), refetchInterval: 60_000, enabled });
+}
+
+const freshReadEvery = 60_000;
+let lastFreshRead = Number.NEGATIVE_INFINITY;
+
+/** Reads every account's limits past the daemon's cache, at most once a
+ * minute across mounts. A failed read is left to the next poll to surface. */
+export function useFreshAgentAccountsRead() {
+	const queryClient = useQueryClient();
+	return useCallback(() => {
+		const now = Date.now();
+		if (now - lastFreshRead < freshReadEvery) return;
+		lastFreshRead = now;
+		void fetchAgentAccounts(true).then((accounts) => queryClient.setQueryData(agentAccountsQueryKey, accounts), () => undefined);
+	}, [queryClient]);
+}
+
+/** Lets tests start each case without a recent fresh read. */
+export function resetFreshAgentAccountsReadForTests() {
+	lastFreshRead = Number.NEGATIVE_INFINITY;
 }
 
 export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };

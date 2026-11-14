@@ -11,6 +11,7 @@ vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => null }));
 const mocks = vi.hoisted(() => ({
 	report: vi.fn(),
 	reportRefetch: vi.fn(),
+	readFreshLimits: vi.fn(),
 	workspaces: [] as Array<{ id: string; name: string; kind?: string }>,
 }));
 
@@ -24,7 +25,7 @@ vi.mock("../../hooks/useUsageReport", () => ({
 }));
 vi.mock("../../hooks/useAgentAccounts", () => ({
 	useAgentAccounts: () => ({ data: [], isLoading: false, isFetching: false, error: null }),
-	useAgentAccountActions: () => ({ refresh: vi.fn() }),
+	useFreshAgentAccountsRead: () => mocks.readFreshLimits,
 }));
 vi.mock("./UsageLimits", () => ({ UsageLimits: () => <p>Limits content</p> }));
 vi.mock("./UsageWindows", () => ({ UsageWindows: () => <p>Windows content</p> }));
@@ -38,6 +39,7 @@ describe("UsageView", () => {
 	beforeEach(() => {
 		mocks.report.mockReset();
 		mocks.reportRefetch.mockReset();
+		mocks.readFreshLimits.mockReset();
 		mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "web", name: "Web app" }];
 		useUiStore.setState({ developerMode: false });
 	});
@@ -54,10 +56,27 @@ describe("UsageView", () => {
 		await user.click(within(views).getByRole("button", { name: "Limits" }));
 		expect(within(views).getByRole("button", { name: "Limits" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("Limits content")).toBeInTheDocument();
-		// Project and period only apply to spend; refresh stays for every view.
+		// Project and period only apply to spend; data refreshes on its own, so no view has a refresh button.
 		expect(screen.queryByRole("button", { name: "Filter" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Previous period" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+	});
+
+	it("reads limits fresh on open, on switching view, and on window focus", async () => {
+		const user = userEvent.setup();
+		renderView();
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(1);
+		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(2);
+		window.dispatchEvent(new Event("focus"));
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(3);
+		expect(mocks.reportRefetch).not.toHaveBeenCalled();
+	});
+
+	it("refetches spend when the window regains focus", () => {
+		renderView();
+		window.dispatchEvent(new Event("focus"));
+		expect(mocks.reportRefetch).toHaveBeenCalledTimes(1);
 	});
 
 	it("offers the experimental windows view only in developer mode", () => {
