@@ -660,7 +660,11 @@ export const CommandPalette = memo(function CommandPalette() {
 		// sessions Needs attention already lists. Once a query is typed, transcript
 		// matches follow the commands and sessions, ahead of files and chats.
 		const recents = normalizedSessionQuery === "";
-		const listed = new Set(commandGroups.flatMap((group) => group.items.flatMap((item) => (item.action?.kind === "resume-session" ? [item.action.sessionId] : []))));
+		// The open session heads the list with its own actions, so it is listed too.
+		const listed = new Set([
+			...(currentSession ? [currentSession.id] : []),
+			...commandGroups.flatMap((group) => group.items.flatMap((item) => (item.action?.kind === "resume-session" ? [item.action.sessionId] : []))),
+		]);
 		const searchRows = recents
 			? sessionSearchItems.filter((item) => item.action?.kind !== "open-search-result" || !listed.has(item.action.sessionId)).slice(0, PALETTE_RECENTS_LIMIT)
 			: sessionSearchItems;

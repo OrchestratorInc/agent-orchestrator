@@ -1720,6 +1720,56 @@ describe("CommandPalette session-text search", () => {
 		expect(searchCall?.[1]).toMatchObject({ params: { query: { sort: "recent", limit: 8 } } });
 	});
 
+	function groupText(heading: string): string | undefined {
+		const node = [...document.querySelectorAll("[cmdk-group-heading]")].find((candidate) => candidate.textContent === heading);
+		return node?.closest("[cmdk-group]")?.textContent ?? undefined;
+	}
+
+	it("leaves the open session and Needs attention rows out of Recent sessions", async () => {
+		const flagged = ctx.workspaces[0].sessions[0];
+		const status = flagged.status;
+		flagged.status = "ci_failed";
+		try {
+			ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+			const recent = (sessionId: string, sessionName: string) => ({ ...hit, sessionId, sessionName, messageId: "", kind: "title", snippet: "" });
+			mockSearch([recent("w-merge", "ship banner"), recent("w-fix", "fix flake"), recent("w-archived", "archived cleanup")]);
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+
+			await waitFor(() => expect(groupText("Recent sessions")).toContain("archived cleanup"), { timeout: 2_000 });
+			expect(groupText("Needs attention")).toContain("ship banner");
+			expect(groupText("Recent sessions")).not.toContain("ship banner");
+			expect(groupText("Recent sessions")).not.toContain("fix flake");
+		} finally {
+			flagged.status = status;
+		}
+	});
+
+	it("lists past-session matches after commands and sessions, ahead of chats", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.includes("/search/index-status")) return { data: { coverage: { state: "ready" } } };
+			if (path.includes("/search/sessions")) {
+				return searchResponse([{ ...hit, sessionId: "w-merge", sessionName: "ship banner", snippet: "fix the banner", highlights: [{ start: 0, end: 3 }] }]);
+			}
+			if (path === "/api/v1/conversations/search") {
+				return { data: { results: [{ messageId: "chat-1", sessionId: "w-archived", projectId: "proj-1", title: "Archived chat", text: "\x02fix\x03 it later" }] } };
+			}
+			return { data: {} };
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "fix" } });
+
+		await waitFor(() => {
+			const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent);
+			expect(headings).toContain("Past sessions");
+			expect(headings).toContain("In chats");
+			expect(headings.indexOf("Sessions")).toBeGreaterThanOrEqual(0);
+			expect(headings.indexOf("Sessions")).toBeLessThan(headings.indexOf("Past sessions"));
+			expect(headings.indexOf("Past sessions")).toBeLessThan(headings.indexOf("In chats"));
+		}, { timeout: 2_000 });
+	});
+
 	// The recent sessions once sat under Past sessions while a typed search
 	// loaded, as if they were its matches.
 	it("does not show recents as matches while a typed search loads", async () => {

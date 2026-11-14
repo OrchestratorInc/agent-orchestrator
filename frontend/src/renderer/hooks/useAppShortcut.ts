@@ -48,7 +48,7 @@ export function onDedicatedShortcut(
 	};
 }
 
-const TERMINAL_SELECTOR =".xterm, .terminal-surface, [data-testid='session-terminal']";
+const TERMINAL_SELECTOR = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
 /**
  * Runs `handler` when shortcut `id` is pressed.
