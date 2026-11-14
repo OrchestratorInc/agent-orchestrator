@@ -16,7 +16,7 @@ func TestMigrationStrandsAllowsStrandsAndReversesBothHistoricalSchemas(t *testin
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 20261024194546592)
+			db := openMigratedDatabaseCopy(t, 20261114072016988)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
 				// 'codewhale' in every variant the Strands migration rewrites, so anchor
@@ -25,7 +25,7 @@ func TestMigrationStrandsAllowsStrandsAndReversesBothHistoricalSchemas(t *testin
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 20261024194546592)
+			upTo(t, db, 20261114072016988)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -36,20 +36,20 @@ func TestMigrationStrandsAllowsStrandsAndReversesBothHistoricalSchemas(t *testin
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 20261028082940187)
+			upTo(t, db, 20261114173932630)
 			if _, err := db.Exec(insert, "cc-session", 3, "strands"); err != nil {
 				t.Fatalf("insert strands session after migration: %v", err)
 			}
 			var version int64
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261028082940187 {
-				t.Fatalf("migration version = %d, err = %v; want 20261028082940187", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 20261114173932630 {
+				t.Fatalf("migration version = %d, err = %v; want 20261114173932630", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'strands'`)
-			downTo(t, db, 20261024194546592)
+			downTo(t, db, 20261114072016988)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -66,7 +66,7 @@ func TestMigrationStrandsAllowsStrandsAndReversesBothHistoricalSchemas(t *testin
 }
 
 func TestReconcileStrandsRejectsDivergentHarnessConstraint(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261024194546592)
+	db := openMigratedDatabaseCopy(t, 20261114072016988)
 	// Start from a valid current constraint so another harness added by main
 	// cannot mask the Strands-specific negative fixture.
 	if err := reconcileHarnessConstraint(db); err != nil {
