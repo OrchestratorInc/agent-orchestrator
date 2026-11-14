@@ -641,6 +641,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer releaseLock()
+	// A record left by an earlier provider must not explain this one's exit.
+	removeProviderExit(cfg.DataDir, cfg.SessionID)
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -663,12 +665,15 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	// The adapter's stderr is the only record of why a turn went silent. Keep it
-	// beside the descriptor instead of discarding it.
+	// Provider stderr is not part of the wire protocol. Keep a tail of this
+	// provider's stderr so one that dies before answering can be explained to
+	// the daemon, and the full stream beside the descriptor for later inspection.
+	stderrTail := &tailBuffer{}
+	child.Stderr = stderrTail
 	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
 		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
 		defer func() { _ = adapterLog.Close() }()
-		child.Stderr = adapterLog
+		child.Stderr = io.MultiWriter(adapterLog, stderrTail)
 	}
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
@@ -767,8 +772,10 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	}
 	var runErr error
+	providerExited := false
 	select {
 	case runErr = <-providerDone:
+		providerExited = true
 		reapProvider()
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	case <-h.shutdown:
@@ -787,6 +794,13 @@ func Run(ctx context.Context, cfg Config) error {
 	// goroutine after the provider exits. Reap the job before that final wait.
 	closeProviderTree()
 	_ = wait()
+	if providerExited && child.ProcessState != nil {
+		// Publish before the deferred descriptor removal: WaitProviderExit
+		// treats a missing descriptor as proof that no record is coming.
+		_ = writeProviderExit(cfg.DataDir, cfg.SessionID, ProviderExit{
+			State: child.ProcessState.String(), StderrTail: stderrTail.String(), ExitedAt: time.Now().UTC(),
+		})
+	}
 	return runErr
 }
 
