@@ -76,6 +76,14 @@ function SessionPreviewContent() {
 	const appHeaders = showingApp && preview.authenticated && shown ? authHeaders(shown.config) : undefined;
 	const appHeadersKey = JSON.stringify(appHeaders ?? null);
 	const appSource = useMemo(() => appURL ? { uri: appURL, headers: appHeaders } : undefined, [appURL, appHeadersKey]);
+	// Those headers are the old connection's while the app reconnects, and its
+	// address may be another device's until the machine answers as itself. The
+	// page already open stays, but nothing new is requested with them: a web
+	// view mounted fresh waits for a verified connection, and so does a reload.
+	const appMounted = useRef(false);
+	const appWaits = showingApp && !config && !appMounted.current;
+	useEffect(() => { appMounted.current = showingApp && !appWaits; });
+	const reloadWhenVerified = useRef(false);
 	useEffect(() => {
 		setWebTitle(undefined);
 		setWebProgress(1);
@@ -97,8 +105,17 @@ function SessionPreviewContent() {
 
 	const reloadApp = useCallback(() => {
 		setPreviewError(undefined);
+		if (!currentConfig.current) {
+			reloadWhenVerified.current = true;
+			return;
+		}
 		web.current?.reload();
 	}, []);
+	useEffect(() => {
+		if (!config || !reloadWhenVerified.current) return;
+		reloadWhenVerified.current = false;
+		web.current?.reload();
+	}, [config]);
 
 	// Reload and the choice between the two views, as native items in the bar.
 	// Memoized: each new element re-registers the header's items, and the page
@@ -164,7 +181,7 @@ function SessionPreviewContent() {
 
 	return <View style={[styles.screen, { paddingTop: glassInset }]}>
 		{headerItems}
-		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : <View style={styles.appPane}>
+		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : appWaits ? <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View> : <View style={styles.appPane}>
 			<WebView
 				ref={web}
 				source={appSource ?? { uri: preview.url }}
@@ -175,7 +192,8 @@ function SessionPreviewContent() {
 				// iOS: the edge swipe walks the page's history and a pull reloads it,
 				// as in Safari.
 				allowsBackForwardNavigationGestures
-				pullToRefreshEnabled
+				// A pull reloads with the credential: only on a verified connection.
+				pullToRefreshEnabled={Boolean(config)}
 				refreshControlLightMode={scheme === "dark"}
 				onLoadStart={() => {
 					setPreviewError(undefined);

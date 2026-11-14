@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import { UnreachableError } from "./connectionError";
 import type { FilesBackend } from "./files/backend";
@@ -20,7 +20,14 @@ import type { FilesBackend } from "./files/backend";
 // (up to HELD_WAIT_MS, then fails as unreachable). URL builders (an image, a
 // page in a web view) answer from the live backend too; with none, they repeat
 // what they last answered for the same arguments, so a view already showing it
-// keeps the same source and nothing new is requested from an unverified address.
+// keeps the same source and does not load again.
+//
+// That repeated source still carries the old connection's credential, and
+// until the identity probe answers, the old address may be another device's
+// (a LAN address on another network). So nothing may start a new request with
+// it: a retry, a reload, a download or a view mounted fresh waits for the
+// connection to be verified again (`verified`, `whenVerified`,
+// `useVerifiedOnMount`). What is already on screen is left as it is.
 
 /** How long a call waits for the connection before it fails as unreachable. */
 export const HELD_WAIT_MS = 15_000;
@@ -28,8 +35,8 @@ export const HELD_WAIT_MS = 15_000;
 export type LiveSlot<B> = {
 	get(): B | null;
 	set(next: B | null): void;
-	/** The live backend, now or once the connection is back. */
-	whenLive(signal?: AbortSignal | null): Promise<B>;
+	/** The live backend, now or once the connection is back; fails as unreachable after `timeoutMs` (never, for Infinity). */
+	whenLive(signal?: AbortSignal | null, timeoutMs?: number): Promise<B>;
 };
 
 export function createLiveSlot<B>(): LiveSlot<B> {
@@ -42,12 +49,12 @@ export function createLiveSlot<B>(): LiveSlot<B> {
 			if (!next) return;
 			for (const resolve of [...waiting]) resolve(next);
 		},
-		whenLive(signal) {
+		whenLive(signal, timeoutMs = HELD_WAIT_MS) {
 			if (current) return Promise.resolve(current);
 			return new Promise<B>((resolve, reject) => {
 				const done = (live: B) => { cleanup(); resolve(live); };
 				const fail = (error: Error) => { cleanup(); reject(error); };
-				const timer = setTimeout(() => fail(new UnreachableError("offline")), HELD_WAIT_MS);
+				const timer = Number.isFinite(timeoutMs) ? setTimeout(() => fail(new UnreachableError("offline")), timeoutMs) : undefined;
 				const onAbort = () => fail(Object.assign(new Error("Request cancelled"), { name: "AbortError" }));
 				function cleanup() {
 					clearTimeout(timer);
@@ -59,6 +66,14 @@ export function createLiveSlot<B>(): LiveSlot<B> {
 				waiting.add(done);
 			});
 		},
+	};
+}
+
+/** Whether the held backend's connection is verified, and a wait (with no limit) until it is. */
+function verifiedBy<B>(slot: LiveSlot<B>) {
+	return {
+		verified: () => slot.get() !== null,
+		whenVerified: (signal?: AbortSignal) => slot.whenLive(signal, Infinity).then(() => undefined),
 	};
 }
 
@@ -104,6 +119,7 @@ function heldFiles(slot: LiveSlot<FilesBackend>, first: FilesBackend, key: strin
 		search: (sessionId, query) => on((live) => live.search(sessionId, query)),
 		imageSource: (sessionId, path, side, version, read) => on((live) => live.imageSource(sessionId, path, side, version, read)),
 		sendFeedback: (sessionId, comments, onSent) => on((live) => live.sendFeedback(sessionId, comments, onSent)),
+		...verifiedBy(slot),
 		...(git ? {
 			git: {
 				branches: (sessionId, signal) => on((live) => live.git!.branches(sessionId, signal), signal),
@@ -142,6 +158,7 @@ export function holdArtifactsBackend(slot: LiveSlot<ArtifactsBackend>, first: Ar
 		...(first.syncVersions ? { syncVersions: (sessionId: string, path: string, signal?: AbortSignal) => on((live) => live.syncVersions!(sessionId, path, signal), signal) } : {}),
 		version: (sessionId, path, version, signal) => on((live) => live.version(sessionId, path, version, signal), signal),
 		restore: (sessionId, path, version) => on((live) => live.restore(sessionId, path, version)),
+		...verifiedBy(slot),
 	};
 }
 
@@ -160,4 +177,35 @@ export function useHeldBackend<B>(live: B | null, scope: string, hold: (slot: Li
 	entry.slot.set(live);
 	if (live && !entry.backend) entry.backend = hold(entry.slot, live, scope);
 	return entry.backend;
+}
+
+type Verifiable = { verified?(): boolean; whenVerified?(signal?: AbortSignal): Promise<void> };
+
+/**
+ * Whether a view that loads with the backend's credential may mount: at once
+ * with a verified connection (or a backend that needs none, as Cloud's), else
+ * once the connection is verified again. Once it has mounted, it stays: losing
+ * the connection later does not take it off screen.
+ */
+export function useVerifiedOnMount(backend: Verifiable | null | undefined): boolean {
+	const [ready, setReady] = useState(() => backend?.verified?.() ?? true);
+	useEffect(() => {
+		if (ready || !backend?.whenVerified) return;
+		const waiting = new AbortController();
+		backend.whenVerified(waiting.signal).then(() => setReady(true), () => {});
+		return () => waiting.abort();
+	}, [backend, ready]);
+	return ready;
+}
+
+/**
+ * Runs `fn` (a reload, a retry) now with a verified connection, else once it is
+ * verified again; cancelled with `signal`.
+ */
+export function afterVerified(backend: Verifiable | null | undefined, fn: () => void, signal?: AbortSignal): void {
+	if (!backend?.whenVerified || (backend.verified?.() ?? true)) {
+		fn();
+		return;
+	}
+	backend.whenVerified(signal).then(() => { if (!signal?.aborted) fn(); }, () => {});
 }

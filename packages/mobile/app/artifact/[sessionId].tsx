@@ -27,6 +27,7 @@ import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { useFilesBackend } from "../../lib/files/useFilesBackend";
 import { haptics } from "../../lib/haptics";
+import { afterVerified, useVerifiedOnMount } from "../../lib/heldBackend";
 import { findHost } from "../../lib/hosts";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
@@ -382,6 +383,9 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50, minimumViewTime: 120 }).current;
 	// A picture or preview that cannot load falls back to the kind's glyph, until the file changes.
 	const [previewFailed, setPreviewFailed] = useState<Readonly<Record<string, string>>>({});
+	// A strip shown again while the app reconnects draws its glyphs until the
+	// machine has answered as itself (see heldBackend).
+	const verified = useVerifiedOnMount(backend);
 	// Returns the same object when nothing changed, so a preview reporting failure again does not re-render.
 	const markPreviewFailed = useCallback((path: string, updatedAt: string) => {
 		setPreviewFailed((previous) => previous[path] === updatedAt ? previous : { ...previous, [path]: updatedAt });
@@ -415,9 +419,9 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 					const visual = artifactVisual(item, t);
 					const failed = previewFailed[item.path] === item.updatedAt;
 					// An image that cannot load (a format the phone can't decode, a 404) shows the glyph instead.
-					const picture = artifactViewKind(item) === "image" && !failed ? backend.imageSource(sessionId, item.path, item.updatedAt) : undefined;
+					const picture = verified && artifactViewKind(item) === "image" && !failed ? backend.imageSource(sessionId, item.path, item.updatedAt) : undefined;
 					// A text, markdown or HTML file shows a peek at its contents, as its gallery card does.
-					const previewing = !picture && hasContentThumbnail(item) && !failed;
+					const previewing = verified && !picture && hasContentThumbnail(item) && !failed;
 					return (
 						<View style={{ marginLeft: position > 0 ? STRIP_GAP : 0 }}>
 							<Pressable
@@ -457,8 +461,14 @@ function PagerTitle({ title, position, actions }: { title: string; position: str
 }
 
 function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact; active: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
+	const styles = useThemedStyles(makeStyles);
+	const t = useTheme();
 	// Said where the phone gives up on a file (a format it cannot play).
 	const hint = useOpenOnMachineHint(backend.cloud);
+	// A page swiped back to while the app reconnects waits for the machine to
+	// answer as itself before it loads with the credential (see heldBackend).
+	const verified = useVerifiedOnMount(backend);
+	if (!verified) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	const kind = artifactViewKind(artifact);
 	const source = backend.webSource(sessionId, artifact.path);
 	if (!source) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
@@ -590,6 +600,11 @@ function ArtifactWeb({ backend, source, version, page }: {
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
+	// Mounted fresh, and reloaded, only with a verified connection: the page
+	// loads with the machine's credential (see heldBackend).
+	const verified = useVerifiedOnMount(backend);
+	const retrying = useRef<AbortController | null>(null);
+	useEffect(() => () => retrying.current?.abort(), []);
 	// A machine's page is drawn with the files it links inlined. Cloud's loads
 	// from its signed address, as the desktop frames it: that keeps the control
 	// plane's sandbox on it, and its own links work.
@@ -610,7 +625,7 @@ function ArtifactWeb({ backend, source, version, page }: {
 	const renewed = useRef(false);
 	useEffect(() => { renewed.current = false; }, [version]);
 	// Inlining failed: the page still opens from its URL.
-	if (inline && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (!verified || (inline && !inlined.html && !inlined.failed)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<View style={styles.screen}>
 			<WebView
@@ -652,7 +667,13 @@ function ArtifactWeb({ backend, source, version, page }: {
 				<View accessibilityRole="alert" style={styles.webError}>
 					<Feather name="alert-triangle" size={iconSize.sm} color={t.red} />
 					<Text style={styles.webErrorText}>{error}</Text>
-					<Pressable onPress={() => { renewed.current = false; setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable>
+					<Pressable onPress={() => {
+						renewed.current = false;
+						setError(undefined);
+						retrying.current?.abort();
+						retrying.current = new AbortController();
+						afterVerified(backend, () => web.current?.reload(), retrying.current.signal);
+					}}><Text style={styles.retryText}>Retry</Text></Pressable>
 				</View>
 			) : null}
 		</View>

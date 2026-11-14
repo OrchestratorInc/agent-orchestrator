@@ -66,6 +66,14 @@ export type ArtifactsBackend = {
 	restore(sessionId: string, path: string, version: number): Promise<void>;
 	/** Asks for fresh access after a load was refused for an expired one (Cloud). */
 	renew?(): void;
+	/**
+	 * A machine's held backend only (see heldBackend): whether its connection is
+	 * verified now, and a wait for it. While it is not, what is on screen stays,
+	 * but a new request carrying the credential (a retry, a reload, a download, a
+	 * view mounted fresh) waits for it.
+	 */
+	verified?(): boolean;
+	whenVerified?(signal?: AbortSignal): Promise<void>;
 };
 
 export function daemonArtifactsBackend(config: ServerConfig): ArtifactsBackend {
