@@ -5341,6 +5341,10 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 	return m.send(ctx, id, message, "", options)
 }
 
+type semanticDeliveryStore interface {
+	SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
+}
+
 // SendSemantic delivers an internal message and returns only after the target
 // agent has accepted that exact message. Chat uses its native accepted-turn
 // boundary. Supported TUIs correlate the durable id through UserPromptSubmit;
@@ -5360,14 +5364,37 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		}
 		return sendErr
 	}
+	receipts, ok := m.store.(semanticDeliveryStore)
+	if !ok {
+		return fmt.Errorf("%w: durable delivery receipts are unavailable", ErrSemanticAcceptanceUnsupported)
+	}
+	if deliveryID, valid := domain.ReportDeliveryID(domain.WrapReportDelivery(clientMessageID, message)); !valid || deliveryID != clientMessageID {
+		return fmt.Errorf("%w: invalid semantic delivery id", ErrSemanticAcceptanceUnsupported)
+	}
+	launchID := rec.Metadata.RuntimeLaunchID
+	accepted, err := receipts.SemanticDeliveryAccepted(ctx, id, launchID, clientMessageID)
+	if err != nil {
+		return err
+	}
+	// A delivery accepted before the daemon recorded accepted deliveries
+	// separately is still matched by the conversation checkpoint.
+	if accepted || semanticMessageAccepted(rec, clientMessageID) {
+		return nil
+	}
+	if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		return ErrTerminated
+	}
+	if launchID == "" {
+		return fmt.Errorf("%w: session has no active runtime launch", ErrSemanticAcceptanceUnsupported)
+	}
 	if !m.harnessSemanticAcceptance(rec.Harness) {
 		return ErrSemanticAcceptanceUnsupported
 	}
-	if semanticMessageAccepted(rec, clientMessageID) {
-		return nil
-	}
 	wrapped := domain.WrapReportDelivery(clientMessageID, message)
-	if err := m.send(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}); err != nil {
+	stopConfirmation := func(stopCtx context.Context) (bool, error) {
+		return receipts.SemanticDeliveryAccepted(stopCtx, id, launchID, clientMessageID)
+	}
+	if err := m.sendWithConfirmationStop(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}, stopConfirmation); err != nil {
 		// A pane write whose activity confirmation could not be observed is not
 		// fatal here: SendSemantic's own durable acceptance loop below is
 		// authoritative and correlates this exact message through its submission
@@ -5381,15 +5408,19 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	ticker := time.NewTicker(m.sendConfirm.pollInterval)
 	defer ticker.Stop()
 	for {
+		accepted, readErr := receipts.SemanticDeliveryAccepted(ctx, id, launchID, clientMessageID)
+		if readErr != nil {
+			return readErr
+		}
+		if accepted {
+			return nil
+		}
 		current, found, readErr := m.store.GetSession(ctx, id)
 		if readErr != nil {
 			return readErr
 		}
 		if !found || current.IsTerminated || current.Activity.State == domain.ActivityExited {
 			return ErrTerminated
-		}
-		if semanticMessageAccepted(current, clientMessageID) {
-			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -5443,6 +5474,16 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) error {
+	return m.sendWithConfirmationStop(ctx, id, message, clientMessageID, options, nil)
+}
+
+func (m *Manager) sendWithConfirmationStop(
+	ctx context.Context,
+	id domain.SessionID,
+	message, clientMessageID string,
+	options ports.MessageDeliveryOptions,
+	stop confirmationStopCheck,
+) error {
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
@@ -5577,7 +5618,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return nil
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
-		if err := m.confirmActive(ctx, m.messenger, id, evidence, inputBaseline); err != nil {
+		if err := m.confirmActiveWithStop(ctx, m.messenger, id, evidence, inputBaseline, stop); err != nil {
 			return fmt.Errorf("send %s: %w", id, err)
 		}
 	}
@@ -5708,11 +5749,8 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-// confirmActive fences each retry's input timestamp check through its Enter
-// write. Typing since inputBaseline suppresses the retry, so AO cannot submit
-// the operator's new draft while trying to confirm its own prompt.
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
-	return m.confirmActiveWithNudge(ctx, id, evidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
+func (m *Manager) confirmActiveWithStop(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time, stop confirmationStopCheck) error {
+	return m.confirmActiveWithNudge(ctx, id, evidence, stop, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
 		accepted := false
 		outcome, err := guard.DeliverWithComposerCheck(nudgeCtx, id, "", func(_ context.Context, rec domain.SessionRecord) (bool, func()) {
 			lastInputAt, release := m.fenceTerminalInput(rec)
