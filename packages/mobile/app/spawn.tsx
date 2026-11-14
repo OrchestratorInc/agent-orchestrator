@@ -17,8 +17,9 @@ import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequ
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
+import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
@@ -37,6 +38,7 @@ import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
+import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
@@ -104,6 +106,8 @@ export default function SpawnScreen() {
 	const [attachments, setAttachments] = useState<SpawnAttachment[]>([]);
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
 	const pickingAttachments = useRef(false);
+	// A paste that came in while a pick was loading, said again when it ends.
+	const missedPaste = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
 	// Keyed by place and name: picked files carry no id of their own, and the
 	// same file can be picked twice.
@@ -117,6 +121,11 @@ export default function SpawnScreen() {
 	// before it is picked. The picked agent's list is the project-aware catalog.
 	const [agentModelLists, setAgentModelLists] = useState<Record<string, AgentModelInfo[]>>({});
 	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
+	const [accountPick, setAccountPick] = useState<string>();
+	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
+	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);
+	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
+	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -413,7 +422,7 @@ export default function SpawnScreen() {
 		if (nextProjectId === NEW_CLOUD_PROJECT) {
 			// A cloud project starts from a repository, on its own sheet over this
 			// page; the project menu offers it once it exists.
-			router.push("/cloud/new-project");
+			router.push({ pathname: "/cloud/new-project", params: { placement: "cloud" } });
 			return;
 		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
@@ -474,25 +483,36 @@ export default function SpawnScreen() {
 			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
 		}));
 	};
-	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
-		if (pickingAttachments.current) return;
+	/** Adds picks to the task; resolves to how many were added. `notice` says what a paste left out. */
+	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string, notice?: string): Promise<number> => {
+		if (pickingAttachments.current) return 0;
 		if (cloudSelected) {
 			setAttachmentError("Cloud tasks can't take attachments yet. Start the task, then add files in its chat.");
-			return;
+			return 0;
 		}
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
+		// The pick's own result would replace the paste-again notice, so it is
+		// added back to whatever the pick ends with.
+		const missed = () => {
+			const was = missedPaste.current;
+			missedPaste.current = false;
+			return was ? "Paste the images again: they came in while attachments were loading." : undefined;
+		};
 		try {
 			const picked = await pick();
-			if (!picked) return;
+			if (!picked) { setAttachmentError(missed()); return 0; }
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
+			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
-			setAttachmentError(next.error ?? merged.error);
+			setAttachmentError(joinAttachmentErrors(next.error ?? merged.error, notice, missed()));
+			return added;
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, fallback));
+			setAttachmentError(joinAttachmentErrors(userFacingError(cause, fallback), missed()));
+			return 0;
 		} finally {
 			pickingAttachments.current = false;
 		}
@@ -531,6 +551,22 @@ export default function SpawnScreen() {
 		return result.assets.map((asset, index) => photoPickerAttachment(asset, index, new File(asset.uri)));
 	}, "Couldn't open your photo library.");
 
+	// Pasting is a way to attach too, so it goes through the same gate as the
+	// menu. Native stops a paste at 8 images or 25 MB and says which.
+	const pasteImages = (assets: ComposerImageAsset[], overflow?: PasteOverflow) => {
+		// A paste can't wait for a pick still loading, and dropping it silently
+		// would look like paste doing nothing.
+		if (pickingAttachments.current) {
+			missedPaste.current = true;
+			setAttachmentError("Wait for attachments to finish loading, then paste again.");
+			return;
+		}
+		const { picks, error } = pastedSpawnAttachments(assets, attachmentsRef.current.length);
+		const skipped = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
+		void addAttachments(async () => picks, "Couldn't read the pasted image.", joinAttachmentErrors(error, skipped))
+			.then((added) => { if (added > 0) haptics.tap(); });
+	};
+
 	const onSpawn = async () => {
 		if (!selectedHostId || (!config && !cloudSelected)) {
 			setError("Choose a connected machine before starting this task.");
@@ -556,6 +592,7 @@ export default function SpawnScreen() {
 				model: modelOverride(displayedModel, modelTouched),
 				// Only a level picked here; otherwise the model's default applies.
 				effort: chosenEffort,
+				accountId: accountPick || undefined,
 				// Only a mode picked here overrides the project's; an untouched
 				// picker names the project's mode, which the daemon applies anyway.
 				approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,
@@ -645,6 +682,9 @@ export default function SpawnScreen() {
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
+					accounts={accountOptions}
+					accountId={shownAccountId}
+					onSelectAccount={setAccountPick}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}
@@ -663,6 +703,7 @@ export default function SpawnScreen() {
 					onSelectEffort={selectEffort}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
+					onPasteImages={busy ? null : pasteImages}
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
 					onChangePrompt={setPrompt}

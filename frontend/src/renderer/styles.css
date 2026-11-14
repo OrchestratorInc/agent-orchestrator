@@ -2102,7 +2102,8 @@ textarea,
 }
 
 /* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
-   dots on a 3.5px pitch, 13px across and centred in the 20px slot, so every dot
+   dots on a 3.5px pitch, 13px across. It starts at the left edge of the step
+   icons' 12px slot (STEP_MARK_SLOT_CLASS in ChatTimelineItems.tsx), so every dot
    lands on whole device pixels on a 2x display. The outer twelve share one beat,
    staggered inline. */
 .chat-lattice {
@@ -2151,6 +2152,28 @@ textarea,
 @keyframes chat-working-shimmer {
 	from { background-position: -10% center, 0 0; }
 	to { background-position: 110% center, 0 0; }
+}
+
+/* A link's globe while its site icon loads: a brighter band sweeps across the
+   dimmed glyph, as the working shimmer does across text. Masked, since a
+   stroked SVG has no text to clip a gradient to. */
+.link-favicon-shimmer {
+	mask-image: linear-gradient(100deg, rgb(0 0 0 / 0.5) 35%, #000 50%, rgb(0 0 0 / 0.5) 65%);
+	mask-size: 250% 100%;
+	mask-repeat: no-repeat;
+	animation: link-favicon-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes link-favicon-shimmer {
+	from { mask-position: 100% 0; }
+	to { mask-position: 0% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.link-favicon-shimmer {
+		animation: none;
+		mask-image: none;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2308,6 +2331,16 @@ textarea,
 		animation: none;
 		opacity: 0.5;
 	}
+}
+
+[data-host-offline] *,
+[data-host-offline] *::before,
+[data-host-offline] *::after {
+	animation: none;
+}
+
+[data-host-offline] .animate-attention-card-pulse::before {
+	opacity: 0.5;
 }
 
 @keyframes ao-startup-logo-breathe {
@@ -3071,6 +3104,12 @@ html.sidebar-reordering * {
 	left: 0;
 }
 
+/* On a translucent window bg-surface is a 5% tint, so the transcript under the
+   open dock showed through it. The queue box keeps its solid fill there. */
+html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue-dock-body) {
+	background-color: var(--solid-bg-secondary);
+}
+
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
 .queue-dock-body {
 	--queue-dock-row-height: 2.5rem;
@@ -3081,8 +3120,6 @@ html.sidebar-reordering * {
 	overflow: hidden;
 	min-width: 0;
 	height: var(--queue-dock-row-height);
-	transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1);
-	will-change: height;
 }
 
 .queue-dock[data-reordering="true"] .queue-dock-body,
@@ -3094,8 +3131,8 @@ html.sidebar-reordering * {
 	height: var(--queue-dock-collapsed-height, 4.5rem);
 	min-width: 0;
 	max-width: 100%;
-	transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1);
-	will-change: height;
+	/* No height animation: rows arrive and leave with every send, and the dock
+	   follows at once. */
 }
 
 .queue-dock[data-collapsible="true"][data-expanded="true"] {
@@ -3675,7 +3712,8 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
 	opacity: 0;
-	background: color-mix(in srgb, var(--color-border) 50%, transparent);
+	/* Spacer only: the line itself is not drawn. */
+	background: transparent;
 }
 
 .session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
@@ -6156,6 +6194,16 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	color: inherit;
 }
 
+::highlight(chat-annotations) {
+	background-color: color-mix(in srgb, var(--primary) 14%, transparent);
+	color: inherit;
+}
+
+::highlight(chat-annotation-draft) {
+	background-color: var(--color-term-selection-light);
+	color: inherit;
+}
+
 /* Text selected in an artifact preview while its ask bar has focus. */
 ::highlight(artifact-selection) {
 	background-color: var(--color-term-selection-light);
@@ -6538,6 +6586,7 @@ body.is-pane-dragging webview {
 }
 
 [data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source] [data-pane-drag-chip],
 [data-pane-drag-source][data-terminal-tab-frame] {
 	opacity: 0.4;
 	transition: opacity var(--duration-fast) ease-out;
@@ -6560,7 +6609,8 @@ body.is-pane-dragging webview {
 	transition: opacity var(--duration-fast) ease-out;
 }
 
-.pane-drag-ghost > [data-terminal-tab-frame] {
+.pane-drag-ghost > [data-terminal-tab-frame],
+.pane-drag-ghost > [data-pane-drag-chip] {
 	flex: 1;
 	min-width: 0;
 	max-width: none;
@@ -6614,18 +6664,35 @@ body.is-pane-dragging webview {
 	transition: none;
 }
 
-/* Unfocused panes of a split rest under a light veil of the background, so
- * the focused one stands out in either theme. */
-.pane-split-dim {
-	z-index: 5;
-	pointer-events: none;
-	background: color-mix(in oklch, var(--background) 45%, transparent);
-	opacity: 0;
-	transition: opacity var(--duration-fast) ease-out;
+/* What releasing a dragged tab here does, named inside the preview. */
+.pane-drop-preview[data-label]::after {
+	content: attr(data-label);
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	max-width: calc(100% - 16px);
+	padding: 4px 10px;
+	overflow: hidden;
+	transform: translate(-50%, -50%);
+	border-radius: var(--radius-md);
+	background: color-mix(in oklch, var(--background) 90%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	color: var(--foreground);
+	font-size: 12px;
+	line-height: 16px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
-.pane-split-dim[data-dimmed] {
-	opacity: 1;
+/* The title bar of one pane in a split: the pane's handle, name and exits. */
+.pane-split-header {
+	z-index: 5;
+	cursor: grab;
+	touch-action: none;
+}
+
+.pane-split-header:active {
+	cursor: grabbing;
 }
 
 /* Divider between the panes: a hairline, with the shared hover-only grip line. */
@@ -6675,6 +6742,33 @@ body.is-pane-dragging webview {
 	background: var(--color-border);
 }
 
+/* Where two dividers meet: a wider hit area that moves both at once, with a
+ * soft dot on hover. Above the dividers so it wins the overlap. */
+.pane-split-junction {
+	position: absolute;
+	z-index: 7;
+	width: 15px;
+	height: 15px;
+	margin: -7px 0 0 -7px;
+	border-radius: 9999px;
+	cursor: move;
+	touch-action: none;
+}
+
+.pane-split-junction::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 9999px;
+	background: color-mix(in oklch, var(--foreground) 30%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-junction:hover::after {
+	opacity: 1;
+}
+
 /* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
 .pane-split-divider::after {
 	opacity: 0;
@@ -6705,8 +6799,8 @@ body.is-pane-dragging webview {
 @media (prefers-reduced-motion: reduce) {
 	.pane-drag-ghost,
 	.pane-drop-preview,
-	.pane-split-dim,
-	.pane-split-divider::after {
+	.pane-split-divider::after,
+	.pane-split-junction::after {
 		transition: none;
 	}
 }

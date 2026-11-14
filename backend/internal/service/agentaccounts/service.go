@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +32,12 @@ const freshFor = 5 * time.Minute
 // retryEmptyAfter is how long an answer with no limit windows is reused. A
 // folder read just after its sign-in can answer before its limits are known.
 const retryEmptyAfter = 30 * time.Second
+
+// retryFailedAfter is how long a check that failed on its own (a slow CLI, an
+// unknown error) is reused. A busy computer's next check usually works; each
+// failure in a row doubles the wait, up to freshFor, so a CLI that stays slow
+// is not started every minute.
+const retryFailedAfter = time.Minute
 
 // Terminals opens the embedded terminal a sign-in runs in.
 type Terminals interface {
@@ -61,6 +69,7 @@ type Service struct {
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
+	lastOrg        map[string]seenOrg
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
 }
@@ -69,11 +78,48 @@ type Service struct {
 type reading struct {
 	identity    domain.AgentAccountIdentityCheck
 	identityErr string
+	// identityProblem and limitsProblem say what kind of failure each error is.
+	identityProblem domain.AgentAccountProblemKind
 	// mismatch: the folder is signed in, but as another login than its own.
-	mismatch  bool
-	limits    *domain.AgentAccountLimits
-	limitsErr string
-	at        time.Time
+	mismatch      bool
+	limits        *domain.AgentAccountLimits
+	limitsErr     string
+	limitsProblem domain.AgentAccountProblemKind
+	// failures counts checks in a row that failed on their own.
+	failures int
+	at       time.Time
+}
+
+// failedOnItsOwn reports a reading whose check failed in a way the next check
+// may not, such as a CLI too slow to answer.
+func (r *reading) failedOnItsOwn() bool {
+	transient := func(k domain.AgentAccountProblemKind) bool {
+		return k.Transient() && k != domain.AgentAccountProblemRateLimited
+	}
+	return transient(r.identityProblem) || transient(r.limitsProblem)
+}
+
+// httpStatus429 matches an HTTP 429 named as a status, not any "429" digits
+// (a port such as 127.0.0.1:42901 is not a rate limit).
+var httpStatus429 = regexp.MustCompile(`\b(?:status|http|code)\W{0,3}429\b`)
+
+// problemKind sorts a failed check by what failed, not by the error's text.
+func problemKind(err error) domain.AgentAccountProblemKind {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return domain.AgentAccountProblemSlow
+	case errors.Is(err, ports.ErrAgentBinaryNotFound), errors.Is(err, exec.ErrNotFound):
+		return domain.AgentAccountProblemCLIMissing
+	}
+	// Some CLI clients pass a timeout on as text only.
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "deadline exceeded") || strings.Contains(text, "timed out") {
+		return domain.AgentAccountProblemSlow
+	}
+	if strings.Contains(text, "rate limit") || strings.Contains(text, "rate_limit") || strings.Contains(text, "too many requests") || httpStatus429.MatchString(text) {
+		return domain.AgentAccountProblemRateLimited
+	}
+	return domain.AgentAccountProblemUnavailable
 }
 
 // knownUnusable reports a reading that shows the folder cannot launch as its
@@ -105,7 +151,7 @@ func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCL
 	}
 	return &Service{
 		store: store, providers: byProvider, root: filepath.Clean(root), terminals: terminals, log: log,
-		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{},
+		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]seenOrg{},
 	}
 }
 
@@ -188,11 +234,18 @@ type AccountView struct {
 	SignedIn bool
 	// LoggedIn is any login the CLI launches with as this account, an API key
 	// included; a folder signed in as another login is not.
-	LoggedIn    bool
-	IdentityErr string
-	Limits      *domain.AgentAccountLimits
-	LimitsErr   string
+	LoggedIn        bool
+	IdentityErr     string
+	IdentityProblem domain.AgentAccountProblemKind
+	Limits          *domain.AgentAccountLimits
+	LimitsErr       string
+	LimitsProblem   domain.AgentAccountProblemKind
+	SameLoginAs     string
+	OrgID           string
+	OrgName         string
 }
+
+type seenOrg struct{ id, name string }
 
 // List returns every account, the computer's own first per provider. refresh
 // reads identity and limits again even when the last reading is fresh.
@@ -213,11 +266,16 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		def, _ := s.defaultID(ctx, account.Provider)
 		s.mu.Lock()
 		r := s.readings[account.ID]
+		lastOrg := s.lastOrg[account.ID]
 		s.mu.Unlock()
-		view := AccountView{Account: account, Default: def == account.ID}
+		view := AccountView{Account: account, Default: def == account.ID, OrgID: lastOrg.id, OrgName: lastOrg.name}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			view.IdentityProblem, view.LimitsProblem = r.identityProblem, r.limitsProblem
 			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
+			if r.identity.SignedIn && r.identity.OrgID != "" {
+				view.OrgID, view.OrgName = r.identity.OrgID, r.identity.OrgName
+			}
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {
@@ -226,7 +284,34 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		}
 		views = append(views, view)
 	}
+	markSameLogin(views)
 	return views, nil
+}
+
+func markSameLogin(views []AccountView) {
+	for i := range views {
+		device := &views[i]
+		if !device.Account.Device() || !device.SignedIn || device.Account.Email == "" {
+			continue
+		}
+		for _, saved := range views {
+			if !saved.Account.Device() && saved.Account.Provider == device.Account.Provider && saved.SignedIn && strings.EqualFold(saved.Account.Email, device.Account.Email) && sameOrg(saved.OrgID, device.OrgID) {
+				device.SameLoginAs = saved.Account.ID
+				break
+			}
+		}
+	}
+}
+
+func sameOrg(a, b string) bool {
+	return a == "" || b == "" || a == b
+}
+
+func orgLabel(name, id string) string {
+	if name != "" {
+		return name
+	}
+	return id
 }
 
 func (s *Service) needsReading(id string, refresh bool) bool {
@@ -237,7 +322,11 @@ func (s *Service) needsReading(id string, refresh bool) bool {
 		return true
 	}
 	ttl := freshFor
-	if r.limits != nil && len(r.limits.Windows) == 0 {
+	switch {
+	case r.failedOnItsOwn():
+		// Before the empty-windows case: a failed read can keep earlier limits with no windows.
+		ttl = min(freshFor, retryFailedAfter<<min(max(r.failures-1, 0), 8))
+	case r.limits != nil && len(r.limits.Windows) == 0:
 		// A plan that never reports windows is then read on every poll, one CLI call a minute.
 		ttl = retryEmptyAfter
 	}
@@ -258,6 +347,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	r.identity = identity
 	if err != nil {
 		r.identityErr = err.Error()
+		r.identityProblem = problemKind(err)
 		// A failed check (a timeout under load) says nothing about the login:
 		// keep what the last good one found, so it does not read as signed out.
 		s.mu.Lock()
@@ -266,6 +356,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	known := s.lastOrg[account.ID]
+	s.mu.Unlock()
 	switch {
 	case err != nil:
 	case !identity.SignedIn:
@@ -274,10 +367,17 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		// The right-account check: the folder must still hold the login it was added with.
 		r.identity.SignedIn = false
 		r.mismatch = true
+		r.identityProblem = domain.AgentAccountProblemOtherLogin
 		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
+	case !account.Device() && !sameOrg(known.id, identity.OrgID):
+		r.identity.SignedIn = false
+		r.mismatch = true
+		r.identityProblem = domain.AgentAccountProblemOtherOrg
+		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
+			r.limitsProblem = problemKind(limitsErr)
 			s.mu.Lock()
 			if prev := s.readings[account.ID]; prev != nil && prev.limits != nil && strings.EqualFold(prev.identity.Email, identity.Email) {
 				r.limits = prev.limits
@@ -302,7 +402,16 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
+	if r.failedOnItsOwn() {
+		r.failures = 1
+		if prev := s.readings[account.ID]; prev != nil && prev.failedOnItsOwn() {
+			r.failures = prev.failures + 1
+		}
+	}
 	s.readings[account.ID] = r
+	if err == nil && r.identity.SignedIn && !r.mismatch && r.identity.OrgID != "" && !account.Device() {
+		s.lastOrg[account.ID] = seenOrg{id: r.identity.OrgID, name: r.identity.OrgName}
+	}
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
@@ -643,7 +752,8 @@ const (
 	LoginComplete  LoginStatus = "complete"
 	LoginDuplicate LoginStatus = "duplicate"
 	// LoginMismatch is a sign-in again with another login than the account's.
-	LoginMismatch LoginStatus = "mismatch"
+	LoginMismatch        LoginStatus = "mismatch"
+	LoginNotSubscription LoginStatus = "not_subscription"
 )
 
 // VerifyLogin checks whether the sign-in finished, and saves the account when
@@ -662,8 +772,12 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, fmt.Errorf("check sign-in: %w", err)
 	}
 	if !identity.SignedIn {
+		if identity.LoggedIn {
+			return LoginNotSubscription, nil, nil
+		}
 		return LoginWaiting, nil, nil
 	}
+	s.read(ctx, domain.AgentAccount{ID: domain.DeviceAgentAccountID(op.provider), Provider: op.provider})
 	views, err := s.List(ctx, false)
 	if err != nil {
 		return "", nil, err
@@ -675,10 +789,11 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, ports.ErrAgentAccountLoginUnknown
 	}
 	for _, view := range views {
-		if op.account != nil && view.Account.ID == op.account.ID {
+		if op.account != nil && (view.Account.ID == op.account.ID || view.Account.Device()) {
 			continue
 		}
-		if view.Account.Provider == op.provider && view.SignedIn && strings.EqualFold(view.Account.Email, identity.Email) {
+		heldBy := view.SignedIn || (op.account == nil && !view.Account.Device() && view.Account.Email != "")
+		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
 		}
@@ -737,7 +852,10 @@ func (s *Service) finishSignInAgain(ctx context.Context, op *login, identity dom
 			saved = &views[i]
 		}
 	}
-	if op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email) {
+	s.mu.Lock()
+	known := s.lastOrg[op.account.ID]
+	s.mu.Unlock()
+	if (op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email)) || !sameOrg(known.id, identity.OrgID) {
 		s.endLogin(ctx, op, true)
 		return LoginMismatch, saved, nil
 	}
@@ -851,6 +969,7 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 	s.removeFolder(account.Home)
 	s.mu.Lock()
 	delete(s.readings, accountID)
+	delete(s.lastOrg, accountID)
 	s.mu.Unlock()
 	s.notifyDefaultChanged(account.Provider)
 	return nil
@@ -1039,6 +1158,55 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 		return account.ID, domain.AgentAccountLimits{}, errors.New("account limits are unavailable")
 	}
 	return account.ID, *r.limits, nil
+}
+
+// HandoffTarget picks the account with the most verified room for a usage-limited session, or "" when none has room.
+func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", ports.ErrAgentAccountProviderMismatch
+	}
+	current, err := s.boundAccount(ctx, id, p)
+	if err != nil {
+		return "", err
+	}
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return "", err
+	}
+	headroom := make([]float64, len(accounts))
+	var wg sync.WaitGroup
+	for i, account := range accounts {
+		if account.Provider != p || account.ID == current.ID || s.beingRemoved(account.ID) {
+			continue
+		}
+		wg.Go(func() {
+			if r := s.read(ctx, account); r != nil && r.identityErr == "" && r.identity.SignedIn && r.limitsErr == "" && r.limits != nil {
+				headroom[i], _ = r.limits.HandoffHeadroom(p, model)
+			}
+		})
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if after, err := s.boundAccount(ctx, id, p); err != nil {
+		return "", err
+	} else if after.ID != current.ID {
+		return "", ports.ErrAgentAccountChanged
+	}
+	best := -1
+	for i, room := range headroom {
+		if room > 0 && (best < 0 || room > headroom[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		s.log.Info("account handoff: no target", "session", id, "model", model)
+		return "", nil
+	}
+	s.log.Info("account handoff: target", "session", id, "model", model, "target", accounts[best].ID)
+	return accounts[best].ID, nil
 }
 
 func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {

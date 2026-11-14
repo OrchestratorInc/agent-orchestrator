@@ -14,12 +14,12 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
-import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
+import { ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
 import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -50,6 +50,13 @@ export function ActivityRun({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, next);
 		else setLocalOpen(next);
 	};
+	// A search match inside this run opens it, as a reader's choice would, so it
+	// stays open once the match has been shown.
+	const revealed = useContext(RevealedChatActivity);
+	const holdsRevealed = Boolean(revealed && activities.some((activity) => activity.id === revealed));
+	useEffect(() => {
+		if (holdsRevealed && !open) updateOverride(disclosureKey ?? "", true);
+	}, [holdsRevealed, revealed]);
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
 	// The group fades in when it forms while the chat is on screen, never when the
@@ -288,6 +295,15 @@ function ActivitySubgroup({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
 		else setLocalOpen(next);
 	};
+	const revealed = useContext(RevealedChatActivity);
+	// A subgroup lists top-level calls; a match inside a subagent below one counts too.
+	const holdsRevealed = Boolean(revealed && activities.some((activity) => {
+		const node = nodesByActivityID.get(activity.id);
+		return node ? nodeActivities(node).some((nested) => nested.id === revealed) : activity.id === revealed;
+	}));
+	useEffect(() => {
+		if (holdsRevealed && !open) updateOverride(true);
+	}, [holdsRevealed, revealed]);
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
 	);
@@ -430,7 +446,13 @@ function ActivityTree({ node }: { node: ActivityNode }) {
 }
 
 function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
-	const [open, setOpen] = useState(false);
+	// A search match in one of the subagent's calls opens the fold that holds it.
+	const revealed = useContext(RevealedChatActivity);
+	const holdsRevealed = Boolean(revealed && nodes.some((node) => nodeActivities(node).some((activity) => activity.id === revealed)));
+	const [open, setOpen] = useState(holdsRevealed);
+	useEffect(() => {
+		if (holdsRevealed) setOpen(true);
+	}, [holdsRevealed, revealed]);
 	const reducedMotion = useReducedMotion();
 	const count = countNodes(nodes);
 	const running = nodes.some(nodeRunning);

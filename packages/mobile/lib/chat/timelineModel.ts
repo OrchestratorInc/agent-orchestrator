@@ -60,6 +60,8 @@ export function readableConversationItems(snapshot: ConversationSnapshot, openin
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
+		// The model picker already names the model that answered.
+		item.detail?.event !== "model.rerouted" &&
 		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
 		// An older copy of a list that spans turns; a later turn or run carries it.
 		!(item.activityKind === "plan" && item.detail?.superseded)

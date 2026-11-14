@@ -79,9 +79,61 @@ export function recordPoll(tracker: LinkTracker, outcome: PollOutcome, now: numb
 	};
 }
 
+/**
+ * How long an answered request outweighs an OS that says the phone is offline.
+ * Longer than Cloud's 30-second machine sync, so a machine that stops answering
+ * while Cloud still does is not called "Phone offline" between syncs.
+ */
+export const ANSWER_TRUSTED_FOR_MS = 45_000;
+
 /** True only when the OS says so. An unknown state is not offline. */
 export function isPhoneOffline(phone: PhoneNetwork): boolean {
 	return phone.connected === false;
+}
+
+/**
+ * The phone's network as far as the app can trust it.
+ *
+ * The OS can report no network, or no internet, while the app's requests are
+ * being answered: Android does this on a Wi-Fi network it could not validate
+ * (#8282). A request sent after the OS made its report, and answered, outweighs
+ * that report, so its "no" becomes "not known". Its "yes" stands.
+ *
+ * A real disconnect usually shows at once: the OS changes its report, and every
+ * request answered before that change no longer counts. On a network the OS
+ * already called offline, a disconnect may not change the report at all (seen
+ * on the Pixel in airplane mode), so an answer also stops counting once it is
+ * ANSWER_TRUSTED_FOR_MS old.
+ *
+ * @param reportedAt when the OS last changed its report, epoch ms
+ * @param answeredAt when the newest answered request was sent, epoch ms (0 if none)
+ */
+export function trustedPhoneNetwork(os: PhoneNetwork, reportedAt: number, answeredAt: number, now: number): PhoneNetwork {
+	if (answeredAt <= reportedAt || now - answeredAt >= ANSWER_TRUSTED_FOR_MS) return os;
+	if (os.connected !== false && os.internet !== false) return os;
+	return {
+		connected: os.connected === false ? undefined : os.connected,
+		internet: os.internet === false ? undefined : os.internet,
+	};
+}
+
+/**
+ * Whether the selected machine's reconnect attempt is worth making, with no
+ * working connection to protect. The trusted network alone is not enough: on
+ * a network the OS already calls offline, its report never changes, so once
+ * an answer expires only a request can prove the network is back (#8308).
+ * Skipped only when the OS says there is no network at all and nothing has
+ * ever answered since it said so.
+ */
+export function worthProbingForRecovery(
+	os: PhoneNetwork & { type?: string },
+	reportedAt: number,
+	answeredAt: number,
+	now: number,
+): boolean {
+	if (!isPhoneOffline(trustedPhoneNetwork(os, reportedAt, answeredAt, now))) return true;
+	if (answeredAt > reportedAt) return true;
+	return os.type !== undefined && os.type !== "NONE" && os.type !== "UNKNOWN";
 }
 
 export function classifyLink(tracker: LinkTracker, phone: PhoneNetwork, now: number): LinkHealth {

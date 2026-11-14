@@ -190,8 +190,8 @@ test("renderer: switching project with a draft never flashes the sample requests
 
 	const projectPicker = page.getByTestId("chat-conversation-panel").getByRole("button", { name: /^Project: / });
 	await projectPicker.click();
-	await page.getByRole("menuitem", { name: "Scratchpad" }).click();
-	await expect(projectPicker).toHaveText("Scratchpad");
+	await page.getByRole("menuitem", { name: "Sessions" }).click();
+	await expect(projectPicker).toHaveText("Sessions");
 	await expect(prompt).toHaveText("keep this");
 	expect(await page.evaluate(() => (window as unknown as { __samples: { flashed: boolean } }).__samples.flashed)).toBe(false);
 });

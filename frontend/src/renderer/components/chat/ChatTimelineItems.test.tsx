@@ -13,6 +13,8 @@ import {
 	ProviderSwitchMarker,
 	TurnOutcome,
 } from "./ChatTimelineItems";
+import claudeCodeLogo from "../../assets/agents/claude-code.svg";
+import codexLogo from "../../assets/agents/codex.svg";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
 import type { ConversationMessage } from "../../types/conversation";
@@ -852,6 +854,53 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
+	});
+
+	const switched = (sourceHarness: string, targetHarness: string, extra: Record<string, string> = {}) => {
+		// A seeded catalog keeps the recorded-model case off the network.
+		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+		client.setQueryData(agentModelsQueryKey("codex", ""), { models: [{ id: "gpt-6", label: "GPT Six" }] });
+		return (
+			<QueryClientProvider client={client}>
+				<ProviderSwitchMarker activity={{
+					kind: "activity", id: "switch", sequence: 1, revision: 1, activityKind: "system", status: "completed",
+					summary: "Switched provider", createdAt: "2026-01-01T00:00:00Z",
+					detail: { event: "provider_switch", sourceHarness, targetHarness, ...extra },
+				}} />
+			</QueryClientProvider>
+		);
+	};
+	// The decorative mark drawn just before a side's name.
+	const markBefore = (name: string) => screen.getByText(name).previousElementSibling;
+
+	it("draws each side's agent mark before its name", () => {
+		const { container } = render(switched("claude-code", "codex"));
+		const from = markBefore("Claude Code");
+		const to = markBefore("Codex");
+		expect(from).toHaveAttribute("aria-hidden", "true");
+		expect(to).toHaveAttribute("aria-hidden", "true");
+		expect(from?.tagName).toBe("IMG");
+		expect(from).toHaveAttribute("src", claudeCodeLogo);
+		expect(to).toHaveAttribute("src", codexLogo);
+		// Marks are decorative: the separator still names the switch in words.
+		expect(screen.getByRole("separator", { name: "Switched from Claude Code to Codex" })).toBeInTheDocument();
+		expect(container.querySelectorAll('[role="separator"] [aria-hidden="true"].size-icon-base')).toHaveLength(2);
+	});
+
+	it("keeps the mark beside a recorded model's name", () => {
+		const { container } = render(switched("claude-code", "codex", { targetModel: "gpt-6", targetEffort: "high" }));
+		const marks = container.querySelectorAll('[role="separator"] [aria-hidden="true"].size-icon-base');
+		expect(marks).toHaveLength(2);
+		expect(marks[1]).toHaveAttribute("src", codexLogo);
+		expect(marks[1]?.nextElementSibling).toHaveTextContent("GPT Six");
+	});
+
+	it("gives an agent with no logo the app's lettered mark", () => {
+		render(switched("claude-code", "zeta-agent"));
+		const mark = markBefore("zeta-agent");
+		expect(mark).toHaveAttribute("aria-hidden", "true");
+		expect(mark?.tagName).toBe("SPAN");
+		expect(mark).toHaveTextContent("Z");
 	});
 });
 

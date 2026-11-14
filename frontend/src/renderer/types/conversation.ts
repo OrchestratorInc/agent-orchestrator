@@ -149,6 +149,12 @@ export interface ConversationTurn {
 	errorMessage?: string;
 	/** A provider failure with a known way out: a missing API key, or a refused login. */
 	failureCode?: "provider_key_missing" | "auth_required";
+	/**
+	 * The turn ended before an agent started on it (a Cloud message refused
+	 * when its turn came): it reads as not run, with errorMessage as the
+	 * reason, rather than as a run that failed.
+	 */
+	notRun?: boolean;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;
@@ -204,6 +210,7 @@ export interface ConversationContentSummary {
 	uri?: string;
 	name?: string;
 	text?: string;
+	comment?: string;
 	sourceConversationId?: string;
  sourceMessageId?: string;
 	sourceRevision?: number;
@@ -521,6 +528,7 @@ export interface SystemEventDetail {
 		| "workspace.setup"
 		| "workspace.script.run"
 		| "account.switched"
+		| "account.limit_handoff"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
 		| "approval_mode.substituted"
 		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
@@ -529,6 +537,7 @@ export interface SystemEventDetail {
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
+	retry?: "sent" | "skipped";
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */

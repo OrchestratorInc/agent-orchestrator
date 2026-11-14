@@ -36,8 +36,9 @@ var (
 )
 
 const (
-	maxExcerptReferences = 8
-	maxExcerptTextBytes  = 24 * 1024
+	maxExcerptReferences   = 8
+	maxExcerptTextBytes    = 24 * 1024
+	maxExcerptCommentRunes = 4 * 1024
 	// Each excerpt carries its source turn so a short selection keeps its
 	// meaning. Long turns are truncated so eight excerpts cannot flood the
 	// provider prompt or the durable delivery row.
@@ -104,6 +105,11 @@ type Service struct {
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
 	usageLimitAccounts    usageLimitAccountReader
+	handoffMu             sync.Mutex
+	handoff               accountHandoffDeps
+	handoffSince          time.Time
+	handoffScanning       bool
+	handoffs              map[string]*accountHandoff
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
@@ -707,6 +713,16 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if err != nil {
 		return nil, fmt.Errorf("load active conversation branch: %w", err)
 	}
+	if note := strings.TrimSpace(cfg.ForkHandoffNote); note != "" && cfg.ProviderSwitch == nil && activeBranch.HandoffNote == "" {
+		keeper, ok := s.store.(forkHandoffNoteKeeper)
+		if !ok {
+			return nil, errors.New("chat start: store can't keep a fork's copied conversation")
+		}
+		if err := keeper.SetConversationBranchHandoffNote(ctx, conversation.ID, activeBranch.ID, note); err != nil {
+			return nil, fmt.Errorf("keep fork's copied conversation: %w", err)
+		}
+		activeBranch.HandoffNote = note
+	}
 	providerScopeID := activeBranch.ProviderScopeID
 	providerHandleOwnedByActiveBranch := true
 	if cfg.ProviderScopeID != "" {
@@ -783,6 +799,17 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; cfg.Harness == domain.HarnessClaudeCode && tokens > 0 {
 		cfg.Env = cloneStartConfig(cfg).Env
 		cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
+	}
+	// A fork's first start resumes the provider conversation copied for it,
+	// into a conversation with no settings saved yet: it starts with the
+	// session's, as a new conversation does, not with empty ones.
+	if cfg.ProviderConversationID != "" && cfg.ForkFirstStart && cfg.ProviderSwitch == nil {
+		conversation.Settings.Model = cfg.Model
+		conversation.Settings.ReasoningEffort = cfg.Effort
+		conversation.Settings.ApprovalMode = cfg.Permissions
+		if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
+			return nil, fmt.Errorf("record initial conversation settings: %w", err)
+		}
 	}
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
@@ -1055,7 +1082,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, cfg.WorkspacePath, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
 	if owner.Kind != domain.ConversationOwnerReview {
 		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
 	}
@@ -1610,6 +1637,9 @@ func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversati
 		text := strings.TrimSpace(excerpt.Text)
 		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || (text == "" && !isFlowchartOnlySnapshot(excerpt.Snapshot)) || excerpt.Revision < 0 {
 			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
+		}
+		if utf8.RuneCountInString(excerpt.Comment) > maxExcerptCommentRunes {
+			return fmt.Errorf("%w: annotation comment exceeds %d characters", ErrExcerptInvalid, maxExcerptCommentRunes)
 		}
 		if excerpt.Snapshot != nil {
 			if err := validateExcerptSnapshot(excerpt.Snapshot); err != nil {
@@ -2481,6 +2511,12 @@ func (s *Service) rebindBranchOnReady(
 
 // withHandoffNote adds a switch's handoff note to the agent's system prompt. A
 // branch keeps its note for life, so every launch on it passes the note again.
+// forkHandoffNoteKeeper stores the note a text-handoff fork's agent starts
+// with on the branch it runs on.
+type forkHandoffNoteKeeper interface {
+	SetConversationBranchHandoffNote(ctx context.Context, conversationID, branchID, note string) error
+}
+
 func withHandoffNote(systemPrompt, note string) string {
 	if note == "" {
 		return systemPrompt

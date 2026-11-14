@@ -1,18 +1,19 @@
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderNames, describeAccountProblem, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
-import { formatCountdown, groupAccounts, limitWindowPace, PROVIDER_HARNESS, remainingPercent } from "../../lib/usage-limits";
+import { formatCountdown, groupAccounts, limitWindowPace, PROVIDER_HARNESS, usedPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { formatPlanName } from "../settings/AgentAccountsSection";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-function remainingTone(remaining: number): string | null {
-	return remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : null;
+function usedTone(used: number): string | null {
+	return used >= 100 ? "bg-error" : used >= 75 ? "bg-warning" : null;
 }
 
 export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount[]; now: Date }) {
@@ -46,7 +47,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 					</div>
 					<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
 						{entry.accounts.map((account, index) => (
-							<AccountLimitRows key={account.id} account={account} harness={PROVIDER_HARNESS[entry.provider]} first={index === 0} now={now} />
+							<AccountLimitRows key={account.id} account={account} peers={entry.accounts} harness={PROVIDER_HARNESS[entry.provider]} first={index === 0} now={now} />
 						))}
 					</div>
 				</section>
@@ -55,7 +56,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 	);
 }
 
-function AccountLimitRows({ account, harness, first, now }: { account: AgentAccount; harness: string; first: boolean; now: Date }) {
+function AccountLimitRows({ account, peers, harness, first, now }: { account: AgentAccount; peers: readonly AgentAccount[]; harness: string; first: boolean; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const windows = account.limits?.windows ?? [];
 	const plan = formatPlanName(account.plan);
@@ -66,18 +67,22 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 		account.default ? t("settings.agentAccounts.default") : null,
 		resetCredits > 0 ? t("usage.limits.resetCredits", { value: resetCredits }) : null,
 	].filter(Boolean).join(" · ");
-	const issue = account.problem || (account.signedIn ? null : t("usage.limits.signedOut"));
+	const problem = describeAccountProblem(account, t);
+	const issue = problem?.text ?? (account.signedIn ? null : t("usage.limits.signedOut"));
+	// A check that failed on its own clears by itself: no warning for it.
+	const needsUser = problem ? problem.actionable : Boolean(issue);
 	const fetchedAt = account.limits?.fetchedAt;
 	const staleFrom = issue && windows.length > 0 && fetchedAt ? t("usage.limits.staleFrom", { value: formatRelativeTime(fetchedAt, now, i18n.language) }) : null;
 	return (
 		<>
 			<div className={cn("col-span-full flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5", !first && "mt-4")} data-usage-account={account.id}>
-				<span className="truncate text-control font-medium text-foreground">{agentAccountName(account, t)}</span>
+				<span className="truncate text-control font-medium text-foreground">{agentAccountLabel(account, peers, t)}</span>
 				{meta ? <span className="text-xs text-muted-foreground">{meta}</span> : null}
 				{issue ? (
-					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-						<TriangleAlert aria-hidden="true" className="size-icon-sm self-center text-warning" />
+					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground" data-account-problem={problem ? account.problemKind ?? "unavailable" : undefined}>
+						{needsUser ? <TriangleAlert aria-hidden="true" className="size-icon-sm self-center text-warning" /> : null}
 						{staleFrom ? `${issue} · ${staleFrom}` : issue}
+						{problem?.detail ? <Tooltip><TooltipTrigger asChild><button type="button" className="underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:text-foreground">{t("settings.agentAccounts.problemDetails")}</button></TooltipTrigger><TooltipContent className="max-w-sm break-words font-mono">{problem.detail}</TooltipContent></Tooltip> : null}
 					</span>
 				) : null}
 			</div>
@@ -89,31 +94,32 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 
 function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAccountLimitWindow; fetchedAt?: string; harness: string; now: Date }) {
 	const { t, i18n } = useTranslation();
-	const remaining = Math.round(remainingPercent(window.usedPercent));
-	const tone = remainingTone(remaining);
+	const used = Math.round(usedPercent(window.usedPercent));
+	const tone = usedTone(used);
 	const pace = fetchedAt ? limitWindowPace(window, fetchedAt) : null;
-	const leftAtReset = pace ? Math.max(0, 100 - pace.atReset) : null;
+	const usedAtReset = pace ? Math.min(100, pace.atReset) : null;
 	const countdown = formatCountdown(window.resetsAt, now);
 	const runsOutIn = pace?.runsOutAt ? formatCountdown(pace.runsOutAt.toISOString(), now) : null;
-	const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(remaining / 100);
+	const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(used / 100);
 	return (
 		<>
 			<span className="truncate text-control text-foreground">{window.label}</span>
 			<span className="text-end">
 				<span className="text-heading-sm tabular-nums text-foreground">{percent}</span>
-				<span className="ms-1 text-xs text-muted-foreground">{t("usage.limits.left")}</span>
+				<span className="ms-1 text-xs text-muted-foreground">{t("usage.limits.used")}</span>
 			</span>
 			<div
 				role="progressbar"
 				aria-label={t("usage.limits.barLabel", { window: window.label, value: percent })}
 				aria-valuemin={0}
 				aria-valuemax={100}
-				aria-valuenow={remaining}
+				aria-valuenow={used}
 				className="relative h-2.5 min-w-0 overflow-hidden rounded-full bg-muted"
 			>
-				<div className={cn("h-full rounded-full", tone)} style={{ width: `${remaining}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
-				{leftAtReset !== null && leftAtReset < remaining ? (
-					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `${leftAtReset}%` }} />
+				<div className={cn("h-full rounded-full", tone)} style={{ width: `${used}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
+				{usedAtReset !== null && usedAtReset > used ? (
+					// Clamped by the marker's own width so a projection that hits 100% stays inside the clipped track.
+					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `min(${usedAtReset}%, calc(100% - 0.125rem))` }} />
 				) : null}
 			</div>
 			<span className="whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground">
@@ -124,7 +130,7 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 					{pace.runsOutAt ? <TriangleAlert aria-hidden="true" className="size-icon-sm" /> : null}
 					{pace.runsOutAt
 						? runsOutIn ? t("usage.limits.paceRunsOut", { value: runsOutIn }) : t("usage.limits.paceRanOut")
-						: t("usage.limits.paceLeft", { value: new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format((leftAtReset ?? 0) / 100) })}
+						: t("usage.limits.paceUsed", { value: new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format((usedAtReset ?? 0) / 100) })}
 				</p>
 			) : null}
 		</>
