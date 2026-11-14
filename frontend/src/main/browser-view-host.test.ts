@@ -6713,6 +6713,39 @@ describe("hidden browser background throttling", () => {
 		expect(throttled(views[0]!)).toBe(true);
 	});
 
+	it("keeps an un-awaited native command's page unthrottled until the command settles", async () => {
+		const { emit, host, invoke, runtime, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		let started = false;
+		vi.mocked(runtime.runAction).mockImplementationOnce(async () => {
+			started = true;
+			await gate;
+			return {};
+		});
+		const command = host.execute("sess-1", "click", { ref: "e2" });
+		await vi.waitFor(() => expect(started).toBe(true));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(throttled(views[0]!)).toBe(false);
+		release();
+		await command;
+		expect(throttled(views[0]!)).toBe(true);
+	});
+
+	it("keeps a page unthrottled for as long as network capture runs", async () => {
+		const { emit, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		expect(throttled(views[0]!)).toBe(true);
+		expect(await host.execute("sess-1", "network-start", { durationSeconds: 30 })).toMatchObject({ active: true });
+		expect(throttled(views[0]!)).toBe(false);
+		await host.execute("sess-1", "network-stop", {});
+		expect(throttled(views[0]!)).toBe(true);
+	});
+
 	it("never throttles a tab that is playing audio", async () => {
 		const { emit, invoke, views } = setupTabHost();
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
