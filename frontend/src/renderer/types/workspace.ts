@@ -285,6 +285,8 @@ export type WorkspaceSession = {
 		requestedBy?: { userId: string; name: string };
 		/** The control-plane user who started the session; only they share its files as public links. */
 		createdByUserId?: string;
+		/** Set on an AO Cloud automation run's session: it is shared only to watch, with teams and by link. */
+		automationRunId?: string;
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;

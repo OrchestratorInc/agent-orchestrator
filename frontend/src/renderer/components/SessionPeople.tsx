@@ -115,7 +115,7 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
  * for the owner; a guest only sees who is there. The whole project is shared
  * from the dialog or from Project settings.
  */
-export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent }: {
+export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent, viewOnly }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string;
@@ -124,6 +124,8 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 	projectName?: string;
 	/** The session is a Cloud standalone agent's: shared on its own, never as a project. */
 	standaloneAgent?: boolean;
+	/** An AO Cloud automation run's session: shared only to watch, with teams and by link. */
+	viewOnly?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
@@ -157,6 +159,7 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 					projectName={projectName}
 					people={teams}
 					standaloneAgent={standaloneAgent}
+					viewOnly={viewOnly}
 				/>
 			) : null}
 		</>
