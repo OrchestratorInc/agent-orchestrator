@@ -145,7 +145,11 @@ max_tokens = 1024
 		t.Fatal(err)
 	}
 	initialTask := "--help AO_INITIAL_TASK\nKeep 'quotes' and $(literal) intact.\n" + strings.Repeat("Literal long task data. ", 40) + "\nFinal task line."
-	launch := ports.LaunchConfig{WorkspacePath: workspace, SessionID: "ao-tau-conformance", Prompt: initialTask, SystemPrompt: "AO_HIDDEN_FIRST", Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "ao/test"}, Env: envMap}
+	// Core keeps one session-owned instruction file and rewrites it in place
+	// before a restore, so launch and restore share this exact path.
+	promptFile := filepath.Join(home, "ao-data", "prompts", "ao-tau-conformance", "system.md")
+	writeConformanceFile(t, promptFile, "AO_HIDDEN_FIRST")
+	launch := ports.LaunchConfig{WorkspacePath: workspace, SessionID: "ao-tau-conformance", Prompt: initialTask, SystemPrompt: "AO_HIDDEN_FIRST", SystemPromptFile: promptFile, Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "ao/test"}, Env: envMap}
 	argv, err := plugin.GetLaunchCommand(context.Background(), launch)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +171,10 @@ max_tokens = 1024
 	waitConformanceEvent(t, hookLog, "stop", 1, first)
 	first.stop() // SIGKILL: prove restore does not rely on a graceful quit hook.
 
-	restore := ports.RestoreConfig{Session: ports.SessionRef{ID: "ao-tau-conformance", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: started.Payload.SessionID}}, SystemPrompt: "AO_HIDDEN_RESTORED", Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "ao/test"}, Env: envMap}
+	// After Kill, core rebuilds the private instructions into the same file.
+	// The restored request must carry only the new text, never the old.
+	writeConformanceFile(t, promptFile, "AO_HIDDEN_RESTORED")
+	restore := ports.RestoreConfig{Session: ports.SessionRef{ID: "ao-tau-conformance", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: started.Payload.SessionID}}, SystemPrompt: "AO_HIDDEN_RESTORED", SystemPromptFile: promptFile, Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "ao/test"}, Env: envMap}
 	histories, err := filepath.Glob(filepath.Join(tauHome, "sessions", "*", started.Payload.SessionID+".jsonl"))
 	if err != nil || len(histories) != 1 {
 		t.Fatalf("native history lookup: %v, %v", histories, err)
