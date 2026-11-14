@@ -4161,6 +4161,8 @@
 	"settings.agentAccounts.switching": "Переключение на {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Смена аккаунта",
 	"settings.agentAccounts.switchFailed": "Не удалось переключить аккаунт. Агент остаётся на прежнем аккаунте.",
+	"settings.agentAccounts.cloudLoginOf": "Вход в {{provider}}",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator удалит вход {{email}}. Сессии, работающие на нём, сначала нужно перевести на другой аккаунт.",
 	"files.readOnlySnapshot": "Эта версия доступна только для чтения. Для редактирования откройте копию из рабочего пространства.",
 	"files.treeTruncated": "Некоторые пути не показаны. Уточните фильтр, чтобы найти больше файлов.",
 	"files.finishEditingToOpen": "Сохраните или отмените редактирование, прежде чем открывать в центре.",

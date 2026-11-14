@@ -4020,6 +4020,8 @@
 	"settings.agentAccounts.switching": "{{email}} に切り替え中…",
 	"settings.agentAccounts.switchingAccount": "アカウントを切り替え中",
 	"settings.agentAccounts.switchFailed": "切り替えに失敗しました。エージェントは以前のアカウントのままです。",
+	"settings.agentAccounts.cloudLoginOf": "{{provider}} ログイン",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator は {{email}} のログインを削除します。このアカウントで実行中のセッションは、先に別のアカウントへ移動してください。",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

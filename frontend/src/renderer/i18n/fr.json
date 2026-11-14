@@ -4095,6 +4095,8 @@
 	"settings.agentAccounts.switching": "Passage à {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Changement de compte",
 	"settings.agentAccounts.switchFailed": "Le changement a échoué. L'agent reste sur son compte précédent.",
+	"settings.agentAccounts.cloudLoginOf": "Connexion {{provider}}",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator supprime la connexion {{email}}. Les sessions qui l'utilisent doivent d'abord passer à un autre compte.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

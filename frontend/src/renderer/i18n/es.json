@@ -4095,6 +4095,8 @@
 	"settings.agentAccounts.switching": "Cambiando a {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Cambiando de cuenta",
 	"settings.agentAccounts.switchFailed": "El cambio falló. El agente sigue en su cuenta anterior.",
+	"settings.agentAccounts.cloudLoginOf": "Inicio de sesión de {{provider}}",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator elimina el inicio de sesión {{email}}. Las sesiones que lo usan deben pasar antes a otra cuenta.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

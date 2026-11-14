@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../../hooks/useCloudCp";
 import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
+import { useCloudOffering } from "../../../hooks/useCloudOffering";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../../hooks/useProviderConnections";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
@@ -16,6 +17,7 @@ import { Button } from "../../ui/button";
 import { Pressable } from "../../ui/pressable";
 import { CloudHarnessLoginPanel, type CloudHarness } from "../CloudHarnessLoginPanel";
 import { SettingsRow } from "../SettingsRow";
+import { CloudAgentAccountsPanel } from "./CloudAgentAccountsPanel";
 import { FOCUS_HIGHLIGHT_MS } from "./harness-ui";
 
 export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; search: string }) {
@@ -23,6 +25,8 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 	const { org } = useCloudOrg();
 	const connections = useProviderConnections();
 	const versions = useCloudHarnessVersions();
+	// Each harness can hold several accounts: its options list them instead of one login.
+	const { agentAccounts } = useCloudOffering();
 	const [loginAgent, setLoginAgent] = useState<CloudHarness | null>(null);
 	const [expandedAgentId, setExpandedAgentId] = useState<CloudHarness | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
@@ -53,7 +57,11 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 					const connected = isCloudHarnessConnected(connections.data, agentId);
 					const cloudVersion = describeCloudHarness(versions.data, agentId)?.currentVersion;
 					const expanded = expandedAgentId === agentId;
-					const openLogin = () => { setLoginAgent(agentId); setExpandedAgentId(agentId); };
+					const openLogin = () => {
+						// With accounts the list logs in: it opens on adding one while there is none.
+						if (!agentAccounts) setLoginAgent(agentId);
+						setExpandedAgentId(agentId);
+					};
 					return <div
 						aria-labelledby={`harness-agent-${agentId}`}
 						className={cn("settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
@@ -71,7 +79,7 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 						</Pressable>
 						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="default" className="min-w-20" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
 						<div id={`cloud-harness-options-${agentId}`} hidden={!expanded} className={cn("basis-full pl-10", !expanded && "hidden")}>
-							{loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="default" variant="secondary" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
+							{agentAccounts ? (expanded ? <CloudAgentAccountsPanel agent={agentId} addFirst={!connected} /> : null) : loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="default" variant="secondary" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
 						</div>
 					</div>;
 				})}

@@ -4020,6 +4020,8 @@
 	"settings.agentAccounts.switching": "Wechsel zu {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Konto wird gewechselt",
 	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto.",
+	"settings.agentAccounts.cloudLoginOf": "{{provider}}-Anmeldung",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator löscht die Anmeldung {{email}}. Sitzungen, die darauf laufen, müssen zuerst zu einem anderen Konto wechseln.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

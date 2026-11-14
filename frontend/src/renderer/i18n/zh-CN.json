@@ -4002,6 +4002,8 @@
 	"settings.agentAccounts.switching": "正在切换到 {{email}}…",
 	"settings.agentAccounts.switchingAccount": "正在切换账号",
 	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。",
+	"settings.agentAccounts.cloudLoginOf": "{{provider}} 登录",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator 会删除 {{email}} 登录。在其上运行的会话需要先移到其他账号。",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

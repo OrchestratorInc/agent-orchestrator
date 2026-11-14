@@ -4095,6 +4095,8 @@
 	"settings.agentAccounts.switching": "Trocando para {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Trocando de conta",
 	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior.",
+	"settings.agentAccounts.cloudLoginOf": "Login do {{provider}}",
+	"settings.agentAccounts.cloudRemoveDescription": "O Orchestrator exclui o login {{email}}. As sessões que usam esse login precisam passar para outra conta antes.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

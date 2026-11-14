@@ -4020,6 +4020,8 @@
 	"settings.agentAccounts.switching": "{{email}}(으)로 전환 중…",
 	"settings.agentAccounts.switchingAccount": "계정 전환 중",
 	"settings.agentAccounts.switchFailed": "전환하지 못했습니다. 에이전트는 이전 계정에 그대로 있습니다.",
+	"settings.agentAccounts.cloudLoginOf": "{{provider}} 로그인",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator가 {{email}} 로그인을 삭제합니다. 이 계정에서 실행 중인 세션은 먼저 다른 계정으로 옮겨야 합니다.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",

@@ -4002,6 +4002,8 @@
 	"settings.agentAccounts.switching": "Switching to {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Switching account",
 	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account.",
+	"settings.agentAccounts.cloudLoginOf": "{{provider}} login",
+	"settings.agentAccounts.cloudRemoveDescription": "Orchestrator deletes the {{email}} login. Sessions that run on it must move to another account first.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
