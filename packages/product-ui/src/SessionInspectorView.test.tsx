@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+  commentTextLines,
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
@@ -1014,8 +1015,11 @@ describe("portable inspector presentations", () => {
 
     setRenderedOverflow(preview, "horizontal", true);
     await waitFor(() => expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "false"));
+    const toggle = preview.closest('[role="button"]')!;
     fireEvent.click(preview);
-    expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // Opened, the comment's text is drawn as markdown under its header.
+    expect(screen.getByTestId("inline-comment-body")).toHaveTextContent("A short comment");
   });
 
   it("offers AO browser, system browser, and worker-send actions for summaries", async () => {
@@ -1111,3 +1115,18 @@ const reviewLabels: InspectorReviewLabels = {
   viewInFileWorkInProgress: "View in file is coming soon.",
   viewOnPR: "View on PR",
 };
+
+describe("commentTextLines", () => {
+  it("reads a bot comment's words without its HTML, markers or rules", () => {
+    const body = [
+      "<!-- coderabbit-ai-generated:v1 -->",
+      "",
+      "**<picture><img src=\"x.svg\" width=\"16\" alt=\"\"></picture> Minor** · **Quick win**",
+      "",
+      "---",
+      "## Fix `rrule`",
+      "- [ ] keep it",
+    ].join("\n");
+    expect(commentTextLines(body)).toEqual(["Minor · Quick win", "Fix rrule", "keep it"]);
+  });
+});

@@ -6,6 +6,8 @@ import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
+import { botThreadReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,8 +15,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
 	InspectorActivityTimelineView,
 	InspectorPullRequestCardView,
@@ -1987,10 +1987,7 @@ function LocalReviewsSection({
 	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data?.prs);
 	const githubReviews = prSummaries.filter(
 		(pr) =>
-			(pr.state === "open" || pr.state === "draft") &&
-			((pr.review?.reviews?.length ?? 0) > 0 ||
-				(pr.review?.unresolvedBy ?? []).some((reviewer) => reviewer.count > 0) ||
-				(pr.review?.resolvedBy ?? []).some((reviewer) => reviewer.count > 0)),
+			(pr.state === "open" || pr.state === "draft") && prHasReviewActivity(pr),
 	);
 	return (
 		<>
@@ -2417,8 +2414,11 @@ function MergedReviewsSection({
 		const entries = (github?.review?.reviews ?? []).filter(
 			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
 		);
-		const allUnresolvedReviewers = github?.review?.unresolvedBy ?? [];
-		const allResolvedReviewers = github?.review?.resolvedBy ?? [];
+		// A bot's inline comments (CodeRabbit's) come from the PR's review threads:
+		// the summary's lists leave bots out.
+		const botReviewers = github ? botThreadReviewers(github) : { unresolved: [], resolved: [] };
+		const allUnresolvedReviewers = [...(github?.review?.unresolvedBy ?? []), ...botReviewers.unresolved];
+		const allResolvedReviewers = [...(github?.review?.resolvedBy ?? []), ...botReviewers.resolved];
 		const agentReviewIds = new Set(aoRuns.map((run) => run.githubReviewId).filter(Boolean));
 		const agentComments = new Map<string, { inlineComments: InspectorInlineComment[]; resolvedComments: InspectorInlineComment[] }>();
 		const partitionReviewerComments = (
@@ -2548,6 +2548,24 @@ function MergedReviewsSection({
 				submittedAt: "",
 				submittedAtLabel: "",
 				verdict: githubVerdict("none", t),
+			});
+		}
+		// Top-level PR comments read beside the reviews: a bot's walkthrough or a
+		// person's note is feedback too, and the PR page shows it in the same place.
+		for (const comment of github ? prConversationComments(github) : []) {
+			externalEntries.push({
+				body: comment.body,
+				canRequestRereview: false,
+				id: `comment:${comment.url || comment.id}`,
+				pullRequestUrl: github?.url,
+				inlineComments: [],
+				resolvedComments: [],
+				isBot: comment.isBot,
+				reviewerId: comment.author,
+				reviewUrl: comment.url,
+				submittedAt: comment.createdAt ?? "",
+				submittedAtLabel: comment.createdAt ? formatTimeCompact(comment.createdAt) : "",
+				verdict: githubVerdict("commented", t),
 			});
 		}
 		for (const reviewer of resolvedByReviewer.values()) {
@@ -2692,19 +2710,12 @@ function reviewLabels(t: TFunction): InspectorReviewLabels {
 }
 
 function renderReviewMarkdown(body: string) {
+	// The same renderer as the PR's comments, so a bot's <details> sections and
+	// badges read as GitHub shows them rather than as literal tags.
 	return (
-		<ReactMarkdown
-			components={{
-				a: ({ href, children }) => (
-					<AppLink href={href} target="_blank" rel="noopener noreferrer">
-						{children}
-					</AppLink>
-				),
-			}}
-			remarkPlugins={[remarkGfm]}
-		>
-			{body}
-		</ReactMarkdown>
+		<div className={githubHtmlClass}>
+			<GitHubMarkdown body={body} />
+		</div>
 	);
 }
 

@@ -1104,8 +1104,8 @@ function ExternalReviewCard({
 				{body ? (
 					<ReviewMarkdownBody body={body} clamped={!open} elementRef={bodyRef} renderMarkdown={renderMarkdown} testId="github-review-summary" />
 				) : null}
-				{open ? <GithubInlineComments comments={openComments} externalLink={externalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} reviewUrl={entry.reviewUrl} /> : null}
-				{open && resolvedComments.length > 0 ? <ResolvedInlineComments comments={resolvedComments} externalLink={externalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} reviewUrl={entry.reviewUrl} /> : null}
+				{open ? <GithubInlineComments comments={openComments} externalLink={externalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} renderMarkdown={renderMarkdown} reviewUrl={entry.reviewUrl} /> : null}
+				{open && resolvedComments.length > 0 ? <ResolvedInlineComments comments={resolvedComments} externalLink={externalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} renderMarkdown={renderMarkdown} reviewUrl={entry.reviewUrl} /> : null}
 			</div>
 		</article>
 	);
@@ -1118,6 +1118,7 @@ function GithubInlineComments({
 	onResolveInlineComment,
 	onSendInlineComment,
 	onViewInlineCommentInFile,
+	renderMarkdown,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1127,6 +1128,8 @@ function GithubInlineComments({
 	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	/** Draws an opened comment's text; without it the text shows as written. */
+	renderMarkdown?: (body: string) => ReactNode;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1138,7 +1141,7 @@ function GithubInlineComments({
 				<ChevronIcon className="size-icon-2xs shrink-0" direction={open ? "down" : "right"} />
 				<span>{labels.openComments} · {comments.length}</span>
 			</button>
-			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} reviewUrl={reviewUrl} /> : null}
+			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} renderMarkdown={renderMarkdown} reviewUrl={reviewUrl} /> : null}
 		</section>
 	);
 }
@@ -1148,6 +1151,7 @@ function ResolvedInlineComments({
 	externalLink: ExternalLink,
 	labels,
 	onViewInlineCommentInFile,
+	renderMarkdown,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1155,6 +1159,7 @@ function ResolvedInlineComments({
 	externalLink: ExternalLinkComponent;
 	labels: InspectorReviewLabels;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	renderMarkdown?: (body: string) => ReactNode;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1165,7 +1170,7 @@ function ResolvedInlineComments({
 				<ChevronIcon className="size-icon-2xs shrink-0" direction={open ? "down" : "right"} />
 				<span>{labels.resolvedComments(comments.length)}</span>
 			</button>
-			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} reviewUrl={reviewUrl} /> : null}
+			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} renderMarkdown={renderMarkdown} reviewUrl={reviewUrl} /> : null}
 		</section>
 	);
 }
@@ -1177,6 +1182,7 @@ function InlineCommentList({
 	onResolveInlineComment,
 	onSendInlineComment,
 	onViewInlineCommentInFile,
+	renderMarkdown,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1186,6 +1192,8 @@ function InlineCommentList({
 	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	/** Draws an opened comment's text; without it the text shows as written. */
+	renderMarkdown?: (body: string) => ReactNode;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1250,6 +1258,7 @@ function InlineCommentList({
 						}
 					} : undefined}
 					onViewInFile={comment.file && onViewInlineCommentInFile ? () => onViewInlineCommentInFile(comment) : undefined}
+					renderMarkdown={renderMarkdown}
 					resolveError={resolveErrorCommentIds.has(comment.id)}
 					resolvedSuccess={manuallyResolvedCommentIds.has(comment.id)}
 					resolving={resolvingCommentIds.has(comment.id)}
@@ -1262,6 +1271,24 @@ function InlineCommentList({
 	);
 }
 
+/**
+ * A comment's words line by line, as plain text: HTML comments and tags,
+ * heading, list and quote markers, and emphasis go; rules and code fences are
+ * not lines of words.
+ */
+export function commentTextLines(body: string): string[] {
+	return body
+		.replace(/<!--[\s\S]*?-->/g, "")
+		.replace(/<[^>]+>/g, "")
+		.split("\n")
+		.map((line) => line
+			.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")
+			.replace(/\*\*|__|`/g, "")
+			.replace(/\s+/g, " ")
+			.trim())
+		.filter((line) => line && !/^(?:[-*_=]{3,}|```.*|~~~.*)$/.test(line));
+}
+
 function InlineCommentRow({
 	comment,
 	externalLink: ExternalLink,
@@ -1269,6 +1296,7 @@ function InlineCommentRow({
 	onResolve,
 	onSend,
 	onViewInFile,
+	renderMarkdown,
 	resolveError = false,
 	resolvedSuccess = false,
 	resolving = false,
@@ -1282,6 +1310,7 @@ function InlineCommentRow({
 	onResolve?: () => void;
 	onSend?: () => void;
 	onViewInFile?: () => void;
+	renderMarkdown?: (body: string) => ReactNode;
 	resolveError?: boolean;
 	resolvedSuccess?: boolean;
 	resolving?: boolean;
@@ -1293,8 +1322,12 @@ function InlineCommentRow({
 	const [menuOpen, setMenuOpen] = useState(false);
 	const body = comment.body?.trim();
 	const fileLabel = comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : labels.commentNumber(1);
-	const preview = body ? body.split("\n")[0] : "";
-	const hasHiddenLines = Boolean(body && body.split("\n").slice(1).some((line) => line.trim()));
+	// A bot writes HTML and markdown (CodeRabbit opens with a hidden comment and
+	// an icon), so the one-line preview is the first line of its words.
+	const lines = body ? commentTextLines(body) : [];
+	const preview = lines[0] ?? "";
+	const hasHiddenLines = lines.length > 1 || Boolean(renderMarkdown && body && body !== preview);
+	const rendered = expanded && body && renderMarkdown;
 	const { ref: previewRef, isOverflowing: previewOverflows } = useRenderedOverflow<HTMLSpanElement>(preview, "horizontal", !expanded);
 	const canExpand = hasHiddenLines || previewOverflows;
 	useEffect(() => {
@@ -1348,8 +1381,10 @@ function InlineCommentRow({
 						) : null}
 					</span>
 				</span>
-				{body ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
+				{body && !rendered ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
 			</div>
+			{/* Outside the toggle, so a link or a <details> in the text works without folding the comment. */}
+			{rendered ? <ReviewMarkdownBody body={body} clamped={false} renderMarkdown={renderMarkdown} testId="inline-comment-body" /> : null}
 			{resolvedSuccess ? <p className="m-0 text-2xs font-medium text-success">{labels.resolvedReview}</p> : null}
 			{resolveError ? <p className="m-0 text-2xs font-medium text-error">{labels.resolveReviewFailed}</p> : null}
 			{sendError && !sent ? <p className="m-0 text-2xs font-medium text-error">{labels.sendToWorkerAgentError}</p> : null}
@@ -1444,6 +1479,7 @@ function ReviewSummaryCard({
 				onResolveInlineComment={onResolveInlineComment}
 				onSendInlineComment={onSendInlineComment}
 				onViewInlineCommentInFile={onViewInlineCommentInFile}
+				renderMarkdown={renderMarkdown}
 				reviewerId={actor}
 				reviewUrl={url ?? undefined}
 			/>
@@ -1453,6 +1489,7 @@ function ReviewSummaryCard({
 					externalLink={externalLink}
 					labels={labels}
 					onViewInlineCommentInFile={onViewInlineCommentInFile}
+					renderMarkdown={renderMarkdown}
 					reviewerId={actor}
 					reviewUrl={url ?? undefined}
 				/>

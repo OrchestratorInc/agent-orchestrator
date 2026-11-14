@@ -4050,6 +4050,88 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getAllByText("Earlier-pass comment.")).toHaveLength(1);
   });
 
+  it("lists a bot's inline comments and the PR's top-level comments with the review summary, rendering its HTML", async () => {
+    const previous = getMock.getMockImplementation()!;
+    getMock.mockImplementation(async (path: string, opts?: unknown) => {
+      if (path === "/api/v1/sessions/{sessionId}/pr") {
+        return {
+          data: {
+            prs: [prSummary(3, "open", {
+              author: "aditi",
+              review: {
+                decision: "none",
+                hasUnresolvedHumanComments: false,
+                reviews: [{
+                  reviewerId: "coderabbitai",
+                  verdict: "none",
+                  isBot: true,
+                  autoInjectReview: true,
+                  reviewUrl: "https://example.com/pr/3#review-1",
+                  submittedAt: "2026-06-15T10:00:00Z",
+                  body: "<!-- coderabbit-ai-generated:v1 -->\n\n**Actionable comments posted: 1**\n\n<details>\n<summary>Prompt to fix all issues</summary>\n\nFix the schema.\n\n</details>",
+                }],
+                // The summary leaves bots out; their comments live on the threads.
+                unresolvedBy: [],
+              },
+              threads: [{
+                id: "thread-1",
+                path: "contracts/openapi.yaml",
+                line: 12,
+                resolved: false,
+                comments: [{
+                  id: "c-1",
+                  author: "coderabbitai[bot]",
+                  isBot: true,
+                  url: "https://example.com/pr/3#discussion_r1",
+                  createdAt: "2026-06-15T10:00:00Z",
+                  body: "<!-- coderabbit-ai-generated:v1 -->\n\n**<picture><img src=\"https://example.com/amber.svg\" width=\"16\" height=\"16\" alt=\"\"></picture> Minor** · **Quick win**\n\n**Encode the schedule requirement.**",
+                }],
+              }],
+              conversation: [{
+                id: "walk-1",
+                author: "coderabbitai",
+                isBot: true,
+                url: "https://example.com/pr/3#issuecomment-1",
+                createdAt: "2026-06-15T09:00:00Z",
+                body: "## Walkthrough\n\nAdds cloud automations.",
+              }, {
+                id: "note-1",
+                author: "maya",
+                isBot: false,
+                url: "https://example.com/pr/3#issuecomment-2",
+                createdAt: "2026-06-15T11:00:00Z",
+                body: "Please also update the docs.",
+              }],
+            })],
+          },
+        };
+      }
+      return previous(path, opts);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    // The review summary's <details> is a real disclosure, and its hidden state never shows.
+    const summary = await screen.findByText("Prompt to fix all issues");
+    expect(summary.tagName).toBe("SUMMARY");
+    expect(document.body.textContent).not.toMatch(/<details|<summary|<!--|coderabbit-ai-generated/);
+    // Top-level comments sit beside the review.
+    expect(screen.getByText("Adds cloud automations.")).toBeInTheDocument();
+    expect(screen.getByText("Please also update the docs.")).toBeInTheDocument();
+
+    // The bot's inline comment is listed under its review, previewed as words.
+    await userEvent.click(screen.getByRole("button", { name: /coderabbitai.*Commented/i }));
+    expect(await screen.findByText("contracts/openapi.yaml:12")).toBeInTheDocument();
+    expect(screen.getByText("Minor · Quick win")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Minor · Quick win"));
+    const body = screen.getByTestId("inline-comment-body");
+    expect(body).toHaveTextContent("Encode the schedule requirement.");
+    expect(body.querySelector("strong")).not.toBeNull();
+    // The 16px icon is decoration, not an image to open.
+    expect(body.querySelector("[data-testid='pr-description-image']")).toBeNull();
+  });
+
   it("passes an inline review location to the Files diff viewer", async () => {
     const onOpenReviewFile = vi.fn();
     const previous = getMock.getMockImplementation()!;
