@@ -1,11 +1,30 @@
 import { useEffect, useRef } from "react";
-import { aoBridge } from "../../lib/bridge";
+import { dictationClient } from "../../lib/dictation-client";
 import { cn } from "../../lib/utils";
 
 const BARS = 11;
 const MIDDLE = (BARS - 1) / 2;
 /** Bar heights, 1px apart, from the resting dot to the pill's inner height. */
-const HEIGHTS = ["h-[3px]", "h-[4px]", "h-[5px]", "h-[6px]", "h-[7px]", "h-[8px]", "h-[9px]", "h-[10px]", "h-[11px]", "h-[12px]", "h-[13px]", "h-[14px]", "h-[15px]", "h-[16px]", "h-[17px]", "h-[18px]", "h-[19px]", "h-[20px]"];
+const HEIGHTS = [
+	"h-[3px]",
+	"h-[4px]",
+	"h-[5px]",
+	"h-[6px]",
+	"h-[7px]",
+	"h-[8px]",
+	"h-[9px]",
+	"h-[10px]",
+	"h-[11px]",
+	"h-[12px]",
+	"h-[13px]",
+	"h-[14px]",
+	"h-[15px]",
+	"h-[16px]",
+	"h-[17px]",
+	"h-[18px]",
+	"h-[19px]",
+	"h-[20px]",
+];
 const BAR = "w-[3px] rounded-full bg-current";
 /** How tall each bar may grow: full in the middle, about a third at the ends. */
 const REACH = Array.from({ length: BARS }, (_, bar) => {
@@ -18,6 +37,10 @@ const SPEECH_SPAN = 0.6;
 /** The bars catch up with louder sound within a frame or two, and settle back gently. */
 const ATTACK_S = 0.03;
 const RELEASE_S = 0.14;
+/** While the recognizer starts or finishes there is no audio to show, so a ripple runs across the bars instead. */
+const RIPPLE_HZ = 0.9;
+const RIPPLE_FLOOR = 0.14;
+const RIPPLE_SPAN = 0.4;
 /** A standing wave over the bell, so the bars rise and fall in place instead of travelling sideways. */
 const WAVE_DEPTH = 0.22;
 const WAVE_HZ = 1.6;
@@ -27,7 +50,7 @@ const WAVE_HZ = 1.6;
  * middle: tallest in the centre, with a gentle standing wave across them.
  * Drawn straight to the bars each frame, outside React.
  */
-export function DictationMeter({ listening }: { listening: boolean }) {
+export function DictationMeter({ listening, working = false }: { listening: boolean; working?: boolean }) {
 	const row = useRef<HTMLSpanElement>(null);
 
 	useEffect(() => {
@@ -41,13 +64,28 @@ export function DictationMeter({ listening }: { listening: boolean }) {
 				if (bar.className !== className) bar.className = className;
 			});
 		};
+		if (!listening && working) {
+			let ripple = 0;
+			const run = (now: number) => {
+				const seconds = now / 1000;
+				bars.forEach((bar, index) => {
+					const crest = 0.5 + 0.5 * Math.sin(2 * Math.PI * ((index / BARS) * 1.25 - seconds * RIPPLE_HZ));
+					const step = Math.round((RIPPLE_FLOOR + RIPPLE_SPAN * crest) * REACH[index] * (HEIGHTS.length - 1));
+					const className = `${BAR} ${HEIGHTS[step]}`;
+					if (bar.className !== className) bar.className = className;
+				});
+				ripple = requestAnimationFrame(run);
+			};
+			ripple = requestAnimationFrame(run);
+			return () => cancelAnimationFrame(ripple);
+		}
 		if (!listening) {
 			draw(0, 0);
 			return;
 		}
 
 		let loudness = 0;
-		const unsubscribe = aoBridge.dictation.onEvent((event) => {
+		const unsubscribe = dictationClient.onEvent((event) => {
 			if (event.type === "levels") loudness = Math.max(loudness, ...event.values);
 		});
 		let position = 0;
@@ -67,7 +105,7 @@ export function DictationMeter({ listening }: { listening: boolean }) {
 			cancelAnimationFrame(frame);
 			unsubscribe();
 		};
-	}, [listening]);
+	}, [listening, working]);
 
 	return (
 		<span ref={row} aria-hidden="true" className="flex h-5 items-center gap-0.5">

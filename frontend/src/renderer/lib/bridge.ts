@@ -13,6 +13,7 @@ export const aoBridge: AoBridge =
 			start: async () => undefined,
 			stop: async () => undefined,
 			cancel: async () => undefined,
+			authorize: async () => ({ granted: true }),
 			onEvent: () => () => undefined,
 		},
 		app: {

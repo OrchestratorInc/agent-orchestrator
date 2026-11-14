@@ -1,3 +1,10 @@
+/** The answer to asking macOS for the speech and microphone access native dictation needs. */
+export type DictationAuthorization = {
+	granted: boolean;
+	/** What to do next when access was refused. */
+	message?: string;
+};
+
 export type DictationEvent =
 	| { type: "listening" }
 	/** Loudness in 0...1, one value per 10 ms of audio, oldest first. */

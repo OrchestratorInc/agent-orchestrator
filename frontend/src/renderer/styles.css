@@ -2420,15 +2420,6 @@ textarea,
 	}
 }
 
-@keyframes ao-install-progress-sweep {
-	0% {
-		transform: translateX(-60%);
-	}
-	100% {
-		transform: translateX(160%);
-	}
-}
-
 .ao-install-progress {
 	position: relative;
 	height: 4px;
@@ -2437,21 +2428,15 @@ textarea,
 	background: var(--color-border);
 }
 
+/* Fills from the left to how far the install is. It never sweeps, so it never looks finished and then starts over. */
 .ao-install-progress__bar {
 	position: absolute;
 	top: 0;
 	bottom: 0;
-	width: 40%;
+	left: 0;
 	border-radius: var(--radius-full);
 	background: var(--color-accent);
-	animation: ao-install-progress-sweep 1.1s ease-in-out infinite;
-}
-
-/* The installer reported how far it is: fill from the left instead of sweeping. */
-.ao-install-progress__bar--determinate {
-	left: 0;
-	animation: none;
-	transition: width 300ms ease-out;
+	transition: width 500ms linear;
 }
 
 @keyframes overlay-in {
@@ -2744,12 +2729,7 @@ html.sidebar-reordering * {
 		animation: none;
 	}
 
-	.ao-install-progress__bar:not(.ao-install-progress__bar--determinate) {
-		animation: none;
-		width: 60%;
-	}
-
-	.ao-install-progress__bar--determinate {
+	.ao-install-progress__bar {
 		transition: none;
 	}
 

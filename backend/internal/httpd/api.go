@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/dictation"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
@@ -97,6 +98,7 @@ type APIDeps struct {
 	Endpoints controllers.EndpointSource
 	Installer controllers.Installer
 	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
+	Dictation   *dictation.Service
 	ComputerUse controllers.ComputerUse
 	AgentAuth   controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
@@ -185,6 +187,7 @@ type API struct {
 	endpoints     *controllers.EndpointsController
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
+	dictation     *controllers.DictationController
 	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
@@ -254,6 +257,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
+		dictation:     &controllers.DictationController{Svc: deps.Dictation},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
@@ -406,6 +410,7 @@ func (a *API) Register(root chi.Router) {
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.computerUse.Register(r)
+			a.dictation.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
 			a.sessionSearch.Register(r)
@@ -413,6 +418,7 @@ func (a *API) Register(root chi.Router) {
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.
+		a.dictation.RegisterStreams(r)
 		a.notifications.RegisterStream(r)
 		a.codexAccounts.RegisterStreams(r)
 		a.sessions.RegisterStreams(r)
