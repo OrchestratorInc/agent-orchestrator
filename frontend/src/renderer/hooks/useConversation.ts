@@ -1676,9 +1676,11 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	// keeps getting it does not reload the conversation every time.
 	const snapshotRefreshed = useRef(false);
 	const readEnabled = Boolean(sessionId) && enabled;
-	// Turned off means the snapshot caught up; a later conflict is a new one.
+	// Turned off means the snapshot caught up, so each enabled period starts fresh.
+	// Reset on turning on too: a read still in flight when it turned off can answer
+	// "not running" after the first reset and set the guard again.
 	useEffect(() => {
-		if (!readEnabled) snapshotRefreshed.current = false;
+		snapshotRefreshed.current = false;
 	}, [readEnabled]);
 	const query = useQuery({
 		queryKey,

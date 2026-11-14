@@ -818,6 +818,37 @@ describe("config options read while the cached snapshot outlived the controller"
 		expect(snapshotReloads()).toBe(2);
 	});
 
+	it("reloads the snapshot for a new conflict when a read from before the turn-off answered late", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		const notRunning = {
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		};
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const snapshotReloads = () => invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify(filters?.queryKey) === JSON.stringify(conversationQueryKey("ao-1"))).length;
+		let answerLate!: (value: typeof notRunning) => void;
+		getMock.mockReturnValueOnce(new Promise((resolve) => { answerLate = resolve; }));
+		const { rerender } = renderHook(({ enabled }) => useConversationConfigOptions("ao-1", enabled), {
+			wrapper: catalogWrapper(queryClient),
+			initialProps: { enabled: true },
+		});
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+
+		// The read is turned off while its request is still out, then it answers "not running".
+		rerender({ enabled: false });
+		await act(async () => { answerLate(notRunning); });
+		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.status).toBe("error"));
+		expect(snapshotReloads()).toBe(1);
+
+		// Turned on again, the next conflict is a new one and reloads the snapshot again.
+		getMock.mockResolvedValueOnce(notRunning);
+		rerender({ enabled: true });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(snapshotReloads()).toBe(2));
+	});
+
 	it("still reports a catalog read that failed for any other reason", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		getMock.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } });
