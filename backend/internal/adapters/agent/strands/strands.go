@@ -47,7 +47,15 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Native provider/model override. Leave empty to preserve the configured model; model modules do not accept this override.")
 }
 
+// safeID bounds native Strands session ids, which AO generates as UUIDs.
 var safeID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
+
+// aoSessionID matches the AO session ids `ao hooks` accepts: project prefixes
+// keep dots and case (a `next.js` project yields `next.js-1`), but no path
+// separator, leading dot or `..` can reach the launches/ file name.
+var aoSessionID = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
+
+func validAOSessionID(id string) bool { return len(id) <= 200 && aoSessionID.MatchString(id) }
 
 // GetLaunchCommand starts a distinct durable conversation and records only its
 // correlation metadata under AO data. The visible task is separate from the
@@ -56,7 +64,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !safeID.MatchString(cfg.SessionID) {
+	if !validAOSessionID(cfg.SessionID) {
 		return nil, errors.New("strands: invalid AO session id")
 	}
 	id := cfg.NativeSessionID
@@ -207,7 +215,7 @@ func readLocator(ctx context.Context, dataDir, sessionID string) (sessionLocator
 	if err := ctx.Err(); err != nil {
 		return loc, err
 	}
-	if !filepath.IsAbs(dataDir) || !safeID.MatchString(sessionID) {
+	if !filepath.IsAbs(dataDir) || !validAOSessionID(sessionID) {
 		return loc, errors.New("strands: invalid session locator")
 	}
 	data, err := os.ReadFile(locatorPath(dataDir, sessionID))

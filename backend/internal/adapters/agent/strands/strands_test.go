@@ -177,6 +177,43 @@ func TestInvalidIDsAndRestrictions(t *testing.T) {
 	}
 }
 
+// AO session ids carry the project prefix, which keeps dots and case.
+func TestDottedAndMixedCaseAOSessionIDsLaunchAndRestore(t *testing.T) {
+	for _, id := range []string{"next.js-1", "MyApp-2", "a.b_c-3"} {
+		t.Run(id, func(t *testing.T) {
+			p, cfg := setup(t, `{}`)
+			cfg.SessionID = id
+			if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
+				t.Fatalf("launch rejected %q: %v", id, err)
+			}
+			ref := ports.SessionRef{ID: id, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-1"}}
+			if _, ok, err := p.SessionInfo(context.Background(), ref); err != nil || ok {
+				t.Fatalf("session info before history = %v, %v; want not found", ok, err)
+			}
+			path := checkpointPath(cfg.DataDir, "native-1")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`{"scope":"agent","schemaVersion":"1.0","data":{"messages":[{"role":"user","content":[{"text":"task"}]}]}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: cfg.DataDir, Session: ref}); err != nil || !ok {
+				t.Fatalf("restore %q = %v, %v", id, ok, err)
+			}
+			if info, ok, err := p.SessionInfo(context.Background(), ref); err != nil || !ok || info.AgentSessionID != "native-1" {
+				t.Fatalf("session info %q = %+v, %v, %v", id, info, ok, err)
+			}
+		})
+	}
+	for _, id := range []string{"", ".hidden", "a..b", "a.", "../escape", "a/b", `a\b`, strings.Repeat("a", 201)} {
+		p, cfg := setup(t, `{}`)
+		cfg.SessionID = id
+		if _, err := p.GetLaunchCommand(context.Background(), cfg); err == nil {
+			t.Errorf("launch accepted AO session id %q", id)
+		}
+	}
+}
+
 func TestPromptFileAndContext(t *testing.T) {
 	p, cfg := setup(t, `{}`)
 	cfg.SystemPromptFile = filepath.Join(t.TempDir(), "prompt")
@@ -342,5 +379,39 @@ func TestNodePreloadHidesSynchronousModuleHooks(t *testing.T) {
 		"--input-type=module", "-e", `import * as m from "node:module"; console.log(typeof m.registerHooks, typeof m.register)`).CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "undefined function" {
 		t.Fatalf("preload output %q, %v", out, err)
+	}
+}
+
+// The preload must not leak into project Node children: an older Node rejects
+// --import in NODE_OPTIONS, and children never need the Strands workaround.
+func TestNodePreloadLeavesChildNodeOptionsAsLaunched(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	dataDir := t.TempDir()
+	path := nodePreloadPath(dataDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nodePreloadSource, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	child := `const { execFileSync } = require("node:child_process");
+process.stdout.write(execFileSync(process.execPath, ["-p", "JSON.stringify(process.env.NODE_OPTIONS ?? null)"], { encoding: "utf8" }));`
+	// The exact token AO launches with; a placeholder keeps withNodePreload from
+	// falling back to this process's own NODE_OPTIONS.
+	preload := strings.TrimSpace(strings.TrimSuffix(withNodePreload("--placeholder", path), "--placeholder"))
+	for _, tc := range []struct{ options, want string }{
+		{preload + " --max-old-space-size=4096", `"--max-old-space-size=4096"`},
+		{preload, "null"},
+	} {
+		options := tc.options
+		cmd := exec.Command(node, "-e", child)
+		cmd.Env = append(os.Environ(), "NODE_OPTIONS="+options, "AO_STRANDS_NODE_HOOK_WORKAROUND=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != tc.want {
+			t.Fatalf("child NODE_OPTIONS with %q = %q, %v; want %s", options, out, err, tc.want)
+		}
 	}
 }
