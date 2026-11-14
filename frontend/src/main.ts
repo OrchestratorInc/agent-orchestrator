@@ -3261,7 +3261,8 @@ const dictation = registerDictationIpc(
 		app.isPackaged ? process.resourcesPath : app.getAppPath(),
 		"dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator",
 	),
-	getShellWebContents,
+	// The chat composer, or a browser page's annotation composer while annotating.
+	(sender) => sender === getShellWebContents() || Boolean(browserViewHost?.isAnnotationDictationSender(sender)),
 );
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);

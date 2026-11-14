@@ -17,6 +17,7 @@ import type {
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
 import { aoBridge } from "../lib/bridge";
+import { isMacPlatform } from "../lib/platform";
 import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
@@ -914,6 +915,8 @@ export function useBrowserView({
 					accentForeground: styles.getPropertyValue("--primary-foreground").trim(),
 					destructive: styles.getPropertyValue("--destructive").trim(),
 				},
+				// The native dictation helper runs on macOS only.
+				dictation: isMacPlatform(),
 			});
 			setAnnotationModeState(enabled);
 		},

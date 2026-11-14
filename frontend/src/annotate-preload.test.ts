@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserAnnotationSession, type BrowserAnnotationSession } from "./shared/browser-annotations";
+import type { DictationEvent } from "./shared/dictation";
 
 const electronMocks = vi.hoisted(() => {
 	const listeners = new Map<string, (...args: unknown[]) => void>();
+	// The composer and its level meter both listen to dictation at once.
+	const dictationListeners = new Set<(...args: unknown[]) => void>();
 	return {
 		listeners,
-		on: vi.fn((channel: string, listener: (...args: unknown[]) => void) => listeners.set(channel, listener)),
+		dictationListeners,
+		on: vi.fn((channel: string, listener: (...args: unknown[]) => void) => {
+			if (channel === "dictation:event") dictationListeners.add(listener);
+			else listeners.set(channel, listener);
+		}),
+		removeListener: vi.fn((channel: string, listener: (...args: unknown[]) => void) => {
+			if (channel === "dictation:event") dictationListeners.delete(listener);
+		}),
 		send: vi.fn(),
 		invoke: vi.fn().mockResolvedValue(undefined),
 	};
@@ -14,6 +24,7 @@ const electronMocks = vi.hoisted(() => {
 vi.mock("electron", () => ({
 	ipcRenderer: {
 		on: electronMocks.on,
+		removeListener: electronMocks.removeListener,
 		send: electronMocks.send,
 		invoke: electronMocks.invoke,
 	},
@@ -42,6 +53,21 @@ const motionMocks = vi.hoisted(() => ({
 
 vi.mock("motion", () => ({ animate: motionMocks.animate }));
 
+// jsdom cannot produce trusted events, so tests opt in to treating clicks as the user's.
+const gestureMocks = vi.hoisted(() => ({ trustClicks: false }));
+vi.mock("./shared/trusted-event", () => ({
+	isTrustedUserEvent: (event: Event) => gestureMocks.trustClicks || event.isTrusted,
+}));
+
+// The overlay's shadow root is closed to the page; keep a handle for the tests.
+const overlayShadowRoots = new WeakMap<Element, ShadowRoot>();
+const attachShadow = Element.prototype.attachShadow;
+Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
+	const root = attachShadow.call(this, init);
+	overlayShadowRoots.set(this, root);
+	return root;
+};
+
 const fontMocks = vi.hoisted(() => ({ add: vi.fn() }));
 class MockFontFace {
 	constructor(_family: string) {}
@@ -54,10 +80,20 @@ await import("./annotate-preload");
 
 type Bounds = { left: number; top: number; width: number; height: number };
 
-function setMode(enabled: boolean, session?: BrowserAnnotationSession): void {
+function setMode(enabled: boolean, session?: BrowserAnnotationSession, dictation = false): void {
 	const listener = electronMocks.listeners.get("browser:annotation:setMode");
 	if (!listener) throw new Error("annotation mode listener was not registered");
-	listener({}, { enabled, ...(session ? { session } : {}) });
+	listener({}, { enabled, ...(session ? { session } : {}), ...(dictation ? { dictation } : {}) });
+}
+
+/** The run number of the latest dictation the composer started. */
+function latestRun(): number {
+	return (electronMocks.invoke.mock.calls.findLast(([channel]) => channel === "dictation:start")?.[1] as number) ?? 0;
+}
+
+/** Delivers an event as main does: tagged with a run, the latest one by default. */
+function emitDictation(event: DictationEvent, run = latestRun()): void {
+	for (const listener of [...electronMocks.dictationListeners]) listener({}, { ...event, run });
 }
 
 function setElementBounds<T extends Element>(element: T, bounds: Bounds): T {
@@ -91,8 +127,9 @@ function stubPanelContentHeight(height: number): void {
 
 function overlayRoot(): ShadowRoot {
 	const host = document.querySelector<HTMLDivElement>("[data-ao-annotation-root]");
-	if (!host?.shadowRoot) throw new Error("annotation overlay was not rendered");
-	return host.shadowRoot;
+	const root = host && overlayShadowRoots.get(host);
+	if (!root) throw new Error("annotation overlay was not rendered");
+	return root;
 }
 
 function openAdjust(element: Element): ShadowRoot {
@@ -663,10 +700,10 @@ describe("annotation adjustment preload", () => {
 		listener({}, "capture");
 
 		await vi.waitFor(() => {
-			expect(overlayRoot().querySelector<HTMLElement>(".screenshot-notice")?.hidden).toBe(false);
+			expect(overlayRoot().querySelector<HTMLElement>(".notice")?.hidden).toBe(false);
 		});
 		expect(electronMocks.invoke).toHaveBeenCalledWith("browser:annotation:capture");
-		expect(overlayRoot().querySelector<HTMLElement>(".screenshot-notice")?.textContent).toBe(
+		expect(overlayRoot().querySelector<HTMLElement>(".notice")?.textContent).toBe(
 			"Screenshot copied to clipboard",
 		);
 		// Nothing joins the annotation batch, so no session state is emitted.
@@ -683,7 +720,260 @@ describe("annotation adjustment preload", () => {
 			expect(electronMocks.invoke).toHaveBeenCalledWith("browser:annotation:capture");
 		});
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(overlayRoot().querySelector<HTMLElement>(".screenshot-notice")?.hidden).toBe(true);
+		expect(overlayRoot().querySelector<HTMLElement>(".notice")?.hidden).toBe(true);
 		expect(electronMocks.send.mock.calls.some(([channel]) => channel === "browser:annotation:state")).toBe(false);
+	});
+});
+
+describe("annotation composer dictation", () => {
+	function openComment(id: string): ShadowRoot {
+		const button = setElementBounds(document.createElement("button"), { left: 20, top: 30, width: 140, height: 36 });
+		button.id = id;
+		button.textContent = "Continue";
+		document.body.appendChild(button);
+		clickPage(button);
+		return overlayRoot();
+	}
+
+	beforeEach(() => {
+		document.body.innerHTML = "";
+		electronMocks.send.mockClear();
+		electronMocks.invoke.mockClear();
+		electronMocks.invoke.mockResolvedValue(undefined);
+		vi.stubGlobal("requestAnimationFrame", () => 0);
+		vi.stubGlobal("cancelAnimationFrame", () => undefined);
+		gestureMocks.trustClicks = true;
+	});
+
+	afterEach(() => {
+		gestureMocks.trustClicks = false;
+		setMode(false);
+		document.body.innerHTML = "";
+		vi.unstubAllGlobals();
+		vi.stubGlobal("FontFace", MockFontFace);
+	});
+
+	it("offers the mic only when the shell allows dictation", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href));
+		expect(openComment("no-dictation").querySelector('[data-action="dictate"]')).toBeNull();
+		setMode(false);
+
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const row = openComment("with-dictation").querySelector<HTMLElement>(".composer-input-row");
+		const mic = row?.querySelector<HTMLButtonElement>('[data-action="dictate"]');
+		expect(mic?.getAttribute("aria-label")).toBe("Dictate");
+		// The add control stays the trailing one.
+		expect(mic?.nextElementSibling).toBe(row?.querySelector('[data-action="add"]'));
+	});
+
+	it("does not let the page's scripts start the microphone or read the comment", () => {
+		gestureMocks.trustClicks = false;
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-untrusted");
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+
+		// What a page script can do: a synthetic click on the control.
+		mic.click();
+		mic.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+		expect(electronMocks.invoke).not.toHaveBeenCalledWith("dictation:start", expect.anything());
+		expect(mic.getAttribute("aria-pressed")).toBe("false");
+		expect(document.querySelector("[data-ao-annotation-root]")?.shadowRoot).toBeNull();
+	});
+
+	it("streams the transcript into the comment at the caret and keeps it when done", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-text");
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		textarea.value = "Make this later";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		// The caret sits before "later", inside the comment.
+		textarea.setSelectionRange(10, 10);
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+
+		mic.click();
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:start", expect.any(Number));
+		expect(mic.getAttribute("aria-pressed")).toBe("true");
+		emitDictation({ type: "listening" });
+		expect(mic.querySelectorAll(".dictation-bar")).toHaveLength(11);
+
+		emitDictation({ type: "text", text: "bigger" });
+		expect(textarea.value).toBe("Make this bigger later");
+		emitDictation({ type: "text", text: "bigger and bold" });
+		expect(textarea.value).toBe("Make this bigger and bold later");
+		expect(latestSession().draft?.body).toBe("Make this bigger and bold later");
+
+		mic.click();
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:stop");
+		emitDictation({ type: "end", text: "bigger and bolder" });
+		expect(textarea.value).toBe("Make this bigger and bolder later");
+		expect(mic.getAttribute("aria-pressed")).toBe("false");
+		expect(root.querySelector<HTMLButtonElement>('[data-action="add"]')?.disabled).toBe(false);
+	});
+
+	it.each([
+		["the helper finishes", () => emitDictation({ type: "end", text: "done" })],
+		["the user types", (root: ShadowRoot) => {
+			const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+			textarea.value = "typed";
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		}],
+		["the composer closes", (root: ShadowRoot) => {
+			root.querySelector<HTMLTextAreaElement>(".composer-note")!
+				.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+		}],
+		["another surface takes the mic", () => emitDictation({ type: "superseded" })],
+	])("stops the level meter when %s while listening", (_name, finish) => {
+		const cancelFrame = vi.fn();
+		vi.stubGlobal("requestAnimationFrame", () => 42);
+		vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-meter");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "listening" });
+		// The run and its meter each listen.
+		expect(electronMocks.dictationListeners.size).toBe(2);
+
+		finish(root);
+
+		expect(cancelFrame).toHaveBeenCalledWith(42);
+		expect(electronMocks.dictationListeners.size).toBe(0);
+	});
+
+	it("stops dictating, keeping the words, when its tab is hidden", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-hidden");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "text", text: "Keep this" });
+
+		electronMocks.listeners.get("browser:annotation:stopDictation")?.({});
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:cancel");
+		expect(root.querySelector<HTMLTextAreaElement>(".composer-note")?.value).toBe("Keep this");
+		expect(root.querySelector('[data-action="dictate"]')?.getAttribute("aria-pressed")).toBe("false");
+	});
+
+	it("adds a space before the words when they would run into the text before them", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-prefix");
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		textarea.value = "Make this";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.setSelectionRange(9, 9);
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+
+		emitDictation({ type: "end", text: "bigger" });
+
+		expect(textarea.value).toBe("Make this bigger");
+	});
+
+	it.each([
+		["Hello ()", 7, "Hello (world)"],
+		["Say it.", 6, "Say it world."],
+		["Done, ok", 4, "Done world, ok"],
+		["[]", 1, "[world]"],
+	])("does not space the words from punctuation around them in %j", (value, caret, expected) => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-punctuation");
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		textarea.value = value;
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.setSelectionRange(caret, caret);
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+
+		emitDictation({ type: "end", text: "world" });
+
+		expect(textarea.value).toBe(expected);
+	});
+
+	it("keeps the selected text when the run ends without words", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-empty");
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		textarea.value = "Make this red";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.setSelectionRange(10, 13);
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+
+		emitDictation({ type: "end", text: "" });
+
+		expect(textarea.value).toBe("Make this red");
+		expect(latestSession().draft?.body).toBe("Make this red");
+		expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([10, 13]);
+	});
+
+	it("ignores a late event from an earlier run", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-stale");
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		mic.click();
+		const first = latestRun();
+		// Typing ends the first run; the user starts another straight away.
+		textarea.value = "typed";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		mic.click();
+		expect(latestRun()).not.toBe(first);
+
+		emitDictation({ type: "superseded" }, first);
+		emitDictation({ type: "end", text: "stale" }, first);
+
+		expect(mic.getAttribute("aria-pressed")).toBe("true");
+		expect(textarea.value).toBe("typed");
+		emitDictation({ type: "text", text: "fresh" });
+		expect(textarea.value).toBe("typed fresh");
+	});
+
+	it("finishes dictation on Escape instead of closing the composer", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-escape");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:stop");
+		expect(overlayRoot().querySelector(".composer")).not.toBeNull();
+	});
+
+	it("hands the comment back to the keyboard when the user types", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-type");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "text", text: "hello" });
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+
+		textarea.value = "hello there";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:cancel");
+		emitDictation({ type: "text", text: "overwritten" });
+		expect(textarea.value).toBe("hello there");
+	});
+
+	it("cancels a running dictation when the composer closes", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-close");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "text", text: "Tighten the spacing" });
+
+		root.querySelector<HTMLTextAreaElement>(".composer-note")!
+			.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:cancel");
+		expect(latestSession().annotations[0]?.body).toBe("Tighten the spacing");
+	});
+
+	it("shows the helper's error and ends the run", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-error");
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+		mic.click();
+
+		emitDictation({ type: "error", message: "Microphone access is off." });
+
+		expect(mic.getAttribute("aria-pressed")).toBe("false");
+		const notice = root.querySelector<HTMLElement>(".notice");
+		expect(notice?.hidden).toBe(false);
+		expect(notice?.textContent).toBe("Microphone access is off.");
 	});
 });

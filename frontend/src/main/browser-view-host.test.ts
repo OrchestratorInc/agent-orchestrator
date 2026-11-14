@@ -5279,6 +5279,55 @@ describe("agent browser screenshot", () => {
 	});
 });
 
+describe("annotation dictation", () => {
+	it("only lets the active annotating tab dictate, and stops a tab's dictation when it is hidden", async () => {
+		const { host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:annotation:setMode", { viewId, enabled: true, dictation: true });
+		const first = views[0].webContents;
+		expect(host.isAnnotationDictationSender(first)).toBe(true);
+
+		await invoke("browser:openTab", { viewId });
+
+		expect(first.send).toHaveBeenCalledWith("browser:annotation:stopDictation");
+		expect(host.isAnnotationDictationSender(first)).toBe(false);
+	});
+
+	it("stops dictation when the panel stays hidden, not when a re-layout briefly hides it", async () => {
+		vi.useFakeTimers();
+		try {
+			const { emit, invoke, views } = setupTabHost();
+			const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+			await invoke("browser:annotation:setMode", { viewId, enabled: true, dictation: true });
+			const page = views[0].webContents;
+			const shown = { x: 20, y: 30, width: 700, height: 500 };
+			const hidden = { x: 0, y: 0, width: 0, height: 0 };
+			emit("browser:setBounds", { viewId, revision: 1, rect: shown, visible: true });
+
+			// A slot handoff: hidden, then shown again straight away.
+			emit("browser:setBounds", { viewId, revision: 2, rect: hidden, visible: false });
+			await vi.advanceTimersByTimeAsync(100);
+			emit("browser:setBounds", { viewId, revision: 3, rect: shown, visible: true });
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(page.send).not.toHaveBeenCalledWith("browser:annotation:stopDictation");
+
+			// The panel closes.
+			emit("browser:setBounds", { viewId, revision: 4, rect: hidden, visible: false });
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(page.send).toHaveBeenCalledWith("browser:annotation:stopDictation");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not offer dictation while annotation is off", async () => {
+		const { host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:annotation:setMode", { viewId, enabled: false, dictation: true });
+		expect(host.isAnnotationDictationSender(views[0].webContents)).toBe(false);
+	});
+});
+
 describe("browser tab lifecycle stress (tabs stop closing regression guard)", () => {
 	const stressTabCount = 16;
 	// Re-verifies the historically reported "tabs stop closing" bug against the

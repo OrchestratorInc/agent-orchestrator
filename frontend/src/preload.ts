@@ -30,7 +30,7 @@ import {
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
-import type { DictationEvent } from "./shared/dictation";
+import type { DictationMessage } from "./shared/dictation";
 import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
@@ -269,11 +269,11 @@ const api = {
 		launch: () => ipcRenderer.invoke("triage.launch") as Promise<TriageResult>,
 	},
 	dictation: {
-		start: () => ipcRenderer.invoke("dictation:start") as Promise<void>,
+		start: (run: number) => ipcRenderer.invoke("dictation:start", run) as Promise<void>,
 		stop: () => ipcRenderer.invoke("dictation:stop") as Promise<void>,
 		cancel: () => ipcRenderer.invoke("dictation:cancel") as Promise<void>,
-		onEvent: (listener: (event: DictationEvent) => void) => {
-			const handler = (_event: Electron.IpcRendererEvent, message: DictationEvent) => listener(message);
+		onEvent: (listener: (event: DictationMessage) => void) => {
+			const handler = (_event: Electron.IpcRendererEvent, message: DictationMessage) => listener(message);
 			ipcRenderer.on("dictation:event", handler);
 			return () => {
 				ipcRenderer.removeListener("dictation:event", handler);
