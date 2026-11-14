@@ -791,6 +791,33 @@ describe("config options read while the cached snapshot outlived the controller"
 		expect(result.current).toMatchObject({ error: undefined, options: [{ id: "model", currentValue: "a" }] });
 	});
 
+	it("reloads the snapshot again for a new conflict after the read was turned off", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		const notRunning = {
+			data: undefined,
+			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
+		};
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const snapshotReloads = () => invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify(filters?.queryKey) === JSON.stringify(conversationQueryKey("ao-1"))).length;
+		getMock.mockResolvedValueOnce(notRunning);
+		const { rerender } = renderHook(({ enabled }) => useConversationConfigOptions("ao-1", enabled), {
+			wrapper: catalogWrapper(queryClient),
+			initialProps: { enabled: true },
+		});
+		await waitFor(() => expect(snapshotReloads()).toBe(1));
+
+		// The refreshed snapshot reported the agent asleep, which turns the read off.
+		rerender({ enabled: false });
+		// It reports "ready" again, and the daemon still disagrees: a new conflict.
+		getMock.mockResolvedValueOnce(notRunning);
+		rerender({ enabled: true });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.fetchStatus).toBe("idle"));
+		expect(snapshotReloads()).toBe(2);
+	});
+
 	it("still reports a catalog read that failed for any other reason", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		getMock.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } });
