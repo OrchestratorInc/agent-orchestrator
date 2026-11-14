@@ -6505,7 +6505,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
 	}
-	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(chat)); artifactPrompt != "" {
+	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
 	}
 	if kind == domain.KindWorker && requestedOutput == domain.RequestedOutputArtifact {
@@ -6672,8 +6672,8 @@ func (m *Manager) cleanupArtifactDir(id domain.SessionID) {
 
 // artifactPrompt tells the agent where deliverables go. Only a chat session can
 // show a page in its thread, so only a chat prompt sends charts there.
-func (m *Manager) artifactPrompt(chat bool) string {
-	dir := filepath.ToSlash(m.artifactDir("<session-id>"))
+func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
+	dir := filepath.ToSlash(m.artifactDir(id))
 	if dir == "" {
 		return ""
 	}
@@ -6683,8 +6683,7 @@ func (m *Manager) artifactPrompt(chat bool) string {
 		keptRender = " Neither does keeping a render with `ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns."
 	}
 	return "## Session Artifacts\n\n" +
-		"Write deliverables that are not part of a pull request to `" + dir + "`, never into the git workspace, even temporarily or under `docs/` or `notes/`. " +
-		"Replace `<session-id>` with the value of `AO_SESSION_ID` from the environment before using the path.\n\n" +
+		"Write deliverables that are not part of a pull request to `" + dir + "`, never into the git workspace, even temporarily or under `docs/` or `notes/`.\n\n" +
 		"Only two kinds of file belong there: a finished deliverable the user asked for or will open directly, such as a document, page, dashboard, image, video, dataset, or export; and files a deliverable needs to work, such as images a page links to. Keep relative links between them intact. " +
 		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
@@ -6694,7 +6693,7 @@ func (m *Manager) artifactPrompt(chat bool) string {
 		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or Orchestrator report notes. " +
 		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
 		"Saving a file here or attaching it to an Orchestrator report does not authorize external publishing. " +
-		"Only the user publishes an artifact, with Share in the Orchestrator desktop; after that, `ao session get <session-id>` lists each artifact with its public link."
+		"Only the user publishes an artifact, with Share in the Orchestrator desktop; after that, `ao session get " + string(id) + "` lists each artifact with its public link."
 }
 
 // artifactOutputPrompt is added for a session spawned with the artifact output

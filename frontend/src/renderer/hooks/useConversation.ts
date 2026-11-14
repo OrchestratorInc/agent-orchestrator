@@ -358,8 +358,7 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
-const LOCAL_INITIAL_PAGE_SIZE = 30;
-const LOCAL_OLDER_PAGE_SIZE = 200;
+const CONVERSATION_PAGE_SIZE = 200;
 // A remote page crosses a tunnel, often on the host's upload: a small live page,
 // larger pages on scroll, and each tool output cut to its head and tail.
 const REMOTE_LIVE_PAGE_SIZE = 30;
@@ -426,7 +425,7 @@ async function fetchConversationWire(sessionId: string, hostId: string | undefin
 }
 
 function conversationPageQuery(hostId: string | undefined, beforeSequence?: number): ConversationPageQuery {
-	if (!hostId) return { beforeSequence, limit: beforeSequence ? LOCAL_OLDER_PAGE_SIZE : LOCAL_INITIAL_PAGE_SIZE };
+	if (!hostId) return { beforeSequence, limit: CONVERSATION_PAGE_SIZE };
 	return { beforeSequence, limit: beforeSequence ? REMOTE_OLDER_PAGE_SIZE : REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT };
 }
 

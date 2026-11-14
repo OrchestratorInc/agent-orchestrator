@@ -6732,14 +6732,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
-	nextPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-8", "", false)
-	if err != nil {
-		t.Fatalf("buildSystemPrompt for another session: %v", err)
-	}
-	if nextPrompt != sp {
-		t.Fatal("standing instructions differ between ordinary sessions")
-	}
-	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "<session-id>"))
+	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
 	if !strings.Contains(sp, "Run `ao artifact add <path>`") {
 		t.Fatal("artifact guidance does not say how to register a deliverable")
 	}
@@ -6755,8 +6748,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		"intermediate outputs such as frames or partial renders",
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.",
 		"does not authorize external publishing",
-		"Replace `<session-id>` with the value of `AO_SESSION_ID` from the environment before using the path",
-		"`ao session get <session-id>` lists each artifact with its public link",
+		"`ao session get mer-7` lists each artifact with its public link",
 	} {
 		if !strings.Contains(sp, want) {
 			t.Fatalf("system prompt missing artifact boundary %q", want)
@@ -6800,7 +6792,7 @@ func TestSystemPrompt_OrchestratorGetsArtifactGuidance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("buildSystemPrompt chat=%v: %v", chat, err)
 		}
-		wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "<session-id>"))
+		wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-orchestrator-2"))
 		for _, want := range []string{"## Session Artifacts", wantDir, "Run `ao artifact add <path>`"} {
 			if !strings.Contains(sp, want) {
 				t.Fatalf("orchestrator prompt (chat=%v) missing %q:\n%s", chat, want, sp)
