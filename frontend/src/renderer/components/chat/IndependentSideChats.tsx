@@ -1555,6 +1555,7 @@ export function useIndependentSideChats(
 							const label = side.label?.trim() || t("sideChat.defaultLabel");
 							const requestClose = () => {
 								if (isClosing(side.id) || closeStatus(closeProjection.current, side.id) === "cleanup_pending") return;
+								setFocusKey(0);
 								setConfirmClose({ id: crypto.randomUUID(), sideId: side.id, requestId: crypto.randomUUID(), scope: creationScopeRef.current });
 							};
 							const frame = (
