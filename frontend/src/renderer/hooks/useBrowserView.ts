@@ -435,6 +435,9 @@ export function useBrowserView({
 		const node = slotNodeRef.current;
 		if (!id) return;
 		if (!activeRef.current || !node || !node.isConnected || hiddenByFullscreen(node)) {
+			// A hidden view stays hidden while the page scrolls: say so once.
+			const last = lastSentBoundsRef.current;
+			if (onlyIfChanged && last?.viewId === id && !last.visible) return;
 			sendHiddenBounds(id);
 			return;
 		}

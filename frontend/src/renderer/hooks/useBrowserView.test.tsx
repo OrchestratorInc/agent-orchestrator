@@ -2461,3 +2461,52 @@ describe("useBrowserView scroll geometry", () => {
 		expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ visible: true }));
 	});
 });
+
+describe("useBrowserView scroll geometry while hidden", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		document.body.replaceChildren();
+		resetConsumedPreviewTriggersForTest();
+		resetClosedTabsForTest();
+		resetNativeViewCacheForTest();
+	});
+
+	const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+
+	it("does not re-send hidden bounds for every scroll while the panel is closed", async () => {
+		const bridge = setupBridge();
+		const chat = document.createElement("div");
+		document.body.append(chat);
+		renderHook(() => useBrowserView({ sessionId: "sess-1", active: false, poppedOut: false }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		// The view is hidden by now; scrolling must not keep saying so.
+		bridge.setBounds.mockClear();
+		for (let i = 0; i < 5; i++) {
+			act(() => { chat.dispatchEvent(new Event("scroll")); });
+			act(() => { document.dispatchEvent(new Event("scroll")); });
+			await nextFrame();
+		}
+		expect(bridge.setBounds.mock.calls.filter(([input]) => input.visible === true)).toEqual([]);
+		expect(bridge.setBounds.mock.calls.length).toBeLessThanOrEqual(1);
+	});
+
+	it("still sends a hide that comes from something other than scrolling", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const { result, rerender } = renderHook(({ active }) => useBrowserView({ sessionId: "sess-1", active, poppedOut: false }), { initialProps: { active: true } });
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		act(() => result.current.slotRef(slot));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		rerender({ active: false });
+		await nextFrame();
+		bridge.setBounds.mockClear();
+		// Hiding again (another deactivation path) is never deduplicated.
+		rerender({ active: true });
+		rerender({ active: false });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: false }));
+	});
+});
