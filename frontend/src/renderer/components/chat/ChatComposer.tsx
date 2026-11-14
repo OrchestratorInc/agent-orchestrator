@@ -1,7 +1,7 @@
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { useDictationUpgrade } from "./DictationUpgradeDialog";
-import { DictationRingGlyph } from "./DictationProgress";
+import { ProgressRing } from "../ui/progress-ring";
 import { refreshDictationStatus, useDictationInstall } from "../../lib/dictation-install";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
@@ -2672,17 +2672,22 @@ export const ChatComposer = memo(function ChatComposer({
 											}
 											aria-pressed={dictating}
 											className={cn(
-												"mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+												"relative mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
 												dictating ? "w-[76px]" : "w-7",
 											)}
 										>
 											{dictating ? (
 												<DictationMeter listening={dictation.phase === "listening"} working={dictation.phase !== "listening"} />
-											) : downloadingModel ? (
-												<DictationRingGlyph fraction={dictationInstall.fraction} icon={<Mic aria-hidden="true" />} className="size-5" />
 											) : (
 												<Mic aria-hidden="true" className="size-3.5" />
 											)}
+											{/* The download's progress, drawn along the button's own border. */}
+											{downloadingModel ? (
+												<ProgressRing
+													className="pointer-events-none absolute inset-0 size-full text-logo-accent"
+													percent={dictationInstall.fraction * 100}
+												/>
+											) : null}
 										</Button>
 									</span>
 								</TooltipTrigger>
