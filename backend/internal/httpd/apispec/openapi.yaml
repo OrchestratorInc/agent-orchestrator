@@ -15520,6 +15520,229 @@ paths:
       summary: List resident memory of each live session's runtime process tree
       tags:
       - usage
+  /api/v1/webhooks:
+    get:
+      operationId: listWebhooks
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List outbound webhooks and their delivery state
+      tags:
+      - webhooks
+  /api/v1/webhooks/{name}:
+    delete:
+      operationId: deleteWebhook
+      parameters:
+      - description: Webhook name.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Webhook name.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove an outbound webhook
+      tags:
+      - webhooks
+    patch:
+      operationId: patchWebhook
+      parameters:
+      - description: Webhook name.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Webhook name.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookPatchRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookView'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change which projects and events a webhook gets
+      tags:
+      - webhooks
+    put:
+      operationId: putWebhook
+      parameters:
+      - description: Webhook name.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Webhook name.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookPutRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookView'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create or replace an outbound webhook
+      tags:
+      - webhooks
+  /api/v1/webhooks/{name}/test:
+    post:
+      operationId: testWebhook
+      parameters:
+      - description: Webhook name.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Webhook name.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTestResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Send a test event to a webhook
+      tags:
+      - webhooks
 components:
   schemas:
     APIError:
@@ -26565,6 +26788,134 @@ components:
       required:
       - status
       type: object
+    WebhookDeliveryStatus:
+      properties:
+        folded:
+          type: integer
+        lastError:
+          type: string
+        lastErrorAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        lastSentAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        pausedUntil:
+          format: date-time
+          type:
+          - "null"
+          - string
+        queued:
+          type: integer
+        sent:
+          type: integer
+      required:
+      - sent
+      - queued
+      - folded
+      type: object
+    WebhookListResponse:
+      properties:
+        kinds:
+          items:
+            type: string
+          type: array
+        webhooks:
+          items:
+            $ref: '#/components/schemas/WebhookView'
+          type: array
+      required:
+      - webhooks
+      - kinds
+      type: object
+    WebhookPatchRequest:
+      properties:
+        events:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
+        projects:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
+        quietAtDesk:
+          type:
+          - "null"
+          - boolean
+      type: object
+    WebhookPutRequest:
+      properties:
+        events:
+          items:
+            type: string
+          type: array
+        headers:
+          additionalProperties:
+            type: string
+          type: object
+        projects:
+          items:
+            type: string
+          type: array
+        quietAtDesk:
+          type: boolean
+        url:
+          type: string
+      required:
+      - url
+      type: object
+    WebhookTestResponse:
+      properties:
+        error:
+          type: string
+        ok:
+          type: boolean
+      required:
+      - ok
+      type: object
+    WebhookView:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        events:
+          items:
+            type: string
+          type: array
+        headerNames:
+          items:
+            type: string
+          type: array
+        host:
+          type: string
+        name:
+          type: string
+        projects:
+          items:
+            type: string
+          type: array
+        quietAtDesk:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/WebhookDeliveryStatus'
+      required:
+      - name
+      - host
+      - headerNames
+      - projects
+      - events
+      - quietAtDesk
+      - createdAt
+      - status
+      type: object
     WorkspaceBranchResponse:
       properties:
         checkedOut:
@@ -27315,6 +27666,9 @@ tags:
   name: reviews
 - description: Durable dashboard notifications
   name: notifications
+- description: Outbound webhooks for session, question and pull request events (loopback
+    only)
+  name: webhooks
 - description: Durable worker reports
   name: reports
 - description: Token usage telemetry for AO sessions

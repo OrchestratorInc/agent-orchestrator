@@ -78,6 +78,8 @@ func Build() ([]byte, error) {
 			"Code-review runs and findings"),
 		*(&openapi31.Tag{Name: "notifications"}).WithDescription(
 			"Durable dashboard notifications"),
+		*(&openapi31.Tag{Name: "webhooks"}).WithDescription(
+			"Outbound webhooks for session, question and pull request events (loopback only)"),
 		*(&openapi31.Tag{Name: "reports"}).WithDescription(
 			"Durable worker reports"),
 		*(&openapi31.Tag{Name: "usage"}).WithDescription(
@@ -673,6 +675,12 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"SessionimportResult":              "SessionImportResult",
 	"ControllersSessionImportRequest":  "SessionImportRequest",
 	"ControllersSessionImportResponse": "SessionImportResponse",
+	"ControllersWebhookView":           "WebhookView",
+	"ControllersWebhookListResponse":   "WebhookListResponse",
+	"ControllersWebhookPutRequest":     "WebhookPutRequest",
+	"ControllersWebhookPatchRequest":   "WebhookPatchRequest",
+	"ControllersWebhookTestResponse":   "WebhookTestResponse",
+	"WebhookStatus":                    "WebhookDeliveryStatus",
 	// httpd/controllers: import wire envelopes
 	"ControllersImportStatusResponse": "ImportStatusResponse",
 	"ControllersImportRunResponse":    "ImportRunResponse",
@@ -833,6 +841,7 @@ func operations() []operation {
 	ops = append(ops, projectOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
+	ops = append(ops, webhookOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
@@ -857,6 +866,23 @@ func operations() []operation {
 	ops = append(ops, linkPreviewOperations()...)
 	ops = append(ops, sessionSearchOperations()...)
 	return ops
+}
+
+func webhookOperations() []operation {
+	name := []any{controllers.WebhookNameParam{}}
+	errs := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusNotFound, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{method: http.MethodGet, path: "/api/v1/webhooks", id: "listWebhooks", tag: "webhooks", summary: "List outbound webhooks and their delivery state", resps: append([]respUnit{{http.StatusOK, controllers.WebhookListResponse{}}}, errs...)},
+		{method: http.MethodPut, path: "/api/v1/webhooks/{name}", id: "putWebhook", tag: "webhooks", summary: "Create or replace an outbound webhook", pathParams: name, reqBody: controllers.WebhookPutRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.WebhookView{}}}, errs...)},
+		{method: http.MethodPatch, path: "/api/v1/webhooks/{name}", id: "patchWebhook", tag: "webhooks", summary: "Change which projects and events a webhook gets", pathParams: name, reqBody: controllers.WebhookPatchRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.WebhookView{}}}, errs...)},
+		{method: http.MethodDelete, path: "/api/v1/webhooks/{name}", id: "deleteWebhook", tag: "webhooks", summary: "Remove an outbound webhook", pathParams: name, resps: append([]respUnit{{http.StatusNoContent, nil}}, errs...)},
+		{method: http.MethodPost, path: "/api/v1/webhooks/{name}/test", id: "testWebhook", tag: "webhooks", summary: "Send a test event to a webhook", pathParams: name, resps: append([]respUnit{{http.StatusOK, controllers.WebhookTestResponse{}}}, errs...)},
+	}
 }
 
 func automationOperations() []operation {

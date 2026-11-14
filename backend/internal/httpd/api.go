@@ -56,6 +56,8 @@ type APIDeps struct {
 	Reports            controllers.ReportService
 	NotificationStream controllers.NotificationStream
 	Push               controllers.PushRegistry
+	Webhooks           controllers.WebhookStore
+	WebhookDelivery    controllers.WebhookDelivery
 	Import             controllers.ImportService
 	SessionImport      controllers.SessionImportService
 	Directories        controllers.DirectoryBrowserService
@@ -170,6 +172,7 @@ type API struct {
 	notifications *controllers.NotificationsController
 	reports       *controllers.ReportsController
 	push          *controllers.PushController
+	webhooks      *controllers.WebhooksController
 	imports       *controllers.ImportController
 	sessionImport *controllers.SessionImportController
 	fs            *controllers.FSController
@@ -239,6 +242,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		notifications: &controllers.NotificationsController{Svc: deps.Notifications, Stream: deps.NotificationStream},
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
 		push:          &controllers.PushController{Registry: deps.Push, Devices: deps.AccessDevices},
+		webhooks:      &controllers.WebhooksController{Store: deps.Webhooks, Delivery: deps.WebhookDelivery},
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
 		fs:            &controllers.FSController{Svc: deps.Directories},
@@ -390,6 +394,7 @@ func (a *API) Register(root chi.Router) {
 			a.notifications.Register(r)
 			a.reports.Register(r)
 			a.push.Register(r)
+			a.webhooks.Register(r)
 			a.imports.Register(r)
 			a.sessionImport.Register(r)
 			a.fs.Register(r)

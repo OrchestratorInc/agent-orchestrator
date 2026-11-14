@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/aoagents/agent-orchestrator/backend/internal/webhook"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -4713,4 +4714,49 @@ type ForkSessionRequest struct {
 type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
+}
+
+// WebhookNameParam is the {name} path parameter of the webhook routes.
+type WebhookNameParam struct {
+	Name string `path:"name" description:"Webhook name."`
+}
+
+// WebhookView is one configured webhook. It never carries the URL path or header values.
+type WebhookView struct {
+	Name        string         `json:"name"`
+	Host        string         `json:"host"`
+	HeaderNames []string       `json:"headerNames"`
+	Projects    []string       `json:"projects"`
+	Events      []string       `json:"events"`
+	QuietAtDesk bool           `json:"quietAtDesk"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	Status      webhook.Status `json:"status"`
+}
+
+// WebhookListResponse lists the configured webhooks and the event kinds they can take.
+type WebhookListResponse struct {
+	Webhooks []WebhookView `json:"webhooks"`
+	Kinds    []string      `json:"kinds"`
+}
+
+// WebhookPutRequest creates or replaces a webhook.
+type WebhookPutRequest struct {
+	URL         string            `json:"url"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Projects    []string          `json:"projects,omitempty"`
+	Events      []string          `json:"events,omitempty"`
+	QuietAtDesk bool              `json:"quietAtDesk,omitempty"`
+}
+
+// WebhookPatchRequest changes a webhook's filters and keeps its URL and headers.
+type WebhookPatchRequest struct {
+	Projects    *[]string `json:"projects,omitempty"`
+	Events      *[]string `json:"events,omitempty"`
+	QuietAtDesk *bool     `json:"quietAtDesk,omitempty"`
+}
+
+// WebhookTestResponse reports one test delivery.
+type WebhookTestResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
