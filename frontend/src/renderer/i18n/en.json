@@ -385,8 +385,6 @@
 	"firstRun.orchPoint2Body": "Each worker has its own copy of your code, so several tasks move at once.",
 	"firstRun.orchPointCiTitle": "CI and code review run for you",
 	"firstRun.orchPointCiBody": "Each worker opens a pull request. GitHub runs CI checks and code review, and the results come back to the board.",
-	"firstRun.orchPoint3Title": "One board for everything",
-	"firstRun.orchPoint3Body": "Every session sorted by what it needs from you. You step in only when asked.",
 	"firstRun.projectTitle": "Set up a project",
 	"firstRun.projectBody": "A project is a folder of code your agents work in. Open one from this computer, or bring one in from GitHub.",
 	"firstRun.startTitle": "Start orchestrating",

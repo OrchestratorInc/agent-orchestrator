@@ -93,7 +93,6 @@ const ORCH_POINTS = [
 	{ title: "firstRun.orchPoint1Title", body: "firstRun.orchPoint1Body" },
 	{ title: "firstRun.orchPoint2Title", body: "firstRun.orchPoint2Body" },
 	{ title: "firstRun.orchPointCiTitle", body: "firstRun.orchPointCiBody" },
-	{ title: "firstRun.orchPoint3Title", body: "firstRun.orchPoint3Body" },
 ] as const;
 /** The part where pull requests go through CI and code review on GitHub. */
 const CI_POINT = 2;
@@ -102,13 +101,12 @@ const INACTIVE_POINT_OPACITY = 0.35;
 /** The welcome's story points come up and recede on this curve. */
 const CAPTION_EASE = [0.23, 1, 0.32, 1] as const;
 /** How long each part of the story holds before the next plays. */
-const POINT_HOLD_MS = [4200, 3800, 8800, 4600] as const;
-/** The order the example work settles (task indexes). The CI part settles the
- * first three, the ones with pull requests, a beat apart: long enough for each
- * round trip to GitHub (OnboardingSchematic). The last part settles the one
- * waiting on you. */
+const POINT_HOLD_MS = [4200, 3800, 10200] as const;
+/** The order the example work settles (task indexes), a beat apart, in the CI
+ * part: first the three with pull requests, each beat long enough for its
+ * round trip to GitHub (OnboardingSchematic), then the one waiting on you, the
+ * board held a moment once it's all sorted. */
 const SORT_ORDER = [3, 2, 0, 1] as const;
-const PR_SORTS = 3;
 const SORT_BEAT_MS = 2200;
 
 
@@ -296,8 +294,8 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 		}, POINT_HOLD_MS[point]);
 		return () => window.clearTimeout(timer);
 	}, [step, point]);
-	// The CI point sorts the board one pull request at a time, a beat apart, so
-	// each trip to GitHub reads on its own; the last point settles the rest.
+	// The CI point sorts the board one card at a time, a beat apart, so each
+	// trip to GitHub reads on its own.
 	// The beat is keyed to the loop and point it belongs to, so a new run starts
 	// from 0 on its first frame instead of flashing the previous run's board.
 	const sorting = step === "welcome" && point === CI_POINT;
@@ -309,7 +307,7 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 		const timer = window.setInterval(() => {
 			beat += 1;
 			setSort({ key: sortKey, beat });
-			if (beat >= PR_SORTS) window.clearInterval(timer);
+			if (beat >= SORT_ORDER.length) window.clearInterval(timer);
 		}, SORT_BEAT_MS);
 		return () => window.clearInterval(timer);
 	}, [sorting, sortKey]);
@@ -708,8 +706,8 @@ function OnboardingScene({
 }
 
 /** What the camera frames through the welcome story: the request, the
- * workers at it, the CI round trips, then the whole board. */
-const STORY_FOCUS: readonly SceneFocus[] = ["chat", "working", "ci", "overview"];
+ * workers at it, then the CI round trips. */
+const STORY_FOCUS: readonly SceneFocus[] = ["chat", "working", "ci"];
 
 /** The same example work on the mobile app's Workers tab, as the story ends. */
 function ExamplePhone() {

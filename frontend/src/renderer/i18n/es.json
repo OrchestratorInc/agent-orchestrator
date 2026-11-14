@@ -425,8 +425,6 @@
 	"firstRun.orchPoint2Body": "Cada trabajador tiene su propia copia de tu código, así varias tareas avanzan a la vez.",
 	"firstRun.orchPointCiTitle": "La CI y la revisión de código se ejecutan solas",
 	"firstRun.orchPointCiBody": "Cada worker abre una pull request. GitHub ejecuta las comprobaciones de CI y la revisión de código, y los resultados vuelven al tablero.",
-	"firstRun.orchPoint3Title": "Un tablero para todo",
-	"firstRun.orchPoint3Body": "Cada sesión ordenada según lo que necesita de ti. Solo intervienes cuando te lo piden.",
 	"firstRun.projectTitle": "Configura un proyecto",
 	"firstRun.projectBody": "Un proyecto es una carpeta de código en la que trabajan tus agentes. Abre una de este equipo o trae una desde GitHub.",
 	"firstRun.startTitle": "Empieza a orquestar",

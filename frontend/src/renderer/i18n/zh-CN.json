@@ -423,8 +423,6 @@
 	"firstRun.orchPoint2Body": "每个工作智能体都有一份自己的代码副本，多个任务可以同时推进。",
 	"firstRun.orchPointCiTitle": "CI 与代码审查自动运行",
 	"firstRun.orchPointCiBody": "每个工作者都会创建拉取请求。GitHub 运行 CI 检查和代码审查，结果会回到看板上。",
-	"firstRun.orchPoint3Title": "一块看板管理一切",
-	"firstRun.orchPoint3Body": "所有会话按需要你做什么来排列。只有被请求时你才需要介入。",
 	"firstRun.projectTitle": "设置项目",
 	"firstRun.projectBody": "项目是智能体工作的代码文件夹。可以打开这台电脑上的文件夹，或从 GitHub 导入。",
 	"firstRun.startTitle": "开始编排",

@@ -423,8 +423,6 @@
 	"firstRun.orchPoint2Body": "워커마다 코드 사본이 따로 있어 여러 작업이 한꺼번에 진행됩니다.",
 	"firstRun.orchPointCiTitle": "CI와 코드 리뷰가 자동으로 실행됩니다",
 	"firstRun.orchPointCiBody": "각 워커가 풀 리퀘스트를 엽니다. GitHub가 CI 검사와 코드 리뷰를 실행하고 결과가 보드로 돌아옵니다.",
-	"firstRun.orchPoint3Title": "모든 것을 하나의 보드에서",
-	"firstRun.orchPoint3Body": "모든 세션이 당신에게 필요한 것 순으로 정리됩니다. 요청받을 때만 나서면 됩니다.",
 	"firstRun.projectTitle": "프로젝트 설정",
 	"firstRun.projectBody": "프로젝트는 에이전트가 작업하는 코드 폴더입니다. 이 컴퓨터에서 열거나 GitHub에서 가져오세요.",
 	"firstRun.startTitle": "오케스트레이션 시작",
