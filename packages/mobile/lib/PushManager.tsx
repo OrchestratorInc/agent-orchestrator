@@ -11,6 +11,7 @@ import { Alert, AppState, Platform } from "react-native";
 import { markNotificationRead } from "./api";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
+import { launchNotificationResponse, markNotificationResponseHandled } from "./launchNotification";
 import { findHost } from "./hosts";
 import { notificationTarget } from "./notificationView";
 import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
@@ -108,11 +109,16 @@ export function PushManager(): null {
 			void route((resp.notification.request.content.data ?? {}) as PushData, coldStart);
 		};
 
+		// The launch's own tap only: one handled before (an earlier launch, or the
+		// listener below) is marked, and RouteRestorer reads the same answer.
 		if (!handledColdStart.current) {
 			handledColdStart.current = true;
-			void Notifications.getLastNotificationResponseAsync().then((r) => handle(r, true));
+			void launchNotificationResponse().then((r) => handle(r, true));
 		}
-		const sub = Notifications.addNotificationResponseReceivedListener((r) => handle(r, false));
+		const sub = Notifications.addNotificationResponseReceivedListener((r) => {
+			void markNotificationResponseHandled(r);
+			handle(r, false);
+		});
 		return () => sub.remove();
 		// route() reads the latest host snapshots through hostsRef.
 		// eslint-disable-next-line react-hooks/exhaustive-deps

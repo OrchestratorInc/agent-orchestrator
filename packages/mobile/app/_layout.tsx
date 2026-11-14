@@ -13,6 +13,8 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
+import { RouteRestorer } from "../lib/RouteRestorer";
+import { startReviewPersistence } from "../lib/files/reviewPersistence";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
@@ -149,6 +151,8 @@ export default function RootLayout() {
 }
 
 function Shell() {
+	// Unsent review comments survive the phone closing the app (see reviewPersistence).
+	useEffect(() => { void startReviewPersistence(); }, []);
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const navigationTheme = useMemo(
@@ -178,6 +182,8 @@ function Shell() {
 			<UpdatesManager />
 			<StoreUpdateManager />
 			<OnboardingGate />
+			{/* Reopens the last screen after the phone closed the app in the background. */}
+			<RouteRestorer />
 			{/* The navigator paints surfaces of its own, and it reads them from *its*
 			    theme, not from the palette above. Two of those surfaces are visible
 			    only while a page moves: the stack's own container, which shows

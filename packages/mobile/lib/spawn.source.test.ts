@@ -148,3 +148,36 @@ describe("spawn approval mode", () => {
 		expect(spawn).toContain("const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });");
 	});
 });
+
+describe("spawn draft", () => {
+	// Saving waits for the saved draft to be read; state, so what was typed
+	// meanwhile is saved once it is, and the old draft never replaces it.
+	it("saves text typed before the saved draft was read, and does not restore over it", () => {
+		expect(spawn).toContain("const [draftRestored, setDraftRestored] = useState(false);");
+		expect(spawn).toContain("}).finally(() => { if (active) setDraftRestored(true); });");
+		expect(spawn).toContain("}, [attachments, draftOwner, draftRestored, draftSaver, prompt]);");
+		expect(spawn).toContain("if (promptRef.current || attachmentsRef.current.length) return;");
+		expect(spawn).not.toContain("draftRestored.current");
+	});
+
+	// On a page kept open after its task started, a new draft saves again.
+	it("stops saving only the draft a Start began a task with", () => {
+		expect(spawn).not.toContain("startedRef");
+		expect(spawn).toContain("if (started && started.prompt === prompt && started.attachments === attachments) return;");
+		expect(spawn).toContain("startedDraft.current = { prompt, attachments: attachmentsRef.current };");
+	});
+
+	// Closed after the daemon took the task but before the draft was cleared,
+	// the restored draft's Start reuses the id and the daemon answers with that task.
+	it("keeps the request id with the draft before the request leaves, and reuses it once restored", () => {
+		const send = spawn.slice(spawn.indexOf("const sent = requestRef.current;"), spawn.indexOf("startedDraft.current = { prompt"));
+		expect(send.indexOf("await draftSaver.flush();")).toBeGreaterThan(0);
+		expect(send.indexOf("await draftSaver.flush();")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
+		expect(send).toContain("request: { id: sent.id, payload: sent.payload }");
+		expect(spawn).toContain("if (draft.request) requestRef.current = { ...draft.request, attachments: draft.attachments };");
+	});
+
+	it("saves the draft for the machine picked and the account signed in", () => {
+		expect(spawn).toContain("const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);");
+	});
+});

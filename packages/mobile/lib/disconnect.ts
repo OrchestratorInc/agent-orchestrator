@@ -7,6 +7,7 @@ import { retryPendingUnpairs, unpairFromServer } from "./push";
 import { markMachineUnpaired } from "./pendingUnpair";
 import { clearEventCursorsForHost } from "./chat/eventCursor";
 import { forgetRememberedTurnOptions } from "./chat/lastTurnOptions";
+import { forgetMachineState } from "./forgetLocalState";
 
 /** Forget one saved machine without disturbing the currently selected machine. */
 export async function forgetPairedHost(host: HostMetadata, options?: { ignoreAccount?: boolean }): Promise<void> {
@@ -22,6 +23,7 @@ export async function forgetPairedHost(host: HostMetadata, options?: { ignoreAcc
 	const cleanup = await Promise.allSettled([
 		removeHost(host.id).then(() => markMachineUnpaired(host.id)),
 		clearEventCursorsForHost(host),
+		forgetMachineState(host.id),
 	]);
 	void retryPendingUnpairs().catch(() => {});
 	const failed = cleanup.find((result): result is PromiseRejectedResult => result.status === "rejected");
@@ -62,6 +64,7 @@ export async function forgetServer(target?: HostMetadata): Promise<void> {
 	const cleanup = await Promise.allSettled([
 		host ? removeHost(host.id).then(() => markMachineUnpaired(host.id)) : Promise.resolve(),
 		host ? clearEventCursorsForHost(host) : Promise.resolve(),
+		host ? forgetMachineState(host.id) : Promise.resolve(),
 		clearConfig(),
 		clearOnboardingSkipped(),
 	]);
