@@ -70,6 +70,11 @@
     {"target": {"action": "click", "role": "button", "name": "Filter", "isSubmit": true, "formMethod": "get", "pageUrl": "https://shop.example/"}},
     {"target": {"action": "click", "role": "button", "name": "Previous page", "pageUrl": "https://news.example/"}},
     {"target": {"action": "act", "instruction": "click the search button", "pageUrl": "https://shop.example/"}},
-    {"target": {"action": "act", "instruction": "open the posts tab", "pageUrl": "https://blog.example/"}}
+    {"target": {"action": "act", "instruction": "open the posts tab", "pageUrl": "https://blog.example/"}},
+    {"target": {"action": "click", "role": "link", "name": "Checkout", "href": "https://shop.example/checkout"}},
+    {"target": {"action": "click", "role": "link", "name": "POST", "href": "https://docs.example/http/post"}},
+    {"target": {"action": "click", "role": "button", "name": "Create Post", "pageUrl": "https://social.example/r/programming"}},
+    {"target": {"action": "click", "role": "button", "name": "New message", "pageUrl": "https://mail.example/"}},
+    {"target": {"action": "click", "role": "button", "name": "Compose", "pageUrl": "https://mail.example/"}}
   ]
 }

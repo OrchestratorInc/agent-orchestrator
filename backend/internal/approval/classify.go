@@ -138,6 +138,10 @@ var benignPhrases = []string{
 	"log in", "login", "search",
 }
 
+// Labels that open an editor or composer rather than act: "Create post",
+// "New message", "Compose".
+var composerPrefixes = []string{"create", "new", "write", "compose", "start", "draft"}
+
 // Text-field names whose Enter usually sends (chat boxes rarely use forms).
 var messageFieldPhrases = []string{"message", "reply", "write a comment", "add a comment", "what s happening", "tweet", "chat"}
 
@@ -196,9 +200,14 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 	if _, ok := valueRoles[role]; ok {
 		return Verdict{}
 	}
-	if name != "" && name != "cancel" && !containsAny(name, benignPhrases) {
+	if name != "" && name != "cancel" && !containsAny(name, benignPhrases) && !opensComposer(name) {
 		linkish := role == "link"
 		for _, set := range phraseSets {
+			// A link labelled with one word is navigation ("Checkout",
+			// "POST") unless that word destroys or changes security.
+			if linkish && set.category != CategoryDelete && set.category != CategorySecurity && !strings.Contains(name, " ") {
+				continue
+			}
 			if phrase := matchPhrase(name, set.phrases, linkish); phrase != "" {
 				return Verdict{NeedsApproval: true, Category: set.category, Reason: labelReason(target, role, set.category)}
 			}
@@ -289,6 +298,16 @@ func matchPhrase(name string, phrases []string, whole bool) string {
 		}
 	}
 	return ""
+}
+
+func opensComposer(name string) bool {
+	first, _, _ := strings.Cut(name, " ")
+	for _, prefix := range composerPrefixes {
+		if first == prefix {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAny(name string, phrases []string) bool {

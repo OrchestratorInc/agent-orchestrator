@@ -23,7 +23,9 @@ type scriptedRuntime struct {
 	describeErr error
 }
 
-func (r *scriptedRuntime) Status() browserruntime.Status { return browserruntime.Status{Connected: true} }
+func (r *scriptedRuntime) Status() browserruntime.Status {
+	return browserruntime.Status{Connected: true}
+}
 
 func (r *scriptedRuntime) Execute(_ context.Context, _ domain.SessionID, action string, _ map[string]interface{}) (browserruntime.Result, error) {
 	r.mu.Lock()

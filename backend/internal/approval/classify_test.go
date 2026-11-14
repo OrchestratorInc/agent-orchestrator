@@ -115,3 +115,37 @@ func TestClassifierFalsePositiveRate(t *testing.T) {
 		t.Fatalf("false positives: %d", flagged)
 	}
 }
+
+// TestOrdinaryPagesFalsePositiveRate classifies every button, link and menu
+// item captured from ordinary pages (news, docs, code hosting, government) as
+// a click. The PR lists the measured rate.
+func TestOrdinaryPagesFalsePositiveRate(t *testing.T) {
+	raw, err := os.ReadFile("testdata/ordinary-pages.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Pages []struct {
+			Page     string      `json:"page"`
+			Elements [][2]string `json:"elements"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	total, flagged := 0, 0
+	for _, page := range fixture.Pages {
+		for _, el := range page.Elements {
+			total++
+			if v := Classify(Target{Action: "click", Role: el[0], Name: el[1], PageURL: "https://example.test/"}, ModeRisky); v.NeedsApproval {
+				flagged++
+				t.Logf("%s: %s %q -> %s", page.Page, el[0], el[1], v.Category)
+			}
+		}
+	}
+	t.Logf("ordinary pages: %d/%d flagged (%.2f%%)", flagged, total, 100*float64(flagged)/float64(total))
+	// One known ask: MDN's newsletter "Subscribe!" button.
+	if flagged > 1 {
+		t.Fatalf("false positives on ordinary pages: %d/%d", flagged, total)
+	}
+}
