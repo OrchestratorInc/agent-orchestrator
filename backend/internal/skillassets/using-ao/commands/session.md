@@ -78,11 +78,28 @@ ao session ls [flags]
 | `--json` | Output as JSON | - |
 | `-p, --project string` | Filter by project ID | - |
 
+`--json` returns one `data` entry per session with `id`, `displayName`, `role`,
+`status`, `activity`, `branch`, `lastActivityAt`, and `prs`. Each PR carries
+`number`, `url`, `state` (`draft`, `open`, `merged`, `closed`), `ci`, `review`,
+`threads`, `mergeability` (`unknown`, `mergeable`, `conflicting`, `blocked`,
+`unstable`), and `mergeBlockers` when it cannot merge. The table shows the
+same state compactly, for example `#123 merged` or `#456 conflicts`.
+
+For questions about many sessions, make one `ao session ls --json` call instead
+of one `ao session get` per session, and rely on these stored PR fields. Query
+GitHub only for facts AO does not store, in one batched `gh` call, never one
+per PR.
+
 **Examples:**
 
 ```bash
 # List all active worker sessions
 ao session ls
+```
+
+```bash
+# Every project's sessions with PR state, as JSON
+ao session ls --json
 ```
 
 ```bash
