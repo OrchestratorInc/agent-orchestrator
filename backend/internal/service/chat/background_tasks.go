@@ -127,6 +127,33 @@ func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, t
 	return nil
 }
 
+// BackgroundTaskOutput reads one task's recent output. Like a reading, it
+// never starts a controller or wakes a hibernated session; output that cannot
+// be read without one is unavailable.
+func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID, taskID string) (ports.ChatBackgroundTaskOutput, error) {
+	rec, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return ports.ChatBackgroundTaskOutput{}, err
+	}
+	if !found {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrSessionNotFound
+	}
+	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	controller, err := s.Controller(id)
+	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	reader, ok := controller.conv.(ports.ChatBackgroundTaskOutputReader)
+	if !ok {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return reader.BackgroundTaskOutput(readCtx, taskID)
+}
+
 // ListBackgroundTasks inspects only already attached controllers. Sessions
 // omitted from this batch have no reading; clients must not invent a zero.
 func (s *Service) ListBackgroundTasks(ctx context.Context, projectID domain.ProjectID) ([]BackgroundTaskSnapshot, error) {

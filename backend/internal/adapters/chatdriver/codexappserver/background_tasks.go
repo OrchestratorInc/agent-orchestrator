@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -59,7 +60,8 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				return nil, errors.New("background-terminal response has missing or duplicate identity")
 			}
 			seenIDs[task.ProcessID] = true
-			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: domain.SanitizeControlChars(task.Command), State: "running"})
+			command := domain.SanitizeControlChars(task.Command)
+			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: command, Command: command, State: "running"})
 		}
 		if response.NextCursor == nil || *response.NextCursor == "" {
 			c.backgroundObserved.ReconcileShells(out, time.Now())
@@ -77,7 +79,41 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	return nil, errors.New("background-terminal inventory exceeded 100 pages")
 }
 
+var _ ports.ChatBackgroundTaskOutputReader = (*conversation)(nil)
+
+// BackgroundTaskOutput returns what a background terminal has printed since
+// this controller attached. The app-server keeps streaming a backgrounded
+// command's output on its exec item after the turn ends (codex-cli 0.158.0),
+// but offers no read, so earlier output and output from before a reconnect
+// are not available.
+func (c *conversation) BackgroundTaskOutput(_ context.Context, taskID string) (ports.ChatBackgroundTaskOutput, error) {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ports.ChatBackgroundTaskOutput{}, errConversationClosed
+	}
+	for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
+		if task.ID != taskID || task.Kind != "shell" || task.RunID == "" {
+			continue
+		}
+		if output, ok := c.backgroundOutput.Read(task.RunID); ok {
+			return output, nil
+		}
+		// A known terminal that has printed nothing yet.
+		return ports.ChatBackgroundTaskOutput{}, nil
+	}
+	return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+}
+
 func (c *conversation) observeBackgroundNotification(n notification) {
+	if n.Method == codexproto.MethodItemCommandExecutionOutputDelta {
+		var delta codexproto.CommandExecutionOutputDeltaNotification
+		if json.Unmarshal(n.Params, &delta) == nil && (delta.ThreadID == "" || delta.ThreadID == c.threadID) {
+			c.backgroundOutput.Append(delta.ItemID, delta.Delta)
+		}
+		return
+	}
 	if n.Method != "item/started" && n.Method != "item/completed" {
 		return
 	}
