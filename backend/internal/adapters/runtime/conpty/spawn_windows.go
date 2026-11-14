@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 // boundedBuffer is a thread-safe io.Writer that retains up to max bytes of what
@@ -55,13 +57,10 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 		return "", 0, fmt.Errorf("conpty spawn: resolve executable: %w", err)
 	}
 
-	// Translate a leading `env NAME=VALUE ...` prefix into real child env vars.
-	// Windows has no `env` binary and the pty-host execs argv[0] directly, so an
-	// adapter that emits `env KEY=value <bin>` (e.g. opencode, to set
-	// OPENCODE_CONFIG) would otherwise fail with "env: executable file not
-	// found". The assignments are added to the pty-host environment below, which
-	// the ConPTY child inherits (host_conpty_windows.go passes os.Environ()).
-	envAssignments, argv := stripEnvAssignments(argv)
+	envAssignments, command, ok := agentlaunch.SplitEnvAssignments(argv)
+	if ok {
+		argv = command
+	}
 
 	// Build: <exe> pty-host [--start=attach] <sessionID> <cwd> <shellCmd> <shellArgs...>
 	args := ptyHostArgs(sessionID, cwd, argv, opts)
