@@ -31,6 +31,7 @@ import {
 	type ChatDraftBoundaryKind,
 } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
+import { agentSwitchTarget, useIsCloudSessionCreator } from "./useCloudAgentSwitch";
 import type { WorkspaceSession } from "../types/workspace";
 import { ComposerErrorNotice } from "../components/chat/AgentSwitchPicker";
 import { readCloudTurnSettings } from "../components/chat/CloudSessionChatSurface";
@@ -88,6 +89,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	const isCloud = Boolean(cloud);
 	const { client: cloudCpClient } = useCloudCp(isCloud);
 	const { cloudEnabled } = useCloudGate(isCloud);
+	const cloudCreator = useIsCloudSessionCreator(isCloud ? session : undefined);
 	const owner = sessionUiKey(sessionId, hostId);
 	const currentOwnerRef = useRef(owner);
 	useEffect(() => {
@@ -249,7 +251,12 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		(interfaceSwitch.transition?.policy === "drain" &&
 			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase))
 	));
-	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && (
+	// An agent switch keeps the interface: the agent it switches to, while it
+	// runs. Chat keeps its conversation on screen with the "Switching" line, as a
+	// local switch does; the terminal is covered while the worker restarts on
+	// the new agent.
+	const agentSwitchTo = activeTransition || interfaceSwitch.settling ? agentSwitchTarget(interfaceSwitch.transition) : undefined;
+	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && !(agentSwitchTo && session?.mode === "chat") && (
 		interfaceSwitch.starting || activeTransition || interfaceSwitch.settling ||
 		(interfaceSwitch.transition?.phase === "completed" && session?.mode !== interfaceSwitch.transition.targetMode)
 	));
@@ -450,8 +457,11 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	const disabledReason = interfaceSwitch.isLoading
 		? "Checking whether this agent can switch interfaces…"
 		: blockedReason || interfaceSwitch.status?.reason || interfaceSwitch.statusError;
-	// While a switch runs, the control is its status, with cancel on hover.
+	// While a switch runs, the control is its status, with cancel on hover. Only
+	// a Cloud session's creator may cancel its agent switch; anyone else sees
+	// the switch's progress without a cancel.
 	const showStatus = cloudDrainWaiting || (!isCloud && activeTransition);
+	const cancelRefused = isCloud && Boolean(agentSwitchTarget(interfaceSwitch.transition)) && !cloudCreator;
 	const switchControl = session && showAction ? <span className="group inline-flex shrink-0"><SessionInterfaceSwitchButton
 		target={target}
 		mayStartFresh={session.provider === "hermes"}
@@ -462,7 +472,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		cancelling={interfaceSwitch.cancelling}
 		cancelError={interfaceSwitch.cancelError}
 		onClick={request}
-		onCancel={() => { void interfaceSwitch.cancel().catch(() => {}); }}
+		onCancel={cancelRefused ? undefined : () => { void interfaceSwitch.cancel().catch(() => {}); }}
 	/></span> : null;
 	const startError = dialogOpen || historyRecoveryNotice || restartRequiredNotice ? undefined : interfaceSwitch.startError;
 	// A local chat shows this above its message box instead.
@@ -546,6 +556,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		accountMoveQueues,
 		accountMoveTarget,
 		activeTransition,
+		agentSwitchTo,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
 		cloudLoader,
 		confirmUnsafeDraftLeave,

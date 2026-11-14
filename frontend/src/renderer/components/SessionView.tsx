@@ -23,6 +23,8 @@ import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
+import { agentLabel } from "../lib/agent-options";
+import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
@@ -456,8 +458,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} queuedMessage={terminalOnly ? undefined : queuedMessage} />;
 }
 
-function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
-	const label = `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
+function CloudInterfaceSwitchLoader({ target, agent }: { target: "chat" | "tui"; agent?: string }) {
+	// An agent switch keeps the interface and names the agent it switches to.
+	const label = agent ? `Switching to ${agentLabel(agent)}` : `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
 	return (
 		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen" data-startup-cover="">
 			<div role="status" aria-live="polite" aria-label={label} className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -2343,17 +2346,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A session's tab menus hold the interface switch and, in a local terminal, its agent; Cloud cannot switch agent.
+	// A session's tab menus hold the interface switch and, in a terminal, its agent: a Cloud
+	// terminal's where its control plane can switch the session's agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
+	const cloudAgentSwitch = useCloudAgentSwitch(session?.cloud ? session : undefined);
 	// The agent rows apply while there is a switch to offer, or a local
 	// terminal's agent to pick and no switch running.
 	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
 		if (!session) return undefined;
-		const picksAgent = !session.cloud && interfaceUi.target === "chat";
+		const picksAgent = (!session.cloud || cloudAgentSwitch.available) && interfaceUi.target === "chat";
 		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
-		return { session, hostId, blocked: agentWorking, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
-	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
+		return { session, hostId, blocked: agentWorking || cloudAgentSwitch.switching, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
+	}, [agentWorking, cloudAgentSwitch.available, cloudAgentSwitch.switching, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
 	// Cmd+K offers the same switch for the session on screen.
 	useEffect(() => {
 		if (!session) return;
@@ -3330,7 +3335,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>
 			{interfaceUi.cloudLoader
-				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
+				? <CloudInterfaceSwitchLoader target={interfaceUi.target} agent={interfaceUi.agentSwitchTo} />
 				: showLifecycleLoader || showCompletedLoader
 					? <CloudSessionLifecycleLoader
 						key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}
