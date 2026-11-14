@@ -60,6 +60,8 @@ class FakeChrome {
 	windowStates = new Map<number, string>();
 	/** Debugger screenshots that never produce a frame, like a page that loaded minimized. */
 	hangingScreenshots = 0;
+	/** The user's last focused window, if they have one open. */
+	userWindow?: { id: number; incognito?: boolean };
 	windowUpdates: Array<{ windowId: number; state?: string; focused?: boolean }> = [];
 	granted = { origins: true, debugger: true };
 	events = {
@@ -205,7 +207,10 @@ class FakeChrome {
 					return { id: self.nextWindow++, focused: true };
 				},
 				get: async (windowId) => ({ id: windowId, focused: false, state: self.windowStates.get(windowId) ?? "normal" }),
-				getLastFocused: async () => ({ id: 1, focused: true }),
+				getLastFocused: async () => {
+					if (!self.userWindow) throw new Error("No last-focused window");
+					return { ...self.userWindow, focused: true, type: "normal" };
+				},
 				update: async (windowId, props) => {
 					self.windowUpdates.push({ windowId, ...props });
 					if (props.state) self.windowStates.set(windowId, props.state);
@@ -400,16 +405,52 @@ describe("Executor", () => {
 		expect(await run("snapshot", { interactive: true, delta: true })).toMatchObject({ kind: "unchanged", revision: 2, baseRevision: 1 });
 	});
 
-	it("gives each session its own unfocused window instead of the user's", async () => {
+	it("opens each session's tab group in the background of the user's window", async () => {
+		const { fake, run, approve } = setup();
+		fake.userWindow = { id: 1 };
+		const mine = await fake.api().tabs.create({ url: "https://personal.test/", active: true, windowId: 1 });
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		const tabOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!;
+		// The user's tab stays in front while the agent works behind it.
+		const { refs } = (await run("snapshot", { interactive: true }, "s1")) as { refs: Record<string, { name: string }> };
+		const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+		expect(await run("click", { ref: buy }, "s1")).toMatchObject({ inputTier: "trusted" });
+		expect(await run("screenshot", {}, "s1")).toMatchObject({ width: 1, height: 1 });
+		expect(fake.tabs.get(mine.id!)!.active).toBe(true);
+		expect(tabOf("https://shop.test/").active).toBe(false);
+
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		expect(fake.windowsCreated).toEqual([]);
+		expect(tabOf("https://shop.test/").windowId).toBe(1);
+		expect(tabOf("https://shop.test/done").windowId).toBe(1);
+		expect(tabOf("https://shop.test/").groupId).not.toBe(tabOf("https://shop.test/done").groupId);
+		expect(fake.tabs.get(mine.id!)!.active).toBe(true);
+
+		// Ending a session never closes the user's window.
+		await run("__destroy-session", {}, "s1");
+		expect(fake.windowsRemoved).toEqual([]);
+		expect(fake.tabs.get(mine.id!)).toBeDefined();
+	});
+
+	it("never opens a session in an incognito window", async () => {
+		const { fake, run, approve } = setup();
+		fake.userWindow = { id: 1, incognito: true };
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		expect(fake.windowsCreated).toHaveLength(1);
+		expect([...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.windowId).not.toBe(1);
+	});
+
+	it("falls back to an unfocused window of its own when the user has none open", async () => {
 		const { fake, run, approve } = setup();
 		await approve("s1");
 		await approve("s2");
 		await run("open", { url: "https://shop.test/" }, "s1");
 		await run("open", { url: "https://shop.test/done" }, "s2");
 		const windowOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.windowId;
-		// Window 1 is the user's focused window in the fake.
-		expect(windowOf("https://shop.test/")).not.toBe(1);
-		expect(windowOf("https://shop.test/done")).not.toBe(1);
+		expect(fake.windowsCreated).toHaveLength(2);
 		expect(windowOf("https://shop.test/")).not.toBe(windowOf("https://shop.test/done"));
 		// A second tab for a session joins that session's window.
 		await run("tab-new", { url: "https://shop.test/more" }, "s1");
