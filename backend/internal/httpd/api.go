@@ -268,7 +268,6 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
-// setupRoute reports a request that may run the project's Setup steps.
 // moveCaptureRoute reports a route that captures a session's whole worktree,
 // which can outlast the default request budget.
 func moveCaptureRoute(req *http.Request) bool {
@@ -279,6 +278,7 @@ func moveCaptureRoute(req *http.Request) bool {
 	return false
 }
 
+// setupRoute reports a request that may run the project's Setup steps.
 func setupRoute(req *http.Request) bool {
 	if req.Method != http.MethodPost {
 		return false

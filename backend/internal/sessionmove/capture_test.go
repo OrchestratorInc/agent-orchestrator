@@ -148,23 +148,31 @@ func TestCaptureWithoutIdentityAndWithSigningOn(t *testing.T) {
 	}
 }
 
-func TestCaptureFlagsLFSPointers(t *testing.T) {
-	f := newFixture(t)
-	writeFile(t, filepath.Join(f.src, ".gitattributes"), "*.psd filter=lfs diff=lfs merge=lfs -text\n", 0o644)
-	pointer := lfsPointerPrefix + "\noid sha256:" + strings.Repeat("ab", 32) + "\nsize 48213\n"
-	writeFile(t, filepath.Join(f.src, "art/design.psd"), pointer, 0o644)
-	c, err := CaptureWorktree(t.Context(), CaptureOptions{Worktree: f.src})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(c.LFS) != 1 || c.LFS[0] != "art/design.psd" {
-		t.Fatalf("LFS = %v", c.LFS)
-	}
-	if err := PushBranch(t.Context(), f.src, c, GitHubFileLimit); !errors.Is(err, ErrLFSObjects) {
-		t.Fatalf("push err = %v, want ErrLFSObjects", err)
-	}
-	if got := g(t, f.origin, "rev-parse", "refs/heads/feat/x"); got != f.c1 {
-		t.Fatal("refused push still changed origin")
+// LFS objects would stay behind, since the push runs without the LFS hook,
+// whether the pointer is in the WIP commit or a commit origin lacks.
+func TestPushRefusesLFSPointers(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		f := newFixture(t)
+		writeFile(t, filepath.Join(f.src, ".gitattributes"), "*.psd filter=lfs diff=lfs merge=lfs -text\n", 0o644)
+		pointer := lfsPointerPrefix + "\noid sha256:" + strings.Repeat("ab", 32) + "\nsize 48213\n"
+		writeFile(t, filepath.Join(f.src, "art/design.psd"), pointer, 0o644)
+		if committed {
+			g(t, f.src, "add", "-A")
+			g(t, f.src, "commit", "-q", "-m", "design")
+		}
+		c, err := CaptureWorktree(t.Context(), CaptureOptions{Worktree: f.src})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if committed != (c.Commit == "") {
+			t.Fatalf("committed=%v: capture commit %q", committed, c.Commit)
+		}
+		if err := PushBranch(t.Context(), f.src, c, GitHubFileLimit); !errors.Is(err, ErrLFSObjects) || !strings.Contains(err.Error(), "art/design.psd") {
+			t.Fatalf("committed=%v: push err = %v, want ErrLFSObjects naming art/design.psd", committed, err)
+		}
+		if got := g(t, f.origin, "rev-parse", "refs/heads/feat/x"); got != f.c1 {
+			t.Fatalf("committed=%v: refused push still changed origin", committed)
+		}
 	}
 }
 

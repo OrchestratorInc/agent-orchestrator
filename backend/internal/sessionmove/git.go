@@ -62,12 +62,13 @@ type Blob struct {
 	Size int64
 }
 
-// blobsOver lists the files over limit in commits reachable from tip that
-// origin does not have, largest first.
-func blobsOver(ctx context.Context, dir, tip string, limit int64) ([]Blob, error) {
+// unpushedBlobs lists, among the files in commits reachable from tip that
+// origin does not have, those over limit, largest first, and the Git LFS
+// pointers, whose objects a push without the LFS hook would leave behind.
+func unpushedBlobs(ctx context.Context, dir, tip string, limit int64) ([]Blob, []string, error) {
 	out, err := runGit(ctx, dir, nil, nil, "rev-list", "--objects", tip, "--not", "--remotes=origin")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	paths := map[string]string{}
 	var ids []string
@@ -83,17 +84,32 @@ func blobsOver(ctx context.Context, dir, tip string, limit int64) ([]Blob, error
 	}
 	sizes, err := objectSizes(ctx, dir, ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var blobs []Blob
+	var small []string
 	for i, id := range ids {
+		if sizes[i] > 0 && sizes[i] < 1024 {
+			small = append(small, id)
+		}
 		if sizes[i] <= limit {
 			continue
 		}
 		blobs = append(blobs, Blob{Path: paths[id], Size: sizes[i]})
 	}
 	slices.SortFunc(blobs, func(a, b Blob) int { return cmp.Compare(b.Size, a.Size) })
-	return blobs, nil
+	contents, err := blobContents(ctx, dir, small)
+	if err != nil {
+		return nil, nil, err
+	}
+	var lfs []string
+	for _, id := range small {
+		if bytes.HasPrefix(contents[id], []byte(lfsPointerPrefix)) {
+			lfs = append(lfs, paths[id])
+		}
+	}
+	slices.Sort(lfs)
+	return blobs, lfs, nil
 }
 
 // objectSizes returns each object's size, or -1 for anything that is not a blob.
