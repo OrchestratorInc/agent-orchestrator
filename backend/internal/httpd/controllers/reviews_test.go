@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -130,6 +131,10 @@ func (f *fakeReviewService) TeardownReviewerTerminal(context.Context, domain.Ses
 	f.teardown = true
 	f.list.ReviewerHandleID = ""
 	return nil
+}
+
+func (f *fakeReviewService) ReleaseIdleReviewers(context.Context, time.Duration) (int, error) {
+	return 0, nil
 }
 
 func (f *fakeReviewService) RestoreReviewer(context.Context, domain.SessionID) error {

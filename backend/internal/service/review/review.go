@@ -72,6 +72,7 @@ type Manager interface {
 	TerminateReviewer(ctx context.Context, workerID domain.SessionID, body string) error
 	ArchiveReviewer(ctx context.Context, workerID domain.SessionID) error
 	TeardownReviewerTerminal(ctx context.Context, workerID domain.SessionID) error
+	ReleaseIdleReviewers(ctx context.Context, idleFor time.Duration) (int, error)
 	RestoreReviewer(ctx context.Context, workerID domain.SessionID) error
 	SwitchReviewer(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.SessionReviews, error)
 	ApplyReviewActivitySignal(ctx context.Context, reviewSessionID string, signal ActivitySignal) error
@@ -734,6 +735,12 @@ func (s *Service) TerminateReviewer(ctx context.Context, workerID domain.Session
 // worker shutdown while preserving review rows and native reviewer session ids.
 func (s *Service) TeardownReviewerTerminal(ctx context.Context, workerID domain.SessionID) error {
 	return s.engine.TeardownReviewerTerminal(ctx, workerID)
+}
+
+// ReleaseIdleReviewers stops terminal reviewers that have been idle for idleFor
+// with no review running. The next review resumes their conversation.
+func (s *Service) ReleaseIdleReviewers(ctx context.Context, idleFor time.Duration) (int, error) {
+	return s.engine.ReleaseIdleReviewers(ctx, idleFor)
 }
 
 // RestoreReviewer relaunches an idle reviewer pane after its worker has been restored.

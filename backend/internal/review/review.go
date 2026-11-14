@@ -73,6 +73,7 @@ type Store interface {
 	ListReviewRunsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 	ListRunningReviewRunsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 	ListRecoverableChatReviews(ctx stdctx.Context) ([]domain.Review, error)
+	ListLiveReviewerHandles(ctx stdctx.Context) ([]domain.ReviewerHandle, error)
 	RecordReviewChatControllerError(ctx stdctx.Context, id, message string, now time.Time) (bool, error)
 }
 
@@ -1325,6 +1326,58 @@ func (e *Engine) TeardownReviewerTerminal(ctx stdctx.Context, workerID domain.Se
 		}
 	}
 	return nil
+}
+
+// ReleaseIdleReviewers destroys terminal reviewer panes whose reviewer has been
+// idle for at least idleFor with no review running. Review rows and native agent
+// session ids are kept, so the next pass resumes the same conversation.
+func (e *Engine) ReleaseIdleReviewers(ctx stdctx.Context, idleFor time.Duration) (int, error) {
+	handles, err := e.store.ListLiveReviewerHandles(ctx)
+	if err != nil {
+		return 0, err
+	}
+	released := 0
+	var errs []error
+	for _, handle := range handles {
+		ok, err := e.releaseIdleReviewer(ctx, handle, idleFor)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("release reviewer for %s: %w", handle.SessionID, err))
+			continue
+		}
+		if ok {
+			released++
+		}
+	}
+	return released, errors.Join(errs...)
+}
+
+func (e *Engine) releaseIdleReviewer(ctx stdctx.Context, handle domain.ReviewerHandle, idleFor time.Duration) (bool, error) {
+	unlock := e.lockWorker(handle.SessionID)
+	defer unlock()
+	review, ok, err := e.store.GetReviewBySessionAndHarness(ctx, handle.SessionID, handle.Harness)
+	if err != nil || !ok || review.ReviewerHandleID == "" || review.InterfaceMode == domain.ReviewerInterfaceChat {
+		return false, err
+	}
+	// A reviewer waiting on a permission prompt or still working keeps its pane.
+	if review.ReviewerActivityState != domain.ActivityIdle && review.ReviewerActivityState != domain.ActivityExited {
+		return false, nil
+	}
+	if e.clock().Sub(review.UpdatedAt) < idleFor {
+		return false, nil
+	}
+	running, err := e.store.ListRunningReviewRunsBySession(ctx, review.SessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, run := range running {
+		if run.Harness == review.Harness || run.ReviewID == review.ID {
+			return false, nil
+		}
+	}
+	if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
+		return false, err
+	}
+	return true, e.store.ClearReviewerHandleByHarness(ctx, review.SessionID, review.Harness)
 }
 
 func autoReviewHeadBlocked(runs []domain.ReviewRun, prURL, targetSHA string, harness domain.ReviewerHarness) bool {

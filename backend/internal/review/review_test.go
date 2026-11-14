@@ -325,6 +325,23 @@ func (f *fakeStore) ListRecoverableChatReviews(context.Context) ([]domain.Review
 	return f.recoverableReviews, f.recoverableReviewsErr
 }
 
+func (f *fakeStore) ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error) {
+	reviews := make([]domain.Review, 0, len(f.reviews)+1)
+	for _, review := range f.reviews {
+		reviews = append(reviews, review)
+	}
+	if f.review != nil {
+		reviews = append(reviews, *f.review)
+	}
+	out := make([]domain.ReviewerHandle, 0, len(reviews))
+	for _, review := range reviews {
+		if review.ReviewerHandleID != "" {
+			out = append(out, domain.ReviewerHandle{ReviewID: review.ID, SessionID: review.SessionID, Harness: review.Harness, HandleID: review.ReviewerHandleID})
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) RecordReviewChatControllerError(_ context.Context, id, message string, _ time.Time) (bool, error) {
 	if f.recoveryErrors == nil {
 		f.recoveryErrors = make(map[string]string)
