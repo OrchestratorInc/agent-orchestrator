@@ -180,6 +180,7 @@ export type ChatApprovalDecisionInput = Schemas["ChatApprovalDecisionInput"];
 export type TurnSteeredEvent = Schemas["TurnSteeredEvent"];
 export type TurnSteerRequestedEvent = Schemas["TurnSteerRequestedEvent"];
 export type TurnSteerFailedEvent = Schemas["TurnSteerFailedEvent"];
+export type AgentSwitchedEvent = Schemas["AgentSwitchedEvent"];
 export type EditQueuedMessageInput = Schemas["EditQueuedMessageInput"];
 export type UserMessageEditedEvent = Schemas["UserMessageEditedEvent"];
 export type ChatModel = Schemas["ChatModel"];

@@ -37,6 +37,16 @@ type ShellRuntime interface {
 	IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 }
 
+// TerminalInputForgetter drops one terminal's input bookkeeping in the
+// terminal mux. *terminal.Manager satisfies it. Shell terminals destroy their
+// own runtimes (Session Manager never sees them) and every tab gets a fresh
+// random handle id, so without this each closed tab would leave one input
+// timestamp behind forever (#5691). It waits on the terminal's write fence, so
+// it returns ctx's error if ctx ends first.
+type TerminalInputForgetter interface {
+	ForgetTerminalInput(ctx context.Context, terminalID string) error
+}
+
 // ProjectRootLocator resolves a project id to the directory a shell should
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
@@ -70,6 +80,10 @@ type Service struct {
 	pendingPreview      map[domain.SessionID]string
 	hiddenAuthMu        sync.RWMutex
 	hiddenAuthTerminals map[string]struct{}
+
+	// inputForgetter is told to drop a shell's terminal input timestamp once
+	// its runtime is confirmed destroyed. Set once at boot; nil skips it.
+	inputForgetter TerminalInputForgetter
 
 	// now and newHandleID are injectable so tests can assert on exact ids and
 	// timestamps without a clock or entropy dependency.
@@ -238,6 +252,27 @@ func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLoca
 		executable:          agentlaunch.Executable,
 		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
+	}
+}
+
+// SetTerminalInputForgetter wires the terminal mux so a shell's input
+// timestamp is dropped once its runtime is confirmed destroyed. Call once at
+// boot, before serving requests.
+func (s *Service) SetTerminalInputForgetter(f TerminalInputForgetter) {
+	s.inputForgetter = f
+}
+
+// forgetTerminalInput tells the terminal mux, if wired, to drop handleID's
+// input timestamp. Call it only after the runtime is confirmed destroyed: a
+// live runtime may still hold a draft the timestamp guards. A failure (ctx
+// ended while it waited on the write fence) only leaves one stale timestamp,
+// so it is logged and teardown goes on.
+func (s *Service) forgetTerminalInput(ctx context.Context, handleID string) {
+	if s.inputForgetter == nil {
+		return
+	}
+	if err := s.inputForgetter.ForgetTerminalInput(ctx, handleID); err != nil {
+		s.log.Warn("shell terminal: forget input timestamp failed", "handleId", handleID, "error", err)
 	}
 }
 
@@ -1018,10 +1053,10 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 }
 
 // destroyConfirmed handles explicit teardown and confirmed child exit. It
-// destroys the runtime and deletes the row only once host death is confirmed,
-// so CloseShellTerminal, ReapShellTerminalsFromPreviousAppRuns,
-// and BeginSessionTeardown can't each independently forget a shell that
-// actually survived.
+// destroys the runtime and, only once host death is confirmed, forgets the
+// terminal's input timestamp and deletes the row, so CloseShellTerminal,
+// ReapShellTerminalsFromPreviousAppRuns, and BeginSessionTeardown can't each
+// independently forget a shell that actually survived.
 //
 //   - A clean Destroy is confirmed dead.
 //   - A Destroy error is followed by an IsAlive check; an IsAlive error is
@@ -1041,6 +1076,9 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 	for _, tracker := range s.trackers {
 		tracker.UntrackShellTerminal(handleID)
 	}
+	// Death is confirmed: nothing reads a destroyed shell's input timestamp,
+	// and its random handle id never comes back.
+	s.forgetTerminalInput(ctx, handleID)
 	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)
 	} else if deleted {

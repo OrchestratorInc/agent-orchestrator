@@ -137,6 +137,61 @@ func TestClaudeACPLaunchEnvKeepsConfiguredTodoToolsChoice(t *testing.T) {
 	})
 }
 
+func TestClaudeACPLaunchEnvNamesOrchestratorEntrypoint(t *testing.T) {
+	t.Run("replaces an inherited value", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENTRYPOINT"]; got != "agent-orchestrator" {
+			t.Fatalf("CLAUDE_CODE_ENTRYPOINT = %q, want agent-orchestrator", got)
+		}
+	})
+	t.Run("blank project value", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": " "}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENTRYPOINT"]; got != "agent-orchestrator" {
+			t.Fatalf("CLAUDE_CODE_ENTRYPOINT = %q, want agent-orchestrator for a blank value", got)
+		}
+	})
+	t.Run("project env wins", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": "custom"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENTRYPOINT"]; got != "custom" {
+			t.Fatalf("CLAUDE_CODE_ENTRYPOINT = %q, want the project's value kept", got)
+		}
+	})
+}
+
+func TestClaudeACPLaunchEnvTurnsArtifactsOffByDefault(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ARTIFACT"]; got != "0" {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want 0", got)
+		}
+	})
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ARTIFACT": "1"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ARTIFACT"]; got != "1" {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want the project's value kept", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "1")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ARTIFACT"]; set {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want the inherited value left alone", got)
+		}
+	})
+	t.Run("blank project value keeps the daemon's choice", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "1")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ARTIFACT": " "}, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ARTIFACT"]; set {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want no overlay so the daemon's value reaches Claude", got)
+		}
+	})
+}
+
 func TestClaudeACPLaunchEnvAdvertisesSelectedModelWithoutProviderCatalog(t *testing.T) {
 	t.Setenv("CLAUDE_MODEL_CONFIG", "")
 	env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-opus-4-7", nil)

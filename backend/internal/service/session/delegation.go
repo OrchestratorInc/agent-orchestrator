@@ -37,6 +37,7 @@ type DelegateTaskInput struct {
 	Effort            *string
 	ApprovalMode      domain.PermissionMode
 	RequestedMode     domain.SessionMode
+	AccountID         string
 	Attachments       []ports.SpawnAttachment
 	TaskPreparation   domain.TaskPreparationToken
 	ClientRequestID   string
@@ -115,6 +116,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		},
 		EffortOverride: effortOverride,
 		RequestedMode:  in.RequestedMode,
+		AgentAccountID: in.AccountID,
 		Attachments:    in.Attachments,
 		// This is the desktop's new-task path: there is a UI waiting to navigate
 		// to the session. A Chat worker answers as soon as it is addressable and

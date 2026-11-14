@@ -683,6 +683,16 @@ type PromptReadinessHints struct {
 	PollInterval time.Duration
 	Timeout      time.Duration
 	Lines        int
+	// RenderedScreen matches against the runtime's rendered current viewport
+	// (StyledTerminalOutputReader) instead of the raw output ring. Full-screen
+	// TUIs draw on the alternate screen, so their text never appears as a
+	// contiguous run in raw output. Runtimes without a rendered view for the
+	// handle fall back to raw output.
+	RenderedScreen bool
+	// BlockingPatterns hold readiness while any of them is visible, for startup
+	// dialogs that also show a ready marker. If one is still visible when
+	// Timeout elapses, delivery is abandoned instead of typed into the dialog.
+	BlockingPatterns []string
 }
 
 // AgentResolver maps a session's harness onto the Agent adapter that drives it,

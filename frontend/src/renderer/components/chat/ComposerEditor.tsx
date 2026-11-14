@@ -57,7 +57,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { findActiveTrigger, skillCommandName, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
@@ -325,7 +325,10 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
-	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
+	// A `skill:` command reads as `/name` like every other agent's; the wire still
+	// carries the command the agent runs.
+	const skillName = skillCommandName(value);
+	const display = kind === "skill" ? (skillName ? `/${skillName}` : wire) : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
@@ -918,6 +921,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Takes no input but looks exactly as usual: same text, no dimming. */
+		readOnly?: boolean;
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
@@ -940,6 +945,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		readOnly = false,
 		enterSends,
 		concealed,
 		dictating,
@@ -963,7 +969,8 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
+	const locked = Boolean(disabled) || readOnly;
+	const suggestion = empty && !locked && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -975,7 +982,7 @@ export const ComposerEditor = forwardRef<
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode, DictationLetterNode],
-		editable: !disabled,
+		editable: !locked,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
 			throw error;
@@ -1063,7 +1070,7 @@ export const ComposerEditor = forwardRef<
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
-					disabled={disabled}
+					disabled={locked}
 					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
