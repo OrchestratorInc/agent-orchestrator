@@ -6789,17 +6789,26 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 			...(reading ? { accountPending: true } : {}),
 		});
 		if (reading) {
+			// A login started since for another agent is not this read's to change.
+			const agentId = snapshot.harness;
+			const ours = () => {
+				const waiting = useUiStore.getState().loginReturn;
+				return waiting?.sessionId === sessionId && waiting.agentId === agentId;
+			};
 			void fetchSessionAgentAccounts(sessionId).then(
 				(accounts) => {
+					if (!ours()) return;
 					const store = useUiStore.getState();
 					const found = accounts[reading];
 					store.setLoginReturnAccount(sessionId, found);
 					// Settings opened before the account was known: sign in that saved account.
-					if (found && store.loginReturn?.sessionId === sessionId && store.settingsModal?.scope === "global") {
+					if (found && store.settingsModal?.scope === "global") {
 						useUiStore.setState({ accountLogin: found });
 					}
 				},
-				() => useUiStore.getState().setLoginReturnAccount(sessionId, undefined),
+				() => {
+					if (ours()) useUiStore.getState().setLoginReturnAccount(sessionId, undefined);
+				},
 			);
 		}
 		ui.openGlobalSettings("harness", {
