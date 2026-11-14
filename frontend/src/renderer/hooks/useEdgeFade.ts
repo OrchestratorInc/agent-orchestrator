@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type RefCallback, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useRef, type RefCallback, type RefObject } from "react";
 
 /**
  * Scroll edge fades, shared by every scroll container that fades its content
@@ -9,18 +9,35 @@ import { useCallback, useEffect, useRef, type RefCallback, type RefObject } from
  * the translucent window tint, every theme, light and dark. These helpers only
  * toggle `data-fade-start` / `data-fade-end` on the element while content sits
  * past that edge, so scrolling never re-renders React.
+ *
+ * The fades ease in and out as the reader scrolls, but where a scroller already
+ * sits when it mounts (a chat opened at its end, a menu opened over a long list)
+ * is not a change: that first state applies at once, under `data-fade-instant`.
  */
 export type EdgeFadeAxis = "x" | "y";
 
-/** Marks which edges of a scroller still have content past them. `suppressEnd` holds the end fade off (a strip gliding to its end). */
-export function syncEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y", suppressEnd = false): void {
+/**
+ * Marks which edges of a scroller still have content past them, and returns
+ * whether it overflows at all. `suppressEnd` holds the end fade off (a strip
+ * gliding to its end).
+ */
+export function syncEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y", suppressEnd = false): boolean {
 	const offset = axis === "x" ? element.scrollLeft : element.scrollTop;
 	const overflow = axis === "x"
 		? element.scrollWidth - element.clientWidth
 		: element.scrollHeight - element.clientHeight;
 	element.toggleAttribute("data-fade-start", overflow > 1 && offset > 1);
 	element.toggleAttribute("data-fade-end", !suppressEnd && overflow > 1 && offset < overflow - 1);
+	return overflow > 1;
 }
+
+/**
+ * How long a scroller that has not overflowed yet keeps its fades instant.
+ * Content loading in that window (a chat's transcript) lands where it opens;
+ * content that first overflows later (a reply streaming into a fresh chat) is
+ * a change, and fades.
+ */
+const INSTANT_FADE_LIMIT_MS = 1000;
 
 /**
  * Keeps a scroller's fade attributes current: on every scroll (passive), and a
@@ -29,7 +46,29 @@ export function syncEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y", sup
  * observer has usually just dirtied layout. Returns the cleanup.
  */
 export function observeEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y"): () => void {
-	const sync = () => syncEdgeFade(element, axis);
+	// Instant until the content is in and has held for two frames: the scroll
+	// position a chat restores, or the rows a list measures, land a frame or two
+	// after the content itself.
+	element.setAttribute("data-fade-instant", "");
+	let settleFrame: number | null = null;
+	const endInstant = () => {
+		if (settleFrame !== null) window.cancelAnimationFrame(settleFrame);
+		settleFrame = null;
+		window.clearTimeout(instantLimit);
+		element.removeAttribute("data-fade-instant");
+	};
+	const instantLimit = window.setTimeout(() => {
+		if (settleFrame === null) endInstant();
+	}, INSTANT_FADE_LIMIT_MS);
+	let settling = false;
+	const sync = () => {
+		const overflows = syncEdgeFade(element, axis);
+		if (!overflows || settling || !element.hasAttribute("data-fade-instant")) return;
+		settling = true;
+		settleFrame = window.requestAnimationFrame(() => {
+			settleFrame = window.requestAnimationFrame(endInstant);
+		});
+	};
 	let frame: number | null = null;
 	const schedule = () => {
 		if (frame !== null) return;
@@ -58,12 +97,16 @@ export function observeEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y"):
 			schedule();
 		});
 	mutationObserver?.observe(element, { childList: true });
+	// Now, so the first paint already has its fades; and again next frame, once
+	// whatever mounted alongside has laid out.
+	sync();
 	schedule();
 	return () => {
 		element.removeEventListener("scroll", sync);
 		resizeObserver?.disconnect();
 		mutationObserver?.disconnect();
 		if (frame !== null) window.cancelAnimationFrame(frame);
+		endInstant();
 	};
 }
 
@@ -71,13 +114,14 @@ export function observeEdgeFade(element: HTMLElement, axis: EdgeFadeAxis = "y"):
  * Drives the fade attributes of the scroller in `ref`. The element needs the
  * `edge-fade` class (plus `edge-fade-x` for a horizontal strip). Pass the
  * values that mount or remount the scroller (a menu opening) as `dependencies`.
+ * Attached before paint, so a scroller never paints its first frame unfaded.
  */
 export function useEdgeFade(
 	ref: RefObject<HTMLElement | null>,
 	axis: EdgeFadeAxis = "y",
 	dependencies: readonly unknown[] = [],
 ): void {
-	useEffect(() => {
+	useLayoutEffect(() => {
 		const element = ref.current;
 		if (!element) return;
 		return observeEdgeFade(element, axis);

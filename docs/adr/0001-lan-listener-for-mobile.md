@@ -52,8 +52,9 @@ Security posture:
   hash, compared constant-time. Sent as `Authorization: Bearer <password>` on both
   REST and the RN WebSocket (RN's WebSocket header option). Rotating drops the
   current phone.
-- **Per-source Lockout** after 5 failed attempts. It is not global, so a hostile
-  device cannot lock out the real phone.
+- **Per-source Lockout** after 5 wrong passwords. It is not global, so a hostile
+  device cannot lock out the real phone. A request with no password is not a
+  guess and does not count.
 - **App API only** on the LAN Listener; daemon-control routes keep their existing
   loopback-only guard (`localControlRequest`) with no change.
 - The authenticated app API includes `GET /api/v1/fs/dirs` for remote folder

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
 import { apiClient } from "../lib/api-client";
+import { fetchPairingCode } from "../lib/mobile-pairing-code";
 import { useUiStore } from "../stores/ui-store";
 
 // vi.mock is hoisted above module-level consts, so the shared double has to be
@@ -16,6 +17,7 @@ const { mobileStatus } = vi.hoisted(() => ({
 		tailscaleHost: "100.72.46.7",
 		port: 3011,
 		password: "fake-password-for-testing",
+		requireDeviceCredentials: false,
 		// The daemon always advertises its endpoints now, and a v2 code is built
 		// from that list — there is no v1 form left to fall back to when it is
 		// missing, so a fixture without it is not a realistic daemon.
@@ -56,6 +58,14 @@ vi.mock("../hooks/useAwake", () => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
+vi.mock("../lib/mobile-pairing-code", () => {
+	let made = 0;
+	return {
+		mobilePairingCodeQueryKey: ["mobile-pairing-code"],
+		PAIRING_CODE_REFRESH_MS: 540_000,
+		fetchPairingCode: vi.fn(async () => ({ code: `Next${++made}`, expiresAt: Date.now() + 600_000 })),
+	};
+});
 // An app with no AO sign-in pairs signed out; signing in to pair is covered in
 // settings/ConnectMobileContent.signin.test.tsx.
 vi.mock("../lib/cloud-session", () => ({
@@ -86,6 +96,8 @@ import {
 function renderMobileSettings(
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
+	// Settings prefetches the one-time pairing code with the status.
+	client.setQueryData(["mobile-pairing-code"], { code: "Code1234", expiresAt: Date.now() + 600_000 });
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
@@ -118,6 +130,7 @@ beforeEach(() => {
 	window.localStorage.clear();
 	mobileStatus.enabled = true;
 	mobileStatus.password = "fake-password-for-testing";
+	mobileStatus.requireDeviceCredentials = false;
 	mobileStatus.noPublicTunnel = false;
 	mobileStatus.host = "192.168.1.42";
 	mobileStatus.hostId = "h_fixture";
@@ -152,7 +165,7 @@ test("encodes the LAN address by default", async () => {
 	expect(offer.endpoints).toContainEqual(
 		expect.objectContaining({ kind: "lan", host: "192.168.1.42" }),
 	);
-	expect(offer.token).toBe("fake-password-for-testing");
+	expect(offer.token).toBe("Code1234");
 	expect(offer.hostId).toBe("h_fixture");
 	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
 });
@@ -183,7 +196,7 @@ test("shows the tunnel-only QR without a LAN address and preserves pairing crede
 		name: "host.example.net",
 		platform: "",
 		endpoints: mobileStatus.endpoints,
-		token: "fake-password-for-testing",
+		token: "Code1234",
 	});
 	expect(await screen.findByTestId("mobile-pairing-address")).toHaveTextContent("host.example.net:443");
 	expect(screen.queryByText(/No network address found/i)).not.toBeInTheDocument();
@@ -223,11 +236,11 @@ test("withholds the QR when tunnel startup fails without advertising an endpoint
 test("vertically aligns the regenerate control with the password row", async () => {
 	renderMobileSettings();
 
-	// The password value and its icon actions share one centred flex row.
-	const regenerate = await screen.findByRole("button", { name: "Regenerate password" });
+	// The pairing code and its icon actions share one centred flex row.
+	const regenerate = await screen.findByRole("button", { name: "Revoke all devices" });
 	const row = regenerate.closest("dd");
 	expect(row).toHaveClass("flex", "items-center");
-	expect(row).toHaveTextContent("fake-password-for-testing");
+	expect(row).toHaveTextContent("Code1234");
 });
 
 // The blurred placeholder stays behind the spinner, so the code that arrives
@@ -1058,7 +1071,7 @@ test.each([undefined, "isolated_data_dir", "helper_missing"])("never falls back 
 	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("even with the lid closed");
 	if (lidReason === "isolated_data_dir") {
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		expect(screen.queryByText("Requires AO’s default data folder.")).not.toBeInTheDocument();
+		expect(screen.queryByText("Requires Orchestrator’s default data folder.")).not.toBeInTheDocument();
 		await userEvent.hover(screen.getByRole("button", { name: "About keeping this Mac awake" }));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Closed-lid wakefulness is disabled for custom or isolated data directories.");
 	} else {
@@ -1100,7 +1113,7 @@ test.each([false, true])("shows helper upgrade recovery with lid preference %s",
 	const toggle = await screen.findByRole("switch", { name: "Keep this Mac awake" });
 	expect(toggle).toHaveAttribute("aria-checked", String(lidClosed));
 	expect(screen.getByText(/launchctl bootout gui\/\$\(id -u\)\/com\.aoagents\.mobile-wake/)).toHaveTextContent(
-		"turn closed-lid wake off in every AO instance and wait for recovery to finish",
+		"turn closed-lid wake off in every Orchestrator instance and wait for recovery to finish",
 	);
 	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
 });
@@ -1190,7 +1203,7 @@ test("renders cached state on first paint, with no transition on the code", asyn
 		mobileStatus.password = "regenerated-password";
 		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
-	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
+	await userEvent.click(screen.getByRole("button", { name: "Revoke all devices" }));
 	await waitFor(() => expect(qrPayload()).not.toBe(before));
 	await waitFor(() => {
 		expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100");
@@ -1222,4 +1235,73 @@ test.each([false, true])("remembers the combined lid preference %s during a cold
 	expect(toggle).toBeDisabled();
 	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
 	expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toHaveAttribute("aria-checked", String(lidClosed));
+});
+
+test("keeps the password hidden until asked for, and the QR never carries it", async () => {
+	renderMobileSettings();
+	const password = await screen.findByTestId("mobile-pairing-password");
+	expect(password).toHaveTextContent("•".repeat("fake-password-for-testing".length));
+	expect(document.body).not.toHaveTextContent("fake-password-for-testing");
+	expect(qrPayload()).not.toContain("fake-password-for-testing");
+	await userEvent.click(screen.getByRole("button", { name: "Show password" }));
+	expect(password).toHaveTextContent("fake-password-for-testing");
+	await userEvent.click(screen.getByRole("button", { name: "Hide password" }));
+	expect(document.body).not.toHaveTextContent("fake-password-for-testing");
+});
+
+test("takes the password off the panel once the host refuses it", async () => {
+	mobileStatus.requireDeviceCredentials = true;
+	renderMobileSettings();
+	expect(await screen.findByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
+	expect(screen.queryByTestId("mobile-pairing-password")).not.toBeInTheDocument();
+	expect(screen.queryByRole("switch", { name: /device credentials/i })).not.toBeInTheDocument();
+});
+
+test("never shows an expired pairing code", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(["mobile-pairing-code"], { code: "Expired1", expiresAt: Date.now() - 1 });
+	render(
+		<QueryClientProvider client={client}>
+			<TooltipProvider>
+				<ConnectMobileContent active />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+	await waitFor(() => expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent(/^Next\d+$/));
+	expect(document.body).not.toHaveTextContent("Expired1");
+	expect(qrPayload()).not.toContain("Expired1");
+});
+
+test("offers to try again when no pairing code could be made", async () => {
+	vi.mocked(fetchPairingCode).mockRejectedValueOnce(new Error("remote access is off; turn it on before pairing a device"));
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(
+		<QueryClientProvider client={client}>
+			<TooltipProvider>
+				<ConnectMobileContent active />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+	await userEvent.click(await screen.findByTestId("mobile-pairing-code-retry"));
+	await waitFor(() => expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent(/^Next\d+$/));
+	expect(screen.queryByTestId("mobile-pairing-code-retry")).not.toBeInTheDocument();
+});
+
+test("drops a spent pairing code even when its replacement fails", async () => {
+	let devices: Array<{ id: string; kind: string; live: boolean }> = [];
+	const get = vi.spyOn(apiClient, "GET").mockImplementation(async (path) =>
+		path === "/api/v1/mobile/devices" ? { data: { devices }, error: undefined } : { data: { ...mobileStatus }, error: undefined });
+	try {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderMobileSettings(client);
+		expect(await screen.findByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
+		await waitFor(() => expect(client.getQueryData(["mobile-devices"])).toEqual([]));
+		vi.mocked(fetchPairingCode).mockRejectedValueOnce(new Error("pairing code failed"));
+		devices = [{ id: "dev_1", kind: "device", live: true }];
+		await act(() => client.invalidateQueries({ queryKey: ["mobile-devices"] }));
+		expect(await screen.findByTestId("mobile-pairing-code-retry")).toBeInTheDocument();
+		expect(document.body).not.toHaveTextContent("Code1234");
+	} finally {
+		get.mockRestore();
+	}
 });

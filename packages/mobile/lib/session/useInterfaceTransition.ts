@@ -1,16 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState as RNAppState } from "react-native";
 import type { ServerConfig } from "../config";
-import { ApiError } from "../api";
 import { shouldPoll } from "../appStatePoll";
-import { shouldKeepPolling, userFacingError, RECONNECTING_ACTION_COPY } from "../connectionError";
-import {
-	acknowledgeSessionInterfaceTransitionNotice,
-	cancelSessionInterfaceTransition,
-	getSessionInterfaceTransition,
-	startSessionInterfaceTransition,
-	type SessionInterfaceTransitionStatus,
-} from "../chat/api";
+import { shouldKeepPolling, RECONNECTING_ACTION_COPY } from "../connectionError";
+import type { SessionInterfaceTransitionStatus } from "../chat/api";
+import { daemonInterfaceTransitionBackend, type InterfaceSwitchSettings, type InterfaceTransitionBackend } from "./interfaceTransitionBackend";
 import {
 	interfaceTransitionNextPoll,
 	mobileInterfaceTransitionIsActive,
@@ -23,6 +17,7 @@ export {
 	mobileInterfaceTransitionIsBusy,
 	mobileInterfaceTransitionIsCancellable,
 	mobileInterfaceTransitionRecoveryMessage,
+	mobileInterfaceTransitionStoppingSource,
 } from "./interfaceTransition";
 export type { InterfaceSwitchRecheck } from "./interfaceTransition";
 
@@ -34,11 +29,28 @@ export type InterfaceTransitionRecheck =
 	| { ok: true; status: SessionInterfaceTransitionStatus; stale?: boolean }
 	| { ok: false; error: string; status?: number; stale?: boolean };
 
+/** A machine session's switch, asked of its daemon. */
 export function useInterfaceTransition(
 	cfg: ServerConfig | null,
 	sessionId: string,
 	onSettled?: () => void | Promise<void>,
 ) {
+	const backend = useMemo(() => cfg ? daemonInterfaceTransitionBackend(cfg) : null, [cfg]);
+	return useInterfaceTransitionWith(backend, sessionId, onSettled);
+}
+
+/**
+ * A session's switch between Chat and Terminal UI, from whichever host holds
+ * it (a machine's daemon or Orchestrator Cloud): readiness, the switch under
+ * way, and its start, cancel and notice.
+ */
+export function useInterfaceTransitionWith(
+	backend: InterfaceTransitionBackend | null,
+	sessionId: string,
+	onSettled?: () => void | Promise<void>,
+) {
+	// The host asked; named as when this hook took only a machine's config.
+	const cfg = backend;
 	const [status, setStatus] = useState<SessionInterfaceTransitionStatus>();
 	const [loading, setLoading] = useState(Boolean(cfg && sessionId));
 	const [starting, setStarting] = useState(false);
@@ -85,7 +97,7 @@ export function useInterfaceTransition(
 		const seq = ++requestSeq.current;
 		const current = () => seq === requestSeq.current;
 		try {
-			const next = await getSessionInterfaceTransition(cfg, sessionId);
+			const next = await cfg.status(sessionId);
 			// A superseded answer is not allowed to write state, stamp `settledRef`,
 			// or fire `onSettled` — that callback is a full board refetch, and running
 			// it off a response the hook just refused to trust settles the wrong turn.
@@ -101,8 +113,7 @@ export function useInterfaceTransition(
 			}
 			return { ok: true, status: next };
 		} catch (cause) {
-			const message = userFacingError(cause);
-			const httpStatus = cause instanceof ApiError ? cause.status : undefined;
+			const { message, status: httpStatus } = cfg.describe(cause);
 			const stale = !current();
 			if (!stale) {
 				const keepPolling = shouldKeepPolling(httpStatus);
@@ -236,7 +247,7 @@ export function useInterfaceTransition(
 	]);
 
 	const start = useCallback(
-		async (targetMode: "chat" | "tui", policy: "drain" | "interrupt") => {
+		async (targetMode: "chat" | "tui", policy: "drain" | "interrupt", settings?: InterfaceSwitchSettings) => {
 			if (!cfg) throw new Error(RECONNECTING_ACTION_COPY);
 			setStarting(true);
 			setError(undefined);
@@ -245,7 +256,7 @@ export function useInterfaceTransition(
 				// in a two-mode world it also names the direction (to tui = from chat).
 				const transition = await trackFeature(
 					"handoff",
-					() => startSessionInterfaceTransition(cfg, sessionId, targetMode, policy),
+					() => cfg.start(sessionId, targetMode, policy, settings),
 					{ mode: targetMode },
 				);
 				noteRequestLanded();
@@ -255,8 +266,7 @@ export function useInterfaceTransition(
 					transition,
 				}));
 			} catch (cause) {
-				const message = userFacingError(cause);
-				setError(message);
+				setError(cfg.describe(cause).message);
 				throw cause;
 			} finally {
 				setStarting(false);
@@ -270,11 +280,10 @@ export function useInterfaceTransition(
 		setCancelling(true);
 		setError(undefined);
 		try {
-			await cancelSessionInterfaceTransition(cfg, sessionId);
+			await cfg.cancel(sessionId);
 			await refresh();
 		} catch (cause) {
-			const message = userFacingError(cause);
-			setError(message);
+			setError(cfg.describe(cause).message);
 			throw cause;
 		} finally {
 			setCancelling(false);
@@ -287,24 +296,21 @@ export function useInterfaceTransition(
 			setAcknowledgingNotice(true);
 			setAcknowledgeNoticeError(undefined);
 			try {
-				const transition = await acknowledgeSessionInterfaceTransitionNotice(
-					cfg,
-					sessionId,
-					transitionId,
-				);
+				const transition = await cfg.acknowledgeNotice(sessionId, transitionId);
 				noteRequestLanded();
-				setStatus((current) =>
+				// A host that answers only "ok" is read again for the notice's new state.
+				if (!transition) await refresh();
+				else setStatus((current) =>
 					current?.transition?.id === transition.id ? { ...current, transition } : current,
 				);
 			} catch (cause) {
-				const message = userFacingError(cause);
-				setAcknowledgeNoticeError(message);
+				setAcknowledgeNoticeError(cfg.describe(cause).message);
 				throw cause;
 			} finally {
 				setAcknowledgingNotice(false);
 			}
 		},
-		[cfg, noteRequestLanded, sessionId],
+		[cfg, noteRequestLanded, refresh, sessionId],
 	);
 
 	return {

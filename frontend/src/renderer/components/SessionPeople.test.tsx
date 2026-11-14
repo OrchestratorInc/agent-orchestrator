@@ -2,10 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aoBridge } from "../lib/bridge";
 import type { CloudCpSessionLive, CloudCpShareLink } from "../lib/cloud-cp";
 import type { SessionPerson } from "../lib/session-people";
-import { useUiStore } from "../stores/ui-store";
 import { SessionPeopleControl, SessionPeopleStack } from "./SessionPeople";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	teams: true,
 	links: [] as CloudCpShareLink[],
 	createShareLink: vi.fn(),
+	listShareLinks: vi.fn(),
 }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
 vi.mock("../hooks/useCloudCp", () => ({
@@ -21,14 +20,14 @@ vi.mock("../hooks/useCloudCp", () => ({
 		userId: "me",
 		ready: true,
 		baseUrl: "https://cp.test",
-		client: { listShareLinks: async () => ({ links: mocks.links }), createShareLink: mocks.createShareLink, revokeShareLink: vi.fn() },
+		client: { listShareLinks: mocks.listShareLinks, createShareLink: mocks.createShareLink, revokeShareLink: vi.fn() },
 	}),
 }));
 vi.mock("../hooks/useCloudSessionLive", () => ({ useCloudSessionLive: () => mocks.live }));
 vi.mock("./ShareSessionDialog", () => ({
-	ShareSessionDialog: (props: { open: boolean; people?: boolean }) => {
+	ShareSessionDialog: (props: { open: boolean; people?: boolean; sessionId?: string }) => {
 		mocks.dialog(props.open);
-		return props.open ? <div data-testid="share-dialog" data-people={String(props.people)} /> : null;
+		return props.open ? <div data-testid="share-dialog" data-people={String(props.people)} data-session={props.sessionId ?? ""} /> : null;
 	},
 }));
 
@@ -94,7 +93,7 @@ describe("SessionPeopleControl", () => {
 		mocks.teams = true;
 		mocks.links = [];
 		mocks.createShareLink.mockReset();
-		useUiStore.setState({ globalToasts: [] });
+		mocks.listShareLinks.mockReset().mockImplementation(async () => ({ links: mocks.links }));
 	});
 	afterEach(() => vi.restoreAllMocks());
 
@@ -113,85 +112,34 @@ describe("SessionPeopleControl", () => {
 		expect(screen.getByTestId("share-dialog").dataset.people).toBe("true");
 	});
 
-	it("copies the link from the menu beside Share, naming who it lets in", async () => {
-		const id = "0c927f48-7214-4fb1-833a-7c1af5b7bf80";
-		const url = "https://orchestrator.inc/s/k7Hq2x9PmB4wR5tY8uI0oP";
-		mocks.links = [{
-			id, orgId: "org", projectId: "project", sessionId: "session", role: "viewer", status: "active", accessScope: "anyone",
-			recipients: [], interaction: "view", modeCap: "read-only", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
-		}];
-		vi.spyOn(aoBridge.sessionShareUrls, "recall").mockResolvedValue({ [id]: url });
-		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+	it("is one plain Share button, with no menu beside it, that opens this session's dialog", async () => {
 		mocks.live = live([{ userId: "me", name: "Mohak" }]);
-		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
-		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
-		const item = await screen.findByRole("menuitem", { name: "Copy link" });
-		await waitFor(() => expect(item).not.toHaveAttribute("data-disabled"));
-		await userEvent.click(item);
-		await waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
-		const toast = useUiStore.getState().globalToasts.at(-1);
-		expect(toast?.title).toBe("Link copied");
-		expect(toast?.body).toContain("Anyone signed in to Orchestrator.inc with the link can watch this session");
-		expect(toast?.action?.label).toBe("Manage");
-	});
-
-	it("opens the Share dialog instead of making a link when this device doesn't have it", async () => {
-		mocks.links = [{
-			id: "0c927f48-7214-4fb1-833a-7c1af5b7bf80", orgId: "org", projectId: "project", sessionId: "session", role: "editor", status: "active", accessScope: "anyone",
-			recipients: [], interaction: "interact", modeCap: "standard", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
-		}];
-		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
-		mocks.live = live([{ userId: "me", name: "Mohak" }]);
-		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
-		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
-		const item = await screen.findByRole("menuitem", { name: /Copy new link…/ });
-		await waitFor(() => expect(item).not.toHaveAttribute("data-disabled"));
-		expect(item).toHaveTextContent("Made on another device");
-		await userEvent.click(item);
-		expect(await screen.findByTestId("share-dialog")).toBeTruthy();
-		expect(mocks.createShareLink).not.toHaveBeenCalled();
-		expect(writeText).not.toHaveBeenCalled();
-	});
-
-	it("opens the Share dialog instead of copying a link revoked elsewhere since the menu read the links", async () => {
-		const id = "0c927f48-7214-4fb1-833a-7c1af5b7bf80";
-		const link: CloudCpShareLink = {
-			id, orgId: "org", projectId: "project", sessionId: "session", role: "viewer", status: "active", accessScope: "anyone",
-			recipients: [], interaction: "view", modeCap: "read-only", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
-		};
-		mocks.links = [link];
-		vi.spyOn(aoBridge.sessionShareUrls, "recall").mockResolvedValue({ [id]: "https://orchestrator.inc/s/k7Hq2x9PmB4wR5tY8uI0oP" });
-		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
-		mocks.live = live([{ userId: "me", name: "Mohak" }]);
-		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
-		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
-		const item = await screen.findByRole("menuitem", { name: "Copy link" });
-		await waitFor(() => expect(item).not.toHaveAttribute("data-disabled"));
-		// Revoked on another device while the menu showed the list it read.
-		mocks.links = [{ ...link, status: "revoked" }];
-		await userEvent.click(item);
-		expect(await screen.findByTestId("share-dialog")).toBeTruthy();
-		expect(writeText).not.toHaveBeenCalled();
-	});
-
-	it("says only the whole project's link is on when this session has none of its own", async () => {
-		mocks.links = [{
-			id: "0c927f48-7214-4fb1-833a-7c1af5b7bf80", orgId: "org", projectId: "project", role: "viewer", status: "active", accessScope: "anyone",
-			recipients: [], interaction: "view", modeCap: "read-only", deniedCommands: [], createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z",
-		}];
-		mocks.live = live([{ userId: "me", name: "Mohak" }]);
-		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
-		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
-		await screen.findByText("Only the whole project's link is on");
+		const { container } = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		// Google Docs' Share: the one control in the header is the button itself.
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		const share = screen.getByRole("button", { name: "Share" });
+		expect(share).not.toHaveAttribute("aria-haspopup");
+		expect(share.className).not.toContain("rounded-r-none");
+		expect(screen.queryByRole("button", { name: "More sharing options" })).toBeNull();
+		expect(container.querySelector("[data-share-menu], [data-share-split]")).toBeNull();
+		await userEvent.click(share);
+		expect(screen.getByTestId("share-dialog").dataset.session).toBe("session");
+		// Nothing to copy from the header: Copy link is in the dialog, never a disabled menu item here.
+		expect(screen.queryByRole("menu")).toBeNull();
+		expect(screen.queryByRole("menuitem")).toBeNull();
 		expect(screen.queryByText("Link access is off")).toBeNull();
+		// It reads no links of its own: the dialog does.
+		expect(mocks.listShareLinks).not.toHaveBeenCalled();
 	});
 
-	it("says link access is off in the menu instead of copying", async () => {
-		mocks.live = live([{ userId: "me", name: "Mohak" }]);
-		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
-		await userEvent.click(screen.getByRole("button", { name: "More sharing options" }));
-		await screen.findByText("Link access is off");
-		expect(screen.getByRole("menuitem", { name: /Copy link/ })).toHaveAttribute("data-disabled");
+	it("keeps no menu beside the circles when someone else is here", () => {
+		mocks.live = live([{ userId: "me", name: "Mohak" }, { userId: "b", name: "Bob" }], "b");
+		const { container } = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		expect(screen.queryByRole("button", { name: "More sharing options" })).toBeNull();
+		expect(container.querySelector("[data-share-menu], [data-share-split]")).toBeNull();
+		fireEvent.click(container.querySelector("[data-session-people]")!);
+		expect(screen.getByTestId("share-dialog").dataset.session).toBe("session");
 	});
 
 	it("shows the owner a Share button while nobody else is here", () => {

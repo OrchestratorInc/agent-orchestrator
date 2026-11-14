@@ -13,6 +13,7 @@ import {
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
+import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 import { persistRemoteCache } from "./remote-chat-cache";
@@ -208,7 +209,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 								const decoded = JSON.parse(String((event as MessageEvent).data)) as {
 									type?: unknown;
 									sessionId?: unknown;
-									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown };
+									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown };
 								};
 								const payload = typeof decoded.payload === "object" && decoded.payload !== null ? decoded.payload : undefined;
 								const sessionId = typeof decoded.sessionId === "string" && decoded.sessionId ? decoded.sessionId : undefined;
@@ -217,6 +218,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 									conversationOnly = typeof payload.conversationId === "string";
 								} else if (sessionId && typeof payload?.conversationId === "string") {
 									refreshOpenRemoteChat(hostId, sessionId);
+									conversationOnly = true;
+								} else if (typeof payload?.shellTerminalHandleId === "string") {
+									invalidate(shellTerminalsQueryKeyForHost(hostId));
 									conversationOnly = true;
 								} else if (decoded.type === "session_updated" && sessionId && typeof payload?.interfaceTransitionId !== "string") {
 									idOnlySessionUpdate = payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
@@ -397,11 +401,18 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										conversationId?: unknown;
 										reviewId?: unknown;
 										interfaceTransitionId?: unknown;
+										activity?: unknown;
+										shellTerminalHandleId?: unknown;
 										kind?: unknown;
 										agentId?: unknown;
 										projectId?: unknown;
 								  })
 								: undefined;
+						// A shell's program title changed; only the shell list shows it.
+						if (typeof payload?.shellTerminalHandleId === "string") {
+							void queryClient.invalidateQueries({ queryKey: shellTerminalsQueryKey });
+							conversationOnly = true;
+						}
 						// A review run can start or finish without this window asking for
 						// it: an agent ran `ao review trigger`, auto-review fired, or a
 						// reviewer submitted. Refresh that session's reviews so the
@@ -450,7 +461,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof decoded.sessionId === "string" &&
 							decoded.sessionId &&
 							typeof payload?.conversationId !== "string" &&
-							typeof payload?.interfaceTransitionId !== "string"
+							typeof payload?.interfaceTransitionId !== "string" &&
+							typeof payload?.shellTerminalHandleId !== "string"
 						) {
 							idOnlySessionUpdate =
 								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
@@ -463,6 +475,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// refetching for each one reloaded its whole page every few seconds.
 							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
 								pendingConversationSessions.add(decoded.sessionId);
+							}
+							// Native identity and provisioning changes carry the session-row
+							// activity field. Recheck switch readiness even after its poll
+							// budget expires, without reacting to id-only usage updates.
+							if (typeof payload?.activity === "string") {
+								pendingInterfaceTransitionSessions.add(decoded.sessionId);
 							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}

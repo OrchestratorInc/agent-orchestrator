@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
+	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
@@ -35,6 +35,7 @@ import (
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -267,6 +268,9 @@ type sessionLifecycle interface {
 	// SetHarnessUseGate prevents lifecycle operations from racing a harness
 	// executable replacement.
 	SetHarnessUseGate(gate sessionmanager.HarnessUseGate)
+	// SetImportArchiveRefresher rereads an imported conversation before its
+	// first open, using the same import service the REST surface serves.
+	SetImportArchiveRefresher(refresher sessionmanager.ImportArchiveRefresher)
 	// PersistChatModel records the model the user picked in ChatUI onto the
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
@@ -286,7 +290,7 @@ func (m sessionLifecycleMessenger) Send(ctx context.Context, id domain.SessionID
 	return m.sessionLifecycle.Send(ctx, id, message, nil)
 }
 
-// telemetryEmitsSpawned reports whether the ao.session.spawned carrier event can
+// telemetryEmitsSpawned reports whether the ao.sessions.spawned carrier event can
 // reach a sink under this config: product telemetry on and the event not on the
 // kill switch. When it cannot, session wiring leaves the GitHub identity resolver
 // nil so a spawn never makes a GitHub call whose only purpose is a dropped event.
@@ -296,7 +300,7 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 	if !cfg.Telemetry.Events {
 		return false
 	}
-	return !slices.Contains(cfg.Telemetry.DisabledEvents, "ao.session.spawned")
+	return !telemetryadapter.EventDenied(cfg.Telemetry.DisabledEvents, "ao.sessions.spawned")
 }
 
 // startSession builds the controller-facing session service: a session manager
@@ -363,7 +367,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	if scmProvider != nil && telemetryEmitsSpawned(cfg) {
 		githubIdentity = scmProvider
 	}
-	sessionSvc := sessionsvc.NewWithDeps(sessionsvc.Deps{
+	deps := sessionsvc.Deps{
 		Manager:           mgr,
 		Store:             store,
 		PRClaimer:         store,
@@ -382,7 +386,13 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		SignalCapable:        activitydispatch.FullySupportsHarness,
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
-	})
+		ShareLinks:           sessionartifacts.NewShareLinks(cfg.DataDir, cfg.CloudControlPlaneURL),
+	}
+	// Guard the typed nil some tests pass, so reads list files by path instead.
+	if artifactVersions != nil {
+		deps.ArtifactTracker = artifactVersions
+	}
+	sessionSvc := sessionsvc.NewWithDeps(deps)
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
 	// reviewer posts its review to the PR itself, so the service needs no SCM
@@ -494,7 +504,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				if !hasWitness || !witness.TerminalMessageObserved(admission.pending, admission.baseline, screen) {
 					// Admission resets only on a new runtime handle or launch, so name the
 					// recovery instead of looking like a transient failure.
-					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume AO input", id)
+					return fmt.Errorf("session %s: prior terminal submission remains unconfirmed; check the terminal, then kill and restore the session to resume Orchestrator input", id)
 				}
 				admission.pending = ""
 			}
@@ -950,7 +960,7 @@ func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.Sessio
 	case errors.Is(err, sessionsvc.ErrInvalidPRRef), errors.Is(err, sessionsvc.ErrProjectMismatch):
 		return fmt.Errorf("%w: %s is not a pull request in this project's repository", reviewcore.ErrInvalid, prURL)
 	case errors.Is(err, sessionsvc.ErrSCMUnavailable):
-		return fmt.Errorf("%w: AO could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
+		return fmt.Errorf("%w: Orchestrator could not fetch %s from the provider; try again shortly", reviewcore.ErrInvalid, prURL)
 	default:
 		return err
 	}

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { openSync, closeSync, writeSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,20 +12,16 @@ vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => token.va
 import { createCloudCpProxy } from "./cloud-cp-proxy";
 import {
 	CloudShareError,
-	MAX_SCANNED_BYTES,
 	resolveShareFile,
-	scanShareFile,
-	SecretScanner,
+	shareFileFingerprint,
 	snapshotShareFile,
+	statShareFile,
 	listShareLinks,
+	SHARE_TIMEOUTS,
+	shareLinksAvailable,
 	uploadShare,
 	type CloudShareApi,
 } from "./cloud-share";
-
-// Fake credentials are built at runtime so the repository's secret scanner
-// does not flag the fixtures.
-const PRIVATE_KEY_HEADER = ["-----BEGIN OPENSSH", "PRIVATE KEY-----"].join(" ");
-const GITHUB_TOKEN_PREFIX = ["gh", "p_"].join("");
 
 const sha = (value: Uint8Array | string) => createHash("sha256").update(value).digest("hex");
 
@@ -75,47 +71,33 @@ describe("resolveShareFile", () => {
 	});
 });
 
-describe("secret scanning", () => {
-	it("finds credentials, across chunk boundaries and in file names", () => {
-		const scanner = new SecretScanner("notes.txt");
-		scanner.push(Buffer.from("key = AKIAABCDEFGH"));
-		scanner.push(Buffer.from(`IJKLMNOP and ${PRIVATE_KEY_HEADER}`));
-		expect(scanner.list()).toEqual(["AWS access key", "private key"]);
-		expect(new SecretScanner(".env.production").list()).toEqual(["environment file"]);
-		expect(new SecretScanner("id_ed25519").list()).toEqual(["SSH key"]);
-		const clean = new SecretScanner("report.html");
-		clean.push(Buffer.from("<h1>A report about passwords in general</h1>"));
-		expect(clean.list()).toEqual([]);
-	});
-
-	it("stops after the start of a large file", () => {
-		const scanner = new SecretScanner("big.bin");
-		scanner.push(Buffer.alloc(MAX_SCANNED_BYTES));
-		scanner.push(Buffer.from(GITHUB_TOKEN_PREFIX + "a".repeat(40)));
-		expect(scanner.list()).toEqual([]);
-	});
-
-	it("scans a resolved file", async () => {
-		await fs.writeFile(path.join(artifacts, "config.yaml"), `token: "${GITHUB_TOKEN_PREFIX}${"x".repeat(36)}"\ndb_password: "hunter2hunter2"`);
+describe("share file fingerprint", () => {
+	it("names a file by its size and modification time, without reading it", async () => {
+		await fs.writeFile(path.join(artifacts, "config.yaml"), "token: one");
 		const file = await resolveShareFile(dataDir, "sess-1", "config.yaml");
-		const scan = await scanShareFile(file);
-		expect(scan.secretFindings).toEqual(["GitHub token", "password or secret"]);
-		// The fingerprint names what was scanned: the snapshot of the same
-		// file has it, a rewritten file does not.
+		const read = vi.spyOn(fs, "readFile");
+		const fingerprint = await statShareFile(file);
+		const stat = await fs.stat(file.realPath);
+		expect(fingerprint).toBe(shareFileFingerprint(stat));
+		expect(fingerprint).toBe(`${stat.size}:${Math.trunc(stat.mtimeMs)}`);
+		expect(read).not.toHaveBeenCalled();
+		read.mockRestore();
+		// The snapshot of the same file has it; a rewritten file does not.
 		const snapshot = await snapshotShareFile(file, path.join(dataDir, "snapshots"));
-		expect(snapshot.fingerprint).toBe(scan.fingerprint);
-		await fs.writeFile(path.join(artifacts, "config.yaml"), "token: none");
-		const rewritten = await scanShareFile(await resolveShareFile(dataDir, "sess-1", "config.yaml"));
-		expect(rewritten.fingerprint).not.toBe(scan.fingerprint);
+		expect(snapshot.fingerprint).toBe(fingerprint);
+		const later = new Date(Date.now() + 60_000);
+		await fs.writeFile(path.join(artifacts, "config.yaml"), "token: two, longer");
+		await fs.utimes(path.join(artifacts, "config.yaml"), later, later);
+		expect(await statShareFile(await resolveShareFile(dataDir, "sess-1", "config.yaml"))).not.toBe(fingerprint);
 	});
 });
 
 describe("snapshotShareFile", () => {
-	it("copies the file privately, hashing and scanning it", async () => {
+	it("copies the file privately, hashing it", async () => {
 		const file = await resolveShareFile(dataDir, "sess-1", "docs/report.html");
 		const snapshot = await snapshotShareFile(file, path.join(dataDir, "snapshots"));
 		expect(await fs.readFile(snapshot.path, "utf8")).toBe("<h1>report</h1>");
-		expect(snapshot).toMatchObject({ size: 15, sha256: sha("<h1>report</h1>"), secretFindings: [] });
+		expect(snapshot).toMatchObject({ size: 15, sha256: sha("<h1>report</h1>") });
 		expect((await fs.stat(snapshot.path)).mode & 0o777).toBe(0o600);
 	});
 
@@ -135,8 +117,36 @@ describe("snapshotShareFile", () => {
 		await fs.rename(path.join(artifacts, "docs"), path.join(artifacts, "docs-old"));
 		await fs.symlink(outside, path.join(artifacts, "docs"));
 		await expect(snapshotShareFile(file, path.join(dataDir, "snapshots"))).rejects.toThrow("changed");
-		await expect(scanShareFile(file)).rejects.toThrow("changed");
+		await expect(statShareFile(file)).rejects.toThrow("changed");
 		expect(await fs.readdir(path.join(dataDir, "snapshots")).catch(() => [])).toEqual([]);
+	});
+
+	it("refuses a file rewritten while it is copied, though its size stays the same", async () => {
+		// 2 MiB, last written long ago: a write during the copy moves its times.
+		const big = path.join(artifacts, "big.bin");
+		await fs.writeFile(big, Buffer.alloc(2 << 20, 1));
+		const past = new Date("2020-01-01T00:00:00Z");
+		await fs.utimes(big, past, past);
+		const file = await resolveShareFile(dataDir, "sess-1", "big.bin");
+		const inspected = await statShareFile(file);
+		let rewritten = false;
+		const snapshot = snapshotShareFile(file, path.join(dataDir, "snapshots"), {
+			// After the first MiB is copied, an agent rewrites the second one.
+			onProgress: () => {
+				if (rewritten) return;
+				rewritten = true;
+				const handle = openSync(big, "r+");
+				writeSync(handle, Buffer.alloc(1 << 20, 2), 0, 1 << 20, 1 << 20);
+				closeSync(handle);
+			},
+		});
+		await expect(snapshot).rejects.toMatchObject({ code: "source_changed" });
+		expect(rewritten).toBe(true);
+		expect(await fs.readdir(path.join(dataDir, "snapshots"))).toEqual([]);
+		// Left alone, the same file copies, and names its new version.
+		const again = await snapshotShareFile(await resolveShareFile(dataDir, "sess-1", "big.bin"), path.join(dataDir, "snapshots"));
+		expect(again.fingerprint).not.toBe(inspected);
+		expect(again.size).toBe(2 << 20);
 	});
 
 	it("reports progress and stops when cancelled", async () => {
@@ -206,6 +216,63 @@ async function snapshotOf(content: string) {
 	return snapshotShareFile(file, path.join(dataDir, "snapshots"));
 }
 
+// A connection that dropped answers nothing: the request only ends when its
+// signal aborts.
+function silentControlPlane(): CloudShareApi {
+	return {
+		getToken: async () => "token-1",
+		fetch: vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+			const fail = () => reject(init.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+			// Like fetch, a request cancelled before it starts fails at once.
+			if (init.signal?.aborted) return fail();
+			init.signal?.addEventListener("abort", fail, { once: true });
+		})),
+	};
+}
+
+describe("share request time limits", () => {
+	const saved = { ...SHARE_TIMEOUTS };
+	beforeEach(() => Object.assign(SHARE_TIMEOUTS, { api: 30, probe: 30, transfer: 30, publish: 30 }));
+	afterEach(() => Object.assign(SHARE_TIMEOUTS, saved));
+
+	it("fails a request that never answers instead of waiting for good", async () => {
+		await expect(listShareLinks(silentControlPlane(), "https://cp.test")).rejects.toMatchObject({
+			code: "timeout",
+			message: "Orchestrator Cloud didn't answer in time. Check your connection and try again.",
+		});
+		await expect(shareLinksAvailable(silentControlPlane(), "https://cp.test")).resolves.toBeNull();
+	});
+
+	it("counts a token refresh that stalls against the request's limit", async () => {
+		const fetch = vi.fn();
+		const stalledToken: CloudShareApi = { getToken: () => new Promise<string | null>(() => undefined), fetch };
+		await expect(listShareLinks(stalledToken, "https://cp.test")).rejects.toMatchObject({ code: "timeout" });
+		await expect(shareLinksAvailable(stalledToken, "https://cp.test")).resolves.toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it("keeps a cancel a cancel, not a timeout", async () => {
+		const snapshot = await snapshotOf("0123456789");
+		Object.assign(SHARE_TIMEOUTS, { api: 60_000 });
+		const controller = new AbortController();
+		const upload = uploadShare(silentControlPlane(), { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "sess-1" }, () => undefined, controller.signal);
+		controller.abort();
+		const error = await upload.catch((caught: unknown) => caught);
+		expect(error).not.toBeInstanceOf(CloudShareError);
+	});
+
+	it("times out an upload part that stops answering", async () => {
+		const snapshot = await snapshotOf("0123456789");
+		const { api } = fakeControlPlane(4);
+		const answer = api.fetch;
+		api.fetch = vi.fn((url: string, init: RequestInit) => new URL(url).pathname.startsWith("/part/")
+			? silentControlPlane().fetch(url, init)
+			: answer(url, init));
+		await expect(uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "sess-1" }, () => undefined))
+			.rejects.toMatchObject({ code: "timeout" });
+	});
+});
+
 describe("uploadShare", () => {
 	it("uploads the snapshot in signed parts and finalizes it", async () => {
 		const snapshot = await snapshotOf("0123456789");
@@ -236,11 +303,11 @@ describe("uploadShare", () => {
 		}
 	});
 
-	it("updates a link by its ID", async () => {
+	it("updates a link by its ID, naming where the file is now", async () => {
 		const snapshot = await snapshotOf("x");
 		const { api, calls } = fakeControlPlane(4);
 		await uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f", shareId: "share-9" }, () => undefined);
-		expect(JSON.parse(calls[0].body as string)).toEqual({ name: "upload.txt", size: 1, sha256: sha("x"), shareId: "share-9" });
+		expect(JSON.parse(calls[0].body as string)).toEqual({ name: "upload.txt", size: 1, sha256: sha("x"), project: "p", feature: "f", shareId: "share-9" });
 	});
 
 	it("aborts the upload when a part fails or finalize refuses", async () => {

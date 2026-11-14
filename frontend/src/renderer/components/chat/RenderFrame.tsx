@@ -1,5 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
-import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
@@ -7,6 +7,7 @@ import {
 	clampRenderHeight,
 	measuredRenderHeight,
 	readRenderContentHeight,
+	readRenderImageRequest,
 	readRenderLinkRequest,
 	readRenderTheme,
 	renderFileName,
@@ -23,8 +24,11 @@ import { BrowserIcon } from "../icons";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ChatImageDialog } from "./ChatImage";
 import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
 import { useChatBrowserOpen } from "./ChatMarkdown";
+
+type RenderImage = { src: string; alt: string };
 
 /** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
 interface FramePage {
@@ -87,11 +91,13 @@ function RenderDocument({
 	page,
 	displayMode,
 	wrapContent,
+	onOpenImage,
 	className,
 }: {
 	page: FramePage;
 	displayMode: RenderDisplayMode;
 	wrapContent: boolean;
+	onOpenImage: (image: RenderImage) => void;
 	className?: string;
 }) {
 	const theme = useRenderTheme();
@@ -100,6 +106,8 @@ function RenderDocument({
 	themeRef.current = theme;
 	const wrapContentRef = useRef(wrapContent);
 	wrapContentRef.current = wrapContent;
+	const onOpenImageRef = useRef(onOpenImage);
+	onOpenImageRef.current = onOpenImage;
 	// The daemon can come back on another port, so the src follows the API base
 	// (a frame not yet loaded would otherwise point at a dead port). Theme and
 	// wrapping ride in the fragment only for the first paint; later changes are
@@ -140,10 +148,11 @@ function RenderDocument({
 				return;
 			}
 			// Only while the reader is using this frame: a page can post on load.
+			if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
 			const url = readRenderLinkRequest(event.data);
-			if (url && document.activeElement === frame && navigator.userActivation?.isActive !== false) {
-				window.open(url, "_blank", "noopener,noreferrer");
-			}
+			if (url) window.open(url, "_blank", "noopener,noreferrer");
+			const image = readRenderImageRequest(event.data);
+			if (image) onOpenImageRef.current(image);
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
@@ -282,6 +291,12 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
+	const [image, setImage] = useState<RenderImage>();
+	const [imageOpen, setImageOpen] = useState(false);
+	const openImage = (next: RenderImage) => {
+		setImage(next);
+		setImageOpen(true);
+	};
 	const openInBrowserPanel = useChatBrowserOpen();
 	// The local daemon has no copy of a remote host's render, and the remote
 	// proxy URL must not reach the page: its path carries the proxy's capability
@@ -361,7 +376,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					) : null}
 				</div>
 			) : null}
-			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} />
+			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
 			<div
 				className={cn(
 					"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
@@ -432,10 +447,11 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					{!expanded ? null : showSource ? (
 						<RenderSource path={page.path} />
 					) : (
-						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} className="max-h-[calc(100svh-8rem)]" />
+						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} onOpenImage={openImage} className="max-h-[calc(100svh-8rem)]" />
 					)}
 				</DialogContent>
 			</Dialog>
+			{image ? <ChatImageDialog open={imageOpen} onOpenChange={setImageOpen} url={image.src} label={image.alt} /> : null}
 		</div>
 	);
 }

@@ -82,7 +82,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	path := filepath.Join(dir, standingInstructionsName)
 	if data, err := os.ReadFile(path); err == nil { //nolint:gosec // caller-owned workspace path
 		if !strings.Contains(string(data), standingInstructionsMark) {
-			return fmt.Errorf("codewhale.GetAgentHooks: refusing to overwrite non-AO file at %s", path)
+			return fmt.Errorf("codewhale.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", path)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("codewhale.GetAgentHooks: read standing instructions: %w", err)

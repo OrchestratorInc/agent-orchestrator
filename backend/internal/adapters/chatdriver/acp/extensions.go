@@ -101,28 +101,27 @@ func (c *conversation) HandleExtensionMethod(
 		c.applyPersistentInteraction(command)
 		return nil, nil
 	}
-	if method == persistenthost.ACPPromptResultMethod {
-		var payload struct {
-			Result  json.RawMessage      `json:"result"`
-			Error   *acpsdk.RequestError `json:"error"`
-			EventID string               `json:"eventId"`
-		}
-		if err := json.Unmarshal(params, &payload); err != nil {
+	if method == persistenthost.ACPPromptHandoffMethod {
+		answer, _, err := decodeHostPromptAnswer(params)
+		if err != nil {
 			return nil, err
 		}
-		var response acpsdk.PromptResponse
-		var promptErr error
-		if payload.Error != nil {
-			promptErr = payload.Error
-		} else if err := json.Unmarshal(payload.Result, &response); err != nil {
-			promptErr = err
+		c.adoptedPromptHandoff(answer)
+		return nil, nil
+	}
+	if method == persistenthost.ACPPromptResultMethod {
+		answer, eventID, err := decodeHostPromptAnswer(params)
+		if err != nil {
+			return nil, err
 		}
+		response, promptErr := answer.resp, answer.err
 		if response.Meta == nil {
 			response.Meta = make(map[string]any)
 		}
-		response.Meta[persistenthost.ACPEventIDMetaKey] = payload.EventID
+		response.Meta[persistenthost.ACPEventIDMetaKey] = eventID
 		c.mu.Lock()
 		turnID := c.activeTurn
+		adopted := c.adoptedPrompt
 		ignore := c.ignorePromptResult
 		if ignore {
 			c.ignorePromptResult = false
@@ -134,10 +133,18 @@ func (c *conversation) HandleExtensionMethod(
 		if turnID == "" {
 			return nil, errors.New("persistent ACP prompt result has no durable active turn")
 		}
+		if adopted {
+			// A steer prompt this attachment sent may still be answering.
+			c.finishTurnPrompt(turnID, adoptedPromptSeq, response, promptErr)
+			return nil, nil
+		}
 		c.finishPrompt(turnID, response, promptErr)
 		return nil, nil
 	}
 	original, configured := c.extensionMethods[method]
+	if drain := c.steering.drain; drain != nil && (method == drain.Method || (configured && original == drain.Method)) {
+		return c.collectSteers(params), nil
+	}
 	if !configured || c.extensionFor == nil {
 		return nil, acpsdk.NewMethodNotFound(method)
 	}
@@ -230,4 +237,24 @@ func persistentInteractionEvent(command persistentInteractionCommand) ports.Chat
 		})
 	}
 	return event
+}
+
+// decodeHostPromptAnswer reads a session/prompt answer the persistent host
+// passed on as a private notification.
+func decodeHostPromptAnswer(params json.RawMessage) (promptAnswer, string, error) {
+	var payload struct {
+		Result  json.RawMessage      `json:"result"`
+		Error   *acpsdk.RequestError `json:"error"`
+		EventID string               `json:"eventId"`
+	}
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return promptAnswer{}, "", err
+	}
+	var answer promptAnswer
+	if payload.Error != nil {
+		answer.err = payload.Error
+	} else if err := json.Unmarshal(payload.Result, &answer.resp); err != nil {
+		answer.err = err
+	}
+	return answer, payload.EventID, nil
 }

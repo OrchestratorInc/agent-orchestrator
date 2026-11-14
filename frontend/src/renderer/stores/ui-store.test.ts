@@ -87,6 +87,17 @@ describe("global settings deep links", () => {
 		useUiStore.getState().closeSettings();
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "project-1" });
 	});
+
+	it("drops a pending account sign-in when settings close or project settings open", () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", loginAccountId: "acct-b" });
+		expect(useUiStore.getState().accountLogin).toBe("acct-b");
+		useUiStore.getState().closeSettings();
+		expect(useUiStore.getState().accountLogin).toBeNull();
+
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", loginAccountId: "acct-b" });
+		useUiStore.getState().openProjectSettings("project-1");
+		expect(useUiStore.getState().accountLogin).toBeNull();
+	});
 });
 
 describe("cloud review cleanup", () => {
@@ -401,5 +412,24 @@ describe("palette search requests", () => {
 		expect(useUiStore.getState().chatMessageFocusRequest).not.toBeNull();
 		useUiStore.getState().clearChatMessageFocusRequest(request!.nonce);
 		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
+	});
+});
+
+describe("retired new sidebar design switch", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("boots into the one sidebar design for someone who had switched it off", async () => {
+		window.localStorage.setItem("ao.developerMode", "true");
+		window.localStorage.setItem("ao.newSidebarDesign", "false");
+
+		const state = (await bootStore()).getState();
+
+		expect(state).not.toHaveProperty("newSidebarDesign");
+		expect(state).not.toHaveProperty("setNewSidebarDesign");
+		expect(window.localStorage.getItem("ao.newSidebarDesign")).toBeNull();
+		expect(document.documentElement.hasAttribute("data-legacy-status-colors")).toBe(false);
 	});
 });

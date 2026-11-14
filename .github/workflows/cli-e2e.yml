@@ -1,22 +1,14 @@
 name: CLI E2E
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
-    paths:
-      - "backend/**"
-      - "test/cli/**"
-      - ".github/workflows/cli-e2e.yml"
+  workflow_call:
+    inputs:
+      native:
+        type: boolean
+        required: true
 
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || format('{0}-{1}', github.event_name, github.ref) }}
-  # Coalesce pending main runs, but let the active run finish for a main signal.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Primary tier: the cross-platform Go E2E suite (build tag `e2e`) runs the real
@@ -28,11 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Preserve all check names, even when a PR does not request native tests.
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
-    env:
-      CI_NATIVE: ${{ matrix.os == 'ubuntu-latest' || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        os: ${{ fromJSON(inputs.native && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     defaults:
@@ -40,16 +28,13 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
-        if: env.CI_NATIVE == 'true'
 
       - uses: actions/setup-go@v5
-        if: env.CI_NATIVE == 'true'
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.4"
           cache: false
 
       - name: CLI E2E (native)
-        if: env.CI_NATIVE == 'true'
         run: go test -tags e2e -v ./internal/cli/...
 
   # Secondary hardening tier: prove that a freshly installed binary works on a
@@ -58,7 +43,6 @@ jobs:
   # --init gives a real PID-1 reaper so the daemon the check starts is reaped
   # after `stop` instead of lingering as a zombie.
   container:
-    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && github.base_ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -67,7 +51,7 @@ jobs:
       - name: Build fresh-install image
         run: |
           docker build -f test/cli/Dockerfile -t ao-cli-smoke \
-            --build-arg GO_IMAGE=mirror.gcr.io/library/golang:1.27.1-bookworm \
+            --build-arg GO_IMAGE=mirror.gcr.io/library/golang:1.27.4-bookworm \
             --build-arg RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim .
 
       - name: Fresh-install check (container)

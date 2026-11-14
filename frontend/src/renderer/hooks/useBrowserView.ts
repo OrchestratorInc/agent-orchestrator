@@ -142,6 +142,9 @@ const EMPTY_TABS_STATE: BrowserTabsState = {
 	tabs: [],
 };
 
+const EMPTY_TABS: BrowserTabState[] = [];
+const EMPTY_CLOSED_TABS: ClosedBrowserTab[] = [];
+
 const EMPTY_DEVTOOLS_STATE: BrowserDevToolsState = {
 	viewId: "",
 	open: false,
@@ -1118,7 +1121,7 @@ export function useBrowserView({
 				setNavState((current) => ({
 					...current,
 					url: normalized,
-					title: normalized ? "AO preview" : "",
+					title: normalized ? "Orchestrator preview" : "",
 					isLoading: false,
 				}));
 				return Promise.resolve();
@@ -1295,40 +1298,72 @@ export function useBrowserView({
 	// already on screen, so the panel stays transparent over it.
 	const switchingTo = !stateBelongsToSession && hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 
-	return {
-		viewId: stateBelongsToSession ? viewId : (switchingTo?.viewId ?? ""),
-		navState: stateBelongsToSession ? navState : (switchingTo?.navState ?? EMPTY_NAV_STATE),
-		slotRef,
-		navigate,
-		goBack: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()),
-		goForward: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()),
-		reload: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()),
-		stop: () => (hasNativeBrowser ? withView((id) => window.ao!.browser.stop(id)) : Promise.resolve()),
-		findState: stateBelongsToSession ? findState : EMPTY_FIND_STATE,
-		findOpenRequest: stateBelongsToSession ? findOpenRequest : 0,
-		findInPage,
-		stopFindInPage,
-		tabs: stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? []),
-		activeTabId: stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? ""),
-		tabNotice: stateBelongsToSession ? tabNotice : "",
-		selectTab,
-		closeTab,
-		openTab,
-		openLink,
-		reorderTabs,
-		closedTabs: stateBelongsToSession ? closedTabs : [],
-		reopenClosedTab,
-		devtoolsState: stateBelongsToSession ? devtoolsState : EMPTY_DEVTOOLS_STATE,
-		profileState: stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE,
-		openDevTools: () => runDevtools("open"),
-		closeDevTools: () => runDevtools("close"),
-		setDevToolsPlacement: (placement) => runDevtools("setPlacement", placement),
-		agentBrowserActive: stateBelongsToSession && agentBrowserActive,
-		agentBrowserActivity: stateBelongsToSession ? agentBrowserActivity : null,
-		destroy,
-		annotationMode,
-		annotationState,
-		setAnnotationMode,
-		annotationAction,
-	};
+	const modelViewId = stateBelongsToSession ? viewId : (switchingTo?.viewId ?? "");
+	const modelNavState = stateBelongsToSession ? navState : (switchingTo?.navState ?? EMPTY_NAV_STATE);
+	const modelFindState = stateBelongsToSession ? findState : EMPTY_FIND_STATE;
+	const modelFindOpenRequest = stateBelongsToSession ? findOpenRequest : 0;
+	const modelTabs = stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? EMPTY_TABS);
+	const modelActiveTabId = stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? "");
+	const modelTabNotice = stateBelongsToSession ? tabNotice : "";
+	const modelClosedTabs = stateBelongsToSession ? closedTabs : EMPTY_CLOSED_TABS;
+	const modelDevtoolsState = stateBelongsToSession ? devtoolsState : EMPTY_DEVTOOLS_STATE;
+	const modelProfileState = stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE;
+	const modelAgentBrowserActive = stateBelongsToSession && agentBrowserActive;
+	const modelAgentBrowserActivity = stateBelongsToSession ? agentBrowserActivity : null;
+	const goBack = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const goForward = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const reload = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const stop = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.stop(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
+	const openDevTools = useCallback(() => runDevtools("open"), [runDevtools]);
+	const closeDevTools = useCallback(() => runDevtools("close"), [runDevtools]);
+	const setDevToolsPlacement = useCallback((placement: BrowserDevToolsPlacement) => runDevtools("setPlacement", placement), [runDevtools]);
+
+	// One object per distinct state, so the panel and other consumers skip
+	// renders their parent makes for unrelated reasons (a session switch renders
+	// SessionView several times while this state settles once).
+	return useMemo<BrowserViewModel>(
+		() => ({
+			viewId: modelViewId,
+			navState: modelNavState,
+			slotRef,
+			navigate,
+			goBack,
+			goForward,
+			reload,
+			stop,
+			findState: modelFindState,
+			findOpenRequest: modelFindOpenRequest,
+			findInPage,
+			stopFindInPage,
+			tabs: modelTabs,
+			activeTabId: modelActiveTabId,
+			tabNotice: modelTabNotice,
+			selectTab,
+			closeTab,
+			openTab,
+			openLink,
+			reorderTabs,
+			closedTabs: modelClosedTabs,
+			reopenClosedTab,
+			devtoolsState: modelDevtoolsState,
+			profileState: modelProfileState,
+			openDevTools,
+			closeDevTools,
+			setDevToolsPlacement,
+			agentBrowserActive: modelAgentBrowserActive,
+			agentBrowserActivity: modelAgentBrowserActivity,
+			destroy,
+			annotationMode,
+			annotationState,
+			setAnnotationMode,
+			annotationAction,
+		}),
+		[
+			modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
+			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
+			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
+			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
+			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
+		],
+	);
 }

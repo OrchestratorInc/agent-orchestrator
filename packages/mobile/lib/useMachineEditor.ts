@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AccessibilityInfo } from "react-native";
 import type { ServerConfig } from "./config";
-import { portError } from "./connectionFields";
+import { manualAddressError } from "./connectionFields";
 import { canSaveDraft, isDraftDirty, MachineSaveError, machineEditDraft, type EnvironmentMachineDraft } from "./environmentEditor";
 import { haptics } from "./haptics";
 import type { Host } from "./hosts";
@@ -64,7 +64,7 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 		canSave,
 		saving,
 		failure,
-		portError: portError(draft.config.httpPort),
+		portError: manualAddressError(draft.config.host, draft.config.httpPort, draft.config.secure),
 		/** Account sync owns this machine's route and password; only its name and icon edit here. */
 		accountManaged: Boolean(host.accountUserId),
 		setName: (machineName: string) => edit((current) => ({ ...current, machineName })),

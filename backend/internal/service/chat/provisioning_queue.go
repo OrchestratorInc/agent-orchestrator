@@ -26,13 +26,14 @@ func (s *Service) QueueUserMessage(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	return s.queueWithoutController(ctx, record, msg)
+	return s.queueWithoutController(ctx, record, msg, false)
 }
 
 func (s *Service) queueWithoutController(
 	ctx context.Context,
 	record domain.SessionRecord,
 	msg ports.ChatUserMessage,
+	behindAccountMove bool,
 ) (domain.ConversationTurn, error) {
 	if msg.ClientPayloadHash == "" {
 		var err error
@@ -41,7 +42,7 @@ func (s *Service) queueWithoutController(
 			return domain.ConversationTurn{}, err
 		}
 	}
-	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
+	if !behindAccountMove && !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
 		return domain.ConversationTurn{}, ErrNotProvisioning
 	}
 	conversation, err := s.ensureConversation(ctx, record)
