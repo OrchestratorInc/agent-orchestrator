@@ -114,8 +114,6 @@ const cloudMocks = vi.hoisted(() => ({
 	sessionStatus: "unauthenticated",
 	createProject: vi.fn(),
 	listUserProviderConnections: vi.fn(),
-	putGitHubPAT: vi.fn(),
-	validateSavedRepositoryAccess: vi.fn(),
 	startGitHubInstallation: vi.fn(),
 	getGitHubUser: vi.fn(),
 	listGitHubInstallations: vi.fn(),
@@ -172,8 +170,6 @@ vi.mock("../hooks/useCloudCp", () => ({
 		client: {
 			createProject: cloudMocks.createProject,
 			listUserProviderConnections: cloudMocks.listUserProviderConnections,
-			putGitHubPAT: cloudMocks.putGitHubPAT,
-			validateSavedRepositoryAccess: cloudMocks.validateSavedRepositoryAccess,
 			startGitHubInstallation: cloudMocks.startGitHubInstallation,
 			getGitHubUser: cloudMocks.getGitHubUser,
 			listGitHubInstallations: cloudMocks.listGitHubInstallations,
@@ -449,10 +445,6 @@ beforeEach(() => {
 			},
 		],
 	});
-	cloudMocks.putGitHubPAT.mockReset().mockResolvedValue({
-		providerConnection: { id: "gh-1", provider: "github", label: "default", config: {}, validationState: "valid", createdAt: "", updatedAt: "" },
-	});
-	cloudMocks.validateSavedRepositoryAccess.mockReset().mockResolvedValue({ writeAccess: true });
 	// Default: no GitHub App installation, so the connect button shows.
 	cloudMocks.startGitHubInstallation.mockReset().mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" });
 	cloudMocks.getGitHubUser.mockReset().mockResolvedValue({ connected: false, installations: [] });
@@ -2351,7 +2343,6 @@ describe("CreateProjectFlow project import validation", () => {
 				},
 			}),
 		);
-		expect(cloudMocks.validateSavedRepositoryAccess).not.toHaveBeenCalled();
 		// Like a local project, the new cloud project opens onto its board.
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-app-1"));
 		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["cp-app-1", "existing-b", "existing-a"]);

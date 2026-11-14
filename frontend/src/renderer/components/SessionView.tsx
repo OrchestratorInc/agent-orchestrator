@@ -2386,6 +2386,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					sessionName={session.title}
 					projectName={sessionWorkspace?.name}
 					standaloneAgent={sessionWorkspace?.standaloneAgent}
+					// The orchestrator is the project's: sharing it shares the whole project.
+					shareProject={isOrchestrator && !sessionWorkspace?.standaloneAgent}
 				/>
 			) : null}
 			<SessionTopbarActions route={sessionTopbarRoute} />

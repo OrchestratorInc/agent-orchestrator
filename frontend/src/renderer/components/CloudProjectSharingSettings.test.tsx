@@ -177,6 +177,9 @@ describe("Project settings › Sharing", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Remove access" }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "revokeShareGrant")).toEqual(["revokeShareGrant", "org", "proj", "g-data"]));
 		await waitFor(() => expect(within(list).queryByText("Data infra")).toBeNull());
+		// The last share gone, the workspace's people still have access: the list stays, with them on it.
+		expect(screen.getByRole("heading", { name: "People with access" })).toBeInTheDocument();
+		expect(within(list).getByText("Everyone in your workspace")).toBeInTheDocument();
 		const notice = await within(pane()!).findByRole("status");
 		expect(notice).toHaveTextContent("Removed Data infra's access");
 		expect(within(notice).getByRole("button", { name: "Undo" })).toBeInTheDocument();

@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { KeyRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -7,11 +7,11 @@ import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/us
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../../hooks/useProviderConnections";
+import { CloudCpError, type CloudCpProviderConnection } from "../../../lib/cloud-cp";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../../lib/cloud-agents";
 import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
-import { GitHubTokenField } from "../../onboarding/GitHubTokenField";
 import { Button } from "../../ui/button";
 import { Pressable } from "../../ui/pressable";
 import { CloudHarnessLoginPanel, type CloudHarness } from "../CloudHarnessLoginPanel";
@@ -77,81 +77,51 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 				})}
 				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 			</div>}
-		{org?.id ? <div className="mt-3 border-t border-border px-3 pt-3"><CloudGitHubPatRow /></div> : null}
+		{org?.id && hasSavedGitHubToken(connections.data) ? <div className="mt-3 border-t border-border px-3 pt-3"><SavedGitHubTokenRow /></div> : null}
 	</>;
 }
 
+/** A GitHub token saved for Cloud before it reached GitHub through the GitHub App, whatever its last check said. */
+function hasSavedGitHubToken(connections: CloudCpProviderConnection[] | undefined): boolean {
+	return (connections ?? []).some((connection) => connection.provider === "github" && connection.label === "default");
+}
+
+/** The control plane has no saved GitHub token for this person (DELETE /me/github-pat answered 404 not_found). */
+function isTokenAlreadyGone(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 404 && error.code === "not_found";
+}
+
 /**
-	* GitHub personal access token for cloud workers to clone private repositories.
-	* Lives on the Harness page's cloud view (the only place cloud credentials are
-	* managed) so GitHub connectivity stays reachable once a user is signed into a
-	* cloud org. The PAT is personal: stored encrypted and never echoed back.
-	*/
-function CloudGitHubPatRow() {
+ * Nothing saves a GitHub token for Cloud any more, but the control plane keeps
+ * one saved earlier and can still use it, so its owner can remove it here. The
+ * row leaves once the token is gone.
+ */
+function SavedGitHubTokenRow() {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
 	const queryClient = useQueryClient();
-	const userConnections = useProviderConnections();
-	const [githubPAT, setGitHubPAT] = useState("");
-	const [githubPATBusy, setGitHubPATBusy] = useState(false);
-	const [githubPATError, setGitHubPATError] = useState<string | null>(null);
-
-	const githubPATConnected = (userConnections.data ?? []).some(
-		(connection) => connection.provider === "github" && connection.label === "default" && connection.validationState === "valid",
-	);
-	const saveGitHubPAT = async () => {
-		if (githubPAT.trim() === "") return;
-		setGitHubPATBusy(true);
-		setGitHubPATError(null);
-		try {
-			await client.putGitHubPAT({ secret: githubPAT.trim() });
-			setGitHubPAT("");
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
-		} catch (error) {
-			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorSave"));
-		} finally {
-			setGitHubPATBusy(false);
-		}
-	};
-	const removeGitHubPAT = async () => {
-		setGitHubPATBusy(true);
-		setGitHubPATError(null);
-		try {
-			await client.deleteGitHubPAT();
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
-		} catch (error) {
-			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorRemove"));
-		} finally {
-			setGitHubPATBusy(false);
-		}
-	};
-	return (
-		<div className="flex w-full flex-col gap-1.5">
-			<SettingsRow key="github-pat" icon={KeyRound} label={t("settings.cloudAgents.github.title")}>
-				<span className="text-sm leading-5 text-settings-muted">{githubPATConnected ? t("settings.cloudAgents.github.connected") : t("settings.cloudAgents.github.notConnected")}</span>
-			</SettingsRow>
-			<GitHubTokenField
-				id="settings-github-pat"
-				bare
-				className="mt-2"
-				label={t("settings.cloudAgents.github.tokenLabel")}
-				hint={t("settings.cloudAgents.github.tokenHint")}
-				value={githubPAT}
-				disabled={githubPATBusy}
-				error={githubPATError}
-				submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
-				submitVariant="secondary"
-				submitDisabled={githubPATBusy}
-				onChange={setGitHubPAT}
-				onSubmit={() => void saveGitHubPAT()}
-			/>
-			{githubPATConnected ? (
-				<div className="mt-2 flex justify-end">
-					<Button type="button" variant="secondary" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
-						{t("settings.cloudAgents.github.remove")}
-					</Button>
-				</div>
-			) : null}
-		</div>
-	);
+	const remove = useMutation({
+		mutationFn: async () => {
+			try {
+				await client.deleteGitHubPAT();
+			} catch (error) {
+				// Already gone (removed from another device) is what Remove asked for.
+				if (!isTokenAlreadyGone(error)) throw error;
+			}
+		},
+		// Refetch either way, so the row matches what the control plane holds.
+		onSettled: () => queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
+	});
+	return <SettingsRow
+		data-saved-github-token=""
+		description={remove.isError
+			? <span className="text-error" role="alert">{t("settings.cloudAgents.savedGitHubToken.errorRemove")}</span>
+			: t("settings.cloudAgents.savedGitHubToken.hint")}
+		icon={KeyRound}
+		label={t("settings.cloudAgents.savedGitHubToken.title")}
+	>
+		<Button disabled={remove.isPending} onClick={() => remove.mutate()} type="button" variant="destructive-ghost">
+			{remove.isPending ? t("settings.cloudAgents.savedGitHubToken.removing") : t("settings.cloudAgents.savedGitHubToken.remove")}
+		</Button>
+	</SettingsRow>;
 }

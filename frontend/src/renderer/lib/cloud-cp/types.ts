@@ -1619,21 +1619,6 @@ export interface CloudCpPutAgentConnectionRequest {
 	secret: string;
 }
 
-/** PUT /me/github-pat */
-export interface CloudCpPutGitHubPATRequest {
-	/** Raw GitHub personal access token; stored encrypted and never echoed. */
-	secret: string;
-}
-
-/** POST /me/github-pat/validate-saved-repository */
-export interface CloudCpValidateRepositoryAccessRequest {
-	repositoryUrl: string;
-}
-
-export interface CloudCpValidateRepositoryAccessResponse {
-	writeAccess: boolean;
-}
-
 export interface CloudCpProviderConnection {
 	id: string;
 	provider: string;
@@ -1650,7 +1635,7 @@ export interface CloudCpProviderConnectionsResponse {
 	providerConnections: CloudCpProviderConnection[];
 }
 
-/** PUT /me/providers/{agent}, PUT /me/github-pat */
+/** PUT /me/providers/{agent} */
 export interface CloudCpProviderConnectionResponse {
 	providerConnection: CloudCpProviderConnection;
 }
