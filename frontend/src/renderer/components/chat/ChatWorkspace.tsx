@@ -4307,7 +4307,7 @@ export function Timeline({
 		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
-		const items = atCarryingSteer(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
+		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
@@ -7228,41 +7228,46 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 const carriedRows = new WeakMap<ConversationItem, ConversationItem>();
 const carriedInto = new WeakMap<ConversationItem, string>();
 
-function atCarryingSteer(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
+function atCarrier(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
 	if (deliveries.length === 0) return items;
 	const steers = new Map(items.flatMap((item) => (item.kind === "activity" && item.turnId && isSteer(item) ? [[item.id, item] as const] : [])));
+	const leaders = new Map<string, ConversationItem>();
+	for (const item of items) {
+		if (item.kind === "message" && item.role === "user" && item.turnId && !leaders.has(item.turnId)) leaders.set(item.turnId, item);
+	}
 	const carriers = new Map(deliveries.flatMap((delivery) => {
-		const steer = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : undefined;
-		return steer && !moved.has(delivery.turnId) ? [[delivery.turnId, steer] as const] : [];
+		const carrier = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : leaders.get(delivery.deliveredWithTurnId);
+		return carrier && !moved.has(delivery.turnId) ? [[delivery.turnId, carrier] as const] : [];
 	}));
 	if (carriers.size === 0) return items;
 	const sentAt = (turnId: string) => {
-		const index = carriers.get(turnId)?.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1;
+		const carrier = carriers.get(turnId);
+		const index = carrier?.kind === "activity" ? carrier.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1 : -1;
 		return index < 0 ? Number.MAX_SAFE_INTEGER : index;
 	};
 	const carried = items.filter((item) => item.turnId && carriers.has(item.turnId));
 	const blocks = new Map<ConversationItem, ConversationItem[]>();
 	for (const item of carried.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)) {
-		const steer = carriers.get(item.turnId!)!;
-		const block = blocks.get(steer);
+		const carrier = carriers.get(item.turnId!)!;
+		const block = blocks.get(carrier);
 		if (block) block.push(item);
-		else blocks.set(steer, [item]);
+		else blocks.set(carrier, [item]);
 	}
 	const isCarried = new Set(carried);
-	const place = new Map([...blocks].flatMap(([steer, block]) => {
-		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > steer.sequence && item.sequence < min ? item.sequence : min), steer.sequence + 1);
-		return block.map((item, index) => [item, steer.sequence + ((next - steer.sequence) * (index + 1)) / (block.length + 1)] as const);
+	const place = new Map([...blocks].flatMap(([carrier, block]) => {
+		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > carrier.sequence && item.sequence < min ? item.sequence : min), carrier.sequence + 1);
+		return block.map((item, index) => [item, carrier.sequence + ((next - carrier.sequence) * (index + 1)) / (block.length + 1)] as const);
 	}));
 	return items
 		.map((item) => {
-			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
+			const carrier = item.turnId ? carriers.get(item.turnId) : undefined;
 			const sequence = place.get(item);
-			if (!steer || sequence === undefined) return item;
+			if (!carrier || sequence === undefined) return item;
 			const cached = carriedRows.get(item);
-			if (cached && carriedInto.get(cached) === steer.turnId && cached.sequence === sequence) return cached;
+			if (cached && carriedInto.get(cached) === carrier.turnId && cached.sequence === sequence) return cached;
 			const row = { ...item, sequence };
 			carriedRows.set(item, row);
-			carriedInto.set(row, steer.turnId!);
+			carriedInto.set(row, carrier.turnId!);
 			return row;
 		})
 		.sort((a, b) => a.sequence - b.sequence);
