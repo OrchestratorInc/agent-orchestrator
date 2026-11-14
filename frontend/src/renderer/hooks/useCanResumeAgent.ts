@@ -7,6 +7,7 @@ import { sessionAgentExited, sessionIsActive, type WorkspaceSession } from "../t
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { appI18n } from "../i18n";
 import { clientForSessionHost } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
 
 const resumesInFlight = new Map<string, Promise<void>>();
 
@@ -37,7 +38,7 @@ export function resumeOpenElsewhere(error: unknown): boolean {
  * the same request instead of being refused as a second resume.
  */
 export function resumeAgentOnOpen(sessionId: string, hostId?: string): Promise<void> {
-	return resumeOnce(hostId ? `${hostId}:${sessionId}` : sessionId, async () => {
+	return resumeOnce(sessionUiKey(sessionId, hostId), async () => {
 		const { error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});

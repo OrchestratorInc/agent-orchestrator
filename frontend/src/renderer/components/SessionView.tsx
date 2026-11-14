@@ -652,9 +652,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const resumeOnOpen = autoResume.mutate;
 	// This session's background resume failed; the chat shows why.
 	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
+	const remoteReadRequestedAt = useRef(0);
+	const refetchRemoteSession = remoteSessionQuery.refetch;
+	useEffect(() => {
+		if (!hostId || !remoteBase) return;
+		remoteReadRequestedAt.current = Date.now();
+		void refetchRemoteSession({ cancelRefetch: false });
+	}, [hostId, refetchRemoteSession, remoteBase, uiSessionId]);
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? !remoteBase || remoteSessionQuery.isFetching : daemonStatus.state !== "ready") ||
+		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.dataUpdatedAt < remoteReadRequestedAt.current : daemonStatus.state !== "ready") ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
 		if (!session.needsResume && !sessionAgentExited(session)) {
 			openedSession.current.checked = true;
@@ -666,7 +673,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		openedSession.current.checked = true;
 		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id, hostId));
 		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, remoteBase, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, remoteSessionQuery.dataUpdatedAt, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);

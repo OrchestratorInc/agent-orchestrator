@@ -327,10 +327,41 @@ it("resumes a remote agent that exited after the host list was last read when th
 	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
 	first.unmount();
 	state = "exited";
-	await act(async () => {
-		for (const query of queryClient.getQueryCache().findAll({ queryKey: remoteWorkspaceQueryKey("box-a") })) query.setState({ dataUpdatedAt: 0 });
-	});
 	renderRemoteSession(queryClient);
+	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
+	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("resumes an agent that exited while its host was away once a read after the reconnect shows it", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const resumes: string[] = [];
+	let state = "idle";
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: state, activity: { state }, mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: state === "exited" ? "stopped" : "ready" }));
+		if (path.endsWith("/resume-agent")) {
+			resumes.push(request.url);
+			state = "idle";
+			return Response.json({});
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+	const first = renderRemoteSession(queryClient);
+	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
+	first.unmount();
+	await act(async () => { await disconnectHost("box-a"); });
+	state = "exited";
+	renderRemoteSession(queryClient);
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	await act(async () => { await connectHost("http://box-a:3001"); });
 	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
 	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
