@@ -2804,6 +2804,19 @@ func (s *Store) FailReservedQueuedBatch(ctx context.Context, conversationID stri
 	})
 }
 
+// QueuedTurnOrder lists the undispatched queued turns in dispatch (FIFO) order.
+func (s *Store) QueuedTurnOrder(ctx context.Context, conversationID string) ([]string, error) {
+	rows, err := s.qr.SelectQueuedConversationTurnOrder(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("list queued turns for %s: %w", conversationID, err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	return ids, nil
+}
+
 // ReserveQueuedTurnForPromotion atomically removes one selected queued turn from
 // automatic drain and returns the durable content that must be steered.
 func (s *Store) ReserveQueuedTurnForPromotion(
@@ -3041,6 +3054,22 @@ func (s *Store) ReorderQueuedTurns(
 // bytes to the renderer.
 func (s *Store) QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error) {
 	row, err := s.qr.SelectQueuedConversationMessage(ctx, gen.SelectQueuedConversationMessageParams{
+		ConversationID: conversationID, TurnID: nullableString(turnID),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationMessage{}, ErrQueuedTurnNotAvailable
+	}
+	if err != nil {
+		return domain.ConversationMessage{}, err
+	}
+	return messageToDomain(row), nil
+}
+
+// PromotableQueuedTurnMessage reads a queued turn's message with the promotion
+// acceptance rules: a human message, or the user's own words relayed as
+// automation (Browser annotations). Anything else is not the user's queue item.
+func (s *Store) PromotableQueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error) {
+	row, err := s.qr.SelectPromotableQueuedConversationMessage(ctx, gen.SelectPromotableQueuedConversationMessageParams{
 		ConversationID: conversationID, TurnID: nullableString(turnID),
 	})
 	if errors.Is(err, sql.ErrNoRows) {

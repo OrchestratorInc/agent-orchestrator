@@ -178,8 +178,8 @@ function QueuedMessageRowContent({
 									? "pointer-events-none opacity-0 disabled:opacity-0"
 									: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
 						)}
-						aria-label="Steer this queued message into the running turn"
-						title="Steer into running turn"
+						aria-label="Send this queued message now, interrupting the running turn"
+						title="Send now (interrupts)"
 					>
 						Steer
 					</Button>
@@ -194,8 +194,9 @@ function QueuedMessageRowContent({
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn(turnId));
 						}}
-						aria-label="Steer this queued message into the running turn"
-						title="Steer into running turn"
+						className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs leading-none text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:active:scale-100"
+						aria-label="Send this queued message now, interrupting the running turn"
+						title="Send now (interrupts)"
 					>
 						{/* The key hint hides in place on other rows, so every Steer button is the same width. */}
 						<span
