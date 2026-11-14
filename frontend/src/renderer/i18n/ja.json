@@ -2815,7 +2815,7 @@
 	"settings.sideChats": "サイドチャット",
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
 	"settings.splitPanes": "分割ペイン",
-	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。",
+	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。依頼したときに限り、セッション内のエージェントも分割を作成し、ターミナルでコマンドを実行できます。",
 	"settings.prView": "PR ビュー",
 	"settings.prViewHint": "プルリクエストを専用のタブで開き、説明、コメント、チェック、スタックを表示します。",
 	"settings.chromeAgents.label": "自分の Chrome でエージェントを使う",
@@ -4806,5 +4806,17 @@
 	"sessionFork.forkedInto_other": "このセッションから {{count}} 件のセッションがフォークされました:",
 	"sessionFork.forkDeleted": "{{title}}(削除済み)",
 	"sessionFork.textCopy": "会話をテキストとしてコピー済み",
-	"sessionFork.textCopyNotice": "{{title}} からフォークしました。このエージェントは自分の会話をコピーできないため、元のセッションの会話をテキストとして受け取りました。"
+	"sessionFork.textCopyNotice": "{{title}} からフォークしました。このエージェントは自分の会話をコピーできないため、元のセッションの会話をテキストとして受け取りました。",
+	"command.sessionText": "過去のセッション",
+	"command.searchingSessions": "過去のセッションを検索中…",
+	"command.searchSessionsError": "過去のセッションを検索できませんでした。",
+	"command.noSessionMatches": "一致する過去のセッションはありません。",
+	"command.searchSessionsBackfilling_one": "まだ一致はありません。インデックスは構築中です（{{count}}件のソースが保留中）。",
+	"command.searchSessionsBackfilling_other": "まだ一致はありません。インデックスは構築中です（{{count}}件のソースが保留中）。",
+	"command.searchSessionsUnindexed": "次のエージェントのトランスクリプトは索引化されていません: {{harnesses}}。",
+	"command.searchSessionsUnavailable": "一致するものはありませんが、インデックスの作成を完了できなかったため、一部のセッションが含まれていない可能性があります。",
+	"command.copyResumeCommand": "再開コマンドをコピー",
+	"command.recentSessions": "最近のセッション",
+	"command.sessionMatches_one": "{{count}}件の一致",
+	"command.sessionMatches_other": "{{count}}件の一致"
 }

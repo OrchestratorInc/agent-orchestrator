@@ -242,6 +242,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReportCommand(ctx))
 	root.AddCommand(newArtifactCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
+	root.AddCommand(newPaneCommand(ctx))
 	root.AddCommand(newRenderCommand(ctx))
 	root.AddCommand(newMCPCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))
@@ -263,6 +264,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newAutomationCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
+	root.AddCommand(newSearchCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 

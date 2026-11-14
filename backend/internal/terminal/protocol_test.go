@@ -3,6 +3,7 @@ package terminal
 import (
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestClientMsgRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out != in {
+	if !reflect.DeepEqual(out, in) {
 		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", out, in)
 	}
 }

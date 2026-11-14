@@ -2885,7 +2885,7 @@
 	"settings.sideChats": "侧边聊天",
 	"settings.sideChatsHint": "在检查器中打开独立的侧边对话，并使用 /btw 提问。",
 	"settings.splitPanes": "分屏",
-	"settings.splitPanesHint": "将标签页拖到中间面板的边缘，即可与当前标签页并排显示。",
+	"settings.splitPanesHint": "将标签页拖到中间面板的边缘，即可与当前标签页并排显示。应你的要求，会话中的智能体也可以拆分窗格并在终端中运行命令。",
 	"settings.prView": "PR 视图",
 	"settings.prViewHint": "在单独的标签页中打开拉取请求，查看其描述、评论、检查和堆栈。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",
@@ -4788,5 +4788,17 @@
 	"sessionFork.forkedInto_other": "从此会话分叉出 {{count}} 个会话:",
 	"sessionFork.forkDeleted": "{{title}}(已删除)",
 	"sessionFork.textCopy": "对话已作为文本复制",
-	"sessionFork.textCopyNotice": "从 {{title}} 分叉。此智能体无法复制自己的对话，因此以文本形式获得了原会话的对话。"
+	"sessionFork.textCopyNotice": "从 {{title}} 分叉。此智能体无法复制自己的对话，因此以文本形式获得了原会话的对话。",
+	"command.sessionText": "过去的会话",
+	"command.searchingSessions": "正在搜索过去的会话…",
+	"command.searchSessionsError": "无法搜索过去的会话。",
+	"command.noSessionMatches": "没有匹配的过去会话。",
+	"command.searchSessionsBackfilling_one": "尚无匹配 — 索引仍在回填（{{count}} 个来源待处理）。",
+	"command.searchSessionsBackfilling_other": "尚无匹配 — 索引仍在回填（{{count}} 个来源待处理）。",
+	"command.searchSessionsUnindexed": "以下代理的转录未被索引：{{harnesses}}。",
+	"command.searchSessionsUnavailable": "没有匹配项，但索引未能完成构建，部分会话可能缺失。",
+	"command.copyResumeCommand": "复制恢复命令",
+	"command.recentSessions": "最近的会话",
+	"command.sessionMatches_one": "{{count}} 个匹配",
+	"command.sessionMatches_other": "{{count}} 个匹配"
 }

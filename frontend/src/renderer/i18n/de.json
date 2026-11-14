@@ -2815,7 +2815,7 @@
 	"settings.sideChats": "Seiten-Chats",
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.splitPanes": "Geteilte Bereiche",
-	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen.",
+	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen. Wenn du sie darum bittest, können Agenten in deinen Sitzungen auch Bereiche teilen und Befehle in Terminals ausführen.",
 	"settings.prView": "PR-Ansicht",
 	"settings.prViewHint": "Einen Pull Request in einem eigenen Tab öffnen, mit Beschreibung, Kommentaren, Checks und Stack.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",
@@ -4806,5 +4806,17 @@
 	"sessionFork.forkedInto_other": "{{count}} Sitzungen wurden von dieser abgezweigt:",
 	"sessionFork.forkDeleted": "{{title}} (gelöscht)",
 	"sessionFork.textCopy": "Unterhaltung als Text kopiert",
-	"sessionFork.textCopyNotice": "Abgezweigt von {{title}}. Dieser Agent kann seine Unterhaltung nicht selbst kopieren, deshalb hat er die Unterhaltung des Originals als Text erhalten."
+	"sessionFork.textCopyNotice": "Abgezweigt von {{title}}. Dieser Agent kann seine Unterhaltung nicht selbst kopieren, deshalb hat er die Unterhaltung des Originals als Text erhalten.",
+	"command.sessionText": "Frühere Sitzungen",
+	"command.searchingSessions": "Frühere Sitzungen werden durchsucht…",
+	"command.searchSessionsError": "Frühere Sitzungen konnten nicht durchsucht werden.",
+	"command.noSessionMatches": "Keine früheren Sitzungen gefunden.",
+	"command.searchSessionsBackfilling_one": "Noch keine Treffer — der Index wird noch aufgebaut ({{count}} Quelle ausstehend).",
+	"command.searchSessionsBackfilling_other": "Noch keine Treffer — der Index wird noch aufgebaut ({{count}} Quellen ausstehend).",
+	"command.searchSessionsUnindexed": "Transkripte werden nicht indiziert für: {{harnesses}}.",
+	"command.searchSessionsUnavailable": "Keine Treffer, aber der Index konnte nicht fertig erstellt werden, daher fehlen möglicherweise Sitzungen.",
+	"command.copyResumeCommand": "Fortsetzen-Befehl kopieren",
+	"command.recentSessions": "Letzte Sitzungen",
+	"command.sessionMatches_one": "{{count}} Treffer",
+	"command.sessionMatches_other": "{{count}} Treffer"
 }
