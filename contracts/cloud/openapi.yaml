@@ -1623,6 +1623,10 @@ paths:
     delete:
       operationId: cancelSessionInterfaceTransition
       tags: [Sessions]
+      description: >-
+        An agent switch or a move to another account can be cancelled only by
+        the session's creator (403 forbidden otherwise); an interface-only
+        switch by any member who may switch it.
       responses:
         "200":
           description: Interface switch cancelled.
@@ -2287,12 +2291,19 @@ paths:
     post:
       operationId: cancelTurn
       tags: [Sessions]
-      description: Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403.
+      description: >-
+        Stop a turn. Allowed for the person whose message started it, the
+        composer lease holder, the session's creator, and the organization's
+        owners and admins; anyone else gets 403. A running turn is stopped by
+        its worker (chat.interrupt_requested, then chat.turn_interrupted). A
+        turn still queued is deleted: it ends at once with
+        chat.turn_interrupted of attempt 0 and reason deleted, and stopping it
+        again answers 202. 409 TURN_FINISHED once the turn ended otherwise.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "202":
-          description: Cancellation was durably requested for the turn.
+          description: Cancellation was durably requested for the turn, or the queued turn was stopped.
           content:
             application/json:
               schema:
@@ -2645,6 +2656,83 @@ paths:
                 properties:
                   event:
                     $ref: "#/components/schemas/TurnSteeredEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    post:
+      operationId: editQueuedMessage
+      tags: [Sessions]
+      description: >-
+        Replace the text and files of a message whose turn is still queued,
+        before the agent starts on it. Only the message's author may edit it
+        (403 NOT_MESSAGE_AUTHOR otherwise). The message keeps its model and
+        settings and, like every queued message, runs within the access its
+        author holds when the agent starts on it; a display it recorded
+        (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent
+        took the turn or it was stopped, and 409 SESSION_TERMINATED once the
+        session ended. Offered when offering.features lists queued-edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditQueuedMessageInput"
+      responses:
+        "200":
+          description: The message was edited.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/UserMessageEditedEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/delete:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    post:
+      operationId: deleteQueuedMessage
+      tags: [Sessions]
+      description: >-
+        Take back a message whose turn is still queued, before the agent
+        starts on it: the turn ends at once with chat.turn_interrupted of
+        attempt 0 and reason deleted, and a client drops the message. Unlike
+        cancelTurn it never stops a turn that left the queue. Allowed for
+        whoever may stop the turn: the person whose message started it, the
+        composer lease holder, the session's creator, and the organization's
+        owners and admins. Deleting a message already deleted answers 202
+        again. Offered when offering.features lists queued-delete.
+      responses:
+        "202":
+          description: The queued message was deleted, now or before.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        "403":
+          description: forbidden. The caller may not stop this turn, or only watches the session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            TURN_NOT_QUEUED: the agent started on the message, or it was
+            stopped or ended otherwise, so it can no longer be deleted (the
+            turn is left as it is). SESSION_TERMINATED: the session ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide:
@@ -5486,7 +5574,10 @@ components:
           description: >-
             The organization's product features (share lets it share
             sessions) and the deployment's own: attachments when the session
-            attachment routes are on. Empty when none apply.
+            attachment routes are on, queued-edit when a queued message can be
+            edited (editQueuedMessage), queued-delete when a queued message can
+            be deleted without stopping a started turn (deleteQueuedMessage).
+            Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -7884,6 +7975,25 @@ components:
           format: int64
           minimum: 0
           description: The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+    EditQueuedMessageInput:
+      type: object
+      additionalProperties: false
+      required: [text]
+      description: A queued message's new text and files. Text may be empty only when attachmentIds names a file.
+      properties:
+        text:
+          type: string
+          maxLength: 65536
+        attachmentIds:
+          type: array
+          maxItems: 10
+          description: >-
+            Every file the edited message carries, attached to the session
+            first (uploadSessionAttachment). A file the message carried and
+            this list leaves out is dropped from it.
+          items:
+            type: string
+            format: uuid
     WorkerWorkspaceListPayload:
       type: object
       additionalProperties: false
@@ -8398,7 +8508,10 @@ components:
             new agent starts a new conversation with a handoff note of the
             conversation so far, even when the session ran it before.
             Messages sent while the switch runs reach the new agent. A
-            control plane without agent switching refuses the field.
+            control plane without agent switching refuses the field. Only the
+            session's creator may switch its agent, since the new agent runs
+            on their login for it. Anyone else, an org admin included, gets
+            403 forbidden, whatever logins the creator has.
         model:
           type: string
           description: >-
@@ -10380,6 +10493,45 @@ components:
         createdAt:
           type: string
           format: date-time
+    UserMessageEditedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        A queued message was edited (editQueuedMessage). Its chat.user_message
+        event (payload.messageSequence) now reads as edited; a client holding
+        that event shows payload.text and payload.attachments in its place.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.user_message_edited
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, messageSequence, text]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            messageSequence:
+              type: integer
+              format: int64
+              maximum: 9007199254740991
+            text:
+              type: string
+            attachments:
+              type: array
+              description: The files the edited message carries; absent when none.
+              items:
+                $ref: "#/components/schemas/MessageAttachment"
+        createdAt:
+          type: string
+          format: date-time
     AssistantDeltaEvent:
       type: object
       additionalProperties: false
@@ -10479,7 +10631,19 @@ components:
               format: uuid
             attempt:
               type: integer
-              minimum: 1
+              minimum: 0
+              description: 0 for a turn stopped while still queued, before the agent started on it.
+            reason:
+              type: string
+              enum: [deleted, interface_switch]
+              description: >-
+                Why a turn ended before it started. deleted: the person took
+                the queued message back (cancelTurn), so a client drops it from
+                the transcript. interface_switch: a stop-now switch to the
+                terminal ended the queued message, which a client keeps, shown
+                interrupted. Absent for a stopped running turn and for events
+                written before reasons existed; a client reads a missing or
+                unknown reason as a plain interruption and keeps the message.
         createdAt:
           type: string
           format: date-time
@@ -10487,6 +10651,12 @@ components:
       type: object
       additionalProperties: false
       required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        A turn ended in failure, with payload.error saying why. Also a queued
+        message the control plane did not run because, when the agent came to
+        it, its author could no longer write to the session (cut to watching,
+        share revoked, gone from the organization or the team); that one
+        carries payload.reason author_cannot_write.
       properties:
         sessionId:
           type: string
@@ -10509,6 +10679,17 @@ components:
               minimum: 1
             error:
               type: string
+            reason:
+              type: string
+              enum: [author_cannot_write]
+              description: >-
+                Set when the control plane did not run the message at all.
+                author_cannot_write: its author could no longer write to the
+                session when the agent came to it, so a client shows the
+                message as not run (error says why). Absent for a turn that
+                failed while it ran and for events written before reasons
+                existed; a client reads a missing or unknown reason as a
+                normal failure.
         createdAt:
           type: string
           format: date-time
@@ -10634,6 +10815,7 @@ components:
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
+        - $ref: "#/components/schemas/UserMessageEditedEvent"
         - $ref: "#/components/schemas/AssistantDeltaEvent"
         - $ref: "#/components/schemas/TurnStartedEvent"
         - $ref: "#/components/schemas/TurnCompletedEvent"

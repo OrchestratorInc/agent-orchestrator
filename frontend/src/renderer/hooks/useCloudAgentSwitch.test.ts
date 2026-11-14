@@ -9,12 +9,14 @@ const mocks = vi.hoisted(() => ({
 	transition: undefined as unknown,
 	starting: false,
 	latest: { activityState: "idle", status: "idle" } as { activityState: string; status: string },
+	meUserId: "user-1" as string | undefined,
 }));
 
 vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({ client: { getSession: vi.fn(async () => ({ session: mocks.latest })) } }),
 }));
 
+vi.mock("./useCloudMeUserId", () => ({ useCloudMeUserId: () => mocks.meUserId }));
 vi.mock("./useCloudOffering", () => ({
 	useCloudOffering: () => ({ agentSwitchHarnesses: mocks.agentSwitchHarnesses, chatHarnesses: ["claude-code", "codex", "cursor"] }),
 }));
@@ -32,7 +34,7 @@ vi.mock("./useSessionInterfaceTransition", async (original) => ({
 
 const session: WorkspaceSession = {
 	id: "session-1", workspaceId: "project-1", workspaceName: "Project", title: "Agent", provider: "codex",
-	kind: "worker", mode: "chat", status: "idle", updatedAt: "2026-10-01T00:00:00Z", prs: [], cloud: { orgId: "org-1" },
+	kind: "worker", mode: "chat", status: "idle", updatedAt: "2026-10-01T00:00:00Z", prs: [], cloud: { orgId: "org-1", createdByUserId: "user-1" },
 };
 
 describe("useCloudAgentSwitch", () => {
@@ -42,6 +44,7 @@ describe("useCloudAgentSwitch", () => {
 		mocks.transition = undefined;
 		mocks.starting = false;
 		mocks.latest = { activityState: "idle", status: "idle" };
+		mocks.meUserId = "user-1";
 	});
 
 	it("offers agents the control plane can switch to and the person is signed in to, with a Chat in Chat", () => {
@@ -58,6 +61,18 @@ describe("useCloudAgentSwitch", () => {
 		mocks.agentSwitchHarnesses = ["claude-code", "codex"];
 		expect(renderHook(() => useCloudAgentSwitch({ ...session, isTerminated: true })).result.current.available).toBe(false);
 		expect(renderHook(() => useCloudAgentSwitch(undefined)).result.current.available).toBe(false);
+	});
+
+	// The new agent runs on the creator's login for it: the control plane
+	// refuses anyone else (403), an org admin included, so nobody else is offered it.
+	it("offers the switch only to the session's creator", () => {
+		mocks.meUserId = "user-2";
+		expect(renderHook(() => useCloudAgentSwitch(session)).result.current.available).toBe(false);
+		mocks.meUserId = undefined;
+		expect(renderHook(() => useCloudAgentSwitch(session)).result.current.available).toBe(false);
+		mocks.meUserId = "user-1";
+		expect(renderHook(() => useCloudAgentSwitch({ ...session, cloud: { orgId: "org-1" } })).result.current.available).toBe(false);
+		expect(renderHook(() => useCloudAgentSwitch(session)).result.current.available).toBe(true);
 	});
 
 	it("starts the switch in the session's interface with the picked model and effort, draining Chat", async () => {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -58,6 +59,8 @@ type fakeClaude struct {
 	failing    map[string]bool   // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
 	limitsErr  error
+	orgOf      map[string]string
+	orgNameOf  map[string]string
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -73,7 +76,7 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	if f.apiKey[home] {
 		return domain.AgentAccountIdentityCheck{LoggedIn: true}, nil
 	}
-	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
+	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home], OrgName: f.orgNameOf[home]}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
 	if f.limitsErr != nil {
@@ -803,5 +806,138 @@ func TestFailedLimitsRefreshKeepsTheLastReading(t *testing.T) {
 	claude.signedInAs[""] = "b@example.com"
 	if view := device(); view.Limits != nil {
 		t.Fatalf("another login kept the last login's limits: %+v", view.Limits)
+	}
+}
+
+func TestProblemKindSortsFailuresByWhatFailed(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want domain.AgentAccountProblemKind
+	}{
+		{fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded), domain.AgentAccountProblemSlow},
+		{errors.New("account/read: context deadline exceeded"), domain.AgentAccountProblemSlow},
+		{fmt.Errorf("resolve claude: %w", ports.ErrAgentBinaryNotFound), domain.AgentAccountProblemCLIMissing},
+		{&exec.Error{Name: "claude", Err: exec.ErrNotFound}, domain.AgentAccountProblemCLIMissing},
+		{errors.New("claude get_usage: 429 Too Many Requests"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude get_usage: rate_limit_error"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude ended without answering get_usage"), domain.AgentAccountProblemUnavailable},
+		{errors.New("claude get_usage: API error: status 429"), domain.AgentAccountProblemRateLimited},
+		{errors.New("claude get_usage: HTTP 429"), domain.AgentAccountProblemRateLimited},
+		// Digits in a port are not a status.
+		{errors.New("dial tcp 127.0.0.1:42901: connect: connection refused"), domain.AgentAccountProblemUnavailable},
+		{errors.New("dial tcp 127.0.0.1:429: connect: connection refused"), domain.AgentAccountProblemUnavailable},
+	} {
+		if got := problemKind(tc.err); got != tc.want {
+			t.Errorf("problemKind(%q) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestASlowCheckIsTriedAgainSoonAndARateLimitIsNot(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 40}},
+	}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	device := func(refresh bool) AccountView {
+		t.Helper()
+		views, err := svc.List(ctx, refresh)
+		if err != nil || len(views) == 0 {
+			t.Fatalf("List = %v, %v", views, err)
+		}
+		return views[0]
+	}
+	device(true)
+
+	claude.limitsErr = fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded)
+	if view := device(true); view.LimitsProblem != domain.AgentAccountProblemSlow || view.Limits == nil {
+		t.Fatalf("slow check = %+v, want kind slow and the last limits", view)
+	}
+	claude.limitsErr = nil
+	now = now.Add(retryFailedAfter + time.Second) // well inside the five-minute window
+	if view := device(false); view.LimitsProblem != "" || view.LimitsErr != "" {
+		t.Fatalf("a minute after a slow check: %+v, want it read again", view)
+	}
+
+	claude.limitsErr = errors.New("claude get_usage: 429 Too Many Requests")
+	if view := device(true); view.LimitsProblem != domain.AgentAccountProblemRateLimited {
+		t.Fatalf("rate limited check = %+v", view)
+	}
+	claude.limitsErr = nil
+	now = now.Add(retryFailedAfter + time.Second)
+	if view := device(false); view.LimitsProblem != domain.AgentAccountProblemRateLimited {
+		t.Fatalf("a refused check was asked again within a minute: %+v", view)
+	}
+}
+
+func TestACLIThatStaysSlowIsAskedLessOften(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		limitsErr:  fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded),
+	}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	// Each slow check in a row doubles the wait, up to the usual five minutes.
+	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, freshFor, freshFor} {
+		now = now.Add(wait - time.Second)
+		if svc.needsReading(id, false) {
+			t.Fatalf("read again before %v", wait)
+		}
+		now = now.Add(2 * time.Second)
+		if !svc.needsReading(id, false) {
+			t.Fatalf("not read again after %v", wait)
+		}
+		if _, err := svc.List(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A failed read can keep earlier limits with no windows; the failure backoff
+// still applies instead of the 30-second empty-windows retry.
+func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}},
+		[]ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	now := time.Now()
+	svc.now = func() time.Time { return now }
+	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	if _, err := svc.List(ctx, true); err != nil { // limits with no windows
+		t.Fatal(err)
+	}
+	claude.limitsErr = fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded)
+	if view, err := svc.List(ctx, true); err != nil || view[0].Limits == nil || len(view[0].Limits.Windows) != 0 {
+		t.Fatalf("slow check = %+v, %v; want the earlier empty limits kept", view, err)
+	}
+	now = now.Add(retryEmptyAfter + time.Second)
+	if svc.needsReading(id, false) {
+		t.Fatal("a slow check was read again after 30 seconds")
+	}
+	now = now.Add(-retryEmptyAfter - time.Second)
+	// Each slow check in a row doubles the wait: one, two, then four minutes.
+	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		now = now.Add(wait - time.Second)
+		if svc.needsReading(id, false) {
+			t.Fatalf("read again before %v", wait)
+		}
+		now = now.Add(2 * time.Second)
+		if !svc.needsReading(id, false) {
+			t.Fatalf("not read again after %v", wait)
+		}
+		if _, err := svc.List(ctx, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

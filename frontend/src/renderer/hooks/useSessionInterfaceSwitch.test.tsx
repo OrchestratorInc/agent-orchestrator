@@ -14,10 +14,12 @@ const mocks = vi.hoisted(() => ({
 	context: vi.fn(),
 	status: undefined as SessionInterfaceTransitionStatus | undefined,
 	settling: false,
+	meUserId: "user-1" as string | undefined,
 }));
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: { getSession: mocks.getSession } }) }));
 vi.mock("./useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
+vi.mock("./useCloudMeUserId", () => ({ useCloudMeUserId: () => mocks.meUserId }));
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor", "hermes"] } }) }));
 vi.mock("./useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("./useSessionInterfaceTransition")>(),
@@ -56,10 +58,10 @@ const cloudSession: WorkspaceSession = {
 	status: "idle",
 	updatedAt: "2026-10-01T00:00:00Z",
 	prs: [],
-	cloud: { orgId: "org-1" },
+	cloud: { orgId: "org-1", createdByUserId: "user-1" },
 };
 
-type SwitchControl = ReactElement<{ children: ReactElement<{ onClick: () => void; transition?: unknown }> }> | null;
+type SwitchControl = ReactElement<{ children: ReactElement<{ onClick: () => void; transition?: unknown; onCancel?: () => void }> }> | null;
 
 // The control is the switch button inside a hover wrapper.
 function requestSwitch(control: SwitchControl) {
@@ -77,6 +79,7 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.context.mockReset();
 		mocks.status = { supported: true, targetMode: "chat" };
 		mocks.settling = false;
+		mocks.meUserId = "user-1";
 	});
 
 	it.each(["chat", "tui"] as const)("asks before an idle Hermes %s switch can reset context", (mode) => {
@@ -257,6 +260,34 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.newWorkDisabled).toBe(true);
 		// While it waits, the control shows the running switch instead of the button.
 		expect((result.current.switchControl as SwitchControl)?.props.children.props.transition).toBeDefined();
+	});
+
+	// The control plane lets only the session's creator cancel its agent switch
+	// (403 for anyone else, an org admin included); an interface-only switch
+	// stays any member's to cancel.
+	it("offers the cancel of an agent switch only to the session's creator", () => {
+		const draining = (agentSwitch: boolean): SessionInterfaceTransitionStatus => ({
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "transition-1", sessionId: "session-1", sourceMode: "chat", targetMode: agentSwitch ? "chat" : "tui",
+				policy: "drain", historyPolicy: "strict", phase: "draining",
+				createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:01Z",
+				...(agentSwitch ? { sourceHarness: "codex", targetHarness: "claude-code" } : {}),
+			} as SessionInterfaceTransition,
+		});
+		const control = () => renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode: "chat", status: "working" }, { orgId: "org-1" }))
+			.result.current.switchControl as SwitchControl;
+
+		mocks.status = draining(true);
+		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
+		mocks.meUserId = "user-2";
+		const member = control()?.props.children.props;
+		expect(member?.transition).toBeDefined();
+		expect(member?.onCancel).toBeUndefined();
+
+		mocks.status = draining(false);
+		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
 	});
 
 	it("checks fresh Cloud activity before automatically interrupting an idle terminal", async () => {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 import { useSessionImportStore } from "../stores/session-import-store";
+import { peekSessionSearchReveal, resetSessionSearchReveals } from "../lib/session-search-reveal";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -152,7 +153,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 }));
 
 vi.mock("../lib/shell-context", () => ({
-	useShell: () => ({ cloneProject: vi.fn(), createProject: vi.fn(), initializeProjectRepository: vi.fn(), daemonStatus: {} }),
+	useShell: () => ({ cloneProject: vi.fn(), createProject: vi.fn(), initializeProjectRepository: vi.fn(), daemonStatus: { state: "ready" } }),
 }));
 
 vi.mock("../lib/spawn-orchestrator", () => ({ spawnOrchestrator: spawnMock }));
@@ -173,6 +174,7 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
+	clientForHost: () => ({ GET: getMock, POST: postMock }),
 }));
 
 
@@ -269,6 +271,30 @@ beforeEach(() => {
 	spawnMock.mockReset();
 	choosePathMock.mockReset();
 	getMock.mockReset();
+	// Opening the palette now asks for recent sessions, so the default mock must
+	// answer the search and index-status endpoints. A test that cares about a
+	// specific search response overrides this.
+	getMock.mockImplementation(async (path: string) => {
+		if (String(path).includes("/search/index-status")) {
+			return { data: { coverage: { state: "ready" } } };
+		}
+		// Chat-message search (palette "Messages") answers with no hits by default.
+		if (String(path) === "/api/v1/conversations/search") return { data: { results: [] } };
+		if (String(path).includes("/search/sessions")) {
+			return {
+				data: {
+					query: "",
+					results: [],
+					total: 0,
+					limit: 8,
+					offset: 0,
+					sort: "recent",
+					coverage: { state: "ready" },
+				},
+			};
+		}
+		return { data: {} };
+	});
 	postMock.mockReset();
 	openExternalMock.mockReset();
 	writeTextMock.mockReset();
@@ -308,6 +334,29 @@ describe("CommandPalette gating", () => {
 
 		fireEvent.click(screen.getByText(rowTitle("New project")));
 		await waitFor(() => expect(createProjectFlowMock.props).not.toBeNull());
+	});
+
+	it("starts a problem report and closes", async () => {
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.click(screen.getByText(rowTitle("Report a problem")));
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
+	});
+
+	it.each(["bug", "report"])("starts a problem report when Enter follows %s", async (query) => {
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.change(input, { target: { value: query } });
+		await screen.findByText(rowTitle("Report a problem"));
+		fireEvent.keyDown(input, { key: "Enter" });
+
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID });
 	});
 
 	it("subscribes to workspace updates only while open", () => {
@@ -1433,5 +1482,287 @@ describe("CommandPalette New task", () => {
 
 		await waitFor(() => expect(paletteInput()).toBeNull());
 		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "proj-1" });
+	});
+});
+
+describe("CommandPalette session-text search", () => {
+	beforeEach(() => {
+		resetSessionSearchReveals();
+	});
+
+	function searchResponse(results: unknown[], coverage: Record<string, unknown> = { state: "ready" }) {
+		return {
+			data: {
+				query: "flaky",
+				results,
+				total: results.length,
+				limit: 8,
+				offset: 0,
+				sort: "relevance",
+				coverage,
+			},
+		};
+	}
+
+	const hit = {
+		sessionId: "w-fix",
+		projectId: "proj-1",
+		harness: "codex",
+		kind: "user",
+		messageId: "msg-1",
+		seq: 3,
+		snippet: "the flaky login test",
+		highlights: [{ start: 4, end: 9 }],
+		rank: -0.4,
+		createdAt: "2026-06-10T00:00:00Z",
+		sessionName: "fix flake",
+		projectName: "app",
+		sessionState: "active",
+	};
+
+	function mockSearch(results: unknown[], coverage?: Record<string, unknown>) {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.includes("/search/index-status")) {
+				return { data: { coverage: coverage ?? { state: "ready" } } };
+			}
+			if (path.includes("/search/sessions")) return searchResponse(results, coverage);
+			if (path === "/api/v1/conversations/search") return { data: { results: [] } };
+			return { data: {} };
+		});
+	}
+
+	// The row's snippet line is the palette's own: the matched word is its own
+	// span, drawn in the foreground, inside the line holding the message.
+	async function matchedWordIn(line: string, word: string) {
+		const matched = await screen.findByText(word, { selector: "[cmdk-item] span span" }, { timeout: 2_000 });
+		expect(matched.parentElement?.textContent).toBe(line);
+		expect(matched).toHaveClass("text-foreground");
+		return matched;
+	}
+
+	it("shows a matching past session with the match marked", async () => {
+		mockSearch([hit]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+
+		await matchedWordIn("the flaky login test", "flaky");
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+	});
+
+	it("keeps one row per session across Past sessions and Messages", async () => {
+		// Both searches find the session; only its session-text row stays, with
+		// its message count. The reviewer chat's matches are counted in that row
+		// too, so its Messages row would be a second row for the same session.
+		const chatHits = [
+			{ messageId: "chat-main", sessionId: "w-fix", projectId: "proj-1", title: "Main chat twin", text: "the \x02flaky\x03 login test" },
+			{ messageId: "chat-review", sessionId: "w-fix", projectId: "proj-1", reviewId: "review-1", title: "Reviewer thread", text: "a \x02flaky\x03 retry" },
+		];
+		getMock.mockImplementation(async (path: string) => {
+			if (path.includes("/search/index-status")) return { data: { coverage: { state: "ready" } } };
+			if (path.includes("/search/sessions")) return searchResponse([{ ...hit, sessionMatches: 7 }]);
+			if (path === "/api/v1/conversations/search") return { data: { results: chatHits } };
+			return { data: {} };
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
+		// The row shows the best-matching message with the query marked, and the count.
+		await matchedWordIn("the flaky login test", "flaky");
+		expect(screen.getByText("you · 7 matches · app · codex")).toBeInTheDocument();
+		expect(screen.queryByText("Main chat twin")).not.toBeInTheDocument();
+		expect(screen.queryByText("Reviewer thread")).not.toBeInTheDocument();
+	});
+
+	it("opens a reviewer-chat match in the reviewer chat", async () => {
+		mockSearch([{ ...hit, messageId: "review-msg", reviewId: "review-1", snippet: "the flaky retry" }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		fireEvent.click(await screen.findByText("fix flake", {}, { timeout: 2_000 }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "w-fix" },
+		});
+		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({
+			sessionId: "w-fix", messageId: "review-msg", reviewId: "review-1",
+		});
+		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
+	});
+
+	it("opens the session at the matched message", async () => {
+		mockSearch([hit]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+
+		const row = await screen.findByText("fix flake", {}, { timeout: 2_000 });
+		fireEvent.click(row);
+
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "w-fix" },
+		});
+		// Opening is not enough: the palette must hand the matched message to the
+		// session, or the Chat timeline has nothing to scroll to and the row would
+		// behave like a plain session jump.
+		// The matched word: the opened message marks it, and the session opens
+		// find in chat on it.
+		expect(peekSessionSearchReveal("w-fix")).toEqual({
+			messageId: "msg-1",
+			text: "flaky",
+			find: true,
+		});
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+	});
+
+	// A standalone session has no project, so its hit carries an empty project
+	// id. It must open on the standalone route, not "/projects//sessions/…".
+	it("opens a standalone session's match on the standalone route", async () => {
+		mockSearch([{ ...hit, sessionId: "standalone-3", projectId: "", projectName: undefined, sessionName: "kettle notes" }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		fireEvent.click(await screen.findByText("kettle notes", {}, { timeout: 2_000 }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-3" } });
+		expect(peekSessionSearchReveal("standalone-3")).toMatchObject({ messageId: "msg-1" });
+	});
+
+	it("opens a tool-output match without inventing a message anchor", async () => {
+		mockSearch([{ ...hit, kind: "command", messageId: undefined, snippet: "TS2304: cannot find name" }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+
+		const row = await screen.findByText("fix flake", {}, { timeout: 2_000 });
+		fireEvent.click(row);
+
+		expect(navigateMock).toHaveBeenCalled();
+		// A command-output hit has no message bubble; the session opens plainly
+		// rather than scrolling to a guessed anchor.
+		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
+	});
+
+	it("copies the resume command on ⌘↵ instead of opening", async () => {
+		mockSearch([hit]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+
+		await waitFor(() => {
+			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
+			expect(selected?.textContent).toContain("fix flake");
+		}, { timeout: 2_000 });
+		// The footer names what ⌘↵ does on this row.
+		expect(screen.getByText("Copy resume command")).toBeInTheDocument();
+		fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+
+		await waitFor(() => expect(writeTextMock).toHaveBeenCalledWith("ao session resume-agent w-fix"));
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("does not send a one-character text query", async () => {
+		mockSearch([hit]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		await screen.findByPlaceholderText(/search sessions/i);
+		// Clear the recents request so only the typed query is measured.
+		getMock.mockClear();
+		fireEvent.change(input, { target: { value: "f" } });
+
+		await act(async () => { await Promise.resolve(); });
+		const searchCalls = getMock.mock.calls.filter(([path]) => String(path).includes("/search/sessions"));
+		expect(searchCalls).toHaveLength(0);
+	});
+
+	it("shows recent sessions before anything is typed", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (String(path).includes("/search/index-status")) {
+				return { data: { coverage: { state: "ready" } } };
+			}
+			if (String(path).includes("/search/sessions")) {
+				return {
+					data: {
+						query: "",
+						results: [{ ...hit, messageId: "", kind: "title", snippet: "fix flake" }],
+						total: 1,
+						limit: 8,
+						offset: 0,
+						sort: "recent",
+						coverage: { state: "ready" },
+					},
+				};
+			}
+			return { data: {} };
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+
+		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
+		// The request is a recency browse, not a text search.
+		const searchCall = getMock.mock.calls.find(([path]) => String(path).includes("/search/sessions"));
+		expect(searchCall?.[1]).toMatchObject({ params: { query: { sort: "recent", limit: 8 } } });
+	});
+
+	// The recent sessions once sat under Past sessions while a typed search
+	// loaded, as if they were its matches.
+	it("does not show recents as matches while a typed search loads", async () => {
+		getMock.mockImplementation((path: string, init?: { params?: { query?: { q?: string } } }) => {
+			if (String(path).includes("/search/index-status")) return Promise.resolve({ data: { coverage: { state: "ready" } } });
+			if (String(path).includes("/search/sessions")) {
+				if (init?.params?.query?.q) return new Promise(() => {});
+				return Promise.resolve({
+					data: {
+						query: "",
+						results: [{ ...hit, messageId: "", kind: "title", snippet: "fix flake" }],
+						total: 1,
+						limit: 8,
+						offset: 0,
+						sort: "recent",
+						coverage: { state: "ready" },
+					},
+				});
+			}
+			return Promise.resolve({ data: {} });
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
+
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "zebra" } });
+		expect(await screen.findByText("Searching past sessions…", {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.queryByText("fix flake")).not.toBeInTheDocument();
+	});
+
+	it("explains an incomplete index instead of implying nothing exists", async () => {
+		mockSearch([], { state: "backfilling", pendingSources: 3, unindexedHarnesses: ["aider"] });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+
+		await waitFor(() => {
+			expect(screen.getByText(/still backfilling/)).toBeInTheDocument();
+		}, { timeout: 2_000 });
+		expect(screen.getByText(/aider/)).toBeInTheDocument();
+	});
+
+	// A failed first build leaves nothing filling the index: "no matches" there
+	// is not the complete answer it reads as.
+	it("says when the index could not finish building", async () => {
+		mockSearch([], { state: "unavailable" });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+		expect(await screen.findByText(/could not finish building/, {}, { timeout: 2_000 })).toBeInTheDocument();
 	});
 });

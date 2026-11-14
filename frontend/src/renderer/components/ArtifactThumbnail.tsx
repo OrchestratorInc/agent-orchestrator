@@ -18,6 +18,7 @@ import { PdfPreview } from "./PdfPreview";
 import { TableFileView } from "./TableFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
+import { useDownscaledImage } from "../lib/downscaled-image";
 
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
@@ -32,7 +33,6 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	const [visible, setVisible] = useState(false);
 	const [width, setWidth] = useState(0);
 	const [failed, setFailed] = useState(false);
-	const [pageAvailable, setPageAvailable] = useState<boolean>();
 	// A Cloud page's frame, by the URL it reported for: a frame for another URL is still loading.
 	const [frame, setFrame] = useState<{ url?: string; state: "loading" | "failed" | "ready" }>({ state: "loading" });
 	const cloud = Boolean(row.cloud);
@@ -51,6 +51,32 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
+	// A local photo or screenshot shows a small copy: the original is decoded once, off the main
+	// thread, rather than in full by every card each time it scrolls into view. An SVG stays
+	// vector, and a Cloud image is shown as it is served.
+	const smallImage = useDownscaledImage(visible && !cloud && image && isRasterImagePath(row.path) ? image : undefined, row.updatedAt);
+	const downscaling = visible && !cloud && Boolean(image) && isRasterImagePath(row.path) && smallImage === undefined;
+	const imageSrc = smallImage && smallImage !== "failed" ? smallImage : image;
+	// A cross-origin iframe fires load even for a 404 JSON response, so the readable artifact
+	// route is checked before the page is framed, without keeping the HTML. The answer is kept
+	// for this version of the file: a card scrolling back into view does not ask again. Only a
+	// file that is not there is kept as unavailable; any other failure may pass, so it is an
+	// error, which the next card to mount asks about again.
+	const pageCheck = useQuery({
+		queryKey: ["artifact-page-available", contentUrl ?? "", row.updatedAt],
+		queryFn: async ({ signal }) => {
+			const response = await fetch(contentUrl ?? "", { signal, cache: "no-store" });
+			await response.body?.cancel();
+			if (response.ok) return true;
+			if (response.status === 404 || response.status === 410) return false;
+			throw new Error(`artifact page check failed: ${response.status}`);
+		},
+		enabled: !cloud && visible && Boolean(page) && Boolean(contentUrl),
+		staleTime: Infinity,
+		gcTime: 10 * 60_000,
+		retry: false,
+	});
+	const pageAvailable = !cloud && page && contentUrl ? (pageCheck.isError ? false : pageCheck.data) : undefined;
 	const onFrameState = useCallback((state: "loading" | "failed" | "ready") => setFrame({ url: page, state }), [page]);
 	const frameState = cloud && page ? (frame.url === page ? frame.state : "loading") : undefined;
 	// A local video shows the frame Chromium paints after a metadata preload,
@@ -103,11 +129,8 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element) return;
-		const bounds = element.getBoundingClientRect();
-		if (bounds.width > 0 && bounds.bottom >= -200 && bounds.top <= window.innerHeight + 200) {
-			setVisible(true);
-			return;
-		}
+		// The observer reports a card already in view before it is painted. Measuring here instead
+		// would force a layout of the whole page for every card mounted, as each one scrolls in.
 		const observer = new IntersectionObserver(([entry]) => {
 			if (!entry?.isIntersecting) return;
 			setVisible(true);
@@ -117,26 +140,9 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		return () => observer.disconnect();
 	}, []);
 	useLayoutEffect(() => {
-		setPageAvailable(undefined);
-		if (cloud || !visible || !page || !contentUrl) return;
-		const controller = new AbortController();
-		// A cross-origin iframe fires load even for a 404 JSON response. Check
-		// the readable artifact route before framing it, without retaining HTML.
-		void fetch(contentUrl, { signal: controller.signal, cache: "no-store" })
-			.then(async (response) => {
-				await response.body?.cancel();
-				if (!controller.signal.aborted) setPageAvailable(response.ok);
-			})
-			.catch(() => {
-				if (!controller.signal.aborted) setPageAvailable(false);
-			});
-		return () => controller.abort();
-	}, [cloud, visible, page, contentUrl, row.updatedAt]);
-	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element || (!page && !isMarkdown)) return;
-		const initialWidth = element.getBoundingClientRect().width;
-		if (initialWidth > 0) setWidth(initialWidth);
+		// The first observation brings the width, before the card is painted, without forcing a layout.
 		const observer = new ResizeObserver(([entry]) => {
 			if (entry && entry.contentRect.width > 0) setWidth(entry.contentRect.width);
 		});
@@ -154,9 +160,9 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	// A preview that failed to load for a reason that may pass (the network, an expired access link, a read error).
-	const loadFailed = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
+	const loadFailed = failed || access.isError || (!cloud && Boolean(page) && pageCheck.isError) || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
 	// What a snapshot of this card may wait for: the preview drawn, nothing worth drawing for good, or a failure to try again later.
-	const previewState = accessPending || imagePending || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined) || frameState === "loading"
+	const previewState = accessPending || imagePending || downscaling || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined) || frameState === "loading"
 		? "loading"
 		: loadFailed ? "error" : unavailable ? "unavailable" : "content";
 	const placeholder = (
@@ -166,8 +172,8 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	);
 	return (
 		<span inert ref={container} data-preview-state={previewState} className={cn("pointer-events-none absolute inset-0 block overflow-hidden", isMarkdown || plainText ? "ao-document-surface" : "bg-[var(--solid-muted,var(--muted))]")} aria-hidden="true">
-			{accessPending || imagePending || unavailable ? placeholder : !visible ? null : image ? (
-				<img src={image} alt="" loading="eager" onError={() => setFailed(true)} className="h-full w-full object-cover object-top" />
+			{accessPending || imagePending || unavailable ? placeholder : !visible || downscaling ? null : image ? (
+				<img src={imageSrc} alt="" decoding="async" loading="lazy" onError={() => setFailed(true)} className="h-full w-full object-cover object-top" />
 			) : video ? (
 				<video crossOrigin={mediaCrossOrigin(video)} muted onError={() => setFailed(true)} playsInline preload="metadata" src={video} tabIndex={-1} className="h-full w-full object-cover object-top" />
 			) : page ? (
