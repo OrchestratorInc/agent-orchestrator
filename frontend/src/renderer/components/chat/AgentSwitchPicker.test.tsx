@@ -6,7 +6,7 @@ import claudeCodeLogo from "../../assets/agents/claude-code.svg";
 import codexLogo from "../../assets/agents/codex.svg";
 import { toggleModelFavorite } from "../../lib/model-favorites";
 import { useUiStore } from "../../stores/ui-store";
-import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, type PendingAgentSwitch, type PickerOverride, type PickerSource } from "./AgentSwitchPicker";
 
 const unavailableGet = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
@@ -33,7 +33,7 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	}),
 }));
 
-function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string, notice?: string) {
+function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string, notice?: string, override?: PickerOverride) {
 	const onPendingChange = vi.fn();
 	const current: PickerSource = {
 		models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }],
@@ -55,6 +55,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 				loadingModels={loadingModels}
 				savedModel={savedModel}
 				notice={notice}
+				override={override}
 				agentSwitch={{ projectId: "p", pending, onPendingChange }}
 			/>
 		</QueryClientProvider>,
@@ -74,6 +75,24 @@ describe("AgentModelPicker", () => {
 		await userEvent.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		if (pending) expect(screen.queryByText("Account quota warning")).not.toBeInTheDocument();
 		else expect(screen.getByText("Account quota warning")).toBeInTheDocument();
+	});
+
+	// The running agent's usage limit describes the running agent. With another
+	// agent picked to switch to, the trigger names that agent's model, and the
+	// running one's warning (which at the full limit never flashes away) stays off it.
+	it.each([undefined, { harness: "codex" as const, model: "gpt-x", modelLabel: "GPT X" }])("only shows the running account's quota override without a pending switch (%j)", async (pending) => {
+		const quota: PickerOverride = { key: "limit", label: "Claude usage limit reached", title: "Claude usage limit reached", detail: "Resets at 5 PM" };
+		open(pending, false, "claude-code", {}, false, false, undefined, undefined, quota);
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		if (pending) {
+			expect(trigger).toHaveTextContent("GPT X");
+			expect(trigger).not.toHaveTextContent("Claude usage limit reached");
+		} else {
+			expect(trigger).toHaveTextContent("Claude usage limit reached");
+		}
+		await userEvent.hover(trigger);
+		if (pending) expect(screen.queryByText("Resets at 5 PM", { exact: false })).not.toBeInTheDocument();
+		else expect((await screen.findAllByText("Resets at 5 PM", { exact: false })).length).toBeGreaterThan(0);
 	});
 
 	it("is one menu of Agent, Model and Effort rows for the running agent", async () => {

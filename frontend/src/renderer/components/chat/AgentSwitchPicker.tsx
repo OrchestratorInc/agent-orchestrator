@@ -341,6 +341,9 @@ export function AgentModelPicker({
 	);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;
+	// An override (the usage limit) is the running agent's, so a pending switch
+	// keeps it off the trigger and its tooltip, as it does the menu's notice.
+	const shownOverride = pending ? undefined : override;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
 	// A catalog that could not be read says why, instead of an empty model list.
@@ -457,7 +460,7 @@ export function AgentModelPicker({
 				onPointerEnter={warmCatalogs}
 				onFocus={warmCatalogs}
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
-				title={override && !terminal ? undefined : title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
+				title={shownOverride && !terminal ? undefined : title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
@@ -465,15 +468,15 @@ export function AgentModelPicker({
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
 				{/* The model and an override crossfade, and the trigger's width eases between them. */}
 				{terminal ? labelContent() : (
-					<SmoothSwap swapKey={override ? `override:${override.key}` : "model"}>
-						{override ? override.label : labelContent()}
+					<SmoothSwap swapKey={shownOverride ? `override:${shownOverride.key}` : "model"}>
+						{shownOverride ? shownOverride.label : labelContent()}
 					</SmoothSwap>
 				)}
 			</OptionMenuTrigger>
-			</TooltipTrigger>{override && !terminal ? (
+			</TooltipTrigger>{shownOverride && !terminal ? (
 				<TooltipContent>
-					<p>{override.title}</p>
-					<p className="text-muted-foreground">{[override.detail, [shownModel, shownEffort].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</p>
+					<p>{shownOverride.title}</p>
+					<p className="text-muted-foreground">{[shownOverride.detail, [shownModel, shownEffort].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</p>
 				</TooltipContent>
 			) : null}</Tooltip></TooltipProvider>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
