@@ -536,9 +536,10 @@ export const CommandPalette = memo(function CommandPalette() {
 	// project's remaining sidebar-menu actions beside the ones above.
 	const rootContextItems = useMemo((): CommandItemModel[] => {
 		if (view.mode !== "root") return [];
+		// The blank list keeps a session's few main actions; the rest wait for a search.
 		const sessionRows = currentSession
 			? [...switchItemFor(currentSession.id), ...menuEntryCommands(sessionMenuEntries, currentSession.id).filter((item) => item.id !== "menu:session-copy-branch")]
-				.map((item) => ({ ...item, group: "session" as const }))
+				.map((item) => ({ ...item, group: "session" as const, ...(BLANK_SESSION_ACTIONS.has(item.id) ? {} : { searchOnly: true }) }))
 			: [];
 		const projectRows = currentProject
 			? projectActionsFor(currentProject)
@@ -546,7 +547,8 @@ export const CommandPalette = memo(function CommandPalette() {
 				// Removing waits for a search, so it never sits in the default list.
 				.map((item) => (item.id === "project-action:remove" ? { ...item, searchOnly: true } : item))
 			: [];
-		return [...sessionRows, ...projectRows];
+		// On a session page the project's actions wait for a search too.
+		return [...sessionRows, ...(currentSession ? projectRows.map((item) => ({ ...item, searchOnly: true })) : projectRows)];
 	}, [view.mode, currentSession, currentProject, sessionMenuEntries, switchItemFor, projectActionsFor]);
 	const filePickerWorkspace = view.mode === "file-session-picker"
 		? workspaces.find((workspace) => workspace.id === view.projectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
@@ -615,8 +617,12 @@ export const CommandPalette = memo(function CommandPalette() {
 			// Renaming shows its one row whatever is typed; other lists filter.
 			return [{ id: "menu", label: "", items: view.mode === "rename-session" ? menuViewItems : filterCommands(menuViewItems, query) }];
 		}
-		return displayGroups([...rootItems, ...rootContextItems, ...fileItems, ...contentItems, ...chatItems], query, t);
-	}, [view.mode, rootItems, rootContextItems, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+		// On a session page the project's actions and Copy branch wait for a search.
+		const shownRootItems = currentSession
+			? rootItems.map((item) => (item.group === "current" || item.id === "current-copy-branch" ? { ...item, searchOnly: true } : item))
+			: rootItems;
+		return displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...contentItems, ...chatItems], query, t);
+	}, [view.mode, rootItems, rootContextItems, currentSession, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	// Rows a search found for an earlier query stay visible while the next one
@@ -1497,6 +1503,9 @@ function PaletteRow({
 		</CommandItem>
 	);
 }
+
+/** The open session's actions the blank list shows; the others wait for a search. */
+const BLANK_SESSION_ACTIONS = new Set(["session-switch-interface", "menu:open-in", "menu:session-rename", "menu:session-resume", "menu:session-open-pr", "menu:session-archive"]);
 
 /** A row whose action opens a nested list rather than doing something; drawn with ›. */
 function rowOpensList(item: CommandItemModel): boolean {
