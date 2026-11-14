@@ -588,6 +588,9 @@ type Manager struct {
 
 // acquireWorkspaceGate acquires the per-project workspace gate, returning a
 // release function that must be deferred or called when the operation finishes.
+// The gate is not re-entrant: callers that hold it must not call code that
+// acquires it again. cleanupOne acquires it internally, so callers must not
+// hold the gate across the per-session cleanup loop.
 func (m *Manager) acquireWorkspaceGate(projectID domain.ProjectID) func() {
 	mu := m.workspaceGate(projectID)
 	mu.Lock()
@@ -5871,7 +5874,7 @@ type CleanupResult struct {
 // whose teardown is refused (uncommitted work) is never forced; it is reported
 // in Skipped with the reason so the refusal is visible instead of silent.
 func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (CleanupResult, error) {
-	recs, err := m.cleanupRecords(ctx, project)
+	recs, err := m.cleanupRecordsUnderGate(ctx, project)
 	if err != nil {
 		return CleanupResult{}, fmt.Errorf("cleanup %s: %w", project, err)
 	}
@@ -5918,6 +5921,16 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		result.Cleaned = append(result.Cleaned, rec.ID)
 	}
 	return result, nil
+}
+
+// cleanupRecordsUnderGate snapshots the project's cleanup candidates while
+// holding the workspace gate. The gate is released before cleanupOne runs:
+// cleanupOne acquires it again for its own ownership checks, so holding it
+// across the per-session loop would deadlock on the second acquire.
+func (m *Manager) cleanupRecordsUnderGate(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	release := m.acquireWorkspaceGate(project)
+	defer release()
+	return m.cleanupRecords(ctx, project)
 }
 
 // cleanupWorkspaceUnderGate acquires the per-project workspace gate and then
@@ -5988,6 +6001,8 @@ func (m *Manager) isWorkspaceInUse(ctx context.Context, projectID domain.Project
 // shell terminal scoped to it first (same ordering as Kill). Split out of
 // Cleanup's loop so the release function's defer is scoped to one session's
 // call, not deferred across every iteration until Cleanup itself returns.
+// It must be called without the project's workspace gate held; it acquires the
+// gate for each ownership check.
 // Returns no refusal when the workspace was reclaimed; a refusal means it was
 // left alone this run (Cleanup records it in Skipped and can retry on a later
 // call) — most commonly because a scoped shell terminal could not be
