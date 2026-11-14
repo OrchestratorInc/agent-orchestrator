@@ -146,6 +146,25 @@ func TestAuthPresenceIsNotAuthorization(t *testing.T) {
 	}
 }
 
+// Neovate's built-in MiniMax and Z.ai providers read these keys from the
+// environment, so an AO-saved key alone must report local configuration.
+func TestProviderEnvironmentKeysReportConfigured(t *testing.T) {
+	for _, name := range []string{"MINIMAX_API_KEY", "ZHIPU_API_KEY"} {
+		t.Run(name, func(t *testing.T) {
+			for _, key := range credentialEnv {
+				t.Setenv(key, "")
+			}
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv(name, "test-key")
+			if got, err := New().AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusConfigured {
+				t.Fatalf("%s auth = %q, %v", name, got, err)
+			}
+		})
+	}
+}
+
 func TestActivityDoesNotInferPermissions(t *testing.T) {
 	for _, event := range []string{"permission", "tool-start", "unknown"} {
 		if _, ok := DeriveActivityState(event, nil); ok {

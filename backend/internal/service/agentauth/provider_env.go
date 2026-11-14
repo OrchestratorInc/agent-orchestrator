@@ -44,6 +44,7 @@ var providerEnvironment = map[string][]LoginMethod{
 	"unreal-agent": {{"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_FIREWORKS_API_KEY", "Fireworks API key", true}},
 	"memcode":      {{"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}},
 	"command-code": {{"env_COMMAND_CODE_API_KEY", "Command Code API key", true}},
+	"neovate":      {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GOOGLE_API_KEY", "Google API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}, {"env_XAI_API_KEY", "xAI API key", true}, {"env_MOONSHOT_API_KEY", "Moonshot API key", true}, {"env_ZHIPU_API_KEY", "Z.ai (Zhipu) API key", true}, {"env_MINIMAX_API_KEY", "MiniMax API key", true}},
 	"hermes":       {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}},
 	"openhands":    {{"env_LLM_API_KEY", "OpenHands LLM API key", true}},
 }

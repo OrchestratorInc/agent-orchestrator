@@ -11,7 +11,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var credentialEnv = []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "XAI_API_KEY", "DEEPSEEK_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY"}
+// credentialEnv lists every provider key variable read by the built-in provider
+// registry of the pinned @neovate/code 0.28.5 (see modelcatalog's
+// neovateBuiltInProviders). Keep the two lists in step when the pin changes.
+var credentialEnv = []string{
+	"OPENAI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY",
+	"ANTHROPIC_API_KEY", "AIHUBMIX_API_KEY", "OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY", "MOONSHOT_API_KEY",
+	"GROQ_API_KEY", "SILICONFLOW_API_KEY", "MODELSCOPE_API_KEY", "VOLCENGINE_API_KEY", "ZHIPU_API_KEY",
+	"ZENMUX_API_KEY", "MINIMAX_API_KEY", "MIMO_API_KEY", "CEREBRAS_API_KEY", "HUGGINGFACE_API_KEY",
+	"POE_API_KEY", "NVIDIA_API_KEY", "CANOPYWAVE_API_KEY", "MODELWATCH_API_KEY", "OPENCODE_API_KEY",
+	"KILO_API_KEY", "BAILIAN_CODING_API_KEY", "KIMI_CODING_API_KEY",
+}
 
 // AuthStatus reports local configuration, never proof of provider authorization.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
