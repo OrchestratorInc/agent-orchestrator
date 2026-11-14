@@ -674,14 +674,11 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse, review *bool) e
 			return err
 		}
 	}
+	// A plain claim prints nothing more: the agent instructions already say to
+	// claim with --review when only reviewing.
 	var err error
 	switch {
 	case review == nil:
-		ref := "<pr-ref>"
-		if len(res.PRs) > 0 && res.PRs[0].URL != "" {
-			ref = res.PRs[0].URL
-		}
-		_, err = fmt.Fprintf(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session claim-pr %s %s --review` and do not change it unless the user asks.\n", res.SessionID, ref)
 	case *review:
 		_, err = fmt.Fprintln(out, "  reviewing: automatic fixing of CI failures, merge conflicts and review comments and native auto-review are off. It is not the user's PR; do not change it unless the user asks.")
 	default:

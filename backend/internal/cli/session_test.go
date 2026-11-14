@@ -938,9 +938,9 @@ func TestSessionClaimPR_UsesCurrentSessionFromEnv(t *testing.T) {
 	if !strings.Contains(out, "claimed PR #142") {
 		t.Fatalf("unexpected output: %s", out)
 	}
-	// The reviewer hint names the claimed session and PR, so it works from any shell.
-	if !strings.Contains(out, "`ao session claim-pr demo-1 https://github.com/aoagents/agent-orchestrator/pull/142 --review`") {
-		t.Fatalf("claim output missing session-specific --review hint: %s", out)
+	// A plain claim is not a review, so it says nothing about reviewing.
+	if strings.Contains(out, "review") {
+		t.Fatalf("plain claim output mentions reviewing: %s", out)
 	}
 	want := []string{
 		"GET /api/v1/sessions/demo-1",
