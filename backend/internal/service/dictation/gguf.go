@@ -26,36 +26,55 @@ func (s *Service) ggufPython() string {
 func (s *Service) vadPath() string { return filepath.Join(s.root, "models", "silero-v6.2.gguf") }
 
 func (s *Service) installGGUF(ctx context.Context, m modelSpec) error {
+	root := filepath.Dir(filepath.Dir(s.ggufPython()))
+	marker := filepath.Join(root, "ao-ready")
+	_, markerErr := os.Stat(marker)
+	needVAD := !fileExists(s.vadPath())
+	weights := make([]int64, 0, 4)
+	if !fileExists(s.uvPath()) {
+		weights = append(weights, 4)
+	}
+	if markerErr != nil {
+		weights = append(weights, 26)
+	}
+	if needVAD {
+		weights = append(weights, 2)
+	}
+	step := s.planInstall(append(weights, 68)...)
+	if !fileExists(s.uvPath()) {
+		step("Downloading installer")
+	}
 	uv, err := s.ensureUV(ctx)
 	if err != nil {
 		return err
 	}
-	root := filepath.Dir(filepath.Dir(s.ggufPython()))
-	marker := filepath.Join(root, "ao-ready")
-	if _, err := os.Stat(marker); err != nil {
+	if markerErr != nil {
 		if err := os.RemoveAll(root); err != nil {
 			return err
 		}
-		s.stageIs("Preparing local speech runtime")
-		if err := s.run(ctx, uv, "venv", "--python", "3.12.15", root); err != nil {
-			return err
+		step("Preparing local speech runtime")
+		stopEasing := s.easeStep(25 * time.Second)
+		err := s.run(ctx, uv, "venv", "--python", "3.12.15", root)
+		if err == nil {
+			err = s.run(ctx, uv, "pip", "install", "--python", s.ggufPython(), "transcribe-cpp=="+ggufVersion, "transcribe-cpp-native=="+ggufVersion)
 		}
-		if err := s.run(ctx, uv, "pip", "install", "--python", s.ggufPython(), "transcribe-cpp=="+ggufVersion, "transcribe-cpp-native=="+ggufVersion); err != nil {
+		stopEasing()
+		if err != nil {
 			return err
 		}
 		if err := os.WriteFile(marker, []byte(ggufVersion), 0o600); err != nil {
 			return err
 		}
 	}
-	if _, err := os.Stat(s.vadPath()); err != nil {
-		s.stageIs("Downloading silence detection")
+	if needVAD {
+		step("Downloading silence detection")
 		if err := downloadVerified(ctx, "https://huggingface.co/handy-computer/silero-vad-v6.2-gguf/resolve/97bbd75179f535e4708bccdf61e9278b8b60dfc7/silero-vad-v6.2-F32.gguf", s.vadPath(), 1241056, "0d871a800c420fdd5d1b17a3aea4296d1c39608f0ff4a9295eb76457eb1c88e6", nil); err != nil {
 			return err
 		}
 	}
-	s.stageIs("Downloading and verifying " + m.name)
+	step("Downloading and verifying " + m.name)
 	url := "https://huggingface.co/" + m.id + "/resolve/" + m.revision + "/" + m.filename
-	if err := downloadVerified(ctx, url, s.modelPath(m), m.bytes, m.checksum, func(done int64) { s.progressIs(done, m.bytes) }); err != nil {
+	if err := downloadVerified(ctx, url, s.modelPath(m), m.bytes, m.checksum, func(done int64) { s.stepProgress(float64(done) / float64(m.bytes)) }); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

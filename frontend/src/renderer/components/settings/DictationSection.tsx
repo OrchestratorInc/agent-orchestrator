@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "../../lib/api-client";
 import { dictationClient } from "../../lib/dictation-client";
+import { cancelDictationInstall, publishDictationStatus, useDictationInstall } from "../../lib/dictation-install";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
@@ -21,6 +22,7 @@ export function DictationSection({ titleHidden }: { titleHidden?: boolean }) {
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
 	const [authorizing, setAuthorizing] = useState(false);
+	const install = useDictationInstall();
 	const [transcript, setTranscript] = useState("");
 	const test = useDictation({
 		ownerKey: "dictation-settings-test",
@@ -34,6 +36,8 @@ export function DictationSection({ titleHidden }: { titleHidden?: boolean }) {
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/dictation");
 			if (error || !data) throw new Error(t("dictation.loadFailed"));
+			// Keeps the composer's mic button in step with a download started here.
+			publishDictationStatus(data);
 			return data;
 		},
 		refetchInterval: 1500,
@@ -49,8 +53,15 @@ export function DictationSection({ titleHidden }: { titleHidden?: boolean }) {
 				const access = await dictationClient.authorize().finally(() => setAuthorizing(false));
 				if (!access.granted) throw new Error(access.message ?? t("dictation.updateFailed"));
 			}
-			const { data, error } = await apiClient.POST("/api/v1/dictation", { body: { action, model } });
-			if (error || !data) throw new Error(error?.message ?? t("dictation.updateFailed"));
+			let data;
+			if (action === "cancel") {
+				data = await cancelDictationInstall();
+			} else {
+				const response = await apiClient.POST("/api/v1/dictation", { body: { action, model } });
+				if (response.error || !response.data) throw new Error(response.error?.message ?? t("dictation.updateFailed"));
+				data = response.data;
+				publishDictationStatus(data);
+			}
 			cache.setQueryData(["dictation"], data);
 		} catch (error) {
 			setError(error instanceof Error ? error.message : t("dictation.updateFailed"));
@@ -160,11 +171,7 @@ export function DictationSection({ titleHidden }: { titleHidden?: boolean }) {
 			{status.data?.installing && (
 				<div className="settings-content-row flex items-center justify-between gap-6">
 					<div className="min-w-0 flex-1">
-						<DictationProgress
-							stage={status.data.stage}
-							done={status.data.progressDone}
-							total={status.data.progressTotal}
-						/>
+						<DictationProgress stage={status.data.stage} fraction={install.fraction} />
 					</div>
 					<Button size="sm" variant="ghost" disabled={pending} onClick={() => void change("cancel", "")}>
 						{t("dictation.cancel")}

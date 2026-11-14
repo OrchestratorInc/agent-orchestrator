@@ -6,7 +6,16 @@ import { useUiStore } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { dictationClient, nativeDictationAvailable } from "../../lib/dictation-client";
-import { DictationProgressBar, useDictationProgressText } from "./DictationProgress";
+import {
+	acknowledgeDictationChoice,
+	cancelDictationInstall,
+	dictationChooserKey,
+	DictationInstallCancelled,
+	installDictationModel,
+	publishDictationStatus,
+	useDictationInstall,
+} from "../../lib/dictation-install";
+import { DictationProgressBar, useDictationPercent } from "./DictationProgress";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogTitle } from "../ui/dialog";
 import { CloseButton } from "../ui/close-button";
 import { cn } from "../../lib/utils";
@@ -17,7 +26,7 @@ import {
 	onboardingPanelTitleClass,
 } from "../../lib/onboarding-ui";
 
-export const dictationUpgradeKey = "ao.dictation.chooser.v2";
+export const dictationUpgradeKey = dictationChooserKey;
 const recommendedModel = "phonon-2.5";
 const accurateModel = "handy-computer/parakeet-tdt-0.6b-v3-gguf";
 const nativeModel = "native-macos";
@@ -43,7 +52,7 @@ function DictationRow({
 	disabled?: boolean;
 	chevron?: boolean;
 	/** Set while this row's model downloads: the row becomes its own progress. */
-	installing?: { done: number; total: number; cancelling: boolean; onCancel?: () => void; status?: string };
+	installing?: { fraction: number; cancelling: boolean; onCancel: () => void };
 	onClick: () => void;
 }) {
 	if (installing) return <DictationInstallingRow icon={icon} label={label} {...installing} />;
@@ -73,25 +82,18 @@ function DictationRow({
 function DictationInstallingRow({
 	icon,
 	label,
-	done,
-	total,
+	fraction,
 	cancelling,
 	onCancel,
-	status,
 }: {
 	icon: ReactNode;
 	label: string;
-	done: number;
-	total: number;
+	fraction: number;
 	cancelling: boolean;
-	/** Missing while the row waits on something that cannot be cancelled, such as a macOS permission prompt. */
-	onCancel?: () => void;
-	/** Replaces the byte count, for steps that have none. */
-	status?: string;
+	onCancel: () => void;
 }) {
 	const { t } = useTranslation();
-	const progressText = useDictationProgressText(done, total);
-	const text = status ?? progressText;
+	const percent = useDictationPercent(fraction);
 	return (
 		<div className="flex w-full items-center gap-4 rounded-lg bg-interactive-hover px-4 py-3">
 			<span className="flex shrink-0 text-muted-foreground">{icon}</span>
@@ -99,23 +101,26 @@ function DictationInstallingRow({
 				<div className="flex items-baseline justify-between gap-3">
 					<span className="truncate text-[14px] font-medium text-foreground">{label}</span>
 					<span className="shrink-0 text-[12px] leading-5 tabular-nums text-muted-foreground" role="status">
-						{text}
+						{percent}
 					</span>
 				</div>
-				<DictationProgressBar done={done} total={total} label={label} />
+				<DictationProgressBar fraction={fraction} label={label} />
 			</div>
-			{onCancel && (
-				<Button variant="ghost" size="sm" disabled={cancelling} onClick={onCancel}>
-					{t("dictation.cancel")}
-				</Button>
-			)}
+			<Button variant="ghost" size="sm" disabled={cancelling} onClick={onCancel}>
+				{t("dictation.cancel")}
+			</Button>
 		</div>
 	);
 }
 
 export function useDictationUpgrade(ownerKey?: string) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
+	const [open, setOpenState] = useState(false);
+	const openRef = useRef(false);
+	const setOpen = (next: boolean) => {
+		openRef.current = next;
+		setOpenState(next);
+	};
 	const [phase, setPhase] = useState<"choose" | "install" | "cancel">("choose");
 	const [active, setActive] = useState("");
 	const [options, setOptions] = useState<{
@@ -127,30 +132,27 @@ export function useDictationUpgrade(ownerKey?: string) {
 		models: {},
 		downloading: "",
 	});
+	const install = useDictationInstall();
 	const target = useRef(recommendedModel);
-	const [progress, setProgress] = useState({ done: 0, total: 0 });
 	const [error, setError] = useState<string>();
 	const start = useRef<() => void>(() => {});
 	const checking = useRef(false);
 	const generation = useRef(0);
 	const operation = useRef(0);
 	useEffect(() => {
-		setOpen(false);
+		openRef.current = false;
+		setOpenState(false);
 		setPhase("choose");
 		setActive("");
 		checking.current = false;
 		return () => {
 			generation.current += 1;
 			operation.current += 1;
+			openRef.current = false;
 		};
 	}, [ownerKey]);
-	const acknowledge = () => {
-		try {
-			localStorage.setItem(dictationUpgradeKey, "seen");
-		} catch {
-			/* Storage can be unavailable in previews. */
-		}
-	};
+	const toast = (title: string, body: string | undefined, tone: "success" | "error") =>
+		useUiStore.getState().showGlobalToast(title, body, { tone, dedupeKey: "dictation-install" });
 	const requestStart = async (onStart: () => void) => {
 		if (checking.current || open) return;
 		checking.current = true;
@@ -159,6 +161,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 			const { data, error } = await apiClient.GET("/api/v1/dictation");
 			if (current !== generation.current) return;
 			if (error || !data) throw new Error(t("dictation.loadFailed"));
+			publishDictationStatus(data);
 			let seen = false;
 			try {
 				seen = localStorage.getItem(dictationUpgradeKey) === "seen";
@@ -166,7 +169,8 @@ export function useDictationUpgrade(ownerKey?: string) {
 				/* Show the chooser. */
 			}
 			const usable = data.models.some((model) => model.id === data.selected && model.installed && model.available);
-			if (seen && usable) {
+			// Dictation cannot start while a download runs; the mic button shows how far along it is.
+			if (seen && usable && !data.installing) {
 				onStart();
 				return;
 			}
@@ -180,6 +184,8 @@ export function useDictationUpgrade(ownerKey?: string) {
 						bytes: found.downloadBytes ?? 0,
 					};
 			}
+			// Some other model is downloading (started from Settings): there is nothing to choose here.
+			if (data.installing && !(data.installing in models)) return;
 			const next = {
 				native: nativeDictationAvailable() && data.models.some((model) => model.id === nativeModel && model.available),
 				models,
@@ -198,7 +204,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 			if (current === generation.current) checking.current = false;
 		}
 	};
-	const change = async (action: "install" | "select" | "cancel", model: string) => {
+	const change = async (action: "install" | "select", model: string) => {
 		const { data, error } = await apiClient.POST("/api/v1/dictation", {
 			body: { action, model },
 		});
@@ -217,7 +223,6 @@ export function useDictationUpgrade(ownerKey?: string) {
 		if (needsInstall || native) {
 			setPhase("install");
 			setActive(model);
-			setProgress({ done: 0, total: 0 });
 		}
 		try {
 			if (native) {
@@ -228,48 +233,57 @@ export function useDictationUpgrade(ownerKey?: string) {
 				if (!access.granted) throw new Error(access.message ?? t("dictation.updateFailed"));
 			}
 			if (needsInstall) {
-				let data =
-					from.downloading === model ? (await apiClient.GET("/api/v1/dictation")).data : await change("install", model);
-				if (!valid()) return;
-				while (valid()) {
-					if (!data) throw new Error(t("dictation.loadFailed"));
-					if (!data.installing) {
-						if (!data.models.some((entry) => entry.id === model && entry.installed))
-							throw new Error(data.error || t("dictation.updateFailed"));
-						break;
-					}
-					if (data.installing !== model) throw new Error(t("dictation.updateFailed"));
-					setProgress({ done: data.progressDone, total: data.progressTotal });
-					await new Promise((resolve) => setTimeout(resolve, 500));
-					if (!valid()) return;
+				let initial;
+				if (from.downloading === model) {
 					const response = await apiClient.GET("/api/v1/dictation");
-					if (!valid()) return;
-					if (response.error) throw new Error(t("dictation.loadFailed"));
-					data = response.data;
+					if (response.error || !response.data) throw new Error(t("dictation.loadFailed"));
+					initial = response.data;
+				} else {
+					initial = await change("install", model);
 				}
+				if (!valid()) return;
+				// The download belongs to the app, so it carries on, and selects the model, even if this
+				// dialog is closed or its chat is left.
+				await installDictationModel(model, initial, {
+					loadFailed: t("dictation.loadFailed"),
+					updateFailed: t("dictation.updateFailed"),
+				});
+				if (!openRef.current) toast(t("dictation.upgrade.ready"), undefined, "success");
+			} else {
+				await change("select", model);
+				if (!valid()) return;
+				acknowledgeDictationChoice();
 			}
 			if (!valid()) return;
-			await change("select", model);
-			if (!valid()) return;
-			acknowledge();
-			// Whatever was chosen is now ready: get out of the way and start listening.
-			setOpen(false);
 			setPhase("choose");
 			setActive("");
+			// Left while it downloaded: the mic button and a toast said so, and nothing starts listening unasked.
+			if (!openRef.current) return;
+			// Whatever was chosen is now ready: get out of the way and start listening.
+			setOpen(false);
 			start.current();
 		} catch (cause) {
+			if (cause instanceof DictationInstallCancelled) {
+				if (valid()) {
+					setPhase("choose");
+					setActive("");
+				}
+				return;
+			}
+			const message = cause instanceof Error ? cause.message : t("dictation.updateFailed");
+			if (!openRef.current) toast(t("dictation.updateFailed"), message, "error");
 			if (!valid()) return;
 			setPhase("choose");
 			setActive("");
 			setOptions((previous) => ({ ...previous, downloading: "" }));
-			setError(cause instanceof Error ? cause.message : t("dictation.updateFailed"));
+			setError(message);
 		}
 	};
 	const cancel = async () => {
 		const current = ++operation.current;
 		setPhase("cancel");
 		try {
-			await change("cancel", target.current);
+			await cancelDictationInstall();
 			if (current !== operation.current) return;
 			setOptions((previous) => ({ ...previous, downloading: "" }));
 			setPhase("choose");
@@ -288,19 +302,20 @@ export function useDictationUpgrade(ownerKey?: string) {
 			<Download className="size-6" aria-hidden="true" strokeWidth={1.6} />
 		);
 	const busy = phase !== "choose";
-	// Closing the chooser abandons a choice still waiting on the daemon, so a late reply cannot start dictation.
+	// Closing never blocks the user. A download carries on in the background; anything else still waiting on
+	// the daemon is abandoned, so a late reply cannot start dictation.
 	const dismiss = () => {
-		operation.current += 1;
+		if (phase !== "install" || active === nativeModel) {
+			operation.current += 1;
+			setPhase("choose");
+			setActive("");
+		}
 		setOpen(false);
 	};
 	const installingProps = (model: string) => {
 		if (active !== model) return undefined;
-		// macOS dictation has nothing to download; its row waits on the system's permission prompts.
-		if (model === nativeModel)
-			return { done: 0, total: 0, cancelling: false, status: t("dictation.upgrade.allowAccess") };
 		return {
-			done: progress.done,
-			total: progress.total,
+			fraction: install.model === model ? install.fraction : 0,
 			cancelling: phase === "cancel",
 			onCancel: () => void cancel(),
 		};
@@ -311,7 +326,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 			<Dialog
 				open={open}
 				onOpenChange={(next) => {
-					if (!next && !busy) dismiss();
+					if (!next) dismiss();
 				}}
 			>
 				<DialogContent
@@ -323,11 +338,9 @@ export function useDictationUpgrade(ownerKey?: string) {
 					overlay={<DialogOverlay className="data-[state=open]:animate-none data-[state=closed]:animate-none" />}
 					showCloseButton={false}
 				>
-					{!busy && (
-						<DialogClose asChild>
-							<CloseButton floating aria-label={t("common.close")} />
-						</DialogClose>
-					)}
+					<DialogClose asChild>
+						<CloseButton floating aria-label={t("common.close")} />
+					</DialogClose>
 					<DialogTitle className={cn(onboardingPanelTitleClass, "pr-12")}>{t("dictation.upgrade.title")}</DialogTitle>
 					<DialogDescription className={onboardingPanelDescriptionClass}>
 						{t("dictation.upgrade.description")}
@@ -386,7 +399,7 @@ export function useDictationUpgrade(ownerKey?: string) {
 								action={t("dictation.upgrade.explore")}
 								disabled={busy}
 								onClick={() => {
-									acknowledge();
+									acknowledgeDictationChoice();
 									dismiss();
 									useUiStore.getState().openGlobalSettings("dictation");
 								}}
