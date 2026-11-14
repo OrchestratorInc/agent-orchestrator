@@ -5014,6 +5014,7 @@ export function createBrowserViewHost(
                   sessionId,
                   projectId,
                   pageURL: () => target.view.webContents.getURL(),
+                  signal,
                 },
                 { itemId, field },
               );
@@ -5026,6 +5027,7 @@ export function createBrowserViewHost(
                 sessionId,
                 projectId,
                 pageURL: () => target.view.webContents.getURL(),
+                signal,
               },
               { itemId: typeof args.itemId === "string" && args.itemId ? args.itemId : undefined },
             );

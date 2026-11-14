@@ -16,6 +16,8 @@ export type FillTarget = {
   projectId: string;
   /** The top-level page URL, read live. */
   pageURL: () => string;
+  /** The command's cancellation; a late approval must not type anything. */
+  signal?: AbortSignal;
 };
 
 type Frame = { id: string; url: string };
@@ -186,6 +188,10 @@ export function createCredentialFiller(options: {
     }
     const origin = originOf(topURL);
     await ensureApproved(target, item, origin);
+    const ensureLive = () => {
+      if (target.signal?.aborted) throw new FillRefused("The command was cancelled before the fill", "cancelled");
+    };
+    ensureLive();
     // The page may have navigated while the user was deciding.
     if (originOf(target.pageURL()) !== origin) {
       throw new FillRefused("Page origin changed before the fill", "origin changed");
@@ -198,6 +204,7 @@ export function createCredentialFiller(options: {
     });
     if (field !== "username") redactorFor(target.sessionId).add(secret);
     await evaluate(target.cdp, frame.id, SELECT);
+    ensureLive();
     await target.cdp.sendCommand("Input.insertText", { text: secret });
     return origin;
   };

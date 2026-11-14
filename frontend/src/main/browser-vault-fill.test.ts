@@ -207,6 +207,21 @@ describe("credential filler", () => {
     expect(t.inserted).toEqual([]);
   });
 
+  it("does not type after the command was cancelled while approval was pending", async () => {
+    const controller = new AbortController();
+    const filler = createCredentialFiller({
+      store,
+      approve: async () => {
+        controller.abort();
+        return "allow-always";
+      },
+    });
+    const t = { ...target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]), signal: controller.signal };
+    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/cancel/i);
+    expect(t.inserted).toEqual([]);
+    expect((await store.readAudit())[0]).toMatchObject({ outcome: "denied", reason: "cancelled" });
+  });
+
   it("login fills username then password on the matching page", async () => {
     const filler = createCredentialFiller({ store, approve: approver });
     const t = target([
