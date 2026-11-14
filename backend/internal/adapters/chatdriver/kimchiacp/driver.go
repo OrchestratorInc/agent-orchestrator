@@ -22,6 +22,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		Harness:        domain.HarnessKimchi,
 		Configure:      configure,
 		SessionOptions: sessionOptions,
+		SteerRequest:   steerRequest,
 		VersionProbe:   versionProbe,
 	}, log)
 }

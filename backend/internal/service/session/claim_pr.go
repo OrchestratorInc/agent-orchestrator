@@ -136,6 +136,12 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, err
 	}
 	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
+	// The PR has changed hands: tell the previous owner now, so a later read
+	// failing doesn't leave it acting on a PR it no longer owns.
+	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id
+	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
+		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
+	}
 	// Reconcile immediately rather than waiting for the artifact-output
 	// poller's next tick: a session that already produced artifacts must move
 	// to pr OutputType (and out of the artifact Kanban placement) with the
@@ -155,7 +161,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	// false and have CLI output report that the workspace was unchanged, without
 	// assuming the session was already on the PR branch.
 	res := ClaimPRResult{PRs: prs, BranchChanged: false, DonorWasTerminated: outcome.OwnerTerminated}
-	if outcome.PreviousOwner != "" && outcome.PreviousOwner != id {
+	if tookOver {
 		res.TakenOverFrom = []domain.SessionID{outcome.PreviousOwner}
 	}
 	return res, nil

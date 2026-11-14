@@ -530,29 +530,23 @@ describe("ShareArtifactButton on a file on this computer", () => {
 });
 
 describe("ShareArtifactButton once the file changed", () => {
-	it("splits into Republish and the link's access; Republish puts the newer version on the same link", async () => {
+	it("shows one Republish button, with no separate access button, and it puts the newer version on the same link", async () => {
 		const { inspectSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
 		publishSpy.mockImplementation(async () => {
 			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
 			return { status: "published", replaced: true, share };
 		});
-		renderButton(cloudFile);
-		await userEvent.click(await screen.findByRole("button", { name: "Republish: report.html" }));
+		const { container } = renderButton(cloudFile);
+		const republish = await screen.findByRole("button", { name: "Republish: report.html" });
+		expect(container.querySelector("[data-share-split]")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Access and people: report.html" })).toBeNull();
+		await userEvent.click(republish);
 		await waitFor(() => expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID }));
 		// The popover opens on the published link, and never offers Republish itself.
 		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
 		expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Republish" })).toBeNull();
 		// Once republished, the button checks again and is back to Published.
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
-	});
-
-	it("opens the popover from the access half without republishing", async () => {
-		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] });
-		renderButton(cloudFile);
-		await screen.findByRole("button", { name: "Republish: report.html" });
-		await userEvent.click(screen.getByRole("button", { name: "Access and people: report.html" }));
-		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
-		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
 	it("says Republish after a pure rename, and one click updates the same link under the new name", async () => {

@@ -19,6 +19,7 @@ import {
 	Plus,
 	RotateCcw,
 	Sun,
+	Terminal,
 } from "@/components/app-icons";
 import type { CommandGroupId, CommandItem } from "./command-palette";
 
@@ -48,6 +49,9 @@ const GROUP_ICONS: Partial<Record<CommandGroupId, AppIcon>> = {
 	messages: MessageSquare,
 	settings: Settings,
 	prs: GitPullRequest,
+	// Session-text hits get a terminal glyph so they read as transcript text
+	// rather than as a command or a file.
+	search: Terminal,
 	// Sessions / attention stay text-only, matching Cursor's "Chats" rows.
 };
 

@@ -157,34 +157,46 @@ export function anyoneSentence(t: TFunction, scope: ShareScope, role: CloudCpSha
 }
 
 /**
- * Whether a workspace is someone's own rather than a team's, so "people in
- * <it>" would read oddly ("people in Asha's organization"). Only the control
- * plane's word for it (`kind`) counts: a name or an offering can't tell (a
- * team can be named after a person, or run on Freestyle only). Unknown (an
- * older control plane, or the workspace still loading) is a team's: naming
- * the workspace's people never understates who can open the session.
+ * Whether a workspace is someone's own rather than a team's, so it has
+ * nobody else in it. Only the control plane's word for it (`kind`) counts: a
+ * name or an offering can't tell (a team can be named after a person, or run
+ * on Freestyle only). Unknown (an older control plane, or the workspace still
+ * loading) is a team's: counting the workspace's people never understates who
+ * can open the session.
  */
 export function isPersonalWorkspace(org: { kind?: string } | undefined): boolean {
 	return org?.kind === "personal";
 }
 
+/** An email anywhere in a name: "asha@example.com", or "asha@example.com's organization". */
+const EMAIL_IN_NAME = /[^\s@]+@[^\s@]+\.[^\s@]{2,}/;
+
+/**
+ * A workspace's name when it reads as one, else undefined. A workspace made
+ * for one person can be named after their email, which reads as an address
+ * rather than a group ("People in asha@example.com"), so it is left out.
+ */
+export function workspaceDisplayName(name: string | undefined): string | undefined {
+	const trimmed = name?.trim();
+	return trimmed && !EMAIL_IN_NAME.test(trimmed) ? trimmed : undefined;
+}
+
 /** "Only people with access" in words that fit the workspace. */
-export function restrictedSentence(t: TFunction, { scope, workspaceName, personal, people }: {
+export function restrictedSentence(t: TFunction, { scope, workspaceKnown, solo, people }: {
 	scope: ShareScope;
-	/** Undefined while it loads or when it couldn't be read. */
-	workspaceName: string | undefined;
-	/** A personal workspace has nobody else in it: "people in Asha's organization" reads oddly. */
-	personal: boolean;
+	/** Whether the workspace that owns the project has been read: false while it loads or when it couldn't be. */
+	workspaceKnown: boolean;
+	/** Nobody else in the workspace can open it: a personal workspace, a team's with only you in it, or a standalone agent. */
+	solo: boolean;
 	/** Whether people can be added above (Teams); without it only links share. */
 	people: boolean;
 }): string {
 	const project = scope === "project";
-	if (personal && people) return project ? t("share.general.restrictedProjectPersonal") : t("share.general.restrictedSessionPersonal");
-	// Without a workspace to name, the plain sentence: "only you" could understate a team's.
-	if (!people || !workspaceName) return project ? t("share.general.restrictedProjectNoPeople") : t("share.general.restrictedSessionNoPeople");
-	return project
-		? t("share.general.restrictedProject", { workspace: workspaceName })
-		: t("share.general.restrictedSession", { workspace: workspaceName });
+	if (solo && people) return project ? t("share.general.restrictedProjectPersonal") : t("share.general.restrictedSessionPersonal");
+	// Without the workspace, the plain sentence: "only you" could understate a team's.
+	if (!people || !workspaceKnown) return project ? t("share.general.restrictedProjectNoPeople") : t("share.general.restrictedSessionNoPeople");
+	// Never the workspace's name: it can be an email, and the list above names it.
+	return project ? t("share.general.restrictedProject") : t("share.general.restrictedSession");
 }
 
 export function expiryText(t: TFunction, link: Pick<CloudCpShareLink, "expiresAt">, locale: string): string {

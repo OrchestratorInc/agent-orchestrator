@@ -342,6 +342,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		if cfg.StartPoint != "" {
+			seedRef = cfg.StartPoint
+		}
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
