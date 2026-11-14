@@ -515,6 +515,9 @@ type MessageDeliveryOptions struct {
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
 	AuthoredByUser  bool
+	// WakeExitedAgent restarts the target's agent first if it has exited. Set
+	// only for the user and other AO sessions, never for automated nudges.
+	WakeExitedAgent bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the

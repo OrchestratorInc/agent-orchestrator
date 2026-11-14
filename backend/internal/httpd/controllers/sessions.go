@@ -2263,7 +2263,7 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
 			return
 		}
-		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID, WakeExitedAgent: true})
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
