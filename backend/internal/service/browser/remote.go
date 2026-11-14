@@ -245,7 +245,7 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (approval.T
 		}
 		return target, true
 	}
-	if ref, ok := strings.CutPrefix(gate.selector, "@"); ok {
+	if ref, ok := snapshotRef(gate.selector); ok {
 		if data, ok := s.remoteData(ctx, "snapshot", "--interactive", "--json"); ok {
 			if refs, ok := data["refs"].(map[string]interface{}); ok {
 				if entry, ok := refs[ref].(map[string]interface{}); ok {
@@ -278,6 +278,21 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (approval.T
 	}
 	described.Action, described.Key = gate.action, gate.key
 	return described, described.Role != "" || described.Name != "" || described.IsSubmit
+}
+
+// snapshotRef reads a snapshot ref as agents write it: "e2" as the snapshot
+// prints it, or "@e2". Anything else is a CSS selector.
+func snapshotRef(selector string) (string, bool) {
+	ref := strings.TrimPrefix(selector, "@")
+	if len(ref) < 2 || ref[0] != 'e' {
+		return "", false
+	}
+	for _, r := range ref[1:] {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return ref, true
 }
 
 // remoteData runs a describe command on the service and returns its JSON
