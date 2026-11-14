@@ -59,6 +59,19 @@ describe("MachineIdentity", () => {
 		expect(dot.props.accessibilityElementsHidden).toBe(true);
 	});
 
+	// The project header has nothing else saying which machine it is; rows do.
+	it("is its own accessibility element only when asked", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(<MachineIdentity name="Mac" appearance={{ symbol: "laptop" }} freshness="lagging" accessible />);
+		});
+		expect(renderer.root.findByProps({ testID: "machine-identity" }).props).toMatchObject({ accessible: true, accessibilityLabel: "Machine Mac, updates delayed" });
+		act(() => {
+			renderer.update(<MachineIdentity name="Mac" appearance={{ symbol: "laptop" }} freshness="lagging" />);
+		});
+		expect(renderer.root.findByProps({ testID: "machine-identity" }).props.accessible).toBeUndefined();
+	});
+
 	it("wears no dot while live", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => {

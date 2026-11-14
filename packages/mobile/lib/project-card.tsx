@@ -260,7 +260,8 @@ export function ProjectMachineIndicator({
 	const styles = useThemedStyles(makeStyles);
 	const host = hosts.find((candidate) => candidate.hostId === hostId);
 	if (!host) return null;
-	return <MachineIdentity name={host.name} appearance={host.appearance} freshness={freshness} style={styles.projectMachineIdentity} testID="project-machine-identity" />;
+	// Accessible on its own: nothing else in the header says which machine this is or how it is doing.
+	return <MachineIdentity name={host.name} appearance={host.appearance} freshness={freshness} accessible style={styles.projectMachineIdentity} testID="project-machine-identity" />;
 }
 
 /**

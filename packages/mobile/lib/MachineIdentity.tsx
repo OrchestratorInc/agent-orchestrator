@@ -28,11 +28,23 @@ export function MachineAvatar({ appearance, size = 22, color }: { appearance: Ma
  * front of the name when the machine's rows may not be current (see
  * machineFreshness); a live machine shows no mark.
  */
-export function MachineIdentity({ name, appearance, freshness, style, testID = "machine-identity" }: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness; style?: StyleProp<ViewStyle>; testID?: string }) {
+export function MachineIdentity({ name, appearance, freshness, accessible, style, testID = "machine-identity" }: {
+	name: string;
+	appearance: MachineAppearance;
+	freshness?: MachineFreshness;
+	/**
+	 * Makes the label its own accessibility element, for a caller with nothing
+	 * around it that says the machine's name and state (the project header).
+	 * Rows leave it off: their own label already speaks for the row.
+	 */
+	accessible?: boolean;
+	style?: StyleProp<ViewStyle>;
+	testID?: string;
+}) {
 	const themed = useThemedStyles(makeStyles);
 	const state = freshnessAccessibilityLabel(freshness);
 	return (
-		<View testID={testID} accessibilityLabel={state ? `Machine ${name}, ${state}` : `Machine ${name}`} style={[themed.identity, style]}>
+		<View testID={testID} accessible={accessible} accessibilityLabel={state ? `Machine ${name}, ${state}` : `Machine ${name}`} style={[themed.identity, style]}>
 			{freshness && freshness !== "live" ? <FreshnessDot tone={freshnessTone(freshness)} testID="machine-identity-freshness" /> : null}
 			<Text testID="machine-identity-name" numberOfLines={1} ellipsizeMode="tail" style={themed.name}>{name}</Text>
 			<MachineAvatar testID="machine-identity-symbol" appearance={appearance} />

@@ -48,7 +48,9 @@ export function FreshnessLine({ hostId, onRetry }: { hostId?: string; onRetry?: 
 	return (
 		<View accessibilityRole="alert" accessibilityLabel={line.text} style={styles.line} testID="freshness-line">
 			<FreshnessDot tone={line.tone} />
-			<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.text}>
+			{/* Polite: TalkBack announces a change (lagging to unreachable) without
+			    moving focus; the alert role alone does not. Retry stays its own button. */}
+			<Text accessibilityLiveRegion="polite" numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.text}>
 				{line.text}
 			</Text>
 			{line.retry && onRetry ? (
