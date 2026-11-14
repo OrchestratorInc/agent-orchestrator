@@ -16,7 +16,7 @@ func TestPoolMigrationAllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
 			name = "legacy_qm"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := openMigratedDatabaseCopy(t, 20261019220421514)
+			db := openMigratedDatabaseCopy(t, 20261021051727800)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
 				// 'codewhale' in every variant the Pool migration rewrites, so anchor
@@ -25,7 +25,7 @@ func TestPoolMigrationAllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 20261019220421514)
+			upTo(t, db, 20261021051727800)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -49,7 +49,7 @@ func TestPoolMigrationAllowsPoolAndReversesBothHistoricalSchemas(t *testing.T) {
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'pool'`)
-			downTo(t, db, 20261019220421514)
+			downTo(t, db, 20261021051727800)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -112,7 +112,7 @@ func TestReconcilePoolAfterBurnedMigration(t *testing.T) {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	for _, harness := range []string{"'fx'", "'gemini'", "'unreal-agent'", "'mimo-code'", "'deepseek-harness'", "'openhands'", "'command-code'", "'pool'"} {
+	for _, harness := range []string{"'fx'", "'gemini'", "'unreal-agent'", "'mimo-code'", "'deepseek-harness'", "'openhands'", "'command-code'", "'hermes'", "'pool'"} {
 		if !strings.Contains(schema, harness) {
 			t.Fatalf("repaired sessions constraint lost %s: %s", harness, schema)
 		}

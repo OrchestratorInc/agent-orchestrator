@@ -1,12 +1,7 @@
-import { Feather } from "./icons";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-
-import { haptics } from "./haptics";
+import { InlineBanner } from "./InlineBanner";
+import { describeLinkHealth, type LinkBannerCopy } from "./linkHealth";
 import { staleAgeLabel } from "./screenState";
 import { useApp } from "./store";
-import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { fontScaleCap, space, type } from "./tokens";
 import { useStaleness } from "./useStaleness";
 
 /**
@@ -22,76 +17,63 @@ import { useStaleness } from "./useStaleness";
  * that called it would re-render its whole list on a timer. Here the cost is one
  * small component. It also self-gates to null when the data is current, so
  * screens can render it unconditionally.
+ *
+ * It draws the chat screen's banner, so the app has one banner language rather
+ * than two that nearly match.
+ *
+ * It also says when the phone's own connection is the problem: no network, a
+ * link still recovering from a blip, or one that answers slowly. Those are
+ * amber and never name the machine as down. `networkOnly` limits it to the
+ * phone being offline, for screens that show several machines at once, where
+ * one machine's poll is not the whole story.
  */
-export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRetry?: () => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const { getLastSyncAt, config } = useApp();
+export function StaleBanner({ error = false, onRetry, networkOnly = false }: { error?: boolean; onRetry?: () => void; networkOnly?: boolean }) {
+	const { getLastSyncAt, config, linkHealth, selectedHostName } = useApp();
 	const { stale, ageMs } = useStaleness(getLastSyncAt);
+
+	const host = config?.host?.trim();
+	const link = describeLinkHealth(linkHealth, selectedHostName ?? host);
+	if (networkOnly && linkHealth !== "phone-offline") return null;
+	// A machine that answered with an error (a rejected password, a 5xx) keeps
+	// its own red copy; "slow" is no explanation for that.
+	const showLink = link !== null && !(error && linkHealth === "slow");
 
 	// Fresh and healthy: say nothing. Silence is the correct state here, and it
 	// keeps the caller free of a conditional.
-	if (!stale && !error) return null;
+	if (!stale && !error && !showLink) return null;
 
 	// A reachability failure is worth more alarm than mere age: one means the
-	// desktop is gone, the other can just be a laptop that slept.
-	const tone = error ? t.red : t.amber;
-	const fill = error ? t.tintRed : t.tintAmber;
-	const host = config?.host?.trim();
+	// desktop is gone, the other can just be a laptop that slept. The phone's own
+	// connection is amber: nothing is wrong with the machine.
+	const red = error && !showLink;
 	const age = staleAgeLabel(ageMs);
-	const text = error
-		? host
-			? `Can't reach ${host} — showing data from ${age}`
-			: `Can't reach your machine — showing data from ${age}`
-		: `Showing data from ${age}`;
+	const text = showLink
+		? link.text
+		: error
+			? host
+				? `Can't reach ${host} — showing data from ${age}`
+				: `Can't reach your machine — showing data from ${age}`
+			: `Showing data from ${age}`;
+	// Retrying can't help while the phone itself has no network.
+	const retry = linkHealth === "phone-offline" ? undefined : onRetry;
 
 	return (
-		<View
+		<InlineBanner
 			accessibilityRole="alert"
 			accessibilityLabel={text}
-			style={[styles.banner, { backgroundColor: fill }]}
-		>
-			<Feather name={error ? "wifi-off" : "clock"} size={12} color={tone} />
-			<Text
-				numberOfLines={1}
-				maxFontSizeMultiplier={fontScaleCap.chrome}
-				style={styles.bannerText}
-			>
-				{text}
-			</Text>
-			{onRetry ? (
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Retry now"
-					hitSlop={7}
-					onPress={() => {
-						haptics.tap();
-						onRetry();
-					}}
-				>
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.bannerAction, { color: tone }]}>
-						Retry
-					</Text>
-				</Pressable>
-			) : null}
-		</View>
+			tone={red ? "danger" : "warning"}
+			icon={showLink ? linkSymbols[link.icon] : error ? "offline" : "history"}
+			title={text}
+			action={retry ? "Retry" : undefined}
+			actionLabel="Retry now"
+			onPress={retry}
+		/>
 	);
 }
 
-// Metrics mirror the chat screen's InlineBanner so the app has one banner
-// language rather than two that nearly match.
-const makeStyles = (t: Theme) =>
-	StyleSheet.create({
-		banner: {
-			minHeight: 35,
-			flexDirection: "row",
-			alignItems: "center",
-			gap: space.sm,
-			paddingHorizontal: space.md,
-			paddingVertical: space.xs,
-			borderBottomWidth: 1,
-			borderBottomColor: t.borderSubtle,
-		},
-		bannerText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		bannerAction: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600" },
-	});
+/** The link's own glyphs, as the app's system symbols. */
+const linkSymbols = {
+	"wifi-off": "offline",
+	"refresh-cw": "refresh",
+	activity: { ios: "waveform.path.ecg", android: "monitor_heart" },
+} as const satisfies Record<LinkBannerCopy["icon"], unknown>;

@@ -193,6 +193,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Binary:           binary,
 		SessionID:        cfg.SessionID,
 		NativeSessionID:  nativeSessionID,
+		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(permissions)),
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
@@ -201,8 +202,30 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Permission:       agentruntime.PermissionPolicy(permissions),
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
-		ProviderArgs:     autoDefaultNudgeGuardArgs(agentruntime.PermissionPolicy(permissions)),
 	})
+}
+
+// claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
+// settings: Ultracode, and the token count at which it compacts on its own.
+// They share one --settings flag with the auto-mode dialog guard (see
+// autoDefaultNudgeGuardArgs).
+func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy) []string {
+	settings := autoDefaultNudgeGuardSettings(policy)
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	if options.Ultracode {
+		settings["ultracode"] = true
+	}
+	if tokens := domain.AutoCompactTokens[options.AutoCompactWindow]; tokens > 0 {
+		settings["autoCompactEnabled"] = true
+		settings["autoCompactWindow"] = tokens
+	}
+	if len(settings) == 0 {
+		return nil
+	}
+	encoded, _ := json.Marshal(settings)
+	return []string{"--settings", string(encoded)}
 }
 
 // freshLaunchNativeSessionID keeps a fresh launch from adopting someone else's
@@ -314,17 +337,25 @@ func claudeLaunchConfigPaths(env map[string]string) (settingsPath, globalConfigP
 // points Claude at another CLAUDE_CONFIG_DIR, so PreLaunch marks the dialog
 // seen in the global config instead.
 func autoDefaultNudgeGuardArgs(policy agentruntime.PermissionPolicy) []string {
+	settings := autoDefaultNudgeGuardSettings(policy)
+	if settings == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return nil
+	}
+	return []string{"--settings", string(encoded)}
+}
+
+// autoDefaultNudgeGuardSettings is the flag-settings content of
+// autoDefaultNudgeGuardArgs, or nil when the mode needs no guard.
+func autoDefaultNudgeGuardSettings(policy agentruntime.PermissionPolicy) map[string]any {
 	flag := agentruntime.ClaudePermissionArgs(policy)
 	if len(flag) != 2 {
 		return nil
 	}
-	settings, err := json.Marshal(map[string]any{
-		"permissions": map[string]any{"defaultMode": flag[1]},
-	})
-	if err != nil {
-		return nil
-	}
-	return []string{"--settings", string(settings)}
+	return map[string]any{"permissions": map[string]any{"defaultMode": flag[1]}}
 }
 
 // userSettingsOfferAutoDefaultNudge reports whether the user's own Claude
@@ -379,6 +410,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Binary:           binary,
 		SessionID:        cfg.Session.ID,
 		Metadata:         cfg.Session.Metadata,
+		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(cfg.Permissions)),
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
@@ -387,7 +419,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
-		ProviderArgs:     autoDefaultNudgeGuardArgs(agentruntime.PermissionPolicy(cfg.Permissions)),
 	})
 }
 

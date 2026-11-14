@@ -1,7 +1,8 @@
+import { apiErrorException } from "./api-error-exception";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { aoBridge } from "./bridge";
-import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { apiClient, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 export type NotificationDTO = components["schemas"]["NotificationResponse"];
@@ -82,7 +83,7 @@ export async function fetchNotificationsPage(
 			},
 		},
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not load notifications"));
+	if (error) throw apiErrorException(error, "Could not load notifications");
 	const notifications = sortNotifications(data?.notifications ?? []);
 	return {
 		notifications,
@@ -103,13 +104,13 @@ export async function markAllNotificationsRead(ids: string[]): Promise<number> {
 	const { data, error } = await apiClient.POST("/api/v1/notifications/read-all", {
 		body: ids.length === 0 ? {} : { ids },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not mark notifications read"));
+	if (error) throw apiErrorException(error, "Could not mark notifications read");
 	return data?.updatedCount ?? 0;
 }
 
 export async function clearAllNotifications(): Promise<ClearNotificationsResult> {
 	const { data, error } = await apiClient.DELETE("/api/v1/notifications");
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not clear notifications"));
+	if (error || !data) throw apiErrorException(error, "Could not clear notifications");
 	return data;
 }
 
@@ -121,7 +122,7 @@ export async function deleteNotification(notification: NotificationDTO): Promise
 	// this one. The requested end state already holds, so confirm the optimistic
 	// removal instead of rolling it back and showing an error.
 	if (response.status === 404) return notification;
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not clear notification"));
+	if (error || !data) throw apiErrorException(error, "Could not clear notification");
 	return data.notification;
 }
 
@@ -647,7 +648,7 @@ export function createNotificationsTransport(
 				source = undefined;
 				sourceBaseUrl = baseUrl;
 				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/notifications/stream`);
+					source = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/notifications/stream`);
 					source.onopen = () => {
 						retries = 0;
 						invalidateNotifications();

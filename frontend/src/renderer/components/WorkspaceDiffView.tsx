@@ -12,7 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Check, LoaderCircle, Plus, Send as SendIcon } from "lucide-react";
+import { Check, LoaderCircle, Plus, Send as SendIcon, type AppIcon } from "@/components/app-icons";
 import type { FileAnnotationTarget } from "../../shared/file-annotations";
 import {
 	type WorkspaceCompareMode,
@@ -666,7 +666,7 @@ export function LineFeedbackButtonControl({
 			aria-label={label}
 			aria-expanded={expanded || undefined}
 			className={cn(
-				"z-20 size-6 rounded-sm border-primary/70 shadow-md shadow-black/30 active:translate-y-0 active:scale-100",
+				"z-20 size-6 rounded-sm border-primary/70 shadow-md shadow-black/30",
 				gutter
 					? "relative size-5"
 					: "absolute inset-y-0 left-6 my-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/line:opacity-100",
@@ -825,23 +825,23 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
 					<span className="mr-auto min-w-0 truncate text-caption text-passive">{writtenCount > 1 ? t("files.feedbackShortcutAll") : t("files.feedbackShortcut")}</span>
 					<Button
-						className="px-2 text-xs text-muted-foreground hover:text-foreground"
+						className="px-2"
 						disabled={sending}
 						onClick={() => annotation.cancel(target)}
 						size="sm"
 						type="button"
-						variant="ghost"
+						variant="quiet"
 					>
 						{t("files.cancelFeedback")}
 					</Button>
 					<Button
 						aria-label={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
-						className="text-muted-foreground hover:text-foreground disabled:opacity-100"
+						className="disabled:opacity-100"
 						disabled={!text.trim() || sending || sent}
 						size="icon-sm"
 						title={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
 						type="submit"
-						variant="ghost"
+						variant="quiet"
 					>
 						{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" className="text-success" /> : <SendIcon aria-hidden="true" className={cn(!text.trim() && "opacity-50")} />}
 					</Button>
@@ -866,10 +866,10 @@ export function FileAnnotationSendBar({ annotation, className, surface }: { anno
 			<span className="mr-auto min-w-0 truncate text-xs text-muted-foreground" role="status">
 				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : null}
 			</span>
-			<Button className="px-2 text-xs text-muted-foreground hover:bg-error/10 hover:text-error focus-visible:text-error active:bg-error/15 dark:hover:bg-error/10" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
+			<Button className="px-2" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="destructive-ghost">
 				{t("files.discardFeedback")}
 			</Button>
-			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
+			<Button className="px-2" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
 				{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" /> : <SendIcon aria-hidden="true" />}
 				{t("files.sendAllFeedback", { count: written.length })}
 			</Button>
@@ -918,10 +918,27 @@ export function PanelMessage({ action, children, compact = false }: { action?: R
 	);
 }
 
+/**
+ * A pane with nothing to show: an icon over a short heading and an optional
+ * way out, a little above the middle of the space it fills (where the eye
+ * lands), so it reads as a state of the pane rather than a stray line at its top.
+ */
+export function EmptyMessage({ icon: Icon, title, action }: { icon: AppIcon; title: ReactNode; action?: ReactNode }) {
+	return (
+		<div className="flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 p-6 pb-[15vh] text-center" data-testid="empty-message">
+			<span aria-hidden="true" className="flex size-10 items-center justify-center rounded-lg bg-interactive-hover text-muted-foreground">
+				<Icon className="size-5" />
+			</span>
+			<p className="max-w-xs text-heading-sm font-medium text-foreground">{title}</p>
+			{action ?? null}
+		</div>
+	);
+}
+
 export function RetryButton({ onClick }: { onClick: () => void }) {
 	const { t } = useTranslation();
 	return (
-		<Button onClick={onClick} size="sm" type="button" variant="outline">
+		<Button onClick={onClick} size="sm" type="button" variant="secondary">
 			{t("files.retry")}
 		</Button>
 	);

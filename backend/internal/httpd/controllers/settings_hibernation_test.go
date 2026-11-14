@@ -80,3 +80,61 @@ func TestSettingsVersionRefreshRequiresBoolean(t *testing.T) {
 		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
 	}
 }
+
+type computerUseSettingsService struct {
+	hibernationSettingsService
+	computerUse bool
+}
+
+func (s *computerUseSettingsService) SetComputerUse(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.computerUse = enabled
+	s.calls++
+	return settingssvc.Snapshot{ComputerUse: enabled}, nil
+}
+
+func TestSettingsComputerUseRequiresBoolean(t *testing.T) {
+	svc := &computerUseSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"true"}`} {
+		w := httptest.NewRecorder()
+		c.setComputerUse(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/computer-use", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setComputerUse(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/computer-use", strings.NewReader(`{"enabled":true}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || !got.ComputerUse || !svc.computerUse {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}
+
+type retentionSettingsService struct {
+	hibernationSettingsService
+	days int
+}
+
+func (s *retentionSettingsService) SetSessionRetentionDays(_ context.Context, days int) (settingssvc.Snapshot, error) {
+	s.days = days
+	s.calls++
+	return settingssvc.Snapshot{SessionRetentionDays: days}, nil
+}
+
+func TestSettingsSessionRetentionRequiresDays(t *testing.T) {
+	svc := &retentionSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"days":null}`, `{"days":"30"}`} {
+		w := httptest.NewRecorder()
+		c.setSessionRetention(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/session-retention", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setSessionRetention(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/session-retention", strings.NewReader(`{"days":30}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.SessionRetentionDays != 30 || svc.days != 30 {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}

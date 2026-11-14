@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, type RoleSession } from "./agent-select-options";
+import {
+	buildRankedAgentOptions,
+	defaultAuthorizedAgentForRole,
+	defaultProjectAgents,
+	isLaunchableAgent,
+	preferredAgentList,
+	preferredAgentNeedsChecks,
+	type RoleSession,
+} from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -101,6 +109,14 @@ describe("buildRankedAgentOptions", () => {
 		expect(options[1]).toMatchObject({ id: "codex", disabled: true, status: "Needs auth" });
 	});
 
+	it("keeps harnesses without installation checks selectable and launchable", () => {
+		const unchecked = agent("codex", "unknown", "unknown");
+		unchecked.installation.reasonCode = "install_check_unsupported";
+		const options = buildRankedAgentOptions({ agents: [unchecked], priorityRank, fallbackAgents: [] });
+		expect(options[0]).toMatchObject({ disabled: false, status: "Install unknown" });
+		expect(isLaunchableAgent(unchecked)).toBe(true);
+	});
+
 	it("keeps stale known-good agents selectable while checking", () => {
 		const knownGood = agent("codex");
 		knownGood.installation.freshness = "checking";
@@ -114,20 +130,29 @@ describe("buildRankedAgentOptions", () => {
 
 		expect(option).toMatchObject({ disabled: false, status: "" });
 	});
+
+	it.each(["fresh", "stale", "checking"] as const)("omits unknown authentication badges while %s and keeps the agent launchable", (freshness) => {
+		const unchecked = agent("codex", "installed", "unknown");
+		unchecked.authentication.freshness = freshness;
+		const [option] = buildRankedAgentOptions({ agents: [unchecked], priorityRank, fallbackAgents: [] });
+
+		expect(option).toMatchObject({ disabled: false, status: "", statusTone: "muted" });
+		expect(isLaunchableAgent(unchecked)).toBe(true);
+	});
 });
 
 describe("configured but unverified credentials", () => {
 	// The whole point of the "configured" state is that it must not look like
 	// a working credential. Falling through to the known-good branch would
 	// paint an unvalidated — possibly revoked — credential green.
-	it("shows an unverified agent as neutral rather than known-good", () => {
+	it.each(["mimo-code", "hermes", "claude-code"])("omits the verification badge for %s while keeping a neutral tone", (id) => {
 		const [option] = buildRankedAgentOptions({
-			agents: [agent("claude-code", "installed", "configured")],
+			agents: [agent(id, "installed", "configured")],
 			priorityRank,
 			fallbackAgents: [],
 		});
 		expect(option.statusTone).not.toBe("success");
-		expect(option.status).toBe("Unverified");
+		expect(option.status).toBe("");
 	});
 
 	// I1: never block. An unverified credential is not a disproved one.
@@ -241,5 +266,92 @@ describe("defaultAuthorizedAgentForRole", () => {
 	it("stays usable when Claude Code is unavailable", () => {
 		expect(defaultAuthorizedAgentForRole([agent("codex")], [], "worker")).toBe("codex");
 		expect(defaultAuthorizedAgentForRole([], [], "worker")).toBe("");
+	});
+});
+
+describe("preferredAgentList", () => {
+	it("orders ready agents by how well AO integrates them", () => {
+		expect(preferredAgentList([agent("aider"), agent("codex"), agent("claude-code")])).toEqual([
+			"claude-code",
+			"codex",
+			"aider",
+		]);
+	});
+
+	it("puts installed, signed-in agents ahead of ones AO has not checked yet", () => {
+		expect(preferredAgentList([agent("claude-code", "unknown", "unknown"), agent("codex")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
+	it("counts a configured credential as signed in", () => {
+		expect(preferredAgentList([agent("claude-code", "installed", "unknown"), agent("codex", "installed", "configured")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
+	it("leaves out agents that are missing or signed out", () => {
+		expect(
+			preferredAgentList([agent("claude-code", "not_installed"), agent("codex", "installed", "unauthorized"), agent("cursor")]),
+		).toEqual(["cursor"]);
+	});
+
+	it("ranks agents outside AO's priority list after the ones in it", () => {
+		expect(preferredAgentList([agent("goose"), agent("aider")])).toEqual(["aider", "goose"]);
+	});
+});
+
+describe("preferredAgentNeedsChecks", () => {
+	it("waits for checks when nothing has been checked yet", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code", "unknown", "unknown"), agent("codex", "unknown", "unknown")])).toBe(true);
+	});
+
+	it("waits for checks when a more preferred agent could still outrank the confirmed one", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code", "unknown", "unknown"), agent("codex")])).toBe(true);
+	});
+
+	it("ranks right away once the most preferred usable agent is confirmed", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code"), agent("codex", "unknown", "unknown")])).toBe(false);
+		expect(preferredAgentNeedsChecks([agent("claude-code", "not_installed"), agent("codex", "installed", "configured")])).toBe(false);
+		expect(preferredAgentNeedsChecks([])).toBe(false);
+	});
+});
+
+describe("defaultProjectAgents", () => {
+	it("starts every role on the most preferred agent", () => {
+		expect(defaultProjectAgents([agent("claude-code", "not_installed"), agent("codex")])).toEqual({
+			workerAgent: "codex",
+			orchestratorAgent: "codex",
+			reviewerAgent: "codex",
+		});
+	});
+
+	it("reviews with the most preferred unattended-safe reviewer when the top agent is not one", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("opencode"), agent("codex", "unknown", "unknown")])).toEqual({
+			workerAgent: "cursor",
+			orchestratorAgent: "cursor",
+			reviewerAgent: "opencode",
+		});
+		// A ready reviewer outranks one AO has not checked yet.
+		expect(defaultProjectAgents([agent("cursor"), agent("opencode", "unknown", "unknown"), agent("kimchi")]).reviewerAgent).toBe("kimchi");
+	});
+
+	it("reviews with Claude Code when no unattended-safe reviewer is usable", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("codex", "not_installed")])).toEqual({
+			workerAgent: "cursor",
+			orchestratorAgent: "cursor",
+			reviewerAgent: "claude-code",
+		});
+		expect(defaultProjectAgents([agent("goose")]).reviewerAgent).toBe("claude-code");
+	});
+
+	it("falls back to Claude Code when no agent is usable", () => {
+		expect(defaultProjectAgents([])).toEqual({
+			workerAgent: "claude-code",
+			orchestratorAgent: "claude-code",
+			reviewerAgent: "claude-code",
+		});
 	});
 });

@@ -218,7 +218,16 @@ func codexComposerFrame(output string) string {
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
 			if codexPromptLine(plainPrompt) {
-				return strings.Join(raw[prompt:footer], "\n")
+				// The composer ends at the first status row with a " · " (model
+				// row, or a hint row's warnings badge), else it reads as draft text.
+				end := footer
+				for row := prompt + 1; row < footer; row++ {
+					if strings.Contains(terminalui.PlainTerminalText(raw[row]), " · ") {
+						end = row
+						break
+					}
+				}
+				return strings.Join(raw[prompt:end], "\n")
 			}
 		}
 	}

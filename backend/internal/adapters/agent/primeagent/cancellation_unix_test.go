@@ -23,7 +23,7 @@ func TestGetLaunchCommandReturnsCancellationAfterPromptFileRead(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		_, err := (&Plugin{resolvedBinary: "prime-agent"}).GetLaunchCommand(ctx, ports.LaunchConfig{
+		_, err := (&Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}}).GetLaunchCommand(ctx, ports.LaunchConfig{
 			DataDir:          dataDir,
 			SystemPromptFile: fifo,
 		})

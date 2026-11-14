@@ -696,6 +696,28 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin missing opencode event handler %q:\n%s", eventCase, body)
 		}
 	}
+	// A reply must be reported as the turn-boundary permission-resolved event,
+	// not generic active: active is suppressed while the session is blocked,
+	// which leaves the session stuck on Needs You until the turn ends.
+	if !strings.Contains(body, `callHookSync("permission-resolved"`) {
+		t.Fatalf("installed plugin does not emit permission-resolved for replies:\n%s", body)
+	}
+	// With several dialogs open, the first reply must NOT resolve the block:
+	// the plugin tracks open asks by request id and reports only once none
+	// remain, or the first `ao send` types into the still-open dialog.
+	for _, marker := range []string{"openAsks", "askID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not track open permission asks (%q missing):\n%s", marker, body)
+		}
+	}
+	// Subagent sessions arrive on the same bus. The plugin must track them from
+	// session.created(parentID) and never report a child id as the identity:
+	// AO persists that id as the native restore handle.
+	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "reportSessionID"} {
+		if !strings.Contains(body, marker) {
+			t.Fatalf("installed plugin does not filter child sessions (%q missing):\n%s", marker, body)
+		}
+	}
 	for _, unsupported := range []string{`"client.permissionRequest"`, `"permission.ask":`, `"tool.start"`, `"tool.end"`} {
 		if strings.Contains(body, unsupported) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)
@@ -837,6 +859,10 @@ func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	if installed, err := plugin.AreHooksInstalled(ctx, workspace); err != nil || !installed {
 		t.Fatalf("AreHooksInstalled after install = (%v, %v), want (true, nil)", installed, err)
 	}
+	bugTriage := filepath.Join(SkillsDir(workspace), "bug-triage")
+	if _, err := os.Stat(filepath.Join(bugTriage, "SKILL.md")); err != nil {
+		t.Fatalf("bug-triage skill missing after install: %v", err)
+	}
 
 	if err := plugin.UninstallHooks(ctx, workspace); err != nil {
 		t.Fatal(err)
@@ -849,6 +875,9 @@ func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	}
 	if _, err := os.Stat(opencodeSkillDir(workspace)); !os.IsNotExist(err) {
 		t.Fatalf("AO using-ao skill still present after uninstall: err=%v", err)
+	}
+	if _, err := os.Stat(bugTriage); !os.IsNotExist(err) {
+		t.Fatalf("AO bug-triage skill still present after uninstall: err=%v", err)
 	}
 	if _, err := os.Stat(opencodeSkillMarkerPath(workspace)); !os.IsNotExist(err) {
 		t.Fatalf("AO skill marker still present after uninstall: err=%v", err)
@@ -881,6 +910,88 @@ func TestGetAgentHooksRecoversPartialSkillInstall(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(skillDir, "commands", "spawn.md")); err != nil {
 		t.Fatalf("recovered install missing commands/spawn.md: %v", err)
 	}
+}
+
+// opencode npm-installs its plugin package into every .opencode it loads; AO's
+// own .opencode gets a stub that skips that 4-7s install, while a repository's
+// own plugins keep the real install.
+func TestGetAgentHooksSeedsPluginDependencyStub(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "opencode"}
+	ctx := context.Background()
+
+	t.Run("AO-only .opencode gets the stub", func(t *testing.T) {
+		workspace := t.TempDir()
+		if err := plugin.GetAgentHooks(ctx, ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: workspace}); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(workspace, opencodePluginDirName)
+		if info, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil || !info.IsDir() {
+			t.Fatalf("node_modules = (%v, %v), want a directory", info, err)
+		}
+		lock, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Packages map[string]struct {
+				Dependencies map[string]string `json:"dependencies"`
+			} `json:"packages"`
+		}
+		if err := json.Unmarshal(lock, &parsed); err != nil {
+			t.Fatalf("package-lock.json is not JSON: %v", err)
+		}
+		if _, ok := parsed.Packages[""].Dependencies[opencodePluginDependency]; !ok {
+			t.Fatalf("package-lock.json root does not name %s: %s", opencodePluginDependency, lock)
+		}
+		ignore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+		if err != nil || !strings.Contains(string(ignore), "node_modules") {
+			t.Fatalf(".gitignore = (%q, %v), want it to ignore node_modules", ignore, err)
+		}
+	})
+
+	t.Run("a repository's own plugin keeps opencode's install", func(t *testing.T) {
+		workspace := t.TempDir()
+		pluginDir := filepath.Dir(opencodePluginPath(workspace))
+		if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pluginDir, "repo.ts"), []byte("export default {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := plugin.GetAgentHooks(ctx, ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: workspace}); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"node_modules", "package-lock.json"} {
+			if _, err := os.Stat(filepath.Join(workspace, opencodePluginDirName, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s seeded beside a repository plugin (err %v); opencode must install for it", name, err)
+			}
+		}
+	})
+
+	t.Run("a plugin added after the stub removes it, and a relaunch keeps it otherwise", func(t *testing.T) {
+		workspace := t.TempDir()
+		cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: workspace}
+		for range 2 {
+			if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(workspace, opencodePluginDirName, "package-lock.json")); err != nil {
+			t.Fatalf("relaunch dropped AO's own stub: %v", err)
+		}
+		pluginDir := filepath.Dir(opencodePluginPath(workspace))
+		if err := os.WriteFile(filepath.Join(pluginDir, "repo.ts"), []byte("export default {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"node_modules", "package-lock.json"} {
+			if _, err := os.Stat(filepath.Join(workspace, opencodePluginDirName, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stub %s kept beside a repository plugin (err %v)", name, err)
+			}
+		}
+	})
 }
 
 func TestGetAgentHooksRefusesToClobberForeignSkill(t *testing.T) {
@@ -1199,5 +1310,15 @@ func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 	}
 	if config.Permission != nil {
 		t.Fatalf("config permission = %#v, want the rule on the agent alone", config.Permission)
+	}
+}
+
+// The hook client reads the turn's final assistant text from this payload
+// field on stop. The plugin is the only thing that can supply it for opencode.
+func TestOpenCodePluginReportsFinalAssistantTextOnStop(t *testing.T) {
+	for _, want := range []string{"last_assistant_message: lastAssistantText", `callHookSync("stop"`} {
+		if !strings.Contains(opencodePluginSource, want) {
+			t.Fatalf("embedded plugin is missing %q", want)
+		}
 	}
 }

@@ -219,6 +219,36 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByText(message)).toBeInTheDocument();
 	});
 
+	it("says a running session's sandbox stopped responding, and still offers Retry", async () => {
+		const message = "The sandbox stopped responding: AO tried to restart the session's worker 4 times over 12 minutes and every attempt failed. The sandbox has been stopped. Retry to start it again.";
+		mount({ phase: "failed", code: "sandbox_unresponsive", message });
+		expect(screen.getByRole("heading", { name: "The sandbox stopped responding" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "This session couldn't start" })).not.toBeInTheDocument();
+		expect(screen.getByText(message)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(retrySessionStartup).toHaveBeenCalledWith("org-1", "sess-1");
+	});
+
+	it.each([
+		["workspace_setup_not_ready", "The workspace setup didn't finish"],
+		["project_setup_failed", "The project's Setup script failed"],
+		["repository_checkout_failed", "The repository checkout failed"],
+		["working_directory_unusable", "The working directory can't be used"],
+		["working_directory_occupied", "The working folder is already in use"],
+		["working_directory_not_durable", "The working folder isn't kept across restarts"],
+		["sandbox_unresponsive", "The sandbox stopped responding"],
+		["worker_never_started", "This session couldn't start"],
+		[undefined, "This session couldn't start"],
+	])("titles a failed startup with code %s as \"%s\"", (code, title) => {
+		mount({ phase: "failed", code, message: "The reason." });
+		expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+	});
+
+	it("titles a runtime that ended without a startup reason as not running", () => {
+		mount({ phase: "unavailable" });
+		expect(screen.getByRole("heading", { name: "This session isn't running" })).toBeInTheDocument();
+	});
+
 	it("shows a pending retry, then refetches the session", async () => {
 		let resolve!: (value: unknown) => void;
 		retrySessionStartup.mockReturnValue(new Promise((done) => { resolve = done; }));

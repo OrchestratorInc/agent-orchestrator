@@ -1,8 +1,13 @@
+import type { ComposerImageAsset } from "./chat/composerImages";
+import { sniffImageMimeType } from "./imageMime";
+
 export type SpawnAttachment = {
 	name: string;
 	mimeType: string;
 	data: string;
 	bytes: number;
+	/** The picked local file, kept for images so the sheet can show a thumbnail. */
+	previewUri?: string;
 };
 
 export type PickedSpawnAttachment = Omit<SpawnAttachment, "data" | "bytes"> & {
@@ -10,7 +15,7 @@ export type PickedSpawnAttachment = Omit<SpawnAttachment, "data" | "bytes"> & {
 	readData: () => Promise<string>;
 };
 
-const MAX_ATTACHMENTS = 8;
+export const MAX_SPAWN_ATTACHMENTS = 8;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 
@@ -23,8 +28,8 @@ export function appendSpawnAttachments(
 	let error: string | undefined;
 
 	for (const item of incoming) {
-		if (attachments.length >= MAX_ATTACHMENTS) {
-			error ??= `You can attach up to ${MAX_ATTACHMENTS} files.`;
+		if (attachments.length >= MAX_SPAWN_ATTACHMENTS) {
+			error ??= `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.`;
 			break;
 		}
 		if (item.mimeType.trim().toLowerCase() === "image/svg+xml") {
@@ -62,7 +67,7 @@ export async function readSpawnAttachments(
 			error ??= `Could not determine the size of ${item.name}.`;
 			continue;
 		}
-		const candidate: SpawnAttachment = { name: item.name, mimeType: item.mimeType, bytes: item.bytes, data: "" };
+		const candidate: SpawnAttachment = { name: item.name, mimeType: item.mimeType, bytes: item.bytes, data: "", ...(item.previewUri ? { previewUri: item.previewUri } : {}) };
 		const next = appendSpawnAttachments(attachments, [candidate]);
 		if (next.error) {
 			error ??= next.error;
@@ -78,8 +83,86 @@ export async function readSpawnAttachments(
 			error ??= `${item.name} is empty.`;
 			continue;
 		}
+		// The daemon names the saved file from this type, so it has to describe
+		// the bytes being sent, not the picker's account of the original.
+		if (candidate.mimeType.trim().toLowerCase().startsWith("image/")) {
+			candidate.mimeType = sniffImageMimeType(candidate.data) ?? candidate.mimeType;
+		}
 		attachments = next.attachments;
 	}
 
 	return { attachments, error };
+}
+
+/** The exported photo file the picker hands back. */
+export type PickedPhotoFile = { size: number; base64(): Promise<string> };
+
+/**
+ * A photo-library pick, described by the file actually exported. Android
+ * compresses anything but PNG to JPEG when `quality < 1`, yet reports the
+ * source's type and size, so a WebP, GIF or HEIC would otherwise be sent as
+ * JPEG bytes under the source's label and size-checked against the original.
+ * The type is corrected from the bytes in `readSpawnAttachments`.
+ */
+export function photoPickerAttachment(
+	asset: { uri: string; fileName?: string | null; mimeType?: string },
+	index: number,
+	file: PickedPhotoFile,
+): PickedSpawnAttachment {
+	const mimeType = asset.mimeType || "image/jpeg";
+	return {
+		name: asset.fileName || `photo-${index + 1}.${mimeType.split("/")[1] || "jpg"}`,
+		mimeType,
+		bytes: file.size,
+		previewUri: asset.uri,
+		readData: () => file.base64(),
+	};
+}
+
+/**
+ * Images pasted into the task's field (see `useImagePaste`), as picks. The
+ * native side sends the bytes inline. It leaves out an image over its 10 MB
+ * limit, sending only the size, and one it could not read, sending a size of 0;
+ * both are dropped here and named in `error` instead of reaching the size
+ * checks. `start` numbers the names after what is already attached.
+ */
+export function pastedSpawnAttachments(assets: readonly ComposerImageAsset[], start = 0): { picks: PickedSpawnAttachment[]; error?: string } {
+	const picks: PickedSpawnAttachment[] = [];
+	const errors: string[] = [];
+	assets.forEach((asset, index) => {
+		const data = asset.base64 ?? "";
+		const mimeType = (data && sniffImageMimeType(data)) || asset.mimeType || "image/png";
+		const name = `pasted-image-${start + index + 1}.${mimeType.split("/")[1] || "png"}`;
+		if (!data) {
+			errors.push(asset.fileSize ? `${name} must be under 10 MB.` : `Could not read ${name}.`);
+			return;
+		}
+		picks.push({
+			name,
+			mimeType,
+			bytes: asset.fileSize ?? Math.floor(data.length * 0.75),
+			previewUri: `data:${mimeType};base64,${data}`,
+			readData: async () => data,
+		});
+	});
+	return { picks, error: errors.length ? errors.join(" ") : undefined };
+}
+
+/**
+ * Joins what an attach left out into one message, skipping any part the
+ * message already says: a paste native cut at 8 images and a task that filled
+ * up at 8 both say "You can attach up to 8 files."
+ */
+export function joinAttachmentErrors(...parts: readonly (string | undefined)[]): string | undefined {
+	let message = "";
+	for (const part of parts) {
+		if (!part || message.includes(part)) continue;
+		message = message ? `${message} ${part}` : part;
+	}
+	return message || undefined;
+}
+
+/** Images the sheet can draw: a thumbnail in the row, full screen on tap. */
+export function spawnAttachmentPreview(item: SpawnAttachment): string | undefined {
+	return item.previewUri && item.mimeType.trim().toLowerCase().startsWith("image/") ? item.previewUri : undefined;
 }

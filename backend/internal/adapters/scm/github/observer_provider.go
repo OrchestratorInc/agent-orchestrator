@@ -95,6 +95,33 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	}
 }
 
+// ListOpenPRsByBranch lists the open pull requests whose head is branch in
+// repo itself (head=<owner>:<branch>), so PRs from forks are not returned. One
+// request: GitHub filters on the server, so a repository's other open PRs
+// are never paged through. Reading only the first page of 100 is deliberate:
+// GitHub allows one open PR per head and base, so a branch with more than 100
+// open PRs would need more than 100 base branches. The GitLab provider pages
+// because its client already has a pagination helper; this one has none.
+func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	q := url.Values{}
+	q.Set("state", "open")
+	q.Set("head", repo.Owner+":"+branch)
+	q.Set("per_page", "100")
+	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
+	if err != nil {
+		return nil, err
+	}
+	var pulls []restListPull
+	if err := json.Unmarshal(resp.Body, &pulls); err != nil {
+		return nil, fmt.Errorf("github scm: decode branch PR list: %w", err)
+	}
+	out := make([]ports.SCMPRObservation, 0, len(pulls))
+	for _, pull := range pulls {
+		out = append(out, restListPullToSCM(pull))
+	}
+	return out, nil
+}
+
 // githubCheckRunsPageSize fetches the complete check-run set for a commit in a
 // single REST page when the commit has no more than this many runs. A commit
 // virtually never exceeds GitHub's 100-result cap, so one request carries the
@@ -227,6 +254,12 @@ func stableCheckFingerprint(parts []string) string {
 // observer marks that ref refresh-incomplete and can log the permanent miss
 // distinctly from a transient provider failure. The observer owns chunking;
 // this method rejects larger batches so tests catch accidental over-batching.
+//
+// PR details cost far more than the rest of the query, so they are read only
+// when they can have changed. A ref with no DetailsUpdatedAt gets them in the
+// batch query itself. A ref with one gets the light fields; if the PR's
+// updatedAt has moved from it, one follow-up query reads the details of every
+// such PR in the batch, and otherwise the observation's Details stay nil.
 func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	if len(refs) == 0 {
 		return nil, nil
@@ -240,6 +273,8 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 		return nil, err
 	}
 	out := make([]ports.SCMObservation, len(refs))
+	details := make([]*domain.PullRequestDetails, len(refs))
+	var stale []int
 	for i, ref := range refs {
 		repoData, _ := data[aliases[i]].(map[string]any)
 		pr, _ := repoData["pullRequest"].(map[string]any)
@@ -259,9 +294,51 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 				return nil, err
 			}
 		}
+		p.markCancelledGateFailures(ctx, ref.Repo.Owner, ref.Repo.Name, pr)
 		out[i] = scmObservationFromGraphQL(ref, pr)
+		switch {
+		case ref.DetailsUpdatedAt.IsZero():
+			details[i] = pullRequestDetailsFromGraphQL(pr)
+		case !out[i].PR.UpdatedAtProvider.Equal(ref.DetailsUpdatedAt):
+			stale = append(stale, i)
+		}
+	}
+	p.fetchPullRequestDetails(ctx, refs, stale, details)
+	for i := range out {
+		out[i].PR.Details = details[i]
+	}
+	// Details that were needed but not read stay owed until a poll stores them.
+	for _, i := range stale {
+		out[i].PR.DetailsPending = details[i] == nil
 	}
 	return out, nil
+}
+
+// fetchPullRequestDetails reads, in one query, the details of the PRs at the
+// stale indexes of refs into details. Details are view-only, so a failed read
+// is logged and leaves them nil: the observation still carries the PR's state
+// and CI, the stored details are kept, and the observation is marked
+// DetailsPending so the next poll reads them again.
+func (p *Provider) fetchPullRequestDetails(ctx context.Context, refs []ports.SCMPRRef, stale []int, details []*domain.PullRequestDetails) {
+	if len(stale) == 0 {
+		return
+	}
+	staleRefs := make([]ports.SCMPRRef, len(stale))
+	for j, i := range stale {
+		staleRefs[j] = refs[i]
+	}
+	query, aliases := buildSCMDetailsQuery(staleRefs)
+	data, err := p.client.doGraphQL(ctx, query, nil)
+	if err != nil {
+		p.logger.Warn("github scm: PR details read failed; keeping the stored details", "prs", len(staleRefs), "err", err)
+		return
+	}
+	for j, i := range stale {
+		repoData, _ := data[aliases[j]].(map[string]any)
+		if pr, _ := repoData["pullRequest"].(map[string]any); pr != nil {
+			details[i] = pullRequestDetailsFromGraphQL(pr)
+		}
+	}
 }
 
 // FetchFailedCheckLogTail fetches and tails a failed GitHub Actions job log.
@@ -377,7 +454,23 @@ func restListPullToSCM(pull restListPull) ports.SCMPRObservation {
 	}
 }
 
+// buildSCMBatchQuery selects the light PR fields for every ref, plus the
+// details fields for a ref with no DetailsUpdatedAt.
 func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
+	return buildPRQuery(refs, func(ref ports.SCMPRRef) string {
+		if ref.DetailsUpdatedAt.IsZero() {
+			return scmPRFields() + scmPRDetailsFields()
+		}
+		return scmPRFields()
+	})
+}
+
+// buildSCMDetailsQuery selects only the details fields of each ref's PR.
+func buildSCMDetailsQuery(refs []ports.SCMPRRef) (string, []string) {
+	return buildPRQuery(refs, func(ports.SCMPRRef) string { return scmPRDetailsFields() })
+}
+
+func buildPRQuery(refs []ports.SCMPRRef, fields func(ports.SCMPRRef) string) (string, []string) {
 	aliases := make([]string, len(refs))
 	var b strings.Builder
 	b.WriteString("query{\n")
@@ -385,12 +478,13 @@ func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
 		alias := fmt.Sprintf("pr%d", i)
 		aliases[i] = alias
 		_, _ = fmt.Fprintf(&b, "%s: repository(owner:%s,name:%s){ pullRequest(number:%d){ %s } }\n",
-			alias, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, scmPRFields())
+			alias, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, fields(ref))
 	}
 	b.WriteString("}")
 	return b.String(), aliases
 }
 
+// scmPRFields are the state, CI and merge fields every poll reads.
 func scmPRFields() string {
 	return strings.ReplaceAll(`
 number id url state isDraft merged closed title additions deletions changedFiles
@@ -400,10 +494,34 @@ author{ login avatarUrl }
 mergeCommit{ oid }
 commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
   __typename
-  ... on CheckRun { name status conclusion detailsUrl url databaseId }
+  ... on CheckRun { `+checkRunFields+` }
   ... on StatusContext { context state targetUrl }
 } pageInfo{ hasNextPage endCursor } } } } } }
 `, "CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit))
+}
+
+// scmPRDetailsFields are the view-only details: description, labels,
+// requested reviewers, commits and conversation comments. Editing the
+// description, labels or reviewers, pushing commits and commenting all move
+// the PR's updatedAt, which is what lets a poll skip them.
+func scmPRDetailsFields() string {
+	return strings.NewReplacer(
+		"LABEL_LIMIT", strconv.Itoa(scmDetailsLabelLimit),
+		"REVIEWER_LIMIT", strconv.Itoa(scmDetailsReviewerLimit),
+		"COMMIT_LIMIT", strconv.Itoa(scmDetailsCommitLimit),
+		"CONVERSATION_LIMIT", strconv.Itoa(domain.MaxPullRequestConversationComments),
+	).Replace(`body
+labels(first:LABEL_LIMIT){ nodes{ name color } }
+reviewRequests(first:REVIEWER_LIMIT){ nodes{ requestedReviewer{
+  __typename
+  ... on User { login avatarUrl }
+  ... on Bot { login avatarUrl }
+  ... on Mannequin { login avatarUrl }
+  ... on Team { name }
+} } }
+commitList: commits(last:COMMIT_LIMIT){ totalCount nodes{ commit{ oid messageHeadline committedDate author{ name user{ login } } } } }
+conversation: comments(last:CONVERSATION_LIMIT){ nodes{ id body url createdAt author{ login __typename } } }
+`)
 }
 
 func (p *Provider) fetchRemainingCheckContexts(ctx context.Context, ref ports.SCMPRRef, pr map[string]any) error {
@@ -447,7 +565,7 @@ func buildCheckContextsQuery(ref ports.SCMPRRef, cursor string) string {
 repo: repository(owner:%s,name:%s){ pullRequest(number:%d){
   commits(last:1){ nodes{ commit{ statusCheckRollup{ contexts(first:%d, after:%s){ nodes{
     __typename
-    ... on CheckRun { name status conclusion detailsUrl url databaseId }
+    ... on CheckRun { `+checkRunFields+` }
     ... on StatusContext { context state targetUrl }
   } pageInfo{ hasNextPage endCursor } } } } } }
 } }
@@ -483,7 +601,7 @@ func pageInfoEndCursor(connection map[string]any) string {
 func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMObservation {
 	checks := scmChecksFromGraphQL(pr)
 	failed := failedSCMChecks(checks)
-	ci := string(ciSummaryFromRollupState(pr))
+	ci := string(scmCISummary(pr))
 	prURL := firstNonEmpty(str(pr["url"]), ref.URL)
 	review := string(reviewDecisionFromGraphQL(pr))
 	providerMergeable := str(pr["mergeable"])
@@ -554,6 +672,30 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	return mapRollupState(str(roll["state"]))
 }
 
+// scmCISummary is GitHub's rollup state, except a FAILURE that only superseded
+// or cancelled check runs cause: rollup state counts every run on the commit
+// and treats cancelled as failed, so with the full context list in hand the
+// verdict comes from the newest run per check.
+func scmCISummary(pr map[string]any) domain.CIState {
+	ci := ciSummaryFromRollupState(pr)
+	if ci != domain.CIFailing || scmContextsPaginated(pr) {
+		return ci
+	}
+	if latest := ciSummaryFromGraphQL(pr); latest != domain.CIUnknown || hasCancelledCheck(pr) {
+		return latest
+	}
+	return ci
+}
+
+func hasCancelledCheck(pr map[string]any) bool {
+	for _, n := range latestCheckRuns(nodes(statusContexts(pr)["nodes"])) {
+		if checkStatusFromGraphQL(n) == domain.PRCheckCancelled {
+			return true
+		}
+	}
+	return false
+}
+
 func scmContextsPaginated(pr map[string]any) bool {
 	return pageInfoHasMore(statusContexts(pr))
 }
@@ -561,7 +703,7 @@ func scmContextsPaginated(pr map[string]any) bool {
 func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
+	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
 	out := make([]ports.SCMCheckObservation, 0, len(rawNodes))
 	for _, n := range rawNodes {
 		typ := str(n["__typename"])
@@ -594,8 +736,7 @@ func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 func failedSCMChecks(checks []ports.SCMCheckObservation) []ports.SCMCheckObservation {
 	out := make([]ports.SCMCheckObservation, 0, len(checks))
 	for _, ch := range checks {
-		status := domain.PRCheckStatus(ch.Status)
-		if status == domain.PRCheckFailed || status == domain.PRCheckCancelled {
+		if isFailingCheckStatus(domain.PRCheckStatus(ch.Status)) {
 			out = append(out, ch)
 		}
 	}
@@ -711,7 +852,7 @@ func buildReviewThreadsQuery(ref ports.SCMPRRef, beforeCursor string, includeRev
 	return fmt.Sprintf(`query{
 repo: repository(owner:%s,name:%s){ pullRequest(number:%d){ reviewDecision%s reviewThreads(last:%d, before:%s){ nodes{
   id isResolved path line
-  comments(first:%d){ nodes{ id body url pullRequestReview{ databaseId } author{ login __typename } } }
+  comments(first:%d){ nodes{ id body url createdAt pullRequestReview{ databaseId } author{ login __typename } } }
 } pageInfo{ hasPreviousPage startCursor } } } }
 }`, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, reviewSelection, githubReviewThreadPageSize, before, githubReviewCommentLimitPerThread)
 }
@@ -762,12 +903,13 @@ func scmThreadFromGraphQL(th map[string]any) ports.SCMReviewThreadObservation {
 			allCommentsBot = false
 		}
 		out.Comments = append(out.Comments, ports.SCMReviewCommentObservation{
-			ID:       str(cn["id"]),
-			ReviewID: decimalID(parentReview["databaseId"]),
-			Author:   str(author["login"]),
-			Body:     str(cn["body"]),
-			URL:      str(cn["url"]),
-			IsBot:    isBot,
+			ID:        str(cn["id"]),
+			ReviewID:  decimalID(parentReview["databaseId"]),
+			Author:    str(author["login"]),
+			Body:      str(cn["body"]),
+			URL:       str(cn["url"]),
+			IsBot:     isBot,
+			CreatedAt: parseGitHubTime(str(cn["createdAt"])),
 		})
 	}
 	out.IsBot = allCommentsBot
