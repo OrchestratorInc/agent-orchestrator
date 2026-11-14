@@ -127,12 +127,45 @@ func (s *Service) Steer(
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
 	}
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return SteerResult{}, err
+	}
+	if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
+		if result, found, err := s.steerReceipt(ctx, id, msg); found || err != nil {
+			return result, err
+		}
+		return SteerResult{}, writerErr
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err
 	}
 	defer release()
 	return controller.Steer(ctx, msg)
+}
+
+func (s *Service) steerReceipt(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (SteerResult, bool, error) {
+	if msg.ClientMessageID == "" {
+		return SteerResult{}, false, nil
+	}
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if err != nil {
+		return SteerResult{}, false, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
+	}
+	delivery, found, err := s.store.SteerDelivery(ctx, conversation.ID, msg.ClientMessageID)
+	if err != nil || !found {
+		if err != nil {
+			err = fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
+		}
+		return SteerResult{}, false, err
+	}
+	requestJSON, err := encodeSteerDeliveryRequest(msg)
+	if err != nil {
+		return SteerResult{}, true, err
+	}
+	result, err := replaySteerDelivery(delivery, requestJSON)
+	return result, true, err
 }
 
 // RecoverSteer reads only the durable receipt. A missing controller or a changed
@@ -175,6 +208,22 @@ func (s *Service) SteerOrSend(
 	// targets render the same way.
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
+	}
+	if !recoverOnly {
+		record, err := s.requireChatSession(ctx, id)
+		if err != nil {
+			return SteerOrSendResult{}, err
+		}
+		if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
+			conversation, err := s.store.ConversationForSession(ctx, id)
+			if err != nil {
+				return SteerOrSendResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
+			}
+			if result, done, err := steerOrSendReceipt(ctx, s.store, conversation.ID, msg, false); done {
+				return result, err
+			}
+			return SteerOrSendResult{}, writerErr
+		}
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -571,54 +620,8 @@ func (c *Controller) SteerOrSend(
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	if existing, found, err := c.store.ConversationMessageByClientID(
-		ctx, c.conversation.ID, msg.ClientMessageID,
-	); err != nil {
-		return SteerOrSendResult{}, fmt.Errorf("recover sent message: %w", err)
-	} else if found {
-		if !recoverOnly {
-			hash, err := clientPayloadHash(msg)
-			if err != nil {
-				return SteerOrSendResult{}, err
-			}
-			if existing.ClientPayloadHash != "" {
-				if existing.ClientPayloadHash != hash {
-					return SteerOrSendResult{}, domain.ErrClientMessageConflict
-				}
-			} else if !legacyMessageMatches(existing, msg) {
-				return SteerOrSendResult{}, domain.ErrClientMessageConflict
-			}
-		}
-		turn, err := c.store.TurnByID(ctx, existing.TurnID)
-		if err != nil {
-			return SteerOrSendResult{}, fmt.Errorf("recover sent turn: %w", err)
-		}
-		return SteerOrSendResult{Duplicate: true, Turn: turn}, nil
-	}
-
-	requestJSON, err := encodeSteerDeliveryRequest(msg)
-	if err != nil {
-		return SteerOrSendResult{}, err
-	}
-	if delivery, found, err := c.store.SteerDelivery(
-		ctx, c.conversation.ID, msg.ClientMessageID,
-	); err != nil {
-		return SteerOrSendResult{}, fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
-	} else if found {
-		replayRequest := requestJSON
-		if recoverOnly {
-			replayRequest = delivery.RequestJSON
-		}
-		steered, replayErr := replaySteerDelivery(delivery, replayRequest)
-		if replayErr == nil {
-			return SteerOrSendResult{Steered: true, Duplicate: true, Steer: steered}, nil
-		}
-		if !errors.Is(replayErr, ErrNoActiveTurn) || recoverOnly {
-			return SteerOrSendResult{}, replayErr
-		}
-	}
-	if recoverOnly {
-		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
+	if result, done, err := steerOrSendReceipt(ctx, c.store, c.conversation.ID, msg, recoverOnly); done {
+		return result, err
 	}
 
 	if _, active := c.awaitAcknowledgedTurn(ctx); active {
@@ -662,6 +665,65 @@ func (c *Controller) SteerOrSend(
 		}
 	}
 	return SteerOrSendResult{Turn: turn}, nil
+}
+
+func steerOrSendReceipt(
+	ctx context.Context,
+	st Store,
+	conversationID string,
+	msg ports.ChatUserMessage,
+	recoverOnly bool,
+) (SteerOrSendResult, bool, error) {
+	if existing, found, err := st.ConversationMessageByClientID(
+		ctx, conversationID, msg.ClientMessageID,
+	); err != nil {
+		return SteerOrSendResult{}, true, fmt.Errorf("recover sent message: %w", err)
+	} else if found {
+		if !recoverOnly {
+			hash, err := clientPayloadHash(msg)
+			if err != nil {
+				return SteerOrSendResult{}, true, err
+			}
+			if existing.ClientPayloadHash != "" {
+				if existing.ClientPayloadHash != hash {
+					return SteerOrSendResult{}, true, domain.ErrClientMessageConflict
+				}
+			} else if !legacyMessageMatches(existing, msg) {
+				return SteerOrSendResult{}, true, domain.ErrClientMessageConflict
+			}
+		}
+		turn, err := st.TurnByID(ctx, existing.TurnID)
+		if err != nil {
+			return SteerOrSendResult{}, true, fmt.Errorf("recover sent turn: %w", err)
+		}
+		return SteerOrSendResult{Duplicate: true, Turn: turn}, true, nil
+	}
+
+	requestJSON, err := encodeSteerDeliveryRequest(msg)
+	if err != nil {
+		return SteerOrSendResult{}, true, err
+	}
+	if delivery, found, err := st.SteerDelivery(
+		ctx, conversationID, msg.ClientMessageID,
+	); err != nil {
+		return SteerOrSendResult{}, true, fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
+	} else if found {
+		replayRequest := requestJSON
+		if recoverOnly {
+			replayRequest = delivery.RequestJSON
+		}
+		steered, replayErr := replaySteerDelivery(delivery, replayRequest)
+		if replayErr == nil {
+			return SteerOrSendResult{Steered: true, Duplicate: true, Steer: steered}, true, nil
+		}
+		if !errors.Is(replayErr, ErrNoActiveTurn) || recoverOnly {
+			return SteerOrSendResult{}, true, replayErr
+		}
+	}
+	if recoverOnly {
+		return SteerOrSendResult{}, true, ErrSteerDeliveryUncertain
+	}
+	return SteerOrSendResult{}, false, nil
 }
 
 type steerDeliveryRequest struct {

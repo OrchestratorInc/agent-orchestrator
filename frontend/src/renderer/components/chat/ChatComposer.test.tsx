@@ -867,14 +867,15 @@ describe("send keys", () => {
 		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
-	it.each([
+	it.each<[string, string, string?]>([
 		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
 		["validation_error", "Request was rejected"],
 		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
 		// A refused /btw or /side launch must not lock the main draft.
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
-	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
+		["CHAT_OPEN_ELSEWHERE", "open in another process", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again."],
+	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message, shown = message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
 			.mockRejectedValueOnce({ code, message })
@@ -885,7 +886,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent(message);
+		expect(screen.getByRole("alert")).toHaveTextContent(shown);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);

@@ -77,6 +77,7 @@
 	"chat.archived.body": "历史记录已保留。恢复会话以继续。",
 	"chat.controller.openElsewhere": "已在其他地方打开",
 	"chat.controller.couldNotConnect": "无法连接到代理",
+	"chat.draft.openElsewhere": "此聊天已在另一个 Claude Code 会话中打开，例如终端或 IDE。请在那里退出，然后重新发送你的消息。",
 	"chat.controller.openElsewhereBody": "请在那里关闭它以在此继续。",
 	"chat.controller.openElsewhereRecheck": "Orchestrator 每 {{seconds}} 秒检查一次。",
 	"chat.controller.openElsewhereCodex": "Codex 可能会将已关闭的聊天保留一段时间。",

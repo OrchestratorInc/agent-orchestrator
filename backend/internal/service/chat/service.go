@@ -112,6 +112,7 @@ type Service struct {
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
+	otherWriter func(context.Context, domain.SessionRecord, time.Time) (bool, bool)
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}
@@ -423,6 +424,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 // startLocked is the launch implementation shared by ordinary starts and the
 // provider-switch saga. Callers must hold the typed controller gate.
 func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	startedAt := s.now()
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -1263,6 +1265,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.ExpectedControllerOwner.ControllerGeneration = controller.Generation()
 	}
 	s.mu.Lock()
+	if !liveReconnect {
+		controller.started = startedAt
+	}
 	s.ownerControllers[owner] = controller
 	if owner.Kind == domain.ConversationOwnerSession {
 		s.controllers[cfg.SessionID] = controller
@@ -1401,9 +1406,16 @@ func (s *Service) Send(
 	if err := validateFileReferenceContent(msg, string(id)); err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if s.switchBeforeSend(ctx, record) {
-		// The provider stopped on its old release. The hibernated path below
-		// queues this message and wakes the session on the installed one.
+	restarting, writerErr := s.checkOtherWriter(ctx, record)
+	if writerErr != nil {
+		return domain.ConversationTurn{}, writerErr
+	}
+	if restarting {
+		defer s.startBackgroundWake(id)
+	}
+	if restarting || s.switchBeforeSend(ctx, record) {
+		// The provider stopped. The hibernated path below queues this message
+		// and wakes the session.
 		if record, err = s.requireChatSession(ctx, id); err != nil {
 			return domain.ConversationTurn{}, err
 		}
@@ -2988,6 +3000,12 @@ func (s *Service) relayChatTurn(
 	// through the provider start, and a caller holding the session's input
 	// lease (a lifecycle nudge) deadlocks with the resume, which waits for that
 	// lease to drain.
+	stoppedForOtherWriter := false
+	defer func() {
+		if stoppedForOtherWriter {
+			s.startBackgroundWake(id)
+		}
+	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -2995,6 +3013,14 @@ func (s *Service) relayChatTurn(
 		record, err := s.requireChatSession(ctx, id)
 		if err != nil {
 			return "", err
+		}
+		restarting, err := s.checkOtherWriter(ctx, record)
+		if err != nil {
+			return "", err
+		}
+		if restarting {
+			stoppedForOtherWriter = true
+			continue
 		}
 		if record.HibernatedAt != nil {
 			turn, err := s.queueWithoutController(ctx, record, msg, false)

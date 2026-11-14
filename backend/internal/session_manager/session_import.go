@@ -306,6 +306,55 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	return false
 }
 
+const claudeTranscriptTail = 1 << 20
+
+// ImportedChatWrittenElsewhere reports whether another Claude Code process has
+// an imported chat open, and otherwise whether one wrote turns to its
+// transcript after since.
+func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.SessionRecord, since time.Time) (open, wrote bool) {
+	if rec.Metadata.ImportSource == nil || rec.Harness != domain.HarnessClaudeCode {
+		return false, false
+	}
+	if adoptedOwnedElsewhere(ctx, rec) {
+		return true, false
+	}
+	return false, !since.IsZero() && claudeTurnsWrittenElsewhere(rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
+}
+
+func claudeTurnsWrittenElsewhere(path, workspace string, since time.Time) bool {
+	if path == "" || workspace == "" {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.ModTime().After(since) {
+		return false
+	}
+	start := max(info.Size()-claudeTranscriptTail, 0)
+	tail := make([]byte, info.Size()-start)
+	if _, err := file.ReadAt(tail, start); err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	for line := range bytes.SplitSeq(tail, []byte{'\n'}) {
+		var record struct {
+			Type      string    `json:"type"`
+			CWD       string    `json:"cwd"`
+			Timestamp time.Time `json:"timestamp"`
+		}
+		if json.Unmarshal(line, &record) != nil || record.Type != "user" && record.Type != "assistant" {
+			continue
+		}
+		if record.CWD != "" && record.Timestamp.After(since) && !pathWithin(workspace, record.CWD) {
+			return true
+		}
+	}
+	return false
+}
+
 // claudeSessionLive reads Claude Code's live-session registry. A launch inside
 // this session's own AO workspace is an earlier AO attempt, not another owner.
 func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) bool {
@@ -323,6 +372,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 			SessionID string `json:"sessionId"`
 			CWD       string `json:"cwd"`
 			StartedAt int64  `json:"startedAt"`
+			Version   string `json:"version"`
 		}
 		if err != nil || json.Unmarshal(body, &live) != nil || live.SessionID != nativeID || live.PID <= 0 {
 			continue
@@ -330,7 +380,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 		if ownWorkspace != "" && pathWithin(ownWorkspace, live.CWD) {
 			continue
 		}
-		if claudeProcessLive(ctx, live.PID, live.StartedAt) {
+		if claudeProcessLive(ctx, live.PID, live.StartedAt, live.Version) {
 			return true
 		}
 	}
@@ -340,13 +390,13 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 // claudeProcessLive checks a registry entry against the process now holding its
 // PID. Registry files outlive crashes and PIDs are reused, so the PID must still
 // be a Claude process, and one that started before it registered the session.
-func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) bool {
+func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, version string) bool {
 	if !processalive.Alive(pid) {
 		return false
 	}
 	name, started, ok := processStart(ctx, pid)
 	name = strings.ToLower(name)
-	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") {
+	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") && (version == "" || !strings.EqualFold(name, version)) {
 		return false
 	}
 	return registeredAtMillis <= 0 || !started.After(time.UnixMilli(registeredAtMillis))

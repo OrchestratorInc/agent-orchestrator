@@ -71,6 +71,7 @@
 	"chat.archived.body": "История сохранена. Восстановите сессию, чтобы продолжить.",
 	"chat.controller.openElsewhere": "Открыт в другом месте",
 	"chat.controller.couldNotConnect": "Не удалось подключиться к агенту",
+	"chat.draft.openElsewhere": "Этот чат открыт в другом сеансе Claude Code, например в терминале или IDE. Завершите его там, затем отправьте сообщение ещё раз.",
 	"chat.controller.openElsewhereBody": "Закройте его там, чтобы продолжить здесь.",
 	"chat.controller.openElsewhereRecheck": "Orchestrator проверяет снова каждые {{seconds}} с.",
 	"chat.controller.openElsewhereCodex": "Codex может какое-то время удерживать закрытый чат.",
