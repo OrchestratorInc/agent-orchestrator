@@ -32,7 +32,7 @@ Show the plan as go, ask and blocked, and wait for answers on ask.
 ## 4. Apply
 Note each current version first; it is the rollback.
 - Coding agents: `aoapi POST "agents/<id>/update-advisory"`, then check `aoapi GET "agents/<id>/install"` every 15 seconds until `status` is `succeeded` or fails. Orchestrator updates the agent the way it was installed.
-- `gh`, `node`: `brew upgrade gh node` on macOS (or the installed `node@<major>`); Linux needs the package manager and usually `sudo`: give the command and let the user run it. Global npm tools: `npm i -g <pkg>@latest`. `brew` level: `brew upgrade`.
+- `gh`, `node`: `brew upgrade <approved formulae>` on macOS, naming only the items that passed the safety check (`brew upgrade gh` for "update gh"; `node` or the installed `node@<major>` only when it passed too); Linux needs the package manager and usually `sudo`: give the command and let the user run it. Global npm tools: `npm i -g <pkg>@latest`. `brew` level: `brew upgrade <formulae>` with the approved items from `brew outdated`, never a bare `brew upgrade`.
 
 ## 5. Check and report
 `<tool> --version` for each updated item; for agents, `aoapi GET "agents/<id>/update-advisory"` shows `current`. Per host: before and after, what was skipped and why. Anything broken: the error in one line and the rollback (`npm i -g <pkg>@<old>`, `brew install <formula>@<old>`), done only on a yes.

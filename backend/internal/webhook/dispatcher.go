@@ -100,6 +100,9 @@ type Payload struct {
 	Sessions    []string                       `json:"sessions,omitempty"`
 	FirstAt     *time.Time                     `json:"firstAt,omitempty"`
 	LastAt      *time.Time                     `json:"lastAt,omitempty"`
+
+	tries    int
+	firstTry time.Time
 }
 
 // Status is a hook's delivery state since the daemon started.
@@ -419,7 +422,11 @@ func (d *Dispatcher) drain(ctx context.Context, name string, q *queue) {
 		}
 		for {
 			q.mu.Lock()
-			wait := q.pausedUntil.Sub(d.clock())
+			until := q.pausedUntil
+			if q.retryAt.After(until) {
+				until = q.retryAt
+			}
+			wait := until.Sub(d.clock())
 			q.mu.Unlock()
 			if wait > 0 && !sleep(ctx, wait) {
 				return
@@ -436,7 +443,7 @@ func (d *Dispatcher) drain(ctx context.Context, name string, q *queue) {
 }
 
 func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Payload) bool {
-	if p.Event == EventExited {
+	if p.Event == EventExited && p.tries == 0 {
 		if wait := p.At.Add(d.settle).Sub(d.clock()); wait > 0 && !sleep(ctx, wait) {
 			return false
 		}
@@ -445,42 +452,44 @@ func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Paylo
 			return true
 		}
 	}
-	start := d.clock()
-	for attempt := 0; ; attempt++ {
-		h, ok := d.deps.Store.Get(name)
-		if !ok {
-			q.clear()
-			return true
-		}
-		retryAfter, err := d.post(ctx, h, p)
-		now := d.clock()
-		q.mu.Lock()
-		q.record(err, now)
-		var limited *rateLimited
-		switch {
-		case err == nil:
-			q.mu.Unlock()
-			return true
-		case errors.Is(err, errPermanent):
-			q.mu.Unlock()
-			d.deps.Log.Warn("webhook: event rejected", "hook", name, "event", p.Event, "err", err)
-			return true
-		}
-		wait := retryBackoff[min(attempt, len(retryBackoff)-1)]
-		if errors.As(err, &limited) {
-			wait = retryAfter
-			q.pausedUntil = now.Add(wait)
-		}
-		q.failing = true
-		q.mu.Unlock()
-		if now.Sub(start) > giveUpAfter {
-			d.deps.Log.Warn("webhook: giving up on event", "hook", name, "event", p.Event, "err", err)
-			return true
-		}
-		if !sleep(ctx, wait) {
-			return false
-		}
+	h, ok := d.deps.Store.Get(name)
+	if !ok {
+		q.clear()
+		return true
 	}
+	retryAfter, err := d.post(ctx, h, p)
+	now := d.clock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.record(err, now)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, errPermanent):
+		d.deps.Log.Warn("webhook: event rejected", "hook", name, "event", p.Event, "err", err)
+		return true
+	}
+	if p.tries == 0 {
+		p.firstTry = now
+	}
+	if now.Sub(p.firstTry) > giveUpAfter {
+		d.deps.Log.Warn("webhook: giving up on event", "hook", name, "event", p.Event, "err", err)
+		return true
+	}
+	var limited *rateLimited
+	if errors.As(err, &limited) {
+		q.pausedUntil = now.Add(retryAfter)
+	} else {
+		q.retryAt = now.Add(retryBackoff[min(p.tries, len(retryBackoff)-1)])
+	}
+	p.tries++
+	q.failing = true
+	if urgent(p.Event) {
+		q.urgent = append([]Payload{p}, q.urgent...)
+	} else {
+		q.normal = append([]Payload{p}, q.normal...)
+	}
+	return true
 }
 
 var errPermanent = errors.New("webhook refused the event")
@@ -575,6 +584,7 @@ type queue struct {
 	summary     *Payload
 	runEnds     []time.Time
 	pausedUntil time.Time
+	retryAt     time.Time
 	failing     bool
 	status      Status
 }
@@ -582,8 +592,8 @@ type queue struct {
 func (q *queue) push(p Payload, now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	switch p.Event {
-	case EventFinished, EventWorkerFinished:
+	switch {
+	case p.Event == EventFinished || p.Event == EventWorkerFinished:
 		cut := 0
 		for cut < len(q.runEnds) && now.Sub(q.runEnds[cut]) > time.Minute {
 			cut++
@@ -595,7 +605,7 @@ func (q *queue) push(p Payload, now time.Time) {
 		}
 		q.runEnds = append(q.runEnds, now)
 		q.normal = append(q.normal, p)
-	case EventNeedsInput, EventExited, EventInputResolved, EventFailed:
+	case urgent(p.Event):
 		q.urgent = append(q.urgent, p)
 	default:
 		if len(q.normal) >= maxQueued {
@@ -607,6 +617,14 @@ func (q *queue) push(p Payload, now time.Time) {
 	case q.signal <- struct{}{}:
 	default:
 	}
+}
+
+func urgent(kind string) bool {
+	switch kind {
+	case EventNeedsInput, EventExited, EventInputResolved, EventFailed:
+		return true
+	}
+	return false
 }
 
 func (q *queue) fold(p Payload) {

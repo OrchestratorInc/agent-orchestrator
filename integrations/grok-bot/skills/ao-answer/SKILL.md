@@ -46,7 +46,7 @@ Each line is one thing waiting:
 | `user_input` | A question. `detail.message` asks it; `detail.schema.properties` are the fields, with choices in `enum` or `oneOf` |
 | `reply` | The agent asked in plain text: a session that waits with no request (or a terminal session), or an idle session from the last 24 hours whose last reply ends with a question (`asked` holds its end). Read its last reply (ao-status "One session in detail") |
 
-With live events on (ao-live), questions arrive the moment they are asked; this check is for "what's waiting on me" and hosts without live events. In the **AO waiting check** routine: keep what you already showed in `~/.ao-grok/shown.txt` on `via`, one line per item (`<host> <session> <requestId>`, or `<host> <session> reply <lastEventAt>` for a `reply`), and message only about new items. Send nothing when nothing new is waiting.
+With live events on (ao-live), questions arrive the moment they are asked and ao-event records them in `shown.txt`. Keep this check on anyway: it catches what live events don't send, such as a worker that asks in plain text, and kinds, projects or desk time a webhook skips. In the **AO waiting check** routine: keep what you already showed in `~/.ao-grok/shown.txt` on `via`, one line per item (`<host> <session> <requestId>`, or `<host> <session> reply <lastEventAt>` for a `reply`), and message only about new items. Send nothing when nothing new is waiting.
 
 ## 2. Show it
 Per session, one short briefing first: `<host>/<session>` and its name, what it is doing, and what it asks, in one or two sentences. Don't recommend anything. Then:

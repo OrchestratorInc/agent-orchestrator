@@ -11,8 +11,8 @@
   {
    "id": "ao-answer",
    "path": "skills/ao-answer/SKILL.md",
-   "bytes": 5844,
-   "sha256": "23481437a4ebb2869e32fc2a53b32079295370d50f3359f8648ccf299ff29faa"
+   "bytes": 5972,
+   "sha256": "4caccfb531e34f99cd963a5ce553f4a175cc0cbfdbdc5a963fb5a9746ae122f4"
   },
   {
    "id": "ao-checkup",
@@ -29,44 +29,44 @@
   {
    "id": "ao-dev-update",
    "path": "skills/ao-dev-update/SKILL.md",
-   "bytes": 3487,
-   "sha256": "6d77636777d6d4af659431b14abf0a176834a9219e58a5e8a00bc31422235534"
+   "bytes": 3702,
+   "sha256": "5068476765ffbfc45bb181f51cc9b1762647b60aebe433ec1a71af79f179bd05"
   },
   {
    "id": "ao-event",
    "path": "skills/ao-event/SKILL.md",
-   "bytes": 6910,
-   "sha256": "660136d0e9a97ece9cd6f60e46da531e7945bfd989a4d5f632804c5ca67aea78"
+   "bytes": 7825,
+   "sha256": "83e016069a132ea949c4c317bd4b9742a639dd807eaf89b38b0f446cf4aa3c38"
   },
   {
    "id": "ao-handoff",
    "path": "skills/ao-handoff/SKILL.md",
-   "bytes": 2034,
-   "sha256": "22b54e525f1623c484c3152716c9f5ed3c5372925a31dc67f0ba70d8efee5895"
+   "bytes": 2250,
+   "sha256": "678e0c92cc026bb7190b3a30c171dae30156eacd5dc2b8e65b8fd309115fecee"
   },
   {
    "id": "ao-learnings",
    "path": "skills/ao-learnings/SKILL.md",
-   "bytes": 1583,
-   "sha256": "b8141c3450a25308df38fa0a4d447334bc52036fbbc2bd1d14f1d5899e8db580"
+   "bytes": 1717,
+   "sha256": "6d9a951f263d7993a0d258bc8d7074199da93a110fc71441554d2d0a25dae8fe"
   },
   {
    "id": "ao-live",
    "path": "skills/ao-live/SKILL.md",
-   "bytes": 7953,
-   "sha256": "13ec0e97615b527dcd8913d6e7998cc35df7d8c6c90510e909cc9a306a11466f"
+   "bytes": 8316,
+   "sha256": "a4be948fdf665ff4c5cd308379e803cb479896df4a89479e12dbf133fac547d5"
   },
   {
    "id": "ao-orchestrator",
    "path": "skills/ao-orchestrator/SKILL.md",
-   "bytes": 6338,
-   "sha256": "cdb829eb57a9f0d11e43ef839e7d31d6222c15cdeaf45dc07ad9e47f229e0e91"
+   "bytes": 6496,
+   "sha256": "6bb83c882527ab15182d0d87ef5791547696732ea5a4dd8d9d7d693b2fa78f9d"
   },
   {
    "id": "ao-report",
    "path": "skills/ao-report/SKILL.md",
-   "bytes": 3599,
-   "sha256": "6a2f5bc1b268c03cad64992bb1d908b62254a280d38bb6f90a7ed922adf0938e"
+   "bytes": 4065,
+   "sha256": "013120da298a687f68d72b04af63f784a165f78ed7f4f5a1af2be656ae9e0eab"
   },
   {
    "id": "ao-rules",
@@ -77,14 +77,14 @@
   {
    "id": "ao-setup",
    "path": "skills/ao-setup/SKILL.md",
-   "bytes": 16502,
-   "sha256": "4562c6d858a025c282ae892dc41bbb88c6642cacaff90f2fa8fc77749c1e1ff0"
+   "bytes": 16811,
+   "sha256": "1f095783cd5f6627149e2ae21790983a88e9ca444634194c30befa7d47f9cd81"
   },
   {
    "id": "ao-status",
    "path": "skills/ao-status/SKILL.md",
-   "bytes": 5026,
-   "sha256": "a4cc3a05d69643751b89e9ba10a642cd1c69b16a68af0102b29eb0a1209cfb2a"
+   "bytes": 4874,
+   "sha256": "46a6b80c5501ebb48edbef5c2c7b4ab1cb1237cab781072c77e41082a8d359af"
   },
   {
    "id": "ao-sync",
@@ -107,14 +107,14 @@
   {
    "id": "ao-update",
    "path": "skills/ao-update/SKILL.md",
-   "bytes": 17817,
-   "sha256": "d1823c0dbcd58fe87579785337d23c1e19b9bb5dfef2b83223357efc0425059f"
+   "bytes": 18596,
+   "sha256": "720becf61f775564ff936b36d4798efa44ff06825e2134d2a55f726dd09c6438"
   },
   {
    "id": "ao-usage",
    "path": "skills/ao-usage/SKILL.md",
-   "bytes": 2498,
-   "sha256": "def1422edb2c70db7c621aca58af92c7b99df412427efded101a6dc114a4ff3b"
+   "bytes": 2700,
+   "sha256": "d38b7fc440974d17ed0618417ce1694452faec8b7bcb64489b0708ada0bd2586"
   },
   {
    "id": "ao-watch",

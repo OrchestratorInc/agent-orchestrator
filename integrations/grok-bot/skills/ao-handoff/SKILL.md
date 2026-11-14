@@ -11,7 +11,7 @@ Follow the ao-rules skill. Read-only on the user's computers. Launch only after 
 ## 1. Gather
 1. Find the session (`<host>/<id>`). Read its last 20 turns (`aoapi GET "sessions/<id>/history?offset=0&limit=20"`) and its PRs (`aoapi GET "sessions/<id>/pr"`).
 2. `aoapi GET "projects/<project>"` gives `repo` and `defaultBranch`. The session record has its `branch`.
-3. The cloud agent sees only what is pushed. On a local host, check the worktree through Orchestrator: `aoapi GET "sessions/<id>/workspace/manifest"`. Files in the `uncommitted` section, or a branch that was never pushed: ask the user to have the session commit and push first (ao-orchestrator), or start from the default branch.
+3. The cloud agent sees only what is pushed. Check through Orchestrator: `aoapi GET "sessions/<id>"` has `branchState`; on a local host also `aoapi GET "sessions/<id>/workspace/manifest"`. Files in the `uncommitted` section, no `branchState.remoteBranch` (never pushed) or `branchState.unpushed` above 0 (commits after the last push): ask the user to have the session commit and push first (ao-orchestrator). Start from an older base (the pushed branch as it is, or the default branch) only on the user's explicit yes, saying what it leaves out.
 4. No GitHub repo: stop and say a cloud agent needs one.
 
 ## 2. Brief

@@ -13,7 +13,7 @@ description: >-
 ---
 Follow the ao-rules skill. This runs on the bot's own cloud computer (the box), not on the user's computers. It changes only this bot's ao-* skills, and only after the user's yes or in auto mode.
 
-The skills are published in the public Orchestrator repository (`OrchestratorInc/agent-orchestrator`, folder `integrations/grok-bot/`) with a `manifest.json` that lists each skill's sha256. Every check reads the newest commit on `main`, then downloads the manifest and the skills from that exact commit, so the files always match each other.
+The skills are published in the public Orchestrator repository (`OrchestratorInc/agent-orchestrator`, folder `integrations/grok-bot/`) with a `manifest.json` that lists each skill's sha256. Every check reads the newest commit on `main`, then downloads the manifest and the skills from that exact commit, so the files always match each other. An update installs the commit the user said yes to, never a newer one.
 
 ## 1. Save the fetcher
 Save it on the box if `/workspace/ao-bot/fetch.py` is missing or differs:
@@ -50,7 +50,9 @@ def norm(s):
     return hashlib.sha256("\0".join([s["name"], s["description"], s["body"].strip()]).encode()).hexdigest() if s else None
 def live(i):
     p = os.path.join(LIVE, i, "SKILL.md")
-    return parse(open(p, encoding="utf-8-sig", errors="replace").read()) if os.path.exists(p) else None
+    if not os.path.exists(p): return None
+    raw = open(p, encoding="utf-8-sig", errors="replace").read()
+    return parse(raw) or {"name": "", "description": "", "body": raw, "broken": True}
 def release(sha, man, src=None):  # every skill of one published version, each checked against its manifest
     out = {}
     for s in man["skills"]:
@@ -84,11 +86,13 @@ def merge(l, b, n):  # the user's edit and the release's change in one copy, or 
 def diff(a, b, x, y):
     r = subprocess.run(["git", "diff", "--no-index", "--no-color", "-U2", "--", a, b], capture_output=True, text=True)
     return r.stdout.replace("a" + a, x).replace("b" + b, y)
-def plan():
-    sha = "local" if SRC else json.loads(get(f"https://api.github.com/repos/{REPO}/commits/main"))["sha"]
+def plan(sha=None):
+    sha = sha or ("local" if SRC else json.loads(get(f"https://api.github.com/repos/{REPO}/commits/main"))["sha"])
+    if not re.fullmatch(r"[0-9a-f]{40}|local", sha): sys.exit(f"BAD_COMMIT {sha}")
     new = json.loads(read(sha, "manifest.json", SRC)); rel = release(sha, new, SRC)
     old = jload(os.path.join(STATE, "manifest.json"), {"version": None, "skills": []})
     kept = jload(os.path.join(STATE, "kept.json"), {}); has_live = os.path.isdir(LIVE)
+    unresolved = set(jload(os.path.join(STATE, "unresolved.json"), []))
     bases = {i: jload(os.path.join(STATE, "base", i + ".json"), None) for i in rel}
     earlier = published(old["version"]) if has_live and not all(bases.values()) else {}
     was = {s["id"]: s["sha256"] for s in old["skills"]}; now = {s["id"]: s["sha256"] for s in new["skills"]}
@@ -97,8 +101,9 @@ def plan():
         if not has_live:
             st[i] = "same" if was.get(i) == now[i] else "changed"; continue
         l, c = live(i), earlier.get(i, [])
-        b = bases[i] = bases[i] or next((x for x in c if norm(x) == norm(l)), None) or (c[0] if old["version"] and c else None)
+        b = bases[i] = bases[i] or next((x for x in c if norm(x) == norm(l)), None) or (c[0] if old["version"] and c and i not in unresolved else None)
         if l is None: st[i] = "new"
+        elif l.get("broken"): st[i] = "unknown"
         elif norm(l) == norm(n): st[i] = "same"
         elif kept.get(i) == norm(n): st[i] = "kept"
         elif b is None: st[i] = "unknown"
@@ -114,11 +119,11 @@ cmd = sys.argv[1] if len(sys.argv) > 1 else "check"
 if cmd == "check":
     sha, new, old, rel, bases, st, merged, removed, has_live = plan()
     pick = lambda k: [i for i in sorted(st) if st[i] == k]
-    print(json.dumps({"installed": old["version"], "latest": new["version"], "commit": sha[:12], "live": has_live,
+    print(json.dumps({"installed": old["version"], "latest": new["version"], "commit": sha, "live": has_live,
         "new": pick("new"), "changed": pick("changed"), "yours": pick("yours"), "kept": pick("kept"), "unknown": pick("unknown"),
         "both": [{"id": i, "merges_cleanly": i in merged} for i in pick("both")], "removed": removed}))
 elif cmd == "fetch":
-    sha, new, old, rel, bases, st, merged, removed, has_live = plan()
+    sha, new, old, rel, bases, st, merged, removed, has_live = plan(sys.argv[2] if len(sys.argv) > 2 else None)
     shutil.rmtree(PENDING, ignore_errors=True); os.makedirs(PENDING)
     back = os.path.join(STATE, "backups", new["version"] + "-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     apply = sorted([i for i in st if st[i] in ("new", "changed")], key=lambda i: (i != "ao-rules", i == "ao-update", i))
@@ -149,25 +154,27 @@ elif cmd == "fetch":
     print(json.dumps({"apply": apply, "ask_the_user": [e["id"] for e in ask], "folder": PENDING}))
 elif cmd == "done":
     p = jload(os.path.join(PENDING, "PLAN.json"), None) or sys.exit("NO_PLAN")
-    synced = []
+    synced, unresolved = [], []
     for s in p["manifest"]["skills"]:
         i = s["id"]; n = jload(os.path.join(PENDING, i + ".new.json"), None); m = jload(os.path.join(PENDING, i + ".merged.json"), None)
         if n and (not os.path.isdir(LIVE) or norm(live(i)) in (norm(n), norm(m))):
             jsave(os.path.join(STATE, "base", i + ".json"), n); synced.append(i)
         elif os.path.exists(os.path.join(PENDING, i + ".base.json")):
             jsave(os.path.join(STATE, "base", i + ".json"), jload(os.path.join(PENDING, i + ".base.json"), None))
+        else: unresolved.append(i)
+    jsave(os.path.join(STATE, "unresolved.json"), unresolved)
     jsave(os.path.join(STATE, "manifest.json"), p["manifest"]); print("INSTALLED", p["version"], "in step:", " ".join(synced))
 elif cmd == "keep":
     i = sys.argv[2]; n = jload(os.path.join(PENDING, i + ".new.json"), None) or sys.exit("NO_PLAN")
     k = jload(os.path.join(STATE, "kept.json"), {}); k[i] = norm(n); jsave(os.path.join(STATE, "kept.json"), k); print("KEPT", i)
 else:
-    sys.exit("usage: fetch.py check|fetch|done|keep <id>")
+    sys.exit("usage: fetch.py check|fetch <commit>|done|keep <id>")
 PY
 }; f
 ```
 
 ## 2. Check (read-only, no yes needed)
-`python3 /workspace/ao-bot/fetch.py check` prints the installed and latest version and one list per kind:
+`python3 /workspace/ao-bot/fetch.py check` prints the installed and latest version, the `commit` they come from, and one list per kind:
 
 | Kind | Meaning | Do |
 |---|---|---|
@@ -176,7 +183,7 @@ PY
 | `yours` | The user edited it; the release didn't change it | Keep it. No question |
 | `kept` | The user chose to keep their copy of this release | Keep it. No question |
 | `both` | The user edited it and the release changed it. `merges_cleanly` says whether the two touch different lines | Ask, one by one ("Skills you edited") |
-| `unknown` | It differs from the release and nothing on record says whether the user edited it | Ask, one by one |
+| `unknown` | It differs from the release and nothing on record says whether the user edited it, or its file can't be read as a skill | Ask, one by one |
 | `removed` | The release no longer has it | Ask before deleting |
 
 Nothing new, changed, both or unknown: say it's up to date and stop. `"live": false` means the box has no skills folder where Grok Bot keeps them, so edits can't be seen: say that updating replaces the changed skills as they are. `DOWNLOAD_FAILED`: GitHub or the network didn't answer (a 404 means the skills aren't published at that path yet). Say so and try again later.
@@ -185,7 +192,7 @@ Nothing new, changed, both or unknown: say it's up to date and stop. `"live": fa
 One short message: installed and latest version, the new and changed skills, the ones kept as the user's edit, and any `both`, `unknown` or removed ones. Ask "Update to <latest>?". "Yes, but skip <skill>": leave it out, and after step 4.1 run `python3 /workspace/ao-bot/fetch.py keep <skill>`.
 
 ## 4. On yes
-1. `python3 /workspace/ao-bot/fetch.py fetch`. It downloads every skill of that commit, checks each sha256 against the manifest, backs up each live copy it may replace, and writes `/workspace/ao-bot/pending/`: `PLAN.json` plus `<id>.new.json` (`name`, `description`, `body`) per skill. `HASH_MISMATCH <id>`: stop, change nothing, and tell the user.
+1. `python3 /workspace/ao-bot/fetch.py fetch <commit>`, with the `commit` from the check the user said yes to. It downloads every skill of that commit, checks each sha256 against the manifest, backs up each live copy it may replace, and writes `/workspace/ao-bot/pending/`: `PLAN.json` plus `<id>.new.json` (`name`, `description`, `body`) per skill. `HASH_MISMATCH <id>`: stop, change nothing, and tell the user.
 2. Go through `PLAN.json` `apply` in order (ao-rules first, ao-update last). For each, call UpdateSkill with that `<id>.new.json`'s `name`, `description` and `body`: rewrite the skill of that name, or create it. A subagent can't call UpdateSkill: the main agent does this step.
 3. Handle `ask_the_user` ("Skills you edited").
 4. `python3 /workspace/ao-bot/fetch.py done` records the version and, per skill now in step with the release, the copy later checks compare against.
@@ -204,14 +211,14 @@ Never keep an edit that removes or weakens an ao-rules "Decisions", "Writes", "S
 ## Update mode
 One memory note says how updates happen: "Orchestrator Bot updates: auto", "notify" or "off". Setup asks once (ao-setup "Mode and routines"). "Update automatically", "just tell me about updates" or "stop checking for updates" changes the note and resumes or pauses the **Orchestrator Bot updates** routine (Mondays at 10:00) to match. Create the routine if it is missing, never a second one.
 - **auto**: the weekly run installs a new version by itself and tells the user after. Skills the user edited are never replaced in that run.
-- **notify**: the weekly run installs nothing. It tells the user a version is out and asks "Update to <latest>?". Their yes in chat runs step 4.
+- **notify**: the weekly run installs nothing. It tells the user a version is out and asks "Update to <latest>?". Their yes in chat runs step 4 with the commit in the "update offered" note.
 - **off**: the routine is paused. The user says "update Orchestrator Bot" when they want it.
 
 ## Weekly update run
 The routine's prompt is: "Orchestrator Bot weekly update. Follow ao-update "Weekly update run" and ao-rules. Send nothing when nothing changed."
 1. Save the fetcher if it differs (step 1), then run the check. Nothing new, changed, both or unknown: do the "After an update" checks if the memory note "Orchestrator Bot checks done for <version>" is missing or older, and otherwise send nothing.
-2. **notify**: one message, once per version (note "update offered: <version>" in memory): the latest version, the new and changed skills, and any skill waiting for the user's choice. Ask "Update to <latest>?". Stop.
-3. **auto**: run step 4.1, 4.2, 4.4 and 4.6. Leave `ask_the_user` skills as they are and list them with their three choices, for the main chat. Never delete a skill from a routine run.
+2. **notify**: one message, once per version (note "update offered: <version> <commit>" in memory): the latest version, the new and changed skills, and any skill waiting for the user's choice. Ask "Update to <latest>?". Stop.
+3. **auto**: run step 4.1 with this check's commit, then 4.2, 4.4 and 4.6. Leave `ask_the_user` skills as they are and list them with their three choices, for the main chat. Never delete a skill from a routine run.
 4. One short message: the old and new version, what was updated, and what waits for the user.
 5. `HASH_MISMATCH` or a failed step: say what was and wasn't updated, once per version and error, and note it in memory so later runs stay quiet until the version or the error changes.
 

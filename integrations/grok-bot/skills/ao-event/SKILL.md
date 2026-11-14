@@ -38,7 +38,7 @@ for a in json.load(sys.stdin).get("activities") or []:
             "decisions":a.get("decisions") or (a.get("detail") or {}).get("decisions"),"detail":a.get("detail")}))'; }; f
 ```
    Nothing printed: it was answered already, or the agent asked in plain text. Read its last reply (`aoapi GET "sessions/<sessionId>/history?offset=0&limit=1"`, `agentResponse`). A question at its end: show that question with its options if it gives clear ones, else ask for a typed answer. No question: send nothing.
-2. One short briefing: `<host>/<sessionId>`, `sessionName`, what it asks, in one or two sentences. No recommendation.
+2. One short briefing: `<host>/<sessionId>`, `sessionName`, what it asks, in one or two sentences. No recommendation. Add a line `<host> <sessionId> <requestId>` per request you show to `~/.ao-grok/shown.txt` on `via`, so the waiting check doesn't show it again.
 3. **approval**: the command or change verbatim (`summary`, `detail.input`), your risk, and the `decisions` labels exactly as one card. Mark an `allow_always` decision as "changes this agent's permissions for good".
    **user_input**: one card with every question, in order. A field with `oneOf` or `enum` is a question: its `oneOf` titles or `enum` values are the options, exactly. A field whose `_meta._askUserQuestionCustomAnswer.questionId` names another field is that question's "Other" box: a typed-answer option on that question. Any other free-text field is a question with a typed answer. `detail.inputMode` `url`: tell the user to answer it in Orchestrator.
 4. Answer with the user's pick:
@@ -55,6 +55,19 @@ for a in json.load(sys.stdin).get("activities") or []:
 
 ## An exited agent
 Offer "Resume <host>/<sessionId>?". On yes (or away mode, once per session): `aoapi POST "sessions/<id>/resume-agent" '{}'`. An orchestrator that exits again right away: tell the user and leave it.
+
+## Awaited reply
+Memory has "awaiting reply: <host>/<sessionId> <tag>". Read the whole reply, not the end in `lastReply`:
+```sh
+f(){ <aoapi helper>; aoapi GET "sessions/<sessionId>/history?offset=0&limit=5" | python3 -c '
+import json,sys
+for t in json.load(sys.stdin).get("turns") or []:
+    if (t.get("userRequest") or "").startswith(sys.argv[1]) and t.get("agentResponse"):
+        print(t["agentResponse"]); raise SystemExit(0)
+raise SystemExit(1)' '<tag>'; }; f
+```
+- A reply: relay it faithfully as the reply the user was waiting for; shorten only for a phone, and send a long one as a file. Then delete the note and the routine "AO reply <tag>".
+- Nothing printed: this turn was another one. Report it as a plain finished turn, and keep the note and the routine.
 
 ## A finished turn
 - `lastReply` ends with a question to the user: handle it as a plain-text question (step 1 onwards).

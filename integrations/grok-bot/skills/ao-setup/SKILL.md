@@ -133,12 +133,12 @@ Use this when Orchestrator runs on a computer that has no Grok Bot desktop app, 
 2. Tell the user, in one message:
    "On the host, open Orchestrator, go to remote access (Connect Mobile) and turn on network access. It shows an address and a pairing code. Send me the **address** here. You'll type the pairing code on <via> in a window I open, so it never passes through this chat."
    On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host pair` shows the address and a pairing code. A code works once, within 10 minutes. If Orchestrator on another computer already connects to the host, that computer's Settings > Remote hosts shows the address too.
-3. When the address arrives, check it looks like `https://h-<letters and digits>.useao.dev` (the host's account address: it works from any network, so prefer it) or `http://<ip or name>:<port>` (the same network only). Check it without a password first: `curl -sS -m 8 -w ' HTTP %{http_code}\n' '<address>/api/v1/identity'`. HTTP 200 gives the host's `hostId`: keep it for step 5. If that `hostId` is already in the AO hosts note, it is that host: say so and stop. Any other result: say what it means (ao-rules "When a host can't be reached") and stop. Then, on `via`, write a one-time pairing window and open it. Replace `<name>` with the host name you checked and `<address>` with the address: run "Pairing window" below.
+3. When the address arrives, check it looks like `https://h-<letters and digits>.useao.dev` (the host's account address: it works from any network, so prefer it) or `http://<ip or name>:<port>` (the same network only). Check it without a password first: `curl -sS -m 8 -w ' HTTP %{http_code}\n' '<address>/api/v1/identity'`. HTTP 200 gives the host's `hostId`: keep it for step 5. If that `hostId` is already in the AO hosts note: on a `reach: local` line it is that same computer, so say so and stop; on a `reach: remote` line this is a repair (a revoked token or a changed password), so keep that host's name, say you are reconnecting it, and go on. Any other result: say what it means (ao-rules "When a host can't be reached") and stop. Then, on `via`, write a one-time pairing window and open it. Replace `<name>` with the host name you checked and `<address>` with the address: run "Pairing window" below.
    Tell the user: "A Terminal window opened on <via>. Type the pairing code there and press Return."
    On Linux, `open` doesn't run `.command` files: write the same lines to `~/.ao-grok/add-<name>.sh` and ask the user to run `zsh ~/.ao-grok/add-<name>.sh` in a terminal on `via`.
 4. When they say done, test it from `via`: run "Connection test" below.
    HTTP 401 means a wrong, used or expired code: ask for a new code and open the window again. A timeout means the host is not reachable from `via` (another network, asleep, or access off).
-5. Add the host to the **AO hosts** note with `reach: remote`, `via`, `base`, `header` and `id` = the `hostId` from step 3.
+5. Add the host to the **AO hosts** note with `reach: remote`, `via`, `base`, `header` and `id` = the `hostId` from step 3. For a repair, update that host's line (`via`, `base`, `header`) instead of adding one.
 
 ### Pairing window
 The host swaps the code for this computer's own token, which the host can revoke by itself. A host from before pairing codes takes its password, typed the same way, and that is saved as is.
@@ -165,7 +165,7 @@ Limits of a remote host, said once: keep-awake, browser screenshots and starting
 1. Save **Mode: default** in memory (ao-rules "Decisions"). Say in one line that away mode exists: "Say 'I'm away till 6' and I'll keep routine work moving."
 2. Offer these in one multi-select card, nothing pre-selected, plus **none**:
    - **Live events** (recommended): questions, finished orchestrator turns, failures, exits and PR news reach this chat the moment they happen. Runs ao-live "Setup".
-   - **AO waiting check**: every 30 minutes, 9:00 to 19:00 on weekdays. Runs ao-answer "Find what's waiting" and messages only when something new is waiting. Not needed with live events.
+   - **AO waiting check**: every 30 minutes, 9:00 to 19:00 on weekdays. Runs ao-answer "Find what's waiting" and messages only when something new is waiting. Keep it with live events: it catches questions they don't send.
    - **AO daily digest**: weekdays at 9:00. Runs ao-status "Digest".
    - **Orchestrator Bot updates**: Mondays at 10:00. Runs ao-update "Weekly update run". Ask how: install by itself (**auto**), or only tell (**notify**).
    Create the picked routines, then save "Routines on: <names>" in memory. Never create a second copy.

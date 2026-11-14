@@ -330,6 +330,36 @@ func TestDispatcherPausesOnRateLimit(t *testing.T) {
 	}
 }
 
+func TestDispatcherSendsUrgentEventsBeforeRetries(t *testing.T) {
+	old := retryBackoff
+	retryBackoff = []time.Duration{300 * time.Millisecond}
+	defer func() { retryBackoff = old }()
+	rcv := &receiver{status: []int{http.StatusBadGateway}}
+	srv := httptest.NewServer(rcv)
+	defer srv.Close()
+	store, _ := OpenStore(t.TempDir())
+	_, _ = store.Put(Hook{Name: "main", URL: srv.URL}, time.Now())
+	hub := &fakeHub{ch: make(chan domain.NotificationEvent, 2)}
+	d := NewDispatcher(Deps{Store: store, Notifications: hub, Changes: &fakeChanges{}, Sessions: &fakeSessions{}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+	hub.ch <- domain.NotificationEvent{Kind: domain.NotificationCreated, Record: domain.NotificationRecord{
+		SessionID: "s", Type: domain.NotificationPRMerged, Title: "PR merged", CreatedAt: time.Now(),
+	}}
+	deadline := time.Now().Add(5 * time.Second)
+	for d.Statuses()["main"].LastError == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	hub.ch <- domain.NotificationEvent{Kind: domain.NotificationCreated, Record: domain.NotificationRecord{
+		SessionID: "s", Type: domain.NotificationNeedsInput, Title: "Fix login needs input", CreatedAt: time.Now(),
+	}}
+	got := rcv.wait(t, 2)
+	if got[0].Event != EventNeedsInput || got[1].Event != EventPRMerged {
+		t.Fatalf("order = %s, %s; want needs_input before the retried pr_merged", got[0].Event, got[1].Event)
+	}
+}
+
 func TestDispatcherTestReportsRefusal(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bad key", http.StatusUnauthorized)

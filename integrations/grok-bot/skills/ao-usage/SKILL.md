@@ -10,7 +10,7 @@ description: >-
 Follow the ao-rules skill. Read-only. Run on every host, in parallel.
 
 ## Tokens and cost
-`<days>` defaults to 7; "this month" is 30. `<tz>` is the user's IANA timezone.
+`<days>` defaults to 7; "this month" is today's day of the month in `<tz>` (the 14th: 14, which starts on the 1st). `<tz>` is the user's IANA timezone.
 ```sh
 f(){ <aoapi helper>; aoapi GET "usage/report?days=<days>&tz=<tz>" | python3 -c '
 import json,sys,collections
@@ -21,8 +21,10 @@ def by(k):
     for r in rows: t[r[k]]+=tok(r); c[r[k]]+=r.get("costNanos",0)
     return [(x, t[x], c[x]/1e9) for x in sorted(t, key=lambda x:-c[x])]
 print("total tokens=%d cost=$%.2f unpriced_events=%d" % (sum(map(tok,rows)), sum(r.get("costNanos",0) for r in rows)/1e9, sum(r["events"]-r.get("pricedEvents",r["events"]) for r in rows)))
-for k in ("harness","model","period"):
+for k in ("harness","model"):
     for x,t,c in by(k)[:10]: print(k, x, t, "$%.2f" % c)
+day={x:(t,c) for x,t,c in by("period")}
+for x in d.get("periods") or sorted(day): t,c=day.get(x,(0,0)); print("period", x, t, "$%.2f" % c)
 for s in sorted(d.get("sessions") or [], key=lambda s:-s.get("costNanos",0))[:5]: print("session", s["sessionId"], (s.get("title") or "")[:50], "$%.2f" % (s.get("costNanos",0)/1e9))'; }; f
 ```
 Add `&projectId=<id>` for one project. Per host and combined: total tokens and cost, then by agent, the top models, by day, and the five costliest sessions as `<host>/<session>`. Every figure is an estimate at Orchestrator's prices (Usage settings in Orchestrator): a subscription isn't billed per token. Say how many events had no price.
