@@ -11,6 +11,7 @@ const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
 const choosePathMock = vi.hoisted(() => vi.fn());
 const getMock = vi.hoisted(() => vi.fn());
+const NO_CONNECTED_HOSTS = vi.hoisted((): never[] => []);
 const postMock = vi.hoisted(() => vi.fn());
 const openExternalMock = vi.hoisted(() => vi.fn());
 const writeTextMock = vi.hoisted(() => vi.fn());
@@ -175,6 +176,10 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
 	clientForHost: () => ({ GET: getMock, POST: postMock }),
+	// The session menu's hooks read the connected hosts.
+	subscribeConnectedHosts: () => () => {},
+	connectedHost: () => undefined,
+	connectedHosts: () => NO_CONNECTED_HOSTS,
 }));
 
 

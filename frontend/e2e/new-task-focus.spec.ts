@@ -167,6 +167,8 @@ test("renderer: New task from the command palette focuses the composer prompt @T
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
 	await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
 	await page.keyboard.press("ControlOrMeta+k");
+	// On a session page the project's actions wait for a search.
+	await page.keyboard.type("new task");
 	await page.getByRole("option", { name: /New task/ }).first().click();
 	await expectPromptTakesTyping(page);
 });

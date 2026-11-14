@@ -571,6 +571,7 @@
 	"command.noResults": "Sin resultados.",
 	"command.matchCount_one": "{{count}} coincidencia",
 	"command.matchCount_other": "{{count}} coincidencias",
+	"command.matchCount_many": "{{count}} coincidencias",
 	"awake.title": "Mantener activo",
 	"command.goToProject": "Ir al proyecto",
 	"command.goToSession": "Ir a la sesión",
