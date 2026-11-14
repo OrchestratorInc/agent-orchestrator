@@ -180,3 +180,28 @@ it.each(["codex", "claude-code", "opencode", "opencode-v2", "droid", "kimi", "ki
 	render(<SessionBackgroundTasks session={{ ...session, provider } as WorkspaceSession} />);
 	expect(screen.getByRole("region", { name: "Background tasks" })).toHaveTextContent("Dev server");
 });
+
+describe("opening a task in the side panel", () => {
+	it("opens a row from its name or time, while the stop square only stops", async () => {
+		const onOpenTask = vi.fn();
+		const tasks = [shell("dev", "Start the renderer dev server"), shell("lint", "Run the Go linter", { state: "failed", endedAt: ago(60_000) })];
+		render(<ComposerBackgroundTasks sessionId="s" reading={readingOf(tasks)} onOpenTask={onOpenTask} />);
+		await userEvent.click(screen.getByRole("button", { name: /1 running/ }));
+		await userEvent.click(screen.getByRole("button", { name: /^Start the renderer dev server/ }));
+		expect(onOpenTask).toHaveBeenLastCalledWith(expect.objectContaining({ id: "dev" }));
+		await userEvent.click(screen.getByRole("button", { name: /^Run the Go linter/ }));
+		expect(onOpenTask).toHaveBeenLastCalledWith(expect.objectContaining({ id: "lint" }));
+		await userEvent.click(screen.getByRole("button", { name: "Stop Start the renderer dev server" }));
+		expect(onOpenTask).toHaveBeenCalledTimes(2);
+		expect(mutateMock).toHaveBeenCalledWith("dev");
+	});
+
+	it("opens a single task from its name, and nothing is clickable without a side panel", async () => {
+		const onOpenTask = vi.fn();
+		const { rerender } = render(<ComposerBackgroundTasks sessionId="s" reading={reading} onOpenTask={onOpenTask} />);
+		await userEvent.click(screen.getByRole("button", { name: /^Dev server/ }));
+		expect(onOpenTask).toHaveBeenCalledWith(expect.objectContaining({ id: "shell" }));
+		rerender(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+		expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Stop Dev server"]);
+	});
+});

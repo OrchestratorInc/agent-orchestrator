@@ -8,6 +8,7 @@ import {
 	ChevronIcon,
 	GitPullRequestIcon,
 	MoreHorizontalIcon,
+	XIcon,
 } from "./icons";
 import {
 	PRCardStatusSummary,
@@ -23,7 +24,15 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts" | "task";
+
+/** A temporary tab for one background task; the user closes it when done. */
+export type InspectorTaskTab = {
+	closeLabel: string;
+	icon: ReactNode;
+	id: string;
+	label: string;
+};
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -55,6 +64,11 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
+	taskTabs = [],
+	activeTaskTab,
+	onTaskTabSelect,
+	onTaskTabClose,
+	taskView,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
@@ -70,7 +84,14 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
+	/** Background task tabs, after the fixed tabs. One shows when activeView is "task". */
+	taskTabs?: InspectorTaskTab[];
+	activeTaskTab?: string;
+	onTaskTabSelect?: (id: string) => void;
+	onTaskTabClose?: (id: string) => void;
+	taskView?: ReactNode;
 }) {
+	const tablistRef = useRef<HTMLDivElement>(null);
 
 	if (loadingText) {
 		return (
@@ -82,30 +103,42 @@ export function SessionInspectorShellView({
 		);
 	}
 
+	// Arrow keys walk the fixed tabs and the task tabs as one list.
+	const tabCount = tabs.length + taskTabs.length;
+	const selectTabAt = (index: number) => {
+		if (index < tabs.length) onViewChange(tabs[index].id);
+		else onTaskTabSelect?.(taskTabs[index - tabs.length].id);
+	};
 	const selectAdjacentTab = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
 		let nextIndex: number;
 		switch (event.key) {
 			case "ArrowLeft":
-				nextIndex = (index - 1 + tabs.length) % tabs.length;
+				nextIndex = (index - 1 + tabCount) % tabCount;
 				break;
 			case "ArrowRight":
-				nextIndex = (index + 1) % tabs.length;
+				nextIndex = (index + 1) % tabCount;
 				break;
 			case "Home":
 				nextIndex = 0;
 				break;
 			case "End":
-				nextIndex = tabs.length - 1;
+				nextIndex = tabCount - 1;
 				break;
+			case "Delete":
+			case "Backspace":
+				if (index < tabs.length) return;
+				event.preventDefault();
+				onTaskTabClose?.(taskTabs[index - tabs.length].id);
+				return;
 			default:
 				return;
 		}
 		event.preventDefault();
-		onViewChange(tabs[nextIndex].id);
-		event.currentTarget.parentElement
+		selectTabAt(nextIndex);
+		tablistRef.current
 			?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
 			.item(nextIndex)
-			.focus();
+			?.focus();
 	};
 
 	return (
@@ -116,14 +149,15 @@ export function SessionInspectorShellView({
 					activeView === "browser" && "session-inspector__topbar--browser",
 				)}
 			>
-				{isVisible && tabs.length === 1 ? (
+				{isVisible && tabs.length === 1 && taskTabs.length === 0 ? (
 					<span className="min-w-0 flex-1 px-2 text-sm text-passive">{tabs[0].label}</span>
 				) : isVisible ? (
 					<div
 						className={cn(
 							"session-inspector__tablist flex min-w-0 items-center justify-start gap-1",
-							activeView === "browser" ? "shrink-0" : "flex-1",
+							activeView !== "browser" ? "flex-1" : taskTabs.length ? "shrink" : "shrink-0",
 						)}
+						ref={tablistRef}
 						role="tablist"
 					>
 						{tabs.map((tab, index) => (
@@ -133,6 +167,7 @@ export function SessionInspectorShellView({
 								type="button"
 								role="tab"
 								aria-selected={activeView === tab.id}
+								data-active={activeView === tab.id || undefined}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
 									"session-inspector__tab-button relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md border border-transparent p-0 font-medium text-passive outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2",
@@ -169,6 +204,48 @@ export function SessionInspectorShellView({
 								</span>
 							</button>
 						))}
+						{taskTabs.length ? (
+							<div className="session-inspector__task-tabs edge-fade edge-fade-x scrollbar-none flex min-w-0 items-center gap-1 overflow-x-auto">
+								<span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />
+								{taskTabs.map((tab, index) => {
+									const selected = activeView === "task" && activeTaskTab === tab.id;
+									return (
+										<div
+											className={cn(
+												"session-inspector__task-tab flex h-control-md min-w-20 max-w-40 shrink items-center rounded-md text-passive hover:bg-interactive-hover hover:text-foreground",
+												selected && "text-foreground",
+											)}
+											key={tab.id}
+										>
+											<button
+												aria-selected={selected}
+												className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md pr-0.5 pl-2 text-left text-xs font-medium outline-none focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
+												data-active={selected || undefined}
+												onClick={() => onTaskTabSelect?.(tab.id)}
+												onKeyDown={(event) => selectAdjacentTab(event, tabs.length + index)}
+												role="tab"
+												tabIndex={selected ? 0 : -1}
+												title={tab.label}
+												type="button"
+											>
+												<span className="inline-flex shrink-0 [&_svg]:size-icon-md">{tab.icon}</span>
+												<span className="min-w-0 truncate">{tab.label}</span>
+											</button>
+											<button
+												aria-label={tab.closeLabel}
+												className="mr-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-passive outline-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+												onClick={() => onTaskTabClose?.(tab.id)}
+												tabIndex={selected ? 0 : -1}
+												title={tab.closeLabel}
+												type="button"
+											>
+												<XIcon aria-hidden="true" className="size-3" />
+											</button>
+										</div>
+									);
+								})}
+							</div>
+						) : null}
 					</div>
 				) : null}
 				{isVisible ? headerActions : null}
@@ -179,10 +256,10 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && activeView !== "task" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "artifacts" || activeView === "task") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -196,6 +273,7 @@ export function SessionInspectorShellView({
 				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
+				{activeView === "task" ? taskView : null}
 			</div>
 		</aside>
 	);

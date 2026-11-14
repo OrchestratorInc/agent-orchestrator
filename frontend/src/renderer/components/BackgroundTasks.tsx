@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ChevronRight, ListTodo, SquareTerminal } from "@/components/app-icons";
@@ -12,6 +12,7 @@ import { shellTaskLabel } from "../lib/shell-task-label";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 
 function taskSummary(tasks: BackgroundTask[], t: TFunction): string | null {
 	const live = tasks.filter((task) => task.state === "running");
@@ -58,7 +59,7 @@ export function backgroundTaskName(task: BackgroundTask, t: TFunction): string {
 	}
 }
 
-const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
+export const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
 
 /**
  * What the composer tab shows: live work and recent failures. Agents have their
@@ -80,7 +81,7 @@ export function formatElapsed(ms: number): string {
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function elapsed(task: BackgroundTask, now: number): string | null {
+export function elapsed(task: BackgroundTask, now: number): string | null {
 	const start = task.startedAt ? Date.parse(task.startedAt) : Number.NaN;
 	const end = isLive(task) ? now : task.endedAt ? Date.parse(task.endedAt) : Number.NaN;
 	if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
@@ -88,7 +89,7 @@ function elapsed(task: BackgroundTask, now: number): string | null {
 }
 
 /** Ticks only while something runs: every second in a task's first minute, then every ten. */
-function useNow(tasks: BackgroundTask[]): number {
+export function useNow(tasks: BackgroundTask[]): number {
 	const [now, setNow] = useState(() => Date.now());
 	const live = tasks.filter(isLive);
 	const young = live.some((task) => task.startedAt && now - Date.parse(task.startedAt) < 60_000);
@@ -105,7 +106,7 @@ const STOP_SETTLE_MS = 10_000;
 const STOP_ERROR_MS = 4_000;
 
 /** Stop requests in flight, per task, and the one that last failed. */
-function useTaskStops(sessionId: string, liveIds: string) {
+export function useTaskStops(sessionId: string, liveIds: string) {
 	const mutation = useStopBackgroundTask(sessionId);
 	const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
 	const [failed, setFailed] = useState<string | null>(null);
@@ -147,14 +148,19 @@ function useTaskStops(sessionId: string, liveIds: string) {
 }
 
 /** Chat entry point: a tab on the composer's top edge. Renders nothing while no work shows. */
-export function SessionBackgroundTasks({ session }: { session: WorkspaceSession }) {
+export function SessionBackgroundTasks({ session, onOpenTask }: { session: WorkspaceSession; onOpenTask?: (task: BackgroundTask) => void }) {
 	const enabled = supportsLocalBackgroundTasks(session);
 	const query = useBackgroundTasks(session.id, enabled);
 	if (!enabled) return null;
-	return <ComposerBackgroundTasks sessionId={session.id} reading={query.data} />;
+	return <ComposerBackgroundTasks sessionId={session.id} reading={query.data} onOpenTask={onOpenTask} />;
 }
 
-export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: string; reading?: BackgroundTaskReading }) {
+/** `onOpenTask` opens a task in the side panel; without it, tasks are not clickable. */
+export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask }: {
+	sessionId: string;
+	reading?: BackgroundTaskReading;
+	onOpenTask?: (task: BackgroundTask) => void;
+}) {
 	const { t } = useTranslation();
 	const listId = useId();
 	const tasks = useMemo(() => composerBackgroundTasks(reading), [reading]);
@@ -207,14 +213,26 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 		);
 	};
 
+	// The task's name and time open it in the side panel; the stop square stays its own control.
+	const opener = (task: BackgroundTask, content: ReactNode) => onOpenTask ? (
+		<Pressable
+			className="-mx-1.5 flex h-7 min-w-0 flex-1 items-center gap-2 rounded-sm px-1.5 hover:bg-interactive-hover focus-visible:outline-2 focus-visible:outline-ring"
+			onClick={() => onOpenTask(task)}
+		>
+			{content}
+		</Pressable>
+	) : content;
+
 	if (!several) {
 		const [task] = tasks;
 		return (
 			<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
 				<div className="flex h-8 min-w-0 items-center gap-2">
 					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-					<span className="ml-auto flex shrink-0 items-center pl-2">{time(task)}</span>
+					{opener(task, <>
+						<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
+						<span className="ml-auto flex shrink-0 items-center pl-2">{time(task)}</span>
+					</>)}
 					{trailing(task)}
 				</div>
 			</section>
@@ -239,8 +257,10 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				<ul id={listId} className="chat-composer-tasks-list">
 					{tasks.map((task) => (
 						<li key={`${task.id}:${task.runId ?? ""}`} className="flex h-8 min-w-0 items-center gap-2">
-							<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-							{time(task)}
+							{opener(task, <>
+								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
+								{time(task)}
+							</>)}
 							{trailing(task)}
 						</li>
 					))}
