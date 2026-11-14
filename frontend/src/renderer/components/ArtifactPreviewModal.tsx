@@ -60,7 +60,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="min-w-0 shrink-[2] truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-0.5">
-							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} revision={artifact.updatedAt} /> : null}
+							{share ? <ShareArtifactButton className="transition-none" file={share} iconOnly name={artifact.name} published={Boolean(artifact.shareUrl)} revision={artifact.updatedAt} /> : null}
 							<ArtifactActionsMenu
 								artifact={artifact}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud }}

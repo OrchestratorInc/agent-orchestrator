@@ -415,6 +415,56 @@ describe("Cloud project settings", () => {
 		await userEvent.click(await screen.findByRole("switch", { name: "Workers request a built-in review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
 	});
+
+	it("turns off naming Orchestrator a commit co-author through the settings patch", async () => {
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		expect(toggle).toBeChecked();
+		// The page is read by admins too, for every session's commits: it promises nothing about who "you" are.
+		expect(screen.getByText("When enabled, commits the agents make in this project list the Orchestrator GitHub App as a co-author. The commit author does not change.")).toBeInTheDocument();
+		await userEvent.click(toggle);
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coAuthorCommits: false } }));
+	});
+
+	it("puts the co-author switch back on when the control plane does not support it yet", async () => {
+		// A control plane from before the setting rejects it as unknown.
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "validation_error" }));
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "This Cloud control plane does not support the co-author setting yet, so it stays on.", tone: "error",
+		}));
+		await waitFor(() => expect(toggle).toBeChecked());
+		// Nothing else changed, so nothing else is sent, and the next edit does not resend the setting.
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		await userEvent.click(screen.getByRole("switch", { name: "Workers request a built-in review" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
+	});
+
+	// Only an older control plane's exact rejection of the unknown setting puts
+	// the switch back; any other failure, even one naming the setting, is a
+	// failure to save.
+	it.each([
+		["an outage", new CloudCpError("Cloud is unavailable", { status: 503, code: "unavailable" })],
+		["an outage that names the setting", new CloudCpError("Failed to persist coAuthorCommits", { status: 503, code: "unavailable" })],
+		["another validation error on the setting", new CloudCpError("coAuthorCommits must be a boolean", { status: 422, code: "validation_error" })],
+		["the older rejection with another status", new CloudCpError("unsupported or null config.coAuthorCommits", { status: 400, code: "validation_error" })],
+		["the older rejection with another code", new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "invalid_request" })],
+		["the older message without a control plane answer", new Error("unsupported or null config.coAuthorCommits")],
+	])("still reports %s when saving the co-author setting", async (_name, failure) => {
+		mocks.patch.mockRejectedValueOnce(failure);
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		const onSaveState = vi.fn();
+		mount("general", onSaveState);
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: failure.message })));
+		expect(toggle).not.toBeChecked();
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().globalToast).toBeNull();
+	});
 });
 
 describe("Cloud project Coder template", () => {

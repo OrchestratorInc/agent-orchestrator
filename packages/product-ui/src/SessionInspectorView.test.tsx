@@ -256,6 +256,39 @@ describe("portable inspector presentations", () => {
     expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
   });
 
+  it("drops the frame, title and number when the host draws its own header", () => {
+    render(
+      <InspectorPullRequestCardView
+        countNounLabel={(count, noun) => `${count} ${noun}s`}
+        description={<p>Body preview</p>}
+        externalLink={ExternalLink}
+        headerless
+        openLabel="Open PR #12"
+        pr={{
+          additions: 4,
+          author: "ada",
+          card: { primary: { key: "merge", label: "Ready to merge", links: [], tone: "success" }, supporting: [] },
+          changedFiles: 2,
+          deletions: 1,
+          href: "https://example.com/pull/12",
+          number: 12,
+          provider: "github",
+          sourceBranch: "feature",
+          state: "open",
+          stateLabel: "open",
+          targetBranch: "main",
+          title: "Portable inspector",
+        }}
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "Portable inspector" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open PR #12" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    expect(screen.getByText("Body preview")).toBeInTheDocument();
+    expect(screen.getByText("ada")).toBeInTheDocument();
+  });
+
   it("renders PR facts and host-owned actions from a neutral view model", () => {
     render(
       <InspectorPullRequestCardView

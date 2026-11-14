@@ -338,31 +338,57 @@ const prStateTone: Record<InspectorPullRequestState, string> = {
 };
 
 export function InspectorPullRequestCardView({
+	compact = false,
 	countNounLabel,
+	description,
+	details,
 	externalIcon,
 	externalLink: ExternalLink,
+	headerless = false,
 	mergeAction,
 	mergeError,
 	openLabel,
 	openedViaLabel,
 	pr,
 	pullRequestIcon,
+	readinessDetails,
 	statusNotice,
 }: {
+	/**
+	 * The PR view's denser card: the author and diff stats on one line, and one
+	 * dropdown for the facts that decide the merge instead of every status row.
+	 */
+	compact?: boolean;
 	countNounLabel: CountNounLabel;
+	/** The PR body, shown under the number and state, before the branches. */
+	description?: ReactNode;
+	/** Shown under the author and diff stats, such as labels and requested reviewers. */
+	details?: ReactNode;
 	externalIcon?: ReactNode;
 	externalLink: ExternalLinkComponent;
+	/**
+	 * Drop the card frame, title and number: the host shows them in its own
+	 * header row, as the inspector's PR card does with its own state row.
+	 */
+	headerless?: boolean;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
 	openedViaLabel?: string;
 	pr: InspectorPullRequest;
 	pullRequestIcon?: ReactNode;
+	/** More under a merge-readiness row, keyed by the row. */
+	readinessDetails?: Partial<Record<string, ReactNode>>;
 	statusNotice?: ReactNode;
 }) {
+	const Frame = headerless ? "div" : "article";
 	return (
-		<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
-			{pr.title ? (
+		<Frame
+			className={headerless
+				? "min-w-0 w-full pb-2"
+				: "min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5"}
+		>
+			{!headerless && pr.title ? (
 				<ExternalLink
 					className="inline text-sm font-semibold leading-snug tracking-tight text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					href={pr.href}
@@ -370,7 +396,7 @@ export function InspectorPullRequestCardView({
 					{pr.title}
 				</ExternalLink>
 			) : null}
-			<div className={cn("flex min-w-0 items-center gap-2", pr.title && "mt-1.5")}>
+			{headerless ? null : <div className={cn("flex min-w-0 items-center gap-2", pr.title && "mt-1.5")}>
 				<ExternalLink
 					ariaLabel={openLabel}
 					className="inline-flex min-w-0 items-center gap-1 font-mono text-xs font-medium text-settings-label decoration-muted-foreground underline-offset-2 hover:text-settings-label hover:underline focus-visible:rounded-sm focus-visible:text-settings-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -391,21 +417,26 @@ export function InspectorPullRequestCardView({
 				>
 					{pr.stateLabel}
 				</span>
-			</div>
+			</div>}
+			{description}
 			<PRSummaryMeta
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				inline={compact}
 				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
+			{details}
 			{pr.state !== "merged" ? (
 				<>
 					<PRCardStatusSummary
 						action={mergeAction}
 						className="mt-2"
+						compactReadiness={compact}
 						externalLink={ExternalLink}
 						presentation={pr.card}
+						readinessDetails={readinessDetails}
 						reviewDetailsAction={pr.reviewDetailsAction}
 					/>
 					{statusNotice}
@@ -416,7 +447,7 @@ export function InspectorPullRequestCardView({
 					) : null}
 				</>
 			) : null}
-		</article>
+		</Frame>
 	);
 }
 

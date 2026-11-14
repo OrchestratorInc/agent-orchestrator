@@ -314,12 +314,57 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 }
 
-func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
-	if got := backgroundTaskPermissions(domain.HarnessKimi); got != ports.PermissionModeDefault {
-		t.Fatalf("Kimi permissions = %q, want default", got)
+func TestBackgroundTaskPermissionsKeepNativeDriversCompatible(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessKimi, domain.HarnessGrok} {
+		if got := backgroundTaskPermissions(harness); got != ports.PermissionModeDefault {
+			t.Fatalf("%s permissions = %q, want default", harness, got)
+		}
 	}
 	if got := backgroundTaskPermissions(domain.HarnessCodex); got != ports.PermissionModeAcceptEdits {
 		t.Fatalf("Codex permissions = %q, want accept-edits", got)
+	}
+}
+
+func TestGrokChatSpawnUsesOnlyExplicitEffort(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		roleEffort string
+		requested  ports.AgentConfig
+		override   bool
+		want       string
+	}{
+		{name: "project effort"},
+		{name: "matching role effort", roleEffort: "xhigh"},
+		{name: "unflagged request effort", requested: ports.AgentConfig{Effort: "max"}},
+		{name: "model change", requested: ports.AgentConfig{Model: "grok-4.5"}},
+		{name: "explicit effort", requested: ports.AgentConfig{Effort: "low"}, override: true, want: "low"},
+		{name: "explicit effort stays subject to ACP validation", requested: ports.AgentConfig{Effort: "max"}, override: true, want: "max"},
+		{name: "explicit provider default", roleEffort: "xhigh", override: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig.Effort = "max"
+			project.Config.Worker = domain.RoleOverride{
+				Harness: domain.HarnessGrok, AgentConfig: domain.AgentConfig{Effort: tt.roleEffort},
+			}
+			st.projects[string(chatTestProject)] = project
+
+			rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessGrok,
+				RequestedMode: domain.SessionModeChat, AgentConfig: tt.requested, EffortOverride: tt.override,
+			})
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if len(launcher.started) != 1 {
+				t.Fatalf("Chat starts = %d, want 1", len(launcher.started))
+			}
+			if rec.Metadata.Effort != tt.want || launcher.started[0].Effort != tt.want {
+				t.Fatalf("effort metadata/start = %q/%q, want %q", rec.Metadata.Effort, launcher.started[0].Effort, tt.want)
+			}
+		})
 	}
 }
 

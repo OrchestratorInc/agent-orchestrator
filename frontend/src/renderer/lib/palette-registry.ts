@@ -93,10 +93,9 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug"] },
 	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
 	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"] },
-	{ id: "new-sidebar-design", section: "general", label: "settings.newSidebarDesign", keywords: ["sidebar", "old sidebar", "status icons", "hover preview"] },
 	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "path", "install"] },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
-	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login"] },
+	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login", "api key", "provider key", "environment variable", "anthropic", "openai", "openrouter"] },
 	{ id: "remote-hosts", section: "remoteHosts", label: "settings.remoteHosts", keywords: [] },
 	{ id: "remote-enable", section: "remoteHosts", label: "remote.enable", keywords: [] },
 	{ id: "saved-hosts", section: "remoteHosts", label: "remote.savedHosts", keywords: ["servers"] },
@@ -119,7 +118,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "version", section: "updates", label: "settings.updates.versionSection", keywords: ["about", "build number"] },
 	{ id: "shortcuts", section: "shortcuts", label: "settings.keyboardShortcuts", keywords: [] },
 	{ id: "help", section: "help", label: "settings.help", keywords: [] },
-	{ id: "report-problem", section: "help", label: "settings.reportProblem", keywords: ["bug report", "feedback", "issue"] },
 	{ id: "diagnostics", section: "diagnostics", label: "settings.diagnostics", keywords: ["performance", "cpu", "memory", "monitor"] },
 ];
 

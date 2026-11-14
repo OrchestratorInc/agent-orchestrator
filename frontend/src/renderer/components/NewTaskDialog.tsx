@@ -9,7 +9,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQue
 import { labelForHost } from "../lib/host-clients";
 import { apiClient } from "../lib/api-client";
 import { TaskComposer } from "./TaskComposer";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, isScratchpadWorkspace, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { type CanonicalGitHubRepo, repositoryOwnerAvatar } from "../lib/repository-avatar";
 
@@ -48,7 +48,8 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
 	// This dialog serves cloud projects only for now; every other project starts
 	// from the new chat page.
-	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND), [workspaces]);
+	// Cloud standalone agents are the Scratchpad's, not projects to start a task in.
+	const projects = useMemo(() => workspaces.filter((workspace) => workspace.kind === CLOUD_PROJECT_KIND && !isScratchpadWorkspace(workspace)), [workspaces]);
 	const localProjects = useMemo(() => hostId ? [] : projects.filter((project) => project.kind !== CLOUD_PROJECT_KIND), [hostId, projects]);
 	const localProjectDetails = useQueries({
 		queries: localProjects.map((project) => ({

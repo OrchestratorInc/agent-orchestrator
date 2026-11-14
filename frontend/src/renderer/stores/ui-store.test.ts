@@ -436,3 +436,22 @@ describe("palette search requests", () => {
 		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
 	});
 });
+
+describe("retired new sidebar design switch", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("boots into the one sidebar design for someone who had switched it off", async () => {
+		window.localStorage.setItem("ao.developerMode", "true");
+		window.localStorage.setItem("ao.newSidebarDesign", "false");
+
+		const state = (await bootStore()).getState();
+
+		expect(state).not.toHaveProperty("newSidebarDesign");
+		expect(state).not.toHaveProperty("setNewSidebarDesign");
+		expect(window.localStorage.getItem("ao.newSidebarDesign")).toBeNull();
+		expect(document.documentElement.hasAttribute("data-legacy-status-colors")).toBe(false);
+	});
+});
