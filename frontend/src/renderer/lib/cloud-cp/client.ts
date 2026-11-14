@@ -498,13 +498,27 @@ export interface CloudCpClient {
 		body: CloudCpEditQueuedMessageRequest,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpEditQueuedMessageResponse>;
+	/**
+	 * Steer a message still queued into the running turn (offering queued-steer). Answers the
+	 * steer request; chat.turn_steered or chat.turn_steer_failed naming the turn follows.
+	 */
+	steerQueuedMessage(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		body: { composerEpoch?: number },
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpSteerTurnResponse>;
 	/** Take back a message still queued, never stopping a turn that left the queue; 409 TURN_NOT_QUEUED once it has (offering queued-delete). */
 	deleteQueuedMessage(
 		orgId: string,
 		sessionId: string,
 		turnId: string,
 		options?: CloudCpRequestOptions,
-	): Promise<CloudCpCancelTurnResponse>;
+	): Promise<CloudCpCancelTurnResponse & {
+		/** The agent is taking the message as a steer: its answer decides (deleted, or delivered). */
+		pending?: boolean;
+	}>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
 	/** Takes a shared session's composer lease, or renews it when already held. */
 	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
@@ -1185,6 +1199,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/edit`, {
 				body,
 				signal: o?.signal,
+			}),
+		steerQueuedMessage: (orgId, sessionId, turnId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/steer-queued`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
 			}),
 		deleteQueuedMessage: (orgId, sessionId, turnId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/delete`, {

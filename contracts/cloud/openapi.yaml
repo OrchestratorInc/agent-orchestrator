@@ -2521,13 +2521,32 @@ paths:
         composer lease holder, the session's creator, and the organization's
         owners and admins. Deleting a message already deleted answers 202
         again. Offered when offering.features lists queued-delete.
+        A message being steered into the running turn (steerQueuedMessage)
+        deletes too: if the worker has not taken the steer yet it is
+        withdrawn (chat.turn_steer_failed with deleteRequested) and the message
+        deleted at once; if the worker is taking it, the answer is 202 with
+        pending and the steer's outcome decides: chat.turn_interrupted of
+        reason deleted when the agent did not take it, or chat.turn_steered
+        with deleteRequested when it did (the message was delivered). Deleting
+        another queued message is unaffected by a steer in flight.
       responses:
         "202":
           description: The queued message was deleted, now or before.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WorkerOKResponse"
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  pending:
+                    type: boolean
+                    description: >-
+                      The worker is taking the message as a steer; its outcome
+                      decides whether it is deleted or was delivered.
         "403":
           description: forbidden. The caller may not stop this turn, or only watches the session.
           content:
@@ -2539,6 +2558,81 @@ paths:
             TURN_NOT_QUEUED: the agent started on the message, or it was
             stopped or ended otherwise, so it can no longer be deleted (the
             turn is left as it is). SESSION_TERMINATED: the session ended.
+            ALREADY_STEERED: the agent already took the message as a steer
+            into its running turn, so it was delivered and cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer-queued:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    post:
+      operationId: steerQueuedMessage
+      tags: [Sessions]
+      description: >-
+        Steer a message whose turn is still queued into the session's running
+        turn, instead of leaving it to run as a turn of its own. The text
+        steered is the queued message's own; a steer carries text alone, so a
+        message with files (or with no text) is refused and runs as its own
+        turn. Allowed for whoever may stop the
+        queued turn (see deleteQueuedMessage) and, like a steer, only with the
+        composer lease. Answers chat.turn_steer_requested naming the queued
+        turn (payload.queuedTurnId). The message leaves the queue only once
+        the agent takes the guidance: chat.turn_steered with its queuedTurnId,
+        then chat.turn_interrupted of reason steered for the queued turn. When
+        the agent does not take it (it refused, the running turn ended, the
+        worker did not answer in time) chat.turn_steer_failed names the queued
+        turn and says why, and the message stays queued, in its place. While
+        a steer of a queued message is in flight the queue waits for it, so a
+        message is never both steered and run. Offered when offering.features
+        lists queued-steer.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                composerEpoch:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: The composer lease grant the caller holds; 0 or absent for none.
+      responses:
+        "202":
+          description: The steer was asked of the agent; its outcome follows as an event.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/TurnSteerRequestedEvent"
+        "403":
+          description: forbidden. The caller may not direct this turn, or only watches the session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            TURN_NOT_QUEUED: the agent started on the message, or it ended.
+            TURN_NOT_STEERABLE: no running turn can take guidance (nothing is
+            running, or its agent cannot steer); the message stays queued.
+            STEER_CONTENT_UNSUPPORTED: the message has files or no text,
+            which a steer cannot carry; it stays queued. STEER_IN_PROGRESS: a
+            steer of this message is already in flight.
+            COMPOSER_LOCKED, COMPOSER_LEASE_LOST: someone else holds the
+            composer.
           content:
             application/json:
               schema:
@@ -5379,8 +5473,9 @@ components:
             sessions) and the deployment's own: attachments when the session
             attachment routes are on, queued-edit when a queued message can be
             edited (editQueuedMessage), queued-delete when a queued message can
-            be deleted without stopping a started turn (deleteQueuedMessage).
-            Empty when none apply.
+            be deleted without stopping a started turn (deleteQueuedMessage),
+            queued-steer when a queued message can be steered into the running
+            turn (steerQueuedMessage). Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -10373,13 +10468,16 @@ components:
               description: 0 for a turn stopped while still queued, before the agent started on it.
             reason:
               type: string
-              enum: [deleted, interface_switch]
+              enum: [deleted, interface_switch, steered]
               description: >-
                 Why a turn ended before it started. deleted: the person took
                 the queued message back (cancelTurn), so a client drops it from
                 the transcript. interface_switch: a stop-now switch to the
                 terminal ended the queued message, which a client keeps, shown
-                interrupted. Absent for a stopped running turn and for events
+                interrupted. steered: the message was steered into the running
+                turn instead (chat.turn_steered with this turn as its
+                queuedTurnId), so a client shows it there, as the steer, and
+                drops it from the queue. Absent for a stopped running turn and for events
                 written before reasons existed; a client reads a missing or
                 unknown reason as a plain interruption and keeps the message.
         createdAt:
@@ -10472,6 +10570,72 @@ components:
           type: object
           additionalProperties: false
           required: [turnId, text, clientMessageId]
+          description: >-
+            The agent took the guidance. With queuedTurnId, the queued turn
+            then ends with chat.turn_interrupted of reason steered.
+          properties:
+            turnId:
+              type: string
+              format: uuid
+              description: The running turn the guidance is for.
+            text:
+              type: string
+            clientMessageId:
+              type: string
+            queuedTurnId:
+              type: string
+              format: uuid
+              description: >-
+                Set when the steer carries a queued message (steerQueuedMessage,
+                or a message the project's orchestrator sent while the session
+                was busy): the queued turn whose message it is.
+            deleteRequested:
+              type: boolean
+              description: >-
+                With queuedTurnId: the person deleted the message while the
+                agent was taking its steer (deleteQueuedMessage). On
+                chat.turn_steered the agent took it anyway, so it was
+                delivered; on chat.turn_steer_failed it was deleted.
+            origin:
+              type: string
+              description: >-
+                With queuedTurnId: automation for a message the project's
+                orchestrator sent (senderLabel names it), absent for a
+                person's.
+            senderLabel:
+              type: string
+              description: With queuedTurnId and origin automation, who sent the message (Orchestrator).
+            authorUserId:
+              type: string
+              description: With queuedTurnId, the person whose message it is.
+            authorName:
+              type: string
+              description: With authorUserId, their name when they sent it.
+        createdAt:
+          type: string
+          format: date-time
+    TurnSteerRequestedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        Guidance was asked of the agent (steerTurn, steerQueuedMessage, or a
+        message the project's orchestrator sent while the session was busy).
+        Its outcome follows as chat.turn_steered or chat.turn_steer_failed with
+        the same clientMessageId; until then a client shows it as steering.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.turn_steer_requested
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, text, clientMessageId]
           properties:
             turnId:
               type: string
@@ -10479,6 +10643,75 @@ components:
             text:
               type: string
             clientMessageId:
+              type: string
+            queuedTurnId:
+              type: string
+              format: uuid
+              description: Set when the steer carries a queued message, which stays queued until the outcome.
+        createdAt:
+          type: string
+          format: date-time
+    TurnSteerFailedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        The agent did not take the guidance: it refused, the running turn
+        ended first, or the worker did not answer in time. payload.error says
+        why. With queuedTurnId the message stays queued, in its place, and runs
+        as its own turn; a client shows it back in the queue with the reason.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.turn_steer_failed
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, text, clientMessageId]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+              description: The running turn the guidance is for.
+            text:
+              type: string
+            clientMessageId:
+              type: string
+            queuedTurnId:
+              type: string
+              format: uuid
+              description: >-
+                Set when the steer carries a queued message (steerQueuedMessage,
+                or a message the project's orchestrator sent while the session
+                was busy): the queued turn whose message it is.
+            deleteRequested:
+              type: boolean
+              description: >-
+                With queuedTurnId: the person deleted the message while the
+                agent was taking its steer (deleteQueuedMessage). On
+                chat.turn_steered the agent took it anyway, so it was
+                delivered; on chat.turn_steer_failed it was deleted.
+            origin:
+              type: string
+              description: >-
+                With queuedTurnId: automation for a message the project's
+                orchestrator sent (senderLabel names it), absent for a
+                person's.
+            senderLabel:
+              type: string
+              description: With queuedTurnId and origin automation, who sent the message (Orchestrator).
+            authorUserId:
+              type: string
+              description: With queuedTurnId, the person whose message it is.
+            authorName:
+              type: string
+              description: With authorUserId, their name when they sent it.
+            error:
               type: string
         createdAt:
           type: string
@@ -10519,6 +10752,8 @@ components:
         - $ref: "#/components/schemas/TurnAbortedEvent"
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
+        - $ref: "#/components/schemas/TurnSteerRequestedEvent"
+        - $ref: "#/components/schemas/TurnSteerFailedEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
     ClientEventPage:
       type: object
