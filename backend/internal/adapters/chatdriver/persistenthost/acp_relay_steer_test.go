@@ -69,6 +69,26 @@ func TestACPRelaySettlesTheTurnOnTheSteerPrompt(t *testing.T) {
 	}
 }
 
+// agy ends the first prompt only when the steer prompt takes the work over, so
+// once it has handed off, the steer prompt's failure is the turn's failure.
+func TestACPRelayHandedOffTurnFailsWhenTheSteerPromptFails(t *testing.T) {
+	relay := newTestACPRelay(t)
+	first := startRelayPrompt(t, relay)
+	steer := frameID(t, relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":`+steerPromptParams+`}`+"\n"), 1))
+
+	handoff, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+first+`,"result":{"stopReason":"end_turn"}}`+"\n"), 1, true)
+	if journaled || frameID(t, handoff) != "2" || strings.Contains(string(handoff), ACPEventIDMetaKey) {
+		t.Fatalf("handed-off answer = journaled:%v frame:%s, want a plain answer to client id 2", journaled, handoff)
+	}
+	failed, journaled := relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+steer+`,"error":{"code":-32603,"message":"model request failed"}}`+"\n"), 1, true)
+	if !journaled || frameID(t, failed) != "3" || !strings.Contains(string(failed), ACPEventIDMetaKey) || !strings.Contains(string(failed), "model request failed") {
+		t.Fatalf("failed steer prompt answer = journaled:%v frame:%s, want it to settle the turn", journaled, failed)
+	}
+	if state := relay.snapshot(); state.ActivePrompt || state.PendingResultEventID == "" {
+		t.Fatalf("state after the failed steer prompt = %+v, want the turn settled", state)
+	}
+}
+
 func TestACPRelayRefusedSteerPromptLeavesTheTurnToTheFirstPrompt(t *testing.T) {
 	relay := newTestACPRelay(t)
 	first := startRelayPrompt(t, relay)
