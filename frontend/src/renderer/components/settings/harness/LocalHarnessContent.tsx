@@ -44,7 +44,7 @@ import { captureRendererEvent } from "../../../lib/telemetry";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
-import type { HarnessDiagnosticsRequest } from "../../../stores/ui-store";
+import { useUiStore, type HarnessDiagnosticsRequest } from "../../../stores/ui-store";
 import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
@@ -685,6 +685,16 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
+	// The computer's own login for this agent, as the saved-accounts list names it:
+	// a chat waiting on another account is not fixed by the CLI's login.
+	const cliAccountId = useCallback(async (agentId: AgentId): Promise<string | undefined> => {
+		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		if (!provider) return undefined;
+		const accounts = queryClient.getQueryData<Awaited<ReturnType<typeof fetchAgentAccounts>>>(agentAccountsQueryKeyFor())
+			?? await fetchAgentAccounts().catch(() => undefined);
+		return accounts?.find((account) => account.provider === provider && account.device)?.id;
+	}, [hostId, queryClient]);
+
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
@@ -720,6 +730,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			authWorkflowRef.current = null;
 			setAuthWorkflow(null);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
+			// A chat turn that sent the user here to log in gets them back.
+			if (signingIn) useUiStore.getState().completeLoginReturn(workflow.agentId, hostId, await cliAccountId(workflow.agentId));
 			return;
 		}
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? {
@@ -727,7 +739,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			phase: signedOut ? "unauthorized" : "unverified",
 			reason: !signingIn ? t("settings.harness.logoutUnverified") : signedOut ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
 		} : current);
-	}, [checkAuth, cliLoginOnOwnRow, hostId, queryClient, refreshCliLogin, shellKey, t]);
+	}, [checkAuth, cliAccountId, cliLoginOnOwnRow, hostId, queryClient, refreshCliLogin, shellKey, t]);
 
 	const closeAuth = useCallback(async (workflow: AuthTerminalWorkflow): Promise<boolean> => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return false;
@@ -838,7 +850,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
 						const cliLoggedIn = await refreshCliLogin(agentId);
-						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
+						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") {
+							// A chat turn that sent the user here to log in gets them back.
+							useUiStore.getState().completeLoginReturn(agentId, hostId, await cliAccountId(agentId));
+							return true;
+						}
 						// A saved key, or a native sign-in whose harness can only report
 						// its own credentials as present (Gemini, Hermes, MiMo Code),
 						// counts as configured, never as verified.

@@ -64,6 +64,7 @@ import {
 	Globe,
 	Hammer,
 	History,
+	Hourglass,
 	KeyRound,
 	Keyboard,
 	ListChecks,
@@ -171,6 +172,7 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationTurn,
 	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
@@ -642,6 +644,7 @@ export function TurnOutcome({
 	error,
 	failureCode,
 	onConfigure,
+	login,
 	retry,
 	usageLimit,
 	copyText,
@@ -651,8 +654,10 @@ export function TurnOutcome({
 }: {
 	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 	error?: string;
-	failureCode?: "provider_key_missing";
+	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
+	/** The provider refused the agent's login: a quiet line in place of its CLI advice. */
+	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
@@ -677,6 +682,33 @@ export function TurnOutcome({
 					rollbackDisabled={rollbackDisabled}
 					timestamp={timestamp}
 				/>
+			</div>
+		);
+	}
+	// A refused login is offered on the chat box, where the user was about to
+	// write. The turn keeps one quiet line saying what happens to its message;
+	// the provider's own advice ("run /login") is for its CLI and never shows.
+	if (state === "failed" && failureCode === "auth_required" && login) {
+		// A turn that did work still closes on the shared row, so its copy and undo
+		// stay where they always are; the band sends the latest refusal again, so that
+		// one has no Retry. One that did nothing else has its line under the message,
+		// whose row has them.
+		// An earlier refusal, past what the band offers, keeps its Retry like any failed turn.
+		const closesTurn = login.align === "start";
+		const ownRetry = login.ownRetry ? retry : undefined;
+		return (
+			<div data-turn-outcome={state} className={cn("flex min-w-0", closesTurn && "group/message flex-col gap-1.5")}>
+				<LoginStatusNote status={login.status} retry={closesTurn ? undefined : ownRetry} />
+				{closesTurn ? (
+					<TurnActions
+						className="-mt-1"
+						retry={ownRetry}
+						copyText={copyText}
+						onRollback={onRollback}
+						rollbackDisabled={rollbackDisabled}
+						timestamp={timestamp}
+					/>
+				) : null}
 			</div>
 		);
 	}
@@ -730,6 +762,82 @@ export function TurnOutcome({
 	);
 }
 
+const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Loader2, resend: undefined, stopped: undefined } as const;
+
+/**
+ * What happens to a message the agent refused for its login. A message whose
+ * turn did nothing else leads its own row under the bubble with it, before the
+ * time and copy; otherwise it is the turn's last line.
+ */
+export function LoginStatusNote({ status, retry }: {
+	status: TurnOutcomeLogin["status"];
+	/** An earlier refusal's Retry, on the line itself when the message's row carries it. */
+	retry?: TurnOutcomeRetryControl;
+}) {
+	const { t } = useTranslation();
+	const Icon = LOGIN_STATUS_ICON[status];
+	const note = (
+		<div
+			data-testid="login-status"
+			data-login-status={status}
+			className="flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
+		>
+			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" && "animate-spin")} /> : null}
+			<span className="min-w-0">{t(`chat.login.status.${status}`)}</span>
+		</div>
+	);
+	if (!retry) return note;
+	return (
+		<div className="flex min-w-0 items-center gap-1">
+			{note}
+			<RetryTurnButton retry={retry} />
+			{/* The row is one line, so a failed retry says why where its button is. */}
+			{retry.error ? (
+				<span role="alert" title={retry.error} className="min-w-0 truncate text-xs leading-5 text-destructive">
+					{retry.error}
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+/** How a message the agent refused for its login reads in the timeline. */
+export interface TurnOutcomeLogin {
+	/**
+	 * queued: sends again by itself once the user logs in. waiting: the Agents
+	 * page was opened and the login has not taken yet. sending: logged in, sending
+	 * it again. resend: the user sends it again (it did work, or nothing watches
+	 * the login). stopped: an earlier refusal, since sent again or moved past.
+	 */
+	status: "queued" | "waiting" | "sending" | "resend" | "stopped";
+	/** On the message, under its bubble, when the turn did nothing else; otherwise the turn's last line. */
+	align: "end" | "start";
+	/** An earlier refusal the band no longer offers: it keeps its own Retry, as any failed turn does. */
+	ownRetry?: boolean;
+}
+
+/** Sends a failed turn's prompt again as a new turn. */
+function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
+	return (
+		<Button
+			type="button"
+			variant="quiet"
+			size="sm"
+			onClick={retry.onRetry}
+			disabled={retry.pending || retry.disabled}
+			aria-label="Retry this turn"
+			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+			data-testid="retry-turn"
+		>
+			<RotateCw
+				aria-hidden="true"
+				className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
+			/>
+			{retry.pending ? "Retrying…" : "Retry"}
+		</Button>
+	);
+}
+
 interface TurnActionsProps {
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
@@ -765,24 +873,7 @@ export function TurnActions({
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
-				{retry ? (
-					<Button
-						type="button"
-						variant="quiet"
-						size="sm"
-						onClick={retry.onRetry}
-						disabled={retry.pending || retry.disabled}
-						aria-label="Retry this turn"
-						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-						data-testid="retry-turn"
-					>
-						<RotateCw
-							aria-hidden="true"
-							className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
-						/>
-						{retry.pending ? "Retrying…" : "Retry"}
-					</Button>
-				) : null}
+				{retry ? <RetryTurnButton retry={retry} /> : null}
 				{copyText !== undefined ? (
 					<div className="size-7 shrink-0">
 						<CopyButton
@@ -1050,6 +1141,7 @@ export function HumanMessage({
 	activateBranchPending = false,
 	activateBranchError,
 	onSelectAnnotation,
+	status,
 }: {
 	message: ConversationMessage;
 	/** The staged paths are relative to this session's workspace. */
@@ -1077,6 +1169,11 @@ export function HumanMessage({
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/**
+	 * Where the message stands (a refused login's). It leads the row under the
+	 * bubble, and the row then stays in place with its time and actions in view.
+	 */
+	status?: ReactNode;
 }) {
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
@@ -1107,8 +1204,10 @@ export function HumanMessage({
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
+	// So does a status: it leads the row, and the time and actions follow it in
+	// view, one line under the bubble.
 	const inFlowActions = Boolean(branchPoint && onActivateBranch);
-	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-full z-10 mt-1");
+	const actionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : status ? "-mt-0.5" : "absolute right-0 top-full z-10 mt-1");
 	// The editor's Cancel and Send float too, so starting an edit moves nothing. They
 	// sit on the "Worked for" line the turn reserves one row gap (10px) under the bubble.
 	const editActionRowClass = cn("flex h-7 items-center gap-1", inFlowActions ? "mt-1" : "absolute right-0 top-[calc(100%+0.625rem)] z-10");
@@ -1192,7 +1291,8 @@ export function HumanMessage({
 			)}
 			{editing ? null : (
 				<div className={actionRowClass}>
-					<div className="flex items-center gap-2 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
+					{status ? <div className="mr-1 flex items-center">{status}</div> : null}
+					<div className={cn("flex items-center gap-2", !status && "opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none")}>
 						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Button

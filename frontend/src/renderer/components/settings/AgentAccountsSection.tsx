@@ -1,7 +1,7 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
+import { Info, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
@@ -91,6 +91,14 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
+			if (result.status === "complete") {
+				// A chat turn that sent the user here to log in gets them back.
+				const ui = useUiStore.getState();
+				const waiting = ui.loginReturn;
+				if (waiting && agentAccountProviderFor(waiting.agentId) === provider) {
+					ui.completeLoginReturn(waiting.agentId, hostId, result.account?.id);
+				}
+			}
 		}
 	});
 	const closeLogin = (current: AgentAccountLogin) => {
@@ -221,7 +229,17 @@ function AccountHandoffRow() {
 	const { settings, isLoading } = useSettings();
 	const { update, saving, error } = useUpdateAccountHandoff();
 	return <>
-		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+		<HarnessDetailRow label={<span className="inline-flex items-center gap-1.5">
+			{t("settings.agentAccounts.handoff")}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button type="button" size="icon-xs" variant="quiet" aria-label={t("settings.agentAccounts.problemDetails")}>
+						<Info className="size-icon-sm" aria-hidden="true" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-sm">{t("settings.agentAccounts.handoffDescription")}</TooltipContent>
+			</Tooltip>
+		</span>}>
 			<Switch
 				aria-label={t("settings.agentAccounts.handoff")}
 				checked={settings?.accountHandoff ?? false}
