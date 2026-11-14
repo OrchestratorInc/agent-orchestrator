@@ -1036,6 +1036,12 @@ artifact: /evidence/vnc-headless-6gb-02
 			prompt:     "<pasted_content id=\"eead\">\n" + domain.WrapReportDelivery("report-batch:abc123", "worker finished") + "\n</pasted_content>",
 			deliveryID: "report-batch:abc123",
 		},
+		{
+			name: "multiple paste blocks with plain closing tags",
+			prompt: "<pasted_content id=\"a\"><ao-report-delivery id=\"report-batch:abc123\">worker </pasted_content>\n" +
+				"<pasted_content id=\"b\">finished</ao-report-delivery></pasted_content>",
+			deliveryID: "report-batch:abc123",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1074,6 +1080,15 @@ func TestHookConversationFactsPreservesHumanTextAfterReportPaste(t *testing.T) {
 		{
 			name:   "unmatched paste closer",
 			prompt: report + "\n</pasted_content id=\"eead\">",
+		},
+		{
+			name:   "unmatched plain paste closer",
+			prompt: report + "\n</pasted_content>",
+		},
+		{
+			name: "paste block closed twice",
+			prompt: pasteOpen + "<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
+				"\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n</pasted_content>",
 		},
 	}
 	for _, tt := range tests {

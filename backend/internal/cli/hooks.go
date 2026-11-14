@@ -513,7 +513,9 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 }
 
 var claudePastedContentPrefix = regexp.MustCompile(`^<pasted_content id="([A-Za-z0-9_-]+)">`)
-var claudePastedContentClosingSuffix = regexp.MustCompile(`</pasted_content id="([A-Za-z0-9_-]+)">$`)
+var claudePastedContentOpening = regexp.MustCompile(`<pasted_content id="[A-Za-z0-9_-]+">`)
+var claudePastedContentClosing = regexp.MustCompile(`</pasted_content(?: id="[A-Za-z0-9_-]+")?>`)
+var claudePastedContentClosingSuffix = regexp.MustCompile(`</pasted_content(?: id="([A-Za-z0-9_-]+)")?>$`)
 
 // normalizeClaudePastedPrompt removes only Claude's leading paste wrapper.
 // A report envelope can continue after the pasted segment, so keep that suffix.
@@ -542,19 +544,24 @@ func reportDeliveryHasOnlyPastedClosers(value string) bool {
 	}
 	prefix := value[:closeAt]
 	suffix := strings.TrimSpace(value[closeAt+len(reportClose):])
+	// Each closer, with or without an ID, must close a paste block that is
+	// still open, the same closers normalizeClaudePastedPrompt accepts.
+	unclosed := len(claudePastedContentOpening.FindAllString(prefix, -1)) - len(claudePastedContentClosing.FindAllString(prefix, -1))
 	closedIDs := make(map[string]int)
 	for suffix != "" {
 		match := claudePastedContentClosingSuffix.FindStringSubmatch(suffix)
-		if match == nil {
+		if match == nil || unclosed <= 0 {
 			return false
 		}
-		id := match[1]
-		opening := `<pasted_content id="` + id + `">`
-		closing := `</pasted_content id="` + id + `">`
-		if strings.Count(prefix, opening) <= strings.Count(prefix, closing)+closedIDs[id] {
-			return false
+		if id := match[1]; id != "" {
+			opening := `<pasted_content id="` + id + `">`
+			closing := `</pasted_content id="` + id + `">`
+			if strings.Count(prefix, opening) <= strings.Count(prefix, closing)+closedIDs[id] {
+				return false
+			}
+			closedIDs[id]++
 		}
-		closedIDs[id]++
+		unclosed--
 		suffix = strings.TrimSpace(strings.TrimSuffix(suffix, match[0]))
 	}
 	return true
