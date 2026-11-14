@@ -1,16 +1,47 @@
 import { HoverCard as HoverCardPrimitive } from "radix-ui";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
 
+/**
+ * Closes when anything outside the card scrolls. Radix closes a hover card only
+ * on pointer leave, and a scroll moves the trigger out from under a pointer that
+ * stays put: in a chat that auto-scrolls while it streams, the card never got a
+ * leave event and stayed open over the timeline. Scrolling inside the card keeps
+ * it open.
+ */
 function HoverCard({
 	openDelay = 300,
 	closeDelay = 150,
+	open: openProp,
+	defaultOpen = false,
+	onOpenChange,
 	...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Root>) {
+	const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+	const open = openProp ?? uncontrolledOpen;
+	const setOpen = useCallback(
+		(next: boolean) => {
+			if (openProp === undefined) setUncontrolledOpen(next);
+			onOpenChange?.(next);
+		},
+		[openProp, onOpenChange],
+	);
+	useEffect(() => {
+		if (!open) return;
+		const dismiss = (event: Event) => {
+			if (event.target instanceof Element && event.target.closest("[data-slot=hover-card-content]")) return;
+			setOpen(false);
+		};
+		window.addEventListener("scroll", dismiss, { capture: true, passive: true });
+		return () => window.removeEventListener("scroll", dismiss, { capture: true });
+	}, [open, setOpen]);
 	return (
 		<HoverCardPrimitive.Root
 			data-slot="hover-card"
 			openDelay={openDelay}
 			closeDelay={closeDelay}
+			open={open}
+			onOpenChange={setOpen}
 			{...props}
 		/>
 	);
