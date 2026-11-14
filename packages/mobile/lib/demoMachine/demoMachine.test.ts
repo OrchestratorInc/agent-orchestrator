@@ -13,7 +13,8 @@ import { UnreachableError } from "../connectionError";
 import { probeIdentity } from "../connectRuntime";
 import { addDemoMachine } from "./machine";
 import { DEMO_HOST_ID, DEMO_HOSTNAME, DEMO_PORT, DemoServer } from "./server";
-import { demoEventStream, demoFetch, demoServer, installDemoTransport, isDemoUrl, resetDemoServer, setDemoNetwork } from "./transport";
+import { DemoSocket, demoEventStream, demoFetch, demoServer, installDemoTransport, isDemoUrl, orderedDelivery, resetDemoServer, setDemoNetwork } from "./transport";
+import { demoWorkspace } from "./workspace";
 
 const cfg: ServerConfig = { host: DEMO_HOSTNAME, httpPort: String(DEMO_PORT), muxPort: String(DEMO_PORT), secure: false, password: "demo-token", hostId: DEMO_HOST_ID };
 
@@ -145,6 +146,101 @@ describe("demo machine", () => {
 		await pending;
 		expect(settled).toBe(true);
 	});
+
+	it("fails a request still on its way when the machine is switched off", async () => {
+		vi.useFakeTimers();
+		setDemoNetwork("bad");
+		const outcome = demoFetch(`http://${DEMO_HOSTNAME}:${DEMO_PORT}/api/v1/projects`).then(() => "answered", (error: unknown) => error);
+		await vi.advanceTimersByTimeAsync(500);
+		setDemoNetwork("offline");
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(await outcome).toEqual(new TypeError("Network request failed"));
+	});
+
+	// A frame never overtakes one sent ahead of it, however the jitter falls.
+	it("hands over a stream's frames in the order they were sent", async () => {
+		vi.useFakeTimers();
+		const delivered: number[] = [];
+		const delivery = orderedDelivery();
+		[400, 10, 250, 0, 90].forEach((delayMs, index) => delivery.send(() => delivered.push(index), delayMs));
+		await vi.advanceTimersByTimeAsync(399);
+		expect(delivered).toEqual([]);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(delivered).toEqual([0, 1, 2, 3, 4]);
+		// Still late: a later frame waits out its own delay.
+		delivery.send(() => delivered.push(5), 100);
+		await vi.advanceTimersByTimeAsync(99);
+		expect(delivered).toHaveLength(5);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(delivered).toEqual([0, 1, 2, 3, 4, 5]);
+		delivery.send(() => delivered.push(6), 50);
+		delivery.clear();
+		await vi.advanceTimersByTimeAsync(100);
+		expect(delivered).toHaveLength(6);
+	});
+
+	it("keeps the live stream's events in order on a jittery link", async () => {
+		vi.useFakeTimers();
+		setDemoNetwork("terrible");
+		const random = vi.spyOn(Math, "random");
+		const opening = demoEventStream("");
+		await vi.advanceTimersByTimeAsync(5_000);
+		const reader = (await opening).body.getReader();
+		// The first frame draws the longest delay, the next ones the shortest.
+		random.mockReturnValueOnce(1).mockReturnValue(0);
+		const server = demoServer();
+		server.tick(Date.now());
+		server.tick(Date.now() + 100);
+		server.tick(Date.now() + 200);
+		await vi.advanceTimersByTimeAsync(5_000);
+		const seqs: number[] = [];
+		for (let i = 0; i < 3; i++) {
+			const { value } = await reader.read();
+			seqs.push(Number(/^id: (\d+)/.exec(new TextDecoder().decode(value))![1]));
+		}
+		expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+		await reader.cancel();
+	});
+
+	it("keeps a terminal's frames in order on a jittery link", async () => {
+		vi.useFakeTimers();
+		setDemoNetwork("terrible");
+		const socket = new DemoSocket(`ws://${DEMO_HOSTNAME}:${DEMO_PORT}/mux`);
+		await vi.advanceTimersByTimeAsync(5_000);
+		const frames: string[] = [];
+		socket.onmessage = ({ data }) => frames.push((JSON.parse(data) as { type: string }).type);
+		const random = vi.spyOn(Math, "random").mockReturnValueOnce(1).mockReturnValue(0);
+		socket.send(JSON.stringify({ ch: "terminal", id: "t1", type: "open" }));
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(random).toHaveBeenCalled();
+		expect(frames).toEqual(["opened", "data"]);
+		socket.close();
+	});
+
+	it("passes a message sent to a session to its chat, as the chat's own send does", async () => {
+		const { sendMessage } = await import("../api");
+		await sendMessage(cfg, "api-3", "Please also add tests", { userAuthored: true });
+		const page = await getConversationPage(cfg, "api-3");
+		const texts = page.items.flatMap((item) => item.kind === "message" ? [item.text] : []);
+		expect(texts.at(-2)).toBe("Please also add tests");
+		expect(page.controller.state).toBe("busy");
+		await expect(sendMessage(cfg, "api-3", "And again")).rejects.toThrow();
+		expect(demoServer().handle("POST", "/api/v1/sessions/api-3/send", "{}").status).toBe(400);
+	});
+
+	it("gives every generated module a body, whatever its session's seed", () => {
+		const modules = /\/(requests|queue|store|session|cache|router|auth|billing|upload|search)\.(ts|md)$/;
+		let checked = 0;
+		for (const prefix of ["web", "api", "mob", "plat"]) {
+			for (let n = 1; n <= 12; n++) {
+				for (const file of demoWorkspace(`${prefix}-${n}`).filter((f) => modules.test(f.path))) {
+					checked++;
+					expect(file.content.split("\n").length, file.path).toBeGreaterThanOrEqual(40);
+				}
+			}
+		}
+		expect(checked).toBe(4 * 12 * 10);
+	});
 });
 
 describe("demo machine in a release build", () => {
@@ -183,6 +279,6 @@ describe("demo machine in a release build", () => {
 		const settings = readFileSync(new URL("../../app/settings/index.tsx", import.meta.url), "utf8");
 		expect(layout).toContain("<DemoMachineManager />");
 		expect(readFileSync(new URL("./index.ts", import.meta.url), "utf8")).toContain("if (!isDevBuild()) return;");
-		expect(settings).toContain("{__DEV__ ? <DemoMachineSection /> : null}");
+		expect(settings).toContain("{__DEV__ ? <DemoMachineSection onMachinesChanged={reloadMachines} /> : null}");
 	});
 });

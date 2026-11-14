@@ -392,6 +392,7 @@ export class DemoServer {
 			if (!session) return notFound();
 			if (get && segments.length === 2) return ok({ session });
 			if (segments[2] === "conversation") return this.handleConversation(method, id, segments.slice(3), q, body, now);
+			if (method === "POST" && segments[2] === "send" && segments.length === 3) return this.handleSend(id, body, now);
 			const files = this.handleFiles(method, id, segments.slice(2), q, session);
 			if (files) return files;
 		}
@@ -455,9 +456,23 @@ export class DemoServer {
 				return text === undefined ? notFound() : { status: 200, body: null, text, contentType: "text/plain; charset=utf-8" };
 			}
 		}
-		// Review comments from the file viewer reach the agent.
-		if (method === "POST" && route === "send") return ok({});
 		return undefined;
+	}
+
+	/**
+	 * `POST /sessions/:id/send` (a forwarded review, or text typed to a worker):
+	 * every demo session is a chat, so the message becomes its next prompt, as
+	 * the chat's own send route does.
+	 */
+	private handleSend(sessionId: string, body: string | undefined, now: number): DemoResponse {
+		const conversation = this.conversation(sessionId);
+		if (!conversation) return notFound();
+		let message = "";
+		try { message = String((JSON.parse(body ?? "{}") as { message?: unknown }).message ?? "").trim(); } catch { /* not JSON */ }
+		if (!message) return error(400, "invalid_request", "message is required");
+		if (conversation.reply) return error(409, "busy", "The agent is still replying.");
+		this.startReply(conversation, message, now);
+		return ok({});
 	}
 
 	private readonly shells: { handleId: string; projectId: string; sessionId: string; workingDir: string; title: string; createdAt: string }[] = [];
