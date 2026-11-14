@@ -52,7 +52,7 @@ Switching to the agent already running succeeds without changing anything.
 Run ao agent ls for the agents you can switch to.`,
 		Example: `  ao session switch ao-12 --agent codex
   ao session switch ao-12 --agent codex --force --message "Claude is down. Take over."
-  ao session ls --agent claude-code -q | xargs -n1 ao session switch --agent codex --force`,
+  ao session ls --all --agent claude-code -q | xargs -n1 ao session switch --agent codex --force`,
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -66,7 +66,7 @@ Run ao agent ls for the agents you can switch to.`,
 	f.StringVar(&opts.agent, "agent", "", "Agent to switch to (required), for example codex or claude-code")
 	f.StringVar(&opts.model, "model", "", "Model the new agent starts on; empty keeps its default")
 	f.StringVar(&opts.effort, "effort", "", "Reasoning effort the new agent starts with; empty keeps its default")
-	f.StringVar(&opts.permission, "permission", "", "Permission mode for the new agent: default, accept-edits, auto or bypass-permissions; empty keeps the session's")
+	f.StringVar(&opts.permission, "permission", "", "Permission mode for the new agent: default (the agent's own config, which for Codex in a terminal means no approvals and no sandbox), accept-edits, auto or bypass-permissions; empty keeps the session's")
 	f.StringVarP(&opts.message, "message", "m", "", "Message to send to the new agent after the switch")
 	f.BoolVar(&opts.force, "force", false, "Stop the current turn, queued messages and pending approvals, then switch")
 	return cmd
@@ -101,7 +101,7 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 		}
 	case hasResponseErr && !opts.force && (responseErr.ErrorBody.Code == "PROVIDER_SWITCH_busy" || responseErr.ErrorBody.Code == "PROVIDER_SWITCH_pending_interaction"):
 		return fmt.Errorf("%w; rerun with --force to stop it and switch", err)
-	case errors.Is(err, errDaemonUnavailable) || !hasResponseErr || responseErr.StatusCode >= 500:
+	case switchOutcomeUnknown(err):
 		return fmt.Errorf("%w; the switch may still have completed: check ao session get %s", err, id)
 	default:
 		return err
@@ -114,6 +114,21 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 	}
 	_, err = fmt.Fprintf(out, "sent message to %s\n", id)
 	return err
+}
+
+func switchOutcomeUnknown(err error) bool {
+	var responseErr apiResponseError
+	if !errors.As(err, &responseErr) {
+		return !errors.Is(err, errDaemonNotRunning)
+	}
+	if strings.HasPrefix(responseErr.ErrorBody.Code, "PROVIDER_SWITCH_") {
+		return false
+	}
+	switch responseErr.StatusCode {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
 }
 
 func (c *commandContext) sendAfterSwitch(ctx context.Context, id, message string) error {

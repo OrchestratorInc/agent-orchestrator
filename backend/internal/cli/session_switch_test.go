@@ -156,3 +156,31 @@ func TestSendRetriesWhileTheSessionIsSwitching(t *testing.T) {
 		t.Fatalf("err = %v sends = %q sleeps = %d", err, calls.sends, sleeps)
 	}
 }
+
+func TestSessionSwitchRefusalIsNotReportedAsMaybeCompleted(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		code      string
+		uncertain bool
+	}{
+		{http.StatusServiceUnavailable, "PROVIDER_SWITCH_unavailable", false},
+		{http.StatusConflict, "PROVIDER_SWITCH_recovery_required", false},
+		{http.StatusInternalServerError, "INTERNAL_ERROR", true},
+	} {
+		cfg := setConfigEnv(t)
+		srv, _ := switchCommandServer(t, tc.status, tc.code)
+		writeRunFileFor(t, cfg, srv)
+		_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codex")
+		if err == nil || strings.Contains(err.Error(), "may still have completed") != tc.uncertain {
+			t.Fatalf("%s: err = %v, want uncertain=%v", tc.code, err, tc.uncertain)
+		}
+	}
+}
+
+func TestSessionSwitchWithNoDaemonSaysNothingChanged(t *testing.T) {
+	setConfigEnv(t)
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return false }}, "session", "switch", "demo-1", "--agent", "codex")
+	if err == nil || strings.Contains(err.Error(), "may still have completed") {
+		t.Fatalf("err = %v", err)
+	}
+}

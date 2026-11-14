@@ -57,7 +57,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
 	}
 	if !request.Force && (rec.Activity.State == domain.ActivityWaitingInput || rec.Activity.State == domain.ActivityBlocked) {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "answer the pending provider interaction before switching"}
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "the agent is waiting on an approval or question"}
 	}
 
 	// Everything the relaunch needs is read before the source is stopped, so a

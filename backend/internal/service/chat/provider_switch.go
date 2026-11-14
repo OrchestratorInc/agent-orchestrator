@@ -197,9 +197,6 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if source.harness == request.TargetHarness {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalAlreadyActive, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}
 	}
-	if !request.Force && source.busy() {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
-	}
 	// The target runs under the chat's own permission mode, so an agent that only
 	// runs with permissions bypassed (Pi) can take over a chat that has them.
 	permissions, chatPermissions := s.switchPermissions(ctx, source, request)
@@ -217,7 +214,10 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if pending, pendingErr := s.store.HasPendingConversationInteractions(ctx, conversation.ID); pendingErr != nil {
 		return pendingErr
 	} else if pending && !request.Force {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "answer the pending provider interaction before switching"}
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "the agent is waiting on an approval or question"}
+	}
+	if !request.Force && source.busy() {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
 	}
 	started := time.Now()
 	noteInput, err := s.handoffNoteInput(ctx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey))

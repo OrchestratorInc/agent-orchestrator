@@ -183,6 +183,35 @@ func TestForcedProviderSwitchStopsTheRunningTurnAndQueue(t *testing.T) {
 	}
 }
 
+func TestProviderSwitchNamesAPendingApprovalOverAWorkingTurn(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "run a command", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"},
+		ports.ChatEvent{
+			Kind: ports.ChatEventApprovalRequested, ProviderTurnID: "provider-turn-1",
+			ProviderItemID: "approval-item", RequestID: "approval-1",
+			ActivityKind: domain.ActivityKindCommand, ActivityStatus: domain.ActivityStatusPending, Summary: "Approve",
+		},
+	)
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		for _, activity := range snapshot.Activities {
+			if activity.RequestID == "approval-1" {
+				return true
+			}
+		}
+		return false
+	})
+	var refusal *domain.ProviderSwitchError
+	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "plain"})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalPendingInteraction {
+		t.Fatalf("switch = %v, want a pending-interaction refusal", err)
+	}
+}
+
 func TestForcedProviderSwitchStopsASendStuckInTheProvider(t *testing.T) {
 	t.Cleanup(chatsvc.SetForcedHandoffInterruptLimit(50 * time.Millisecond))
 	h, _, _ := newEditHarness(t, false)

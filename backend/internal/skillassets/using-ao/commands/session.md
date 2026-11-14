@@ -354,7 +354,7 @@ ao session switch mer-3 --agent codex
 
 ```bash
 # Claude is down: move every Claude session to Codex, even mid-turn
-ao session ls --agent claude-code -q | xargs -n1 ao session switch --agent codex --force -m "Claude is down. Take over."
+ao session ls --all --agent claude-code -q | xargs -n1 ao session switch --agent codex --force -m "Claude is down. Take over."
 ```
 
 ---
