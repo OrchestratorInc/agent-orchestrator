@@ -381,6 +381,8 @@ export function useIndependentSideChats(
 	const { t } = useTranslation();
 	const translateDraft = useChatDraftTranslation();
 	const [sides, setSides] = useState<Side[]>([]);
+	// False until the session's side list has loaded once, so "none yet" is not read as "none".
+	const [loaded, setLoaded] = useState(false);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
 	const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -449,6 +451,7 @@ export function useIndependentSideChats(
 		closingSidesRef.current.clear();
 		setPendingCloses([]);
 		setSides([]);
+		setLoaded(false);
 		setActiveId(undefined);
 		setVisible(false);
 		setSnapshot(undefined);
@@ -482,6 +485,7 @@ export function useIndependentSideChats(
 			if (!nextSides.some((current) => current.id === side.id)) nextSides.push({ ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
 		}
 		setSides(nextSides);
+		setLoaded(true);
 		setActiveId((current) =>
 			current && nextSides.some((side) => side.id === current) ? current : nextSides.at(-1)?.id,
 		);
@@ -1814,6 +1818,7 @@ export function useIndependentSideChats(
 		replaceDraft,
 		addReference,
 		sides,
+		loaded,
 		activeId: currentActiveId,
 		visible,
 		show: (sideId?: string) => {
