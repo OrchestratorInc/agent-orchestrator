@@ -2475,6 +2475,34 @@ describe("SessionView", () => {
 			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
 			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 		});
+
+		it.each(["running", "failed"])("keeps a Freestyle Chat session first opened with a disconnected worker (%s) on its conversation", (observed) => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: observed };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		});
+
+		it("still raises the startup screen for a Coder Chat session with a disconnected worker", () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		});
+
+		it("shows no startup screen for a paused Freestyle Chat session", () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		});
 	});
 
 	it("leaves a booting Coder Chat session's events to its chat, from before the session resolves", async () => {
