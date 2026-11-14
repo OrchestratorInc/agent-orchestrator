@@ -3,6 +3,7 @@ package poolacp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,10 @@ func TestRequiredStandingHookWitness(t *testing.T) {
 	}
 }
 func TestPermissionAndModelMappings(t *testing.T) {
+	checker, ok := New(nil, nil).(ports.ChatPermissionModeChecker)
+	if !ok {
+		t.Fatal("pool driver does not report its supported permission modes")
+	}
 	for _, tc := range []struct {
 		mode   ports.PermissionMode
 		native string
@@ -96,8 +101,12 @@ func TestPermissionAndModelMappings(t *testing.T) {
 			t.Fatalf("%s: %s", tc.mode, got)
 		}
 		err := validateTurnSettings(tc.mode, ports.ChatTurnSettings{Approval: tc.mode})
-		if (err == nil) != (tc.native != "") {
+		if (err == nil) != (tc.native != "") || (err != nil && !errors.Is(err, ports.ErrChatPermissionModeUnsupported)) {
 			t.Fatalf("admission %s: %v", tc.mode, err)
+		}
+		// The Chat permission picker lists only the modes the driver admits.
+		if got := checker.SupportsPermissionMode(tc.mode); got != (tc.native != "") {
+			t.Fatalf("SupportsPermissionMode(%s) = %v", tc.mode, got)
 		}
 	}
 	options := sessionOptions(ports.ChatTurnSettings{Model: "provider-model"})

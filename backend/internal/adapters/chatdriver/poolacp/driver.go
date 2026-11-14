@@ -120,7 +120,7 @@ func sessionMode(mode ports.PermissionMode) string {
 }
 func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
 	if sessionMode(settings.Approval) == "" {
-		return fmt.Errorf("pool Chat does not support approval mode %q", settings.Approval)
+		return fmt.Errorf("%w: pool Chat does not support approval mode %q", ports.ErrChatPermissionModeUnsupported, settings.Approval)
 	}
 	return nil
 }
