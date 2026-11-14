@@ -40,9 +40,16 @@ type EndpointInputs struct {
 	LANHosts       []string
 	TailscaleHosts []string
 	Port           int
+	// SecureHost is the MagicDNS name Tailscale Serve terminates HTTPS on, set
+	// only while secure pairing is active. It is advertised on port 443 ahead of
+	// the raw Tailscale IPs, whose plain-HTTP bridge port iOS blocks.
+	SecureHost string
 	// Tunnel is nil when remote access is off.
 	Tunnel *TunnelEndpoint
 }
+
+// secureServePort is the port Tailscale Serve exposes HTTPS on.
+const secureServePort = 443
 
 // Endpoints builds the candidate list the phone races.
 //
@@ -58,6 +65,9 @@ func Endpoints(in EndpointInputs) []Endpoint {
 	}
 	for _, h := range in.LANHosts {
 		out = append(out, Endpoint{Kind: KindLAN, Host: h, Port: in.Port})
+	}
+	if in.SecureHost != "" {
+		out = append(out, Endpoint{Kind: KindTailscale, Host: in.SecureHost, Port: secureServePort, Secure: true})
 	}
 	for _, h := range in.TailscaleHosts {
 		out = append(out, Endpoint{Kind: KindTailscale, Host: h, Port: in.Port})
