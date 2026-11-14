@@ -539,8 +539,49 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 	})
 	if err == nil {
 		_ = os.RemoveAll(dir)
+		m.tellOrchestratorAboutArrival(ctx, rec, t)
 	}
 	return rec, err
+}
+
+// ProjectOrchestrator is the project's live orchestrator session, if it has one.
+func (m *Manager) ProjectOrchestrator(ctx context.Context, project domain.ProjectID) (domain.SessionID, bool, error) {
+	return m.activeOrchestratorSessionID(ctx, project)
+}
+
+// tellOrchestratorAboutArrival lets the project's live orchestrator know that a
+// worker it did not spawn now runs here. Delivery waits for the orchestrator,
+// so it runs after the receive has answered.
+func (m *Manager) tellOrchestratorAboutArrival(ctx context.Context, rec domain.SessionRecord, t domain.SessionTransfer) {
+	orchestrator, ok, err := m.activeOrchestratorSessionID(ctx, rec.ProjectID)
+	if err != nil || !ok || orchestrator == rec.ID {
+		return
+	}
+	note := transferArrivalNote(rec.ID, t)
+	m.runInBackground(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		if err := m.Send(ctx, orchestrator, note, nil); err != nil {
+			m.logger.Warn("transfer: could not tell the orchestrator about an arrived worker", "sessionID", rec.ID, "orchestrator", orchestrator, "error", err)
+		}
+	})
+}
+
+func transferArrivalNote(id domain.SessionID, t domain.SessionTransfer) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Worker %s moved here from %s, where it was session %s.", id, t.Source.Label, t.Source.SessionID)
+	if t.DisplayName != "" {
+		fmt.Fprintf(&b, " Task: %s.", t.DisplayName)
+	}
+	fmt.Fprintf(&b, " Branch: %s.", t.Branch)
+	if t.IssueID != "" {
+		fmt.Fprintf(&b, " Issue: %s.", t.IssueID)
+	}
+	if len(t.PullRequests) > 0 {
+		fmt.Fprintf(&b, " Pull requests: %s.", strings.Join(t.PullRequests, ", "))
+	}
+	b.WriteString(" It continues the same conversation and reports to you now. Do not respawn its work.")
+	return b.String()
 }
 
 // placeTransferConversation puts a moved conversation where the agent CLI
