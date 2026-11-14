@@ -78,6 +78,10 @@ type Target struct {
 	FormMethod      string `json:"formMethod,omitempty"`
 	FormHasPayment  bool   `json:"formHasPayment,omitempty"`
 	FormHasPassword bool   `json:"formHasPassword,omitempty"`
+	// FormHasNewPassword means the form sets a password (an
+	// autocomplete="new-password" field, or a password and its confirmation),
+	// as a change or reset does and a sign-in does not.
+	FormHasNewPassword bool `json:"formHasNewPassword,omitempty"`
 	// SubmitName is the label of the form's submit control, used when Enter
 	// submits a form from a text field.
 	SubmitName string `json:"submitName,omitempty"`
@@ -249,10 +253,13 @@ func classifySubmit(submitName string, target Target) Verdict {
 		}
 	}
 	post := strings.EqualFold(target.FormMethod, "post")
-	if post && (target.FormHasPassword || containsAny(submitName, accountPhrases)) {
+	// A password field alone is a sign-in, not an account change: only a form
+	// that sets a new password, or whose button says it saves account
+	// details, changes the account.
+	if post && (target.FormHasNewPassword || containsAny(submitName, accountPhrases)) {
 		reason := "It submits a form that changes account details."
-		if target.FormHasPassword {
-			reason = "It submits a form with a password field that changes account details."
+		if target.FormHasNewPassword {
+			reason = "It submits a form that sets a new password."
 		}
 		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: reason}
 	}

@@ -26,6 +26,8 @@ export type ApprovalElementFacts = {
 	formMethod?: string;
 	formHasPayment: boolean;
 	formHasPassword: boolean;
+	/** The form sets a password (change or reset), unlike a sign-in. */
+	formHasNewPassword: boolean;
 	submitName?: string;
 	rect?: { x: number; y: number; width: number; height: number };
 };
@@ -141,6 +143,7 @@ export function describeApprovalTarget(
 		isSubmit: false,
 		formHasPayment: false,
 		formHasPassword: false,
+		formHasNewPassword: false,
 	};
 	if (tag === "input") facts.inputType = (target as HTMLInputElement).type;
 	if (tag === "a") facts.href = clean((target as HTMLAnchorElement).href, 500);
@@ -174,7 +177,12 @@ export function describeApprovalTarget(
 		facts.formAction = clean(resolve(actionOverride ?? formAction ?? doc.baseURI), 500);
 		facts.formMethod = (override("formmethod") ?? Element.prototype.getAttribute.call(form, "method") ?? "get").toLowerCase();
 		facts.formHasPayment = controls.some((el) => ["input", "select"].includes(el.tagName.toLowerCase()) && paymentField(el));
-		facts.formHasPassword = controls.some((el) => el.tagName.toLowerCase() === "input" && (el as HTMLInputElement).type === "password");
+		const passwords = controls.filter((el) => el.tagName.toLowerCase() === "input" && (el as HTMLInputElement).type === "password");
+		facts.formHasPassword = passwords.length > 0;
+		// A sign-in has one current password; a change or reset asks for a new
+		// one (and usually its confirmation).
+		facts.formHasNewPassword =
+			passwords.length > 1 || passwords.some((el) => /\bnew-password\b/i.test(el.getAttribute("autocomplete") ?? ""));
 		facts.submitName = submitter ? accessibleName(submitter) : undefined;
 		// Enter in a single-line field submits its form (implicit submission);
 		// in a textarea it inserts a newline.
