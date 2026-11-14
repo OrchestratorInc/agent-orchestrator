@@ -856,3 +856,17 @@ func TestRetryOfADeliveredMessageDoesNotSwitchBack(t *testing.T) {
 		t.Fatalf("harness after the retry = %q, want the later switch's opencode", rec.Harness)
 	}
 }
+
+func TestProviderSwitchRefusesAnUnknownAgentAndSession(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	var refusal *domain.ProviderSwitchError
+	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: "codx", IdempotencyKey: "typo"})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported || !strings.Contains(err.Error(), `unknown agent "codx"`) {
+		t.Fatalf("unknown agent = %v", err)
+	}
+	err = h.svc.SwitchProvider(ctx, "no-such-session", domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex, IdempotencyKey: "missing"})
+	if !errors.Is(err, ports.ErrSessionNotFound) {
+		t.Fatalf("unknown session = %v, want ErrSessionNotFound", err)
+	}
+}

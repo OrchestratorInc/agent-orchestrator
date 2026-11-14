@@ -138,9 +138,23 @@ func TestSessionListFiltersByAgentQuietly(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	writeRunFileFor(t, cfg, srv)
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "claude-code", "-q")
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "Claude-Code", "-q")
 	if err != nil || out != "demo-1\ndemo-2\n" {
 		t.Fatalf("out = %q err = %v", out, err)
+	}
+	_, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "claude", "-q")
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "did you mean claude-code") {
+		t.Fatalf("ls --agent claude: err = %v exit = %d", err, ExitCode(err))
+	}
+}
+
+func TestSessionSwitchRejectsAnUnknownAgentLocally(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codx")
+	if ExitCode(err) != 2 || len(calls.switches) != 0 {
+		t.Fatalf("err = %v exit = %d switches = %d", err, ExitCode(err), len(calls.switches))
 	}
 }
 

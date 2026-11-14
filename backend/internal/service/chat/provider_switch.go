@@ -147,9 +147,14 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if request.TargetHarness == "" {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is required"}
 	}
+	if !request.TargetHarness.IsKnown() {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("unknown agent %q; run ao agent ls for the agents you can switch to", request.TargetHarness)}
+	}
 	if record, found, err := s.sessions.GetSession(ctx, id); err != nil {
 		return err
-	} else if found && domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI && s.terminalSwitcher != nil {
+	} else if !found {
+		return fmt.Errorf("switch %s: %w", id, ports.ErrSessionNotFound)
+	} else if domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI && s.terminalSwitcher != nil {
 		// One builder writes the note for both UIs.
 		started := time.Now()
 		if request.HandoffNote, err = s.HandoffNote(ctx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey)); err != nil {

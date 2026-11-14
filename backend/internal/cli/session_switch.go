@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type sessionSwitchOptions struct {
@@ -73,7 +75,10 @@ Run ao agent ls for the agents you can switch to.`,
 }
 
 func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionSwitchOptions) error {
-	agent := strings.TrimSpace(opts.agent)
+	agent, err := knownAgentFlag(opts.agent)
+	if err != nil {
+		return err
+	}
 	if agent == "" {
 		return usageError{errors.New("usage: --agent is required")}
 	}
@@ -83,7 +88,7 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 		return usageError{fmt.Errorf("usage: --permission must be default, accept-edits, auto or bypass-permissions, got %q", opts.permission)}
 	}
 	out := cmd.OutOrStdout()
-	err := c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
+	err = c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
 		TargetHarness: agent, IdempotencyKey: uuid.NewString(),
 		Model: strings.TrimSpace(opts.model), Effort: strings.TrimSpace(opts.effort),
 		PermissionMode: opts.permission, Force: opts.force,
@@ -114,6 +119,23 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 	}
 	_, err = fmt.Fprintf(out, "sent message to %s\n", id)
 	return err
+}
+
+func knownAgentFlag(raw string) (string, error) {
+	agent := strings.ToLower(strings.TrimSpace(raw))
+	if agent == "" || domain.AgentHarness(agent).IsKnown() {
+		return agent, nil
+	}
+	var near []string
+	for _, known := range domain.AllHarnesses {
+		if strings.HasPrefix(string(known), agent) {
+			near = append(near, string(known))
+		}
+	}
+	if len(near) > 0 {
+		return "", usageError{fmt.Errorf("usage: unknown agent %q, did you mean %s? Run ao agent ls for the agents", raw, strings.Join(near, " or "))}
+	}
+	return "", usageError{fmt.Errorf("usage: unknown agent %q; run ao agent ls for the agents", raw)}
 }
 
 func switchOutcomeUnknown(err error) bool {

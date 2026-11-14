@@ -723,6 +723,10 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse, review *bool) e
 }
 
 func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, opts sessionListOptions) error {
+	agent, err := knownAgentFlag(opts.agent)
+	if err != nil {
+		return err
+	}
 	params := url.Values{}
 	if opts.project != "" {
 		params.Set("project", opts.project)
@@ -743,7 +747,7 @@ func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, o
 		}
 	}
 	sessions := filterAndSortSessions(res.Sessions, opts.all)
-	if agent := strings.TrimSpace(opts.agent); agent != "" {
+	if agent != "" {
 		sessions = slices.DeleteFunc(sessions, func(sess sessionDTO) bool { return sess.Harness != agent })
 	}
 	if opts.quiet {
