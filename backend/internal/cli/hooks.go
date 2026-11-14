@@ -567,7 +567,7 @@ func reportDeliveryHasOnlyPastedClosers(value string) bool {
 	}
 	for suffix != "" {
 		match := claudePastedContentLeadingClosing.FindStringSubmatch(suffix)
-		if match == nil || !closeBlock(match[1]) {
+		if len(match) != 2 || !closeBlock(match[1]) {
 			return false
 		}
 		suffix = strings.TrimSpace(suffix[len(match[0]):])
