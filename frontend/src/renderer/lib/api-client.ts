@@ -35,18 +35,29 @@ export function getApiBaseUrl(): string {
 // the daemon reports that it serves [::1] at its port too (ipv6Loopback in its
 // status); otherwise streams stay on 127.0.0.1.
 const eventStreamHostname = "ao-events.localhost";
+const chatImageHostname = "ao-images.localhost";
 let daemonServesIPv6Loopback = false;
 
-/** The base URL a daemon EventSource connects to; see eventStreamHostname. */
-export function eventStreamBaseUrl(baseUrl: string, ipv6Loopback = daemonServesIPv6Loopback): string {
+function loopbackAliasBaseUrl(baseUrl: string, hostname: string, ipv6Loopback: boolean): string {
 	try {
 		const url = new URL(baseUrl);
 		if (!ipv6Loopback || url.hostname !== "127.0.0.1") return baseUrl.replace(/\/+$/, "");
-		url.hostname = eventStreamHostname;
+		url.hostname = hostname;
 		return url.href.replace(/\/+$/, "");
 	} catch {
 		return baseUrl.replace(/\/+$/, "");
 	}
+}
+
+/** The base URL a daemon EventSource connects to; see eventStreamHostname. */
+export function eventStreamBaseUrl(baseUrl: string, ipv6Loopback = daemonServesIPv6Loopback): string {
+	return loopbackAliasBaseUrl(baseUrl, eventStreamHostname, ipv6Loopback);
+}
+
+export function chatImageUrl(src: string | undefined, baseUrl = getApiBaseUrl(), ipv6Loopback = daemonServesIPv6Loopback): string | undefined {
+	const base = baseUrl.replace(/\/+$/, "");
+	if (!src || !base || !src.startsWith(`${base}/`)) return src;
+	return loopbackAliasBaseUrl(base, chatImageHostname, ipv6Loopback) + src.slice(base.length);
 }
 
 export function hasTrustedApiBaseUrl(): boolean {
