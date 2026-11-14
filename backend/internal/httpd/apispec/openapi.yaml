@@ -6921,6 +6921,199 @@ paths:
       summary: Report a reviewer-owned hook signal
       tags:
       - reviews
+  /api/v1/search/index-status:
+    get:
+      operationId: getSessionSearchIndexStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSearchIndexStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report what the session search index covers
+      tags:
+      - sessions
+  /api/v1/search/reindex:
+    post:
+      operationId: reindexSessionSearch
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSearchIndexStatusResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Empty the session search index and rebuild it from scratch in the background
+      tags:
+      - sessions
+  /api/v1/search/sessions:
+    get:
+      operationId: searchSessions
+      parameters:
+      - description: Words to search for. Leave it out to browse by filters or sort=recent.
+          Words may carry operators such as harness:, project:, status:, before:,
+          after:, path:, !exclude, "exact phrase", 'exact, ^prefix.
+        in: query
+        name: q
+        schema:
+          description: Words to search for. Leave it out to browse by filters or sort=recent.
+            Words may carry operators such as harness:, project:, status:, before:,
+            after:, path:, !exclude, "exact phrase", 'exact, ^prefix.
+          type: string
+      - description: 'Restrict results to one project. Equivalent to project: in q.'
+        in: query
+        name: projectId
+        schema:
+          description: 'Restrict results to one project. Equivalent to project: in
+            q.'
+          type: string
+      - description: Restrict results to one agent harness, such as claude-code or
+          codex.
+        in: query
+        name: harness
+        schema:
+          description: Restrict results to one agent harness, such as claude-code
+            or codex.
+          type: string
+      - description: Restrict to sessions that touched a path containing this text.
+        in: query
+        name: path
+        schema:
+          description: Restrict to sessions that touched a path containing this text.
+          type: string
+      - description: Restrict to one session lifecycle state.
+        in: query
+        name: status
+        schema:
+          description: Restrict to one session lifecycle state.
+          enum:
+          - killed
+          - live
+          - hibernated
+          type: string
+      - description: Earliest result time, as an RFC 3339 date or date-time.
+        in: query
+        name: from
+        schema:
+          description: Earliest result time, as an RFC 3339 date or date-time.
+          type: string
+      - description: Latest result time, as an RFC 3339 date or date-time.
+        in: query
+        name: to
+        schema:
+          description: Latest result time, as an RFC 3339 date or date-time.
+          type: string
+      - description: Order by relevance (while typing) or recency (while browsing).
+          Defaults to relevance, or to recent for a filter-only query.
+        in: query
+        name: sort
+        schema:
+          description: Order by relevance (while typing) or recency (while browsing).
+            Defaults to relevance, or to recent for a filter-only query.
+          enum:
+          - relevance
+          - recent
+          type: string
+      - description: One result per session at its best match, with sessionMatches
+          counting the rest (session, the default), or one result per matching message
+          (message).
+        in: query
+        name: group
+        schema:
+          description: One result per session at its best match, with sessionMatches
+            counting the rest (session, the default), or one result per matching message
+            (message).
+          enum:
+          - session
+          - message
+          type: string
+      - description: Page size. Defaults to 20.
+        in: query
+        name: limit
+        schema:
+          description: Page size. Defaults to 20.
+          maximum: 100
+          minimum: 1
+          type: integer
+      - description: Page offset.
+        in: query
+        name: offset
+        schema:
+          description: Page offset.
+          minimum: 0
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search past sessions by title, message text, tool output, and touched
+        file paths
+      tags:
+      - sessions
   /api/v1/session-import:
     get:
       operationId: scanSessionImport
@@ -23519,6 +23712,155 @@ components:
           $ref: '#/components/schemas/ControllersSessionView'
       required:
       - session
+      type: object
+    SessionSearchCoverage:
+      properties:
+        backfilledAt:
+          format: date-time
+          type: string
+        indexedDocs:
+          format: int64
+          type: integer
+        indexedSources:
+          format: int64
+          type: integer
+        pendingSources:
+          format: int64
+          type: integer
+        state:
+          enum:
+          - ready
+          - backfilling
+          - unavailable
+          type: string
+        unavailableSources:
+          format: int64
+          type: integer
+        unindexedHarnesses:
+          items:
+            type: string
+          type: array
+        unsupportedSources:
+          format: int64
+          type: integer
+      required:
+      - state
+      - indexedSources
+      - pendingSources
+      - unsupportedSources
+      - unavailableSources
+      - indexedDocs
+      type: object
+    SessionSearchHighlight:
+      properties:
+        end:
+          type: integer
+        start:
+          type: integer
+      required:
+      - start
+      - end
+      type: object
+    SessionSearchIndexStatusResponse:
+      properties:
+        coverage:
+          $ref: '#/components/schemas/SessionSearchCoverage'
+      required:
+      - coverage
+      type: object
+    SessionSearchResponse:
+      properties:
+        coverage:
+          $ref: '#/components/schemas/SessionSearchCoverage'
+        group:
+          enum:
+          - session
+          - message
+          type: string
+        limit:
+          type: integer
+        offset:
+          type: integer
+        query:
+          type: string
+        results:
+          items:
+            $ref: '#/components/schemas/SessionSearchResult'
+          type: array
+        sort:
+          enum:
+          - relevance
+          - recent
+          type: string
+        total:
+          type: integer
+      required:
+      - query
+      - results
+      - total
+      - limit
+      - offset
+      - sort
+      - group
+      - coverage
+      type: object
+    SessionSearchResult:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        harness:
+          type: string
+        highlights:
+          items:
+            $ref: '#/components/schemas/SessionSearchHighlight'
+          type: array
+        kind:
+          enum:
+          - title
+          - user
+          - assistant
+          - tool
+          - command
+          - path
+          type: string
+        messageId:
+          type: string
+        projectId:
+          type: string
+        projectName:
+          type: string
+        rank:
+          format: double
+          type: number
+        resumeCommand:
+          type: string
+        reviewId:
+          type: string
+        seq:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        sessionMatches:
+          type: integer
+        sessionName:
+          type: string
+        sessionState:
+          type: string
+        snippet:
+          type: string
+        title:
+          type: string
+      required:
+      - sessionId
+      - projectId
+      - harness
+      - kind
+      - seq
+      - snippet
+      - rank
+      - createdAt
       type: object
     SessionStaleBinary:
       properties:

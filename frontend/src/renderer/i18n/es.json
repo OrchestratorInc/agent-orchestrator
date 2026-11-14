@@ -4924,5 +4924,19 @@
 	"sessionFork.forkedInto_other": "{{count}} sesiones se bifurcaron de esta:",
 	"sessionFork.forkDeleted": "{{title}} (eliminada)",
 	"sessionFork.textCopy": "Conversación copiada como texto",
-	"sessionFork.textCopyNotice": "Bifurcada de {{title}}. Este agente no puede copiar su propia conversación, así que recibió la conversación del original como texto."
+	"sessionFork.textCopyNotice": "Bifurcada de {{title}}. Este agente no puede copiar su propia conversación, así que recibió la conversación del original como texto.",
+	"command.sessionText": "Sesiones anteriores",
+	"command.searchingSessions": "Buscando en sesiones anteriores…",
+	"command.searchSessionsError": "No se pudo buscar en sesiones anteriores.",
+	"command.noSessionMatches": "Ninguna sesión anterior coincide.",
+	"command.searchSessionsBackfilling_one": "Aún no hay coincidencias: el índice se está rellenando ({{count}} origen pendiente).",
+	"command.searchSessionsBackfilling_other": "Aún no hay coincidencias: el índice se está rellenando ({{count}} orígenes pendientes).",
+	"command.searchSessionsUnindexed": "Los transcriptos no están indexados para: {{harnesses}}.",
+	"command.searchSessionsUnavailable": "No hay coincidencias, pero no se pudo terminar de crear el índice, así que pueden faltar sesiones.",
+	"command.copyResumeCommand": "Copiar comando de reanudación",
+	"command.searchSessionsBackfilling_many": "Aún no hay coincidencias: el índice se está rellenando ({{count}} orígenes pendientes).",
+	"command.recentSessions": "Sesiones recientes",
+	"command.sessionMatches_one": "{{count}} coincidencia",
+	"command.sessionMatches_other": "{{count}} coincidencias",
+	"command.sessionMatches_many": "{{count}} coincidencias"
 }

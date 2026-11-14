@@ -45,6 +45,7 @@ import { useConversationPromptSuggestion } from "../../hooks/useConversationProm
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
+import { subscribeSessionSearchReveal, takeSessionSearchReveal, type SessionSearchReveal } from "../../lib/session-search-reveal";
 import { sessionUiKey } from "../../lib/hosts";
 import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
 import { clientForSessionHost } from "../../lib/host-clients";
@@ -58,7 +59,7 @@ import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from 
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
-import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId, type ChatFindRequest } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode, withUltracode } from "./TurnSettingsBar";
 
@@ -418,9 +419,34 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
-	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number }>(uiSessionId);
+	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>(uiSessionId);
 	const navigateToAnnotation = annotationNavigation.navigate;
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
+	// A search result hands its matched message over out-of-band (see
+	// session-search-reveal): the search view navigates, and this surface takes
+	// the target and holds it until the chat shows the conversation the daemon
+	// holds (applied below, once renderSnapshot is known). The existing
+	// annotation navigation then scrolls to and highlights it. For a match in a
+	// message's words, find in chat also opens on the highlighted word, starting
+	// at that message, so Enter and Shift+Enter step through its other
+	// occurrences across the whole history.
+	const findNavigation = useChatNavigationRequest<ChatFindRequest>(uiSessionId);
+	const openFind = findNavigation.navigate;
+	const [heldReveal, setHeldReveal] = useState<{ owner: string; reveal: SessionSearchReveal }>();
+	useEffect(() => {
+		const revealPending = () => {
+			const reveal = takeSessionSearchReveal(session.id);
+			if (!reveal) return;
+			// The chat comes forward at once; the match waits for its conversation.
+			onSelectChat?.();
+			setHeldReveal({ owner: session.id, reveal });
+		};
+		// The target that opened the session, then every later one: picking another
+		// result in this session keeps the surface mounted, so this effect does not
+		// run again to pick it up.
+		revealPending();
+		return subscribeSessionSearchReveal(session.id, revealPending);
+	}, [onSelectChat, session.id]);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -530,6 +556,24 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	// A held search match is applied to the conversation the daemon holds. An
+	// orchestrator with nothing cached, and a switch from the terminal, first
+	// render a placeholder under another conversation id. Find opened on that
+	// closes when the real conversation replaces it, and the scroll would look
+	// for the message in an empty transcript.
+	const conversationShown = Boolean(snapshot) && renderSnapshot === snapshot;
+	const appliedReveal = useRef<SessionSearchReveal | undefined>(undefined);
+	useEffect(() => {
+		if (!heldReveal || !conversationShown) return;
+		const { owner, reveal } = heldReveal;
+		setHeldReveal(undefined);
+		// Once per match: StrictMode runs this effect twice with the same one.
+		if (owner !== session.id || appliedReveal.current === reveal) return;
+		appliedReveal.current = reveal;
+		navigateToAnnotation({ id: crypto.randomUUID(), text: reveal.text, messageId: reveal.messageId, activitySequence: reveal.activitySequence });
+		const word = reveal.text.trim();
+		if (word && reveal.find) openFind({ id: crypto.randomUUID(), query: word, messageId: reveal.messageId });
+	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, session.id]);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
 	// The model the running agent reports, kept so this chat names it at once the next time it loads.
 	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
@@ -628,6 +672,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
 				annotationNavigationRequest={annotationNavigation.request}
 				onAnnotationNavigationHandled={annotationNavigation.handled}
+				findRequest={findNavigation.request}
+				onFindRequestHandled={findNavigation.handled}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
