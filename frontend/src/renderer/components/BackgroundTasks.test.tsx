@@ -56,11 +56,21 @@ describe("composer tab", () => {
 		const tab = screen.getByRole("region", { name: "Background tasks" });
 		expect(within(tab).getByText("Dev server")).toBeVisible();
 		expect(within(tab).getByText("12m")).toBeVisible();
-		expect(within(tab).getByRole("img", { name: "Running" })).toBeVisible();
+		// A dev server is meant to keep running: no spinner.
+		expect(within(tab).queryByRole("img")).toBeNull();
 		await userEvent.click(within(tab).getByRole("button", { name: "Stop Dev server" }));
 		expect(mutateMock).toHaveBeenCalledWith("shell");
 		// One request at a time: the square waits for the task to leave.
 		expect(within(tab).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
+	});
+
+	it("names a raw shell command by what it does", async () => {
+		queryMock.mockReturnValue({ data: readingOf([shell("dev", "PORT=3000 npm run dev > /tmp/ronish-dev.log 2>&1")]) });
+		render(<SessionBackgroundTasks session={session} />);
+		const tab = screen.getByRole("region", { name: "Background tasks" });
+		expect(within(tab).getByText("Dev server on port 3000")).toBeVisible();
+		expect(tab).not.toHaveTextContent("/tmp/ronish-dev.log");
+		expect(within(tab).getByRole("button", { name: "Stop Dev server on port 3000" })).toBeVisible();
 	});
 
 	it("offers no stop where the provider cannot stop the task", () => {
@@ -108,7 +118,8 @@ describe("composer tab", () => {
 		const rows = within(screen.getByRole("list")).getAllByRole("listitem");
 		// Live work leads; the failure ends the list without a stop.
 		expect(rows.map((row) => row.textContent)).toEqual(["Start the renderer dev server12m", "Watch the composer tests9m", "Run the Go linter2m"]);
-		expect(within(rows[2]).getByRole("img", { name: "Failed" })).toBeVisible();
+		// The red dot ends the row, in the stop square's place, after the time.
+		expect(rows[2].lastElementChild).toContainElement(within(rows[2]).getByRole("img", { name: "Failed" }));
 		expect(within(rows[2]).queryByRole("button")).toBeNull();
 		await userEvent.click(within(rows[1]).getByRole("button", { name: "Stop Watch the composer tests" }));
 		expect(mutateMock).toHaveBeenCalledWith("watch");
