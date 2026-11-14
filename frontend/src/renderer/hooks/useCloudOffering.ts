@@ -35,6 +35,10 @@ export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "sou
 	canManageBilling: boolean;
 	/** Harnesses a session can start in Chat with (`/me` chatHarnesses). */
 	chatHarnesses: string[];
+	/** Harnesses a running session can switch its agent to (`/me` agentSwitchHarnesses). */
+	agentSwitchHarnesses: string[];
+	/** Each agent can hold several accounts and a session can move between them (`/me` agentAccounts). */
+	agentAccounts: boolean;
 	org: CloudCpOrganization | undefined;
 	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
@@ -96,6 +100,8 @@ export function useCloudOffering(enabled = true, forOrgId?: string): UseCloudOff
 		selfServeBilling: resolved.billingMode === "self_serve",
 		canManageBilling: canManageBilling(org),
 		chatHarnesses: me.data?.chatHarnesses ?? [],
+		agentSwitchHarnesses: me.data?.agentSwitchHarnesses ?? [],
+		agentAccounts: me.data?.agentAccounts === true,
 		org,
 		ready,
 		loaded,

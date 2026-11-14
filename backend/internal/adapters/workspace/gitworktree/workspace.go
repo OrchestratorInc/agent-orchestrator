@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -341,6 +342,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		if cfg.StartPoint != "" {
+			seedRef = cfg.StartPoint
+		}
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -373,6 +377,7 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if cfg.FreshBranch {
 		baseSHA = seedSHA
 	}
+	w.deleteOrphanedFileSnapshots(ctx, repo)
 	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 }
 
@@ -844,7 +849,7 @@ func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.Work
 // Destroy removes the session's worktree and prunes it from the repo, refusing
 // (rather than force-deleting) if git still has the path registered afterwards.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
-	_, err := w.destroy(ctx, info)
+	_, err := w.DestroyReclaim(ctx, info)
 	return err
 }
 
@@ -855,7 +860,48 @@ func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error
 // success without any disk having been released. Callers that count reclaimed
 // workspaces need that told apart from a real removal.
 func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
-	return w.destroy(ctx, info)
+	reclaim, err := w.destroy(ctx, info)
+	if err == nil {
+		w.deleteFileSnapshots(ctx, info)
+	}
+	return reclaim, err
+}
+
+// deleteFileSnapshots drops the Chat rollback snapshots of a session whose
+// worktree is gone, since nothing can restore them any more, and then those of
+// any other session in the repository whose worktree went without a Destroy. A
+// failure only leaves unreachable refs behind, so it is logged rather than
+// failing teardown.
+func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.WorkspaceInfo) {
+	if info.SessionID == "" {
+		return
+	}
+	repo, err := w.repoPathForInfo(info)
+	if err == nil {
+		err = filesnapshot.DeleteAll(ctx, repo, filesnapshot.SessionPrefix(info.SessionID))
+	}
+	if err != nil {
+		w.logf("gitworktree: delete file snapshots for session %s: %v", info.SessionID, err)
+		return
+	}
+	w.deleteOrphanedFileSnapshots(ctx, repo)
+}
+
+// deleteOrphanedFileSnapshots drops the Chat rollback snapshots of every session
+// whose worktree is no longer registered in repo, however that session ended. A
+// failure only leaves unreachable refs behind, so it is logged.
+func (w *Workspace) deleteOrphanedFileSnapshots(ctx context.Context, repo string) {
+	records, err := w.listRecords(ctx, repo)
+	if err == nil {
+		paths := make([]string, len(records))
+		for i, record := range records {
+			paths[i] = record.Path
+		}
+		err = filesnapshot.DeleteOrphans(ctx, repo, paths)
+	}
+	if err != nil {
+		w.logf("gitworktree: delete orphaned file snapshots in %s: %v", repo, err)
+	}
 }
 
 // DeletePreparedBranch is called only after a speculative worktree is gone.

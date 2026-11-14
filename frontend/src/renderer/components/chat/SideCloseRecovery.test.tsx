@@ -109,6 +109,34 @@ it("dispatches the authorized main close before a view can disable and recovers 
  expect(hook.result.current.sides).toEqual([]); expect(remove).not.toHaveBeenCalled();
 });
 
+it("keeps the shared tab frame and target-only spinner while deletion is busy", async () => {
+ rows = [row(), row("Other")];
+ const reply = deferred<SideCloseState>(); requestClose.mockReturnValueOnce(reply.promise);
+ render(<Panel showId="side" />);
+ const target = await screen.findByRole("tab", { name: "Side" });
+ const other = screen.getByRole("tab", { name: "Other" });
+ expect(target.closest("[data-terminal-tab-frame]")).not.toBeNull();
+ await deleteFromPanel();
+ expect(target).toHaveAttribute("aria-busy", "true");
+ expect(other).not.toHaveAttribute("aria-busy");
+ expect(target.querySelector(".animate-spin")).not.toBeNull();
+ expect(other.querySelector(".animate-spin")).toBeNull();
+ expect(target).not.toHaveTextContent("Closing");
+ await act(async () => reply.resolve(summary([entry("closed", 2)], 2)));
+ await waitFor(() => expect(screen.getByRole("tab", { name: "Other" })).toHaveFocus());
+});
+
+it("prevents middle-click deletion while the shared tab is waiting for provider cleanup", async () => {
+ state = summary([entry("cleanup_pending")], 1);
+ render(<Panel />);
+ const tab = await screen.findByRole("tab", { name: "Side" });
+ fireEvent(tab.closest("[data-terminal-tab-frame]")!, new MouseEvent("auxclick", { button: 1, bubbles: true }));
+ expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+ expect(screen.queryByRole("button", { name: "Close Side" })).not.toBeInTheDocument();
+ expect(requestClose).not.toHaveBeenCalled();
+ expect(screen.getByText(/agent is still stopping/)).toBeInTheDocument();
+});
+
 it("keeps duplicate confirmation busy with one main operation and an accessible status", async () => {
  const reply = deferred<SideCloseState>(); requestClose.mockReturnValueOnce(reply.promise);
  render(<Panel />); await screen.findByLabelText("Side chat question"); await deleteFromPanel();

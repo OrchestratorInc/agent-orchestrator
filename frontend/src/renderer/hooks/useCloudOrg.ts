@@ -20,10 +20,22 @@ import { useCloudCp } from "./useCloudCp";
 
 export const cloudOrgQueryKey = ["cloud-org"] as const;
 
-/** Workspace name for the auto-created org (the control plane caps it at 80 chars). */
+const WORKSPACE_SUFFIX = "'s workspace";
+/** The control plane caps a workspace's name at 80 characters. */
+const MAX_WORKSPACE_NAME = 80;
+
+/**
+ * Workspace name for the auto-created org: "<first name>'s workspace", as the
+ * control plane names a personal one "<name>'s organization". The control
+ * plane gives someone without a profile name their email as displayName, and
+ * a workspace named after an email reads as an address, not a group, so an
+ * email's local part stands in for the name.
+ */
 export function orgDisplayNameForAccount(user: Pick<CloudCpUser, "displayName" | "email">): string {
-	const name = user.displayName.trim() || user.email.split("@")[0]?.trim() || "";
-	return (name === "" ? "Workspace" : name).slice(0, 80);
+	const displayName = user.displayName.trim();
+	const name = (displayName.includes("@") ? "" : displayName.split(/\s+/)[0]) || user.email.split("@")[0]?.trim() || "";
+	if (name === "") return "Workspace";
+	return name.slice(0, MAX_WORKSPACE_NAME - WORKSPACE_SUFFIX.length) + WORKSPACE_SUFFIX;
 }
 
 export interface UseCloudOrgResult {

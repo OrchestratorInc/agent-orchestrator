@@ -135,6 +135,33 @@ func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
 	return e.identity
 }
 
+type authEnvironmentKey struct{}
+
+// WithAuthEnvironment returns a context whose authentication checks see
+// overrides on top of AO's own environment, as the harness's sessions do: AO
+// exports every saved provider key to itself, but holds back from a harness a
+// key that would replace its own sign-in. An empty value reads as unset.
+func WithAuthEnvironment(ctx context.Context, overrides map[string]string) context.Context {
+	if len(overrides) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, authEnvironmentKey{}, overrides)
+}
+
+// AuthEnvironmentOverride reports the value an authentication check must use
+// for name instead of AO's environment, if the context carries one.
+func AuthEnvironmentOverride(ctx context.Context, name string) (string, bool) {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	value, ok := overrides[name]
+	return value, ok
+}
+
+// AuthEnvironmentOverrides returns every override the context carries.
+func AuthEnvironmentOverrides(ctx context.Context) map[string]string {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	return overrides
+}
+
 // RecordAuthDiagnostic retains an adapter-authored check outcome, including
 // unsuccessful attempts. Never pass raw errors, credential values or CLI output.
 func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {
@@ -175,9 +202,12 @@ type AgentRuntimeAuthChecker interface {
 // AgentRuntimeCredentialEnv reports the credential environment AO adds when it
 // launches a local session from dataDir (such as a login AO saved itself), so
 // work done outside a session, like model discovery or the computer's account
-// check, sees the same credential. It returns nil when AO adds none.
+// check, sees the same credential. base is the environment that work already
+// has over the daemon's own (the keys AO holds back from the harness), and the
+// credential is chosen against it as a session launch chooses it. It returns
+// base plus that credential, or nil when both are empty. base is not mutated.
 type AgentRuntimeCredentialEnv interface {
-	RuntimeCredentialEnv(dataDir string) map[string]string
+	RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string
 }
 
 // AgentAuthCacheInvalidator is implemented by an adapter that remembers what its
@@ -653,6 +683,16 @@ type PromptReadinessHints struct {
 	PollInterval time.Duration
 	Timeout      time.Duration
 	Lines        int
+	// RenderedScreen matches against the runtime's rendered current viewport
+	// (StyledTerminalOutputReader) instead of the raw output ring. Full-screen
+	// TUIs draw on the alternate screen, so their text never appears as a
+	// contiguous run in raw output. Runtimes without a rendered view for the
+	// handle fall back to raw output.
+	RenderedScreen bool
+	// BlockingPatterns hold readiness while any of them is visible, for startup
+	// dialogs that also show a ready marker. If one is still visible when
+	// Timeout elapses, delivery is abandoned instead of typed into the dialog.
+	BlockingPatterns []string
 }
 
 // AgentResolver maps a session's harness onto the Agent adapter that drives it,
@@ -810,8 +850,10 @@ type LaunchConfig struct {
 	WorkspacePath    string
 	// Env is the environment the runtime layers over the daemon's own for this
 	// launch (the project env plus AO's variables). The session manager sets it
-	// for PreLaunch, so an adapter prepares the provider config the launched
-	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
+	// for PreLaunch and command construction, so an adapter prepares the
+	// provider config, and picks the flags, the launched process will actually
+	// read (for example a project CLAUDE_CONFIG_DIR). A key set to "" is unset
+	// in the launch; a key absent here keeps the daemon's value. Read-only.
 	Env map[string]string
 }
 
@@ -851,6 +893,9 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+	// Env is the environment the runtime layers over the daemon's own for the
+	// resumed process, as LaunchConfig.Env is for a launch.
+	Env map[string]string
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

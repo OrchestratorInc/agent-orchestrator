@@ -177,6 +177,7 @@ import {
 	GitPullRequestDraft as LucideGitPullRequestDraft,
 	Hammer as LucideHammer,
 	History as LucideHistory,
+	Hourglass as LucideHourglass,
 	Import as LucideImport,
 	Laptop as LucideLaptop,
 	ListChevronsDownUp as LucideListChevronsDownUp,
@@ -206,6 +207,7 @@ import {
 	Split as LucideSplit,
 	StickyNote as LucideStickyNote,
 	Strikethrough as LucideStrikethrough,
+	WifiOff as LucideWifiOff,
 	Workflow as LucideWorkflow,
 	WrapText as LucideWrapText,
 	Ungroup as LucideUngroup,
@@ -374,6 +376,7 @@ export const Heading4 = fromMyna(MynaHeading4, "heading-4");
 export const Heading5 = fromMyna(MynaHeading5, "heading-5");
 export const Hammer = fromLucide(LucideHammer, "hammer");
 export const History = fromLucide(LucideHistory, "history");
+export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");
 export const Image = fromMyna(MynaImage, "image");
 export const Import = fromLucide(LucideImport, "import");
@@ -429,6 +432,7 @@ export const Pin = fromMyna(MynaPin, "pin");
 export const PinOff = fromLucide(LucidePinOff, "pin-off");
 export const Play = fromLucide(LucidePlay, "play");
 export const Plug = fromLucide(LucidePlug, "plug");
+export const WifiOff = fromLucide(LucideWifiOff, "wifi-off");
 export const Plus = fromMyna(MynaPlus, "plus");
 export const Presentation = fromMyna(MynaPresentation, "presentation");
 export const QrCode = fromLucide(LucideQrCode, "qr-code");

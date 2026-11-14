@@ -4,6 +4,8 @@ The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
 It opens the desktop app and discovers, inspects, or stops its daemon through the
 loopback HTTP surface and the `running.json` handshake. It must not open SQLite
 directly or call runtime, workspace, tracker, or agent adapters in-process.
+The offline `ao triage` exception resolves agent executables and launches a local
+agent without the daemon, as described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
 by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
@@ -19,7 +21,7 @@ go build -o ./bin/ao ./cmd/ao
 
 ## Current commands
 
-Every product command resolves to a daemon HTTP route. Run `ao <command>
+Product commands use daemon HTTP routes. The offline `ao triage` diagnostic launcher is an exception. Run `ao <command>
 --help` for the authoritative flag shape.
 
 ### Daemon control
@@ -67,6 +69,14 @@ it again to move the machine to another account. An agent
 without a terminal runs it in the background and reads its output; see
 [Set up a VM as an agent](../self-hosted-remote.md#set-up-a-vm-as-an-agent).
 
+### Report a problem
+
+Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+or Codex to draft a report. It works with the daemon down and never starts it.
+Files go under `$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`.
+After the agent exits, review the text and answer `[y/N]` before posting.
+See the [command reference](../../backend/internal/skillassets/using-ao/commands/triage.md).
+
 ### Product commands
 
 | Command                             | Daemon route                                   |
@@ -78,6 +88,10 @@ without a terminal runs it in the background and reads its output; see
 | `ao project rm <id>`                | `DELETE /api/v1/projects/{id}`                 |
 | `ao agent ls`                       | `POST /api/v1/agents/readiness/ensure` (`display`) |
 | `ao agent ls --refresh`             | `POST /api/v1/agents/refresh` (forced checks) |
+| `ao account ls`                     | `GET /api/v1/agents/accounts`                  |
+| `ao account default <account-id>`   | `POST /api/v1/agents/accounts/{id}/default`    |
+| `ao account show [<session-id>]`    | `GET /api/v1/agents/accounts/sessions/{id}`    |
+| `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
@@ -91,6 +105,7 @@ without a terminal runs it in the background and reads its output; see
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
 | `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
+| `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |

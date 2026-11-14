@@ -20,7 +20,7 @@ import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harnes
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, loginPanel, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
+export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, loginPanel, savedKeys, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
 	/** AO Cloud's side of this harness, when AO Cloud runs it: a second line of the installation row. */
@@ -28,6 +28,8 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	/** A login or logout terminal is open for any harness. */
 	authWorkflowActive: boolean;
 	loginPanel?: ReactNode;
+	/** Keys AO saved for this harness while it is not installed, so they can still be removed. */
+	savedKeys?: ReactNode;
 	copied: boolean;
 	diagnosticsExpanded: boolean;
 	onToggleDiagnostics: () => void;
@@ -56,7 +58,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
 	// Subscription accounts are for local Claude Code and Codex.
-	const accountProvider = !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// The running job's steps stay in the Installation card until it finishes on Done.
 	const justFinished = useInstallJustFinished(job);
 	const stage = justFinished ? "done" : installStage(job);
@@ -106,13 +108,14 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 		: localUpdate ? updateButton
 		: details.showUpdate && !details.needsLogin && plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="secondary" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button>
 		: null;
+	const canStartUnknownLogin = Boolean(authPlan?.available && authPlan.action !== "instructions" && details.authStatus === "unknown");
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
 		: details.needsLogin || details.showSetup ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="default" className="min-w-20" disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
-		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="secondary" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>
-			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
+		: details.canRelogin || canStartUnknownLogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="secondary" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>
+			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? details.canRelogin ? "settings.harness.openSetup" : "settings.harness.setup" : details.canRelogin ? "settings.harness.loginAgain" : "settings.harness.login")}
 		</Button> : null;
 	return <div className="flex flex-col gap-6">
 		<HarnessDetailGroup title={t("settings.harness.installation")}>
@@ -145,11 +148,12 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 				description={authBusy ? undefined : details.accountDescription}
 			>
 				{accountAction}
-				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="secondary" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
+				{isInstalled && authPlan?.logoutCommand && authPlan.available && (details.authStatus === "authorized" || details.authStatus === "configured") ? <Button type="button" size="sm" variant="secondary" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>}
 			{loginPanel}
 		</HarnessDetailGroup> : null}
-		{accountProvider ? <AgentAccountsPanel provider={accountProvider} cliLogin={{
+		{savedKeys}
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} cliLogin={{
 			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
 			canLogout: Boolean(authPlan?.logoutCommand),
 			onSignIn: onLogin,

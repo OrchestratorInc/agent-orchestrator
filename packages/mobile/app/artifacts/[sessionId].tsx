@@ -1,16 +1,13 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
-import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
+import { ArtifactPoster } from "../../lib/ArtifactPoster";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
-import { artifactVisual } from "../../lib/artifactVisual";
-import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
+import { formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
-import { Feather } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
-import { imageSourceForPlatform } from "../../lib/imageSource";
 import type { ArtifactsBackend } from "../../lib/artifactsBackend";
 import { useArtifactsBackend } from "../../lib/useArtifactsBackend";
 import { HostScope, useApp } from "../../lib/store";
@@ -113,7 +110,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon={{ ios: "doc.text", android: "description" }} title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} backend={backend} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={backend && artifactViewKind(item) === "image" ? backend.imageSource(sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={item.bundle ? undefined : () => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} backend={backend} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} onOpen={() => open(item)} onMenu={item.bundle ? undefined : () => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -122,7 +119,7 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, backend, sessionId, visible, refreshes, versionOf, thumbnail, onOpen, onMenu }: {
+function ArtifactCard({ artifact, backend, sessionId, visible, refreshes, versionOf, onOpen, onMenu }: {
 	artifact: SessionArtifact;
 	backend: ArtifactsBackend | null;
 	sessionId: string;
@@ -131,24 +128,10 @@ function ArtifactCard({ artifact, backend, sessionId, visible, refreshes, versio
 	/** Pulls to refresh so far; a failed preview is tried again after one. */
 	refreshes: number;
 	versionOf(path: string): string | undefined;
-	/** An image artifact's own picture, drawn over its icon tile. */
-	thumbnail?: { uri: string; headers?: Record<string, string> };
 	onOpen(): void;
 	onMenu?(): void;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	// The URI carries the file's modified time, so a rewrite loads afresh.
-	const [failedUri, setFailedUri] = useState<string>();
-	const picture = thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
-	// A card that previews its contents shows a plain tile while the preview
-	// loads, and its icon only if the preview cannot load: until the file
-	// changes or the gallery is refreshed.
-	const attempt = `${artifact.updatedAt}#${refreshes}`;
-	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
-	const preview = Boolean(backend && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
-	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
-	const visual = artifactVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
 	const meta = [artifact.shareUrl ? "Public" : "", age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
 	return (
@@ -164,22 +147,7 @@ function ArtifactCard({ artifact, backend, sessionId, visible, refreshes, versio
 			style={styles.card}
 		>
 			{({ pressed }) => (<>
-				<View style={[styles.poster, { backgroundColor: preview ? t.bgSubtle : visual.tint }]}>
-					{preview ? null : <>
-						<Feather name={visual.icon} size={28} color={visual.color} />
-						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
-					</>}
-					{preview && backend ? <ArtifactThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={onPreviewFailed} /> : null}
-					{picture ? (
-						<Image
-							accessibilityIgnoresInvertColors
-							source={imageSourceForPlatform(picture)}
-							resizeMode="cover"
-							onError={() => setFailedUri(picture.uri)}
-							style={StyleSheet.absoluteFill}
-						/>
-					) : null}
-				</View>
+				<ArtifactPoster artifact={artifact} backend={backend} sessionId={sessionId} visible={visible} versionOf={versionOf} retries={refreshes} style={styles.poster} />
 				<View style={styles.label}>
 					<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.name}>{artifact.name}</Text>
 					{meta ? <Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.meta}>{meta}</Text> : null}
@@ -200,9 +168,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	caption: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.xs, marginBottom: space.md },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	card: { overflow: "hidden", borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	poster: { aspectRatio: 4 / 3, alignItems: "center", justifyContent: "center", gap: space.xs, overflow: "hidden" },
+	poster: { aspectRatio: 4 / 3 },
 	pressed: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase, opacity: 1 - press.opacity },
-	extension: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.4 },
 	label: { paddingHorizontal: space.md, paddingVertical: space.sm, gap: space.hair },
 	name: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "500" },
 	meta: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },

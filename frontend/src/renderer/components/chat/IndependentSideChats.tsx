@@ -24,26 +24,28 @@ import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDe
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
-import { Pressable } from "../ui/pressable";
+import { TabCloseButton, TerminalTabFrame, terminalTabRenameInputClassName } from "../TerminalTabFrame";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "../ui/context-menu";
 import { handleTabListKeyDown } from "../../lib/terminal-tabs";
 import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
-import { cn } from "../../lib/utils";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 import { useUiStore } from "../../stores/ui-store";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
 
-function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
-	const duplicate = draft.references.some(ref => ref.conversationId === excerpt.conversationId &&
+export function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
+	const duplicate = draft.references.find(ref => ref.conversationId === excerpt.conversationId &&
 		ref.messageId === excerpt.messageId && ref.revision === excerpt.revision && ref.text === excerpt.text &&
 		JSON.stringify(ref.snapshot?.sourceRange) === JSON.stringify(excerpt.snapshot?.sourceRange) &&
 		JSON.stringify(ref.snapshot?.renderedRange) === JSON.stringify(excerpt.snapshot?.renderedRange) &&
 		JSON.stringify(ref.snapshot?.diagramRange) === JSON.stringify(excerpt.snapshot?.diagramRange));
-	if (duplicate) return { draft };
+	if (duplicate) {
+		if (!excerpt.comment || excerpt.comment === duplicate.comment) return { draft };
+		return { draft: { ...draft, references: draft.references.map(ref => (ref === duplicate ? { ...ref, comment: excerpt.comment } : ref)) } };
+	}
 	const error = excerptSizeError([...draft.references, excerpt]);
 	if (error) return { draft, error };
 	const order = excerpt.order ?? Math.max(Date.now(), ...draft.references.map(ref => (ref.order ?? 0) + 1));
@@ -614,7 +616,7 @@ export function useIndependentSideChats(
 		if (targetFocused) window.setTimeout(() => {
 			if (!scope.active || creationScopeRef.current !== scope || confirmCloseRef.current || document.activeElement !== document.body) return;
 			const header = tabRowRef.current;
-			(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], .browser-panel__tab-new:not(:disabled)') ?? header)?.focus();
+			(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], [data-tab-strip-action] button:not(:disabled)') ?? header)?.focus();
 		}, 0);
 	}, [setSides, clearSideError, setConfirmClose]);
 
@@ -1159,7 +1161,7 @@ export function useIndependentSideChats(
 									text: text.slice(btw?.[0].length ?? 0).trim(),
 									resources: [...submitted.attachments.map((file) => file.path), ...staged].map((path) => ({ uri: path, name: path.split(/[\\/]/).at(-1) || "Attachment" })),
 									attachments: nativeImages ? images : [],
-									references: submitted.references.map(({ conversationId, messageId, revision, text, snapshot, id, order }) => ({ conversationId, messageId, revision, text, snapshot, id, order })),
+									references: submitted.references.map(({ conversationId, messageId, revision, text, comment, snapshot, id, order }) => ({ conversationId, messageId, revision, text, comment, snapshot, id, order })),
 								},
 							},
 						};
@@ -1283,7 +1285,7 @@ export function useIndependentSideChats(
 								conversationId: ref.conversationId,
 								messageId: ref.messageId,
 								revision: ref.revision,
-								text: ref.text, snapshot: ref.snapshot, id: ref.id, order: ref.order,
+								text: ref.text, comment: ref.comment, snapshot: ref.snapshot, id: ref.id, order: ref.order,
 							})),
 						},
 					};
@@ -1334,12 +1336,14 @@ export function useIndependentSideChats(
 				const d = draftsRef.current[sideId];
 				if (d?.pendingDelivery === frozen) {
 					const { pendingDelivery: _, ...rest } = d;
-					const unchanged =
+					const sentTextUnchanged =
 						d.text === frozen.submitted.text &&
-						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments) &&
-						JSON.stringify(d.references) === JSON.stringify(frozen.submitted.references);
+						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments);
+					const unsentReferences = d.references.filter((reference) =>
+						!frozen.submitted.references.some((submitted) => JSON.stringify(submitted) === JSON.stringify(reference)));
 					const next: SideChatDraft = {
-						...(unchanged ? emptySideChatDraft() : rest),
+						...(sentTextUnchanged ? emptySideChatDraft() : rest),
+						references: unsentReferences,
 						lastHandoffDelivery: handoffClientMessageId ? frozen : d.lastHandoffDelivery,
 					};
 					draftsRef.current = { ...draftsRef.current, [sideId]: next };
@@ -1533,111 +1537,129 @@ export function useIndependentSideChats(
 
 	const tabBar = enabled ? (
 		<header ref={tabRowRef} tabIndex={-1} className="browser-panel__tab-row side-chat__tab-row">
-			<div className="browser-panel__tab-region">
-				<div
-					ref={tabStripRef}
-					role="tablist"
-					aria-label={t("sideChat.tabs")}
-					onKeyDown={handleTabListKeyDown}
-					className="browser-panel__tab-strip edge-fade edge-fade-x"
-				>
-					{sides.map((side) => {
-						const tab = (
-							<div
-								key={side.id}
-								data-side-id={side.id}
-								className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}
-							>
-								{renameId === side.id ? (
-									<input
-										autoFocus
-										aria-label={t("sideChat.renameSideChat")}
-										className="min-w-0 w-36 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
-										maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
-										onFocus={(event) => event.currentTarget.select()}
-										onBlur={() => void saveRename()}
-										value={renameText ?? ""}
-										onChange={(event) => setRenameText(event.target.value)}
-										onKeyDown={(event) => {
-											if (event.key === "Enter") {
-												event.preventDefault();
-												event.currentTarget.blur();
-											}
-											if (event.key === "Escape") {
-												event.preventDefault();
-												renameCancelled.current = true;
-												setRenameId(undefined);
-												setRenameText(undefined);
-											}
-										}}
-									/>
-								) : (
-									<Pressable
-										role="tab"
-										aria-selected={side.id === currentActiveId}
-										aria-busy={isClosing(side.id) || undefined}
-										tabIndex={side.id === currentActiveId ? 0 : -1}
-										className="browser-panel__tab-select"
-										onFocus={() => setFocusKey(0)}
-										onClick={(event) => {
+			<div className="browser-panel__tab-bar">
+				<div className="browser-panel__tab-region">
+					<div
+						ref={tabStripRef}
+						role="tablist"
+						aria-label={t("sideChat.tabs")}
+						onKeyDown={handleTabListKeyDown}
+						className="browser-panel__tab-strip edge-fade edge-fade-x"
+						data-tab-strip
+					>
+						{sides.map((side) => {
+							const active = side.id === currentActiveId;
+							const renaming = renameId === side.id;
+							const closingTab = isClosing(side.id);
+							const closeDisabled = renaming || closingTab || closeStatus(closeProjection.current, side.id) === "cleanup_pending";
+							const label = side.label?.trim() || t("sideChat.defaultLabel");
+							const requestClose = () => {
+								if (isClosing(side.id) || closeStatus(closeProjection.current, side.id) === "cleanup_pending") return;
+								setConfirmClose({ id: crypto.randomUUID(), sideId: side.id, requestId: crypto.randomUUID(), scope: creationScopeRef.current });
+							};
+							const frame = (
+								<TerminalTabFrame
+									action={
+										closeDisabled ? undefined : (
+											<TabCloseButton label={t("sideChat.closeNamed", { name: side.label })} onClose={requestClose} />
+										)
+									}
+									actionPinned
+									actionPosition="end"
+									active={active}
+									buttonProps={{
+										"aria-keyshortcuts": "F2",
+										"aria-selected": active,
+										"aria-busy": closingTab || undefined,
+										onFocus: () => setFocusKey(0),
+										onClick: (event) => {
 											if (event.detail > 1) return;
 											setActiveId(side.id);
 											setFocusKey(0);
-										}}
-										aria-keyshortcuts="F2"
-										onDoubleClick={(event) => {
+										},
+										onDoubleClick: (event) => {
 											event.preventDefault();
 											if (!closingSidesRef.current.has(side.id)) beginRename(side);
-										}}
-										onKeyDown={(event) => {
-											if (event.key === "F2") {
-												event.preventDefault();
-												if (!closingSidesRef.current.has(side.id)) beginRename(side);
-											}
-										}}
-										title={side.label}
-									>
-										{isClosing(side.id) ? <Loader2 className="browser-panel__tab-icon animate-spin" aria-hidden="true" /> : <MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />}
-										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}</span>
-										{isClosing(side.id) ? <span role="status" className="sr-only">{t("sideChat.deleting")}</span> : null}
-									</Pressable>
-								)}
-								<Pressable
-									hidden={renameId === side.id || isClosing(side.id) || closeStatus(closeProjection.current, side.id) === "cleanup_pending"}
-									className="browser-panel__tab-close"
-									aria-label={t("sideChat.closeNamed", { name: side.label })}
-									onClick={() => {
-										setConfirmClose({ id: crypto.randomUUID(), sideId: side.id, requestId: crypto.randomUUID(), scope: creationScopeRef.current });
+										},
+										onKeyDown: (event) => {
+											if (event.key !== "F2") return;
+											event.preventDefault();
+											if (!closingSidesRef.current.has(side.id)) beginRename(side);
+										},
+										role: "tab",
+										tabIndex: active ? 0 : -1,
+										title: side.label,
+										type: "button",
 									}}
-								>
-									<X className="size-3.5" aria-hidden="true" />
-								</Pressable>
-							</div>
-						);
-						if (renameId === side.id) return tab;
-						return (
-							<ContextMenu key={side.id}>
-								<ContextMenuTrigger asChild disabled={closingSidesRef.current.has(side.id)}>{tab}</ContextMenuTrigger>
-								<ContextMenuContent className="min-w-44">
-									<ContextMenuItem disabled={closingSidesRef.current.has(side.id)} onSelect={() => beginRename(side)}>
-										<Pencil aria-hidden="true" />
-										{t("sideChat.rename")}
-									</ContextMenuItem>
-								</ContextMenuContent>
-							</ContextMenu>
-						);
-					})}
+									editingContent={
+										renaming ? (
+											<input
+												autoFocus
+												aria-label={t("sideChat.renameSideChat")}
+												className={terminalTabRenameInputClassName}
+												maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+												onFocus={(event) => event.currentTarget.select()}
+												onBlur={() => void saveRename()}
+												value={renameText ?? ""}
+												onChange={(event) => setRenameText(event.target.value)}
+												onKeyDown={(event) => {
+													if (event.key === "Enter") {
+														event.preventDefault();
+														event.currentTarget.blur();
+													}
+													if (event.key === "Escape") {
+														event.preventDefault();
+														renameCancelled.current = true;
+														setRenameId(undefined);
+														setRenameText(undefined);
+													}
+												}}
+											/>
+										) : undefined
+									}
+									editingValue={renameText}
+									icon={closingTab ? <><Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /><span role="status" className="sr-only">{t("sideChat.deleting")}</span></> : <MessageSquare aria-hidden="true" className="size-icon-sm" />}
+									label={label}
+									onClose={closeDisabled ? undefined : requestClose}
+								/>
+							);
+							if (renaming) {
+								return (
+									<div key={side.id} data-side-id={side.id} className="browser-panel__tab">
+										{frame}
+									</div>
+								);
+							}
+							return (
+								<ContextMenu key={side.id}>
+									<ContextMenuTrigger asChild disabled={closingSidesRef.current.has(side.id)}>
+										<div data-side-id={side.id} className="browser-panel__tab">{frame}</div>
+									</ContextMenuTrigger>
+									<ContextMenuContent className="min-w-44">
+										<ContextMenuItem disabled={closingSidesRef.current.has(side.id)} onSelect={() => beginRename(side)}>
+											<Pencil aria-hidden="true" />
+											{t("sideChat.rename")}
+										</ContextMenuItem>
+									</ContextMenuContent>
+								</ContextMenu>
+							);
+						})}
+					</div>
+				</div>
+				{/* The session strip's New terminal button, in its action slot. */}
+				<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-tab-strip-action>
+					<Button
+						type="button"
+						size="icon-sm"
+						variant="quiet"
+						disabled={!canCreate || pending}
+						aria-label={t("sideChat.newSideChat")}
+						onClick={() => void create(undefined, true).catch(() => undefined)}
+					>
+						<Plus aria-hidden="true" className="size-icon-md" />
+					</Button>
 				</div>
 			</div>
-			<Pressable
-				type="button"
-				className="browser-panel__tab-new"
-				disabled={!canCreate || pending}
-				aria-label={t("sideChat.newSideChat")}
-				onClick={() => void create(undefined, true).catch(() => undefined)}
-			>
-				<Plus className="size-3.5" />
-			</Pressable>
 		</header>
 	) : null;
 	const closeDialog = (
@@ -1657,7 +1679,7 @@ export function useIndependentSideChats(
 					if (!dialog || !dialog.scope.active || creationScopeRef.current !== dialog.scope || (confirmCloseRef.current && confirmCloseRef.current.id !== dialog.id)) return;
 					if (document.activeElement !== document.body && document.activeElement?.isConnected) return;
 					const header = tabRowRef.current;
-					(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], .browser-panel__tab-new:not(:disabled)') ?? header)?.focus();
+					(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], [data-tab-strip-action] button:not(:disabled)') ?? header)?.focus();
 				}, 0);
 			}}
 			onOpenChange={(open) => {
@@ -1774,6 +1796,14 @@ export function useIndependentSideChats(
 									excerptsEnabled={!readOnly}
 									newWorkDisabled={readOnly}
 									onAddToChat={(excerpt) => addReference(activeId, excerpt)}
+									annotations={drafts[activeId]?.references}
+									onAnnotationsChange={(references) => {
+										if (!operationCurrent(activeId)()) return;
+										setDrafts((current) => ({
+											...current,
+											[activeId]: { ...(current[activeId] ?? emptySideChatDraft()), references },
+										}));
+									}}
 									onForeignAnnotation={(annotation) => onNavigate?.(annotation)}
 									onDecide={readOnly ? undefined : (requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
 									busy={!readOnly && conversation.controller.state === "busy"}

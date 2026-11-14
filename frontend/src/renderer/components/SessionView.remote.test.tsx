@@ -32,7 +32,7 @@ vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-
 vi.mock("./TerminalPane", () => ({ TerminalPane: ({ session, terminalTarget, inputDisabled, createMux }: { session?: { hostId?: string; terminalHandleId?: string }; terminalTarget?: { kind: string; handleId?: string }; inputDisabled?: boolean; createMux?: () => unknown }) => <div data-testid="remote-terminal-base" data-host-id={session?.hostId ?? ""} data-terminal-handle={terminalTarget?.handleId ?? session?.terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"} data-remote-mux={createMux ? "true" : "false"}>{session?.hostId ? baseUrlForHost(session.hostId) : "local"}</div> }));
 
 import { baseUrlForHost, connectHost, disconnectHost } from "../lib/host-clients";
-import { conversationQueryKey, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationConfigOptionsQueryKey, conversationQueryKey, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
@@ -115,15 +115,20 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	])));
 });
 
-const LAST_SAVED_COPY = "Showing the last saved copy until the host connects.";
+const HOST_AWAY = "Host is offline. You can send when it connects.";
 
-it("keeps a remote chat readable and locked while its host is away, without falling back to local", async () => {
+it("keeps a remote chat readable and open for typing while its host is away, and sends only once it is back", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const posts: string[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
+		if (path.endsWith("/conversation/messages")) {
+			posts.push(request.url);
+			return Response.json({ state: "accepted", turnId: "turn-1" }, { status: 202 });
+		}
 		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
 		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
 		if (path.endsWith("/conversation")) return Response.json(conversationBody());
@@ -136,8 +141,11 @@ it("keeps a remote chat readable and locked while its host is away, without fall
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
-	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	const field = screen.getByRole("combobox", { name: "Message the agent" });
+	await typeInLexicalEditor(field, "typed while away");
 	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	fireEvent.keyDown(field, { key: "Enter" });
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	// The refused read of the outage must not take the chat away while the first read after it runs.
 	await act(async () => { await queryClient.refetchQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
@@ -145,7 +153,66 @@ it("keeps a remote chat readable and locked while its host is away, without fall
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
 	expect(screen.queryByTestId("session-missing")).not.toBeInTheDocument();
-	await waitFor(() => expect(screen.queryByText(LAST_SAVED_COPY)).not.toBeInTheDocument());
+	await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+	expect(posts).toEqual([]);
+	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+	await waitFor(() => expect(posts).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages"]));
+	expect(localGet).not.toHaveBeenCalled();
+	expect(localPost).not.toHaveBeenCalled();
+});
+
+it.each(["disconnected", "upstream unavailable"])("pauses provider polling while the host is %s and resumes after reconnect", async (outage) => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	let offline = false;
+	let catalogReads = 0;
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		const unavailable = () => Response.json({ code: "UPSTREAM_UNAVAILABLE", message: "The host could not be reached" }, { status: 502 });
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return offline && outage === "upstream unavailable"
+			? unavailable()
+			: Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "idle", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({
+			capabilities: ["config_options"], settings: { model: "model-1", approvalMode: "default" },
+			messages: [{ id: "saved", role: "assistant", text: "Saved answer", sequence: 1 }],
+		}));
+		if (path.endsWith("/config-options")) {
+			catalogReads++;
+			return offline ? unavailable() : Response.json({ options: [] });
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const catalogKey = conversationConfigOptionsQueryKey("session-1", "box-a");
+	renderRemoteSession(queryClient);
+	await screen.findByText("Saved answer");
+	await waitFor(() => expect(queryClient.getQueryState(catalogKey)?.status).toBe("success"));
+
+	offline = true;
+	await act(async () => {
+		if (outage === "disconnected") await disconnectHost("box-a");
+		else await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") });
+	});
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: catalogKey })?.isActive()).toBe(false));
+	const readsBeforePoll = catalogReads;
+	await act(async () => { await queryClient.refetchQueries({ queryKey: catalogKey, exact: true }); });
+	expect(catalogReads).toBe(readsBeforePoll);
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+	offline = false;
+	await act(async () => {
+		if (outage === "disconnected") await connectHost("http://box-a:3001");
+		else await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") });
+	});
+	await waitFor(() => expect(screen.queryByText(HOST_AWAY)).not.toBeInTheDocument());
+	await waitFor(() => expect(catalogReads).toBeGreaterThan(readsBeforePoll));
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -167,7 +234,7 @@ it("hides the stale stopped-agent banner while the host is away and brings it ba
 	expect(await screen.findByRole("alert")).toHaveTextContent("The agent controller stopped");
 	expect(screen.getByRole("button", { name: "Open shell" })).toBeInTheDocument();
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
@@ -198,7 +265,7 @@ it("locks the last saved chat when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 	expect(localGet).not.toHaveBeenCalled();
@@ -625,7 +692,10 @@ it("reattaches a terminal when the same host gets a new proxy connection", async
 	await waitFor(() => expect(screen.getByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4001/new"));
 });
 
-it("reuses a Chat delivery ID when a lost response is retried", async () => {
+it.each([
+	["its response is lost", () => Promise.reject(new TypeError("response lost after acceptance")), "response lost after acceptance"],
+	["the host is unreachable", async () => Response.json({ error: "unavailable", code: "UPSTREAM_UNAVAILABLE", message: "The host could not be reached" }, { status: 502 }), "The host could not be reached"],
+] as const)("keeps a Chat send as Not sent without the raw error when %s, and Retry reuses its delivery ID", async (_case, lose, raw) => {
 	const deliveryIds: string[] = [];
 	const posts: string[] = [];
 	localGet.mockReset();
@@ -644,7 +714,7 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 		else if (new URL(request.url).pathname.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			deliveryIds.push((await request.json() as { clientMessageId: string }).clientMessageId);
-			if (deliveryIds.length === 1) throw new TypeError("response lost after acceptance");
+			if (deliveryIds.length === 1) return lose();
 			status = 202;
 			body = { state: "accepted", turnId: "turn-1" };
 		} else throw new Error(`Unexpected request ${request.url}`);
@@ -659,8 +729,10 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
+	expect(screen.queryByText(raw)).not.toBeInTheDocument();
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+	expect(screen.queryByText(raw)).not.toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
 	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -772,7 +844,7 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("opens the returned reviewer Chat when a remote review is triggered", async () => {
+it("adds the remote reviewer Chat tab without switching to it when a review is triggered", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	const prUrl = "https://github.com/acme/todo/pull/7";
@@ -804,8 +876,11 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 	await userEvent.click(await screen.findByRole("button", { name: "Open inspector panel" }));
 	await userEvent.click(await screen.findByRole("tab", { name: "Reviews" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
-	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();
+	const reviewerTab = await screen.findByRole("tab", { name: "Reviewer" });
 	expect(mutations).toEqual(["http://127.0.0.1:4001/api/v1/sessions/session-1/reviews/trigger"]);
+	expect(reviewerTab).toHaveAttribute("aria-selected", "false");
+	await userEvent.click(reviewerTab);
+	expect(await screen.findByText("Reviewer is on Box B")).toBeInTheDocument();
 	expect(screen.getByRole("tab", { name: "Reviewer" })).toHaveAttribute("aria-selected", "true");
 });
 

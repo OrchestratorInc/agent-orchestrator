@@ -48,7 +48,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		conv.discard()
 		return nil, fmt.Errorf("%w: destination ACP host already owns a session", ports.ErrChatRecoveryInconclusive)
 	}
-	if !conversationCapabilities(d.cfg.Capabilities, init).Has(ports.ChatCapabilityForkCurrent) {
+	if !conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)).Has(ports.ChatCapabilityForkCurrent) {
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent does not advertise resumable session/fork", ports.ErrChatCapabilityUnavailable)
 	}

@@ -624,15 +624,35 @@ sequenceDiagram
 ```
 
 Chat queues every message in SQLite while a provider turn is active. Completion
-claims the waiting messages in enqueue order and sends them as one provider
-input. A steer claims the same waiting queue and appends its guidance to one
-active turn input. Each source message keeps its own transcript row, origin,
-sender, and delivery handle. Messages arriving after the claim wait for the next
+claims from the front of the queue in enqueue order. A message the user typed
+gets a turn of its own, so the agent answers each one before the next is sent.
+Agent and Orchestrator messages waiting next to each other (agent messages,
+review comments, conflict notices) go together as one provider input, stopping
+before the next typed message. A steer claims the whole waiting queue and
+appends its guidance to one active turn input. Each source message keeps its
+own transcript row, origin, sender, and delivery handle. Messages arriving after the claim wait for the next
 turn. AO does not truncate a batch or impose a provider input size limit;
 provider limits and refusals are surfaced as delivery failures. An uncertain
 provider result closes the claimed receipts without automatically replaying
 input that the provider may already have accepted. Terminal sessions retain
 their existing delivery path.
+
+The desktop composer sends one message per session at a time, so the daemon
+receives them in the order they were entered. A send clears the box before the
+daemon answers. If the user enters the next message while the previous send is
+still in flight, the composer holds it and sends it as soon as that send is
+accepted. Each held message then gets its own queued row and keeps its place.
+A held message is sent only if the box still holds exactly the text that was
+entered; an edit made since waits for its own Enter. If the previous send is
+refused or gets no answer, the held message stays in the box instead of
+overtaking it.
+
+The queue dock lists waiting messages in send order: the next one on top, the
+newest at the bottom, and a send the daemon has not confirmed yet after them.
+Folded, it keeps the next message in view. While a turn can be steered, every
+row shows Steer. Cmd/Ctrl+Enter in an empty composer steers the next message,
+as Cmd/Ctrl+Enter steers a typed draft. A plain Enter in an empty composer does
+nothing.
 
 ---
 
@@ -1142,11 +1162,25 @@ controller.
 The PTY host reads OSC 0/2 titles from terminal output without changing it,
 drops animated status glyphs, and keeps the latest title with or without viewers.
 `service/terminaltitle` watches live TUI sessions and shell terminals and stores
-changes at a bounded rate. Session titles use `session_terminal_titles` because
+changes at a bounded rate. It does not poll: it reads live sessions once at
+start, then one session per CDC event (spawn, restore, terminate and delete all
+emit one), and the shell terminal service reports user shells as they open and
+close. A watch ends when the runtime cannot report titles or the host stops
+answering, and starts again when the session gets a new launch. Session titles use `session_terminal_titles` because
 every `sessions` update bumps the revision that fences observer writes. A label
 is resolved at read time: an explicit name wins, then a meaningful program title
 (`terminalTitle`), then the existing fallback. A title never changes session
 identity. Chat transports and legacy tmux handles have no titles.
+
+### Agents in shell tabs
+
+`service/shellagent` names the agent a user started by hand in a local shell
+tab and whether it is working, idle or waiting. The PTY host reports the
+terminal's foreground process group and its argv (`tcgetpgrp` with
+`kern.procargs2` on macOS, `/proc` on Linux) when the program changes or starts
+or stops drawing; nothing polls, and watches run only while a client subscribes
+to the `shell-agents` mux channel. Windows ConPTY, tmux and remote or cloud
+shells keep plain tabs.
 
 ### Terminal architecture
 

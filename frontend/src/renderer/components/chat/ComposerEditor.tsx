@@ -56,8 +56,9 @@ import {
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { findActiveTrigger, skillCommandName, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
@@ -181,6 +182,15 @@ type SerializedComposerTokenNode = Spread<
 const DICTATION_FADE_MS = 300;
 /** Letters that arrive together fade in this far apart, left to right. */
 const DICTATION_LETTER_STAGGER_MS = 14;
+
+/** The draft's text sits this far inside the composer's padding on both sides. */
+const COMPOSER_TEXT_INSET = "px-[7px]";
+/**
+ * Reserved on both edges of whichever element scrolls the draft, and on the placeholder
+ * standing in for it. A classic scrollbar then neither reflows the text when it appears
+ * nor pushes the text off-centre; overlay scrollbars reserve nothing.
+ */
+const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
 
 /**
  * One letter of a dictation in progress. A letter fades in once, when it first
@@ -316,7 +326,10 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
-	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
+	// A `skill:` command reads as `/name` like every other agent's; the wire still
+	// carries the command the agent runs.
+	const skillName = skillCommandName(value);
+	const display = kind === "skill" ? (skillName ? `/${skillName}` : wire) : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
@@ -621,6 +634,17 @@ const EditorBridge = forwardRef<
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
+	// Links typed or pasted here load their site icons before they are sent.
+	useEffect(() => {
+		const warmer = createDraftFaviconWarmer();
+		warmer.update(editor.getEditorState().read(() => $getRoot().getTextContent()));
+		const unregister = editor.registerTextContentListener((text) => warmer.update(text));
+		return () => {
+			unregister();
+			warmer.dispose();
+		};
+	}, [editor]);
+
 	useImperativeHandle(
 		ref,
 		() => ({
@@ -899,6 +923,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Takes no input but looks exactly as usual: same text, no dimming. */
+		readOnly?: boolean;
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
@@ -921,6 +947,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		readOnly = false,
 		enterSends,
 		concealed,
 		dictating,
@@ -944,7 +971,8 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
+	const locked = Boolean(disabled) || readOnly;
+	const suggestion = empty && !locked && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -956,7 +984,7 @@ export const ComposerEditor = forwardRef<
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode, DictationLetterNode],
-		editable: !disabled,
+		editable: !locked,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
 			throw error;
@@ -972,10 +1000,12 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className={cn(
-				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
+				"py-1 text-base! leading-relaxed text-muted-foreground",
+				COMPOSER_TEXT_INSET,
 				suggestion
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
-					: "pointer-events-none absolute inset-x-0 top-0",
+					// Same gutter as the field below, so the first typed character lands where the placeholder began.
+					: cn("pointer-events-none absolute inset-x-0 top-0 overflow-hidden", COMPOSER_SCROLL_GUTTER),
 			)}>
 				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : (
 					// Both stay mounted in one grid cell, so turning dictation on or off crossfades them.
@@ -996,7 +1026,7 @@ export const ComposerEditor = forwardRef<
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerImages.Provider value={images}>
-			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
+			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-contain", COMPOSER_SCROLL_GUTTER))}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
@@ -1022,7 +1052,9 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								"max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								COMPOSER_TEXT_INSET,
+								COMPOSER_SCROLL_GUTTER,
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								dictating && "caret-transparent",
 								concealed ? "invisible" : disabled && "opacity-50",
@@ -1040,7 +1072,7 @@ export const ComposerEditor = forwardRef<
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
-					disabled={disabled}
+					disabled={locked}
 					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}

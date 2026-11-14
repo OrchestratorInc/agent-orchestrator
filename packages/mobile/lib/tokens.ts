@@ -179,6 +179,9 @@ export const rowIconWidth = 28;
  */
 export { sheetCornerRadius } from "./platformTokens";
 
+/** The corners and gap of an inset-grouped list section, per platform. See `groupedRow`. */
+export { groupedCorner } from "./platformTokens";
+
 /**
  * The inset every sheet body shares. The native sheet draws its own top
  * clearance, so this is the one place the JS side pads — keeping it here is what

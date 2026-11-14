@@ -15,7 +15,7 @@ type runtimeCredentialAgent struct {
 	dataDir string
 }
 
-func (a runtimeCredentialAgent) RuntimeCredentialEnv(dataDir string) map[string]string {
+func (a runtimeCredentialAgent) RuntimeCredentialEnv(dataDir string, _ map[string]string) map[string]string {
 	if dataDir != a.dataDir {
 		return nil
 	}

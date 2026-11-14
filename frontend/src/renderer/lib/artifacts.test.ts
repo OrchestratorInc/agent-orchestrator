@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -193,10 +193,25 @@ describe("filterArtifactGroups", () => {
 	});
 
 	it("keeps only public artifacts, or only ones not shared", () => {
-		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}`, shareAccess: "anyone" as const } : row) }));
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["public"] }))).toEqual(["notes.md", "chart.png"]);
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html"]);
 		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], sharings: ["public"] }))).toEqual(["notes.md"]);
+	});
+
+	it("tells a private link apart from a public one, once the link list says who it opens for", () => {
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
+		const withAccess = withShareAccess(shared, new Map([["https://share.test/notes.md", "restricted" as const], ["https://share.test/chart.png", "anyone" as const]]));
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["shared"] }))).toEqual(["notes.md"]);
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public"] }))).toEqual(["chart.png"]);
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public", "shared"] }))).toEqual(["notes.md", "chart.png"]);
+		// Before the list is read, who a published file's link opens for is not
+		// known: it counts under neither Public nor Shared privately.
+		expect(withShareAccess(shared, new Map())).toEqual(shared);
+		expect(filterArtifactGroups(shared, { query: "", sharings: ["public", "shared"] })).toEqual([]);
+		expect(artifactSharing({ shareUrl: "https://share.test/x" })).toBeUndefined();
+		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "anyone" })).toBe("public");
+		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "restricted" })).toBe("shared");
 	});
 
 	it("keeps a project's rows of the chosen type when the query names the project", () => {
@@ -219,6 +234,19 @@ describe("filterArtifactGroups", () => {
 
 	it("returns nothing when no row matches", () => {
 		expect(filterArtifactGroups(groups, { query: "pricing", projectIds: ["px0"] })).toEqual([]);
+	});
+});
+
+describe("groupArtifactsByProject share access", () => {
+	it("keeps the access recorded with a published file's link", () => {
+		const [group] = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [
+				{ ...artifact("a.html", "2026-10-11T10:00:00Z", "html"), shareUrl: "https://viewer.test/artifact/a", shareAccess: "restricted" },
+				{ ...artifact("b.html", "2026-10-10T10:00:00Z", "html"), shareAccess: "anyone" },
+			])]),
+		]);
+		expect(group.rows.map((row) => [row.name, row.shareAccess])).toEqual([["a.html", "restricted"], ["b.html", undefined]]);
+		expect(artifactSharing(group.rows[0])).toBe("shared");
 	});
 });
 

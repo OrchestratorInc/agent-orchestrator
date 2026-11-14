@@ -298,6 +298,13 @@ function normalizedTerminalShortcut(event: KeyboardEvent): string | null {
 	return null;
 }
 
+// The search overlay renders inside the terminal's shell element, so the shell's
+// listeners also see events meant for its input. Without this check a paste in
+// the search box is blocked and written to the PTY instead.
+function isTerminalSearchEvent(event: Event): boolean {
+	return event.target instanceof Element && event.target.closest('[role="search"]') !== null;
+}
+
 function terminalHasFocus(host: HTMLElement): boolean {
 	const activeElement = document.activeElement;
 	return !!activeElement && host.contains(activeElement);
@@ -1234,6 +1241,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			},
 		};
 		const openContextMenu = (event: MouseEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			event.preventDefault();
 			event.stopPropagation();
 			setContextMenu({
@@ -1307,11 +1315,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			return false;
 		});
 		const copyInput = (event: ClipboardEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			if (!copySelection({ clipboardData: event.clipboardData })) return;
 			event.preventDefault();
 		};
 		const copyShortcut = (event: KeyboardEvent) => {
-			if (!isTerminalCopyShortcut(event) || !terminalHasFocus(shell) || !copySelection()) return;
+			if (isTerminalSearchEvent(event) || !isTerminalCopyShortcut(event) || !terminalHasFocus(shell) || !copySelection()) return;
 			event.preventDefault();
 			event.stopPropagation();
 		};
@@ -1835,6 +1844,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			return false;
 		});
 		const pasteInput = (event: ClipboardEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			event.preventDefault();
 			event.stopPropagation();
 			if (suppressNextNativePaste) {
@@ -1845,6 +1855,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			pasteText(text);
 		};
 		const compositionInput = (event: CompositionEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			emitUserInput(event.data, "composition");
 		};
 		shell.addEventListener("paste", pasteInput, true);

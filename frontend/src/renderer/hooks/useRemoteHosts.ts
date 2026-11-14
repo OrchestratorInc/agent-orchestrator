@@ -26,8 +26,14 @@ export type RemoteHost = {
 	failureReason?: "unauthorized" | "incompatible";
 };
 
-/** listed: hosts holds the saved list, not the empty one before the first read. */
-export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refresh: () => Promise<void> } {
+/**
+ * listed: hosts holds the saved list, not the empty one before the first read.
+ * settled: the host-list attempt has concluded — disabled, signed out, or
+ * listed. Consumers that must wait for remote workspace data (the session
+ * deep-link gate) settle on this instead of restating the enable rule, so the
+ * two can never drift apart.
+ */
+export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settled: boolean; refresh: () => Promise<void> } {
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status, session } = useCloudSession();
 	const accountId = session?.user.id ?? "";
@@ -151,5 +157,12 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refres
 		return () => clearInterval(timer);
 	}, [enabled, cloudBaseUrl, refresh]);
 
-	return { hosts: enabled ? hosts : NO_HOSTS, listed: enabled && listed, refresh };
+	return {
+		hosts: enabled ? hosts : NO_HOSTS,
+		listed: enabled && listed,
+		// Concluded, per the doc comment above. Deliberately mirrors the
+		// `enabled` computation's inputs so the two cannot drift.
+		settled: !remoteHostsEnabled || status === "unauthenticated" || listed,
+		refresh,
+	};
 }

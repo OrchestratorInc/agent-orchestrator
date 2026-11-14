@@ -132,7 +132,7 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 	if err != nil || !ok {
 		return false
 	}
-	env, _, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	env, _, err := m.launchRuntimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	if err != nil {
 		return false
 	}

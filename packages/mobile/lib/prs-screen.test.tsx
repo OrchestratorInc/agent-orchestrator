@@ -22,8 +22,8 @@ vi.mock("react-native", async () => {
 			if (props.accessibilityRole === "button" && props.accessibilityLabel?.includes("Pull request")) fixture.cardRenders.push(props.accessibilityLabel);
 			return React.createElement("Pressable", props, children);
 		},
-		SectionList: ({ sections, renderItem, ...props }: { sections: { key: string; data: unknown[] }[]; renderItem: (args: { item: unknown }) => React.ReactNode }) =>
-			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item }))))),
+		SectionList: ({ sections, renderItem, ...props }: { sections: { key: string; data: unknown[] }[]; renderItem: (args: { item: unknown; index: number; section: { key: string; data: unknown[] } }) => React.ReactNode }) =>
+			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item, index, section }))))),
 	};
 });
 vi.mock("./native-header-button", async () => {
@@ -67,7 +67,9 @@ vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries
 	fixture.summaryTargets.push(targets);
 	return { summaryFor: (_config: unknown, id: string) => fixture.summaries.get(id), reload: fixture.reload };
 } }));
-vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
+vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState" }));
+// A still clock: a ticking one would redraw every card and hide what these tests count.
+vi.mock("./useNow", () => ({ MINUTE_MS: 60_000, useNow: () => 0 }));
 const cloudLookup = vi.hoisted(() => ({ summaryFor: () => undefined, reload: () => {} }));
 vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ sessionsLoaded: true }) }));
 vi.mock("./cloud/useCloudPRSummaries", () => ({ useCloudPRSummaries: () => cloudLookup }));

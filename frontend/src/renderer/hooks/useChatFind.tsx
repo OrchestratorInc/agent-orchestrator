@@ -50,6 +50,10 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const input = useRef<HTMLInputElement>(null), previousFocus = useRef<HTMLElement | null>(null);
 	const sourceRef = useRef(source), activeRef = useRef(active), revealRef = useRef(reveal), pauseRef = useRef(pauseFollow);
 	const queryRef = useRef(query), hostRef = useRef(hostId);
+	// Where openWith asked the first search to start, instead of the first match
+	// on screen: a session search opens its result's message, and find must
+	// start at that match rather than wherever the transcript was.
+	const pendingAnchor = useRef<string | undefined>(undefined);
 	queryRef.current = query; hostRef.current = hostId;
 	const writtenRef = useRef(onScrollWritten);
 	writtenRef.current = onScrollWritten;
@@ -140,6 +144,17 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
 	}, [open, root, activate]);
 	useAppShortcut("find-in-chat", show, true, canHandle);
+	// Opens find already searching for value, its first match at or after
+	// anchorMessageId (a session search result opening its session).
+	const openWith = useCallback((value: string, anchorMessageId?: string) => {
+		cancelWork(); prepareRefresh();
+		// A new search from the anchor even when value is the current query:
+		// otherwise the search would keep its active match instead.
+		pendingAnchor.current = anchorMessageId; activeRef.current = undefined; lastQuery.current = "";
+		setQuery(value); setAnnouncement(""); setActive(undefined);
+		setState({ ...initial, phase: isEmptyFindQuery(value) ? "idle" : "searching" });
+		show();
+	}, [cancelWork, prepareRefresh, show]);
 	useEffect(() => {
 		const otherOpened = (event: Event) => { if ((event as CustomEvent).detail !== root.current) close(false); };
 		document.addEventListener("chat-find-open", otherOpened);
@@ -204,7 +219,10 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 				const changedQuery = lastQuery.current !== query;
 				const prior = changedQuery ? undefined : activeRef.current;
 				let anchorMessageId = prior?.messageId, anchorBlock = prior?.block ?? 0, anchorOffset = prior?.start ?? 0;
-				if (!prior) {
+				if (!prior && pendingAnchor.current) {
+					anchorMessageId = pendingAnchor.current;
+					pendingAnchor.current = undefined;
+				} else if (!prior) {
 					const top = viewport.current?.getBoundingClientRect().top ?? 0;
 					outer: for (const element of root.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? []) {
 						if (element.getBoundingClientRect().bottom < top) continue;
@@ -367,6 +385,24 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 
 	// Closing find leaves the reader in place; the jumped-to page goes when they return to the latest.
 	const dropWindow = useCallback(() => setWindowPage(undefined), []);
+	// Shows the history around one sequence without opening find: a search match
+	// deep in a long chat loads its page in one request rather than paging back
+	// through everything newer. Resolves once the page is shown or could not be.
+	const showWindowAt = useCallback(async (sequence: number) => {
+		windowAbort.current?.abort();
+		const controller = new AbortController(); windowAbort.current = controller;
+		const snapshot = sourceRef.current;
+		try {
+			const { data } = await clientForSessionHost(hostId).GET("/api/v1/conversations/{conversationId}/find-window", {
+				params: { path: { conversationId: snapshot.conversationId }, query: { sequence } }, signal: controller.signal,
+			});
+			if (!data || controller.signal.aborted || sourceRef.current.conversationId !== snapshot.conversationId || sourceRef.current.activeBranchId !== snapshot.activeBranchId) return;
+			const page = toSnapshot(data);
+			if (page.conversationId === snapshot.conversationId && page.activeBranchId === snapshot.activeBranchId) setWindowPage(page);
+		} catch {
+			// The caller falls back to the turn the match belongs to.
+		}
+	}, [hostId]);
 	let snapshot = windowPage && windowPage.conversationId === source.conversationId && windowPage.activeBranchId === source.activeBranchId
 		? mergeConversationPages([source, windowPage]) ?? source : source;
 	if (sideChat && snapshot !== source) {
@@ -405,5 +441,5 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		{state.error ? <span role="alert" className="absolute top-full right-0 mt-2 w-full rounded-lg border border-border bg-surface p-2 shadow-lg">{state.error} <button type="button" className="underline" onClick={() => { prepareRefresh(); setRetry((value) => value + 1); }}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>
 	</div> : null;
-	return { snapshot, bar, active, open, engaged, gapBeforeSequence, dropWindow };
+	return { snapshot, bar, active, open, engaged, gapBeforeSequence, dropWindow, showWindowAt, openWith };
 }

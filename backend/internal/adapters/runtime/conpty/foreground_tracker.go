@@ -27,6 +27,9 @@ var (
 	foregroundStartGrace = 2500 * time.Millisecond
 )
 
+// processArgvFunc is processArgv; tests replace it.
+var processArgvFunc = processArgv
+
 // maxForegroundArgs and maxForegroundArgLen bound the argv sent to watchers.
 const (
 	maxForegroundArgs   = 8
@@ -47,9 +50,12 @@ type foregroundTracker struct {
 	lastOutput    time.Time // output that was not an echo or a resize redraw
 	lastDraw      time.Time
 	screenPending bool
-	since         time.Time // when the current foreground group appeared
-	state         ForegroundPayload
-	hasState      bool
+	// screenTyped stays false while every draw since the last settled update
+	// was the echo of typed input.
+	screenTyped bool
+	since       time.Time // when the current foreground program appeared
+	state       ForegroundPayload
+	hasState    bool
 }
 
 func newForegroundTracker(reader foregroundReader) *foregroundTracker {
@@ -72,7 +78,11 @@ func (t *foregroundTracker) noteOutput(now time.Time) {
 	}
 	t.mu.Lock()
 	t.lastDraw, t.screenPending = now, true
-	if now.Sub(t.lastInput) > foregroundEchoWindow && now.Sub(t.lastResize) > foregroundResizeWindow {
+	echo := now.Sub(t.lastInput) <= foregroundEchoWindow
+	if !echo {
+		t.screenTyped = true
+	}
+	if !echo && now.Sub(t.lastResize) > foregroundResizeWindow {
 		t.lastOutput = now
 	}
 	t.mu.Unlock()
@@ -142,11 +152,12 @@ func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed
 	pgid, _ := t.reader.ForegroundPGID()
 	// exec can replace the program without changing its process group. Wakes
 	// are output-driven and coalesced, so read argv on each evaluation.
-	argv := capForegroundArgv(processArgv(pgid))
+	argv := capForegroundArgv(processArgvFunc(pgid))
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	state.PGID, state.Argv = pgid, argv
-	if pgid != t.state.PGID {
+	// exec keeps the process group, so a new program is also a new argv[0].
+	if pgid != t.state.PGID || firstArg(argv) != firstArg(t.state.Argv) {
 		t.since = now
 	}
 	quiet := now.Sub(t.lastOutput)
@@ -161,11 +172,21 @@ func (t *foregroundTracker) evaluate(now time.Time) (next time.Duration, changed
 		if wait := foregroundEchoWindow - now.Sub(t.lastDraw); wait > 0 {
 			next = wait
 		} else {
-			changed, t.screenPending = true, false
+			// Typing at a prompt only echoes; say so, so the reader can skip
+			// a screen read when nothing else about the program changed.
+			state.EchoOnly = !changed && !t.screenTyped
+			changed, t.screenPending, t.screenTyped = true, false, false
 		}
 	}
 	t.state, t.hasState = state, true
 	return next, changed, state
+}
+
+func firstArg(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	return argv[0]
 }
 
 func capForegroundArgv(argv []string) []string {

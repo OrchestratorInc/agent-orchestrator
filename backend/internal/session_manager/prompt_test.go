@@ -414,3 +414,14 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 		t.Fatalf("a project with no remote has no PRs to review:\n%s", local)
 	}
 }
+
+func TestBuildTaskPrompt_StackedTaskNamesItsBase(t *testing.T) {
+	got := buildTaskPrompt(taskPromptConfig{Role: sessionPromptRoleWorker, Prompt: "Add search", BaseBranch: "feat/parent"})
+	if !strings.HasPrefix(got, "Add search\n\n") || !strings.Contains(got, "Open your pull request against `feat/parent`") {
+		t.Fatalf("prompt = %q", got)
+	}
+	// A promptless worker waits for its instructions; there is nothing to add to.
+	if got := buildTaskPrompt(taskPromptConfig{Role: sessionPromptRoleWorker, BaseBranch: "feat/parent"}); got != "" {
+		t.Fatalf("empty prompt = %q", got)
+	}
+}

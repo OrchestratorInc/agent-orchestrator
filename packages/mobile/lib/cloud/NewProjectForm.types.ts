@@ -1,3 +1,4 @@
+import type { PlacementChoice } from "../localProject/LocalProjectForm.types";
 import type { ProjectSource } from "./newProject";
 import type { NewCloudProject } from "./useNewCloudProject";
 
@@ -33,6 +34,8 @@ export type NewProjectFormProps = {
 	project: NewCloudProject;
 	/** Opens Orchestrator Cloud's settings, where coding agents are connected. */
 	onConnectAgent(): void;
+	/** The Local and Cloud switch, when a paired machine could take the project too. */
+	placement?: PlacementChoice;
 };
 
 /**
