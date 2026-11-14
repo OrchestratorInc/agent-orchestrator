@@ -105,8 +105,11 @@ func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 		return nil
 	}
 	if err := l.watcher.Add(dir); err != nil {
-		_ = l.watcher.Remove(dir)
-		l.pool.give(cost)
+		if l.watcher.Remove(dir) == nil {
+			l.pool.give(cost)
+		} else {
+			l.retained += cost
+		}
 		l.skipped++
 		l.lastError = err
 		if ctx.Err() != nil {

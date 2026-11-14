@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // openDescriptors counts this process's open file descriptors. Readdirnames
@@ -268,5 +270,33 @@ func TestWatchKeepsARenamedDirectoryChargedUntilClose(t *testing.T) {
 	}
 	if got := pool.available(); got != 1000 {
 		t.Fatalf("budget after cancel = %d, want all 1000 returned", got)
+	}
+}
+
+func TestFailedAddKeepsItsChargeWhenCleanupCannotBeConfirmed(t *testing.T) {
+	root := t.TempDir()
+	if directoryWatchCost(root, false) == 0 {
+		t.Skip("this platform's watcher holds no descriptor per entry")
+	}
+	pool := swapDescriptorPool(t, 1000)
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatalf("new watcher: %v", err)
+	}
+	defer func() { _ = watcher.Close() }()
+	limiter := newDirWatchLimiter(watcher, maxWatchedDirectories)
+
+	if err := limiter.add(context.Background(), filepath.Join(root, "missing")); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if !limiter.partial() {
+		t.Fatal("a failed Add was not reported as partial coverage")
+	}
+	if got := pool.available(); got != 999 {
+		t.Fatalf("budget after a failed Add = %d, want its charge of 1 kept until teardown", got)
+	}
+	limiter.releaseAll()
+	if got := pool.available(); got != 1000 {
+		t.Fatalf("budget after teardown = %d, want all 1000 returned", got)
 	}
 }
