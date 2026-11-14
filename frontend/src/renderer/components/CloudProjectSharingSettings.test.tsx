@@ -40,6 +40,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			getTeamShareAccess: async () => ({ members: [] }),
 			listShareCandidates: async () => ({ candidates: [] }),
 			listShareLinks: async () => ({ links: structuredClone(mocks.links) }),
+			listOrgMembers: async () => ({ members: [{ userId: "u-asha" }, { userId: "u-dana" }] }),
 			createShareGrants: async (...args: unknown[]) => {
 				mocks.calls.push(["createShareGrants", ...args]);
 				const request = args[2] as { subjects: Array<{ email: string }>; role: CloudCpShareEntry["role"]; modeCap: CloudCpShareEntry["modeCap"] };
@@ -131,7 +132,8 @@ describe("Project settings › Sharing", () => {
 		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Add people or teams" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "People with access" })).toBeInTheDocument();
-		expect(within(list).getByText("People in Northwind")).toBeInTheDocument();
+		expect(within(list).getByText("Everyone in your workspace")).toBeInTheDocument();
+		expect(within(list).getByText("Northwind · 2 members")).toBeInTheDocument();
 		expect(within(list).getByText("Data infra")).toBeInTheDocument();
 		// General access, with Link settings and Copy link beside its heading.
 		const section = generalSection();

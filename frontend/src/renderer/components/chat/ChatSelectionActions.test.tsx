@@ -35,18 +35,21 @@ describe("chat selection actions", () => {
 		window.getSelection()!.addRange(props.selection.range);
 		render(<ChatSelectionActions {...props} viewportRef={{ current: viewport }} />);
 		const button = screen.getByRole("button", { name: "Add to chat" });
-		expect(button).toHaveAttribute("title", isMac ? "Add to chat (⌘L)" : "Add to chat (Ctrl+L)");
+		act(() => button.focus());
+		window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(props.selection.range);
+		const hint = () => screen.getByRole("tooltip").textContent;
+		expect(hint()).toBe(isMac ? "Add to chat (⌘L)" : "Add to chat (Ctrl+L)");
 		const primary = { ctrlKey: !isMac, metaKey: isMac };
 		await act(async () => { expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(false); });
 		expect(props.onAdd).toHaveBeenCalledTimes(1);
 		act(() => useKeybindingsStore.setState({ overrides: { "add-selection-to-chat": [{ key: "j", ctrl: !isMac, meta: isMac, shift: true, alt: true }] } }));
-		expect(button).toHaveAttribute("title", isMac ? "Add to chat (⌥⇧⌘J)" : "Add to chat (Ctrl+Alt+Shift+J)");
+		expect(hint()).toBe(isMac ? "Add to chat (⌥⇧⌘J)" : "Add to chat (Ctrl+Alt+Shift+J)");
 		expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(true);
 		expect(fireEvent.keyDown(viewport, { key: "j", ...primary, shiftKey: true, altKey: true, isComposing: true })).toBe(true);
 		await act(async () => { expect(fireEvent.keyDown(viewport, { key: "j", ...primary, shiftKey: true, altKey: true })).toBe(false); });
 		expect(props.onAdd).toHaveBeenCalledTimes(2);
 		act(() => useKeybindingsStore.setState({ overrides: { "add-selection-to-chat": [] } }));
-		expect(button).toHaveAttribute("title", "Add to chat");
+		expect(hint()).toBe("Add to chat");
 		expect(fireEvent.keyDown(viewport, { key: "l", ...primary })).toBe(true);
 		expect(fireEvent.keyDown(viewport, { key: "j", ...primary, shiftKey: true, altKey: true })).toBe(true);
 		act(() => useKeybindingsStore.setState({ overrides: {} }));
@@ -71,15 +74,37 @@ describe("chat selection actions", () => {
 	it.each(["{Enter}", " "])("supports native keyboard activation with %s", async (key) => {
 		const props = setup(); render(<ChatSelectionActions {...props} />);
 		const user = userEvent.setup();
-		await user.tab(); await user.keyboard(key);
-		expect(props.onAdd).toHaveBeenCalledTimes(1);
+		await user.tab(); await user.tab(); await user.keyboard(key);
+		expect(props.onAdd).toHaveBeenCalledExactlyOnceWith("");
 	});
-	it("shows both text-only actions together while checking, then enables the side action", () => {
+	it("adds the selection with the comment typed inline", async () => {
+		const props = setup(); render(<ChatSelectionActions {...props} />);
+		const user = userEvent.setup();
+		await user.type(screen.getByRole("textbox", { name: "Comment on the selected text" }), "  make it shorter {Enter}");
+		expect(props.onAdd).toHaveBeenCalledExactlyOnceWith("make it shorter");
+	});
+	it("edits an existing annotation's comment and removes it", async () => {
+		const props = setup(); const onRemove = vi.fn();
+		props.selection.excerpt = { ...props.selection.excerpt, comment: "old" } as typeof props.selection.excerpt;
+		render(<ChatSelectionActions {...props} onRemove={onRemove} />);
+		const box = screen.getByRole("textbox", { name: "Comment on the selected text" });
+		expect(box).toHaveValue("old");
+		expect(box).toHaveFocus();
+		const user = userEvent.setup();
+		await user.clear(box); await user.type(box, "new");
+		await user.click(screen.getByRole("button", { name: "Save comment" }));
+		expect(props.onAdd).toHaveBeenCalledExactlyOnceWith("new");
+		await user.click(screen.getByRole("button", { name: "Remove annotation" }));
+		expect(onRemove).toHaveBeenCalledTimes(1);
+		expect(props.onInvalid).toHaveBeenCalledTimes(1);
+		await user.type(box, "{Escape}");
+		expect(props.onInvalid).toHaveBeenCalledTimes(2);
+	});
+	it("shows the side action disabled while checking, then enables it", () => {
 		const props = setup(); const onSide = vi.fn();
 		const view = render(<ChatSelectionActions {...props} checkingSide />);
 		expect(screen.getByRole("button", { name: "Add to side chat" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Add to chat" })).toBeEnabled();
-		expect(view.container.querySelector("svg")).toBeNull();
 		view.rerender(<ChatSelectionActions {...props} onSide={onSide} />);
 		expect(screen.getByRole("button", { name: "Add to side chat" })).toBeEnabled();
 		view.rerender(<ChatSelectionActions {...props} />);

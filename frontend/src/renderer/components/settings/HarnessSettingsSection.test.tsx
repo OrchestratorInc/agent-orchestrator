@@ -10,6 +10,7 @@ import { appI18n } from "../../i18n";
 import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
+import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
@@ -303,6 +304,77 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("region", { name: "Sign in to Codex" })).toBeNull();
 		expect(within(page).getByRole("button", { name: "Login" })).toBeEnabled();
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	// A chat refused for its login opened this page: the inline sign-in that
+	// takes sends the user back to that chat.
+	it("returns to the chat waiting on this agent's login once an inline sign-in takes", async () => {
+		act(() => useUiStore.setState({
+			settingsModal: { scope: "global", section: "harness", focusAgentId: "codex" },
+			loginReturn: { sessionId: "s1", agentId: "codex" },
+		}));
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		const operation = { id: "inline-login", agentId: "codex", method: "browser", status: "succeeded", expiresAt: "2026-10-27T12:00:00Z" };
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never
+			: path === "/api/v1/agents/{agent}/auth/operations/{operationId}" ? { data: operation } as never : get(path, options));
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations"
+			? { data: operation } as never
+			: path === "/api/v1/agents/{agent}/probe"
+				? { data: { agent: { id: "codex", label: "Codex", authStatus: "authorized" }, supported: true, installed: true } } as never
+				: post(path, options));
+		try {
+			renderSection();
+			await userEvent.click(await findListRow("codex"));
+			const page = await findAgentRow("codex");
+			await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+			await userEvent.click(await within(page).findByRole("button", { name: "ChatGPT in browser" }));
+			await waitFor(() => expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined());
+			expect(useUiStore.getState().settingsModal).toBeNull();
+		} finally {
+			act(() => useUiStore.setState({ loginReturn: null, settingsModal: null }));
+		}
+	});
+
+	// The CLI's login is the computer's own account: a chat on another saved
+	// account is not fixed by it, so it keeps waiting.
+	it("keeps the chat waiting when the inline sign-in is not the session's account", async () => {
+		act(() => useUiStore.setState({
+			settingsModal: { scope: "global", section: "harness", focusAgentId: "codex" },
+			loginReturn: { sessionId: "s1", agentId: "codex", accountId: "saved-codex" },
+		}));
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		const operation = { id: "inline-login", agentId: "codex", method: "browser", status: "succeeded", expiresAt: "2026-10-27T12:00:00Z" };
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never
+			: path === "/api/v1/agents/accounts"
+				? { data: { accounts: [{ id: "device-codex", provider: "codex", device: true, default: true, signedIn: true }] } } as never
+				: path === "/api/v1/agents/{agent}/auth/operations/{operationId}" ? { data: operation } as never : get(path, options));
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations"
+			? { data: operation } as never
+			: path === "/api/v1/agents/{agent}/probe"
+				? { data: { agent: { id: "codex", label: "Codex", authStatus: "authorized" }, supported: true, installed: true } } as never
+				: post(path, options));
+		try {
+			renderSection();
+			await userEvent.click(await findListRow("codex"));
+			const page = await findAgentRow("codex");
+			await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+			await userEvent.click(await within(page).findByRole("button", { name: "ChatGPT in browser" }));
+			expect(await within(page).findByText("Connected")).toBeInTheDocument();
+			expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+			expect(useUiStore.getState().settingsModal).not.toBeNull();
+		} finally {
+			act(() => useUiStore.setState({ loginReturn: null, settingsModal: null }));
+		}
 	});
 
 	// Gemini's Account has no env_ method, but its own key method saves
@@ -2187,6 +2259,23 @@ describe("HarnessSettingsSection", () => {
 
 		const withAction = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY, "/login\r");
 		expect(within(withAction.row).getByText("Complete login in the terminal.")).toBeInTheDocument();
+	});
+
+	// A chat turn refused for its login opened this page: the login that takes
+	// sends the user back to that chat.
+	it("returns to the chat turn waiting on this agent's login once it takes", async () => {
+		act(() => useUiStore.setState({
+			settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+			loginReturn: { sessionId: "s1", agentId: "claude-code" },
+		}));
+		const { row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);
+		expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+		exit();
+
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined();
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		act(() => useUiStore.setState({ loginReturn: null }));
 	});
 
 	it("re-checks a login whose first post-login check fails transiently", async () => {
