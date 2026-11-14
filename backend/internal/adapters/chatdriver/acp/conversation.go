@@ -945,6 +945,11 @@ func (c *conversation) finishPrompt(
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
 	compactionFailure := c.compactionFailure
 	answered := len(c.messages) > 0 || len(c.tools) > 0
+	// Read before settleOpenItems closes the turn's messages.
+	streamed := make([]string, 0, len(c.messages))
+	for _, text := range c.messages {
+		streamed = append(streamed, text)
+	}
 	// "" when the turn started before this controller (a reattached durable
 	// turn): its model is unknown, and the current selection may not be it.
 	turnModel := ""
@@ -993,8 +998,12 @@ func (c *conversation) finishPrompt(
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
 			if failure := c.promptResponseFailure(resp, turnModel); failure != nil {
-				state = domain.TurnStateFailed
-				turnErr = failure
+				if loginRefusalRepeatsAnswer(failure, streamed) {
+					c.log.Warn("chat: ignored a refused login whose text is the turn's own answer", "turn", turnID)
+				} else {
+					state = domain.TurnStateFailed
+					turnErr = failure
+				}
 			}
 		}
 		if c.sessionPromptResponseFailure != nil && turnErr == nil && state != domain.TurnStateInterrupted && !interruptedLocally {
@@ -1260,6 +1269,29 @@ func turnState(reason acpsdk.StopReason) domain.TurnState {
 	default:
 		return domain.TurnStateFailed
 	}
+}
+
+// loginRefusalRepeatsAnswer reports a refused login whose text is an answer the
+// agent streamed this turn. claude-agent-acp fails any successful turn whose
+// result contains "Please run /login" and puts that result in the failure, so an
+// answer that only quotes the CLI's advice comes back as a refused login. A real
+// refusal is never streamed: the adapter withholds the CLI's own login message
+// and sends it only as the failure. Whitespace is ignored because the result and
+// the streamed chunks may join the answer's text blocks differently.
+func loginRefusalRepeatsAnswer(failure error, streamed []string) bool {
+	if !errors.Is(failure, ports.ErrChatAuthRequired) {
+		return false
+	}
+	text := strings.Join(strings.Fields(failure.Error()), "")
+	if text == "" {
+		return false
+	}
+	for _, answer := range streamed {
+		if strings.Contains(strings.Join(strings.Fields(answer), ""), text) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) error {

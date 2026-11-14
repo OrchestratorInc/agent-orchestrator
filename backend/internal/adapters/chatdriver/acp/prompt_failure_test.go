@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,6 +203,66 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 			}
 			if authRecovered != 1 {
 				t.Fatalf("auth recovery signals = %d, want 1", authRecovered)
+			}
+		})
+	}
+}
+
+// claude-agent-acp reports a successful answer that quotes "Please run /login" as
+// a refused login whose title is that answer. Only a refusal the agent did not
+// stream as its answer is a real one.
+func TestPromptResponseLoginRefusalThatRepeatsTheAnswer(t *testing.T) {
+	const answer = "All four `auth_required` turns are false.\n\nEach answer quotes \"Please run /login\"; there were no real logouts."
+	for _, tc := range []struct {
+		name     string
+		streamed map[string]string
+		title    string
+		actions  []any
+		want     domain.TurnState
+		reauth   bool
+	}{
+		{"answer quoting the advice", map[string]string{"msg-1": "Checking the turns.", "msg-2": answer},
+			strings.ReplaceAll(answer, "\n\n", "\n"), []any{"login"}, domain.TurnStateCompleted, false},
+		{"refusal after some answer", map[string]string{"msg-1": "Let me run the tests."},
+			"Not logged in · Please run /login", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal before any answer", nil,
+			"Not logged in · Please run /login", []any{"login"}, domain.TurnStateFailed, true},
+		{"other failure repeating the answer", map[string]string{"msg-1": answer},
+			answer, nil, domain.TurnStateFailed, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authRejected := 0
+			conv := &conversation{
+				activeTurn: "turn-1", events: make(chan ports.ChatEvent, 32), log: slog.New(slog.DiscardHandler),
+				messages:              tc.streamed,
+				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
+				onAuthRejected:        func() { authRejected++ },
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Meta: testPromptFailureMeta(map[string]any{
+				"id": "turn-1:error", "severity": "error", "category": "access", "title": tc.title, "actions": tc.actions,
+			})}, nil)
+			close(conv.events)
+			var completed *ports.ChatEvent
+			for event := range conv.events {
+				if event.Kind == ports.ChatEventTurnCompleted {
+					completed = &event
+				}
+			}
+			if completed == nil {
+				t.Fatal("turn never completed")
+			}
+			if completed.TurnState != tc.want || (completed.Err != nil) != (tc.want == domain.TurnStateFailed) {
+				t.Fatalf("completion = state %q err %v, want state %q", completed.TurnState, completed.Err, tc.want)
+			}
+			if errors.Is(completed.Err, ports.ErrChatAuthRequired) != tc.reauth {
+				t.Fatalf("completion error = %v, want reauth=%v", completed.Err, tc.reauth)
+			}
+			wantRejected := 0
+			if tc.reauth {
+				wantRejected = 1
+			}
+			if authRejected != wantRejected {
+				t.Fatalf("auth rejections = %d, want %d", authRejected, wantRejected)
 			}
 		})
 	}
