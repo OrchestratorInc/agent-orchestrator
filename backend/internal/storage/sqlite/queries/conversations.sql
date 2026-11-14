@@ -1839,6 +1839,21 @@ INSERT OR IGNORE INTO conversation_provider_events (
     COALESCE((SELECT active_branch_id FROM conversations WHERE id = sqlc.arg(conversation_id)), '')
 );
 
+-- The next archive rows after a cursor, oldest first. received_at has no index, so
+-- payload compaction walks the primary key in bounded steps instead of scanning.
+-- name: SelectProviderEventAgesAfter :many
+SELECT id, received_at FROM conversation_provider_events
+WHERE id > sqlc.arg(after_id)
+ORDER BY id
+LIMIT sqlc.arg(batch_size);
+
+-- Old archive rows keep their provider_event_id, which dedupes a provider replay,
+-- but drop their payload. turn.completed keeps it for SelectVerifiedAuthenticationTurn.
+-- name: CompactProviderEventPayloads :execrows
+UPDATE conversation_provider_events SET payload_json = '{}'
+WHERE id > sqlc.arg(after_id) AND id <= sqlc.arg(through_id)
+  AND method <> 'turn.completed' AND payload_json <> '{}';
+
 -- name: SelectConversationProviderEvents :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)

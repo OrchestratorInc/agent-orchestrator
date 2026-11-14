@@ -541,6 +541,27 @@ func (q *Queries) CancelQueuedConversationTurns(ctx context.Context, arg CancelQ
 	return err
 }
 
+const compactProviderEventPayloads = `-- name: CompactProviderEventPayloads :execrows
+UPDATE conversation_provider_events SET payload_json = '{}'
+WHERE id > ?1 AND id <= ?2
+  AND method <> 'turn.completed' AND payload_json <> '{}'
+`
+
+type CompactProviderEventPayloadsParams struct {
+	AfterID   int64
+	ThroughID int64
+}
+
+// Old archive rows keep their provider_event_id, which dedupes a provider replay,
+// but drop their payload. turn.completed keeps it for SelectVerifiedAuthenticationTurn.
+func (q *Queries) CompactProviderEventPayloads(ctx context.Context, arg CompactProviderEventPayloadsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, compactProviderEventPayloads, arg.AfterID, arg.ThroughID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const completeQueuedConversationBatchMember = `-- name: CompleteQueuedConversationBatchMember :execrows
 UPDATE conversation_turns
 SET state = 'completed',
@@ -4548,6 +4569,48 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 		&i.AutoCompactWindow,
 	)
 	return i, err
+}
+
+const selectProviderEventAgesAfter = `-- name: SelectProviderEventAgesAfter :many
+SELECT id, received_at FROM conversation_provider_events
+WHERE id > ?1
+ORDER BY id
+LIMIT ?2
+`
+
+type SelectProviderEventAgesAfterParams struct {
+	AfterID   int64
+	BatchSize int64
+}
+
+type SelectProviderEventAgesAfterRow struct {
+	ID         int64
+	ReceivedAt time.Time
+}
+
+// The next archive rows after a cursor, oldest first. received_at has no index, so
+// payload compaction walks the primary key in bounded steps instead of scanning.
+func (q *Queries) SelectProviderEventAgesAfter(ctx context.Context, arg SelectProviderEventAgesAfterParams) ([]SelectProviderEventAgesAfterRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectProviderEventAgesAfter, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectProviderEventAgesAfterRow{}
+	for rows.Next() {
+		var i SelectProviderEventAgesAfterRow
+		if err := rows.Scan(&i.ID, &i.ReceivedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many

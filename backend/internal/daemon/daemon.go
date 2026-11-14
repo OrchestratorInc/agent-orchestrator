@@ -106,6 +106,33 @@ const chatHibernateSweepTick = 30 * time.Second
 // Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
 
+// Raw provider events older than this keep their row but lose their payload.
+// The table otherwise grows by tens of MB a day of streaming deltas.
+const (
+	providerEventPayloadRetention = 7 * 24 * time.Hour
+	providerEventCompactBatch     = 500
+)
+
+// compactProviderEvents empties old provider event payloads from cursor on, in
+// steps of providerEventCompactBatch rows, so each step reads and writes a
+// bounded range. It advances cursor past every row it has compacted.
+func compactProviderEvents(ctx context.Context, store *sqlite.Store, cursor *int64, log *slog.Logger) {
+	before := time.Now().UTC().Add(-providerEventPayloadRetention)
+	for ctx.Err() == nil {
+		next, more, err := store.CompactProviderEventPayloads(ctx, *cursor, before, providerEventCompactBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("compact provider event payloads failed", "err", err)
+			}
+			return
+		}
+		*cursor = next
+		if !more {
+			return
+		}
+	}
+}
+
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
@@ -1483,6 +1510,7 @@ func Run(buildVersion string) (retErr error) {
 			}
 			ticker := time.NewTicker(workspaceCleanupSweepTick)
 			defer ticker.Stop()
+			var providerEventCursor int64
 			for {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
@@ -1493,6 +1521,7 @@ func Run(buildVersion string) (retErr error) {
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
 					log.Warn("delete expired sessions failed", "err", err)
 				}
+				compactProviderEvents(ctx, store, &providerEventCursor, log)
 				select {
 				case <-ctx.Done():
 					return
