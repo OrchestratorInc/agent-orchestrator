@@ -112,3 +112,14 @@ it("on a slow link runs one read at a time and shows every answer", async () => 
 	expect(shown.at(-1)).toBe(`words ${reads}`);
 });
 
+it("keeps rows that did not change as the same objects, so their views skip a render", async () => {
+	answerAfter(30);
+	await act(async () => { renderer = create(<Harness id="identity" />); await vi.advanceTimersByTimeAsync(50); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+	expect(conversation.snapshot?.items).toHaveLength(2);
+	const settled = conversation.snapshot?.items[0];
+	const streaming = conversation.snapshot?.items[1];
+	await stream(500);
+	expect(conversation.snapshot?.items[0]).toBe(settled);
+	expect(conversation.snapshot?.items[1]).not.toBe(streaming);
+});

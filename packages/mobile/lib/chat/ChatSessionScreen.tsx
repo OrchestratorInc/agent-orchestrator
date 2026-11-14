@@ -1,7 +1,7 @@
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
@@ -30,6 +30,9 @@ import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type 
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
+import { useComposerSnapshot } from "./composerSnapshot";
+import { useKeepUnchanged } from "../keepUnchanged";
+import { useStableFunctionProps } from "../useStableFunctionProps";
 import { KeyboardFollower } from "./KeyboardFollower";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
@@ -351,10 +354,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
 	// and cannot sit after this screen's early returns.
-	const request = requestDockModel(conversation.snapshot, {
+	// Kept by identity while its data is the same, so the composer (which shows
+	// it) is not re-rendered by every snapshot.
+	const request = useKeepUnchanged(requestDockModel(conversation.snapshot, {
 		approval: conversation.pendingActions.includes("approval"),
 		input: conversation.pendingActions.includes("input"),
-	});
+	}));
 	const requestDismissed = request ? dismissedRequest === request.sequence : false;
 	// The timeline collapses a request the card is answering to a record of what
 	// was asked — one live set of controls, never two.
@@ -483,6 +488,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		[conversation.snapshot, session],
 	);
 	const startupShown = startupVisible(startupView, conversation.snapshot);
+	// The composer's view of the conversation: unchanged while a reply streams,
+	// so the composer does not re-render with every word (see composerSnapshot).
+	const composerSnapshot = useComposerSnapshot(conversation.snapshot, startupView?.openingTurnId);
+	const composerChanges = useMemo(
+		() => changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined,
+		[changeSummary, filesNavigation.openChanges],
+	);
 	// The agent coming up is not a conversation event, so over the direct link
 	// nothing tells the screen. With an opening brief the turn's own events cover
 	// it; a promptless start stayed on "Connecting to the agent…". Once
@@ -940,7 +952,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			    transcript; the daemon's own marker replaces it once it lands. */}
 			{agentSwitchSending ? <View style={styles.switchingLine}><ProviderSwitchLine switching /></View> : null}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
-				<ChatComposer
+				<StableChatComposer
 					key={composerKey}
 					quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
 					onQuoteHandled={quoteHandled}
@@ -951,8 +963,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					sessionId={session.id}
 					config={config}
 					machine={machine}
-					snapshot={snapshot}
-					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
+					snapshot={composerSnapshot ?? snapshot}
+					changes={composerChanges}
 					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}
@@ -991,6 +1003,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		</KeyboardFollower>
 		</View>
 	);
+}
+
+const MemoChatComposer = memo(ChatComposer);
+
+/**
+ * The composer, rendered again only when something it shows changes. Its
+ * handlers are passed as stable forwarders to the newest ones, so the screen's
+ * inline handlers neither force a render nor go stale.
+ */
+function StableChatComposer(props: ComponentProps<typeof ChatComposer>) {
+	return <MemoChatComposer {...useStableFunctionProps(props)} />;
 }
 
 function ConversationBanners({ snapshot, startFailure, starting, resuming, resumeError, terminated, onResume, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; starting: boolean; resuming: boolean; resumeError?: string; terminated: boolean; onResume(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {

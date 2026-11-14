@@ -94,7 +94,7 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
 		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
 		expect(screenSource).toContain("reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number)");
-		expect(screenSource).toContain("<ChatComposer");
+		expect(screenSource).toContain("<StableChatComposer");
 	});
 
 });
@@ -133,7 +133,7 @@ describe("the composer and the keyboard", () => {
 		const root = screenSource.indexOf("</KeyboardAvoidingView>");
 		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
 		expect(follower).toBeGreaterThan(root);
-		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+		expect(screenSource.indexOf("<StableChatComposer")).toBeGreaterThan(follower);
 	});
 });
 

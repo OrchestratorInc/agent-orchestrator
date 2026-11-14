@@ -33,7 +33,7 @@ import {
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
-import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
+import { cacheConversationPages, cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
@@ -230,7 +230,7 @@ export function useMobileConversation(
 				if (!mounted.current || !isCurrent()) return;
 				setPages((old) => {
 					const next = withLivePage(old, live);
-					conversationPageCache.set(cacheKey, next);
+					cacheConversationPages(conversationPageCache, cacheKey, old, next);
 					return next;
 				});
 				setUnavailable(undefined);

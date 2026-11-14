@@ -1,4 +1,5 @@
 import { Feather } from "../icons";
+import { useStableFunctionProps } from "../useStableFunctionProps";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
@@ -121,6 +122,28 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
+/**
+ * The groups, with each one that has not changed since the last render kept as
+ * the same object: same key, same turn and plan, and the same item objects
+ * (which the conversation keeps by identity while unchanged; see
+ * reuseUnchangedRows). A memoized turn then skips its render.
+ */
+function useStableGroups(groups: ConversationGroup[]): ConversationGroup[] {
+	const previous = useRef(new Map<string, ConversationGroup>());
+	const next = new Map<string, ConversationGroup>();
+	const stable = groups.map((group) => {
+		const old = previous.current.get(group.key);
+		const kept = old && old.turn === group.turn && old.plan === group.plan && old.turnId === group.turnId && old.anchor === group.anchor &&
+			old.items.length === group.items.length && old.items.every((item, index) => item === group.items[index])
+			? old
+			: group;
+		next.set(group.key, kept);
+		return kept;
+	});
+	previous.current = next;
+	return stable;
+}
+
 /** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
 export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
 	return <MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope>;
@@ -238,7 +261,7 @@ function Timeline({
 	// Keyed on the signature, not the set: a new set with the same keys keeps the old one.
 	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
-	const groups = plan.groups;
+	const groups = useStableGroups(plan.groups);
 	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
 	// Android has no such inset, so its first message sat behind the header's frost.
 	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
@@ -324,6 +347,9 @@ function Timeline({
 		// would pull the list back while the person scrolls to read.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [editingTurnId]);
+
+	// Stable for the life of the list, so a memoized turn is not re-rendered by a new handler.
+	const rowHandlers = useStableFunctionProps({ onDecide, onResolveInput, onRollback, onFork, startEdit, cancelEdit, submitEdit, revealEdit, toggleWorked });
 
 	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {
@@ -446,22 +472,24 @@ function Timeline({
 							ListFooterComponent={standaloneStartup}
 							renderItem={({ item: group }) => <ConversationTurnGroup
 								group={group}
-								snapshot={snapshot}
+								sessionId={snapshot.sessionId}
+								conversationId={snapshot.conversationId}
+								canRollBack={Boolean(group.turn && onRollback && canRollbackTurn(snapshot, group.turn))}
 								approvalPending={approvalPending}
 								inputPending={inputPending}
-								onDecide={onDecide}
-								onResolveInput={onResolveInput}
-								onRollback={onRollback}
-								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? onFork : undefined}
+								onDecide={rowHandlers.onDecide}
+								onResolveInput={rowHandlers.onResolveInput}
+								onRollback={onRollback ? rowHandlers.onRollback : undefined}
+								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? rowHandlers.onFork : undefined}
 								editableTurns={edits?.editable}
-								onEditMessage={onEditMessage ? startEdit : undefined}
+								onEditMessage={onEditMessage ? rowHandlers.startEdit : undefined}
 								editDraft={editDraft}
-								onCancelEdit={cancelEdit}
-								onSubmitEdit={submitEdit}
-								onEditFocus={revealEdit}
+								onCancelEdit={rowHandlers.cancelEdit}
+								onSubmitEdit={rowHandlers.submitEdit}
+								onEditFocus={rowHandlers.revealEdit}
 								answeredBelow={answeredBelow}
 								workedOpen={openWorked.has(group.key)}
-								onToggleWorked={toggleWorked}
+								onToggleWorked={rowHandlers.toggleWorked}
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 							/>}
 						/>
@@ -482,9 +510,17 @@ function Timeline({
 	);
 }
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
+/**
+ * One turn's rows. Memoized, with its groups kept by identity (see
+ * useStableGroups) and its handlers stable, so a streamed word re-renders the
+ * turn it lands in and leaves every other turn on screen alone.
+ */
+const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
-	snapshot: ConversationSnapshot;
+	sessionId: string;
+	conversationId: string;
+	/** Whether this turn's rollback is offered (canRollbackTurn). */
+	canRollBack: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -516,7 +552,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		: undefined;
 	const renderRows = (list: ConversationItem[], actionsHost?: string, actions?: ReactNode) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} turnActions={row.items[0].id === actionsHost ? actions : undefined} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} turnActions={row.items[0].id === actionsHost ? actions : undefined} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -537,8 +573,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
-	const rollback = group.turn && canRollbackTurn(snapshot, group.turn) ? onRollback : undefined;
-	const actions = group.turn ? turnActionButtons(group.turn, rollback, onFork) : null;
+	const actions = group.turn ? turnActionButtons(group.turn, canRollBack ? onRollback : undefined, onFork) : null;
 	// The turn's actions sit beside Copy on its final reply, as on the desktop;
 	// a turn with no reply to copy keeps them on a row of their own.
 	const actionsHost = actions && partition?.settled ? lastReplyID(partition.final) : undefined;
@@ -553,7 +588,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
 		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final, actionsHost, actions)}{summary}</BelowFold>
 	</View>;
-}
+});
 
 const TimelineItem = memo(function TimelineItem({
 	item,
