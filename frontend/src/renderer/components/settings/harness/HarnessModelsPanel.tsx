@@ -22,7 +22,7 @@ const MODELS_PAGE_SIZE = 10;
 export const MULTI_PROVIDER_HARNESSES = new Set<string>([
 	"opencode", "opencode-v2", "kilocode", "pi", "omp", "kimchi", "prime-agent",
 	"crush", "mimo-code", "command-code", "aider", "kimi", "codewhale",
-	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx",
+	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx", "neovate",
 ]);
 
 /** The harness catalog, browsed by provider. */
