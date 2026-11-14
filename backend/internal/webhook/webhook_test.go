@@ -331,9 +331,6 @@ func TestDispatcherPausesOnRateLimit(t *testing.T) {
 }
 
 func TestDispatcherSendsUrgentEventsBeforeRetries(t *testing.T) {
-	old := retryBackoff
-	retryBackoff = []time.Duration{300 * time.Millisecond}
-	defer func() { retryBackoff = old }()
 	rcv := &receiver{status: []int{http.StatusBadGateway}}
 	srv := httptest.NewServer(rcv)
 	defer srv.Close()
@@ -341,6 +338,7 @@ func TestDispatcherSendsUrgentEventsBeforeRetries(t *testing.T) {
 	_, _ = store.Put(Hook{Name: "main", URL: srv.URL}, time.Now())
 	hub := &fakeHub{ch: make(chan domain.NotificationEvent, 2)}
 	d := NewDispatcher(Deps{Store: store, Notifications: hub, Changes: &fakeChanges{}, Sessions: &fakeSessions{}})
+	d.backoff = []time.Duration{300 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go d.Run(ctx)
@@ -362,9 +360,6 @@ func TestDispatcherSendsUrgentEventsBeforeRetries(t *testing.T) {
 
 func startQueueTest(t *testing.T, codes []int, sessions *fakeSessions) (*Dispatcher, *receiver) {
 	t.Helper()
-	old := retryBackoff
-	retryBackoff = []time.Duration{300 * time.Millisecond}
-	t.Cleanup(func() { retryBackoff = old })
 	rcv := &receiver{status: codes}
 	srv := httptest.NewServer(rcv)
 	t.Cleanup(srv.Close)
@@ -372,6 +367,7 @@ func startQueueTest(t *testing.T, codes []int, sessions *fakeSessions) (*Dispatc
 	_, _ = store.Put(Hook{Name: "main", URL: srv.URL}, time.Now())
 	d := NewDispatcher(Deps{Store: store, Notifications: &fakeHub{ch: make(chan domain.NotificationEvent)}, Changes: &fakeChanges{}, Sessions: sessions})
 	d.settle = 0
+	d.backoff = []time.Duration{300 * time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go d.Run(ctx)
@@ -399,9 +395,9 @@ func TestDispatcherRechecksExitBeforeRetry(t *testing.T) {
 	sessions.mu.Lock()
 	sessions.recs["s"] = domain.SessionRecord{ID: "s", Activity: domain.Activity{State: domain.ActivityActive}}
 	sessions.mu.Unlock()
-	d.queue("main").push(Payload{Event: EventPRMerged, SessionID: "s", At: time.Now()}, time.Now())
-	if got := rcv.wait(t, 1); got[0].Event != EventPRMerged {
-		t.Fatalf("sent %s first; the agent is running again, so the exit retry must be dropped", got[0].Event)
+	d.queue("main").push(Payload{Event: EventFinished, SessionID: "s", At: time.Now()}, time.Now())
+	if got := rcv.wait(t, 1); got[0].Event != EventSummary || got[0].Count != 1 {
+		t.Fatalf("sent %s (count %d); want the exit retry dropped and the folded turn sent as a summary", got[0].Event, got[0].Count)
 	}
 }
 

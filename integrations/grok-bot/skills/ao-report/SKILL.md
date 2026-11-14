@@ -9,13 +9,14 @@ description: >-
 ---
 Follow the ao-rules skill. Read-only on the user's computers. The page is built on the box.
 
-1. Find the host and project (ao-orchestrator step 1). Period: 14 days, 7 for "this week", and for "this month" today's day of the month (the 14th: 14).
+1. Find the host and project (ao-orchestrator step 1). Period: 14 days, 7 for "this week", and for "this month" today's day of the month (the 14th: 14). `<tz>` is the user's IANA timezone; days start at its midnight.
 2. Export on the host. For a remote host, set `AO_REMOTE_BASE` and `AO_REMOTE_HEADER` first, as for `aoapi`:
 ```sh
-f(){ P='<project>'; D=<days>; mkdir -p ~/.ao-grok/out; O=~/.ao-grok/out/$P-export.json
-  python3 - "$P" "$D" > "$O" <<'PY' || { rm -f "$O"; echo EXPORT_FAILED; return 1; }
-import json,os,re,subprocess,sys,time,calendar,datetime
-P,D=sys.argv[1],int(sys.argv[2]); since=time.mktime((datetime.date.today()-datetime.timedelta(days=D-1)).timetuple()); rb=os.environ.get("AO_REMOTE_BASE")
+f(){ P='<project>'; D=<days>; Z='<tz>'; mkdir -p ~/.ao-grok/out; O=~/.ao-grok/out/$P-export.json
+  python3 - "$P" "$D" "$Z" > "$O" <<'PY' || { rm -f "$O"; echo EXPORT_FAILED; return 1; }
+import json,os,re,subprocess,sys,time,calendar,datetime,zoneinfo
+P,D,Z=sys.argv[1],int(sys.argv[2]),sys.argv[3]; z=zoneinfo.ZoneInfo(Z); start=datetime.datetime.now(z).date()-datetime.timedelta(days=D-1)
+since=datetime.datetime(start.year,start.month,start.day,tzinfo=z).timestamp(); rb=os.environ.get("AO_REMOTE_BASE")
 base=rb or "http://127.0.0.1:"+re.search(r'"port": *(\d+)',open(os.environ.get("AO_RUN_FILE",os.path.expanduser("~/.ao/running.json"))).read()).group(1)
 def api(path):
     r=subprocess.run(["curl","-sS","--fail-with-body","--max-time","30"]+(["-H","@"+os.environ["AO_REMOTE_HEADER"]] if rb else [])+[base+"/api/v1/"+path],capture_output=True,text=True)
@@ -33,9 +34,9 @@ for s in api("sessions?project="+P).get("sessions") or []:
         "ended":s.get("isTerminated"),"lastEventAt":s.get("lastEventAt"),"asked":red(h.get("userRequest"))[:400],"replied":red(h.get("agentResponse"))[-1200:],
         "prs":api("sessions/%s/pr"%s["id"]).get("prs") or []})
 out["waiting"]=[n for n in api("notifications?status=unresolved").get("notifications") or [] if n.get("projectId")==P]
-out["usage"]=api("usage/report?days=%d&projectId=%s"%(D,P)).get("sessions") or []
+out["usage"]=api("usage/report?days=%d&tz=%s&projectId=%s"%(D,Z,P)).get("sessions") or []
 if not rb and proj.get("path") and os.path.isdir(proj["path"]):
-    out["commits"]=subprocess.run(["git","-C",proj["path"],"log","--since=%d days ago"%D,"--format=%h %ad %s","--date=short","-50"],capture_output=True,text=True).stdout.splitlines()
+    out["commits"]=subprocess.run(["git","-C",proj["path"],"log","--since="+datetime.datetime(start.year,start.month,start.day,tzinfo=z).isoformat(),"--format=%h %ad %s","--date=short","-50"],capture_output=True,text=True).stdout.splitlines()
 print(json.dumps(out))
 PY
   echo "$O"; }; f

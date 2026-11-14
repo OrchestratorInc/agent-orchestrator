@@ -37,7 +37,7 @@ const (
 	deskCheckTTL      = 10 * time.Second
 )
 
-var retryBackoff = []time.Duration{5 * time.Second, 20 * time.Second, time.Minute}
+var defaultBackoff = []time.Duration{5 * time.Second, 20 * time.Second, time.Minute}
 
 // NotificationSource is the live notification fan-out (notify.Hub).
 type NotificationSource interface {
@@ -126,6 +126,7 @@ type Dispatcher struct {
 	home    string
 	changes chan cdc.Event
 	settle  time.Duration
+	backoff []time.Duration
 
 	mu       sync.Mutex
 	runCtx   context.Context
@@ -155,6 +156,7 @@ func NewDispatcher(d Deps) *Dispatcher {
 		home:     home,
 		changes:  make(chan cdc.Event, 1024),
 		settle:   defaultExitSettle,
+		backoff:  defaultBackoff,
 		queues:   map[string]*queue{},
 		activity: map[domain.SessionID]domain.ActivityState{},
 	}
@@ -449,6 +451,11 @@ func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Paylo
 		}
 		rec, ok, err := d.deps.Sessions.GetSession(ctx, domain.SessionID(p.SessionID))
 		if err == nil && (!ok || rec.IsTerminated || rec.Activity.State != domain.ActivityExited) {
+			if p.tries > 0 {
+				q.mu.Lock()
+				q.failing = false
+				q.mu.Unlock()
+			}
 			return true
 		}
 	}
@@ -482,7 +489,7 @@ func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Paylo
 	if errors.As(err, &limited) {
 		q.pausedUntil = now.Add(retryAfter)
 	} else {
-		q.retryAt = now.Add(retryBackoff[min(p.tries, len(retryBackoff)-1)])
+		q.retryAt = now.Add(d.backoff[min(p.tries, len(d.backoff)-1)])
 	}
 	p.tries++
 	q.failing = true

@@ -29,8 +29,8 @@
   {
    "id": "ao-dev-update",
    "path": "skills/ao-dev-update/SKILL.md",
-   "bytes": 3995,
-   "sha256": "dd8ea23cd56b987556d6dbf9b55cee4bb0e6857e5753e68c35ffa1bc889c66c8"
+   "bytes": 4268,
+   "sha256": "1a37d619ff1417b63fbbd5f6c9aa66683c336e331dcf0611c80cc644cf82ad16"
   },
   {
    "id": "ao-event",
@@ -65,8 +65,8 @@
   {
    "id": "ao-report",
    "path": "skills/ao-report/SKILL.md",
-   "bytes": 4091,
-   "sha256": "1a3484dab63d0ef08fa09b32673a53022c3bc9a3ff9aa6cc1c7969468bd268d5"
+   "bytes": 4347,
+   "sha256": "d6e87b2094cef824f875f4f1a633143b20150901d085abdd3682306a231d313e"
   },
   {
    "id": "ao-rules",
