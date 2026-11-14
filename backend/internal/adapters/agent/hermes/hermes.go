@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -53,6 +54,13 @@ const (
 	nativeUserEcho       = "● "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
+	// modernSpinner holds the frames the modern layout (the v0.22 default)
+	// draws at the start of the composer's top rule while a turn or command runs.
+	modernSpinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	// modernFooter starts the status line the modern layout draws under the
+	// composer, one column in: " ☤ <model> · …". The compact busy row starts
+	// in the first column instead.
+	modernFooter = " ☤ "
 )
 
 var (
@@ -60,6 +68,8 @@ var (
 	nativeVersionLine   = regexp.MustCompile(`^Hermes Agent v([0-9]+)\.([0-9]+)\.([0-9]+)(?:\+[0-9A-Za-z.]+)?(?: .*)?$`)
 	titleUnsafe         = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 	nativeStyleSequence = regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+	// modernTitledRule is a composer top rule with the session title at its end.
+	modernTitledRule = regexp.MustCompile(`^─{3,} \S.* ─$`)
 	// A tagless clean checkout; a ".dirty" suffix never matches.
 	nativeSourceVersionLine = regexp.MustCompile(`^Hermes Agent vgit\.([0-9a-f]{7,40})(?: .*)?$`)
 	// A Homebrew bottle is built from the release tarball, which has no git
@@ -1639,6 +1649,7 @@ func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 
 // DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	output, modernBusy := modernComposer(output)
 	// Native placeholders use italic; typed composer text has normal styling.
 	composerOutput := nativeStyleSequence.ReplaceAllStringFunc(output, func(sequence string) string {
 		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
@@ -1684,6 +1695,9 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		if strings.HasPrefix(line, nativePrompt) || strings.HasPrefix(line, nativeNamedPrompt) {
 			break
 		}
+	}
+	if modernBusy {
+		return domain.ActivityActive, true
 	}
 	// Below 64 columns Hermes hides the bottom input rule and draws only the
 	// state icon, without ❯ (`☤ ` busy; `⚠ `, `? `, `✎ ` and the credential icons
@@ -1731,6 +1745,57 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 		}
 	}
 	return "", false
+}
+
+// modernComposer reshapes Hermes's modern layout into the composer the checks
+// above read. That layout puts a status footer under the composer and the
+// session title, or a spinner while Hermes works, into the composer's top rule.
+// Left in place, the footer reads as the compact busy row and the title breaks
+// the matching pair of rules, so an idle terminal never reads as idle. The
+// footer is dropped and a titled top rule becomes a plain rule. busy reports
+// the spinner, which the modern layout draws at every width.
+func modernComposer(output string) (string, bool) {
+	raw := strings.Split(output, "\n")
+	plain := terminalui.PlainTerminalLines(output)
+	if len(raw) != len(plain) {
+		return output, false
+	}
+	last := len(plain) - 1
+	for last >= 0 && strings.TrimSpace(plain[last]) == "" {
+		last--
+	}
+	if last >= 1 && strings.HasPrefix(plain[last], modernFooter) && strings.Contains(plain[last], " · ") {
+		raw, plain = raw[:last], plain[:last]
+		last--
+		for last >= 0 && strings.TrimSpace(plain[last]) == "" {
+			last--
+		}
+	}
+	for i := last; i >= 1 && i >= last-7; i-- {
+		row := strings.TrimSpace(plain[i])
+		if !strings.HasPrefix(row, nativePrompt) && !strings.HasPrefix(row, "☤ ") {
+			continue
+		}
+		top := strings.TrimSpace(plain[i-1])
+		if rest, ok := strings.CutPrefix(top, "── "); ok {
+			if frame, _ := utf8.DecodeRuneInString(rest); strings.ContainsRune(modernSpinner, frame) {
+				return strings.Join(raw, "\n"), true
+			}
+		}
+		if modernTitledRule.MatchString(top) {
+			// Match the bottom rule, which a wide title character would not.
+			width := utf8.RuneCountInString(top)
+			for _, below := range plain[i+1 : last+1] {
+				if rule := strings.TrimSpace(below); len([]rune(rule)) >= 16 && strings.Trim(rule, "─") == "" {
+					width = utf8.RuneCountInString(rule)
+					break
+				}
+			}
+			raw[i-1] = strings.Repeat("─", width)
+		}
+		break
+	}
+	return strings.Join(raw, "\n"), false
 }
 
 // RequiresRenderedActivity implements the scoped native adapter contract.

@@ -1312,7 +1312,7 @@ func (m *Manager) prepareSourceHandoff(
 		if !surfaceProofAvailable && unverifiedIdle && detector != nil && inputQuiet {
 			// Compatibility path for terminal activity adapters that have not yet
 			// adopted the richer surface observation capability.
-			if output, outputErr := m.runtime.GetOutput(probeCtx, handle, interfaceTransitionOutputLines); outputErr == nil {
+			if output, outputErr := m.terminalActivityOutput(probeCtx, detector, handle, interfaceTransitionOutputLines); outputErr == nil {
 				now = time.Now()
 				state, authoritative := detector.DetectTerminalActivity(output)
 				idleProven = authoritative && state == domain.ActivityIdle
@@ -1365,6 +1365,22 @@ func (m *Manager) prepareSourceHandoff(
 		case <-ticker.C:
 		}
 	}
+}
+
+// terminalActivityOutput reads the screen a terminal activity detector expects.
+// A detector that requires rendered activity tells a dim native placeholder
+// from a typed draft by its styling, which plain output drops, so it reads the
+// rendered screen whenever the runtime can provide it.
+func (m *Manager) terminalActivityOutput(ctx context.Context, detector ports.TerminalActivityDetector, handle ports.RuntimeHandle, lines int) (string, error) {
+	if rendered, ok := detector.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() {
+		if styled, ok := m.runtime.(ports.StyledTerminalOutputReader); ok {
+			output, err := styled.GetStyledOutput(ctx, handle, lines)
+			if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+				return output, err
+			}
+		}
+	}
+	return m.runtime.GetOutput(ctx, handle, lines)
 }
 
 // tuiIdleAfterInput proves that the idle fact was written after every terminal
