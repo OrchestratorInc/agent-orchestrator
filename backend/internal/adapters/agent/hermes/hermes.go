@@ -51,6 +51,10 @@ const (
 	nativeWarningPrompt  = "⚠ ❯"
 	nativeQuestionPrompt = "? ❯"
 	nativeUserEcho       = "● "
+	// display.cli_layout=modern (the Hermes >= 0.23 default) echoes submitted
+	// messages with the skin's prompt glyph instead of ●, after the same
+	// transcript rule; cli_layout=classic keeps ●.
+	nativeModernUserEcho = "❯ "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
 )
@@ -494,11 +498,14 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
 // busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS). A newer line stays installed
+// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux —
+// the 0.23 line echoes submitted messages with the modern layout's prompt
+// glyph, which committedMessageEchoes accepts alongside ●). A newer line
+// stays installed
 // but unverified until its markers are revalidated. Only major.minor is
 // compared: Hermes derives its banner from git tags, so the same build can
 // report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
-var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
+var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}, {0, 23}}
 
 // qualifiedSourceCheckout accepts the banner Hermes prints when its own git
 // lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
@@ -1787,6 +1794,18 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 	return committedMessageEchoes(message, screen) > committedMessageEchoes(message, baseline)
 }
 
+// userEchoPrefix reports which native echo prefix a rendered line starts with:
+// ● for cli_layout=classic, or the skin's prompt glyph for the modern layout
+// (the Hermes >= 0.23 default). Empty when the line is not a user echo.
+func userEchoPrefix(line string) string {
+	for _, echo := range []string{nativeUserEcho, nativeModernUserEcho} {
+		if strings.HasPrefix(line, echo) {
+			return echo
+		}
+	}
+	return ""
+}
+
 // Count complete matching native echoes outside the current composer. Comparing
 // counts prevents old identical text from acknowledging a new send after a redraw.
 // Ignore whitespace inserted by terminal line wrapping, but require the entire
@@ -1819,11 +1838,15 @@ func committedMessageEchoes(message, screen string) int {
 			count++
 			continue
 		}
-		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || !strings.HasPrefix(line, nativeUserEcho) {
+		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule {
+			continue
+		}
+		echoPrefix := userEchoPrefix(line)
+		if echoPrefix == "" {
 			continue
 		}
 		var echo strings.Builder
-		echo.WriteString(strings.TrimPrefix(line, nativeUserEcho))
+		echo.WriteString(strings.TrimPrefix(line, echoPrefix))
 		j := i + 1
 		for j < end && strings.TrimSpace(lines[j]) != nativeTranscriptRule {
 			echo.WriteString(strings.TrimSpace(lines[j]))
