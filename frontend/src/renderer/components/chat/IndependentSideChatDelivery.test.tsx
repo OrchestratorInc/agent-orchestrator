@@ -663,6 +663,7 @@ describe("side panel navigation and recovery", () => {
 	it("renames with F2 and Enter and cancels with Escape", async () => {
 		patch.mockResolvedValue({});
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "First question" });
 		fireEvent.keyDown(tab, { key: "F2" });
 		const input = screen.getByRole("textbox", { name: "Rename side chat" });
@@ -685,6 +686,7 @@ describe("side panel navigation and recovery", () => {
 	});
 	it("offers only Rename on a tab's right-click menu", async () => {
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "Second question" });
 		fireEvent.contextMenu(tab, { button: 2 });
 		expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeVisible();
@@ -695,6 +697,7 @@ describe("side panel navigation and recovery", () => {
 	it("selects the existing name and commits on blur, discarding empty or unchanged names", async () => {
 		patch.mockResolvedValue({});
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "First question" });
 		fireEvent.doubleClick(tab);
 		const input = screen.getByRole("textbox", { name: "Rename side chat" }) as HTMLInputElement;
