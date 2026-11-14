@@ -7171,6 +7171,7 @@ export interface components {
             error: string;
             installing: string;
             models: components["schemas"]["DictationModel"][];
+            preparing: boolean;
             /** Format: int64 */
             progressDone: number;
             /** Format: int64 */

@@ -17,9 +17,14 @@ export function acknowledgeDictationChoice() {
 /** The user stopped the download themselves; nothing went wrong. */
 export class DictationInstallCancelled extends Error {}
 
-type Install = { model: string; fraction: number };
-const idle: Install = { model: "", fraction: 0 };
+/**
+ * What the mic button shows: the model being downloaded and how far along it is (0 to 1), or, after the
+ * download, that the chosen model is still loading into memory.
+ */
+type Install = { model: string; fraction: number; preparing: boolean };
+const idle: Install = { model: "", fraction: 0, preparing: false };
 let install = idle;
+let preparing = false;
 const listeners = new Set<() => void>();
 type Waiter = {
 	model: string;
@@ -39,11 +44,7 @@ let cancelling = false;
  */
 export function publishDictationStatus(status: DictationStatus) {
 	const fraction = status.progressTotal > 0 ? Math.min(1, Math.max(0, status.progressDone / status.progressTotal)) : 0;
-	const next = status.installing ? { model: status.installing, fraction } : idle;
-	if (next.model !== install.model || next.fraction !== install.fraction) {
-		install = next;
-		for (const listener of listeners) listener();
-	}
+	setInstall(status.installing ? { model: status.installing, fraction, preparing } : { ...idle, preparing });
 	for (const waiter of [...waiters]) {
 		if (status.installing && status.installing !== waiter.model) {
 			waiters.delete(waiter);
@@ -58,9 +59,16 @@ export function publishDictationStatus(status: DictationStatus) {
 	if (status.installing) schedule();
 }
 
-function stopTracking(failure: string) {
-	install = idle;
+function setInstall(next: Install) {
+	if (next.model === install.model && next.fraction === install.fraction && next.preparing === install.preparing)
+		return;
+	install = next;
 	for (const listener of listeners) listener();
+}
+
+function stopTracking(failure: string) {
+	preparing = false;
+	setInstall(idle);
 	for (const waiter of [...waiters]) {
 		waiters.delete(waiter);
 		waiter.reject(new Error(failure || waiter.loadFailed));
@@ -115,10 +123,32 @@ export function installDictationModel(
 		if (error || !data) throw new Error(error?.message ?? texts.updateFailed);
 		publishDictationStatus(data);
 		acknowledgeDictationChoice();
+		await untilModelLoaded();
 	});
 	const tracked = finished.finally(() => installs.delete(model));
 	installs.set(model, tracked);
 	return tracked;
+}
+
+/**
+ * A freshly chosen model takes several seconds to load the first time. Dictation works meanwhile, but its first
+ * result waits for the load, so "ready" is only announced once the daemon says the model is loaded. Gives up
+ * after two minutes rather than keeping a download looking unfinished forever.
+ */
+async function untilModelLoaded() {
+	preparing = true;
+	setInstall({ ...install, preparing });
+	try {
+		const deadline = Date.now() + 120_000;
+		while (Date.now() < deadline) {
+			const { data, error } = await apiClient.GET("/api/v1/dictation");
+			if (error || !data || !data.preparing) return;
+			await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+	} finally {
+		preparing = false;
+		setInstall({ ...install, preparing });
+	}
 }
 
 /** Stops the download in progress. Anyone waiting on it is told it was cancelled, not that it failed. */
@@ -139,7 +169,6 @@ function subscribe(listener: () => void) {
 	return () => listeners.delete(listener);
 }
 
-/** The model being downloaded, if any, and how far along the whole download is (0 to 1). */
 export function useDictationInstall(): Install {
 	return useSyncExternalStore(subscribe, () => install);
 }
@@ -149,6 +178,7 @@ export function resetDictationInstall() {
 	clearTimeout(timer);
 	timer = undefined;
 	install = idle;
+	preparing = false;
 	waiters.clear();
 	installs.clear();
 	cancelling = false;

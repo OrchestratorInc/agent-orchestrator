@@ -59,6 +59,9 @@ type Status struct {
 	ProgressTotal int64  `json:"progressTotal"`
 	Error         string `json:"error"`
 	Recording     bool   `json:"recording"`
+	// Preparing is true while the selected local model is still loading into memory. Dictation
+	// works then, but its first result waits for the load.
+	Preparing bool `json:"preparing"`
 }
 
 // Event carries a local recognizer result to its owning client.
@@ -121,6 +124,16 @@ type Service struct {
 	recording, closed                          bool
 }
 
+// selectedPreparing reports whether the selected local model is installed but its worker has not
+// finished loading it. The caller holds the service lock.
+func (s *Service) selectedPreparing() bool {
+	m, ok := findModel(s.selected)
+	if !ok || s.closed || s.installing != "" || !s.installed(m) {
+		return false
+	}
+	return s.worker == nil || !s.worker.ready
+}
+
 func (s *Service) marker(m modelSpec) string {
 	return filepath.Join(s.root, strings.ReplaceAll(m.id, "/", "--")+".ready")
 }
@@ -177,6 +190,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	result := Status{Selected: s.selected, Models: []Model{}, Installing: s.installing, Stage: s.stage, ProgressDone: s.progressDone, ProgressTotal: s.progressTotal, Error: s.failure, Recording: s.recording}
+	result.Preparing = s.selectedPreparing()
 	if runtime.GOOS == "darwin" {
 		result.Models = append(result.Models, Model{ID: "native-macos", Name: "macOS · on-device", Installed: true, Available: true})
 	}
@@ -287,6 +301,8 @@ type worker struct {
 	events    chan Event
 	cancel    context.CancelFunc
 	resetting chan struct{}
+	// ready is set, under the service lock, once the worker has loaded its model.
+	ready bool
 }
 
 // Session exclusively owns one recording on the inference worker.
@@ -341,6 +357,11 @@ func (s *Service) ensureWorker(m modelSpec) error {
 		for scanner.Scan() {
 			var event Event
 			if json.Unmarshal(scanner.Bytes(), &event) == nil {
+				if event.Type == "ready" {
+					s.mu.Lock()
+					w.ready = true
+					s.mu.Unlock()
+				}
 				select {
 				case w.events <- event:
 				case <-workerCtx.Done():

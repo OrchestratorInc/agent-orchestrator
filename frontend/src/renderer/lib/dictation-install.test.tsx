@@ -22,6 +22,7 @@ const idle: DictationStatus = {
 	recording: false,
 	progressDone: 0,
 	progressTotal: 0,
+	preparing: false,
 	models: [{ id: "phonon-2.5", name: "Phonon 2.5", installed: false, available: true, downloadBytes: 1 }],
 };
 const busy = (done: number): DictationStatus => ({
@@ -42,11 +43,11 @@ afterEach(resetDictationInstall);
 
 it("reports the model being downloaded and how far along it is, and clears when it finishes", () => {
 	const { result } = renderHook(() => useDictationInstall());
-	expect(result.current).toEqual({ model: "", fraction: 0 });
+	expect(result.current).toEqual({ model: "", fraction: 0, preparing: false });
 	act(() => publishDictationStatus(busy(250)));
-	expect(result.current).toEqual({ model: "phonon-2.5", fraction: 0.25 });
+	expect(result.current).toEqual({ model: "phonon-2.5", fraction: 0.25, preparing: false });
 	act(() => publishDictationStatus(idle));
-	expect(result.current).toEqual({ model: "", fraction: 0 });
+	expect(result.current).toEqual({ model: "", fraction: 0, preparing: false });
 });
 
 it("follows a download to its end, selects the model once, and lets a second request join it", async () => {
@@ -72,4 +73,17 @@ it("tells a waiting caller it was cancelled, not that it failed", async () => {
 	await cancelDictationInstall();
 	await rejection;
 	await waitFor(() => expect(api.POST).toHaveBeenCalledTimes(1));
+});
+
+it("does not report the model ready until the daemon says it has loaded, and shows that meanwhile", async () => {
+	api.GET.mockReset();
+	api.GET.mockResolvedValueOnce({ data: installed })
+		.mockResolvedValueOnce({ data: { ...installed, preparing: true } })
+		.mockResolvedValue({ data: installed });
+	const { result } = renderHook(() => useDictationInstall());
+	const finished = installDictationModel("phonon-2.5", busy(100), texts);
+	await waitFor(() => expect(result.current.preparing).toBe(true));
+	await finished;
+	expect(result.current.preparing).toBe(false);
+	expect(api.GET.mock.calls.length).toBeGreaterThanOrEqual(3);
 });
