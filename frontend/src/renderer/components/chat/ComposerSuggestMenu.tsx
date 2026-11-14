@@ -96,13 +96,27 @@ export function ComposerSuggestMenu({
 									<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 								) : null}
 								{/* Name first, then its description or folder on the same line,
-								    in smaller text, so a row stays one line tall. */}
+								    so a row stays one line tall. In the `/` menu the name is
+								    what the eye scans for, so it reads bright and its
+								    description stays quiet at the same size. A file's folder
+								    stays smaller. */}
 								<span className="flex min-w-0 flex-1 items-baseline gap-2">
-									<span className={cn("truncate", item.detail ? "max-w-3/5 shrink-0" : "min-w-0")}>
-										{kind === "skill" ? `/${item.label}` : item.label}
+									<span
+										className={cn(
+											"truncate",
+											item.detail ? "max-w-3/5 shrink-0" : "min-w-0",
+											kind === "skill" && "text-foreground",
+										)}
+									>
+										{item.label}
 									</span>
 									{item.detail ? (
-										<span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+										<span
+											className={cn(
+												"min-w-0 flex-1 truncate text-muted-foreground",
+												kind === "file" && "text-caption",
+											)}
+										>
 											{item.detail}
 										</span>
 									) : null}

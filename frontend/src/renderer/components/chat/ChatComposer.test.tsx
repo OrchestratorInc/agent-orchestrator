@@ -2005,7 +2005,7 @@ describe("slash commands", () => {
 		const options = screen.getAllByRole("option");
 		expect(options).toHaveLength(2);
 		// The prefix match leads; the mid-name match follows.
-		expect(options[0]?.textContent).toContain("/review");
+		expect(options[0]?.textContent).toMatch(/^Review/);
 	});
 
 	// The whole point of gating on the provider's answer: with nothing to offer,
@@ -2024,7 +2024,7 @@ describe("slash commands", () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");
 		expect(screen.getByRole("listbox")).toBeInTheDocument();
-		expect(screen.getByRole("option", { name: /\/review/ })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: /^Review/ })).toBeInTheDocument();
 	});
 
 	it("moves the highlight with the arrow keys and wraps", async () => {
@@ -2078,8 +2078,8 @@ describe("slash commands", () => {
 	it.each(["Enter", "Tab"])("finds /btw through /side and completes with %s before sending the prompt", async key => {
 		const {onSend,field}=renderComposer({skills:[{name:"btw",displayName:"btw",description:"Open a new side chat",source:"AO"}]});
 		await typeInComposer(field,"/side");
-		expect(screen.getByRole("option",{name:/\/btw/})).toBeInTheDocument();
-		expect(screen.queryByRole("option",{name:/^\/side\b/})).not.toBeInTheDocument();
+		expect(screen.getByRole("option",{name: /^BTW/})).toBeInTheDocument();
+		expect(screen.queryByRole("option",{name: /^Side/})).not.toBeInTheDocument();
 		await userEvent.keyboard(`{${key}}`);
 		expect(composerWireText(field)).toBe("/btw ");
 		expect(onSend).not.toHaveBeenCalled();
@@ -2222,7 +2222,7 @@ describe("slash commands", () => {
 	it("selects with the mouse", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/");
-		await userEvent.click(screen.getByText("/ship"));
+		await userEvent.click(screen.getByText("Ship"));
 		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/ship");
 	});
 });
