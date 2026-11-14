@@ -141,14 +141,14 @@ Use this when Orchestrator runs on a computer that has no Grok Bot desktop app, 
 5. Add the host to the **AO hosts** note with `reach: remote`, `via`, `base`, `header` and `id` = the `hostId` from step 3. For a repair, update that host's line (`via`, `base`, `header`) instead of adding one.
 
 ### Pairing window
-The host swaps the code for this computer's own token, which the host can revoke by itself. A host from before pairing codes takes its password, typed the same way, and that is saved as is.
+The host swaps the code for this computer's own token, which the host can revoke by itself. The window writes `<name>.new.header`; the connection test moves it over `<name>.header` only when it works, so a failed repair keeps the old credential. A host from before pairing codes takes its password, typed the same way, and that is saved as is.
 ```sh
 f(){ mkdir -p ~/.ao-grok/out && cat > ~/.ao-grok/add-<name>.command <<'EOF'
 #!/bin/zsh
 umask 077
 read -rs "p?Orchestrator pairing code for <name>: "; echo
 t="$(curl -fsS -m 10 -X POST -H "Authorization: Bearer $p" -H 'Content-Type: application/json' -d '{"name":"Grok Bot","platform":"'"$(uname -s | tr A-Z a-z)"'"}' '<address>/api/v1/remote-host/devices' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)"
-printf 'Authorization: Bearer %s\n' "${t:-$p}" > ~/.ao-grok/<name>.header
+printf 'Authorization: Bearer %s\n' "${t:-$p}" > ~/.ao-grok/<name>.new.header
 echo "Saved. You can close this window."; rm -- "$0"
 EOF
 chmod +x ~/.ao-grok/add-<name>.command && open ~/.ao-grok/add-<name>.command; }; f
@@ -156,7 +156,7 @@ chmod +x ~/.ao-grok/add-<name>.command && open ~/.ao-grok/add-<name>.command; };
 
 ### Connection test
 ```sh
-f(){ <aoapi helper>; AO_REMOTE_BASE='<address>' AO_REMOTE_HEADER="$HOME/.ao-grok/<name>.header" aoapi GET 'sessions?active=true' | python3 -c 'import json,sys; print("live_sessions=%d" % len(json.load(sys.stdin)["sessions"]))'; }; f
+f(){ <aoapi helper>; AO_REMOTE_BASE='<address>' AO_REMOTE_HEADER="$HOME/.ao-grok/<name>.new.header" aoapi GET 'sessions?active=true' | python3 -c 'import json,sys; print("live_sessions=%d" % len(json.load(sys.stdin)["sessions"]))' && mv -f ~/.ao-grok/<name>.new.header ~/.ao-grok/<name>.header; }; f
 ```
 
 Limits of a remote host, said once: keep-awake, browser screenshots and starting a review work only on local hosts. For those, ask the host's orchestrator (ao-orchestrator). A quick-tunnel address (`trycloudflare.com`) changes when the tunnel restarts; the account address (`useao.dev`) stays the same. If the user removes this computer from the host's devices, or revokes all devices, run this section again.

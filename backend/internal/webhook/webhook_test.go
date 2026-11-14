@@ -360,6 +360,61 @@ func TestDispatcherSendsUrgentEventsBeforeRetries(t *testing.T) {
 	}
 }
 
+func startQueueTest(t *testing.T, codes []int, sessions *fakeSessions) (*Dispatcher, *receiver) {
+	t.Helper()
+	old := retryBackoff
+	retryBackoff = []time.Duration{300 * time.Millisecond}
+	t.Cleanup(func() { retryBackoff = old })
+	rcv := &receiver{status: codes}
+	srv := httptest.NewServer(rcv)
+	t.Cleanup(srv.Close)
+	store, _ := OpenStore(t.TempDir())
+	_, _ = store.Put(Hook{Name: "main", URL: srv.URL}, time.Now())
+	d := NewDispatcher(Deps{Store: store, Notifications: &fakeHub{ch: make(chan domain.NotificationEvent)}, Changes: &fakeChanges{}, Sessions: sessions})
+	d.settle = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go d.Run(ctx)
+	return d, rcv
+}
+
+func waitError(t *testing.T, d *Dispatcher, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(d.Statuses()["main"].LastError, want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("last error %q never contained %q", d.Statuses()["main"].LastError, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestDispatcherRechecksExitBeforeRetry(t *testing.T) {
+	sessions := &fakeSessions{recs: map[domain.SessionID]domain.SessionRecord{
+		"s": {ID: "s", Activity: domain.Activity{State: domain.ActivityExited}},
+	}}
+	d, rcv := startQueueTest(t, []int{http.StatusBadGateway}, sessions)
+	d.queue("main").push(Payload{Event: EventExited, SessionID: "s", At: time.Now()}, time.Now())
+	waitError(t, d, "HTTP 502")
+	sessions.mu.Lock()
+	sessions.recs["s"] = domain.SessionRecord{ID: "s", Activity: domain.Activity{State: domain.ActivityActive}}
+	sessions.mu.Unlock()
+	d.queue("main").push(Payload{Event: EventPRMerged, SessionID: "s", At: time.Now()}, time.Now())
+	if got := rcv.wait(t, 1); got[0].Event != EventPRMerged {
+		t.Fatalf("sent %s first; the agent is running again, so the exit retry must be dropped", got[0].Event)
+	}
+}
+
+func TestDispatcherDeliversAgainAfterRetryIsRejected(t *testing.T) {
+	d, rcv := startQueueTest(t, []int{http.StatusBadGateway, http.StatusBadRequest}, &fakeSessions{})
+	d.queue("main").push(Payload{Event: EventPRMerged, SessionID: "s", At: time.Now()}, time.Now())
+	waitError(t, d, "HTTP 400")
+	d.queue("main").push(Payload{Event: EventFinished, SessionID: "s", At: time.Now()}, time.Now())
+	if got := rcv.wait(t, 1); got[0].Event != EventFinished {
+		t.Fatalf("sent %s; want the finished turn", got[0].Event)
+	}
+}
+
 func TestDispatcherTestReportsRefusal(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "bad key", http.StatusUnauthorized)

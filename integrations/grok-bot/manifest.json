@@ -29,20 +29,20 @@
   {
    "id": "ao-dev-update",
    "path": "skills/ao-dev-update/SKILL.md",
-   "bytes": 3702,
-   "sha256": "5068476765ffbfc45bb181f51cc9b1762647b60aebe433ec1a71af79f179bd05"
+   "bytes": 3995,
+   "sha256": "dd8ea23cd56b987556d6dbf9b55cee4bb0e6857e5753e68c35ffa1bc889c66c8"
   },
   {
    "id": "ao-event",
    "path": "skills/ao-event/SKILL.md",
-   "bytes": 7825,
-   "sha256": "83e016069a132ea949c4c317bd4b9742a639dd807eaf89b38b0f446cf4aa3c38"
+   "bytes": 7961,
+   "sha256": "83401fb7b830185e1baaf46260b090c780878862d5cbe81f5e24fd7daee7e805"
   },
   {
    "id": "ao-handoff",
    "path": "skills/ao-handoff/SKILL.md",
-   "bytes": 2250,
-   "sha256": "678e0c92cc026bb7190b3a30c171dae30156eacd5dc2b8e65b8fd309115fecee"
+   "bytes": 2393,
+   "sha256": "0621a0098fd6d9eab888fe5c8048bef7b342301bd60355af8e0257f65feda46b"
   },
   {
    "id": "ao-learnings",
@@ -65,8 +65,8 @@
   {
    "id": "ao-report",
    "path": "skills/ao-report/SKILL.md",
-   "bytes": 4065,
-   "sha256": "013120da298a687f68d72b04af63f784a165f78ed7f4f5a1af2be656ae9e0eab"
+   "bytes": 4091,
+   "sha256": "1a3484dab63d0ef08fa09b32673a53022c3bc9a3ff9aa6cc1c7969468bd268d5"
   },
   {
    "id": "ao-rules",
@@ -77,8 +77,8 @@
   {
    "id": "ao-setup",
    "path": "skills/ao-setup/SKILL.md",
-   "bytes": 16811,
-   "sha256": "1f095783cd5f6627149e2ae21790983a88e9ca444634194c30befa7d47f9cd81"
+   "bytes": 17036,
+   "sha256": "215c986cf28fc9e63cf977d81a2efe2bc6ac9f237c160dc0ace74cdab28b1a7d"
   },
   {
    "id": "ao-status",

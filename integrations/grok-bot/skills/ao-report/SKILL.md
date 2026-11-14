@@ -14,8 +14,8 @@ Follow the ao-rules skill. Read-only on the user's computers. The page is built 
 ```sh
 f(){ P='<project>'; D=<days>; mkdir -p ~/.ao-grok/out; O=~/.ao-grok/out/$P-export.json
   python3 - "$P" "$D" > "$O" <<'PY' || { rm -f "$O"; echo EXPORT_FAILED; return 1; }
-import json,os,re,subprocess,sys,time,calendar
-P,D=sys.argv[1],int(sys.argv[2]); since=time.mktime(time.localtime()[:3]+(0,0,0,0,0,-1))-(D-1)*86400; rb=os.environ.get("AO_REMOTE_BASE")
+import json,os,re,subprocess,sys,time,calendar,datetime
+P,D=sys.argv[1],int(sys.argv[2]); since=time.mktime((datetime.date.today()-datetime.timedelta(days=D-1)).timetuple()); rb=os.environ.get("AO_REMOTE_BASE")
 base=rb or "http://127.0.0.1:"+re.search(r'"port": *(\d+)',open(os.environ.get("AO_RUN_FILE",os.path.expanduser("~/.ao/running.json"))).read()).group(1)
 def api(path):
     r=subprocess.run(["curl","-sS","--fail-with-body","--max-time","30"]+(["-H","@"+os.environ["AO_REMOTE_HEADER"]] if rb else [])+[base+"/api/v1/"+path],capture_output=True,text=True)

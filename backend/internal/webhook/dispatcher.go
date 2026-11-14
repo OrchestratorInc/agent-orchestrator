@@ -443,8 +443,8 @@ func (d *Dispatcher) drain(ctx context.Context, name string, q *queue) {
 }
 
 func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Payload) bool {
-	if p.Event == EventExited && p.tries == 0 {
-		if wait := p.At.Add(d.settle).Sub(d.clock()); wait > 0 && !sleep(ctx, wait) {
+	if p.Event == EventExited {
+		if wait := p.At.Add(d.settle).Sub(d.clock()); p.tries == 0 && wait > 0 && !sleep(ctx, wait) {
 			return false
 		}
 		rec, ok, err := d.deps.Sessions.GetSession(ctx, domain.SessionID(p.SessionID))
@@ -466,6 +466,7 @@ func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Paylo
 	case err == nil:
 		return true
 	case errors.Is(err, errPermanent):
+		q.failing = false
 		d.deps.Log.Warn("webhook: event rejected", "hook", name, "event", p.Event, "err", err)
 		return true
 	}
@@ -473,6 +474,7 @@ func (d *Dispatcher) deliver(ctx context.Context, name string, q *queue, p Paylo
 		p.firstTry = now
 	}
 	if now.Sub(p.firstTry) > giveUpAfter {
+		q.failing = false
 		d.deps.Log.Warn("webhook: giving up on event", "hook", name, "event", p.Event, "err", err)
 		return true
 	}
