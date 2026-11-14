@@ -2526,7 +2526,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 
 	daemonOutput = "";
 	setDaemonStatus({ state: "starting" });
-	if (launch.source === "bundled") {
+	if (launch.source === "bundled" || (launch.source === "configured" && app.isPackaged)) {
 		try {
 			await mkdir(launch.cwd, { recursive: true, mode: 0o750 });
 		} catch (err) {
