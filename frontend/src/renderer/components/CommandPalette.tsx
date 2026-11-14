@@ -221,7 +221,9 @@ export const CommandPalette = memo(function CommandPalette() {
 	const currentSession = currentSessionContext?.session;
 	const currentProjectId = currentSession?.workspaceId ?? params.projectId;
 	// The Actions heading is the project they act on, drawn as the sidebar draws it.
-	const currentProject = currentProjectId ? workspaces.find((workspace) => workspace.id === currentProjectId) : undefined;
+	const currentProject = currentProjectId
+		? workspaces.find((workspace) => workspace.id === currentProjectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
+		: undefined;
 	const avatarProjects = useMemo(() => (currentProject ? [currentProject] : []), [currentProject]);
 	const headingAvatars = useProjectAvatars(avatarProjects);
 	const actionsHeading = currentProject ? (
@@ -508,7 +510,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		const own = buildSessionActions(scoped.workspace, scoped.session, t);
 		// The palette's own rows already cover these.
 		const skip = new Set(["menu:session-copy-branch", ...(own.some((item) => item.action?.kind === "resume-session") ? ["menu:session-resume"] : [])]);
-		return [...own, ...switchItemFor(scoped.session.id), ...menuEntryCommands(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
+		return [...own, ...switchItemFor(scoped.session.id), ...paletteMenuRows(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
 	}, [scoped, sessionMenuEntries, switchItemFor, t]);
 	const projectActionsFor = useCallback((workspace: WorkspaceSummary): CommandItemModel[] => {
 		const canPin = workspace.id !== STANDALONE_WORKSPACE_ID && !workspace.hostId;
@@ -562,7 +564,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		if (view.mode !== "root") return [];
 		// The blank list keeps a session's few main actions; the rest wait for a search.
 		const sessionRows = currentSession
-			? [...switchItemFor(currentSession.id), ...menuEntryCommands(sessionMenuEntries, currentSession.id).filter((item) => item.id !== "menu:session-copy-branch")]
+			? [...switchItemFor(currentSession.id), ...paletteMenuRows(sessionMenuEntries, currentSession.id).filter((item) => item.id !== "menu:session-copy-branch")]
 				.map((item) => ({ ...item, group: "session" as const, ...(BLANK_SESSION_ACTIONS.has(item.id) ? {} : { searchOnly: true }) }))
 			: [];
 		const projectRows = currentProject
@@ -663,7 +665,10 @@ export const CommandPalette = memo(function CommandPalette() {
 		// The open session heads the list with its own actions, so it is listed too.
 		const listed = new Set([
 			...(currentSession ? [currentSession.id] : []),
-			...commandGroups.flatMap((group) => group.items.flatMap((item) => (item.action?.kind === "resume-session" ? [item.action.sessionId] : []))),
+			// Needs attention and session rows are "attention:<id>" and "session:<id>".
+			...commandGroups.flatMap((group) => (group.id === "attention" || group.id === "sessions"
+				? group.items.map((item) => item.id.slice(item.id.indexOf(":") + 1))
+				: [])),
 		]);
 		const searchRows = recents
 			? sessionSearchItems.filter((item) => item.action?.kind !== "open-search-result" || !listed.has(item.action.sessionId)).slice(0, PALETTE_RECENTS_LIMIT)
@@ -1604,6 +1609,11 @@ function PaletteRow({
 
 /** The open session's actions the blank list shows; the others wait for a search. */
 const BLANK_SESSION_ACTIONS = new Set(["session-switch-interface", "menu:open-in", "menu:session-rename", "menu:session-resume", "menu:session-open-pr", "menu:session-archive"]);
+
+/** A session's menu rows; Rename opens the palette's own rename field, so it keeps the palette open. */
+function paletteMenuRows(entries: readonly MenuEntry[], sessionId: string): CommandItemModel[] {
+	return menuEntryCommands(entries, sessionId).map((item) => (item.id === "menu:session-rename" ? { ...item, keepOpen: true } : item));
+}
 
 /** A row whose action opens a nested list rather than doing something; drawn with ›. */
 function rowOpensList(item: CommandItemModel): boolean {

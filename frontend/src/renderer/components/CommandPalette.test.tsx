@@ -615,6 +615,18 @@ describe("CommandPalette workspace file search", () => {
 	});
 });
 
+describe("CommandPalette session menu", () => {
+	it("keeps the palette open on Rename, with the name in the field", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.click(await screen.findByText(rowTitle("Rename"), {}, { timeout: 2_000 }));
+
+		await waitFor(() => expect(document.querySelector<HTMLInputElement>("[cmdk-input]")?.value).toBe("fix flake"));
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(true);
+	});
+});
+
 describe("CommandPalette content search", () => {
 	const contentHit = { path: "src/lib/palette.ts", line: 12, text: "export function \x02closePalette\x03() {}" };
 	const chatHit = { messageId: "msg-1", sessionId: "w-fix", projectId: "proj-1", title: "Palette cleanup", text: "we should \x02close\x03 the \x02palette\x03 on Escape" };
