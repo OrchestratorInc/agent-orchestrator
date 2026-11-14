@@ -97,8 +97,9 @@ const ORCH_POINTS = [
 ] as const;
 /** The part where pull requests go through CI and code review on GitHub. */
 const CI_POINT = 2;
-/** The welcome captions: the outgoing one fades this fast, then the next comes in. */
-const CAPTION_OUT_S = 0.16;
+/** How far the welcome's other story points recede while one plays. */
+const INACTIVE_POINT_OPACITY = 0.35;
+/** The welcome's story points come up and recede on this curve. */
 const CAPTION_EASE = [0.23, 1, 0.32, 1] as const;
 /** How long each part of the story holds before the next plays. */
 const POINT_HOLD_MS = [4200, 3800, 8800, 4600] as const;
@@ -737,40 +738,25 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 			title={t("firstRun.welcomeTitle")}
 			body={t("firstRun.welcomeBody")}
 		>
-			{/* Narrates the preview: one caption for the part playing. */}
-			<div className="flex flex-col gap-3 pt-6" aria-hidden="true">
-				{/* Every caption stays mounted in one cell, so the block keeps the
-				    tallest one's height; the outgoing one is gone before the next
-				    comes in, so two never show at once. */}
-				<div className="grid">
-					{ORCH_POINTS.map(({ title, body }, i) => {
-						const shown = i === point;
-						return (
-							<motion.div
-								key={title}
-								className="col-start-1 row-start-1 flex flex-col gap-1"
-								initial={false}
-								animate={shown ? { opacity: [0, 1], y: [8, 0] } : { opacity: 0, y: -8 }}
-								transition={
-									reduceMotion
-										? { duration: 0 }
-										: shown
-											? { duration: 0.3, delay: CAPTION_OUT_S, ease: CAPTION_EASE }
-											: { duration: CAPTION_OUT_S, ease: CAPTION_EASE }
-								}
-							>
-								<span className="text-sm font-medium text-foreground">{t(title)}</span>
-								<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
-							</motion.div>
-						);
-					})}
-				</div>
-			</div>
-			{/* The whole story for assistive tech, which skips the animation. */}
-			<ol className="sr-only">
-				{ORCH_POINTS.map(({ title, body }) => (
-					<li key={title}>{t(title)}: {t(body)}</li>
-				))}
+			{/* Narrates the preview: the whole story at once, the part playing
+			    brought up and the rest dimmed. */}
+			<ol className="flex flex-col gap-4 pt-6">
+				{ORCH_POINTS.map(({ title, body }, i) => {
+					const active = i === point;
+					return (
+						<motion.li
+							key={title}
+							className="flex flex-col gap-1"
+							aria-current={active ? "step" : undefined}
+							initial={false}
+							animate={{ opacity: active ? 1 : INACTIVE_POINT_OPACITY }}
+							transition={reduceMotion ? { duration: 0 } : { duration: 0.4, ease: CAPTION_EASE }}
+						>
+							<span className="text-sm font-medium text-foreground">{t(title)}</span>
+							<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
+						</motion.li>
+					);
+				})}
 			</ol>
 			<StepAction>
 				<NextButton onClick={onNext} autoFocus>{t("firstRun.getStarted")}</NextButton>
