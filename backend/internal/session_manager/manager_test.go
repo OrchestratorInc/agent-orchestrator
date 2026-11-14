@@ -6401,6 +6401,7 @@ func TestCopilotOrchestratorMessage_NewTaskNewWorkerUnlessNamed(t *testing.T) {
 		"and give any new task to a new worker",
 		"If the user message asks for a specific worker, use ao send to give the task to that worker. Otherwise",
 		"Give the follow-up to worker demo-3",
+		"After every requested task has a worker, report the worker session ids and stop",
 	} {
 		if !strings.Contains(directive, want) {
 			t.Fatalf("copilot directive missing %q:\n%s", want, directive)
