@@ -165,17 +165,17 @@ func installCopilotAgent(workspacePath, sessionID, inlinePrompt, promptFile stri
 	if err != nil {
 		return err
 	}
-	agentName := copilotAgentName(sessionID, inlinePrompt, promptFile)
+	agentName := copilotAgentName(workspacePath, sessionID, inlinePrompt, promptFile)
 	if systemPrompt == "" || agentName == "" {
 		return nil
 	}
-	agentPath := filepath.Join(workspacePath, copilotAgentsDir, agentName+".agent.md")
+	agentPath := copilotAgentPath(workspacePath, agentName)
 	existing, err := os.ReadFile(agentPath) //nolint:gosec // path built from caller-owned workspace dir
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", agentPath, err)
 	}
 	if err == nil && !strings.Contains(string(existing), hookutil.CopilotAgentProfileSentinel) {
-		return nil
+		return fmt.Errorf("refusing to overwrite non-AO agent profile at %s", agentPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(agentPath), 0o750); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(agentPath), err)

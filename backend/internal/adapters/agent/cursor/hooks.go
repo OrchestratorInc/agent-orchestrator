@@ -33,7 +33,18 @@ const (
 	// prefix without an embedded template to diff against.
 	cursorHookCommandPrefix           = "ao hooks cursor "
 	cursorLegacyPermissionHookCommand = cursorHookCommandPrefix + "permission-request"
+
+	cursorRulesDirName       = "rules"
+	cursorStandingRuleName   = "ao-agent-orchestrator.mdc"
+	cursorStandingRuleMarker = "agent-orchestrator: managed cursor standing instructions"
 )
+
+// cursorStandingRulePath is the AO-managed Cursor rule that carries standing
+// instructions. Cursor has no inline or file system-prompt flag: it reads
+// workspace rule files, so this is the only launch-time channel it honors.
+func cursorStandingRulePath(workspacePath string) string {
+	return filepath.Join(workspacePath, ".cursor", cursorRulesDirName, cursorStandingRuleName)
+}
 
 // cursorHookFile is the on-disk shape of .cursor/hooks.json. It is used by tests
 // to decode the written file. Cursor keys hooks by camelCase native event name.
@@ -125,9 +136,10 @@ var cursorManagedHooks = []cursorHookSpec{
 	{Event: "postToolUseFailure", Command: cursorHookCommandPrefix + "post-tool-use-failure"},
 }
 
-// GetAgentHooks installs AO's Cursor hooks into the worktree-local
-// .cursor/hooks.json file. Existing hook entries are preserved and duplicate
-// AO commands are not appended.
+// GetAgentHooks installs AO's Cursor workspace integration: the activity hooks
+// in the worktree-local .cursor/hooks.json file, and the AO-managed standing
+// rule that carries AO's role prompt. Existing hook entries are preserved and
+// duplicate AO commands are not appended.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -138,6 +150,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := ensureCursorWorkspaceTrusted(cfg); err != nil {
 		slog.Default().Warn("cursor: failed to seed workspace trust; Cursor may show its trust prompt",
 			"sessionID", cfg.SessionID, "workspacePath", cfg.WorkspacePath, "error", err)
+	}
+	if err := installCursorStandingRule(ctx, cfg); err != nil {
+		return fmt.Errorf("cursor.GetAgentHooks: %w", err)
 	}
 
 	hooksPath := cursorHooksPath(cfg.WorkspacePath)
@@ -175,6 +190,101 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	}
 	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(hooksPath), cursorHooksFileName); err != nil {
 		return fmt.Errorf("cursor.GetAgentHooks: gitignore: %w", err)
+	}
+	return nil
+}
+
+// installCursorStandingRule writes AO's standing instructions to an
+// always-applied Cursor rule. Cursor exposes no system-prompt flag, so without
+// this rule a managed session runs with no AO role prompt at all (#6752).
+//
+// The rule is plain Markdown behind Cursor's documented .mdc frontmatter, the
+// same shape AO already ships in the Cursor ACP plugin
+// (chatdriver/cursoracp). Because the file lives in the worktree, it is picked
+// up on a fresh launch and again on `--resume` of the same worktree.
+//
+// A non-AO file at the same path is never overwritten: the session fails with
+// an actionable error rather than silently losing the role prompt, matching the
+// Crush adapter's behavior for its generated context file.
+func installCursorStandingRule(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	prompt, err := cursorSystemPromptText(cfg.SystemPrompt, cfg.SystemPromptFile)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+
+	rulePath := cursorStandingRulePath(cfg.WorkspacePath)
+	managed, err := isAOManagedCursorRule(rulePath)
+	if err != nil {
+		return err
+	}
+	if hookutil.FileExists(rulePath) && !managed {
+		return fmt.Errorf("refusing to overwrite non-AO file at %s", rulePath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(rulePath), 0o750); err != nil {
+		return fmt.Errorf("create rules dir: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	body := "---\n" +
+		"description: Agent Orchestrator standing instructions for this managed session\n" +
+		"alwaysApply: true\n" +
+		"---\n\n" +
+		"<!-- " + cursorStandingRuleMarker + " -->\n\n" +
+		strings.TrimRight(prompt, "\n") + "\n"
+	if err := hookutil.AtomicWriteFile(rulePath, []byte(body), 0o600); err != nil {
+		return fmt.Errorf("write standing rule: %w", err)
+	}
+	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(rulePath), cursorStandingRuleName); err != nil {
+		return fmt.Errorf("gitignore: %w", err)
+	}
+	return ctx.Err()
+}
+
+// cursorSystemPromptText resolves the standing instructions, preferring the
+// file AO wrote under its own data dir and falling back to the inline text.
+func cursorSystemPromptText(inline, file string) (string, error) {
+	if strings.TrimSpace(file) != "" {
+		data, err := os.ReadFile(file) //nolint:gosec // path is AO-owned launch config
+		if err != nil {
+			return "", fmt.Errorf("read system prompt file: %w", err)
+		}
+		return strings.TrimRight(string(data), "\n"), nil
+	}
+	return strings.TrimRight(inline, "\n"), nil
+}
+
+func isAOManagedCursorRule(path string) (bool, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // path built from caller-owned workspace dir
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	return strings.Contains(string(data), cursorStandingRuleMarker), nil
+}
+
+// removeCursorStandingRule deletes AO's standing rule when it carries the AO
+// marker. A user-authored rule at the same path is left in place.
+func removeCursorStandingRule(workspacePath string) error {
+	rulePath := cursorStandingRulePath(workspacePath)
+	managed, err := isAOManagedCursorRule(rulePath)
+	if err != nil {
+		return err
+	}
+	if !managed {
+		return nil
+	}
+	if err := os.Remove(rulePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove standing rule: %w", err)
 	}
 	return nil
 }
@@ -226,6 +336,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	}
 
 	if err := writeCursorHooks(hooksPath, topLevel, rawHooks); err != nil {
+		return fmt.Errorf("cursor.UninstallHooks: %w", err)
+	}
+	if err := removeCursorStandingRule(workspacePath); err != nil {
 		return fmt.Errorf("cursor.UninstallHooks: %w", err)
 	}
 	return nil
