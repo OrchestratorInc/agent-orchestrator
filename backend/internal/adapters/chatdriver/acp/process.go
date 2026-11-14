@@ -27,7 +27,6 @@ type process struct {
 	gate        *gatedReader
 	acpState    *persistenthost.ACPState
 	hostExited  func() bool
-	dataDir     string
 }
 
 type gatedReader struct {

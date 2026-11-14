@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
-	"github.com/aoagents/agent-orchestrator/backend/internal/diskspace"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -31,14 +30,12 @@ const (
 	// terminated (quickSessionCloseWait for a QuickStop provider).
 	sessionCloseWait      = 2 * time.Second
 	quickSessionCloseWait = 500 * time.Millisecond
-	lowDiskSpaceBytes     = 512 << 20
 	hostExitSettleWait    = 5 * time.Second
 )
 
 var (
 	errConversationClosed = errors.New("ACP conversation closed")
 	errClientCapability   = errors.New("ACP client capability not advertised")
-	diskFree              = diskspace.Free
 
 	// ErrACPSetterUnsupported is returned by applyTurnSettings when the agent
 	// does not implement session/set_mode or session/set_config_option
@@ -1572,10 +1569,6 @@ func (c *conversation) hostExitedTurn() []ports.ChatEvent {
 	event := ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turnID, TurnState: domain.TurnStateFailed,
 		Err: errors.New("the agent's process exited before this turn finished"),
-	}
-	if free, err := diskFree(c.proc.dataDir); err == nil && free < lowDiskSpaceBytes {
-		event.FailureCode = domain.ConversationFailureDiskFull
-		event.Err = fmt.Errorf("the agent's process exited while the disk was nearly full (%d MB free)", free>>20)
 	}
 	if compacting {
 		return []ports.ChatEvent{{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: event.Err}, event}
