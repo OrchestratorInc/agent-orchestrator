@@ -250,12 +250,33 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		}
 	}
 
+	providerConversationID, forkHandoffNote := "", ""
+	if fork := in.cfg.Fork; fork != nil && fork.Handoff != nil && fork.PrepareChat == nil {
+		// The agent can't copy its own conversation: the fork's fresh agent
+		// starts with AO's copy, as text.
+		forkHandoffNote, err = fork.Handoff(ctx, ports.ForkTarget{SessionID: id, DataDir: m.dataDir, WorkspacePath: in.workspace.Path, Env: env})
+		if err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, fmt.Errorf("fork: copy conversation: %w", err))
+		}
+	}
+	if fork := in.cfg.Fork; fork != nil && fork.PrepareChat != nil {
+		providerConversationID, err = fork.PrepareChat(ctx, ports.ForkTarget{
+			SessionID: id, DataDir: m.dataDir, WorkspacePath: in.workspace.Path, Env: env,
+		})
+		if err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, fmt.Errorf("fork conversation: %w", err))
+		}
+	}
+
 	var (
 		controllerCommitted bool
 		completionErr       error
 	)
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		SessionID:               id,
+		ProviderConversationID:  providerConversationID,
 		ProjectID:               in.cfg.ProjectID,
 		Kind:                    in.cfg.Kind,
 		Harness:                 in.cfg.Harness,
@@ -266,6 +287,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
+		ForkHandoffNote:         forkHandoffNote,
+		ForkFirstStart:          in.cfg.Fork != nil && in.cfg.Fork.PrepareChat != nil,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
 		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
@@ -333,8 +356,17 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		}
 		// No controller exists, so nothing provider-side needs closing. The
 		// runtime was never touched, hence runtimeDestroyed=false.
+		if providerConversationID != "" {
+			m.discardForkConversation(ctx, in.cfg.Harness, providerConversationID, in.workspace.Path, env)
+		}
 		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
 		return domain.SessionRecord{}, wrapSpawnStage(id, ErrChatController, agentlaunch.RedactError(err, in.project.Config.Env))
+	}
+
+	if fork := in.cfg.Fork; fork != nil && providerConversationID != "" {
+		// The history was imported from the agent's copy, so its artifact
+		// links still name the original.
+		m.pointForkLinksAtFork(ctx, in.cfg.ProjectID, fork.SourceSessionID, id)
 	}
 
 	// The initial prompt is a normal turn through the controller. There is no

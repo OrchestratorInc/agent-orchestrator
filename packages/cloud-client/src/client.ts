@@ -47,11 +47,13 @@ import type {
   SessionPullRequests,
   SessionReviewState,
   SendMessageInput,
+  EditQueuedMessageInput,
   TerminalKind,
   TerminalTicket,
   TurnSteeredEvent,
   UpdateProjectInput,
   UserMessageEvent,
+  UserMessageEditedEvent,
   WorkerBootstrapInput,
   WorkerBootstrapResponse,
   WorkerCancellationResponse,
@@ -741,6 +743,54 @@ export class CloudClient {
         method: "POST",
         body: typeof message === "string" ? { text: message } : message,
         idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Replace a queued message's text and files before the agent starts on it
+   * (offered when offering.features lists queued-edit). 409 TURN_NOT_QUEUED
+   * once the agent took it.
+   */
+  editQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    message: EditQueuedMessageInput,
+    options: RequestOptions = {},
+  ): Promise<{ event: UserMessageEditedEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit`,
+      ),
+      {
+        method: "POST",
+        body: message,
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Take back a message whose turn is still queued (offered when
+   * offering.features lists queued-delete). Unlike cancelTurn it never stops a
+   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it.
+   */
+  deleteQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    options: RequestOptions = {},
+  ): Promise<WorkerOKResponse> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/delete`,
+      ),
+      {
+        method: "POST",
         signal: options.signal,
       },
     );

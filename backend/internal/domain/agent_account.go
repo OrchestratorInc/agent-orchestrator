@@ -57,6 +57,7 @@ type AgentAccountLimitWindow struct {
 	UsedPercent     float64    `json:"usedPercent" minimum:"0" maximum:"100"`
 	ResetsAt        *time.Time `json:"resetsAt,omitempty"`
 	DurationMinutes int        `json:"durationMinutes,omitempty" minimum:"0"`
+	Scope           string     `json:"-"`
 }
 
 // AgentLimitReading is one limit window's value as read at one moment.
@@ -80,6 +81,8 @@ type AgentAccountLimits struct {
 	// AutoResumeResetsAt is present only when native rolling limits identify an
 	// unambiguous future deadline. Nil does not establish available capacity.
 	AutoResumeResetsAt *time.Time `json:"-"`
+	// ReachedScopes are the meter scopes the provider reports as exhausted.
+	ReachedScopes []string `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
 	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
 	// ResetCredits counts Codex usage-limit resets the account can spend.
@@ -88,6 +91,36 @@ type AgentAccountLimits struct {
 	// not only in AO. Codex reports it; Claude does not.
 	Activity  *AgentAccountActivity `json:"activity,omitempty"`
 	FetchedAt time.Time             `json:"fetchedAt"`
+}
+
+// HandoffHeadroom reports the room left in the meters a request for model draws on.
+func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string) (float64, bool) {
+	model = normalizeLimitScope(model)
+	fullest, relevant := 0.0, false
+	meters := append([]AgentAccountLimitWindow{}, l.Windows...)
+	for _, scope := range l.ReachedScopes {
+		meters = append(meters, AgentAccountLimitWindow{Scope: scope, UsedPercent: 100})
+	}
+	for _, w := range meters {
+		scope := normalizeLimitScope(w.Scope)
+		switch {
+		case scope == "":
+		case model == "":
+		case model != "" && (strings.Contains(model, scope) || p == AgentAccountProviderClaude && strings.Contains(scope, model)):
+		default:
+			continue
+		}
+		relevant = true
+		fullest = max(fullest, w.UsedPercent)
+	}
+	if !relevant || fullest >= 100 {
+		return 0, false
+	}
+	return 100 - fullest, true
+}
+
+func normalizeLimitScope(s string) string {
+	return strings.NewReplacer(" ", "-", "_", "-").Replace(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // AgentAccountActivity is the provider's own record of an account's use.

@@ -4,12 +4,14 @@ import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
+import { useSettings, useUpdateAccountHandoff } from "../../hooks/useSettings";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { HarnessDetailGroup } from "./harness/harness-ui";
+import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
 
 const providerNames = agentAccountProviderNames;
 
@@ -128,6 +130,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
+			<AccountHandoffRow />
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
@@ -187,6 +190,23 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
 		<AccountLimits account={account} />
 	</div>;
+}
+
+function AccountHandoffRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateAccountHandoff();
+	return <>
+		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+			<Switch
+				aria-label={t("settings.agentAccounts.handoff")}
+				checked={settings?.accountHandoff ?? false}
+				disabled={isLoading || saving || !settings}
+				onCheckedChange={update}
+			/>
+		</HarnessDetailRow>
+		{error ? <p role="alert" className="px-3 pb-2 text-xs text-error">{error}</p> : null}
+	</>;
 }
 
 /** The account's limit meters, shared by the Harness Account tab and the session summary. */

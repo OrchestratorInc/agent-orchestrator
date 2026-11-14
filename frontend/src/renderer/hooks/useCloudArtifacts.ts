@@ -38,7 +38,9 @@ function accessRefreshIn(access: CloudArtifactAccess | undefined): number {
  * before it expires, and on window focus once it is about to.
  */
 export function useCloudArtifactAccess(session: Pick<WorkspaceSession, "id" | "cloud">, enabled = true) {
-	const { client, ready, baseUrl } = useCloudCp();
+	// Every artifact card calls this, local ones included; a disabled card
+	// keeps no settings poll of its own.
+	const { client, ready, baseUrl } = useCloudCp(enabled);
 	const orgId = session.cloud?.orgId ?? "";
 	return useQuery<CloudArtifactAccess, Error, string, ReturnType<typeof cloudArtifactAccessQueryKey>>({
 		queryKey: cloudArtifactAccessQueryKey(baseUrl, orgId, session.id),
