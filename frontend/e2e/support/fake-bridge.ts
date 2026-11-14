@@ -74,6 +74,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+				},
 					dictation: {
 						start: async () => undefined,
 						stop: async () => undefined,
@@ -96,6 +99,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
 					onOpenFolderPath: () => () => undefined,
+					onOpenSessionDeepLink: () => () => undefined,
 					onNewSessionShortcut: unsubscribe,
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
@@ -158,11 +162,17 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				cloudShare: {
 					available: async () => true,
-					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
-					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
 					publish: async () => ({ status: "cancelled" as const }),
 					cancel: async () => undefined,
 					unpublish: async () => undefined,
+					setAccess: async () => {
+						throw new Error("Sharing is not faked.");
+					},
+					grants: async () => [],
+					invite: async () => [],
+					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
 				artifactSnapshot: {
@@ -1034,6 +1044,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+				},
 					dictation: {
 						start: async () => undefined,
 						stop: async () => undefined,
@@ -1056,6 +1069,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						checkGitHubRepositoryAvailability: async () => ({ available: true }),
 						getPathForFile: () => "",
 					onOpenFolderPath: () => () => undefined,
+					onOpenSessionDeepLink: () => () => undefined,
 					onNewSessionShortcut: unsubscribe,
 					onKeyboardShortcutsHelp: unsubscribe,
 					onQuitConfirmRequest: unsubscribe,
@@ -1114,11 +1128,17 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				cloudShare: {
 					available: async () => true,
-					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
-					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
 					publish: async () => ({ status: "cancelled" as const }),
 					cancel: async () => undefined,
 					unpublish: async () => undefined,
+					setAccess: async () => {
+						throw new Error("Sharing is not faked.");
+					},
+					grants: async () => [],
+					invite: async () => [],
+					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
 				artifactSnapshot: {

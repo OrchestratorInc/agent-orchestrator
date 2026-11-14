@@ -179,7 +179,7 @@ it("archives and restores through the selected host with host-scoped navigation"
 	mocks.workspaces["box-b"].sessions = [worker("box-b", "Fix billing", "terminated")];
 	showHost("box-a");
 	showHost("box-b");
-	fireEvent.click(screen.getByRole("button", { name: /Archive, 1 session/ }));
+	fireEvent.click(screen.getByRole("button", { name: "Archived sessions, 1" }));
 	fireEvent.click(await screen.findByRole("button", { name: "Restore Fix billing" }));
 	await waitFor(() => expect(mocks.remotePost).toHaveBeenCalledWith("box-b", "/api/v1/sessions/{sessionId}/restore", {
 		params: { path: { sessionId: "worker-1" } },

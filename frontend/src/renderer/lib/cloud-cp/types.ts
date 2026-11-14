@@ -156,6 +156,20 @@ export interface CloudCpInvitationsResponse {
 	invitations: CloudCpInvitation[];
 }
 
+/** One active member of an organization (GET /orgs/{orgId}/members). */
+export interface CloudCpOrgMember {
+	userId: string;
+	email: string;
+	displayName: string;
+	role: string;
+	createdAt: string;
+}
+
+/** GET /orgs/{orgId}/members: every active member, any member may read it. */
+export interface CloudCpOrgMembersResponse {
+	members: CloudCpOrgMember[];
+}
+
 // ---------------------------------------------------------------------------
 // Pagination (`resource_handlers.go` pageInfo / transport.go cursors)
 // ---------------------------------------------------------------------------
@@ -216,6 +230,15 @@ export interface CloudCpListQuery {
 	limit?: number;
 	/** Opaque cursor from a previous page's `page.nextCursor`. */
 	cursor?: string;
+}
+
+/**
+ * GET /orgs/{orgId}/projects: the projects without the caller's standalone
+ * agents ("exclude"), or only those agents ("only"). Omitted lists both; an
+ * older control plane ignores it and lists every project.
+ */
+export interface CloudCpProjectListQuery extends CloudCpListQuery {
+	standaloneAgents?: "exclude" | "only";
 }
 
 // ---------------------------------------------------------------------------
@@ -304,8 +327,27 @@ export interface CloudCpProject {
 	defaultBranch: string;
 	githubRepositoryId?: string;
 	config: ProjectConfig;
+	/**
+	 * A standalone agent's project: its owner's one worker session, with no
+	 * repository. Only its owner lists it; others reach it through a share.
+	 * Absent from older control planes.
+	 */
+	standaloneAgent?: boolean;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * POST /orgs/{orgId}/standalone-agents (requires an Idempotency-Key header): a
+ * standalone agent, the session create's body without projectId and kind. The
+ * control plane makes the agent its own project and starts its one worker
+ * session there. Offered when offering.features lists "standalone_agents".
+ */
+export type CloudCpCreateStandaloneAgentRequest = Omit<CloudCpCreateSessionRequest, "projectId" | "kind">;
+
+export interface CloudCpStandaloneAgentResponse {
+	project: CloudCpProject;
+	session: CloudCpSession;
 }
 
 /** POST /orgs/{orgId}/projects (requires an Idempotency-Key header). */
@@ -1469,6 +1511,22 @@ export interface CloudCpCancelTurnResponse {
 
 /** POST steering response; guidance for the active turn was accepted. */
 export interface CloudCpSteerTurnResponse {
+	event: CloudCpClientEvent;
+}
+
+/**
+ * POST /orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit: a queued
+ * message's new text and every file it keeps (offering feature queued-edit).
+ */
+export interface CloudCpEditQueuedMessageRequest {
+	/** At most 65536 bytes; may be empty when the message carries attachments. */
+	text: string;
+	/** Files uploaded to the session that the edited message carries; one left out is dropped. */
+	attachmentIds?: string[];
+}
+
+/** The chat.user_message_edited event the edit appended. */
+export interface CloudCpEditQueuedMessageResponse {
 	event: CloudCpClientEvent;
 }
 

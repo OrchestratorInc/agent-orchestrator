@@ -171,7 +171,7 @@ export type ConversationLocalEcho = {
 	queued?: boolean;
 	/** Excerpts are rendered inside the optimistic user message bubble. */
 	fileReferences?: ChatFileReference[];
-	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order" | "snapshot"> & { id?: string; conversationId?: string })[];
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "comment" | "messageId" | "revision" | "order" | "snapshot"> & { id?: string; conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
@@ -734,6 +734,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				id: excerpt.id, order: excerpt.order, snapshot: excerpt.snapshot,
 					conversationId: excerpt.conversationId,
 					text: excerpt.text,
+					comment: excerpt.comment,
 					messageId: excerpt.messageId,
 					revision: excerpt.revision,
 				})),
@@ -1150,13 +1151,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	});
 
 	const rollback = useMutation({
-		mutationFn: async (turnId: string) => {
+		mutationFn: async ({ turnId, filePlanId }: { turnId: string; filePlanId?: string }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
 				{
 					params: {
 						path: { sessionId: sessionId as string, turnId },
 					},
+					body: filePlanId ? { restoreFiles: true, planId: filePlanId } : { restoreFiles: false },
 				},
 			);
 			if (error) throw error;
@@ -1287,7 +1289,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
-	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) ? send.error : undefined;
+	const sendCode = apiErrorCode(send.error);
+	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const autoResumeTargetsCurrentSession = autoResume.variables?.targetSessionId === sessionId;
@@ -1378,9 +1381,29 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				: apiErrorCode(compact.error) === "CHAT_COMPACTION_BUSY"
 					? "Stop the current turn before compacting"
 					: undefined,
-		rollback: (turnId: string) => rollback.mutateAsync(turnId),
+		/** Rolls back to a turn, restoring the files a preview listed when given
+		 *  that preview's planId. */
+		rollback: (turnId: string, filePlanId?: string) => rollback.mutateAsync({ turnId, filePlanId }),
+		/** What rolling back to a turn would restore on disk, read fresh each time
+		 *  the confirmation opens because the worktree keeps changing. */
+		previewRollback: async (turnId: string) => {
+			const { data, error } = await clientForSessionHost(hostId).GET(
+				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
+				{
+					params: { path: { sessionId: sessionId as string, turnId } },
+					signal: AbortSignal.timeout(10_000),
+				},
+			);
+			if (error) throw error;
+			return data;
+		},
 		rollbackPending: rollback.isPending,
-		rollbackError: rollback.error ? apiErrorMessage(rollback.error) : undefined,
+		rollbackError:
+			apiErrorCode(rollback.error) === "CHAT_ROLLBACK_FILES_CHANGED"
+				? "Files changed while this was open. Check the updated list, then roll back again."
+				: rollback.error
+					? apiErrorMessage(rollback.error)
+					: undefined,
 		retryControl: {
 			setAutoResume: (turnId: string, enabled: boolean) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
@@ -1522,8 +1545,10 @@ function steerRefusal(error: unknown): string | undefined {
 			return "The turn finished before this landed. Send it as a message instead.";
 		case "CHAT_INTERFACE_TRANSITION":
 			return "The session is switching interfaces. This guidance was not delivered; send it after the switch finishes.";
-		case "CHAT_TURN_NOT_STEERABLE":
-			return `${apiErrorMessage(error)} Try again once it finishes.`;
+		case "CHAT_TURN_NOT_STEERABLE": {
+			const message = apiErrorMessage(error).trim();
+			return `${/[.!?]$/.test(message) ? message : `${message}.`} Try again once it finishes.`;
+		}
 		case "CHAT_STEER_UNSUPPORTED":
 			// Answered by hiding the control, so there is nothing to say.
 			return undefined;
@@ -1647,9 +1672,19 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// The catalog the agent last returned, which a queued pick is checked against before it is sent.
 		confirmed: undefined as ChatConfigOption[] | undefined,
 	});
+	// Set once a "not running" answer has asked for a fresh snapshot, so a poll that
+	// keeps getting it does not reload the conversation every time.
+	const snapshotRefreshed = useRef(false);
+	const readEnabled = Boolean(sessionId) && enabled;
+	// Turned off means the snapshot caught up, so each enabled period starts fresh.
+	// Reset on turning on too: a read still in flight when it turned off can answer
+	// "not running" after the first reset and set the guard again.
+	useEffect(() => {
+		snapshotRefreshed.current = false;
+	}, [readEnabled]);
 	const query = useQuery({
 		queryKey,
-		enabled: Boolean(sessionId) && enabled,
+		enabled: readEnabled,
 		retry: false,
 		// ACP can push a replacement catalog when one option changes. Until the
 		// renderer consumes daemon change events, a light poll keeps those updates
@@ -1662,7 +1697,18 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 					params: { path: { sessionId: sessionId as string } },
 				},
 			);
-			if (error) throw error;
+			if (error) {
+				// The snapshot that enabled this read says the controller is up and the
+				// daemon says it is not, so the snapshot is out of date. Read it again:
+				// its real state turns this read off and names the state in the chat.
+				if (apiErrorCode(error) === "CHAT_CONTROLLER_NOT_READY" && !snapshotRefreshed.current) {
+					snapshotRefreshed.current = true;
+					if (hostId) refreshRemoteConversationOnce(queryClient, sessionId as string, hostId);
+					else void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId as string) });
+				}
+				throw error;
+			}
+			snapshotRefreshed.current = false;
 			return (data?.options ?? []) as ChatConfigOption[];
 		},
 	});
@@ -1754,13 +1800,23 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		return { controllerEpoch, options };
 	}
 
+	// The read is enabled from the snapshot's controller state, and a cached snapshot
+	// can still say "ready" after the controller went away (an open whose cached page
+	// is shown while it refetches, or a sleeping agent). The daemon then answers 409
+	// CHAT_CONTROLLER_NOT_READY: that is the controller's state, which the refreshed
+	// snapshot and its controller notice report, not a failure of this catalog. Left
+	// unloaded, the bar keeps the saved settings until the poll or the next enabled
+	// read brings the catalog. A failed pick is still always shown.
+	const readError = query.error && !query.data && apiErrorCode(query.error) !== "CHAT_CONTROLLER_NOT_READY"
+		? query.error
+		: undefined;
 	return {
 		options: query.data ?? [],
-		loaded: query.isSuccess,
+		loaded: query.data !== undefined,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		error: mutation.error || readError ? apiErrorMessage(mutation.error ?? readError) : undefined,
 	};
 }
 
@@ -2138,6 +2194,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			uri: item.uri || undefined,
 			name: item.name || undefined,
 			text: item.text || undefined,
+			comment: item.comment || undefined,
 			fileReference: item.fileReference as ChatFileReference | undefined, annotationId: item.annotationId, annotationOrder: item.annotationOrder,
 			sourceConversationId: item.sourceConversationId || undefined,
 			sourceMessageId: item.sourceMessageId || undefined,

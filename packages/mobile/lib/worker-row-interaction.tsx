@@ -114,7 +114,7 @@ export function WorkerRowInteraction({
 				}),
 		[canFullSwipe, dragOrigin, railOpen, rowWidth, armed, arm, fullSwipe],
 	);
-	const { onLayout: measureMenuWidth } = menuWidth;
+	const { ref: menuSlot, onLayout: measureMenuWidth } = menuWidth;
 	const measure = useCallback((event: LayoutChangeEvent) => {
 		rowWidth.value = event.nativeEvent.layout.width;
 		measureMenuWidth(event);
@@ -123,7 +123,7 @@ export function WorkerRowInteraction({
 	return (
 		<GestureDetector gesture={fullSwipeWatch}>
 			{/* Its own native view: two detectors cannot share the swipeable's. */}
-			<View collapsable={false} onLayout={measure}>
+			<View ref={menuSlot} collapsable={false} onLayout={measure}>
 				<ReanimatedSwipeable
 					ref={swipeable}
 					enabled={enabled}

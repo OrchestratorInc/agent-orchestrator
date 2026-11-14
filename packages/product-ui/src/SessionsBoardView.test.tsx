@@ -257,6 +257,33 @@ describe("SessionsBoardView", () => {
 		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
+	it("shows a session branch as its topic and hides it when it only repeats the title", () => {
+		const renderCard = (branch: string, title: string) =>
+			render(
+				<SessionCardView
+					externalLink={ExternalLink}
+					labels={{
+						formatTime: () => "5m ago",
+						intakeIssue: (id) => `Issue ${id}`,
+						pr: progressLabels,
+						updatedAt: (timestamp) => `Updated ${timestamp}`,
+					}}
+					onOpen={vi.fn()}
+					renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+					selected={false}
+					session={{ ...baseSession, branch, title }}
+				/>,
+			);
+
+		const first = renderCard("ao/agent-orchestrator-132/archived-sessions-label", "Rename the archive");
+		const topic = screen.getByText("archived-sessions-label");
+		expect(topic).toHaveAttribute("title", "ao/agent-orchestrator-132/archived-sessions-label");
+		first.unmount();
+
+		renderCard("ao/fix-login/root", "Fix login");
+		expect(screen.queryByText("fix-login")).not.toBeInTheDocument();
+	});
+
 	it("fills a selected list card and keeps the board card's own hover otherwise", () => {
 		const labels = {
 			formatTime: () => "5m ago",
@@ -757,5 +784,33 @@ describe("SessionsBoardView", () => {
 		expect(status).not.toHaveClass("rounded-sm", "border");
 		expect(status?.style.getPropertyValue("--session-status-tone")).toBe("");
 		expect(status?.querySelector(".rounded-full")).toBeNull();
+	});
+
+	it("paints a merged PR purple inside the Ready lane", () => {
+		const { container } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "1h ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						short: "PR",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{
+					...baseSession,
+					displayStatus: "Merged",
+					kanbanColumn: "ready",
+					status: "merged",
+				}}
+			/>,
+		);
+
+		const status = container.querySelector('[data-kanban-column="ready"]');
+		expect(status).toHaveClass("text-status-merged");
+		expect(status).not.toHaveClass("text-status-ready");
 	});
 });

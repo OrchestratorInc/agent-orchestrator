@@ -23,7 +23,20 @@ export type PickerOption = {
 	disabled?: boolean;
 	/** A React Native mark beside the title, such as an agent's logo. */
 	mark?: ReactElement;
+	/** Titles the group this option starts or continues; consecutive options sharing it are one group. */
+	section?: string;
 };
+
+/** Consecutive options with the same `section`, in order. */
+export function pickerSections(options: readonly PickerOption[]): { title?: string; options: PickerOption[] }[] {
+	const sections: { title?: string; options: PickerOption[] }[] = [];
+	for (const option of options) {
+		const last = sections.at(-1);
+		if (last && last.title === option.section) last.options.push(option);
+		else sections.push({ title: option.section, options: [option] });
+	}
+	return sections;
+}
 
 /**
  * A single choice in a sheet, as each platform draws one: on iOS a Form whose
@@ -55,10 +68,15 @@ export function NativePickerList({ header, options, selected, onSelect, refreshi
 				<View style={styles.header}>{header}</View>
 				<Host style={styles.form} colorScheme={scheme}>
 					<FieldGroup modifiers={[scrollContentBackground("hidden"), refreshable(onRefresh)]}>
-						<FieldGroup.Section>
-							{options.map((option) => <OptionRow key={option.id} option={option} selected={option.id === selected} onSelect={onSelect} />)}
-							{options.length === 0 && empty ? <SwiftUIText modifiers={[secondaryForeground]}>{empty}</SwiftUIText> : null}
-						</FieldGroup.Section>
+						{options.length === 0 ? (
+							<FieldGroup.Section>
+								{empty ? <SwiftUIText modifiers={[secondaryForeground]}>{empty}</SwiftUIText> : null}
+							</FieldGroup.Section>
+						) : pickerSections(options).map((section, index) => (
+							<FieldGroup.Section key={`${index}:${section.title ?? ""}`} title={section.title}>
+								{section.options.map((option) => <OptionRow key={option.id} option={option} selected={option.id === selected} onSelect={onSelect} />)}
+							</FieldGroup.Section>
+						))}
 						{footer}
 					</FieldGroup>
 				</Host>
@@ -82,11 +100,21 @@ export function NativePickerList({ header, options, selected, onSelect, refreshi
 			ListHeaderComponent={<View style={styles.header}>{header}</View>}
 			ListEmptyComponent={empty ? <Text style={styles.empty}>{empty}</Text> : null}
 			ListFooterComponent={footer ? <View style={styles.footer}>{footer}</View> : null}
-			renderItem={({ item }) => (
-				<Host matchContents={{ vertical: true }} style={styles.row} colorScheme={scheme}>
-					<OptionRow option={item} selected={item.id === selected} onSelect={onSelect} />
-				</Host>
-			)}
+			renderItem={({ item, index }) => {
+				const row = (
+					<Host matchContents={{ vertical: true }} style={styles.row} colorScheme={scheme}>
+						<OptionRow option={item} selected={item.id === selected} onSelect={onSelect} />
+					</Host>
+				);
+				// A group's title rides on its first row.
+				if (!item.section || options[index - 1]?.section === item.section) return row;
+				return (
+					<View>
+						<Text accessibilityRole="header" style={styles.section}>{item.section}</Text>
+						{row}
+					</View>
+				);
+			}}
 		/>
 	);
 }
@@ -144,5 +172,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// cannot take as a layout value.
 	row: { alignSelf: "stretch" },
 	footer: { paddingHorizontal: sheetInset.horizontal, paddingTop: space.lg },
+	section: { fontFamily: type.footnote.fontFamily, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: sheetInset.horizontal, paddingTop: space.lg, paddingBottom: space.xs },
 	empty: { fontFamily: type.footnote.fontFamily, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: sheetInset.horizontal, paddingVertical: space.md },
 });

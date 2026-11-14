@@ -12,7 +12,7 @@ import {
 import { AlertTriangle, Archive, RotateCw, WifiOff } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
@@ -139,13 +139,18 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
+	// A Cloud standalone agent has no board: its one session is the agent.
+	// Arriving on its project (archiving it from Pinned) leaves for Home.
+	useEffect(() => {
+		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
+	}, [navigate, workspace?.standaloneAgent]);
 	useSessionShortcut("open-orchestrator", () => {
-		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
+		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || isScratchpadWorkspace(workspace) || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
 	useSessionMenuAvailable(
 		"open-orchestrator",
-		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
 	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
@@ -365,7 +370,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				<div className="flex shrink-0 items-center border-t border-border p-1">
 					<Button
 						aria-haspopup="dialog"
-						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
 						// The shell's archive modal, the same one the sidebar and Cmd+K open.
 						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
@@ -376,7 +381,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						variant="quiet"
 					>
 						<Archive className="size-icon-sm" aria-hidden="true" />
-						{t("shell.archive")}
+						{t("shell.archivedSessions")}
 						<span className="tabular-nums text-passive">{archivedCount}</span>
 					</Button>
 				</div>

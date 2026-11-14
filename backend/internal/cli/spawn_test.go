@@ -596,6 +596,7 @@ func TestSpawnStandaloneRejectsProjectOnlyOptions(t *testing.T) {
 	}{
 		{name: "project", args: []string{"--project", "demo"}},
 		{name: "branch", args: []string{"--branch", "feature/x"}},
+		{name: "base", args: []string{"--base", "feature/parent"}},
 		{name: "issue", args: []string{"--issue", "42"}},
 		{name: "claim pr", args: []string{"--claim-pr", "42"}},
 		{name: "orchestrator", args: []string{"--kind", "orchestrator"}},
@@ -618,6 +619,7 @@ func TestSpawnScratchRejectsGitOnlyFlags(t *testing.T) {
 		wantErr string
 	}{
 		{name: "branch", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--branch", "feature/x"}, wantErr: "scratch projects do not support --branch"},
+		{name: "base", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--base", "feature/parent"}, wantErr: "scratch projects do not support --base"},
 		{name: "claim pr", args: []string{"spawn", "--project", "scratch", "--agent", "codex", "--name", "Scratch Task", "--claim-pr", "142"}, wantErr: "scratch projects do not support --claim-pr"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

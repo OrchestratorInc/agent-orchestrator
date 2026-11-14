@@ -53,7 +53,7 @@ describe("a cloud session's files, in the daemon's shapes", () => {
 
 	it("reads one file with its diff, for the section asked", async () => {
 		const getWorkspaceReviewFile = vi.fn(async () => ({ ...file("src/a.ts", "modified"), deleted: false, content: "x", contentTruncated: false, diff: "@@", diffTruncated: false, workspaceVersion: "v7" }));
-		const detail = await backend({ getWorkspaceReviewFile }).file("s1", "src/a.ts", "staged");
+		const detail = await backend({ getWorkspaceReviewFile }).file("s1", "src/a.ts", { section: "staged" });
 		expect(getWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "s1", { path: "src/a.ts", scope: "staged" });
 		expect(detail).toMatchObject({ path: "src/a.ts", status: "modified", content: "x", diff: "@@", fileFingerprint: "fp-src/a.ts", workspaceVersion: "v7" });
 	});

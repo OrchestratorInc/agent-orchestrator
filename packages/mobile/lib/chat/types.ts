@@ -1,3 +1,4 @@
+import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
@@ -53,6 +54,11 @@ export type ConversationTurn = {
 	completedAt?: string;
 	rolledBack?: boolean;
 	diff?: TurnDiff;
+	/**
+	 * The session artifacts the daemon saw this turn create or edit, by artifact
+	 * path. Unlike the diff it also lists files written through a shell command.
+	 */
+	artifacts?: TurnArtifactChange[];
 	plan?: ConversationPlan;
 	/**
 	 * Where the turn sorts when its prompt is above the loaded history (a Cloud
@@ -161,6 +167,13 @@ export type ActivityDetail = {
 	host?: string;
 	commandSource?: string;
 	event?: "compaction" | "model.rerouted" | "auth.reauth_required" | "steer" | "plan" | string;
+	/** A provider_switch marker's sides, as the daemon records them (see providerSwitchModel). */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
+	targetAutoCompactWindow?: string;
 	/** steer: the AO session that sent it, when another agent did. */
 	senderSessionId?: string;
 	senderProjectId?: string;

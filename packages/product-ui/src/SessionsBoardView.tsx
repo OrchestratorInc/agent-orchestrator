@@ -22,6 +22,7 @@ import {
 	type ProductUITranslator,
 } from "./session-presentation";
 import type { KanbanColumn, SessionActivity, SessionStatus } from "./session-models";
+import { branchTopic } from "./formatting";
 import { UserAvatar } from "./UserAvatar";
 import { cn } from "./utils";
 
@@ -237,9 +238,6 @@ export type SessionCardViewProps = {
 	renderAvatar: (provider: string) => ReactNode;
 	/** A static rendering of the card (a hover preview): no attention pulse. */
 	still?: boolean;
-	/** The card before the new sidebar design: a merged PR keeps the Ready
-	 * tone, and the loader follows a live worker even after its PR settled. */
-	legacyStatus?: boolean;
 	renderUsage?: (usage: BoardUsagePresentation) => ReactNode;
 	/** Live cost on the machine (memory, CPU while working), shown before
 	 * token usage. Grey unless this card is part of the fix for a tight machine. */
@@ -277,7 +275,6 @@ export function SessionCardView({
 	session,
 	tag,
 	still = false,
-	legacyStatus = false,
 	translate,
 	usage,
 }: SessionCardViewProps) {
@@ -290,13 +287,14 @@ export function SessionCardView({
 	const statusClassName =
 		session.displayStatus === "Closed without merge"
 			? "text-status-exited"
-			: session.displayStatus === "Merged" && !legacyStatus
+			: session.displayStatus === "Merged"
 				? "text-status-merged"
 				: session.status === "mergeable" || session.displayStatus === "Mergeable"
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
-	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id));
+	const topic = branchTopic(branch);
+	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(topic, session.title) && !sameLabel(topic, session.id));
 	const renderedStatusLabel =
 		session.statusReadiness === "checking"
 			? translateStatus("session.statusChecking")
@@ -377,7 +375,7 @@ export function SessionCardView({
 	const branchRow = showBranch ? (
 		<>
 			{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-			{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
+			{branchLabel ?? <span className="truncate text-muted-foreground" title={branch}>{topic}</span>}
 			{branchAction}
 		</>
 	) : null;
