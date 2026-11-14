@@ -1146,8 +1146,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		applyDocumentThemeStyle(themeStyle);
 	}, [themeStyle]);
 
-	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// The daemon boots with chat hibernation off; turn it on before the view-close
+	// path or the idle sweep can hibernate a provider. Usage limit history stays
+	// a Developer Mode feature.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
@@ -1157,7 +1158,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
 				if (cancelled) return;
 				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
+					body: { enabled: true },
 				});
 				if (error) throw error;
 				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
