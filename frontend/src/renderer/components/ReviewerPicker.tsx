@@ -198,7 +198,14 @@ export function ReviewerPicker({
 											</OptionMenuItem>
 										))}
 									</div>
-									<OptionMenuItem className={cn(CHAT_PICKER_DIVIDER, "text-xs text-foreground")} onSelect={management.requestManagement}>
+									{/* Settings open once the whole menu has closed, and a pick here only closes this side list. */}
+								<OptionMenuItem
+									className={cn(CHAT_PICKER_DIVIDER, "text-xs text-foreground")}
+									onSelect={() => {
+										management.requestManagement();
+										setOpen(false);
+									}}
+								>
 										{t("agentSelector.manage")}
 									</OptionMenuItem>
 								</OptionMenuSubContent>
