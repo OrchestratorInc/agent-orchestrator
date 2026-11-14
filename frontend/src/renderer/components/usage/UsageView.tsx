@@ -72,8 +72,9 @@ export function UsageView() {
 	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
 	const limitWindows = useUsageLimitWindows(7, tab === "windows");
-	const { read: readFreshLimits, error: freshLimitsError } = useFreshAgentAccountsRead();
-	const limitsError = accounts.error ?? freshLimitsError;
+	const { read: readFreshLimits, error: freshLimitsError, failedAt: freshLimitsFailedAt } = useFreshAgentAccountsRead();
+	// A poll that succeeds after a failed fresh read has recovered the data, so the failure stops showing.
+	const limitsError = accounts.error ?? (accounts.dataUpdatedAt > freshLimitsFailedAt ? null : freshLimitsError);
 	const isLimits = tab === "limits";
 	const isWindows = tab === "windows";
 	const refetchReport = report.refetch;

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	reportRefetch: vi.fn(),
 	readFreshLimits: vi.fn(),
 	freshLimitsError: null as Error | null,
+	accountsUpdatedAt: 0,
 	workspaces: [] as Array<{ id: string; name: string; kind?: string }>,
 }));
 
@@ -25,8 +26,8 @@ vi.mock("../../hooks/useUsageReport", () => ({
 	useUsageLimitWindows: () => ({ data: undefined, isLoading: false, isFetching: false, error: null, refetch: vi.fn() }),
 }));
 vi.mock("../../hooks/useAgentAccounts", () => ({
-	useAgentAccounts: () => ({ data: [], isLoading: false, isFetching: false, error: null }),
-	useFreshAgentAccountsRead: () => ({ read: mocks.readFreshLimits, error: mocks.freshLimitsError }),
+	useAgentAccounts: () => ({ data: [], dataUpdatedAt: mocks.accountsUpdatedAt, isLoading: false, isFetching: false, error: null }),
+	useFreshAgentAccountsRead: () => ({ read: mocks.readFreshLimits, error: mocks.freshLimitsError, failedAt: 1_000 }),
 }));
 vi.mock("./UsageLimits", () => ({ UsageLimits: () => <p>Limits content</p> }));
 vi.mock("./UsageWindows", () => ({ UsageWindows: () => <p>Windows content</p> }));
@@ -42,6 +43,7 @@ describe("UsageView", () => {
 		mocks.reportRefetch.mockReset();
 		mocks.readFreshLimits.mockReset();
 		mocks.freshLimitsError = null;
+		mocks.accountsUpdatedAt = 0;
 		mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "web", name: "Web app" }];
 		useUiStore.setState({ developerMode: false });
 	});
@@ -81,6 +83,16 @@ describe("UsageView", () => {
 		renderView();
 		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
 		expect(screen.getByRole("alert")).toHaveTextContent("Daemon unavailable");
+		expect(screen.getByText("Limits content")).toBeInTheDocument();
+	});
+
+	it("stops showing a failed fresh read once a later poll succeeds", async () => {
+		const user = userEvent.setup();
+		mocks.freshLimitsError = new Error("Daemon unavailable");
+		mocks.accountsUpdatedAt = 2_000;
+		renderView();
+		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(screen.getByText("Limits content")).toBeInTheDocument();
 	});
 

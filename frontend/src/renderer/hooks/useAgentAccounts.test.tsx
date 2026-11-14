@@ -100,6 +100,7 @@ describe("useFreshAgentAccountsRead", () => {
 		const { client, result } = renderRead();
 		act(() => result.current.fresh.read());
 		await waitFor(() => expect(result.current.fresh.error?.message).toBe("daemon down"));
+		expect(result.current.fresh.failedAt).toBe(1_000_000);
 		expect(client.getQueryData(agentAccountsQueryKey)).toBeUndefined();
 
 		act(() => result.current.fresh.read());

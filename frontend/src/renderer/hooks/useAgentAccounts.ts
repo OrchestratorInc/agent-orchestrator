@@ -59,11 +59,11 @@ let freshReadAttempt = 0;
 let accountWrites = 0;
 
 /** Reads every account's limits past the daemon's cache, at most once a
- * minute across mounts. A failed read is returned as error and the next call
- * tries again at once. */
+ * minute across mounts. A failed read is returned as error, with failedAt so
+ * a later successful poll can supersede it, and the next call tries again at once. */
 export function useFreshAgentAccountsRead() {
 	const queryClient = useQueryClient();
-	const [error, setError] = useState<Error | null>(null);
+	const [failure, setFailure] = useState<{ error: Error; at: number } | null>(null);
 	const read = useCallback(() => {
 		const now = Date.now();
 		if (now - lastFreshRead < freshReadEvery) return;
@@ -73,7 +73,7 @@ export function useFreshAgentAccountsRead() {
 		// A read that outlived the throttle was overtaken by a newer one; only the latest may write or report.
 		void fetchAgentAccounts(true).then(async (accounts) => {
 			if (attempt !== freshReadAttempt) return;
-			setError(null);
+			setFailure(null);
 			// A poll still in flight carries the older cached reading; drop it so it can't land after this one.
 			await queryClient.cancelQueries({ queryKey: agentAccountsQueryKey, exact: true }, { revert: false });
 			if (writes === accountWrites) queryClient.setQueryData(agentAccountsQueryKey, accounts);
@@ -81,10 +81,10 @@ export function useFreshAgentAccountsRead() {
 		}, (cause: unknown) => {
 			if (attempt !== freshReadAttempt) return;
 			lastFreshRead = Number.NEGATIVE_INFINITY;
-			setError(cause instanceof Error ? cause : new Error(String(cause)));
+			setFailure({ error: cause instanceof Error ? cause : new Error(String(cause)), at: Date.now() });
 		});
 	}, [queryClient]);
-	return { read, error };
+	return { read, error: failure?.error ?? null, failedAt: failure?.at ?? 0 };
 }
 
 /** Lets tests start each case without a recent fresh read. */
