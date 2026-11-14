@@ -122,11 +122,16 @@ export function useAgentAccountUsage(days = 30, hostId?: HostId) {
 	});
 }
 
+/** The account a session runs on, for each provider. */
+export async function fetchSessionAgentAccounts(sessionId: string, hostId?: HostId) {
+	return unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId } } })) ?? {};
+}
+
 export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: HostId) {
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
+		queryFn: () => fetchSessionAgentAccounts(sessionId ?? "", hostId),
 	});
 }
 
