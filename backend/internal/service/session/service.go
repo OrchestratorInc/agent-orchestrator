@@ -2101,8 +2101,6 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_RESTORE_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrAgentInputRejected):
 		return apierr.Conflict("AGENT_INPUT_REJECTED", err.Error(), nil)
-	case errors.Is(err, ports.ErrAgentPermissionModeUnsupported):
-		return apierr.Invalid("AGENT_PERMISSION_MODE_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrUnsupportedEffort):
 		return apierr.Invalid("UNSUPPORTED_EFFORT", err.Error(), nil)
 	case errors.Is(err, ports.ErrModelCapabilitiesUnavailable):

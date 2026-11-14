@@ -8,11 +8,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -97,9 +99,14 @@ func TestRestoreAlwaysRefused(t *testing.T) {
 // OpenJarvis has no approval flags, so every AO mode launches with native
 // security, as other TUI harnesses without per-launch flags do.
 func TestEveryPermissionModeUsesNativeDefaults(t *testing.T) {
+	previous := resolveLaunchBinary
+	resolveLaunchBinary = func(context.Context, *Plugin) (string, error) { return "jarvis", nil }
+	t.Cleanup(func() { resolveLaunchBinary = previous })
+	want := []string{"jarvis", "chat", "--agent", "orchestrator"}
 	for _, mode := range []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
-		if _, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: mode}); errors.Is(err, ports.ErrAgentPermissionModeUnsupported) {
-			t.Fatalf("mode %s refused: %v", mode, err)
+		got, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: mode})
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("mode %s: argv = %q, err = %v; want %q", mode, got, err, want)
 		}
 	}
 }
@@ -115,6 +122,44 @@ func TestEchoRequiresNewCurrentSubmission(t *testing.T) {
 	}
 	if !p.TerminalMessageObserved("Check status", old, old+"Check status") {
 		t.Fatal("new current echo not witnessed")
+	}
+}
+
+// After Enter the REPL prints the turn and, once it ends, a new empty prompt;
+// the echo must still count, also once earlier rows scroll out of view.
+func TestEchoFollowedByTurnOutputIsObserved(t *testing.T) {
+	p := New()
+	for name, tt := range map[string]struct {
+		baseline, screen string
+		want             bool
+	}{
+		"output after echo":         {"Welcome\nYou> ", "Welcome\nYou> Check status\nThinking...\nstatus is ok", true},
+		"output and new prompt":     {"Welcome\nYou> ", "Welcome\nYou> Check status\nstatus is ok\nYou> ", true},
+		"history scrolled":          {"a\nb\nc\nYou> ", "c\nYou> Check status\nok\nYou> ", true},
+		"padded echo row":           {"Welcome\nYou> ", "Welcome\nYou> Check status   \nok", true},
+		"prior identical turn only": {"You> Check status\nok\nYou> ", "You> Check status\nok\nYou> \nnoise", false},
+		"composer still empty":      {"Welcome\nYou> ", "Welcome\nYou> \nCheck status", false},
+		"different draft":           {"Welcome\nYou> ", "Welcome\nYou> Check other\nok", false},
+	} {
+		if got := p.TerminalMessageObserved("Check status", tt.baseline, tt.screen); got != tt.want {
+			t.Errorf("%s: observed = %t, want %t", name, got, tt.want)
+		}
+	}
+}
+
+// A failure belongs to the turn after the last prompt; a fresh prompt below it
+// is ready for input.
+func TestFailureMarkerOnlyBlocksTheCurrentTurn(t *testing.T) {
+	p := New()
+	for screen, want := range map[string]domain.ActivityState{
+		"You> run\nAgent 'orchestrator' failed: boom\nYou> ": domain.ActivityIdle,
+		"You> run\nAgent 'orchestrator' failed: boom":        domain.ActivityBlocked,
+		"Agent 'orchestrator' failed: boom":                  domain.ActivityBlocked,
+		"You> explain Agent 'orchestrator' failed: lines":    domain.ActivityActive,
+	} {
+		if got, ok := p.DetectTerminalActivity(screen); !ok || got != want {
+			t.Errorf("DetectTerminalActivity(%q) = %q, %t; want %q", screen, got, ok, want)
+		}
 	}
 }
 func readOverlay(t *testing.T, dataDir string) map[string]any {
@@ -237,6 +282,29 @@ func TestAuthStatusMissingKeyForDefaultModelIsUnauthorized(t *testing.T) {
 	if got, err := New().AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusUnauthorized || *probed != "" {
 		t.Fatalf("status = %q, %v, probed %q", got, err, *probed)
 	}
+}
+
+// The readiness check passes the keys OpenJarvis sessions actually get; a key AO
+// withholds from them must not be probed.
+func TestAuthStatusIgnoresKeysWithheldFromSessions(t *testing.T) {
+	withheld := map[string]string{"OPENAI_API_KEY": ""}
+	t.Run("unrouted", func(t *testing.T) {
+		probed := isolateAuth(t, "")
+		t.Setenv("OPENAI_API_KEY", "openai")
+		t.Setenv("DEEPSEEK_API_KEY", "deepseek")
+		ctx := ports.WithAuthEnvironment(context.Background(), withheld)
+		if got, err := New().AuthStatus(ctx); err != nil || got != ports.AgentAuthStatusAuthorized || *probed != "DEEPSEEK_API_KEY" {
+			t.Fatalf("status = %q, %v, probed %q", got, err, *probed)
+		}
+	})
+	t.Run("routed", func(t *testing.T) {
+		probed := isolateAuth(t, "gpt-5")
+		t.Setenv("OPENAI_API_KEY", "openai")
+		ctx := ports.WithAuthEnvironment(context.Background(), withheld)
+		if got, err := New().AuthStatus(ctx); err != nil || got != ports.AgentAuthStatusUnauthorized || *probed != "" {
+			t.Fatalf("status = %q, %v, probed %q", got, err, *probed)
+		}
+	})
 }
 
 func TestAuthStatusWithoutKeysIsUnknown(t *testing.T) {

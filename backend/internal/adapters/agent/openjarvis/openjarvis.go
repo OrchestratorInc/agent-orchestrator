@@ -110,6 +110,9 @@ func validateLine(message string) error {
 	return nil
 }
 
+// resolveLaunchBinary finds the qualified CLI for a launch; tests replace it.
+var resolveLaunchBinary = func(ctx context.Context, p *Plugin) (string, error) { return p.ResolveBinary(ctx) }
+
 // GetLaunchCommand implements the scoped native adapter contract.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
@@ -125,7 +128,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 			return nil, err
 		}
 	}
-	binary, err := p.ResolveBinary(ctx)
+	binary, err := resolveLaunchBinary(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -257,23 +260,40 @@ func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 // EmptyComposerProvesWaitingInputReady implements the scoped native adapter contract.
 func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 
+// agentFailureMarker is the line the native REPL prints when a turn fails.
+const agentFailureMarker = "Agent 'orchestrator' failed:"
+
+// promptRow reports a native composer row. Only a prompt at column zero is a
+// composer: embedded You> in echoed task data must never make a busy input()
+// turn look empty.
+func promptRow(line string) bool {
+	return strings.HasPrefix(line, "You>") && (len(line) == 4 || line[4] == ' ')
+}
+
+// lastPromptRow is the index of the last composer row, or -1.
+func lastPromptRow(lines []string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if promptRow(lines[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
 // DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := terminalui.PlainTerminalLines(output)
-	text := strings.Join(lines, "\n")
-	if strings.Contains(text, "Agent 'orchestrator' failed:") {
-		return domain.ActivityBlocked, true
-	}
-	// Only a native prompt at column zero is a composer. Embedded You> in
-	// echoed task data must never make a busy input() turn look empty.
-	prompt := -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, "You>") && (len(line) == 4 || line[4] == ' ') {
-			prompt = i
-		}
-	}
+	prompt := lastPromptRow(lines)
 	if prompt < 0 {
+		if strings.Contains(strings.Join(lines, "\n"), agentFailureMarker) {
+			return domain.ActivityBlocked, true
+		}
 		return "", false
+	}
+	// Only the current turn can be failed: a failure reported before a fresh
+	// prompt is history, and the submitted line itself is task text.
+	if strings.Contains(strings.Join(lines[prompt+1:], "\n"), agentFailureMarker) {
+		return domain.ActivityBlocked, true
 	}
 	current := strings.TrimRight(strings.Join(lines[prompt:], "\n"), " \t\r\n")
 	if strings.Contains(current, "Confirm:") {
@@ -285,33 +305,49 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	return domain.ActivityActive, true
 }
 
-// TerminalMessageObserved requires an actual change from the admission baseline.
-// Historical echoes (including identical prior turns) are never sufficient.
+// TerminalMessageObserved requires the submitted line in the composer that was
+// empty in the admission baseline. That composer sits right below the
+// baseline's history, scrolled up by any rows printed since, so a historical
+// echo (including an identical prior turn) is never sufficient. Rows the turn
+// prints after the echo, and its next empty prompt, are ignored.
 func (*Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
 	if screen == baseline {
 		return false
 	}
-	lines := terminalui.PlainTerminalLines(screen)
-	prompt := -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, "You> ") {
-			prompt = i
-		}
-	}
-	if prompt < 0 {
+	before := terminalui.PlainTerminalLines(baseline)
+	composer := lastPromptRow(before)
+	if composer < 0 {
 		return false
 	}
-	// Match physical wrapped rows against the exact submitted byte sequence.
-	// A row boundary may consume native padding, but never changes user data.
-	expected := "You> " + message
-	for _, line := range lines[prompt:] {
-		if strings.TrimSpace(line) == "" {
+	history := before[:composer]
+	lines := terminalui.PlainTerminalLines(screen)
+	// Repeated content can align at several scroll offsets. The least-scrolled
+	// one is taken, so ambiguity can only leave a submission unconfirmed.
+	for i := min(len(history), len(lines)-1); i >= 0; i-- {
+		if slices.Equal(lines[:i], history[len(history)-i:]) {
+			row := lines[i]
+			return promptRow(row) && strings.TrimSpace(row) != "You>" && echoStartsAt(lines[i:], "You> "+message)
+		}
+	}
+	return false
+}
+
+// echoStartsAt matches physical wrapped rows against the exact submitted byte
+// sequence. A row boundary may consume native padding, but never changes user
+// data. Blank rows, and every row after the echo, are ignored.
+func echoStartsAt(rows []string, expected string) bool {
+	for _, row := range rows {
+		if expected == "" {
+			return true
+		}
+		if strings.TrimSpace(row) == "" {
 			continue
 		}
-		if len(line) > len(expected) || !strings.HasPrefix(expected, line) {
-			return false
+		if !strings.HasPrefix(expected, row) {
+			// The row completing the echo may carry trailing cell padding.
+			return strings.TrimRight(row, " ") == expected
 		}
-		expected = expected[len(line):]
+		expected = expected[len(row):]
 	}
 	return expected == ""
 }

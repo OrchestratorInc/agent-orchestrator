@@ -10,6 +10,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -40,9 +41,9 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	keyEnv, routed := modelProviderKey(nativeDefaultModel())
+	keyEnv, routed := modelProviderKey(ctx, nativeDefaultModel())
 	if !routed {
-		keyEnv = cloudProviderKey(nil)
+		keyEnv = authProviderKey(ctx)
 	}
 	if keyEnv == "" {
 		if routed {
@@ -51,13 +52,24 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(keyEnv).WithMethod(domain.AgentAccountMethodAPIKey))
-	return providerProbe(ctx, keyEnv, strings.TrimSpace(os.Getenv(keyEnv))), nil
+	return providerProbe(ctx, keyEnv, strings.TrimSpace(authprobe.Getenv(ctx, keyEnv))), nil
+}
+
+// authProviderKey is cloudProviderKey as the checked sessions see the
+// environment: a key AO withholds from OpenJarvis reads as unset.
+func authProviderKey(ctx context.Context) string {
+	for _, provider := range cloudProviderKeys {
+		if strings.TrimSpace(authprobe.Getenv(ctx, provider.env)) != "" {
+			return provider.env
+		}
+	}
+	return ""
 }
 
 // modelProviderKey mirrors the native cloud engine's model routing. routed
 // reports that the model belongs to a cloud provider; keyEnv is the set
 // variable for it, or empty when that provider's key is missing.
-func modelProviderKey(model string) (keyEnv string, routed bool) {
+func modelProviderKey(ctx context.Context, model string) (keyEnv string, routed bool) {
 	m := strings.ToLower(model)
 	var candidates []string
 	switch {
@@ -79,7 +91,7 @@ func modelProviderKey(model string) (keyEnv string, routed bool) {
 		return "", false
 	}
 	for _, env := range candidates {
-		if strings.TrimSpace(os.Getenv(env)) != "" {
+		if strings.TrimSpace(authprobe.Getenv(ctx, env)) != "" {
 			return env, true
 		}
 	}
@@ -116,7 +128,7 @@ func nativeDefaultModel() string {
 // honours OPENAI_BASE_URL, so an OpenAI key is checked where it is sent.
 func probeProviderKey(ctx context.Context, keyEnv, key string) ports.AgentAuthStatus {
 	endpoint := providerModelsEndpoints[keyEnv]
-	if base := strings.TrimRight(os.Getenv("OPENAI_BASE_URL"), "/"); keyEnv == "OPENAI_API_KEY" && base != "" {
+	if base := strings.TrimRight(authprobe.Getenv(ctx, "OPENAI_BASE_URL"), "/"); keyEnv == "OPENAI_API_KEY" && base != "" {
 		endpoint = base + "/models"
 	}
 	if endpoint == "" || key == "" {
