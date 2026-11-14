@@ -123,7 +123,14 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 	if label == "" {
 		label = "the source machine"
 	}
-	commit, err := runGit(ctx, wt, identityEnv(ctx, wt), nil, "commit-tree", "-p", base,
+	// The base's date makes the commit repeatable: a retry after a push that
+	// origin took but this side could not confirm pushes the same commit again.
+	date, err := gitLine(ctx, wt, "show", "-s", "--format=%cd", "--date=raw", base)
+	if err != nil {
+		return Capture{}, err
+	}
+	commitEnv := append(identityEnv(ctx, wt), "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
+	commit, err := runGit(ctx, wt, commitEnv, nil, "commit-tree", "-p", base,
 		"-m", "WIP: uncommitted changes from "+label, tree)
 	if err != nil {
 		return Capture{}, err

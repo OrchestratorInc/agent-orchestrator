@@ -21,6 +21,10 @@ type SessionMover interface {
 	CompleteMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveCompleteInput) (domain.Session, error)
 }
 
+// maxMoveImportBodyBytes bounds a move/import body, whose transcript is a
+// base64 gzip of at most CloudTranscriptMaxBytes unzipped.
+const maxMoveImportBodyBytes = 2 * sessionsvc.CloudTranscriptMaxBytes
+
 // SessionMovesController serves the routes the app calls to move a session:
 // export and complete for a move to AO Cloud, import for a move from it.
 type SessionMovesController struct {
@@ -108,6 +112,7 @@ func (c *SessionMovesController) importMove(w http.ResponseWriter, r *http.Reque
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/move/import")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMoveImportBodyBytes)
 	var in MoveImportRequest
 	if err := decodeJSON(r, &in); err != nil {
 		writeInvalidJSON(w, r)
