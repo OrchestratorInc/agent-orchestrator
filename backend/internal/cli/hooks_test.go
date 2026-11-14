@@ -1090,6 +1090,11 @@ func TestHookConversationFactsPreservesHumanTextAfterReportPaste(t *testing.T) {
 			prompt: pasteOpen + "<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
 				"\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n</pasted_content>",
 		},
+		{
+			name: "closer for a block a plain closer already closed",
+			prompt: "<ao-report-delivery id=\"" + deliveryID + "\"><pasted_content id=\"a\">worker</pasted_content>" +
+				"<pasted_content id=\"b\">finished</ao-report-delivery></pasted_content id=\"a\">",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

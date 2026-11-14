@@ -513,9 +513,8 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 }
 
 var claudePastedContentPrefix = regexp.MustCompile(`^<pasted_content id="([A-Za-z0-9_-]+)">`)
-var claudePastedContentOpening = regexp.MustCompile(`<pasted_content id="[A-Za-z0-9_-]+">`)
-var claudePastedContentClosing = regexp.MustCompile(`</pasted_content(?: id="[A-Za-z0-9_-]+")?>`)
-var claudePastedContentClosingSuffix = regexp.MustCompile(`</pasted_content(?: id="([A-Za-z0-9_-]+)")?>$`)
+var claudePastedContentTag = regexp.MustCompile(`<pasted_content id="([A-Za-z0-9_-]+)">|</pasted_content(?: id="([A-Za-z0-9_-]+)")?>`)
+var claudePastedContentLeadingClosing = regexp.MustCompile(`^</pasted_content(?: id="([A-Za-z0-9_-]+)")?>`)
 
 // normalizeClaudePastedPrompt removes only Claude's leading paste wrapper.
 // A report envelope can continue after the pasted segment, so keep that suffix.
@@ -542,27 +541,36 @@ func reportDeliveryHasOnlyPastedClosers(value string) bool {
 	if closeAt < 0 {
 		return false
 	}
-	prefix := value[:closeAt]
 	suffix := strings.TrimSpace(value[closeAt+len(reportClose):])
+	if suffix == "" {
+		return true
+	}
 	// Each closer, with or without an ID, must close a paste block that is
-	// still open, the same closers normalizeClaudePastedPrompt accepts.
-	unclosed := len(claudePastedContentOpening.FindAllString(prefix, -1)) - len(claudePastedContentClosing.FindAllString(prefix, -1))
-	closedIDs := make(map[string]int)
-	for suffix != "" {
-		match := claudePastedContentClosingSuffix.FindStringSubmatch(suffix)
-		if match == nil || unclosed <= 0 {
+	// still open, the same closers normalizeClaudePastedPrompt accepts. A plain
+	// closer closes the innermost block, an ID closer the innermost with its ID.
+	var open []string
+	closeBlock := func(id string) bool {
+		for i := len(open) - 1; i >= 0; i-- {
+			if id == "" || open[i] == id {
+				open = append(open[:i], open[i+1:]...)
+				return true
+			}
+		}
+		return false
+	}
+	for _, tag := range claudePastedContentTag.FindAllStringSubmatch(value[:closeAt], -1) {
+		if tag[1] != "" {
+			open = append(open, tag[1])
+		} else if !closeBlock(tag[2]) {
 			return false
 		}
-		if id := match[1]; id != "" {
-			opening := `<pasted_content id="` + id + `">`
-			closing := `</pasted_content id="` + id + `">`
-			if strings.Count(prefix, opening) <= strings.Count(prefix, closing)+closedIDs[id] {
-				return false
-			}
-			closedIDs[id]++
+	}
+	for suffix != "" {
+		match := claudePastedContentLeadingClosing.FindStringSubmatch(suffix)
+		if match == nil || !closeBlock(match[1]) {
+			return false
 		}
-		unclosed--
-		suffix = strings.TrimSpace(strings.TrimSuffix(suffix, match[0]))
+		suffix = strings.TrimSpace(suffix[len(match[0]):])
 	}
 	return true
 }
