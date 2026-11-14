@@ -2787,6 +2787,76 @@ describe("SessionView", () => {
 			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
 		});
 
+		describe("while AO waits for the workspace's own ready check", () => {
+			const readyCheck = { since: "2026-11-09T19:18:30Z", timeoutSeconds: 3600, attempts: 31, exitCode: 1, checkedAt: "2026-11-09T19:38:40Z" };
+			const waiting = {
+				code: "workspace_setup_pending",
+				message: "Waiting for your workspace's own setup to finish: its ready check hasn't passed yet.",
+				at: "2026-11-09T19:18:35Z",
+			};
+
+			it.each([
+				["worker", "sess-2", "tui"],
+				["worker", "sess-2", "chat"],
+				["orchestrator", "sess-orch", "tui"],
+				["orchestrator", "sess-orch", "chat"],
+			] as const)("shows the check's progress on the startup screen (%s session %s, %s)", (_kind, sessionId, mode) => {
+				const session = workerSession(sessionId);
+				session.mode = mode;
+				session.runtimeConnected = false;
+				session.cloud = {
+					orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning", runtimeState: "provisioning",
+					startupError: { ...waiting, readyCheck },
+				};
+				render(<SessionView sessionId={sessionId} />);
+				const loader = screen.getByTestId("cloud-session-loader-screen");
+				expect(within(loader).getByTestId("multi-step-loader-step")).toHaveTextContent("Waiting for your workspace's own setup");
+				expect(within(loader).getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("since Coder reported the workspace ready, 31 checks so far");
+				// The check printed nothing: no empty output block.
+				expect(within(loader).queryByTestId("cloud-session-ready-check-output")).toBeNull();
+				expect(screen.queryByTestId("cloud-session-startup-note")).not.toBeInTheDocument();
+				expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
+			});
+
+			it("shows what the check printed, and moves on once it passed", () => {
+				const session = workerSession("sess-2");
+				session.runtimeConnected = false;
+				session.cloud = {
+					orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning", runtimeState: "provisioning",
+					startupError: { ...waiting, readyCheck: { ...readyCheck, output: "Bootstrapping step 3/5" } },
+				};
+				const view = render(<SessionView sessionId="sess-2" />);
+				expect(screen.getByLabelText("Latest output of the ready check (exit 1)")).toHaveTextContent("Bootstrapping step 3/5");
+				// The check passed: the control plane took the wait down and installs the worker.
+				session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "bootstrapping", runtimeState: "bootstrapping" };
+				view.rerender(<SessionView sessionId="sess-2" />);
+				expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+				expect(screen.queryByTestId("cloud-session-ready-check")).not.toBeInTheDocument();
+				expect(screen.getByText("Creating the workspace")).toBeInTheDocument();
+			});
+
+			it.each(["stopped", "restoring"])("shows no ready check while the workspace is %s", (state) => {
+				// A wait recorded before the session was paused, still on the session as it resumes.
+				const session = workerSession("sess-2");
+				session.runtimeConnected = false;
+				session.cloud = {
+					orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: state, runtimeState: state,
+					startupError: { ...waiting, readyCheck: { ...readyCheck, since: "2026-11-09T17:38:40Z", attempts: 45 } },
+				};
+				render(<SessionView sessionId="sess-2" />);
+				const loader = screen.getByTestId("cloud-session-loader-screen");
+				expect(within(loader).queryByTestId("cloud-session-ready-check")).not.toBeInTheDocument();
+				expect(within(loader).queryByText("Waiting for your workspace's own setup")).not.toBeInTheDocument();
+			});
+
+			it("keeps a wait that comes without check progress as a note", () => {
+				failedCloudSession({ runtimeState: "provisioning", observedState: "provisioning", startupError: waiting });
+				render(<SessionView sessionId="sess-2" />);
+				expect(screen.getByTestId("cloud-session-startup-note")).toHaveTextContent(waiting.message);
+				expect(screen.queryByTestId("cloud-session-ready-check")).not.toBeInTheDocument();
+			});
+		});
+
 		it("never leaves an ended cloud session blank without a startup reason", () => {
 			failedCloudSession({ runtimeState: "terminated", runtimeError: "sandbox was deleted" });
 			render(<SessionView sessionId="sess-2" />);

@@ -5863,7 +5863,7 @@ components:
         readyProbe:
           type: string
           maxLength: 1000
-          description: Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0.
+          description: Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. While AO waits, the session's startupError (workspace_setup_pending) carries its progress and the tail of what it prints, redacted.
         readyProbeTimeoutSeconds:
           type: integer
           minimum: 30
@@ -9170,7 +9170,9 @@ components:
             unsupported_architecture, durable_root_unavailable,
             worker_never_started, bootstrap_failed,
             workspace_setup_not_ready (a Coder connection's workspace ready
-            check never passed), working_directory_not_durable (the project's
+            check never passed), workspace_setup_pending (not a failure: AO
+            is still waiting for that ready check to pass, see readyCheck),
+            working_directory_not_durable (the project's
             working folder is outside the Coder connection's durable root),
             repository_checkout_failed, working_directory_unusable (also
             reported when the Coder bootstrap cannot prepare the project's
@@ -9190,6 +9192,40 @@ components:
             Redacted detail behind the error: operator detail for an
             organization's own (bring-your-own) compute, and the failed
             command's output for project_setup_failed.
+        readyCheck:
+          $ref: "#/components/schemas/SessionReadyCheck"
+    SessionReadyCheck:
+      type: object
+      additionalProperties: false
+      required: [since, attempts, exitCode, checkedAt]
+      description: >-
+        A bring-your-own Coder workspace's own ready check while AO waits for
+        it to pass before starting the worker (startupError code
+        workspace_setup_pending), on an organization's own compute only. It
+        updates as the check runs, and is gone once the check passes.
+      properties:
+        since:
+          type: string
+          format: date-time
+          description: >-
+            When the workspace's Coder agent became ready. The check's timeout
+            runs from it, so the time waited is now minus since.
+        timeoutSeconds:
+          type: integer
+          description: How long after since AO keeps checking before it stops.
+        attempts:
+          type: integer
+          description: How many runs of the check have not passed since the agent became ready.
+        exitCode:
+          type: integer
+          description: The latest run's exit status.
+        output:
+          type: string
+          description: The tail of the latest run's output, bounded and redacted.
+        checkedAt:
+          type: string
+          format: date-time
+          description: When the latest run was recorded.
     CreateSessionInput:
       type: object
       additionalProperties: false

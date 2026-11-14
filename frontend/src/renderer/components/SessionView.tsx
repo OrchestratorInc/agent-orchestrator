@@ -114,7 +114,7 @@ import { conversationQueryKey, conversationSettled } from "../hooks/useConversat
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import { CloudCpError, type CloudCpAOReviewRun, type CloudCpClientEvent, type CloudCpSessionReviewState } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAOReviewRun, type CloudCpClientEvent, type CloudCpSessionReadyCheck, type CloudCpSessionReviewState } from "../lib/cloud-cp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { sessionWasSharedWithYou } from "../lib/shared-session-memory";
 import {
@@ -320,8 +320,8 @@ function startupEventProgress(events: readonly CloudCpClientEvent[], cutoff: num
 	return latest;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl, eventsFromChat = false, queuedMessage }: {
-	sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string; queuedMessage?: string;
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, startupReadyCheck, coderWorkspaceUrl, eventsFromChat = false, queuedMessage }: {
+	sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; startupReadyCheck?: CloudCpSessionReadyCheck; coderWorkspaceUrl?: string; queuedMessage?: string;
 	/**
 	 * The session's events are the chat's to read: its Chat surface is mounted
 	 * under this screen (it reads them as it opens, then polls only as a safety
@@ -452,7 +452,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	}, [client, orgId, pollEvents, queryClient, sessionId]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} queuedMessage={terminalOnly ? undefined : queuedMessage} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} readyCheck={terminalOnly ? undefined : startupReadyCheck} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} queuedMessage={terminalOnly ? undefined : queuedMessage} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -3334,6 +3334,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						terminalOnly={cloudReconnecting && !workspaceRestarting}
 						completed={showCompletedLoader}
 						startupNote={startupProblem?.phase === "retrying" ? startupProblem.message : undefined}
+						startupReadyCheck={startupProblem?.phase === "retrying" ? startupProblem.readyCheck : undefined}
 						coderWorkspaceUrl={session?.cloud?.coderWorkspaceUrl}
 						eventsFromChat={!session || Boolean(showChatSurface && session.cloud)}
 						queuedMessage={startupQueuedMessage}
