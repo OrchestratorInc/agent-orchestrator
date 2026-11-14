@@ -90,7 +90,7 @@ func (s *Service) credentialPreflight(
 	// session's approval mode. The site key is the exact origin, so a
 	// "always allow" on http://localhost:4173 never covers another port.
 	outcome, err := s.approvals.Request(ctx, approval.Request{
-		Kind:      approval.KindCredentialUse,
+		Kind:      approval.KindSavedLogin,
 		SessionID: string(session.ID),
 		Site:      description.Origin,
 		URL:       description.PageURL,

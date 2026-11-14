@@ -154,7 +154,7 @@ func TestCredentialFillAsksTheApprovalGateWithoutTheSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := <-asked
-	if prompt.Kind != approval.KindCredentialUse || prompt.Category != approval.CategoryCredential || prompt.Site != "http://localhost:4173" {
+	if prompt.Kind != approval.KindSavedLogin || prompt.Category != approval.CategoryCredential || prompt.Site != "http://localhost:4173" {
 		t.Fatalf("prompt = %+v", prompt.Request)
 	}
 	for _, want := range []string{"alice@example.test", "Demo app", "http://localhost:4173"} {

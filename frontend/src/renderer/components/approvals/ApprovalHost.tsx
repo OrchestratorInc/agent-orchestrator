@@ -1,6 +1,6 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { QueryClientContext, useQueryClient } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { decideApproval, usePendingApprovals, type ApprovalDecision, type PendingApproval } from "../../lib/approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
@@ -66,6 +66,11 @@ function useRoutedLocalSessionId(): string | undefined {
  * left to time out unseen. It names the session and can open it.
  */
 export function GlobalApprovalCard() {
+	// Shell hosts without a query client (some test harnesses) have nothing to show.
+	return useContext(QueryClientContext) ? <GlobalApprovalCardContent /> : null;
+}
+
+function GlobalApprovalCardContent() {
 	// The shell's card holds the one live stream every approval reader shares.
 	const pending = usePendingApprovals({ live: true });
 	const routed = useRoutedLocalSessionId();

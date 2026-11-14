@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 )
 
 type browserStatusDTO struct {
