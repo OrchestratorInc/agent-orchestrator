@@ -6367,7 +6367,7 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
 				)}
 			</FromAgent>
 		);
