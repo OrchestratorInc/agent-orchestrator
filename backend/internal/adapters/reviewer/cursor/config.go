@@ -20,16 +20,39 @@ import (
 )
 
 const (
-	cursorDataDirEnv     = "CURSOR_DATA_DIR"
+	cursorDataDirEnv = "CURSOR_DATA_DIR"
+	// cursorConfigDirEnv is where the Cursor CLI reads cli-config.json, the
+	// permission rules (verified in Cursor CLI 2026.10.22: CURSOR_CONFIG_DIR,
+	// then $XDG_CONFIG_HOME/cursor, then ~/.cursor). CURSOR_DATA_DIR alone
+	// leaves the reviewer on the user's own rules.
+	cursorConfigDirEnv   = "CURSOR_CONFIG_DIR"
 	cursorConfigFileName = "cli-config.json"
 )
 
+// reviewerAllowedPermissions names subcommands, not whole tools: a bare
+// Shell(git) admitted `git push` without a prompt (verified live). printf and
+// gh api stay allowed because both submit commands in the review prompt are
+// `printf ... | gh api ...` and `printf ... | ao review submit ...`.
+//
+// Cursor CLI 2026.10.22 checks every part of a command line, so a denied
+// command stays denied inside `&&`, `;`, pipes, subshells and `$(...)`, and
+// anything not allowed prompts, so an unattended reviewer stops instead of
+// acting. This is a guard, not a boundary: Cursor treats a redirect into the
+// workspace or /tmp as safe after any allowed command, `git diff --output`
+// writes a file, and `gh api` admits any GitHub API call.
 var reviewerAllowedPermissions = []string{
 	"Read(**)",
-	"Shell(git)",
-	"Shell(gh)",
-	"Shell(ao)",
+	"Shell(git status)",
+	"Shell(git diff)",
+	"Shell(git log)",
+	"Shell(git show)",
+	"Shell(git fetch)",
+	"Shell(gh pr view)",
+	"Shell(gh pr diff)",
+	"Shell(gh pr checks)",
+	"Shell(gh api)",
 	"Shell(printf)",
+	"Shell(ao review submit)",
 }
 
 var reviewerDeniedPermissions = []string{
@@ -37,6 +60,11 @@ var reviewerDeniedPermissions = []string{
 	"Shell(rm)",
 	"Shell(mv)",
 	"Shell(cp)",
+	"Shell(git push)",
+	"Shell(git commit)",
+	"Shell(ao spawn)",
+	"Shell(ao send)",
+	"Shell(ao stop)",
 }
 
 type reviewerConfig struct {
@@ -55,7 +83,7 @@ func reviewerEnv(inv ports.ReviewInvocation) map[string]string {
 	if profileDir == "" {
 		return nil
 	}
-	return map[string]string{cursorDataDirEnv: profileDir}
+	return map[string]string{cursorDataDirEnv: profileDir, cursorConfigDirEnv: profileDir}
 }
 
 func reviewerProfileDir(inv ports.ReviewInvocation) string {
@@ -269,15 +297,20 @@ func validateMCPServerIDs(ids []string) error {
 func mcpDisableCommand(ctx context.Context, binary, id, workspacePath, profileDir string) *exec.Cmd {
 	cmd := aoprocess.CommandContext(ctx, binary, "mcp", "disable", id) //nolint:gosec // binary is adapter-resolved, args are static.
 	cmd.Dir = workspacePath
-	prefix := cursorDataDirEnv + "="
-	env := make([]string, 0, len(os.Environ())+1)
+	// Without CURSOR_CONFIG_DIR the child also loads, and creates when missing,
+	// the user's ~/.cursor/cli-config.json (verified live).
+	dataPrefix := cursorDataDirEnv + "="
+	configPrefix := cursorConfigDirEnv + "="
+	env := make([]string, 0, len(os.Environ())+2)
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(strings.ToUpper(entry), strings.ToUpper(prefix)) {
+		upper := strings.ToUpper(entry)
+		if strings.HasPrefix(upper, strings.ToUpper(dataPrefix)) ||
+			strings.HasPrefix(upper, strings.ToUpper(configPrefix)) {
 			continue
 		}
 		env = append(env, entry)
 	}
-	env = append(env, prefix+profileDir)
+	env = append(env, dataPrefix+profileDir, configPrefix+profileDir)
 	cmd.Env = env
 	return cmd
 }
