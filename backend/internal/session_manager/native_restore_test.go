@@ -210,6 +210,7 @@ func TestInteractiveNativeFailureCleanupAndRetryState(t *testing.T) {
 			t.Run(failure+map[bool]string{true: "-restore", false: "-resume"}[terminated], func(t *testing.T) {
 				a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
 				m, st, rt, msg := interactiveManager(t, terminated, a)
+				rt.createIDs = []string{"new-handle"}
 				callctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 				defer cancel()
 				switch failure {
@@ -225,7 +226,7 @@ func TestInteractiveNativeFailureCleanupAndRetryState(t *testing.T) {
 				case "discarded-publication":
 					m.lcm.(*nativeBindingLCM).discard = true
 				case "cleanup":
-					rt.destroyErr = errors.New("destroy failed")
+					rt.destroyErrSequence = []error{nil, errors.New("destroy failed")}
 					a.plan.restored = func(context.Context) (bool, error) { return false, errors.New("wrong native identity") }
 				}
 				var err error
@@ -246,8 +247,8 @@ func TestInteractiveNativeFailureCleanupAndRetryState(t *testing.T) {
 						t.Fatal("invalid history launched")
 					}
 				} else {
-					if rt.destroyed != 1 {
-						t.Fatal("new runtime not cleaned", rt.destroyed)
+					if n := len(rt.destroyedIDs); n == 0 || rt.destroyedIDs[n-1] != "new-handle" {
+						t.Fatal("new runtime not cleaned", rt.destroyedIDs)
 					}
 					if failure != "cleanup" && rec.IsTerminated != terminated {
 						t.Fatal("wrong rollback state", rec)
@@ -330,13 +331,14 @@ func TestInteractiveRestoreRequiresRenderedScreen(t *testing.T) {
 	a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
 	m, _, raw, _ := interactiveManager(t, true, a)
 	m.runtime = &renderedRestoreRuntime{fakeRuntime: raw, err: errors.New("current rendered screen unavailable")}
+	raw.createIDs = []string{"restored-handle"}
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err == nil || !strings.Contains(err.Error(), "current rendered") {
 		t.Fatal(err)
 	}
 	if raw.outputCalls != 0 {
 		t.Fatal("raw output substituted for unavailable rendered screen")
 	}
-	if raw.destroyed != 1 {
-		t.Fatal("unsupported runtime not rolled back", raw.destroyed)
+	if n := len(raw.destroyedIDs); n == 0 || raw.destroyedIDs[n-1] != "restored-handle" {
+		t.Fatal("unsupported runtime not rolled back", raw.destroyedIDs)
 	}
 }
