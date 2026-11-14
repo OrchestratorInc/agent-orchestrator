@@ -2486,6 +2486,7 @@
 	"orchestratorReplacement.morePending_one": "另有 {{count}} 个项目的编排器替换也失败了。",
 	"orchestratorReplacement.morePending_other": "另有 {{count}} 个项目的编排器替换也失败了。",
 	"settings.project.enableIssueIntake": "启用议题接入",
+	"settings.project.intakeElsewhere": "此仓库的议题接收在以下位置也已开启：{{computers}}。每台电脑都会为分配的议题各自启动一个工作者，所以只在一台电脑上开启。",
 	"settings.project.repository": "仓库",
 	"settings.project.repoNotDetected": "无法从此项目的 Git 源检测到 GitHub 仓库。",
 	"settings.project.assignee": "受理人",

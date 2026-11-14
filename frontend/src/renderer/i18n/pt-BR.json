@@ -2465,6 +2465,7 @@
 	"orchestratorReplacement.morePending_many": "A substituição do orchestrator também falhou em {{count}} outros projetos.",
 	"orchestratorReplacement.morePending_other": "A substituição do orchestrator também falhou em {{count}} outros projetos.",
 	"settings.project.enableIssueIntake": "Ativar intake de issues",
+	"settings.project.intakeElsewhere": "A captação de issues também está ativa para este repositório em: {{computers}}. Cada computador inicia o próprio worker para uma issue atribuída, então deixe ativa em apenas um computador.",
 	"settings.project.repository": "Repositório",
 	"settings.project.repoNotDetected": "Não foi possível detectar um repositório GitHub a partir do origin git deste projeto.",
 	"settings.project.assignee": "Responsável",

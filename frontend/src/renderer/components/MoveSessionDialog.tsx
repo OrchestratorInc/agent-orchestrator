@@ -9,7 +9,7 @@ import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { cancelWaitingMove, clearMove, moveKey, runMove, useMoveStore } from "../lib/move-runner";
 import { cancelMove, commitMove, MOVE_PART_BYTES, type MoveResult, type MoveStep } from "../lib/move-session";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { hostsWithRepo } from "../lib/repo-hosts";
+import { projectsWithRepo, type RepoHost } from "../lib/repo-hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore, type MoveSessionRequest } from "../stores/ui-store";
 import { Button } from "./ui/button";
@@ -49,7 +49,7 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 	const remote = useRemoteWorkspaces().data ?? [];
 	const key = moveKey(request.hostId, request.sessionId);
 	const move = useMoveStore((state) => state.moves[key]);
-	const [picked, setPicked] = useState<HostId>();
+	const [picked, setPicked] = useState<string>();
 	const [committing, setCommitting] = useState(false);
 
 	const sourceHost: HostId = request.hostId ?? LOCAL_HOST;
@@ -57,8 +57,11 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 	const sourceProject = (sourceHost === LOCAL_HOST ? local : remote.filter((w) => w.hostId === sourceHost)).find((w) => w.id === request.projectId);
 	const session = sourceProject?.sessions.find((each) => each.id === request.sessionId);
 	const branch = session ? sessionBranchPresentation(session).branch : undefined;
-	const targets = hostsWithRepo(local, remote, sourceProject?.repoKey).filter((host) => host.hostId !== sourceHost);
-	const target = targets.find((host) => host.hostId === (move?.targetHostId ?? picked ?? targets[0]?.hostId));
+	// A computer can hold the repository more than once, as separate projects; each is a target.
+	const targets = projectsWithRepo(local, remote, sourceProject?.repoKey).filter((project) => project.hostId !== sourceHost);
+	const targetKey = (project: Pick<RepoHost, "hostId" | "projectId">) => `${project.hostId}:${project.projectId}`;
+	const wanted = move ? targetKey({ hostId: move.targetHostId, projectId: move.targetProjectId }) : picked;
+	const target = targets.find((project) => targetKey(project) === wanted) ?? (move ? undefined : targets[0]);
 	const source = { client: clientForSessionHost(request.hostId), hostId: sourceHost, sessionId: request.sessionId, label: hostLabel(sourceHost) };
 	const destination = target && {
 		client: clientForSessionHost(target.hostId === LOCAL_HOST ? undefined : target.hostId),
@@ -162,14 +165,14 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 					) : (
 						<div role="radiogroup" aria-label={t("moveSession.pick")} className="overflow-hidden rounded-lg bg-[var(--color-bg-import-card)]">
 							{targets.map((host) => {
-								const selected = host.hostId === target?.hostId;
+								const selected = Boolean(target) && targetKey(host) === targetKey(target as RepoHost);
 								return (
 									<Pressable
-										key={host.hostId}
+										key={targetKey(host)}
 										role="radio"
 										aria-checked={selected}
 										disabled={Boolean(move)}
-										onClick={() => setPicked(host.hostId)}
+										onClick={() => setPicked(targetKey(host))}
 										className="flex h-10 w-full items-center gap-2.5 border-t border-border px-3 text-sm first:border-t-0 hover:bg-interactive-hover aria-checked:bg-interactive-active disabled:cursor-default"
 									>
 										<Monitor aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />

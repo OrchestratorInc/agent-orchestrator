@@ -2427,6 +2427,7 @@
 	"orchestratorReplacement.morePending_one": "Auch bei {{count}} weiterem Projekt ist die Orchestrator-Ersetzung fehlgeschlagen.",
 	"orchestratorReplacement.morePending_other": "Auch bei {{count}} weiteren Projekten ist die Orchestrator-Ersetzung fehlgeschlagen.",
 	"settings.project.enableIssueIntake": "Issue-Intake aktivieren",
+	"settings.project.intakeElsewhere": "Die Issue-Übernahme ist für dieses Repository auch hier aktiv: {{computers}}. Jeder Computer startet für ein zugewiesenes Issue einen eigenen Worker. Lassen Sie sie daher nur auf einem Computer aktiv.",
 	"settings.project.repository": "Repository",
 	"settings.project.repoNotDetected": "Aus dem Git-Origin dieses Projekts konnte kein GitHub-Repo erkannt werden.",
 	"settings.project.assignee": "Assignee",

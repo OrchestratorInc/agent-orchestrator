@@ -6,6 +6,7 @@ import { ProjectSettingsSection as SettingsSection } from "@aoagents/product-ui"
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { useOtherIntakeHosts } from "../hooks/useOtherIntakeHosts";
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { apiClient } from "../lib/api-client";
@@ -148,6 +149,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const intakeVisible = !isScratchProject && !!settings?.trackerIntakeEnabled;
 	const workspace = hostId ? remoteProjectQuery.data : workspaceQuery.data?.find((item) => item.id === projectId);
 	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
+	const otherIntake = useOtherIntakeHosts(intakeVisible ? workspace?.repoKey : undefined, { hostId, projectId });
 	const openProjectImport = useSessionImportStore((state) => state.openProjectImport);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
 	const initialValues: ProjectSettingsDraft = {
@@ -332,7 +334,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
-		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
+		reviewerWarning={reviewerTrustWarning} intakeWarning={otherIntake.length ? t("settings.project.intakeElsewhere", { computers: otherIntake.join(", ") }) : undefined} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
 		generalExtra={workspace && importableProject(workspace) ? <SettingsSection title={t("sessionImport.settingsTitle")} grouped>
 			<SettingsRow label={t("sessionImport.settingsLabel")} description={t("sessionImport.settingsDescription")}>

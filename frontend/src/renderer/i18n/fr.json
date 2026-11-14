@@ -2465,6 +2465,7 @@
 	"orchestratorReplacement.morePending_many": "Le remplacement de l'orchestrateur a aussi échoué pour {{count}} autres projets.",
 	"orchestratorReplacement.morePending_other": "Le remplacement de l'orchestrateur a aussi échoué pour {{count}} autres projets.",
 	"settings.project.enableIssueIntake": "Activer l'intake des issues",
+	"settings.project.intakeElsewhere": "La prise en charge des tickets est aussi activée pour ce dépôt sur : {{computers}}. Chaque ordinateur démarre son propre worker pour un ticket assigné ; gardez-la activée sur un seul ordinateur.",
 	"settings.project.repository": "Dépôt",
 	"settings.project.repoNotDetected": "Impossible de détecter un dépôt GitHub à partir de l'origine git de ce projet.",
 	"settings.project.assignee": "Assigné",

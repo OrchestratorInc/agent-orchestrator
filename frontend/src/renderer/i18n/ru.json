@@ -2957,6 +2957,7 @@
 	"orchestratorReplacement.morePending_many": "Ещё {{count}} проектов не смогли заменить оркестратор.",
 	"orchestratorReplacement.morePending_other": "Ещё {{count}} проекта не смогли заменить оркестратор.",
 	"settings.project.enableIssueIntake": "Включить приём issue",
+	"settings.project.intakeElsewhere": "Приём задач для этого репозитория также включён здесь: {{computers}}. Каждый компьютер запускает своего исполнителя для назначенной задачи, поэтому оставьте его включённым только на одном компьютере.",
 	"settings.project.repository": "Репозиторий",
 	"settings.project.repoNotDetected": "Не удалось определить репозиторий GitHub из git origin этого проекта.",
 	"settings.project.assignee": "Исполнитель",

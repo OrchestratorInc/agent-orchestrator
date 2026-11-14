@@ -2427,6 +2427,7 @@
 	"orchestratorReplacement.morePending_one": "ほか {{count}} 件のプロジェクトでもオーケストレーターの置き換えに失敗しました。",
 	"orchestratorReplacement.morePending_other": "ほか {{count}} 件のプロジェクトでもオーケストレーターの置き換えに失敗しました。",
 	"settings.project.enableIssueIntake": "Issue インテークを有効化",
+	"settings.project.intakeElsewhere": "このリポジトリの Issue 取り込みは次でも有効です: {{computers}}。割り当てられた Issue ごとに各コンピューターが別々にワーカーを起動するため、有効にするのは 1 台だけにしてください。",
 	"settings.project.repository": "リポジトリ",
 	"settings.project.repoNotDetected": "このプロジェクトの git origin から GitHub リポジトリを検出できませんでした。",
 	"settings.project.assignee": "担当者",
