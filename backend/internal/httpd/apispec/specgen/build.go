@@ -220,7 +220,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
-	"ControllersSetSessionStayOnAccountRequest":            "SetSessionStayOnAccountRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -2480,12 +2479,6 @@ func agentOperations() []operation {
 			summary: "Start moving a session to another account through the durable controller handoff", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
 			reqBody: controllers.SwitchSessionAgentAccountRequest{},
 			resps:   []respUnit{{http.StatusAccepted, controllers.StartSessionInterfaceTransitionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
-		},
-		{
-			method: http.MethodPut, path: "/api/v1/agents/accounts/sessions/{sessionId}/stay", id: "setSessionStayOnAccount", tag: "agents",
-			summary: "Keep a session on its account, or let a usage limit move it", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
-			reqBody: controllers.SetSessionStayOnAccountRequest{},
-			resps:   []respUnit{{http.StatusOK, controllers.SessionAgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",

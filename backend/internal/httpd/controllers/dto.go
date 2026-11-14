@@ -4625,14 +4625,8 @@ type AgentAccountUsageByModel struct {
 
 // SessionAgentAccountsResponse is the account a session uses per provider.
 type SessionAgentAccountsResponse struct {
-	Claude        string `json:"claude,omitempty"`
-	Codex         string `json:"codex,omitempty"`
-	StayOnAccount bool   `json:"stayOnAccount"`
-}
-
-// SetSessionStayOnAccountRequest records or clears "Stay on this account".
-type SetSessionStayOnAccountRequest struct {
-	Stay *bool `json:"stay"`
+	Claude string `json:"claude,omitempty"`
+	Codex  string `json:"codex,omitempty"`
 }
 
 // SwitchSessionAgentAccountRequest moves a session to another account.

@@ -105,7 +105,7 @@ export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: 
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
+		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
 	});
 }
 
@@ -148,9 +148,5 @@ export function useAgentAccountActions(hostId?: HostId) {
 			return result.transition;
 		},
 		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId, hostId) }),
-		setStayOnAccount: async (sessionId: string, stay: boolean) =>
-			queryClient.setQueryData(sessionAccountsKey(sessionId, hostId), unwrap(await client(hostId).PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
-				params: { path: { sessionId } }, body: { stay },
-			}))),
 	};
 }

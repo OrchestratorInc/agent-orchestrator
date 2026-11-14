@@ -3976,7 +3976,6 @@
 	"settings.agentAccounts.sessionAccount": "계정",
 	"settings.agentAccounts.handoff": "사용 한도에 도달하면 다른 계정으로 이동",
 	"settings.agentAccounts.handoffDescription": "Claude Code와 Codex에 적용됩니다. Chat 세션이 사용 한도에 도달하면 AO가 여유가 있는 다른 로그인 계정으로 옮기고 프롬프트를 한 번 다시 시도합니다. 여유가 있는 계정이 없으면 제공업체가 재설정 시간을 알려 줄 때 AO가 그 시간에 세션을 재개합니다.",
-	"settings.agentAccounts.stayOnAccount": "이 계정 유지",
 	"settings.agentAccounts.moved": "{{from}}에서 {{to}}(으)로 이동했습니다",
 	"settings.agentAccounts.loading": "계정을 불러오는 중…",
 	"settings.agentAccounts.stopAndMoveTitle": "차례를 멈추고 이동할까요?",

@@ -1147,16 +1147,6 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	return accounts[best].ID, nil
 }
 
-// SessionStaysOnAccount reports the session's "Stay on this account" choice.
-func (s *Service) SessionStaysOnAccount(ctx context.Context, id domain.SessionID) (bool, error) {
-	return s.store.SessionAccountPinned(ctx, id)
-}
-
-// SetSessionStaysOnAccount records or clears the session's "Stay on this account" choice.
-func (s *Service) SetSessionStaysOnAccount(ctx context.Context, id domain.SessionID, stay bool) error {
-	return s.store.SetSessionAccountPinned(ctx, id, stay)
-}
-
 func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
 	accountID, bound, err := s.store.GetSessionAgentAccount(ctx, id, p)
 	if err != nil {
