@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode"
 )
 
 // Mode is how much a session asks before acting.
@@ -45,7 +46,8 @@ const (
 	CategorySubmit     = "submit"
 	CategoryCredential = "credential"
 	// CategoryScript covers commands whose effect on the page cannot be read
-	// in advance: page scripts, coordinate clicks, unrecognized commands.
+	// in advance: page scripts, coordinate clicks, unrecognized commands, and
+	// targets the runtime could not describe.
 	CategoryScript = "script"
 )
 
@@ -180,7 +182,7 @@ func Classify(target Target, mode Mode) Verdict {
 
 func classifyRisk(action, role, name string, target Target) Verdict {
 	if action == "press" {
-		if !strings.EqualFold(strings.TrimSpace(target.Key), "enter") {
+		if !IsEnterKey(target.Key) {
 			return Verdict{}
 		}
 		if role == "button" || role == "link" || role == "menuitem" {
@@ -188,7 +190,10 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 			return classifyRisk("click", role, name, target)
 		}
 		if target.IsSubmit {
-			return classifySubmit(normalize(target.SubmitName), target, true)
+			// Enter submits the form as its default button would.
+			if verdict := classifySubmit(normalize(target.SubmitName), target); verdict.NeedsApproval {
+				return verdict
+			}
 		}
 		if role == "textbox" && containsAny(name, messageFieldPhrases) {
 			return Verdict{NeedsApproval: true, Category: CategoryMessage,
@@ -217,13 +222,13 @@ func classifyRisk(action, role, name string, target Target) Verdict {
 		}
 	}
 	if target.IsSubmit {
-		return classifySubmit(name, target, false)
+		return classifySubmit(name, target)
 	}
 	return Verdict{}
 }
 
 // classifySubmit judges a form submission by its form and submit label.
-func classifySubmit(submitName string, target Target, pressed bool) Verdict {
+func classifySubmit(submitName string, target Target) Verdict {
 	if containsAny(submitName, []string{"search", "filter", "sign in", "log in", "login"}) {
 		return Verdict{}
 	}
@@ -242,9 +247,6 @@ func classifySubmit(submitName string, target Target, pressed bool) Verdict {
 					Reason: fmt.Sprintf("It submits a form whose button %q reads like %s.", label, categoryNouns[set.category])}
 			}
 		}
-	}
-	if pressed {
-		return Verdict{}
 	}
 	post := strings.EqualFold(target.FormMethod, "post")
 	if post && (target.FormHasPassword || containsAny(submitName, accountPhrases)) {
@@ -349,13 +351,29 @@ func instructionTarget(instruction string) (string, string) {
 	return strings.Join(filtered, " "), role
 }
 
-// normalize lowercases and turns punctuation into single spaces, so
-// "Pay $42.10" becomes "pay 42 10" and "two-factor" becomes "two factor".
+// IsEnterKey reports whether a press dispatches Enter: "Enter", its alias
+// "Return", or a chord ending in either ("Control+Enter"), resolved the way
+// the runtimes resolve keys (the last non-empty "+" part).
+func IsEnterKey(key string) bool {
+	last := ""
+	for _, part := range strings.Split(key, "+") {
+		if part = strings.TrimSpace(part); part != "" {
+			last = part
+		}
+	}
+	last = strings.ToLower(last)
+	return last == "enter" || last == "return"
+}
+
+// normalize lowercases and turns punctuation and any Unicode space into
+// single spaces, so "Pay $42.10" becomes "pay 42 10", "Pay\u00a042" becomes
+// "pay 42", and "two-factor" becomes "two factor". Letters and digits of
+// every script are kept.
 func normalize(s string) string {
 	var b strings.Builder
 	space := true
 	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r > 127 {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r) {
 			b.WriteRune(r)
 			space = false
 			continue

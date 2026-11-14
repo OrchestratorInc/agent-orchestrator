@@ -28,6 +28,7 @@ func TestClassifyRemoteArgs(t *testing.T) {
 		{[]string{"eval", "document.querySelector('form').submit()"}, remoteGate{kind: remoteAsk, action: "eval"}},
 		{[]string{"mouse", "click", "400", "300"}, remoteGate{kind: remoteAsk, action: "mouse"}},
 		{[]string{"frobnicate"}, remoteGate{kind: remoteAsk, action: "frobnicate"}},
+		{[]string{"press", "Control+Enter"}, remoteGate{kind: remoteDescribe, action: "press", key: "Control+Enter"}},
 		{[]string{"press", "Tab"}, remoteGate{}},
 		{[]string{"snapshot", "--interactive"}, remoteGate{}},
 		{[]string{"fill", "@e3", "hello"}, remoteGate{}},

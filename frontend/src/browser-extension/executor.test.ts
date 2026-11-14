@@ -580,6 +580,21 @@ describe("Executor", () => {
 		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
 	});
 
+	it("refuses an approved act when the instruction now matches another element", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		const before = fake.debuggerCalls.length;
+		await expect(run("act", { instruction: "the buy now button", expectRef: "e999" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(clicks).toBe(0);
+		expect(fake.debuggerCalls.slice(before).some((call) => call.method.startsWith("Input."))).toBe(false);
+		const { resolvedRef } = (await run("describe", { action: "act", instruction: "the buy now button" })) as { resolvedRef: string };
+		expect(await run("act", { instruction: "the buy now button", expectRef: resolvedRef })).toMatchObject({ outcome: "matched" });
+		expect(clicks).toBe(1);
+	});
+
 	it("resolves act instructions and reports unmatched ones with the snapshot", async () => {
 		const { run, approve } = setup();
 		await approve("s1", false);

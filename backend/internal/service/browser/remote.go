@@ -109,13 +109,13 @@ func classifyRemoteArgs(args []string) remoteGate {
 		}
 		return remoteGate{kind: remoteDescribe, action: command, selector: rest[0]}
 	case "press", "key":
-		if len(rest) > 0 && strings.EqualFold(rest[0], "enter") {
+		if len(rest) > 0 && approval.IsEnterKey(rest[0]) {
 			return remoteGate{kind: remoteDescribe, action: "press", key: rest[0]}
 		}
 		return remoteGate{}
 	case "keyboard":
 		for _, word := range rest {
-			if strings.EqualFold(word, "enter") {
+			if approval.IsEnterKey(word) {
 				return remoteGate{kind: remoteDescribe, action: "press", key: word}
 			}
 		}

@@ -51,21 +51,39 @@ func (s *Service) UseApprovals(gate approvalGate, timeout time.Duration) {
 // command; a multi-step batch must call it (or Execute) for each step.
 func (s *Service) Preflight(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) error {
 	action = strings.ToLower(strings.TrimSpace(action))
-	return s.preflight(ctx, sessionID, s.runtimeFor(s.targetFor(sessionID)), action, args)
+	_, err := s.preflight(ctx, sessionID, s.runtimeFor(s.targetFor(sessionID)), action, args)
+	return err
 }
 
-func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) error {
-	if s.approvals == nil || !mayActConsequentially(action, args) {
-		return nil
+// preflight asks the user when the action is consequential. It returns the
+// arguments to dispatch: an approved act carries the approved element's ref
+// (expectRef), so the runtime refuses if the page moved it in the meantime.
+func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) (map[string]interface{}, error) {
+	if !mayActConsequentially(action, args) {
+		return args, nil
+	}
+	if s.approvals == nil {
+		if s.approvalsErr != nil {
+			return nil, apierr.Unavailable("BROWSER_APPROVAL_UNAVAILABLE",
+				"This action may need the user's approval, and approvals could not load on this machine, so it was not run")
+		}
+		return args, nil
 	}
 	mode := s.approvals.SessionMode(string(sessionID))
 	if mode == approval.ModeOff {
-		return nil
+		return args, nil
 	}
-	target, image := s.describe(ctx, sessionID, rt, action, args)
+	described := s.describe(ctx, sessionID, rt, action, args)
+	target, image := described.target, described.image
 	verdict := approval.Classify(target, mode)
+	if !verdict.NeedsApproval && !described.identified {
+		// Nothing about the element could be read: ask rather than guess.
+		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
+			Summary: unidentifiedSummary(action, args, target.PageURL),
+			Reason:  "Orchestrator could not read what this acts on, so it asks first."}
+	}
 	if !verdict.NeedsApproval {
-		return nil
+		return args, nil
 	}
 	element := strings.TrimSpace(strings.TrimSpace(target.Role) + " " + quoted(target.Name))
 	outcome, err := s.approvals.Request(ctx, approval.Request{
@@ -82,12 +100,44 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 		Timeout:   s.approvalTimeout,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if outcome.Allowed() {
-		return nil
+	if !outcome.Allowed() {
+		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
 	}
-	return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+	if action == "act" && described.ref != "" {
+		bound := make(map[string]interface{}, len(args)+1)
+		for key, value := range args {
+			bound[key] = value
+		}
+		bound["expectRef"] = described.ref
+		return bound, nil
+	}
+	return args, nil
+}
+
+// unidentifiedSummary says what will happen when the target is unknown.
+func unidentifiedSummary(action string, args map[string]interface{}, pageURL string) string {
+	var text string
+	switch action {
+	case "press":
+		key, _ := args["key"].(string)
+		text = fmt.Sprintf("Press %s", strings.TrimSpace(key))
+	case "act":
+		instruction, _ := args["instruction"].(string)
+		text = fmt.Sprintf("Act: %q", strings.TrimSpace(instruction))
+	default:
+		ref, _ := args["ref"].(string)
+		verb := "Click"
+		if action == "dblclick" {
+			verb = "Double-click"
+		}
+		text = fmt.Sprintf("%s element %s", verb, strings.TrimSpace(ref))
+	}
+	if host := approval.Site(pageURL); host != "" {
+		text += " on " + strings.TrimPrefix(host, "www.")
+	}
+	return text
 }
 
 // mayActConsequentially filters out actions that can never need approval
@@ -99,7 +149,7 @@ func mayActConsequentially(action string, args map[string]interface{}) bool {
 	switch action {
 	case "press":
 		key, _ := args["key"].(string)
-		return strings.EqualFold(strings.TrimSpace(key), "enter")
+		return approval.IsEnterKey(key)
 	case "act":
 		verb, _ := args["action"].(string)
 		verb = strings.ToLower(strings.TrimSpace(verb))
@@ -112,9 +162,20 @@ func mayActConsequentially(action string, args map[string]interface{}) bool {
 	return true
 }
 
-// describe asks the runtime about the target. A runtime that cannot answer
-// (an older Chrome extension) still lets the action's own arguments decide.
-func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) (approval.Target, string) {
+// describedTarget is what a runtime reported about an action's target.
+type describedTarget struct {
+	target approval.Target
+	image  string
+	// ref is the element act resolved to, when the runtime reports it.
+	ref string
+	// identified is false when nothing about the element could be read.
+	identified bool
+}
+
+// describe asks the runtime about the target. When it cannot answer (an older
+// Chrome extension, a closed tab), the action's own arguments are all there
+// is, and the result is marked unidentified so preflight asks.
+func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) describedTarget {
 	fallback := approval.Target{Action: action}
 	describeArgs := map[string]interface{}{"action": action}
 	for _, key := range []string{"ref", "instruction", "nth", "key"} {
@@ -128,17 +189,18 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 	result, err := rt.Execute(ctx, sessionID, describeAction, describeArgs)
 	if err != nil {
 		if s.log != nil {
-			s.log.Info("browser approval: describe unavailable; classifying from arguments", "session", sessionID, "action", action, "err", err)
+			s.log.Info("browser approval: describe unavailable; asking", "session", sessionID, "action", action, "err", err)
 		}
-		return fallback, ""
+		return describedTarget{target: fallback}
 	}
 	var described struct {
-		Target approval.Target `json:"target"`
-		Image  string          `json:"image"`
+		Target      approval.Target `json:"target"`
+		Image       string          `json:"image"`
+		ResolvedRef string          `json:"resolvedRef"`
 	}
 	raw, err := json.Marshal(result.Value)
 	if err != nil || json.Unmarshal(raw, &described) != nil {
-		return fallback, ""
+		return describedTarget{target: fallback}
 	}
 	target := described.Target
 	target.Action = action
@@ -148,7 +210,8 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 	if target.Key == "" {
 		target.Key = fallback.Key
 	}
-	return target, described.Image
+	identified := target.Role != "" || target.Name != "" || target.IsSubmit
+	return describedTarget{target: target, image: described.Image, ref: described.ResolvedRef, identified: identified}
 }
 
 func approvalRefusal(decision approval.Decision, summary string, timeout time.Duration) *ApprovalError {

@@ -10,6 +10,7 @@ import {
 	type PendingApproval,
 } from "../../lib/approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
+import { useUiStore } from "../../stores/ui-store";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 
 function useDecide(request: PendingApproval | undefined) {
@@ -57,9 +58,14 @@ export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; 
 	);
 }
 
-/** The session the window is showing, as "host/session" ("/session" locally). */
+/**
+ * The session the window is showing, as "host/session" ("/session" locally).
+ * Global Settings hides the routed page without changing the route, so no
+ * session is showing then.
+ */
 function useRoutedSessionKey(): string | undefined {
-	return useRouterState({
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const routed = useRouterState({
 		select: (state) => {
 			for (const match of [...state.matches].reverse()) {
 				const params = match.params as { sessionId?: string; hostId?: string };
@@ -68,6 +74,7 @@ function useRoutedSessionKey(): string | undefined {
 			return undefined;
 		},
 	});
+	return settingsOpen ? undefined : routed;
 }
 
 const requestKey = (request: PendingApproval) => `${request.hostId ?? ""}/${request.sessionId}`;

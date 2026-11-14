@@ -34,6 +34,7 @@ vi.mock("../../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: [{ id: "proj", sessions: [{ id: "ao-2", title: "Book flights" }] }] }),
 }));
 
+import { useUiStore } from "../../stores/ui-store";
 import { GlobalApprovalCard, SessionApprovalDock } from "./ApprovalHost";
 
 function request(id: string, sessionId: string): PendingApproval {
@@ -106,6 +107,18 @@ describe("approval hosts", () => {
 			expect.arrayContaining([expect.stringContaining("(local)")]),
 		);
 		unmount();
+	});
+
+	it("shows the open session's request app-wide while Settings covers the session", () => {
+		state.pending = [request("a", "ao-1")];
+		state.routedSessionId = "ao-1";
+		useUiStore.setState({ settingsModal: { scope: "global" } } as never);
+		try {
+			renderWith(<GlobalApprovalCard />);
+			expect(screen.getByTestId("approval-action")).toHaveTextContent("(a)");
+		} finally {
+			useUiStore.setState({ settingsModal: null } as never);
+		}
 	});
 
 	it("stays out of the way when the only request belongs to the open session", () => {

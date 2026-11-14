@@ -516,7 +516,16 @@ export class Executor {
 				return { outcome, instruction, ...(outcome === "ambiguous" ? { candidates } : {}), snapshot, untrustedExternalContent: true };
 			};
 			let dispatched = false;
+			// The daemon passes the ref the user approved; a page that moved the
+			// match to another element during the wait is refused.
+			const expectRef = typeof args.expectRef === "string" && args.expectRef ? args.expectRef.replace(/^@/, "") : undefined;
 			const perform = async (candidate: ActCandidate, retried: boolean, beforeSnapshot: string) => {
+				if (expectRef && candidate.ref !== expectRef) {
+					throw new BridgeError(
+						"BROWSER_TARGET_CHANGED",
+						"The page changed while the action waited for approval, so the approved element is no longer the one this instruction matches. Take a new snapshot and try again.",
+					);
+				}
 				const beforeNavigations = this.navigationCounts.get(page.tabId) ?? 0;
 				const before = { tabId: page.logicalId, url: sanitizeBrowserURL(page.tab.url ?? "") };
 				const alreadySatisfied = postcondition ? await this.postconditionHoldsNow(ctx, page, postcondition) : false;
@@ -884,6 +893,7 @@ export class Executor {
 			}
 			return {
 				target: { ...(described.facts ?? {}), ...pageFacts },
+				...(ref ? { resolvedRef: ref } : {}),
 				...(image ? { image } : {}),
 				untrustedExternalContent: true,
 			};

@@ -33,6 +33,8 @@ export type PanelApprovalInput = {
 
 export type PanelApprovalDescription = {
 	target: Partial<ApprovalElementFacts> & { pageUrl: string; pageTitle: string; instruction?: string };
+	/** The ref act matched, so an approved act can be bound to it. */
+	resolvedRef?: string;
 	image?: string;
 	untrustedExternalContent: true;
 };
@@ -41,19 +43,31 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 	const page = { pageUrl: sanitizeBrowserURL(input.page.url), pageTitle: sanitizeBrowserTitle(input.page.title) };
 	let role = "";
 	let name = "";
+	let resolvedRef: string | undefined;
 	let request: ApprovalDescribeRequest = { mode: "focused" };
 	if (input.action !== "press") {
 		const { refs } = await input.snapshot();
+		const entries = parseSnapshotEntries(refs);
 		if (input.action === "act") {
 			const match = matchInstruction(input.instruction ?? "", refs, { nth: input.nth });
-			if (match.outcome === "matched") ({ role, name } = match.candidate);
+			if (match.outcome === "matched") ({ role, name, ref: resolvedRef } = match.candidate);
 		} else if (input.ref) {
 			const wanted = input.ref.replace(/^@/, "");
-			const hit = parseSnapshotEntries(refs).find((entry) => entry.ref === wanted);
+			const hit = entries.find((entry) => entry.ref === wanted);
 			if (hit) ({ role, name } = hit);
 		}
 		if (!role && !name) {
 			return { target: { ...page, instruction: input.instruction }, untrustedExternalContent: true };
+		}
+		// The DOM read finds the first visible control with this role and name;
+		// when several share them it could describe another control's form.
+		// Report only what the snapshot knows about the chosen one.
+		if (entries.filter((entry) => entry.role === role && entry.name === name).length > 1) {
+			return {
+				target: { role, name, ...page, ...(input.instruction ? { instruction: input.instruction } : {}) },
+				...(resolvedRef ? { resolvedRef } : {}),
+				untrustedExternalContent: true,
+			};
 		}
 		request = { mode: "match", role, name };
 	}
@@ -86,5 +100,5 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 			image = undefined;
 		}
 	}
-	return { target, ...(image ? { image } : {}), untrustedExternalContent: true };
+	return { target, ...(resolvedRef ? { resolvedRef } : {}), ...(image ? { image } : {}), untrustedExternalContent: true };
 }
