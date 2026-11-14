@@ -38,6 +38,27 @@ export function annotationTextRange(root: HTMLElement, text: string): Range | un
 	return undefined;
 }
 
+/** Sent from navigated text so whatever folds it (a long user message) can open. */
+export const CHAT_REVEAL_RANGE_EVENT = "chat-reveal-range";
+export type ChatRevealRangeDetail = { range: Range };
+
+/**
+ * Asks whatever folds the range to open. A long user message folds behind Show
+ * more; navigation that centers a match below the fold would land on clipped
+ * text. Returns true when something opened, so the caller measures once the new
+ * layout has rendered instead of centering text the fold still hides.
+ */
+export function revealFoldedRange(range: Range): boolean {
+	const node = range.startContainer;
+	const element = node instanceof Element ? node : node.parentElement;
+	if (!element) return false;
+	return !element.dispatchEvent(new CustomEvent<ChatRevealRangeDetail>(CHAT_REVEAL_RANGE_EVENT, {
+		bubbles: true,
+		cancelable: true,
+		detail: { range },
+	}));
+}
+
 export function annotationBody(source: HTMLElement): HTMLElement {
 	return source.querySelector<HTMLElement>("[data-chat-message-body]") ?? source;
 }

@@ -860,7 +860,17 @@ vi.mock("../hooks/useShellTerminals", () => ({
 	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
 	useShellTerminals: () => ({ data: shellTerminalsState.loaded ? shellTerminalsState.data : undefined, isLoading: !shellTerminalsState.loaded }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
-	useCloseShellTerminal: () => ({ mutate: closeShellTerminalMock }),
+	useCloseShellTerminal: () => ({
+		mutate: closeShellTerminalMock,
+		// Settles on the mock's callbacks, like the real mutation does.
+		mutateAsync: (handleId: string) =>
+			new Promise<void>((resolve, reject) => {
+				closeShellTerminalMock(handleId, {
+					onSuccess: () => resolve(),
+					onError: (error: unknown) => reject(error),
+				});
+			}),
+	}),
 	useRenameShellTerminal: () => ({ mutate: vi.fn() }),
 }));
 

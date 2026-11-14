@@ -1079,6 +1079,30 @@ describe("send keys", () => {
 		await waitFor(() => expect(getChatDraftBoundaries(sessionId)).toEqual([]));
 	});
 
+	// Signed out, nothing can be sent: a restored delivery waits for the login
+	// rather than offering a retry whose send would be dropped.
+	it.each([
+		["the send button", false, "Retry message safely"],
+		["the unsent strip", true, "Retry"],
+	])("holds a restored delivery's retry on %s while typing is locked", async (_where, parkUnsentSends, name) => {
+		const sessionId = `composer-restored-delivery-locked-${parkUnsentSends}`;
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "wait for the login",
+			attachments: [],
+			requestText: "wait for the login",
+			clientMessageId: `composer-restored-delivery-locked-${parkUnsentSends}-id`,
+		});
+		const onSend = vi.fn(async () => undefined);
+		const view = render(<ChatComposer parkUnsentSends={parkUnsentSends} onSend={onSend} draftSessionId={sessionId} typingLocked />);
+
+		expect(await screen.findByRole("button", { name })).toBeDisabled();
+		expect(onSend).not.toHaveBeenCalled();
+
+		view.rerender(<ChatComposer parkUnsentSends={parkUnsentSends} onSend={onSend} draftSessionId={sessionId} />);
+		await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+	});
+
 	it.each([false, true])("preserves a newer draft when an old surface accepts before replacement mount: %s", async (acceptBeforeMount) => {
 		const sessionId = `composer-later-revision-${acceptBeforeMount}`;
 		let acceptSend!: () => void;

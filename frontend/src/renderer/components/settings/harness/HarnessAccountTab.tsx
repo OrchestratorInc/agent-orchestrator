@@ -58,7 +58,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
 	// Subscription accounts are for local Claude Code and Codex.
-	const accountProvider = !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// The running job's steps stay in the Installation card until it finishes on Done.
 	const justFinished = useInstallJustFinished(job);
 	const stage = justFinished ? "done" : installStage(job);
@@ -153,7 +153,7 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			{loginPanel}
 		</HarnessDetailGroup> : null}
 		{savedKeys}
-		{accountProvider ? <AgentAccountsPanel provider={accountProvider} cliLogin={{
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} cliLogin={{
 			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
 			canLogout: Boolean(authPlan?.logoutCommand),
 			onSignIn: onLogin,

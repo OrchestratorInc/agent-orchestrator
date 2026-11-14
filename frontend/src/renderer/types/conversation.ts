@@ -147,7 +147,8 @@ export interface ConversationTurn {
 	 */
 	groupKey?: string;
 	errorMessage?: string;
-	failureCode?: "provider_key_missing";
+	/** A provider failure with a known way out: a missing API key, or a refused login. */
+	failureCode?: "provider_key_missing" | "auth_required";
 	/**
 	 * The turn ended before an agent started on it (a Cloud message refused
 	 * when its turn came): it reads as not run, with errorMessage as the
@@ -209,6 +210,7 @@ export interface ConversationContentSummary {
 	uri?: string;
 	name?: string;
 	text?: string;
+	comment?: string;
 	sourceConversationId?: string;
  sourceMessageId?: string;
 	sourceRevision?: number;
@@ -526,6 +528,7 @@ export interface SystemEventDetail {
 		| "workspace.setup"
 		| "workspace.script.run"
 		| "account.switched"
+		| "account.limit_handoff"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
 		| "approval_mode.substituted"
 		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
@@ -534,6 +537,7 @@ export interface SystemEventDetail {
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
+	retry?: "sent" | "skipped";
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
@@ -1058,11 +1062,16 @@ export function isUserQueuePrompt(item: ConversationItem): item is ConversationM
 }
 
 /**
- * Turn ids whose user prompt is represented in the queue dock instead.
+ * Turn ids the timeline does not draw, because their message shows elsewhere.
  *
  * The user's prompts for queued turns live in the dock until dispatch. Other
  * automation messages have no dock row, so their queued feedback stays visible
  * in the timeline. Turns cancelled from the dock must not reappear after refresh.
+ *
+ * A message the agent refused for its login waited for the login, and once it
+ * is sent again its copy is that message: the refused original is not drawn
+ * beside it. One that ran a tool or changed a file first stays, so that work
+ * stays in the chat.
  */
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
@@ -1071,15 +1080,32 @@ export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<strin
 			humanPromptTurnIds.add(item.turnId);
 		}
 	}
+	const resent = new Set(snapshot.turns.flatMap((turn) => turn.retryOfTurnId && !turn.rolledBack ? [turn.retryOfTurnId] : []));
+	// Only read the items when a refused message was sent again.
+	let worked: Set<string> | undefined;
 	return new Set(
 		snapshot.turns
 			.filter(
 				(turn) =>
-					(turn.state === "queued" || turn.state === "cancelled") &&
-					humanPromptTurnIds.has(turn.id),
+					((turn.state === "queued" || turn.state === "cancelled") && humanPromptTurnIds.has(turn.id)) ||
+					(turn.state === "failed" && turn.failureCode === "auth_required" && resent.has(turn.id) &&
+						!(worked ??= turnsThatDidWork(snapshot)).has(turn.id)),
 			)
 			.map((turn) => turn.id),
 	);
+}
+
+/** Activities that act on the workspace: a turn with any of them may not be run twice unasked. */
+const TURN_WORK_ACTIVITY_KINDS: ReadonlySet<ActivityKind> = new Set(["command", "file_change", "mcp_tool", "ao_action"]);
+
+/** The turns that ran a tool or changed a file, so sending one again could repeat that. */
+export function turnsThatDidWork(snapshot: ConversationSnapshot): Set<string> {
+	const turnIds = new Set<string>();
+	for (const turn of snapshot.turns) if (turn.diff?.files.length || turn.artifacts?.length) turnIds.add(turn.id);
+	for (const item of snapshot.items) {
+		if (item.turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)) turnIds.add(item.turnId);
+	}
+	return turnIds;
 }
 
 /**

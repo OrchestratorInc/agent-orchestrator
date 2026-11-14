@@ -2,6 +2,8 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
+import { ArtifactShareMark } from "./ArtifactShareMark";
+import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
@@ -58,6 +60,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
+import { SessionForksSection } from "./SessionForksSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
@@ -86,7 +89,7 @@ import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -480,7 +483,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId ? null : <SessionAccountSummary session={session} />}
+					<SessionAccountSummary session={session} hostId={hostId} />
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -576,7 +579,7 @@ const SummaryView = memo(function SummaryView({
 			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
-			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
+			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
 	);
 });
@@ -1167,7 +1170,8 @@ function PRViewSummaryCard({
 	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
 	const titleLabel = (
 		<>
-			<span className="font-medium">{viewModel.repositoryLabel ? `${viewModel.repositoryLabel} ` : ""}PR #{pr.number}</span>
+			{/* The chips above name the repository in full on hover; here its short name leaves room for the title. */}
+			<span className="font-medium">{viewModel.repositoryLabel ? `${prRepositoryShortName(viewModel.repositoryLabel)} ` : ""}PR #{pr.number}</span>
 			{pr.title ? <span> {pr.title}</span> : null}
 			{/* The icon carries the state; keep it for screen readers. */}
 			<span className="sr-only"> {viewModel.stateLabel}</span>
@@ -1389,6 +1393,8 @@ function ArtifactSummaryList({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	// Who each published file's link opens for, marked as on the Artifacts page.
+	const shareAccess = useReconciledShareLinks();
 	const container = useRef<HTMLDivElement>(null);
 	const [columns, setColumns] = useState(3);
 	const [expanded, setExpanded] = useState(false);
@@ -1414,14 +1420,14 @@ function ArtifactSummaryList({
 		<div className="flex min-w-0 flex-col" ref={container}>
 			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
 				{previews.map((artifact) => (
-					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} shareAccess={shareAccess} />
 				))}
 			</div>
 			{rest.length > 0 ? (
 				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
 					{rows.map((artifact) => (
 						<li key={artifact.path}>
-							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} shareAccess={shareAccess} />
 						</li>
 					))}
 					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
@@ -1441,19 +1447,21 @@ function ArtifactSummaryList({
 	);
 }
 
-/** One Summary preview: a small thumbnail with the file's name and last update. */
+/** One Summary preview: a small thumbnail with the file's name, how it is shared and last update. */
 function ArtifactPreviewTile({
 	artifact,
 	onOpenArtifact,
 	previewLive,
 	session,
+	shareAccess,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	previewLive: boolean;
 	session: WorkspaceSession;
+	shareAccess: ShareAccessByUrl;
 }) {
-	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
 	return (
 		<Pressable
 			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
@@ -1465,27 +1473,34 @@ function ArtifactPreviewTile({
 			</span>
 			<span className="flex min-w-0 flex-col">
 				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
-				{artifact.updatedAt ? (
-					<time
-						className="truncate text-caption leading-4 tabular-nums text-passive"
-						dateTime={artifact.updatedAt}
-						title={new Date(artifact.updatedAt).toLocaleString()}
-					>
-						{formatTimeCompact(artifact.updatedAt)}
-					</time>
+				{artifact.updatedAt || artifact.shareUrl ? (
+					<span className="flex min-w-0 items-center gap-1">
+						<ArtifactShareMark row={row} iconClassName="size-3" />
+						{artifact.updatedAt ? (
+							<time
+								className="truncate text-caption leading-4 tabular-nums text-passive"
+								dateTime={artifact.updatedAt}
+								title={new Date(artifact.updatedAt).toLocaleString()}
+							>
+								{formatTimeCompact(artifact.updatedAt)}
+							</time>
+						) : null}
+					</span>
 				) : null}
 			</span>
 		</Pressable>
 	);
 }
 
-/** One Summary row: icon, name and last update. */
+/** One Summary row: icon, name, how it is shared and last update. */
 function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
+	shareAccess,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	shareAccess: ShareAccessByUrl;
 }) {
 	const KindIcon = artifactFileIcon(artifact);
 	return (
@@ -1496,6 +1511,7 @@ function ArtifactSummaryRow({
 		>
 			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			<ArtifactShareMark row={{ shareUrl: artifact.shareUrl, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined }} iconClassName="size-icon-sm" />
 			{artifact.updatedAt ? (
 				<time
 					className="shrink-0 text-caption tabular-nums text-settings-muted"
@@ -1773,7 +1789,6 @@ function ReviewsSection({
 		return (
 			<CloudReviewsSection
 				onOpenReviewFile={onOpenReviewFile}
-				onOpenReviewerTerminal={onOpenReviewerTerminal}
 				onWorkerMessageSent={onWorkerMessageSent}
 				session={session}
 			/>
@@ -1924,17 +1939,8 @@ function LocalReviewsSection({
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (ownerKey !== reviewerOwnerKey) return;
-			const started = data?.reviews?.find((review) => review.status === "running" && review.latestRun);
-			if (!started?.latestRun) {
-				if (reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
-				return;
-			}
-			if (data?.reviewerSurface?.mode === "chat" && data.reviewerSurface.reviewId) {
-				onOpenReviewerChat?.(data.reviewerSurface.reviewId);
-			} else if (data?.reviewerHandleId) {
-				const harness = started.latestRun.harness || "reviewer";
-				onOpenReviewerTerminal?.({ handleId: data.reviewerHandleId, harness });
-			}
+			const started = data?.reviews?.some((review) => review.status === "running" && review.latestRun);
+			if (!started && reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
 		},
 		onError: (_error, _variables, context) => {
 			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
@@ -2071,12 +2077,10 @@ function LocalReviewsSection({
 function CloudReviewsSection({
 	session,
 	onOpenReviewFile,
-	onOpenReviewerTerminal,
 	onWorkerMessageSent,
 }: {
 	session: WorkspaceSession;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
-	onOpenReviewerTerminal?: OpenReviewerTerminal;
 	onWorkerMessageSent?: () => void;
 }) {
 	const { t } = useTranslation();
@@ -2120,13 +2124,7 @@ function CloudReviewsSection({
 		onMutate: () => setReviewNotice(null),
 		onSuccess: (data) => {
 			queryClient.setQueryData(["cloud-session-reviews", baseUrl, orgId, session.id], data);
-			const running = data.reviews.find((review) => review.status === "running");
-			if (running && data.reviewerHandleId) {
-				onOpenReviewerTerminal?.({
-					handleId: data.reviewerHandleId,
-					harness: data.reviewerHarness || defaultReviewer,
-				});
-			} else if (!running) {
+			if (!data.reviews.some((review) => review.status === "running")) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
 			}
 		},

@@ -39,6 +39,18 @@ export type PRCardStatus = {
 	tone: PRDisplayTone;
 	/** How the checks stand: the checks row shows these counts in place of its label. */
 	checks?: PRChecksTally;
+	/**
+	 * The same fact as the label, split the way the checks row reads: what it is
+	 * about ("Review"), then where it stands ("Required") behind a state glyph.
+	 * Both already translated.
+	 */
+	fact?: PRCardFact;
+};
+
+export type PRCardFact = {
+	title: string;
+	value: string;
+	state: PRCheckState;
 };
 
 /** Where a check stands, from worst to best. */
