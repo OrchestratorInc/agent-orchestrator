@@ -818,6 +818,7 @@ export interface paths {
         get: operations["getSessionInterfaceTransition"];
         put?: never;
         post: operations["startSessionInterfaceTransition"];
+        /** @description An agent switch can be cancelled only by the session's creator (403 forbidden otherwise); an interface-only switch by any member who may switch it. */
         delete: operations["cancelSessionInterfaceTransition"];
         options?: never;
         head?: never;
@@ -4532,7 +4533,7 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
-            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent receives a handoff note of the conversation so far, or resumes its own conversation when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. */
+            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent receives a handoff note of the conversation so far, or resumes its own conversation when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. Only the session's creator may switch its agent, since the new agent runs on their login for it. Anyone else, an org admin included, gets 403 forbidden, whatever logins the creator has. */
             targetHarness?: components["schemas"]["CloudAgentHarness"];
             /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. With targetHarness, the model the new agent starts with (any target mode); its default model when omitted. */
             model?: string;
