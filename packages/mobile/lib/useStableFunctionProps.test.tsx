@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useStableFunctionProps } from "./useStableFunctionProps";
@@ -27,4 +28,20 @@ it("still changes when a handler comes or goes, for children that show a control
 	await act(async () => { renderer = create(<Harness label="a" onPress={() => "x"} />); });
 	await act(async () => renderer.update(<Harness label="a" />));
 	expect(latest.onPress).toBeUndefined();
+});
+
+it("hands an effect that runs after the commit the handler from that render", async () => {
+	const seen: string[] = [];
+	function Child({ onPress }: { onPress?: () => string }) {
+		useEffect(() => { seen.push(onPress?.() ?? "none"); });
+		return null;
+	}
+	function Parent(props: Props) {
+		const stable = useStableFunctionProps(props);
+		return <Child onPress={stable.onPress} />;
+	}
+	let renderer!: ReturnType<typeof create>;
+	await act(async () => { renderer = create(<Parent label="a" onPress={() => "first"} />); });
+	await act(async () => renderer.update(<Parent label="b" onPress={() => "second"} />));
+	expect(seen).toEqual(["first", "second"]);
 });

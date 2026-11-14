@@ -29,4 +29,9 @@ describe("composerSnapshotKey", () => {
 		const other = { ...snapshot("x"), settings: { model: "other" } };
 		expect(composerSnapshotKey(other)).not.toBe(composerSnapshotKey(snapshot("x")));
 	});
+
+	it("changes when only a model reroute arrives, so the composer names the model now answering", () => {
+		const rerouted = { ...snapshot("x"), modelReroute: { fromModel: "m", toModel: "other", at: "2026-11-14T00:00:02Z" } };
+		expect(composerSnapshotKey(rerouted)).not.toBe(composerSnapshotKey(snapshot("x")));
+	});
 });

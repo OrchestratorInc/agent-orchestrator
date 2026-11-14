@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 /**
  * The same props, with every function replaced by one that keeps its identity
@@ -8,10 +8,16 @@ import { useRef } from "react";
  * identity would cause, without ever calling a stale handler. A prop that goes
  * from a function to undefined (or back) still changes, so a child that shows
  * a control only when its handler is present still updates.
+ *
+ * The forwarders call the handlers of the last committed render, so they are
+ * for events and effects, not for calling during render.
  */
 export function useStableFunctionProps<P extends object>(props: P): P {
 	const latest = useRef(props);
-	latest.current = props;
+	// Taken up once the render commits, not while rendering: a render React
+	// throws away (concurrent rendering, StrictMode's second pass) must not
+	// leave its handlers behind for the forwarders to call.
+	useLayoutEffect(() => { latest.current = props; });
 	const forwarders = useRef(new Map<string, (...args: unknown[]) => unknown>());
 	const stable: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(props)) {

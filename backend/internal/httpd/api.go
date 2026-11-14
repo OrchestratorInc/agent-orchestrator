@@ -27,6 +27,8 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	// SessionForks serves the experimental fork routes. Nil refuses them.
+	SessionForks       controllers.SessionForkService
 	UsageFlush         func(context.Context)
 	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
@@ -72,12 +74,16 @@ type APIDeps struct {
 	Telemetry ports.EventSink
 	// TelemetryIdentity is the live telemetry identity, served to the phone by
 	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
-	TelemetryIdentity        ports.TelemetryIdentityStore
-	LifetimeSessions         func(context.Context) (int64, error)
-	Mobile                   *controllers.MobileController
-	BrowserLive              *BrowserLiveHub
-	Browser                  controllers.BrowserService
-	BrowserChrome            controllers.BrowserChromeService
+	TelemetryIdentity ports.TelemetryIdentityStore
+	LifetimeSessions  func(context.Context) (int64, error)
+	Mobile            *controllers.MobileController
+	BrowserLive       *BrowserLiveHub
+	Browser           controllers.BrowserService
+	BrowserChrome     controllers.BrowserChromeService
+	// Panes relays split-pane requests from agents to the desktop window.
+	Panes controllers.PaneService
+	// PaneTerminals lets an agent type into and read its session's shell terminals.
+	PaneTerminals            controllers.PaneTerminalService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -98,6 +104,9 @@ type APIDeps struct {
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
+	// SessionSearch answers the ranked search over past sessions. Nil leaves
+	// the route answering 501; the index itself is built by the daemon.
+	SessionSearch controllers.SessionSearchService
 
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
@@ -152,6 +161,7 @@ type API struct {
 	agentAccounts *controllers.AgentAccountsController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
+	sessionForks  *controllers.SessionForksController
 	automations   *controllers.AutomationsController
 	desktop       *controllers.DesktopWorkspaceController
 	usage         *controllers.UsageController
@@ -169,6 +179,7 @@ type API struct {
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
+	panes         *controllers.PanesController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
@@ -177,6 +188,7 @@ type API struct {
 	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
+	sessionSearch *controllers.SessionSearchController
 	github        *controllers.GitHubController
 	events        *EventsController
 }
@@ -202,6 +214,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
 		},
+		sessionForks: &controllers.SessionForksController{Svc: deps.SessionForks},
 		sessions: &controllers.SessionsController{
 			Svc:                      deps.Sessions,
 			Projects:                 deps.Projects,
@@ -235,6 +248,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
+		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
@@ -243,6 +257,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
+		sessionSearch: &controllers.SessionSearchController{Svc: deps.SessionSearch},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
@@ -258,7 +273,9 @@ func setupRoute(req *http.Request) bool {
 	switch chi.RouteContext(req.Context()).RoutePattern() {
 	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
 		// The first open of an imported chat runs Setup in its new workspace.
-		"/api/v1/sessions/{sessionId}/resume-agent":
+		"/api/v1/sessions/{sessionId}/resume-agent",
+		// A fork spawns a session, whose Setup runs in its new worktree.
+		"/api/v1/sessions/{sessionId}/fork":
 		return true
 	}
 	return false
@@ -364,6 +381,7 @@ func (a *API) Register(root chi.Router) {
 			a.agentAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
+			a.sessionForks.Register(r)
 			a.automations.Register(r)
 			a.desktop.Register(r)
 			a.usage.Register(r)
@@ -381,6 +399,7 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			a.panes.Register(r)
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
@@ -389,6 +408,7 @@ func (a *API) Register(root chi.Router) {
 			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
+			a.sessionSearch.Register(r)
 			a.github.Register(r)
 			// Sibling REST controllers plug in here.
 		})

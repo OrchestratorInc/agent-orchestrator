@@ -800,10 +800,6 @@ type Session struct {
 	DisplayNameExplicit              bool
 }
 
-type SessionAccountPin struct {
-	SessionID string
-}
-
 type SessionAgentAccount struct {
 	SessionID string
 	Provider  string
@@ -849,6 +845,17 @@ type SessionCleanupFact struct {
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
 	ReportOnly           bool
+}
+
+type SessionFork struct {
+	ForkSessionID   string
+	SourceSessionID string
+	RootSessionID   string
+	SourceTurnID    string
+	SourceTitle     string
+	ContextMode     string
+	ForkNumber      int64
+	CreatedAt       time.Time
 }
 
 type SessionHarnessRelease struct {
@@ -900,6 +907,15 @@ type SessionInterfaceTransitionMessage struct {
 type SessionNumFloor struct {
 	IDPrefix string
 	MaxNum   int64
+}
+
+type SessionSearchDeleted struct {
+	SessionID string
+}
+
+type SessionSearchOwner struct {
+	ID    int64
+	Token string
 }
 
 type SessionTelemetry struct {
