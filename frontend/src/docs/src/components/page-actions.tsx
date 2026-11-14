@@ -4,7 +4,7 @@ import { msg } from "@lingui/core/macro";
 import { useLingui } from "@lingui/react";
 import { buttonVariants } from "fumadocs-ui/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "fumadocs-ui/components/ui/popover";
-import { Check, ChevronDown, Copy, ExternalLink } from "lucide-react";
+import { Check, ChevronDown, Copy, ExternalLink, MessageSquareWarning, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { COMPANY } from "@/lib/constants";
 
@@ -13,10 +13,10 @@ const MENU_ITEM =
   "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-fd-foreground hover:bg-fd-accent hover:text-fd-accent-foreground [&_svg]:size-3.5";
 
 /**
- * Copies the article as Markdown, opens it in a chat assistant, or shows its
- * source. `markdownPath` is the article's Markdown copy, e.g. `/quickstart.md`.
+ * Copies the article as Markdown or opens it in a chat assistant.
+ * `markdownPath` is the article's Markdown copy, e.g. `/quickstart.md`.
  */
-export function PageActions({ markdownPath, sourceUrl }: { markdownPath: string; sourceUrl: string }) {
+export function PageActions({ markdownPath }: { markdownPath: string }) {
   const { i18n } = useLingui();
   const [copied, setCopied] = useState(false);
   const markdown = useRef<Promise<string> | null>(null);
@@ -77,10 +77,29 @@ export function PageActions({ markdownPath, sourceUrl }: { markdownPath: string;
           ))}
         </PopoverContent>
       </Popover>
-      <a href={sourceUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
-        {i18n._(msg`View on GitHub`)}
-        <ExternalLink />
-      </a>
     </div>
+  );
+}
+
+/**
+ * Reports a problem with the article as a prefilled GitHub issue, or opens
+ * its source for editing. It sits at the end, where readers finish.
+ */
+export function PageFeedback({ issueUrl, sourceUrl }: { issueUrl: string; sourceUrl: string }) {
+  const { i18n } = useLingui();
+  return (
+    <section className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-fd-card px-4 py-3">
+      <p className="my-0 text-sm text-fd-muted-foreground">{i18n._(msg`Something wrong or missing on this page?`)}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <a href={issueUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
+          <MessageSquareWarning />
+          {i18n._(msg`Suggest a change`)}
+        </a>
+        <a href={sourceUrl} target="_blank" rel="noreferrer noopener" className={BUTTON}>
+          <SquarePen />
+          {i18n._(msg`Edit this page`)}
+        </a>
+      </div>
+    </section>
   );
 }

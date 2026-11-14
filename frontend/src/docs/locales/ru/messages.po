@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "Документация {name}"
 
+msgid "{name} home"
+msgstr "Главная {name}"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Документация Orchestrator.inc"
 
@@ -23,6 +26,9 @@ msgstr "Вернуться на главную страницу документ
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "Встроенные возможности"
+
+msgid "Changelog"
+msgstr "Список изменений"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "Копировать Markdown"
 msgid "Docs"
 msgstr "Документация"
 
+msgid "Download"
+msgstr "Скачать"
+
+msgid "Edit this page"
+msgstr "Редактировать страницу"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "Попали сюда по ссылке? <0>Сообщите о неработающей ссылке</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "Начало работы"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Скрыть боковую панель"
 
-msgid "Main site"
-msgstr "Основной сайт"
+msgid "Installation"
+msgstr "Установка"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "Открыть боковую панель"
 msgid "Page not found"
 msgstr "Страница не найдена"
 
+msgid "Popular pages"
+msgstr "Популярные страницы"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "Назад"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "Показать боковую панель"
 
+msgid "Something wrong or missing on this page?"
+msgstr "На этой странице что-то не так или чего-то не хватает?"
+
+msgid "Suggest a change"
+msgstr "Предложить изменение"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "Содержание"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Трекеры"
 
+msgid "Troubleshooting"
+msgstr "Устранение неполадок"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "Работа с Orchestrator"
-
-msgid "View on GitHub"
-msgstr "Открыть на GitHub"
 
 msgctxt "sidebar section"
 msgid "Workspaces"

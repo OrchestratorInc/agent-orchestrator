@@ -10,6 +10,9 @@ msgstr ""
 msgid "{name} Docs"
 msgstr "{name} 文档"
 
+msgid "{name} home"
+msgstr "{name} 首页"
+
 msgid "{title} | Orchestrator.inc Docs"
 msgstr "{title} | Orchestrator.inc 文档"
 
@@ -23,6 +26,9 @@ msgstr "返回文档首页"
 msgctxt "sidebar section"
 msgid "Built-in capabilities"
 msgstr "内置功能"
+
+msgid "Changelog"
+msgstr "更新日志"
 
 msgctxt "language switcher"
 msgid "Choose a language"
@@ -66,6 +72,15 @@ msgstr "复制 Markdown"
 msgid "Docs"
 msgstr "文档"
 
+msgid "Download"
+msgstr "下载"
+
+msgid "Edit this page"
+msgstr "编辑此页"
+
+msgid "Followed a link here? <0>Report a broken link</0>"
+msgstr "通过链接来到这里？<0>报告失效链接</0>"
+
 msgctxt "sidebar section"
 msgid "Getting Started"
 msgstr "入门"
@@ -82,8 +97,8 @@ msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "隐藏侧边栏"
 
-msgid "Main site"
-msgstr "官网"
+msgid "Installation"
+msgstr "安装"
 
 msgctxt "pagination"
 msgid "Next"
@@ -122,6 +137,9 @@ msgstr "打开侧边栏"
 msgid "Page not found"
 msgstr "页面未找到"
 
+msgid "Popular pages"
+msgstr "热门页面"
+
 msgctxt "pagination"
 msgid "Previous"
 msgstr "上一页"
@@ -145,6 +163,12 @@ msgctxt "sidebar"
 msgid "Show sidebar"
 msgstr "显示侧边栏"
 
+msgid "Something wrong or missing on this page?"
+msgstr "此页面有错误或遗漏吗？"
+
+msgid "Suggest a change"
+msgstr "建议修改"
+
 msgctxt "table of contents"
 msgid "Table of contents"
 msgstr "目录"
@@ -167,12 +191,12 @@ msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "跟踪器"
 
+msgid "Troubleshooting"
+msgstr "故障排除"
+
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
 msgstr "使用 Orchestrator"
-
-msgid "View on GitHub"
-msgstr "在 GitHub 上查看"
 
 msgctxt "sidebar section"
 msgid "Workspaces"
