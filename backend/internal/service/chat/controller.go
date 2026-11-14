@@ -2558,15 +2558,33 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 
 // BeginForcedBranchHandoff fences intake even mid-turn, cancelling the queue and interrupting the turn.
 func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
-	c.sendMu.Lock()
+	restoreSteers := func() {}
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		if restore := withdrawer.WithdrawPendingSteers(); restore != nil {
+			restoreSteers = restore
+		}
+	}
 	c.mu.Lock()
 	if c.handoff != controllerHandoffNone {
 		c.mu.Unlock()
-		c.sendMu.Unlock()
+		restoreSteers()
 		return ErrControllerHandoff
 	}
 	c.handoff = controllerHandoffIdleBranch
 	c.branchHandoffDone = make(chan struct{})
+	c.mu.Unlock()
+	if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+		c.prepareBranchHandoffStop()
+		stopCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		stopErr := c.Terminate(stopCtx)
+		cancel()
+		if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+			c.AbortHandoff()
+			restoreSteers()
+			return errors.Join(errors.New("the provider did not release its pending send after it was stopped"), stopErr)
+		}
+	}
+	c.mu.Lock()
 	active := c.pendingTurnID != ""
 	c.mu.Unlock()
 	err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
@@ -2586,6 +2604,17 @@ func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) error {
 }
 
 var forcedHandoffInterruptLimit = 5 * time.Second
+
+func lockWithin(ctx context.Context, mu *sync.Mutex, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for !mu.TryLock() {
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
+}
 
 // AbortHandoff reopens source intake when a drain is cancelled before the source
 // controller is stopped. Any queued work resumes through the ordinary drain.

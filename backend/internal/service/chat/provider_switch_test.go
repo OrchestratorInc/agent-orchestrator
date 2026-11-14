@@ -183,6 +183,42 @@ func TestForcedProviderSwitchStopsTheRunningTurnAndQueue(t *testing.T) {
 	}
 }
 
+func TestForcedProviderSwitchStopsASendStuckInTheProvider(t *testing.T) {
+	t.Cleanup(chatsvc.SetForcedHandoffInterruptLimit(50 * time.Millisecond))
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	h.conv.mu.Lock()
+	h.conv.closeStarted = make(chan struct{})
+	released := h.conv.closeStarted
+	h.conv.onSend = func(string) { <-released }
+	h.conv.mu.Unlock()
+	sent := make(chan error, 1)
+	go func() {
+		_, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "never acknowledged", Origin: domain.MessageOriginHuman})
+		sent <- err
+	}()
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool { return len(snapshot.Turns) == 1 })
+
+	done := make(chan error, 1)
+	go func() {
+		done <- h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+			TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "forced", Force: true,
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("forced switch: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("forced switch waited on the stuck send")
+	}
+	<-sent
+	if record, found, err := h.st.GetSession(ctx, testSession); err != nil || !found || record.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("session = %+v found=%v err=%v, want it on Claude", record, found, err)
+	}
+}
+
 func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
