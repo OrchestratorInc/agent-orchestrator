@@ -237,6 +237,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newDoctorCommand(ctx))
 	root.AddCommand(newTriageCommand(ctx))
 	root.AddCommand(newAgentCommand(ctx))
+	root.AddCommand(newAccountCommand(ctx))
 	root.AddCommand(newSpawnCommand(ctx))
 	root.AddCommand(newSendCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))

@@ -12,6 +12,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
 | `session` | Manage agent sessions (list, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
+| `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
 | `pr` | Merge a PR or resolve its review threads | Completing a reviewed change | `ao pr merge` / `ao pr resolve-comments` |
 | `project` | Register, inspect, configure, or remove projects | Setting up or managing repos Orchestrator knows about | [commands/project.md](commands/project.md) |
