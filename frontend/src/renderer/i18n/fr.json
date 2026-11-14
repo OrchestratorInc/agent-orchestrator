@@ -4050,7 +4050,6 @@
 	"settings.agentAccounts.sessionAccount": "Compte",
 	"settings.agentAccounts.handoff": "Passer à un autre compte en cas de limite d'utilisation",
 	"settings.agentAccounts.handoffDescription": "S'applique à Claude Code et Codex. Quand une session Chat atteint une limite d'utilisation, Orchestrator la déplace vers un autre compte connecté qui a de la marge et relance l'invite une fois. Si aucun compte n'a de marge, Orchestrator reprend la session à la réinitialisation quand le fournisseur l'indique.",
-	"settings.agentAccounts.stayOnAccount": "Rester sur ce compte",
 	"settings.agentAccounts.moved": "Déplacé de {{from}} vers {{to}}",
 	"settings.agentAccounts.loading": "Chargement des comptes…",
 	"settings.agentAccounts.stopAndMoveTitle": "Arrêter le tour et déplacer ?",

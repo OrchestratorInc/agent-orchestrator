@@ -466,23 +466,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/agents/accounts/sessions/{sessionId}/stay": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Keep a session on its account, or let a usage limit move it */
-        put: operations["setSessionStayOnAccount"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/agents/accounts/usage": {
         parameters: {
             query?: never;
@@ -7954,7 +7937,6 @@ export interface components {
         SessionAgentAccountsResponse: {
             claude?: string;
             codex?: string;
-            stayOnAccount: boolean;
         };
         SessionArchiveSummary: {
             byProject: {
@@ -8445,9 +8427,6 @@ export interface components {
             agentConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
-        };
-        SetSessionStayOnAccountRequest: {
-            stay: null | boolean;
         };
         SetTurnAutoResumeRequest: {
             enabled: null | boolean;
@@ -10983,60 +10962,6 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    setSessionStayOnAccount: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description AO session identifier. */
-                sessionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetSessionStayOnAccountRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionAgentAccountsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };

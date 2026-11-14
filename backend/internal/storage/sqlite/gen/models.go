@@ -800,10 +800,6 @@ type Session struct {
 	DisplayNameExplicit              bool
 }
 
-type SessionAccountPin struct {
-	SessionID string
-}
-
 type SessionAgentAccount struct {
 	SessionID string
 	Provider  string

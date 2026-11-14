@@ -3958,7 +3958,6 @@
 	"settings.agentAccounts.sessionAccount": "账户",
 	"settings.agentAccounts.handoff": "达到用量上限时切换到其他账户",
 	"settings.agentAccounts.handoffDescription": "适用于 Claude Code 和 Codex。当 Chat 会话达到用量上限时，Orchestrator 会将其移至另一个仍有余量的已登录账户，并重试提示一次。若没有账户有余量，且提供方报告了重置时间，Orchestrator 会在重置时恢复会话。",
-	"settings.agentAccounts.stayOnAccount": "保留在此账户",
 	"settings.agentAccounts.moved": "已从 {{from}} 移至 {{to}}",
 	"settings.agentAccounts.loading": "正在加载账户…",
 	"settings.agentAccounts.stopAndMoveTitle": "停止本轮并移动？",

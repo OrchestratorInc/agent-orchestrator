@@ -3,14 +3,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { useSettings } from "../hooks/useSettings";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { WorkspaceSession } from "../types/workspace";
 import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AccountLimits } from "./settings/AgentAccountsSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Switch } from "./ui/switch";
 
 /** The account a session's agent runs under, and the move to another account.
  * A move is the session's durable controller handoff: the agent restarts in the
@@ -28,10 +26,8 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	const actions = useAgentAccountActions(hostId);
 	const label = useAgentAccountLabel(shown, hostId);
 	const { transition } = useSessionInterfaceTransitionStatus(shownId, hostId);
-	const { settings } = useSettings(undefined, shown && !hostId);
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
-	const [savingStay, setSavingStay] = useState(false);
 	const accountMove = transition?.targetAccountId ? transition : undefined;
 	const moving = interfaceTransitionIsActive(accountMove);
 	const settledPhase = accountMove && !moving ? accountMove.phase : undefined;
@@ -69,17 +65,6 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 		}
 	};
 
-	const setStay = async (stay: boolean) => {
-		setMessage("");
-		setSavingStay(true);
-		try {
-			await actions.setStayOnAccount(session.id, stay);
-		} catch (err) {
-			setMessage(err instanceof Error ? err.message : String(err));
-		} finally {
-			setSavingStay(false);
-		}
-	};
 
 	const status = moving
 		? t("settings.agentAccounts.switching", { email: label(accountMove?.targetAccountId) })
@@ -112,19 +97,12 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 		onOpenChange={(open) => { if (!open) setConfirming(null); }}
 	/> : null;
 
-	const stay = {
-		shown: !hostId && Boolean(settings?.accountHandoff) && session.mode === "chat",
-		checked: current.data?.stayOnAccount ?? false,
-		disabled: !current.data || savingStay,
-		set: setStay,
-	};
-
-	return { shown, choice, account, moving, status, dialog, stay, error: message, clearError: () => setMessage("") };
+	return { shown, choice, account, moving, status, dialog, error: message, clearError: () => setMessage("") };
 }
 
 export function SessionAccountSummary({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
-	const { shown, choice, account, moving, status, dialog, stay, error } = useSessionAccountSwitch(session, hostId ?? session.hostId);
+	const { shown, choice, account, moving, status, dialog, error } = useSessionAccountSwitch(session, hostId ?? session.hostId);
 	if (!shown || !choice) return null;
 
 	return <section className="mt-3 border-t border-(--color-border-settings-input) pt-3" data-testid="session-account-summary">
@@ -140,15 +118,6 @@ export function SessionAccountSummary({ session, hostId }: { session: WorkspaceS
 				</Select>
 			</div>
 		</div>
-		{stay.shown ? <div className="mt-2 flex items-center justify-between gap-3">
-			<p className="text-xs text-muted-foreground">{t("settings.agentAccounts.stayOnAccount")}</p>
-			<Switch
-				aria-label={t("settings.agentAccounts.stayOnAccount")}
-				checked={stay.checked}
-				disabled={stay.disabled}
-				onCheckedChange={(checked) => void stay.set(checked)}
-			/>
-		</div> : null}
 		{error ? <p className="mt-2 text-xs text-muted-foreground" role="status">{error}</p> : null}
 		{status ? <p className="mt-2 text-xs text-muted-foreground" role="status">{status}</p> : null}
 		{account ? <AccountLimits account={account} /> : null}
