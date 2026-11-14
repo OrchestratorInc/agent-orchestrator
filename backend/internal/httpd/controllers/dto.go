@@ -2502,6 +2502,22 @@ type SystemMemoryResponse struct {
 	PressureSource string `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
 }
 
+// SessionDiskResponse is the disk space one session's worktree took at
+// measuredAt.
+type SessionDiskResponse struct {
+	SessionID  domain.SessionID `json:"sessionId"`
+	SizeBytes  int64            `json:"sizeBytes" minimum:"0" description:"Disk space allocated under the session's worktree, as du counts it."`
+	MeasuredAt time.Time        `json:"measuredAt"`
+}
+
+// ListSessionDiskResponse is the cached size of each live session's worktree.
+// A worktree that is not measured yet, or is not on disk, has no row.
+type ListSessionDiskResponse struct {
+	Sessions   []SessionDiskResponse `json:"sessions"`
+	TotalBytes int64                 `json:"totalBytes" minimum:"0" description:"Sum of the measured worktrees. One that several sessions share is counted once."`
+	Measuring  int                   `json:"measuring" minimum:"0" description:"Worktrees with no size yet, or one old enough to be measured again. The figures can change while this is above zero."`
+}
+
 // MemoryPressureResponse is the machine's memory-pressure verdict alone, the
 // same two fields SystemMemoryResponse carries, read without sampling any
 // process so the board can poll it often.

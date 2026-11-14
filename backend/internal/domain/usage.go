@@ -495,6 +495,24 @@ type ReviewerMemory struct {
 	Memory    SessionMemory
 }
 
+// SessionDisk is the disk space one session's worktree took when it was last
+// measured. A reading like SessionMemory; never persisted.
+type SessionDisk struct {
+	SessionID  SessionID
+	SizeBytes  int64
+	MeasuredAt time.Time
+}
+
+// DiskReport is every measured session worktree and their total.
+type DiskReport struct {
+	Sessions []SessionDisk
+	// TotalBytes counts a worktree that several sessions share once.
+	TotalBytes int64
+	// Measuring is how many worktrees have no size yet, or one old enough to
+	// be measured again. The figures can still change while it is above zero.
+	Measuring int
+}
+
 // SessionStep is one tool call the agent made, as reported by its hooks: which
 // tool and when. Transient like SessionMemory; never persisted.
 type SessionStep struct {

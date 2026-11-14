@@ -690,6 +690,8 @@ func Run(buildVersion string) (retErr error) {
 			return roots
 		},
 	})
+	diskReader := usagesvc.NewDiskReader(usagesvc.DiskReaderDeps{Store: store, ManagedRoot: filepath.Join(cfg.DataDir, "worktrees")})
+	go diskReader.Run(ctx)
 	sessMgr = wiredSessMgr
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
@@ -1278,6 +1280,7 @@ func Run(buildVersion string) (retErr error) {
 		UsageLimitSetting:  store,
 		UsagePrices:        usagePrices(usagePricing),
 		SessionMemory:      memoryReader,
+		SessionDisk:        diskReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,

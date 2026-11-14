@@ -29,6 +29,7 @@ import {
 	sampleHistoryLength,
 	cpuSampleOf,
 	useCPUHistory,
+	useSessionDisk,
 	useSessionMemory,
 	type CPUSample,
 	type AppMemoryReading,
@@ -434,6 +435,107 @@ export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onR
 	);
 }
 
+/**
+ * Every session's worktree size, largest first, and their total. A session
+ * with no live process is listed too: it still holds its disk. Sorting by
+ * last active puts the longest idle first. Nothing here deletes anything.
+ */
+export function DiskSection({ projectId }: { projectId?: string }) {
+	const { t } = useTranslation();
+	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
+	const disk = useSessionDisk(projectId);
+	const report = disk.data;
+	const [sort, setSort] = useState<{ by: "size" | "idle"; ascending: boolean }>({ by: "size", ascending: false });
+	const sortBy = (by: "size" | "idle") => setSort((current) => ({ by, ascending: current.by === by ? !current.ascending : false }));
+	const rows = useMemo(() => {
+		const sizes = new Map((report?.sessions ?? []).map((item) => [item.sessionId, item] as const));
+		const now = Date.now();
+		const direction = sort.ascending ? 1 : -1;
+		return workspaces
+			.filter((workspace) => !projectId || workspace.id === projectId)
+			.flatMap((workspace) => workspace.sessions)
+			.flatMap((session) => {
+				const reading = sizes.get(session.id);
+				if (!reading) return [];
+				const facts = toSessionFacts(session, undefined, now);
+				return [{ session, sizeBytes: reading.sizeBytes, working: facts.working, idleSeconds: facts.working ? 0 : facts.idleSeconds ?? 0 }];
+			})
+			.sort(
+				(a, b) =>
+					direction * (sort.by === "size" ? a.sizeBytes - b.sizeBytes : a.idleSeconds - b.idleSeconds) ||
+					a.session.title.localeCompare(b.session.title) ||
+					a.session.id.localeCompare(b.session.id),
+			);
+	}, [workspaces, projectId, report, sort]);
+	// A daemon without the route, or one that failed: no section, not an empty one.
+	if (disk.isError) return null;
+	const measuring = !report || report.measuring > 0;
+	if (rows.length === 0) {
+		return (
+			<SettingsSection title={t("shell.diskSectionTitle")} testId="session-disk" grouped>
+				<p aria-busy={measuring} className="settings-row-bar text-sm text-settings-muted">
+					{measuring ? (
+						<span className="inline-flex items-center gap-2">
+							<Loader2 aria-hidden="true" className="size-icon-sm animate-spin" />
+							{t("shell.diskMeasuring")}
+						</span>
+					) : t("shell.diskEmpty")}
+				</p>
+			</SettingsSection>
+		);
+	}
+	const maxBytes = Math.max(...rows.map((row) => row.sizeBytes), 1);
+	// The oldest measurement: every figure on screen is at least this recent.
+	const measuredAt = new Date(Math.min(...(report?.sessions ?? []).map((item) => Date.parse(item.measuredAt))));
+	return (
+		<SettingsSection
+			title={t("shell.diskSectionTitle")}
+			testId="session-disk"
+			action={
+				<span className="inline-flex items-center gap-2 text-xs tabular-nums text-settings-muted" data-testid="session-disk-total">
+					{measuring ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+					{[
+						measuring ? t("shell.diskMeasuring") : undefined,
+						formatMemory(report?.totalBytes ?? 0),
+						measuring ? undefined : t("shell.diskMeasuredAt", { time: measuredAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }),
+					].filter(Boolean).join(" · ")}
+				</span>
+			}
+		>
+			<div className="settings-grouped-rows">
+				<table className="w-full table-fixed border-collapse text-xs" data-testid="session-disk-table">
+					<colgroup>
+						<col />
+						<col className={columnWidth.type} />
+						<col className={columnWidth.memory} />
+						<col className={columnWidth.share} />
+					</colgroup>
+					<thead>
+						<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
+							<th className={cn("pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
+							<SortHeader active={sort.by === "idle"} ascending={sort.ascending} className={cell.type} label={t("shell.diskColumnLastActive")} onSort={() => sortBy("idle")} sortable={rows.length > 1} />
+							<SortHeader active={sort.by === "size"} ascending={sort.ascending} className={cell.memory} label={t("shell.diskColumnSize")} onSort={() => sortBy("size")} sortable={rows.length > 1} />
+							<th className={cn("pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
+						</tr>
+					</thead>
+					<tbody className="[&_tr+tr]:border-t [&_tr]:border-(--color-border-settings-dialog-header)">
+						{rows.map((row) => (
+							<tr data-testid="session-disk-row" key={row.session.id}>
+								<RowTitle canExpand={false} isExpanded={false} title={row.session.title} />
+								<td className={cn("whitespace-nowrap text-xs tabular-nums text-settings-muted", topLine, cell.type)} data-testid="session-disk-last-active">
+									{formatTimeTerse(row.working ? undefined : row.session.activity?.lastActivityAt)}
+								</td>
+								<MemoryCell bytes={row.sizeBytes} tone="neutral" />
+								<ShareCell bytes={row.sizeBytes} maxBytes={maxBytes} tone="neutral" />
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+		</SettingsSection>
+	);
+}
+
 /** The CPU: its size and load on the heading line, then the graphs. */
 export function CpuSection() {
 	const { t } = useTranslation();
@@ -509,6 +611,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 			</div>
 			<SessionsTable onRows={setRows} pinned={scrolledPast} projectId={projectId} underToolbar={underToolbar} />
 			</div>
+			<DiskSection projectId={projectId} />
 		</>
 	);
 }

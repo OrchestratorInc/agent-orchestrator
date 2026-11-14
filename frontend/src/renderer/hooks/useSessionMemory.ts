@@ -156,6 +156,29 @@ export function useMemoryPressure(local = true) {
 	});
 }
 
+/**
+ * Each session's worktree size, from the daemon's cache. The daemon measures
+ * in the background, so this asks again every two seconds while it reports
+ * worktrees still being measured, and once a minute otherwise.
+ */
+export function useSessionDisk(projectId?: string) {
+	const enabled = useDiagnosticsEnabled();
+	return useQuery({
+		enabled,
+		queryKey: ["session-disk", projectId ?? "all"],
+		queryFn: async (): Promise<components["schemas"]["ListSessionDiskResponse"]> => {
+			const { data, error } = await apiClient.GET("/api/v1/usage/sessions/disk", {
+				params: { query: projectId ? { projectId } : {} },
+			});
+			if (error) throw error;
+			return data;
+		},
+		refetchInterval: (query) => (query.state.data?.measuring ? sessionMemoryFastRefetchIntervalMs : sessionMemoryRefetchIntervalMs),
+		// 501 from a daemon without the route is permanent for the run.
+		retry: false,
+	});
+}
+
 /** The last state any caller saw, so a change refreshes the numbers once. */
 const lastPressure: { state?: PressureState } = {};
 

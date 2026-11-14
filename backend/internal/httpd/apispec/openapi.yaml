@@ -15008,6 +15008,38 @@ paths:
       summary: List compact token and estimated cost usage for session cards
       tags:
       - usage
+  /api/v1/usage/sessions/disk:
+    get:
+      operationId: listSessionDisk
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionDiskResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the cached disk size of each live session's worktree
+      tags:
+      - usage
   /api/v1/usage/sessions/memory:
     get:
       operationId: listSessionMemory
@@ -20782,6 +20814,28 @@ components:
       - runs
       - activeReviewers
       type: object
+    ListSessionDiskResponse:
+      properties:
+        measuring:
+          description: Worktrees with no size yet, or one old enough to be measured
+            again. The figures can change while this is above zero.
+          minimum: 0
+          type: integer
+        sessions:
+          items:
+            $ref: '#/components/schemas/SessionDiskResponse'
+          type: array
+        totalBytes:
+          description: Sum of the measured worktrees. One that several sessions share
+            is counted once.
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - sessions
+      - totalBytes
+      - measuring
+      type: object
     ListSessionMemoryResponse:
       properties:
         app:
@@ -22741,6 +22795,24 @@ components:
       - unpushed
       - behind
       - conflicts
+      type: object
+    SessionDiskResponse:
+      properties:
+        measuredAt:
+          format: date-time
+          type: string
+        sessionId:
+          type: string
+        sizeBytes:
+          description: Disk space allocated under the session's worktree, as du counts
+            it.
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+      - sessionId
+      - sizeBytes
+      - measuredAt
       type: object
     SessionHistoryResponse:
       properties:

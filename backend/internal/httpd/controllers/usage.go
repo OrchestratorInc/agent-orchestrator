@@ -54,6 +54,12 @@ type SessionMemoryService interface {
 	AppMemory(context.Context) (domain.AppMemory, error)
 }
 
+// SessionDiskService reads the cached size of each live session's worktree.
+// It must not walk a worktree: sizes are measured in the background.
+type SessionDiskService interface {
+	ListDisk(context.Context, domain.ProjectID) (domain.DiskReport, error)
+}
+
 // MemoryPressureReader reads the machine's memory-pressure verdict alone:
 // cheap enough to poll while no other memory figure is on screen.
 type MemoryPressureReader interface {
@@ -78,6 +84,8 @@ type UsageController struct {
 	LimitHistory        UsageLimitHistoryService
 	LimitHistorySetting UsageLimitHistorySetting
 	Prices              UsagePriceService
+	// Disk is optional: without it the disk route is 501.
+	Disk SessionDiskService
 }
 
 // Register mounts usage routes on the supplied router.
@@ -89,6 +97,7 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Put("/usage/prices", c.setPrices)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
+	r.Get("/usage/sessions/disk", c.listDisk)
 	r.Get("/usage/memory/pressure", c.getPressure)
 }
 
@@ -308,6 +317,26 @@ func (c *UsageController) listMemory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionMemoryResponse{Sessions: out, System: system, App: app})
+}
+
+func (c *UsageController) listDisk(w http.ResponseWriter, r *http.Request) {
+	if c.Disk == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/sessions/disk")
+		return
+	}
+	report, err := c.Disk.ListDisk(r.Context(), domain.ProjectID(r.URL.Query().Get("projectId")))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := ListSessionDiskResponse{
+		Sessions:   make([]SessionDiskResponse, 0, len(report.Sessions)),
+		TotalBytes: report.TotalBytes, Measuring: report.Measuring,
+	}
+	for _, item := range report.Sessions {
+		out.Sessions = append(out.Sessions, SessionDiskResponse{SessionID: item.SessionID, SizeBytes: item.SizeBytes, MeasuredAt: item.MeasuredAt})
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
 }
 
 func (c *UsageController) getPressure(w http.ResponseWriter, r *http.Request) {
