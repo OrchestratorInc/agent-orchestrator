@@ -65,6 +65,7 @@ type Service struct {
 
 	mu       sync.Mutex
 	readings map[string]*reading
+	readSeq  uint64
 	logins   map[string]*login
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
@@ -86,8 +87,11 @@ type reading struct {
 	limitsErr     string
 	limitsProblem domain.AgentAccountProblemKind
 	// failures counts checks in a row that failed on their own.
-	failures int
-	at       time.Time
+	failures     int
+	at           time.Time
+	seq          uint64
+	confirmed    *domain.AgentAccountIdentityCheck
+	confirmedSeq uint64
 }
 
 // failedOnItsOwn reports a reading whose check failed in a way the next check
@@ -342,7 +346,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	r := &reading{at: s.now()}
+	s.mu.Lock()
+	s.readSeq++
+	r := &reading{at: s.now(), seq: s.readSeq}
+	s.mu.Unlock()
 	identity, err := provider.Identity(ctx, account.Home)
 	r.identity = identity
 	if err != nil {
@@ -395,6 +402,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			s.recordLimits(ctx, account, email, plan, limits)
 		}
 	}
+	if err == nil {
+		confirmed := r.identity
+		r.confirmed, r.confirmedSeq = &confirmed, r.seq
+	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
 	// about the account; caching its failure would refuse the account for the
 	// rest of the cache window.
@@ -402,6 +413,15 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		return r
 	}
 	s.mu.Lock()
+	if prev := s.readings[account.ID]; prev != nil {
+		if prev.confirmedSeq > r.seq {
+			s.mu.Unlock()
+			return prev
+		}
+		if err != nil {
+			r.confirmed, r.confirmedSeq = prev.confirmed, prev.confirmedSeq
+		}
+	}
 	if r.failedOnItsOwn() {
 		r.failures = 1
 		if prev := s.readings[account.ID]; prev != nil && prev.failedOnItsOwn() {
@@ -420,6 +440,20 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		confirmed(account, r.at)
 	}
 	return r
+}
+
+// ConfirmedLogins is, per account, the identity its last successful check
+// found. A failed check keeps the one before it.
+func (s *Service) ConfirmedLogins() map[string]domain.AgentAccountIdentityCheck {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]domain.AgentAccountIdentityCheck, len(s.readings))
+	for id, r := range s.readings {
+		if r.confirmed != nil {
+			out[id] = *r.confirmed
+		}
+	}
+	return out
 }
 
 // accounts is the computer's own account per provider, then the saved ones.

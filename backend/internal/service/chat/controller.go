@@ -3459,8 +3459,14 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			message = event.Err.Error()
 		}
 		state := settledTurnState(event)
+		failureCode := event.FailureCode
+		// Every driver reports a refused login as ErrChatAuthRequired, so the turn
+		// carries one code the chat can offer a sign-in for, whatever the agent.
+		if failureCode == "" && state == domain.TurnStateFailed && errors.Is(event.Err, ports.ErrChatAuthRequired) {
+			failureCode = domain.ConversationFailureAuthRequired
+		}
 		if err := c.store.SettleTurnWithFailureCode(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, event.UsageLimitResetsAt, now); err != nil {
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, failureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
 		}
 		if event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID() {

@@ -101,6 +101,10 @@ type Config struct {
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
+	// SessionModeForAgent picks the mode mapping from the handshake, for a
+	// harness whose ACP servers name their modes differently. It overrides
+	// SessionMode when it returns a mapping.
+	SessionModeForAgent func(acpsdk.InitializeResponse) func(ports.PermissionMode) string
 	// SuppressSessionModes drops the agent's mode surfaces from the
 	// config-option catalog: the legacy session-mode list and any
 	// mode-category config option. It is for agents whose modes are pure
@@ -151,8 +155,13 @@ type Config struct {
 	// extension, which is enabled when the agent advertises it.
 	SteerRequest *SteerRequest
 	// SteerDrain is for an agent that collects mid-turn guidance itself with
-	// an agent-to-client request. It takes precedence over SteerRequest.
+	// an agent-to-client request. It takes precedence over SteerPrompt and
+	// SteerRequest.
 	SteerDrain *SteerDrain
+	// SteerPrompt is for an agent that takes mid-turn guidance as another
+	// session/prompt on the running session. It takes precedence over
+	// SteerRequest.
+	SteerPrompt *SteerPrompt
 	// ValidateTurnSettings rejects provider settings that cannot be applied to a
 	// live process. The initial permission mode is the launch-time value.
 	ValidateTurnSettings TurnSettingsValidator
@@ -377,9 +386,12 @@ func withoutModeOptions(options []acpsdk.SessionConfigOption) []acpsdk.SessionCo
 func (d *Driver) Harness() domain.AgentHarness { return d.cfg.Harness }
 
 // sessionPolicy picks the mode mapping and permission policy for a launch.
-func (d *Driver) sessionPolicy(cfg LaunchConfig) (func(ports.PermissionMode) string, PermissionPolicy) {
+func (d *Driver) sessionPolicy(
+	cfg LaunchConfig,
+	init acpsdk.InitializeResponse,
+) (func(ports.PermissionMode) string, PermissionPolicy) {
 	if !cfg.ReadOnly || d.cfg.ReadOnly == nil {
-		return d.cfg.SessionMode, d.cfg.PermissionPolicy
+		return d.sessionMode(init), d.cfg.PermissionPolicy
 	}
 	session := d.cfg.ReadOnly(cfg)
 	return func(ports.PermissionMode) string { return session.Mode }, session.PermissionPolicy
@@ -515,7 +527,7 @@ func (d *Driver) openNewSession(
 	if resp.SessionId == "" {
 		return errors.New("ACP session/new returned no session id")
 	}
-	modeFor, permissionFor := d.sessionPolicy(launchCfg)
+	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 	conv.start(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 		modeFor, d.cfg.SessionOptions, permissionFor,
@@ -662,7 +674,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 				conv.replaceAvailableCommands(commands)
 			}
 		}
-		modeFor, permissionFor := d.sessionPolicy(launchCfg)
+		modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 			modeFor, d.cfg.SessionOptions, permissionFor,
@@ -757,7 +769,7 @@ func (d *Driver) resumeSession(
 		modes = resp.Modes
 	}
 	conv.hasDurableTurns = cfg.HasPriorTurns
-	modeFor, permissionFor := d.sessionPolicy(launchCfg)
+	modeFor, permissionFor := d.sessionPolicy(launchCfg, init)
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init, steeringFor(d.cfg)),
 		modeFor, d.cfg.SessionOptions, permissionFor,
@@ -1090,6 +1102,17 @@ func cloneCapabilities(in ports.ChatCapabilities) ports.ChatCapabilities {
 		out[capability] = enabled
 	}
 	return out
+}
+
+// sessionMode returns the binding's mode mapping for the agent that answered
+// the handshake.
+func (d *Driver) sessionMode(init acpsdk.InitializeResponse) func(ports.PermissionMode) string {
+	if d.cfg.SessionModeForAgent != nil {
+		if modeFor := d.cfg.SessionModeForAgent(init); modeFor != nil {
+			return modeFor
+		}
+	}
+	return d.cfg.SessionMode
 }
 
 // clientExtensionAliases adds the steering drain's legacy method name, if it

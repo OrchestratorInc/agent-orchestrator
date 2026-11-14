@@ -46,6 +46,7 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		HistoryReconciler:  reconcileReplay,
 		PromptErrorFailure: promptErrorFailure,
 		VersionProbe:       probe,
+		SteerPrompt:        steerPrompt,
 		// Hermes is a shell agent bound to the session workspace: its filesystem
 		// reach is the whole workspace root, so a multi-repo workspace's child
 		// repositories are reachable from its cwd without ACP

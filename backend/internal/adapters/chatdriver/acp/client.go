@@ -614,7 +614,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		if err == nil {
 			err = c.SessionUpdate(context.Background(), update)
 		}
-	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPPromptHandoffMethod,
+		persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
 	case claudeSDKMessageMethod:
 		err = c.handleClaudeSDKMessage(params)
@@ -714,6 +715,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
+		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
+			// The agent's note that it took a steer prompt; the "↳ Steered" mark
+			// already says so.
+			break
+		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
 		segment := c.steerSegment
