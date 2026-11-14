@@ -6712,8 +6712,11 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 	// A message that ran no tool and changed nothing can be sent again on its own
 	// once the login takes: there is nothing it could do twice. Any other, and every
 	// cloud one (the cloud connection's login is not watched from here), is the
-	// user's to send again.
-	const queued = resendable && !cloud && !workedTurnIds.has(refusedId!);
+	// user's to send again. So is one whose start paging left out: its work may not
+	// be loaded.
+	const historyLoaded = !snapshot.hasMoreBefore || snapshot.items.some((item) =>
+		item.kind === "message" && item.role === "user" && item.turnId === refusedId);
+	const queued = resendable && !cloud && historyLoaded && !workedTurnIds.has(refusedId!);
 	// The daemon found this session's login working again after the refusal, however
 	// it came back (a login in a terminal, a token that refreshed): the user is in.
 	const account = snapshot.account;
@@ -6750,19 +6753,19 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 					: loginReturn ? "waiting" : "signedOut";
 	const retryTurn = useStableCallback(retryControl?.retry);
 	const sendAgain = useStableCallback(() => {
-		if (refusedId) void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
+		if (refusedId && !newWorkDisabled) void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
 	});
 	// The account this session runs on, read as soon as a login is on offer, so Log
 	// in signs in that account rather than this computer's CLI login. A remote
 	// host's accounts are not readable from here, and the cloud's login is its own.
 	const readsAccount = Boolean(provider && !hostId && !cloud && (refused || needsReauth(snapshot)));
-	const [sessionAccount, setSessionAccount] = useState<{ sessionId: string; accountId?: string }>();
+	const [sessionAccount, setSessionAccount] = useState<{ sessionId: string; provider: string; accountId?: string }>();
 	useEffect(() => {
 		if (!readsAccount || !provider) return;
 		const sessionId = snapshot.sessionId;
 		let current = true;
 		void fetchSessionAgentAccounts(sessionId).then((accounts) => {
-			if (current) setSessionAccount({ sessionId, accountId: accounts[provider] });
+			if (current) setSessionAccount({ sessionId, provider, accountId: accounts[provider] });
 		}).catch(() => undefined);
 		return () => {
 			current = false;
@@ -6771,7 +6774,7 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 	const logIn = useStableCallback(() => {
 		const ui = useUiStore.getState();
 		const sessionId = snapshot.sessionId;
-		const known = sessionAccount?.sessionId === sessionId ? sessionAccount : undefined;
+		const known = sessionAccount?.sessionId === sessionId && sessionAccount.provider === provider ? sessionAccount : undefined;
 		const accountId = known?.accountId;
 		// Not read yet: read it while the Harness page opens, and count no login until
 		// it is known, so only that account's login brings the user back. A session
@@ -6787,7 +6790,15 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 		});
 		if (reading) {
 			void fetchSessionAgentAccounts(sessionId).then(
-				(accounts) => useUiStore.getState().setLoginReturnAccount(sessionId, accounts[reading]),
+				(accounts) => {
+					const store = useUiStore.getState();
+					const found = accounts[reading];
+					store.setLoginReturnAccount(sessionId, found);
+					// Settings opened before the account was known: sign in that saved account.
+					if (found && store.loginReturn?.sessionId === sessionId && store.settingsModal?.scope === "global") {
+						useUiStore.setState({ accountLogin: found });
+					}
+				},
 				() => useUiStore.getState().setLoginReturnAccount(sessionId, undefined),
 			);
 		}
@@ -6870,7 +6881,7 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 				onLogin: logIn,
 				// Offered from signed out on, also for a message that did work: sending it
 				// again is the user's click, never automatic.
-				...(resendable ? { onSendAgain: sendAgain } : {}),
+				...(resendable && !newWorkDisabled ? { onSendAgain: sendAgain } : {}),
 				signedOut: !loggedIn,
 				...(sendError ? { error: sendError } : {}),
 			},

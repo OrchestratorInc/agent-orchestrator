@@ -1101,7 +1101,7 @@ const TURN_WORK_ACTIVITY_KINDS: ReadonlySet<ActivityKind> = new Set(["command", 
 /** The turns that ran a tool or changed a file, so sending one again could repeat that. */
 export function turnsThatDidWork(snapshot: ConversationSnapshot): Set<string> {
 	const turnIds = new Set<string>();
-	for (const turn of snapshot.turns) if (turn.diff?.files.length) turnIds.add(turn.id);
+	for (const turn of snapshot.turns) if (turn.diff?.files.length || turn.artifacts?.length) turnIds.add(turn.id);
 	for (const item of snapshot.items) {
 		if (item.turnId && item.kind === "activity" && TURN_WORK_ACTIVITY_KINDS.has(item.activityKind)) turnIds.add(item.turnId);
 	}

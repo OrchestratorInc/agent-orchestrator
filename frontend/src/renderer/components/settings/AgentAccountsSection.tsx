@@ -95,8 +95,8 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				// A chat turn that sent the user here to log in gets them back.
 				const ui = useUiStore.getState();
 				const waiting = ui.loginReturn;
-				if (waiting && !waiting.hostId && agentAccountProviderFor(waiting.agentId) === provider) {
-					ui.completeLoginReturn(waiting.agentId, undefined, result.account?.id);
+				if (waiting && agentAccountProviderFor(waiting.agentId) === provider) {
+					ui.completeLoginReturn(waiting.agentId, hostId, result.account?.id);
 				}
 			}
 		}
