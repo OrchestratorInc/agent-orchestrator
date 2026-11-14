@@ -57,7 +57,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { findActiveTrigger, skillCommandName, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
@@ -325,7 +325,10 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
-	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
+	// A `skill:` command reads as `/name` like every other agent's; the wire still
+	// carries the command the agent runs.
+	const skillName = skillCommandName(value);
+	const display = kind === "skill" ? (skillName ? `/${skillName}` : wire) : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
