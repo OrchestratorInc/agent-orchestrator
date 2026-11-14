@@ -202,7 +202,17 @@ func TestACPInterruptedTurnWaitsForNativeSettlement(t *testing.T) {
 
 // The replay reader must remain free to receive the native settlement RPC's
 // response. Duplicate replay notifications must not issue a second stop/commit.
+// A live reconnect adopts the host's running prompt, whose result reaches the
+// conversation through finishTurnPrompt; it must settle off the reader too.
 func TestPersistentACPInterruptedReplayCanReadSettlementResponse(t *testing.T) {
+	for _, adopted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "restored-turn", true: "adopted-turn"}[adopted], func(t *testing.T) {
+			testPersistentACPInterruptedReplaySettlement(t, adopted)
+		})
+	}
+}
+
+func testPersistentACPInterruptedReplaySettlement(t *testing.T, adopted bool) {
 	daemon, host := net.Pipe()
 	t.Cleanup(func() { _ = host.Close() })
 	conv := newConversation(&process{
@@ -213,6 +223,10 @@ func TestPersistentACPInterruptedReplayCanReadSettlementResponse(t *testing.T) {
 	conv.mu.Lock()
 	conv.sessionID = "native-session"
 	conv.activeTurn = "restored-turn"
+	if adopted {
+		conv.adoptedPrompt = true
+		conv.outstanding = map[int]bool{}
+	}
 	conv.afterInterrupt = func(ctx context.Context, request AgentRequest, id string) error {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()

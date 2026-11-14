@@ -98,6 +98,35 @@ func TestNativeHistoryPreflight(t *testing.T) {
 			t.Fatal("accepted symlinked native history manifest")
 		}
 	})
+	// The history directory must stay below v2/sessions even when the recorded
+	// relative path only escapes after cleaning. Each escape target holds a
+	// complete, valid history so only the location check can refuse it.
+	for _, relative := range []string{"exact/../..", ".", "exact/.."} {
+		t.Run("escaping location "+relative, func(t *testing.T) {
+			p, w, id := historyFixture(t)
+			target := filepath.Clean(filepath.Join(p, "v2", "sessions", relative))
+			for _, name := range []string{"manifest.json", "messages.jsonl"} {
+				body, err := os.ReadFile(filepath.Join(p, "v2", "sessions", "exact", name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(target, name), body, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db, err := sql.Open("sqlite", filepath.Join(p, "v2", "sqlite", "runtime-state.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Exec(`UPDATE local_runtime_sessions SET history_relative_dir=? WHERE session_id=?`, relative, id); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateNativeHistory(context.Background(), p, id, w); err == nil {
+				t.Fatalf("accepted history location %q outside the native sessions directory", relative)
+			}
+		})
+	}
 	t.Run("missing identity", func(t *testing.T) {
 		p, w, _ := historyFixture(t)
 		if err := validateNativeHistory(context.Background(), p, "mvs_00000000000000000000000000000000", w); err == nil {

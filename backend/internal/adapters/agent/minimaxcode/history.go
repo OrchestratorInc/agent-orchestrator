@@ -56,7 +56,9 @@ func validateNativeHistoryAllowEmpty(ctx context.Context, profile, id, workspace
 	if archived != 0 {
 		return errors.New("native conversation is archived")
 	}
-	if relative == "" || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(filepath.Clean(relative), ".."+string(os.PathSeparator)) {
+	// Judge the cleaned path: "exact/../.." escapes as surely as "..".
+	clean := filepath.Clean(relative)
+	if relative == "" || filepath.IsAbs(relative) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
 		return errors.New("native history location is invalid")
 	}
 	canonicalProfile, err := filepath.EvalSymlinks(profile)

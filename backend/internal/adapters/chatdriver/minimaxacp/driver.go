@@ -1,5 +1,6 @@
 // Package minimaxacp binds MiniMax Code 0.6.5+'s native ACP server to the shared
-// AO Chat transport and renderer; the chat registry ships it.
+// AO Chat transport and renderer. The chat registry does not ship it yet: Chat
+// admission stays gated until native Chat qualification is complete.
 // Cancellation is settled through its native delegation-stop receipt before
 // AO admits a subsequent prompt.
 package minimaxacp
