@@ -8,14 +8,14 @@ import (
 )
 
 const (
-	coderAgentsMigrationBase    int64 = 20261028124744441
-	coderAgentsMigrationVersion int64 = 20261031044911564
+	coderAgentsMigrationBase    int64 = 20261114072016988
+	coderAgentsMigrationVersion int64 = 20261114172907961
 )
 
-// TestMigration20261031044911564AllowsCoderAgentsAndReverses mirrors the Hermes
+// TestMigration20261114172907961AllowsCoderAgentsAndReverses mirrors the Hermes
 // coverage: the new harness becomes insertable, unknown harnesses stay rejected,
 // and the down migration restores the exact prior constraint.
-func TestMigration20261031044911564AllowsCoderAgentsAndReverses(t *testing.T) {
+func TestMigration20261114172907961AllowsCoderAgentsAndReverses(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, coderAgentsMigrationBase)
 	var before string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
@@ -52,7 +52,7 @@ func TestMigration20261031044911564AllowsCoderAgentsAndReverses(t *testing.T) {
 	}
 }
 
-func TestMigration20261031044911564RejectsUnrecognizedConstraint(t *testing.T) {
+func TestMigration20261114172907961RejectsUnrecognizedConstraint(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, coderAgentsMigrationBase)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''fake'', ''other''))') WHERE type = 'table' AND name = 'sessions'`)

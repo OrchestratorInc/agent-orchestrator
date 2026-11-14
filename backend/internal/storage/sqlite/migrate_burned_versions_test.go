@@ -243,7 +243,6 @@ var shippedMigrations = map[int64]string{
 	20261030230920365: "20261030230920365_chat_account_handoff.sql",
 	20261030234657125: "20261030234657125_app_settings_limit_history.sql",
 	20261031021251693: "20261031021251693_session_interface_transitions_degraded_kind.sql",
-	20261031044911564: "20261031044911564_allow_coder_agents_harness.sql",
 	20261031173315209: "20261031173315209_usage_event_provider_message_id.sql",
 	20261031173316629: "20261031173316629_usage_long_context_reprice.sql",
 	20261101055144579: "20261101055144579_conversation_message_authored_by_user.sql",
@@ -267,6 +266,7 @@ var shippedMigrations = map[int64]string{
 	20261113111818788: "20261113111818788_clear_switched_model_reroutes.sql",
 	20261113173435236: "20261113173435236_session_search.sql",
 	20261114072016988: "20261114072016988_drop_session_account_pins.sql",
+	20261114172907961: "20261114172907961_allow_coder_agents_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
