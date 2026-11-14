@@ -3114,6 +3114,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											>
 												{session?.cloud ? (
 													<CloudFileContentPane
+														active={visible && !filesPoppedOut}
 														annotation={fileAnnotation}
 														commitSha={request?.commitSha}
 														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}

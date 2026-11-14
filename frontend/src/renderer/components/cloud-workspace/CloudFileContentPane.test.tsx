@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
@@ -45,6 +45,27 @@ describe("CloudFileContentPane", () => {
 		await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
 		await userEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(updateWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "session-1", { path: "README.md", content: "# Changed", expectedFileFingerprint: "fp-1" }));
+	});
+
+	it("saves only the file on screen when ⌘S is pressed with several Cloud file tabs kept open", async () => {
+		// The session view keeps every open Cloud file tab mounted, hidden behind
+		// the one on screen; ⌘S must not also save an edit in a hidden tab.
+		const file = (path: string) => ({ ...detail, path, content: `old ${path}`, fileFingerprint: `fp-${path}` });
+		const getWorkspaceReviewFile = vi.fn(async (_org: string, _session: string, query: { path: string }) => file(query.path));
+		const updateWorkspaceReviewFile = vi.fn(async (_org: string, _session: string, body: { path: string }) => file(body.path));
+		const client = { getWorkspaceReviewFile, updateWorkspaceReviewFile } as unknown as CloudCpClient;
+		render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><TooltipProvider>
+			<div data-testid="shown"><CloudFileContentPane active annotation={annotation} baseUrl="https://cloud.test" client={client} initialMode="file" orgId="org-1" path="a.ts" sessionId="session-1" split={false} /></div>
+			<div data-testid="hidden"><CloudFileContentPane active={false} annotation={annotation} baseUrl="https://cloud.test" client={client} initialMode="file" orgId="org-1" path="b.ts" sessionId="session-1" split={false} /></div>
+		</TooltipProvider></QueryClientProvider>);
+		for (const id of ["hidden", "shown"]) {
+			const pane = screen.getByTestId(id);
+			await userEvent.click(await within(pane).findByRole("button", { name: "Edit file" }));
+			await userEvent.type(within(pane).getByRole("textbox", { name: "editor" }), " edited");
+		}
+		await userEvent.keyboard("{Control>}s{/Control}");
+		await waitFor(() => expect(updateWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ path: "a.ts" })));
+		expect(updateWorkspaceReviewFile).toHaveBeenCalledTimes(1);
 	});
 
 	it("leaves line feedback to the file renderer instead of opening a second header composer", async () => {
