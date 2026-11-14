@@ -162,14 +162,16 @@ import {
 } from "./ChatTimelineItems";
 import {
 	FromAgent,
+	indexWorkerUpdates,
 	isTaskTitleUpdate,
 	isWorkerLead,
-	isDuplicateSpawnAction,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
+	spawnedBy,
 	spawnedSessionIds,
 	TaskNamedLine,
+	terminatedBy,
 	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
 	BatchedReportsContext,
@@ -4320,10 +4322,22 @@ export function Timeline({
 				: group);
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
-		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return placed;
+		// A worker this chat spawned is drawn by its box and then by its reports, so the
+		// daemon's records of it would only repeat them: its termination, and its spawn
+		// once it has answered and the box is gone. Dropped here, before they can leave
+		// an empty group behind.
+		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
+		if (spawned.size === 0) return placed;
+		const answered = indexWorkerUpdates(snapshot.items).latest;
+		const repeats = (item: ConversationItem) => {
+			const started = spawnedBy(item);
+			if (started) return answered.has(started);
+			const ended = terminatedBy(item);
+			return ended !== undefined && spawned.has(ended);
+		};
+		if (!placed.some((group) => group.items.some(repeats))) return placed;
 		return placed
-			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+			.map((group) => group.items.some(repeats) ? { ...group, items: group.items.filter((item) => !repeats(item)) } : group)
 			.filter((group) => group.items.length > 0);
 	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
@@ -5870,6 +5884,8 @@ const TurnGroup = memo(function TurnGroup({
 					// A subagent's steps leave the turn's flow and hang under its launch, so
 					// the child's commands stop reading as the parent's own.
 					if (group.subagents?.stepIds.has(item.id)) return false;
+					// A worker the turn spawned draws as its box under the turn, not as a step.
+					if (workerUpdates && spawnedBy(item)) return false;
 					if (item.id === group.liveProviderFailure?.id) return false;
 					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
 					return !(
@@ -5880,7 +5896,7 @@ const TurnGroup = memo(function TurnGroup({
 					);
 				}),
 			),
-		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure, workerUpdates],
 	);
 	const lastAssistantId = [...group.items]
 		.reverse()
@@ -6099,11 +6115,16 @@ const TurnGroup = memo(function TurnGroup({
 	// into its summary. A settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
-	// Agents the turn spawned are part of its work, so they fold with its steps.
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
-	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
-	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
+	// Each worker the turn spawned is a box under it, from the moment the daemon records
+	// the spawn until the worker answers, so it stays out of the fold. `ao spawn`
+	// output still names the workers a daemon too old to record the spawn started.
+	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedBy(item) ?? []) : [];
+	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	const spawnBoxes = recordedSpawns.length > 0 || commandSpawns.length > 0
+		? <SpawnedAgents key="spawned" sessionIds={recordedSpawns} commandSessionIds={commandSpawns} />
+		: null;
+	const hasFoldedWork = foldedRuns.length > 0;
+	const foldedWork = (): ReactNode[] => foldedRuns.flatMap(renderWorkerRun);
 	const showsWorked = Boolean(
 		outcome && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
 	);
@@ -6151,6 +6172,8 @@ const TurnGroup = memo(function TurnGroup({
 	// Settled steers still carry the reports they delivered.
 	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
 	if (finalRun) body.push(renderRun(finalRun));
+	// Under the reply, so the reply streams in above the boxes.
+	if (spawnBoxes) body.push(spawnBoxes);
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.

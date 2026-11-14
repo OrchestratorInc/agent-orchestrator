@@ -683,6 +683,11 @@ export function useChatBrowserOpen() {
 	return useContext(OpenChatLink).open;
 }
 
+/** Opens a session link the way this chat's session links do; absent where the chat cannot open one. */
+export function useOpenSessionLink(): ((href: string) => void) | undefined {
+	return useContext(OpenChatLink).openSession;
+}
+
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
 export function useChatLinkWorkspaces(): WorkspaceSummary[] {
 	const { workspaces, demand } = useContext(ChatLinkWorkspaces);
