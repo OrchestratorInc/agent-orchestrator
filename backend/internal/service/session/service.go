@@ -1902,7 +1902,9 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		DisplayStatus:    presentation.DisplayStatus,
 		TerminalHandleID: rec.Metadata.RuntimeHandleID,
 		ArtifactFiles:    artifactFiles,
-		PRs:              prs,
+		// Status and SCMStatus above stay on the provider's decision; only the
+		// reported PR facts carry AO's review verdicts.
+		PRs: withReviewRunVerdicts(prs, runs),
 	}, nil
 }
 
@@ -2275,11 +2277,10 @@ func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionClean
 }
 
 // currentHeadReviewRuns reads the session's AO review passes for the Kanban
-// reducer. Sessions the reducer already decides without them — terminated ones
-// and ones with no PR yet — skip the query, so listing a board of building
-// workers stays one read per session.
+// reducer and the reported PR review state. Sessions with no PR yet skip the
+// query, so reading a building worker stays one read per session.
 func (s *Service) currentHeadReviewRuns(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts) ([]domain.CurrentHeadReviewRun, error) {
-	if rec.IsTerminated || len(prs) == 0 {
+	if len(prs) == 0 {
 		return nil, nil
 	}
 	runs, err := s.store.ListCurrentHeadReviewRunsForSession(ctx, rec.ID)

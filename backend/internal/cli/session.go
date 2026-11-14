@@ -1029,12 +1029,22 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 
 func listPRsForSession(sess sessionDTO, summaries []sessionPRSummaryDTO) []sessionListPR {
 	if len(summaries) > 0 {
+		listedReview := make(map[int]string, len(sess.PRs))
+		for _, pr := range sess.PRs {
+			listedReview[pr.Number] = pr.Review
+		}
 		out := make([]sessionListPR, 0, len(summaries))
 		for _, pr := range summaries {
+			// The summary's decision is the provider's alone; the list facts
+			// also carry AO's review runs, so they win when they cover this PR.
+			review := pr.Review.Decision
+			if listed := listedReview[pr.Number]; listed != "" {
+				review = listed
+			}
 			// Threads stays nil (rendered as "-") when the daemon did not
 			// publish a count: an older daemon or an only-partially observed
 			// thread snapshot must read as unknown, not zero.
-			out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI.State, Review: pr.Review.Decision, Threads: pr.Review.UnresolvedThreadCount})
+			out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI.State, Review: review, Threads: pr.Review.UnresolvedThreadCount})
 		}
 		return out
 	}
