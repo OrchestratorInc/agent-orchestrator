@@ -6428,10 +6428,17 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"relative to the session workspace root",
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
+		"Give each new task to a new worker",
+		"only for follow-up on that worker's own task",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
+	}
+	// A worker that finished an earlier task is not "suitable" for a new one:
+	// its carried-over history makes every request on the new task costlier.
+	if strings.Contains(systemPrompt, "no suitable active worker exists") {
+		t.Fatalf("system prompt still tells the orchestrator to reuse workers for new tasks:\n%s", systemPrompt)
 	}
 	// This orchestrator runs in a terminal, where the html tools and ao render
 	// do not exist, so its prompt does not send it looking for them.
