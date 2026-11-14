@@ -46,9 +46,12 @@ var approvalMethods = map[string]domain.ActivityKind{
 // conversation is one live Codex thread. It is the only writer to that thread.
 type conversation struct {
 	backgroundObserved backgroundtasks.Tracker
-	conn               *conn
-	proc               *process
-	log                *slog.Logger
+	// backgroundOutput keeps recent command output by exec item, since the
+	// app-server streams it but has no way to read it back.
+	backgroundOutput backgroundtasks.OutputBuffer
+	conn             *conn
+	proc             *process
+	log              *slog.Logger
 
 	threadID        string
 	historyParentID string

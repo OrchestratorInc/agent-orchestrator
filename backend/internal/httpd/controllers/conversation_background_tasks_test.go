@@ -22,6 +22,14 @@ type backgroundTasksService struct {
 	project domain.ProjectID
 	stopped []string
 	stopErr error
+	output  ports.ChatBackgroundTaskOutput
+	outErr  error
+	read    []string
+}
+
+func (s *backgroundTasksService) BackgroundTaskOutput(_ context.Context, _ domain.SessionID, task string) (ports.ChatBackgroundTaskOutput, error) {
+	s.read = append(s.read, task)
+	return s.output, s.outErr
 }
 
 func (s *backgroundTasksService) StopBackgroundTask(_ context.Context, _ domain.SessionID, task string) error {
@@ -114,5 +122,31 @@ func TestStopBackgroundTaskRouteRejectsMalformedEscape(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || len(svc.stopped) != 0 {
 		t.Fatalf("status=%d stopped=%q body=%s", response.Code, svc.stopped, response.Body)
+	}
+}
+
+func TestBackgroundTaskOutputRouteReportsUnavailableAsAnAnswer(t *testing.T) {
+	svc := &backgroundTasksService{output: ports.ChatBackgroundTaskOutput{Text: "ready on :3000", Truncated: true}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	read := func(path string) (*httptest.ResponseRecorder, controllers.BackgroundTaskOutputResponse) {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+		var body controllers.BackgroundTaskOutputResponse
+		_ = json.Unmarshal(r.Body.Bytes(), &body)
+		return r, body
+	}
+	r, body := read("/sessions/s/background-tasks/native%2Ftask/output")
+	if r.Code != http.StatusOK || body.Availability != "ready" || body.Output != "ready on :3000" || !body.Truncated ||
+		body.TaskID != "native/task" || len(svc.read) != 1 || svc.read[0] != "native/task" {
+		t.Fatalf("status=%d body=%+v read=%q", r.Code, body, svc.read)
+	}
+	svc.outErr = ports.ErrBackgroundTaskOutputUnavailable
+	if r, body = read("/sessions/s/background-tasks/bash-1/output"); r.Code != http.StatusOK || body.Availability != "unavailable" || body.Output != "" {
+		t.Fatalf("unavailable status=%d body=%+v", r.Code, body)
+	}
+	svc.outErr = ports.ErrSessionNotFound
+	if r, _ = read("/sessions/missing/background-tasks/bash-1/output"); r.Code != http.StatusNotFound {
+		t.Fatalf("missing session=%d %s", r.Code, r.Body)
 	}
 }
