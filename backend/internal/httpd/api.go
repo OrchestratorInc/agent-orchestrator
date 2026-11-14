@@ -2,7 +2,6 @@ package httpd
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -11,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"

@@ -15,10 +15,11 @@ import (
 	"time"
 )
 
-// Request kinds.
+// Request kinds. KindSavedLogin is the credential vault's first use of a
+// saved login on a site.
 const (
 	KindBrowserAction = "browser-action"
-	KindCredentialUse = "credential-use"
+	KindSavedLogin    = "credential-use"
 )
 
 // DefaultTimeout is how long a request waits for the user before denying.
@@ -412,7 +413,7 @@ func (g *Gate) savePolicyLocked() error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(append(raw, '\n')); err != nil {
 		_ = tmp.Close()
 		return err
@@ -438,7 +439,7 @@ func (g *Gate) audit(req Request, id string, at, decidedAt time.Time, decision D
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, _ = f.Write(append(raw, '\n'))
 }
 
@@ -453,7 +454,7 @@ func (g *Gate) Audit(limit int) ([]AuditEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var all []AuditEntry
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
