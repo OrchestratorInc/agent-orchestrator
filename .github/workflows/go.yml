@@ -74,6 +74,35 @@ jobs:
       - name: Test SQLite, chat, session manager and SQLite store
         run: ../.github/scripts/go-test-parallel.sh 4 ./internal/storage/sqlite ./internal/service/chat ./internal/session_manager ./internal/storage/sqlite/store
 
+  # claude-agent-acp is pinned in frontend/acp-runtime, but the Go chat driver
+  # reads its replies, and the backend tests above only see a hand-built copy of
+  # them. This builds the runtime the app ships (patches included) and drives it
+  # with a fake Claude Code, so an adapter bump that changes how a refused login
+  # reaches Orchestrator fails here instead of in users' chats.
+  claude-adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-go-cached
+        with:
+          name: claude-adapter
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Build the packaged ACP runtime
+        working-directory: frontend
+        run: node ./scripts/build-acp-runtime.mjs
+
+      - name: Test the packaged Claude adapter
+        working-directory: backend
+        env:
+          AO_TEST_REQUIRE_ACP_RUNTIME: "1"
+        run: go test -race -count=1 -run '^TestPackagedAdapter' ./internal/adapters/chatdriver/claudeacp/
+
   # The suite above only ever runs on Linux, so the packages whose behaviour is
   # genuinely platform-specific have never been exercised on Windows: worktree
   # teardown renames and unlinks directories, and Windows is the platform where
