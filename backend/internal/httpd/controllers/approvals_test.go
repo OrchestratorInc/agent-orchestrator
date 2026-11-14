@@ -177,6 +177,14 @@ func TestApprovalAuditAndPolicy(t *testing.T) {
 	if put.StatusCode != http.StatusOK || policy["mode"] != "every-submit" || gate.SessionMode("s1") != approval.ModeEverySubmit {
 		t.Fatalf("policy = %d %v", put.StatusCode, policy)
 	}
+	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/api/v1/approvals/policy", strings.NewReader(`{"mode":"off"}`))
+	put, _ = http.DefaultClient.Do(req)
+	policy = map[string]any{}
+	_ = json.NewDecoder(put.Body).Decode(&policy)
+	put.Body.Close()
+	if put.StatusCode != http.StatusOK || policy["defaultMode"] != "off" || gate.SessionMode("s3") != approval.ModeOff || gate.SessionMode("s1") != approval.ModeEverySubmit {
+		t.Fatalf("default policy = %d %v", put.StatusCode, policy)
+	}
 }
 
 func TestApprovalStream(t *testing.T) {

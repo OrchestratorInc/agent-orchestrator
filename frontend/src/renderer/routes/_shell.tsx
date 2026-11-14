@@ -24,6 +24,7 @@ import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
+import { GlobalApprovalCard } from "../components/approvals/ApprovalHost";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
@@ -1588,6 +1589,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<NewTaskNavigator />
 				<ArchiveModalHost />
 				<GlobalToast />
+				{daemonStatus.state === "ready" ? <GlobalApprovalCard /> : null}
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
 				{quitConfirmDialog}

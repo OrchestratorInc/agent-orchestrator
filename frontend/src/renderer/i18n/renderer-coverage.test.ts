@@ -20,6 +20,8 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"Local: http://localhost:5173/",
 	],
 	"components/CenterPane.tsx": ["px"],
+	// Key-cap hint beside Deny.
+	"components/approvals/ApprovalPrompt.tsx": ["Esc"],
 	"components/CreateProjectFlow.tsx": [
 		"my-workspace/", "my-project", "web-app", "main",
 		"https://github.com/owner/repo",

@@ -66,6 +66,7 @@ import {
 	X,
 } from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
+import { ApprovalModeMenuItems, ApprovalModeMenuRow } from "./approvals/ApprovalModeMenu";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
 import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
@@ -430,6 +431,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	const browserUnavailable = sessionBrowserUnavailable(session);
+	// Approval mode belongs to this machine's daemon; Cloud sessions keep theirs.
+	const approvalSessionId = session.cloud ? undefined : session.id;
 	const {
 		viewId,
 		navState,
@@ -487,7 +490,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
 	const customWidthInputRef = useRef<HTMLInputElement>(null);
-	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
+	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles" | "approvals">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
 	const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([]);
@@ -1590,6 +1593,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							/>
 						</DropdownMenuItem>
 							</>
+						) : controlsView === "approvals" && approvalSessionId ? (
+							<ApprovalModeMenuItems sessionId={approvalSessionId} onBack={() => setControlsView("root")} />
 						) : controlsView === "profiles" ? (
 							<>
 								<DropdownMenuItem
@@ -1660,6 +1665,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									</span>
 									<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 								</DropdownMenuItem>
+								{approvalSessionId ? (
+									<ApprovalModeMenuRow sessionId={approvalSessionId} onOpen={() => setControlsView("approvals")} />
+								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									disabled={!canUseDevTools}

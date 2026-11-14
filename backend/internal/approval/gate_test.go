@@ -217,3 +217,25 @@ func TestGateRejectsUnknownDecision(t *testing.T) {
 func containsBytes(haystack []byte, needle string) bool {
 	return strings.Contains(string(haystack), needle)
 }
+
+func TestGateDefaultModeAppliesToSessionsWithoutTheirOwn(t *testing.T) {
+	dir := t.TempDir()
+	g, _ := Open(dir)
+	if g.DefaultMode() != ModeRisky {
+		t.Fatal("default is not risky")
+	}
+	_ = g.SetSessionMode("s-1", ModeRisky)
+	if err := g.SetDefaultMode(ModeEverySubmit); err != nil {
+		t.Fatal(err)
+	}
+	if g.SessionMode("s-2") != ModeEverySubmit || g.SessionMode("s-1") != ModeRisky {
+		t.Fatalf("s-2=%s s-1=%s", g.SessionMode("s-2"), g.SessionMode("s-1"))
+	}
+	reopened, _ := Open(dir)
+	if reopened.DefaultMode() != ModeEverySubmit {
+		t.Fatal("default not persisted")
+	}
+	if err := g.SetDefaultMode("nope"); err == nil {
+		t.Fatal("bad default accepted")
+	}
+}

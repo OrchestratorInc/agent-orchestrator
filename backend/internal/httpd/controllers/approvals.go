@@ -26,6 +26,8 @@ type ApprovalService interface {
 	Audit(limit int) ([]approval.AuditEntry, error)
 	SessionMode(sessionID string) approval.Mode
 	SetSessionMode(sessionID string, mode approval.Mode) error
+	DefaultMode() approval.Mode
+	SetDefaultMode(mode approval.Mode) error
 	SiteRules() []approval.SiteRule
 	RemoveSiteRule(site, category string) error
 }
@@ -173,11 +175,11 @@ func (c *ApprovalsController) setPolicy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	in.SessionID = strings.TrimSpace(in.SessionID)
+	set := func(mode approval.Mode) error { return c.Svc.SetSessionMode(in.SessionID, mode) }
 	if in.SessionID == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SESSION_ID_REQUIRED", "sessionId is required", nil)
-		return
+		set = c.Svc.SetDefaultMode
 	}
-	if err := c.Svc.SetSessionMode(in.SessionID, approval.Mode(in.Mode)); err != nil {
+	if err := set(approval.Mode(in.Mode)); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_MODE", err.Error(), nil)
 		return
 	}
@@ -207,7 +209,8 @@ func (c *ApprovalsController) removeSite(w http.ResponseWriter, r *http.Request)
 }
 
 func (c *ApprovalsController) policyResponse(sessionID string) ApprovalPolicyResponse {
-	out := ApprovalPolicyResponse{Mode: string(approval.ModeRisky), Sites: []ApprovalSiteRuleResponse{}}
+	defaultMode := string(c.Svc.DefaultMode())
+	out := ApprovalPolicyResponse{Mode: defaultMode, DefaultMode: defaultMode, Sites: []ApprovalSiteRuleResponse{}}
 	if sessionID != "" {
 		out.Mode = string(c.Svc.SessionMode(sessionID))
 	}

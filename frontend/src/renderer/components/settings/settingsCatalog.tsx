@@ -1,3 +1,4 @@
+import { BrowserApprovalsSection } from "./BrowserApprovalsSection";
 import { BrowserIcon, type AppIcon } from "../icons";
 import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
@@ -126,6 +127,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 				<BrowserProfilesSection titleHidden={titleHidden} />
 				<BrowserDownloadsSection />
 				<BrowserChromeSection />
+				<BrowserApprovalsSection />
 			</>
 		),
 	},

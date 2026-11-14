@@ -1,4 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { SessionApprovalDock } from "./approvals/ApprovalHost";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
@@ -2903,6 +2904,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
+						{!hostId && !session?.cloud ? <SessionApprovalDock sessionId={sessionId} /> : null}
 						<div
 							className="relative min-h-0 flex-1"
 							data-split-group={shownGroup?.id}

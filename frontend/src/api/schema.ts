@@ -5669,10 +5669,18 @@ export interface components {
         ApprovalPolicyRequest: {
             /** @enum {string} */
             mode: "off" | "risky" | "every-submit";
-            sessionId: string;
+            sessionId?: string;
         };
         ApprovalPolicyResponse: {
-            /** @enum {string} */
+            /**
+             * @description The mode for sessions that have not chosen their own.
+             * @enum {string}
+             */
+            defaultMode: "off" | "risky" | "every-submit";
+            /**
+             * @description The session's mode, or the default when no session was named.
+             * @enum {string}
+             */
             mode: "off" | "risky" | "every-submit";
             sites: components["schemas"]["ApprovalSiteRuleResponse"][];
         };

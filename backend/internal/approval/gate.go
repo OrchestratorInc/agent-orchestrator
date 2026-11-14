@@ -133,6 +133,8 @@ type SiteRule struct {
 }
 
 type policyFile struct {
+	// Default applies to sessions that have not chosen their own mode.
+	Default  Mode            `json:"default,omitempty"`
 	Sessions map[string]Mode `json:"sessions,omitempty"`
 	Sites    []SiteRule      `json:"sites,omitempty"`
 }
@@ -299,14 +301,40 @@ func (g *Gate) publishLocked(ev Event) {
 	}
 }
 
-// SessionMode returns a session's mode; risky unless the user changed it.
+// SessionMode returns a session's mode: its own choice, else the default.
 func (g *Gate) SessionMode(sessionID string) Mode {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if mode, ok := g.policy.Sessions[sessionID]; ok && ValidMode(mode) {
 		return mode
 	}
+	return g.defaultModeLocked()
+}
+
+// DefaultMode returns the mode for sessions without their own; risky unless
+// the user changed it.
+func (g *Gate) DefaultMode() Mode {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.defaultModeLocked()
+}
+
+func (g *Gate) defaultModeLocked() Mode {
+	if ValidMode(g.policy.Default) {
+		return g.policy.Default
+	}
 	return ModeRisky
+}
+
+// SetDefaultMode changes and persists the default mode.
+func (g *Gate) SetDefaultMode(mode Mode) error {
+	if !ValidMode(mode) {
+		return fmt.Errorf("mode must be off, risky, or every-submit")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.policy.Default = mode
+	return g.savePolicyLocked()
 }
 
 // SetSessionMode changes and persists a session's mode.

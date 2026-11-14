@@ -16838,12 +16838,19 @@ components:
         sessionId:
           type: string
       required:
-      - sessionId
       - mode
       type: object
     ApprovalPolicyResponse:
       properties:
+        defaultMode:
+          description: The mode for sessions that have not chosen their own.
+          enum:
+          - "off"
+          - risky
+          - every-submit
+          type: string
         mode:
+          description: The session's mode, or the default when no session was named.
           enum:
           - "off"
           - risky
@@ -16855,6 +16862,7 @@ components:
           type: array
       required:
       - mode
+      - defaultMode
       - sites
       type: object
     ApprovalSiteRuleResponse:

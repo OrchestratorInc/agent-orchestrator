@@ -4791,13 +4791,15 @@ type ApprovalSiteRuleResponse struct {
 
 // ApprovalPolicyResponse is a session's approval mode and the remembered sites.
 type ApprovalPolicyResponse struct {
-	Mode  string                     `json:"mode" enum:"off,risky,every-submit"`
-	Sites []ApprovalSiteRuleResponse `json:"sites"`
+	Mode        string                     `json:"mode" enum:"off,risky,every-submit" description:"The session's mode, or the default when no session was named."`
+	DefaultMode string                     `json:"defaultMode" enum:"off,risky,every-submit" description:"The mode for sessions that have not chosen their own."`
+	Sites       []ApprovalSiteRuleResponse `json:"sites"`
 }
 
-// ApprovalPolicyRequest changes a session's approval mode.
+// ApprovalPolicyRequest changes a session's approval mode, or the default
+// when sessionId is empty.
 type ApprovalPolicyRequest struct {
-	SessionID string `json:"sessionId" required:"true"`
+	SessionID string `json:"sessionId,omitempty"`
 	Mode      string `json:"mode" enum:"off,risky,every-submit" required:"true"`
 }
 
