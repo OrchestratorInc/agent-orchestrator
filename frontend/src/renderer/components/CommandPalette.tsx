@@ -72,7 +72,8 @@ import { sessionUiKey } from "../lib/hosts";
 import { beginModalHandoff } from "../lib/modal-handoff";
 import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
-import { getSessionStatusDotView } from "../lib/session-presentation";
+import { getSessionRowIndicator } from "../lib/session-presentation";
+import { SessionStatusDot } from "./Sidebar";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
 	CLOUD_PROJECT_KIND,
@@ -221,11 +222,11 @@ export const CommandPalette = memo(function CommandPalette() {
 			<span className="truncate">{currentProject.name}</span>
 		</span>
 	) : undefined;
-	const sessionStatus = currentSession ? getSessionStatusDotView(currentSession) : undefined;
+	// The session's own sidebar mark: spinner, alert, PR state or read dot.
 	const sessionHeading = currentSession ? (
 		<span className="inline-flex min-w-0 items-center gap-2.5">
 			<span className="flex size-icon-base shrink-0 items-center justify-center" aria-hidden="true">
-				<span className={cn("size-2 rounded-full", sessionStatus?.className, sessionStatus?.breathe && "animate-status-pulse")} />
+				<SessionStatusDot indicator={getSessionRowIndicator(currentSession)} session={currentSession} />
 			</span>
 			<span className="truncate">{currentSession.title}</span>
 		</span>
