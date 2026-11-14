@@ -540,8 +540,18 @@ describe("shell workspace startup", () => {
 	});
 	it("reports the first frame that shows the workspace, for launch timing", async () => {
 		shellMocks.reportSessionsShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		await renderShell();
 		await waitFor(() => expect(shellMocks.reportSessionsShown).toHaveBeenCalledTimes(1));
+	});
+
+	it("reports no frame while the daemon has failed, even with workspace data cached", async () => {
+		shellMocks.reportSessionsShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
+		expect(shellMocks.state.workspaceQuery.data).toBeDefined();
+		await renderShell();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(shellMocks.reportSessionsShown).not.toHaveBeenCalled();
 	});
 
 	it("reports no frame while the startup loader is up", async () => {
