@@ -301,6 +301,32 @@ describe("steer message", () => {
 		expect(screen.getByText(/Steered/i)).toBeInTheDocument();
 	});
 
+	it("draws a steered chat excerpt as an annotation chip, without the placeholder message", async () => {
+		const user = userEvent.setup();
+		render(
+			<SteerMessage
+				sessionId="ao-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "Use the attached 1 chat excerpt(s) as context",
+					detail: {
+						event: "steer",
+						text: "Use the attached 1 chat excerpt(s) as context",
+						origin: "human",
+						content: [{
+							type: "excerpt",
+							excerpt: { reference: { id: "ex-1", messageId: "m-1", revision: 0 }, selectedText: "Split across two pastes" },
+						}],
+					},
+				})}
+			/>,
+		);
+		expect(screen.queryByText(/Use the attached/)).not.toBeInTheDocument();
+		expect(screen.queryByText("excerpt")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
+	});
+
 	it("renders a CLI steer as an attributed automation block with a session link", () => {
 		render(
 			<SteerMessage
