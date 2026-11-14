@@ -441,8 +441,8 @@ function StatusRow({
 		: fact
 			? (
 				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
-					<span>{fact.title}</span>
-					<span className="inline-flex min-w-0 items-center gap-1" data-state={fact.state}>
+					<span className="font-normal text-muted-foreground">{fact.title}</span>
+					<span className={cn("inline-flex min-w-0 items-center gap-1", attentionClass[status.tone])} data-state={fact.state}>
 						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
 						<span className="min-w-0 truncate">{fact.value}</span>
 					</span>
@@ -485,7 +485,7 @@ function StatusRow({
 				)}
 			</div>
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot && "pl-4")}>
+				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", (dot || plain) && "pl-4")}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
@@ -516,6 +516,13 @@ const checkStateClass: Record<PRCheckState, string> = {
 	skipped: "text-passive",
 };
 
+/** A state that is in the way takes its colour on the words too; one that is fine stays plain. */
+const attentionClass: Partial<Record<PRDisplayTone, string>> = {
+	review: "text-status-in-review",
+	warning: "text-warning",
+	error: "text-error",
+};
+
 /** A check state's glyph in its colour; a running check's spins unless motion is reduced. */
 export function CheckStateGlyph({ className, state }: { className?: string; state: PRCheckState }) {
 	return (
@@ -533,10 +540,13 @@ export function CheckStateGlyph({ className, state }: { className?: string; stat
 function ChecksTally({ tally }: { tally: PRChecksTally }) {
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
-			<span>{tally.title}</span>
+			<span className="font-normal text-muted-foreground">{tally.title}</span>
 			{tally.counts.map((count, index) => (
 				<span
-					className={cn("inline-flex items-center gap-1 tabular-nums", index === 0 ? "text-foreground" : "font-normal text-muted-foreground")}
+					className={cn(
+						"inline-flex items-center gap-1 tabular-nums",
+						index === 0 ? (count.state === "failed" ? "text-error" : "text-foreground") : "font-normal text-muted-foreground",
+					)}
 					data-state={count.state}
 					key={count.state}
 				>
@@ -589,11 +599,11 @@ function ReadinessFacts({
 	const leadMore = lead ? details?.[lead.key] : readiness.detail;
 	const more = leadMore || others.length > 0 ? (
 		<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
-			{leadMore ? <div className="min-w-0 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
+			{leadMore ? <div className="min-w-0 pl-4 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
 			{others.map((status) => (
 				<div className="min-w-0" key={status.key}>
 					<StatusRow externalLink={externalLink} reviewDetailsAction={reviewDetailsAction} status={status} />
-					{details?.[status.key] ? <div className="mt-1 min-w-0">{details[status.key]}</div> : null}
+					{details?.[status.key] ? <div className="mt-1 min-w-0 pl-4">{details[status.key]}</div> : null}
 				</div>
 			))}
 		</div>
