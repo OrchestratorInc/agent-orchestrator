@@ -5424,6 +5424,23 @@ html[data-shell-linux] body > .files-popout-overlay {
 	background: var(--bg);
 }
 
+/* A site refused this browser: one flat row under the chrome, like the find
+   row, offering to continue in the person's own browser. */
+.browser-panel__notice-row {
+	display: flex;
+	min-height: 36px;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--space-2);
+	overflow: hidden;
+	padding: 3px 6px 3px var(--space-2);
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+	color: var(--fg);
+	font-size: var(--font-size-sm);
+}
+
 .browser-panel__find-input {
 	min-width: 0;
 	flex: 1;

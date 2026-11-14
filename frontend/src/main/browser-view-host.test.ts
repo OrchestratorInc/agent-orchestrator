@@ -1223,7 +1223,7 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
-	overrides?: { entryReadyTimeoutMs?: number },
+	overrides?: { entryReadyTimeoutMs?: number; openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }> },
 	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
@@ -1454,6 +1454,7 @@ function setupTabHost(
 		clearBrowserProfileData,
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
+		openInUserBrowser: overrides?.openInUserBrowser,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -6655,5 +6656,83 @@ describe("browser human pointer and annotated screenshots", () => {
 		expect(runtime.screenshot).toHaveBeenNthCalledWith(2, "sess-1", expect.anything(), undefined, { annotate: true });
 		expect(plain).toMatchObject({ width: 1, height: 1 });
 		expect(annotated).toMatchObject({ annotations: [{ number: 1, ref: "e1", role: "button", name: "Save" }] });
+	});
+});
+
+describe("sites that refuse the Browser panel", () => {
+	type Completed = (details: { webContentsId: number; resourceType: string; url: string; statusCode: number; method: string; responseHeaders?: Record<string, string[]> }) => void;
+	async function setup(openInUserBrowser = vi.fn(async () => ({ name: "Chrome", chrome: true }))) {
+		const lab = setupTabHost(undefined, false, undefined, undefined, undefined, { openInUserBrowser });
+		const { viewId } = (await lab.invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		const view = lab.views[0]!;
+		const onCompleted = view.webContents.session.webRequest.onCompleted.mock.calls[0]![1] as Completed;
+		const respond = (url: string, statusCode: number, headers: Record<string, string[]> = {}) => {
+			onCompleted({ webContentsId: view.webContents.id, resourceType: "mainFrame", url, statusCode, method: "GET", responseHeaders: headers });
+		};
+		const lastBlock = () => {
+			const states = lab.sent.filter((entry) => entry.channel === "browser:navState").map((entry) => entry.payload as BrowserNavState);
+			return states.at(-1)?.siteBlock;
+		};
+		return { ...lab, viewId, view, respond, lastBlock, openInUserBrowser };
+	}
+
+	afterEach(() => vi.useRealTimers());
+
+	it("gives a Cloudflare check time to pass by itself", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+		const { invoke, viewId, respond, lastBlock } = await setup();
+		await invoke("browser:navigate", { viewId, url: "https://dash.cloudflare.com/login" });
+		respond("https://dash.cloudflare.com/login", 403, { "cf-mitigated": ["challenge"] });
+		// It passed: Cloudflare reloads the real page.
+		respond("https://dash.cloudflare.com/login", 200);
+		await vi.advanceTimersByTimeAsync(11_000);
+		expect(lastBlock()).toBeUndefined();
+	});
+
+	it("offers to continue elsewhere when the check is still up after the grace period", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+		const { invoke, viewId, respond, lastBlock } = await setup();
+		await invoke("browser:navigate", { viewId, url: "https://dash.cloudflare.com/login" });
+		respond("https://dash.cloudflare.com/login", 403, { "cf-mitigated": ["challenge"] });
+		await vi.advanceTimersByTimeAsync(9_000);
+		expect(lastBlock()).toBeUndefined();
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(lastBlock()).toEqual({ reason: "verification", host: "dash.cloudflare.com" });
+	});
+
+	it("offers at once when the check comes back, and when a site refuses outright", async () => {
+		const { invoke, viewId, respond, lastBlock, host } = await setup();
+		await invoke("browser:navigate", { viewId, url: "https://dash.cloudflare.com/login" });
+		respond("https://dash.cloudflare.com/login", 403, { "cf-mitigated": ["challenge"] });
+		respond("https://dash.cloudflare.com/login", 403, { "cf-mitigated": ["challenge"] });
+		expect(lastBlock()).toEqual({ reason: "verification", host: "dash.cloudflare.com" });
+
+		await invoke("browser:navigate", { viewId, url: "https://shop.test/" });
+		respond("https://shop.test/", 403, { "x-datadome": ["protected"] });
+		expect(lastBlock()).toEqual({ reason: "blocked", host: "shop.test" });
+		// Agents learn about it through the errors command, as a site signal.
+		const errors = (await host.execute("sess-1", "errors", {})) as { messages: Array<{ source?: string; message: string }> };
+		expect(errors.messages.some((message) => message.source === "browser-site" && message.message.includes("shop.test"))).toBe(true);
+	});
+
+	it("clears the offer once the tab loads a page that works", async () => {
+		const { invoke, viewId, respond, lastBlock } = await setup();
+		await invoke("browser:navigate", { viewId, url: "https://shop.test/" });
+		respond("https://shop.test/", 403, { "x-datadome": ["protected"] });
+		expect(lastBlock()).toMatchObject({ host: "shop.test" });
+		await invoke("browser:navigate", { viewId, url: "https://example.com/" });
+		respond("https://example.com/", 200);
+		expect(lastBlock()).toBeUndefined();
+	});
+
+	it("opens the tab's own page in the person's browser, and never AO's previews", async () => {
+		const { invoke, viewId, openInUserBrowser } = await setup();
+		await invoke("browser:navigate", { viewId, url: "https://shop.test/cart?id=1" });
+		expect(await invoke("browser:openInUserBrowser", viewId)).toEqual({ name: "Chrome", chrome: true });
+		expect(openInUserBrowser).toHaveBeenCalledWith("https://shop.test/cart?id=1");
+
+		await invoke("browser:clear", viewId);
+		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
+		expect(openInUserBrowser).toHaveBeenCalledOnce();
 	});
 });

@@ -21,6 +21,7 @@ import type {
 	BrowserRuntimeState,
 	BrowserTabsState,
 } from "./main/browser-view-host";
+import type { UserBrowser } from "./main/user-browser";
 import {
 	TRAY_OPEN_SESSION_CHANNEL,
 	TRAY_RENDERER_READY_CHANNEL,
@@ -679,6 +680,10 @@ const api = {
 		goForward: (viewId: string) => ipcRenderer.invoke("browser:goForward", viewId) as Promise<BrowserNavState>,
 		reload: (viewId: string) => ipcRenderer.invoke("browser:reload", viewId) as Promise<BrowserNavState>,
 		stop: (viewId: string) => ipcRenderer.invoke("browser:stop", viewId) as Promise<BrowserNavState>,
+		/** The person's own browser (Chrome when installed), or null when unavailable. */
+		userBrowser: () => ipcRenderer.invoke("browser:userBrowser") as Promise<UserBrowser | null>,
+		/** Open the view's current page in the person's own browser. */
+		openInUserBrowser: (viewId: string) => ipcRenderer.invoke("browser:openInUserBrowser", viewId) as Promise<UserBrowser>,
 		getFindState: (viewId: string) =>
 			ipcRenderer.invoke("browser:find:get", viewId) as Promise<BrowserFindState>,
 		findInPage: (input: BrowserFindInput) =>

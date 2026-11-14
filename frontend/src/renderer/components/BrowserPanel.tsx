@@ -1,5 +1,7 @@
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { BrowserIcon } from "./icons";
+import { BrowserSiteBlockRow, continueLabel, useUserBrowser } from "./BrowserContinueElsewhere";
+import { canOpenInUserBrowser } from "../../shared/browser-site-block";
 import {
 	memo,
 	useCallback,
@@ -462,6 +464,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		setAnnotationMode,
 		annotationAction = async () => undefined,
 	} = browserView;
+	const userBrowser = useUserBrowser();
+	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url) && !browserUnavailable;
 	const [urlInput, setUrlInput] = useState(navState.url);
 	// A popped-out panel is portaled outside #root; the popout flag covers that
 	// case, so this one marks only a live page docked inside the shell.
@@ -712,6 +716,20 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			showGlobalToast(t("browser.screenshotCopied"), undefined, "top-center");
 		} catch {
 			showGlobalToast(t("browser.screenshotFailed"), undefined, "top-center");
+		}
+	}, [showGlobalToast, t, viewId]);
+
+	// The browser menu's way out, for any page detection did not catch.
+	const openPageElsewhere = useCallback(async () => {
+		try {
+			const used = await window.ao?.browser.openInUserBrowser(viewId);
+			showGlobalToast(
+				used?.name ? t("browser.continueElsewhere.openedIn", { browser: used.name }) : t("browser.continueElsewhere.openedInYourBrowser"),
+				undefined,
+				"top-center",
+			);
+		} catch {
+			showGlobalToast(t("browser.continueElsewhere.failed"), undefined, "top-center");
 		}
 	}, [showGlobalToast, t, viewId]);
 
@@ -1666,6 +1684,10 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<Camera aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.takeScreenshot")}</span>
 								</DropdownMenuItem>
+								<DropdownMenuItem className="gap-2" disabled={!canOpenElsewhere} onSelect={() => void openPageElsewhere()}>
+									<ExternalLink aria-hidden="true" className="size-icon-base shrink-0" />
+									<span className="flex-1">{continueLabel(t, userBrowser, "open")}</span>
+								</DropdownMenuItem>
 								<DropdownMenuItem className="gap-2" onSelect={() => openGlobalSettings("browserProfiles")}>
 									<Download aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.downloads.title")}</span>
@@ -1682,6 +1704,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 				</DropdownMenu>
 				</div>
 			</div>
+			<BrowserSiteBlockRow siteBlock={navState.siteBlock} viewId={viewId} />
 			<AnimatePresence initial={false}>
 				{annotationMode ? (
 					<motion.div

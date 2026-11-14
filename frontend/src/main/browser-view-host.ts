@@ -60,6 +60,8 @@ import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
+import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
+import type { UserBrowser } from "./user-browser";
 import type {
 	BrowserLiveSink,
 	BrowserLiveState,
@@ -136,6 +138,8 @@ export type BrowserNavState = {
   canGoForward: boolean;
   isLoading: boolean;
   error?: string;
+  /** The page's site refuses this browser (see browser-site-block.ts). */
+  siteBlock?: BrowserSiteBlock;
 };
 
 export type BrowserTabState = {
@@ -509,6 +513,10 @@ export type BrowserViewHostOptions = {
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
+  /** Open a page in the person's own browser (Chrome when installed). */
+  openInUserBrowser?: (url: string) => Promise<UserBrowser>;
+  /** Which browser openInUserBrowser would use, to name the action. */
+  describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
   prepareBrowserPartition?: (partition: string) => void;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
@@ -636,6 +644,10 @@ type BrowserEntry = {
   navigationGeneration: number;
   blockedNavigationGeneration: number;
   networkCapture?: BrowserNetworkCapture;
+  /** The site refuses this browser; offered to continue in the person's browser. */
+  siteBlock?: BrowserSiteBlock;
+  /** A Cloudflare challenge this tab is on, which may still pass by itself. */
+  challenge?: { host: string; at: number; count: number; timer?: ReturnType<typeof setTimeout> };
   favicon?: string;
   // URL of the favicon currently applied to `favicon` (fetch succeeded).
   faviconSourceUrl?: string;
@@ -728,7 +740,7 @@ type BrowserLogEntry = {
 // Text only — never a request/response body, matching the existing on-demand
 // network capture's privacy stance (see MAX_NETWORK_REQUESTS below).
 type BrowserSignalEntry = {
-  kind: "console-error" | "network-failure";
+  kind: "console-error" | "network-failure" | "site-blocked";
   message: string;
   timestamp: string;
 };
@@ -819,6 +831,10 @@ const UNTRUSTED_END = "<<<END UNTRUSTED EXTERNAL CONTENT>>>";
 // preview origin instead.
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const TEMPORARY_BROWSER_PARTITION_PREFIX = "persist:ao-browser-temporary-";
+// A Cloudflare check usually passes by itself within a few seconds. Offer to
+// continue elsewhere only when it is still up after this long, or repeats.
+const SITE_CHALLENGE_GRACE_MS = 10_000;
+const SITE_CHALLENGE_LOOP_MS = 60_000;
 // A confirmed profile switch refuses new agent commands and waits for the
 // in-flight ones (and stopped page loads) to finish. Agent commands can run for
 // up to 60s, so without a cap the switch would hang and block every other agent
@@ -1648,6 +1664,12 @@ export function createBrowserViewHost(
     };
     const filter = { urls: ["*://*/*"] };
     electronSession.webRequest.onCompleted(filter, (details) => {
+      if (details.resourceType === "mainFrame") {
+        const owner = ownerFor(details.webContentsId);
+        const tab = typeof details.webContentsId === "number" ? tabsByWebContentsId.get(details.webContentsId) : undefined;
+        if (owner && tab) observeSiteResponse(owner, tab, details);
+        return;
+      }
       if (details.resourceType !== "xhr" || details.statusCode < 400) return;
       const owner = ownerFor(details.webContentsId);
       if (!owner) return;
@@ -1695,6 +1717,61 @@ export function createBrowserViewHost(
     });
     if (entries.length > MAX_BROWSER_SIGNALS)
       entries.splice(0, entries.length - MAX_BROWSER_SIGNALS);
+  };
+
+  const setSiteBlock = (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    block: BrowserSiteBlock | undefined,
+  ): void => {
+    const current = entry.siteBlock;
+    if (current?.reason === block?.reason && current?.host === block?.host) return;
+    entry.siteBlock = block;
+    if (block) {
+      recordBrowserSignal(session, {
+        kind: "site-blocked",
+        message: `site-blocked: ${block.host} refuses this browser (${block.reason})`,
+      });
+    }
+    if (session.activeTabId === entry.tabId) pushNavState(options, entry);
+  };
+
+  const clearSiteChallenge = (entry: BrowserEntry): void => {
+    if (entry.challenge?.timer) clearTimeout(entry.challenge.timer);
+    entry.challenge = undefined;
+  };
+
+  // Each finished top-level response says whether the site accepts this
+  // browser. Hard refusals show at once; a Cloudflare check gets a grace
+  // period, since it normally passes by itself and reloads the real page.
+  const observeSiteResponse = (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    details: { url: string; statusCode: number; responseHeaders?: Record<string, string[]> },
+  ): void => {
+    const response = classifySiteResponse({ url: details.url, statusCode: details.statusCode, headers: details.responseHeaders });
+    if (!response) return;
+    if (response.kind !== "challenge") {
+      clearSiteChallenge(entry);
+      setSiteBlock(session, entry, response.kind === "blocked" ? response.block : undefined);
+      return;
+    }
+    const now = Date.now();
+    const previous = entry.challenge;
+    const count = previous && previous.host === response.host && now - previous.at < SITE_CHALLENGE_LOOP_MS ? previous.count + 1 : 1;
+    clearSiteChallenge(entry);
+    const challenge: NonNullable<BrowserEntry["challenge"]> = { host: response.host, at: now, count };
+    entry.challenge = challenge;
+    const block: BrowserSiteBlock = { reason: "verification", host: response.host };
+    if (count >= 2) {
+      setSiteBlock(session, entry, block);
+      return;
+    }
+    challenge.timer = setTimeout(() => {
+      if (entry.challenge !== challenge || session.tabs.get(entry.tabId) !== entry) return;
+      setSiteBlock(session, entry, block);
+    }, SITE_CHALLENGE_GRACE_MS);
+    challenge.timer.unref?.();
   };
 
   const ensureNativeActiveTab = async (
@@ -3037,6 +3114,7 @@ export function createBrowserViewHost(
   };
 
   const destroyTabView = (entry: BrowserEntry): void => {
+    clearSiteChallenge(entry);
     applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.removeChildView?.(entry.view);
     if (entry.view.webContents.debugger?.isAttached()) {
@@ -3733,6 +3811,17 @@ export function createBrowserViewHost(
       ? invokeNav(viewId, "stop", true)
       : emptyNavState(viewId),
   );
+  handle("browser:userBrowser", async () => (await options.describeUserBrowser?.()) ?? null);
+  // The page comes from the tab itself, never from the renderer.
+  handle("browser:openInUserBrowser", async (event, viewId: string): Promise<UserBrowser> => {
+    const session = isRendererOwned(event, viewId) ? entries.get(viewId) : undefined;
+    const entry = session?.tabs.size ? activeEntry(session) : undefined;
+    const url = entry ? readNavState(entry).url : "";
+    if (!options.openInUserBrowser || !canOpenInUserBrowser(url)) {
+      throw browserError("BROWSER_URL_FORBIDDEN", "This page cannot be opened in another browser");
+    }
+    return options.openInUserBrowser(url);
+  });
   handle("browser:find", (event, input: BrowserFindInput) => {
     const session =
       typeof input?.viewId === "string" ? entries.get(input.viewId) : undefined;
@@ -6104,7 +6193,17 @@ function readNavState(entry: BrowserEntry): BrowserNavState {
     // the panel renders its "enter a URL" empty state and the address bar is
     // blank rather than showing "about:blank".
     url: page.url === "about:blank" ? "" : page.url,
+    // Only while the tab is still on the refusing site.
+    ...(entry.siteBlock && hostOf(page.url) === entry.siteBlock.host ? { siteBlock: entry.siteBlock } : {}),
   };
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }
 
 function wireAutomationEvents(
@@ -6530,7 +6629,11 @@ function browserSignalMessages(
     level: "error",
     message: markUntrusted(externalText(entry.message)),
     source:
-      entry.kind === "console-error" ? "browser-console" : "browser-network",
+      entry.kind === "console-error"
+        ? "browser-console"
+        : entry.kind === "site-blocked"
+          ? "browser-site"
+          : "browser-network",
     timestamp: entry.timestamp,
   }));
 }

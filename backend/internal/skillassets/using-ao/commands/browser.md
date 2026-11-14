@@ -196,6 +196,13 @@ transient UI, and `--dom-stable <ms>` after HMR or a dynamic render. Conditional
 waits retry through brief execution-context replacement during navigation and
 fail with `WAIT_TIMEOUT` when `--timeout` expires.
 
+Some sites refuse this browser: bot protection that keeps challenging it, or
+Google refusing to sign in from an embedded browser. `errors` then reports a
+`browser-site` entry naming the site. Do not retry, reload in a loop, or try to
+get past it. Tell the user; the Browser panel already offers them a
+"Continue in Chrome" button for that page. If the task needs the agent to keep
+working there and Chrome mode is set up, switch with `ao browser target chrome`.
+
 Network capture is optional and disabled by default. Use it only when the user
 explicitly asks to inspect requests, or when diagnosing loading, API, CORS,
 authentication, caching, or redirect failures after snapshots, console
