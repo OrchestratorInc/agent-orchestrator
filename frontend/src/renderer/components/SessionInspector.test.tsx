@@ -3203,7 +3203,7 @@ describe("SessionInspector summary reviews", () => {
     }
   };
 
-  it("triggers a review and opens the returned reviewer terminal", async () => {
+  it("triggers a review without switching to the reviewer", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review")]);
     const runningReview = {
       ...approvedReview,
@@ -3241,13 +3241,10 @@ describe("SessionInspector summary reviews", () => {
         },
       ),
     );
-    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({
-      handleId: "reviewer-pane",
-      harness: "codex",
-    });
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
 
-  it("opens reviewer Chat when triggering a review from a Chat session", async () => {
+  it("does not switch to reviewer Chat when triggering a review from a Chat session", async () => {
     mockCommonGets([], "", [reviewState(3, "needs_review")]);
     postMock.mockResolvedValue({
       response: { status: 201 },
@@ -3270,7 +3267,8 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
     await userEvent.click(await screen.findByRole("button", { name: "Review latest commit" }));
 
-    await waitFor(() => expect(onOpenReviewerChat).toHaveBeenCalledWith("review-1"));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()));
+    expect(onOpenReviewerChat).not.toHaveBeenCalled();
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
 
@@ -5206,11 +5204,10 @@ describe("SessionInspector summary reviews", () => {
     await userEvent.click(screen.getByRole("button", { name: confirm ? "Re-review commit" : "Cancel" }));
     if (confirm) {
       await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.objectContaining({ body: expect.objectContaining({ rerun: true }) })));
-      await waitFor(() => expect(onOpenReviewerTerminal).toHaveBeenCalled());
     } else {
       expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything());
-      expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
     }
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -5818,10 +5815,7 @@ describe("SessionInspector Cloud reviews", () => {
         "sess-1",
       ),
     );
-    expect(onOpenReviewerTerminal).toHaveBeenCalledWith({
-      handleId: "cloud-reviewer-7",
-      harness: "claude-code",
-    });
+    expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
   it("does not ask a waking session's absent worker for its files count", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });

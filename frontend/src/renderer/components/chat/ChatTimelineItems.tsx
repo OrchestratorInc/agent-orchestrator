@@ -942,7 +942,7 @@ function formatDecisionDuration(ms: number): string {
 
 /**
  * The step rows' icon column (ACTIVITY_SUMMARY_BUTTON_CLASS: a 12px icon at the
- * turn's edge, then a 6px gap). The live row, its setup checklist and their marks
+ * turn's edge, then an 8px gap). The live row, its setup checklist and their marks
  * use the same box, so a mark sits on the step icons' left edge and the label
  * starts where the step labels do. The lattice is 13px across, a pixel wider than
  * the slot: it starts at the slot's left edge and overhangs into the gap. Centred,
@@ -1090,6 +1090,7 @@ export function HumanMessage({
 			annotations={excerptReferences.map((excerpt) => ({
 				fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
 				text: excerpt.text ?? "",
+				comment: excerpt.comment,
 				conversationId: excerpt.sourceConversationId,
 				messageId: excerpt.sourceMessageId,
 				revision: excerpt.sourceRevision,
@@ -1389,6 +1390,8 @@ export function stepInProgress(activity: ConversationActivity): boolean {
  * output the reader opened to follow stays open where it lands.
  */
 export const LiveStepChoices = createContext<Map<string, boolean> | undefined>(undefined);
+/** The activity a search match opened at: the folds that hold it open, and its row opens on its output. */
+export const RevealedChatActivity = createContext<string | undefined>(undefined);
 
 /**
  * Which form of a step's label to show. In progress reads in the present tense, and
@@ -1484,7 +1487,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	// The mark takes the step rows' icon slot and gap (STEP_MARK_SLOT_CLASS), so the
 	// dots sit on the step icons' left edge and the label starts where theirs do: a
 	// step that moves up from here into its own row keeps both edges.
-	const rowClass = "-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0";
+	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
 			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
@@ -1572,7 +1575,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
-					className="truncate pl-4.5 text-xs leading-5 text-muted-foreground"
+					className="truncate pl-5 text-xs leading-5 text-muted-foreground"
 					title={reconnect.detail}
 					data-testid="live-turn-status"
 				>
@@ -1802,7 +1805,14 @@ function GenericActivityRow({
 	// choice made on the live row too, which the row starts from when the step moves
 	// up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	// A folded row of repeated commands opens for a reveal of any call in it.
+	const revealedId = useContext(RevealedChatActivity);
+	const revealed = revealedId !== undefined
+		&& (revealedId === activity.id || repeats.some((each) => each.id === revealedId));
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
+	useEffect(() => {
+		if (revealed) setOpen(true);
+	}, [revealed]);
 	const toggle = (next: boolean) => {
 		setOpen(next);
 		// Kept current, so a later remount starts from the reader's latest choice.
@@ -1831,6 +1841,7 @@ function GenericActivityRow({
 
 	return (
 		<div
+			data-chat-activity-id={activity.id}
 			className={cn(
 				"min-w-0 max-w-full",
 				compactSummary
@@ -1958,7 +1969,15 @@ function GenericActivityRow({
 					>
 						{repeats.length > 0 ? (
 							<div className="flex flex-col gap-1">
-								{[...repeats, activity].map((each) => <GenericActivityBody key={each.id} activity={each} />)}
+								{/* The row itself is the last call's target; each earlier call's
+								    output is its own, so a reveal finds and marks that call. */}
+								{repeats.map((each) => (
+									<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
+										<GenericActivityBody activity={each} />
+									</div>
+								))}
+								<GenericActivityBody activity={activity} />
+
 							</div>
 						) : (
 							<GenericActivityBody activity={activity} />
@@ -2563,7 +2582,11 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// A choice made on the live row carries over when the call moves up from there.
 	const stepChoices = useContext(LiveStepChoices);
-	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? false);
+	const revealed = useContext(RevealedChatActivity) === activity.id;
+	const [open, setOpen] = useState(() => stepChoices?.get(activity.id) ?? revealed);
+	useEffect(() => {
+		if (revealed) setOpen(true);
+	}, [revealed]);
 	const toggle = () => {
 		setOpen(!open);
 		if (stepChoices?.has(activity.id)) stepChoices.set(activity.id, !open);
@@ -2587,7 +2610,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	const hasBody = mcpToolHasBody(activity);
 
 	return (
-		<div className="min-w-0 max-w-full">
+		<div className="min-w-0 max-w-full" data-chat-activity-id={activity.id}>
 			<Pressable
 				onClick={toggle}
 				disabled={!hasBody}
