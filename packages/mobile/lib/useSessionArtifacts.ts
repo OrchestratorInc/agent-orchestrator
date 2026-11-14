@@ -1,7 +1,7 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getSession } from "./api";
 import type { SessionArtifact } from "./artifacts";
+import type { ArtifactsBackend } from "./artifactsBackend";
 import { userFacingError } from "./connectionError";
 import { useApp } from "./store";
 
@@ -19,8 +19,8 @@ const UNLISTED_POLL_MS = 10_000;
  * while it is up, so a rewrite shows. A deleted file leaves the list
  * immediately rather than at the next poll.
  */
-export function useSessionArtifacts(sessionId: string) {
-	const { sessions, config, refresh } = useApp();
+export function useSessionArtifacts(sessionId: string, backend: ArtifactsBackend | null) {
+	const { sessions, refresh } = useApp();
 	const listed = sessions.find((session) => session.id === sessionId)?.artifacts;
 	const [fetched, setFetched] = useState<Fetched | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -28,21 +28,23 @@ export function useSessionArtifacts(sessionId: string) {
 	// Paths deleted from here, hidden until the list they were read from is
 	// replaced by a newer one (which no longer has them).
 	const [removed, setRemoved] = useState<{ base: SessionArtifact[] | undefined; paths: string[] } | null>(null);
-	const current = useRef({ config, sessionId });
-	current.current = { config, sessionId };
+	const current = useRef({ backend, sessionId });
+	current.current = { backend, sessionId };
 
 	const load = useCallback(async () => {
-		if (!config || !sessionId) return;
+		if (!backend || !sessionId) return;
 		setError(undefined);
+		// Still the same machine; for Cloud, a renewed signed prefix reads the same list.
+		const same = () => current.current.sessionId === sessionId && (current.current.backend === backend || Boolean(backend.cloud && current.current.backend?.cloud));
 		try {
-			const session = await getSession(config, sessionId);
-			if (current.current.config === config && current.current.sessionId === sessionId) setFetched({ sessionId, artifacts: session.artifacts ?? [] });
+			const artifacts = await backend.list(sessionId);
+			if (same()) setFetched({ sessionId, artifacts });
 		} catch (cause) {
-			if (current.current.config === config && current.current.sessionId === sessionId) setError(userFacingError(cause));
+			if (same()) setError(userFacingError(cause));
 		} finally {
-			if (current.current.config === config && current.current.sessionId === sessionId) setLoading(false);
+			if (same()) setLoading(false);
 		}
-	}, [config, sessionId]);
+	}, [backend, sessionId]);
 
 	useEffect(() => {
 		setLoading(true);

@@ -1,7 +1,7 @@
 ---
 name: using-ao
-description: "Catalog of the Orchestrator `ao` CLI: spawning workers, managing sessions and projects, creating reusable Cues, sending messages, controlling the shared browser, previewing pages, and daemon control. Use when using the ao CLI, creating Cues, spawning workers, or managing Orchestrator-managed sessions in an Orchestrator workspace."
-trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning workers, managing sessions/projects, sending messages, controlling or previewing pages."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers importing existing agent sessions."
+trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog
@@ -12,6 +12,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
 | `session` | Manage agent sessions (list, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
+| `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
 | `pr` | Merge a PR or resolve its review threads | Completing a reviewed change | `ao pr merge` / `ao pr resolve-comments` |
 | `project` | Register, inspect, configure, or remove projects | Setting up or managing repos Orchestrator knows about | [commands/project.md](commands/project.md) |
@@ -23,6 +24,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 | `report` | Persist a meaningful worker report | Checkpoints, blockers, decisions, outputs, and completion | [commands/report.md](commands/report.md) |
 | `artifact` | Register files in the artifact directory as deliverables | Making a finished file appear as one of the session's artifacts | [commands/artifact.md](commands/artifact.md) |
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |
+| `pane` | Split this session's tabs in the desktop window and run commands in its terminal tabs (Developer Mode preview) | Putting a terminal, file or reviewer beside the chat, or running a command in a terminal the user can see | [commands/pane.md](commands/pane.md) |
 | `render` | Show a self-contained HTML page inline in a chat thread | Answering with a chart, table, diagram, or mockup | [commands/render.md](commands/render.md) |
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
 | `browser` (remote host) | Drive the host's shared remote Chromium, used when `AO_AGENT_BROWSER_URL` is set | Same browser verification on a self-hosted remote host; one browser is shared across sessions | [commands/browser-remote.md](commands/browser-remote.md) |
@@ -30,6 +32,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 | `start` | Fetch (if needed) and open the Orchestrator desktop app | Launching the app | [commands/start.md](commands/start.md) |
 | `stop` | Stop the Orchestrator daemon | Shutting down Orchestrator | [commands/stop.md](commands/stop.md) |
 | `status` | Show daemon status | Verifying the daemon is up and healthy | [commands/status.md](commands/status.md) |
+| `triage` | Collect diagnostics and draft a problem report, even offline | Reporting a bug | [commands/triage.md](commands/triage.md) |
 | `doctor` | Run local health checks | Diagnosing Orchestrator setup problems | [commands/doctor.md](commands/doctor.md) |
 | `import` | Import projects from a legacy Orchestrator install | Migrating from the old flat-file store | [commands/import.md](commands/import.md) |
 | `version` | Print version information | Checking installed version | - |
@@ -37,6 +40,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 
 ## Conventions
 
+- For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
@@ -48,9 +52,11 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 - When the user asks to bring a repository's Conductor settings (scripts, run actions, environment variables, prompt) into Orchestrator, read [commands/conductor.md](commands/conductor.md) first.
 - `--agent` is an alias for `--harness` on `ao spawn`.
 - Every command accepts `-h / --help` for the full flag list.
-- For frontend launch, preview selection, or artifact handoff, read
+- For frontend launch or preview selection, read
   [commands/preview.md](commands/preview.md) before acting. Its static-file,
-  project-runtime, and automatic-handoff rules are load-bearing.
+  project-runtime, and artifact rules are load-bearing: artifacts render in the
+  Artifacts tab after `ao artifact add`, never through `ao preview` unless the
+  user explicitly asks to see one in the Browser panel.
 - For page inspection, interaction, or request diagnosis, read
   [commands/browser.md](commands/browser.md). It defines shared-tab behavior
   and the opt-in network policy.

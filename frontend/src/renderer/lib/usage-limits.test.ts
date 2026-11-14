@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentAccount } from "../hooks/useAgentAccounts";
-import { formatCountdown, groupAccounts, limitWindowPace, remainingPercent, spanPace, type UsageLimitSpan } from "./usage-limits";
+import { formatCountdown, groupAccounts, limitWindowPace, spanPace, usedPercent, type UsageLimitSpan } from "./usage-limits";
 
 function account(overrides: Partial<AgentAccount>): AgentAccount {
 	return { id: "a", provider: "codex", default: false, device: false, signedIn: true, loggedIn: true, ...overrides };
@@ -22,13 +22,30 @@ describe("groupAccounts", () => {
 	it("skips providers without accounts", () => {
 		expect(groupAccounts([])).toEqual([]);
 	});
+
+	it("lists the CLI's login once when a saved account is signed in as the same login", () => {
+		const grouped = groupAccounts([
+			account({ id: "device-claude", provider: "claude", device: true, email: "a@example.com", sameLoginAs: "claude-a" }),
+			account({ id: "claude-a", provider: "claude", default: true, email: "a@example.com" }),
+			account({ id: "claude-b", provider: "claude", email: "b@example.com" }),
+		]);
+		expect(grouped[0].accounts.map((entry) => entry.id)).toEqual(["claude-a", "claude-b"]);
+	});
+
+	it("keeps the CLI's login and its saved twin while the CLI's login is the default", () => {
+		const grouped = groupAccounts([
+			account({ id: "device-claude", provider: "claude", device: true, default: true, email: "a@example.com", sameLoginAs: "claude-a" }),
+			account({ id: "claude-a", provider: "claude", email: "a@example.com" }),
+		]);
+		expect(grouped[0].accounts.map((entry) => entry.id)).toEqual(["device-claude", "claude-a"]);
+	});
 });
 
-describe("remainingPercent", () => {
-	it("is what is left of the window, clamped to 0-100", () => {
-		expect(remainingPercent(18)).toBe(82);
-		expect(remainingPercent(130)).toBe(0);
-		expect(remainingPercent(-5)).toBe(100);
+describe("usedPercent", () => {
+	it("is how much of the window is consumed, clamped to 0-100", () => {
+		expect(usedPercent(18)).toBe(18);
+		expect(usedPercent(130)).toBe(100);
+		expect(usedPercent(-5)).toBe(0);
 	});
 });
 

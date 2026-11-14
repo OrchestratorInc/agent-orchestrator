@@ -212,6 +212,8 @@ type terminalTitleSource interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	// prMoved tells a live session that another session took its PR.
+	prMoved             PRMovedNotifier
 	manager             commander
 	terminalTitles      terminalTitleSource
 	store               Store
@@ -225,6 +227,7 @@ type Service struct {
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
 	asyncSpawns         asyncSpawnAttempts
+	autoSpawns          autoSpawnBreaker
 	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
@@ -248,6 +251,8 @@ type Service struct {
 	// each session's last reconciled branch, remote, and base tips.
 	branchStateMu sync.Mutex
 	branchTips    map[domain.SessionID]string
+	// conflicts remembers the conflicting files of a PR's head against its base.
+	conflicts conflictCache
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -294,6 +299,13 @@ func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) 
 func (s *Service) SetComputerLoginCheck(check func(ctx context.Context, harness domain.AgentHarness, accountID string) bool) {
 	s.runsOnComputerLogin = check
 }
+
+// PRMovedNotifier is told when session to takes PR pr from live session from.
+type PRMovedNotifier func(ctx context.Context, from, to domain.SessionID, pr domain.PullRequest)
+
+// SetPRMovedNotifier wires the notice sent to a session whose PR was claimed
+// by another session.
+func (s *Service) SetPRMovedNotifier(notify PRMovedNotifier) { s.prMoved = notify }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
 // services have been constructed. It performs no provider or filesystem probes.
@@ -423,7 +435,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return newestSession(existing), 0, 0, nil
 		}
 	}
-	return s.spawn(ctx, cfg)
+	return s.spawnUnlessAutoPaused(ctx, cfg, func(spawnCtx context.Context) (domain.Session, int, int, error) { return s.spawn(spawnCtx, cfg) })
 }
 
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -461,7 +473,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		apiErr := toSpawnAPIError(err)
+		apiErr := withSpawnClassification(toSpawnAPIError(err), err)
 		s.recordSpawnOutcome(ctx, cfg, domain.SessionRecord{}, actionStatusForError(err), apiErr)
 		return domain.Session{}, 0, 0, apiErr
 	}
@@ -484,6 +496,9 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		cfg.KeepDisplayName = cfg.DisplayName != ""
 	}
 	start := s.monoNow()
+	// The manager records step timings and the launch it chose here; the
+	// outcome event reads them, from the background for an async Chat start.
+	ctx, _ = sessionmanager.WithSpawnTrace(ctx)
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
@@ -494,8 +509,9 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	createdBy := s.spawnCreatedBy(ctx, cfg)
 	// An asynchronous Chat start answers before it is usable; the provision
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
-	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
+	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project, autoSpawn: autoSpawnAttemptFrom(ctx)}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
+	err = sessionmanager.ClassifySpawnError(ctx, sessionmanager.RelabelSpawnTimeout(err, ctx))
 	answeredMs := s.monoNow().Sub(start).Milliseconds()
 	if err != nil {
 		if acc.deferred {
@@ -508,7 +524,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		s.firstSession.finish(s.milestones, firstSession, false)
 		elapsed := answeredMs
-		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, requestID: reqid.FromContext(ctx)}, err, elapsed, elapsed)
+		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, mode: cfg.RequestedMode, facts: s.spawnFactsFromRequest(ctx, createdBy, false)}, err, elapsed, elapsed)
 		return domain.SessionRecord{}, 0, 0, err
 	}
 	s.recordCreatedBy(ctx, rec.ID, createdBy)
@@ -651,6 +667,7 @@ func (s *Service) emitSpawned(rec domain.SessionRecord, durationMs, spawnDuratio
 	if facts.githubActor != "" {
 		payload["github_actor"] = facts.githubActor
 	}
+	addSpawnLaunchProps(payload, facts.trace.Facts(), rec.Mode)
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
@@ -712,7 +729,10 @@ type spawnFailure struct {
 	kind      domain.SessionKind
 	harness   domain.AgentHarness
 	projectID domain.ProjectID
-	requestID string
+	// mode is the requested mode, used when the start failed before the
+	// manager chose one.
+	mode  domain.SessionMode
+	facts spawnFacts
 }
 
 // emitSpawnFailed reports one failed start attempt. durationMs keeps its
@@ -740,13 +760,29 @@ func (s *Service) emitSpawnFailed(f spawnFailure, err error, durationMs, spawnDu
 	if errorCode != "" {
 		payload["error_code"] = errorCode
 	}
+	if f.facts.createdBy.Valid() {
+		payload["created_by"] = string(f.facts.createdBy)
+	}
+	if f.facts.surface != "" {
+		payload["surface"] = string(f.facts.surface)
+	}
+	trace := f.facts.trace.Facts()
+	addSpawnLaunchProps(payload, trace, f.mode)
+	payload["failed_step"], payload["cause"] = sessionmanager.ClassifySpawnFailure(err, trace)
+	// A start cancelled on purpose (the client left, the session was killed
+	// mid-start, the daemon shut down) is not a launch failure: it reports
+	// separately so it cannot inflate a harness's failure rate.
+	name, level := "ao.sessions.spawn_failed", ports.TelemetryLevelError
+	if errorCode == "SPAWN_CANCELLED" {
+		name, level = "ao.sessions.spawn_cancelled", ports.TelemetryLevelInfo
+	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.sessions.spawn_failed",
+		Name:       name,
 		Source:     "session_service",
 		OccurredAt: s.now(),
-		Level:      ports.TelemetryLevelError,
+		Level:      level,
 		ProjectID:  &projectID,
-		RequestID:  f.requestID,
+		RequestID:  f.facts.requestID,
 		Payload:    payload,
 	})
 }
@@ -1996,6 +2032,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
 		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
 			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
+	case errors.Is(err, sessionmanager.ErrBaseBranchUnsupported):
+		return apierr.Invalid("BASE_BRANCH_UNSUPPORTED", "Base branches need a repository project", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
@@ -2051,6 +2089,9 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_DRIVER_INCOMPATIBLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
+	case errors.Is(err, ports.ErrChatProviderSessionLost):
+		return apierr.Conflict("CHAT_PROVIDER_SESSION_LOST",
+			"The agent's process lost this conversation and was stopped. Resume the agent to continue; your history is kept.", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
 			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)
@@ -2087,6 +2128,12 @@ func mapSessionError(err error) error {
 func toSpawnAPIError(err error) error {
 	if err == nil {
 		return nil
+	}
+	// A stage killed by the spawn's expired budget is a timeout, whatever the
+	// stage returned (sessionmanager.RelabelSpawnTimeout).
+	var timedOut *sessionmanager.SpawnTimeoutError
+	if errors.As(err, &timedOut) {
+		return apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out before the agent could start", nil)
 	}
 	var already *apierr.Error
 	if errors.As(err, &already) {

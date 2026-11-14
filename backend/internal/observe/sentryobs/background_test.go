@@ -15,12 +15,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
+// Receiving an event only proves SendEvent published it. The capture goroutine
+// may still own a shared admission slot or the old Sentry client. Drain before
+// the next test reinitializes globals, especially the four-slot saturation test.
+func finishBackgroundCaptureTest(t *testing.T) {
+	t.Helper()
+	SetPolicyCheck(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := Drain(ctx); err != nil {
+		t.Error(err)
+	}
+	enabled.Store(false)
+}
+
 func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	t.Cleanup(func() { finishBackgroundCaptureTest(t) })
 	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	CaptureBackground(context.Background(), fmt.Errorf("spawn %s: %w", secret, context.DeadlineExceeded), "session_manager", "chat_spawn", map[string]string{
@@ -45,7 +59,7 @@ func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	t.Cleanup(func() { finishBackgroundCaptureTest(t) })
 	SetPolicyCheck(func(context.Context) bool { return true })
 	CaptureBackground(context.Background(), nil, "reaper", "reaper_tick", nil)
 	CaptureBackground(context.Background(), fmt.Errorf("stop: %w", context.Canceled), "reaper", "reaper_tick", nil)
@@ -71,7 +85,7 @@ func TestCaptureBackgroundGroupsOnlyValidatedTags(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	t.Cleanup(func() { finishBackgroundCaptureTest(t) })
 	SetPolicyCheck(func(context.Context) bool { return true })
 	CaptureBackground(context.Background(), errors.New("boom"), "reaper", "reaper_tick", nil)
 	first := <-transport.events
@@ -203,7 +217,7 @@ func TestCaptureErrorAsyncOwnsTagsAndPreservesHTTPMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	SetPolicyCheck(func(context.Context) bool { return true })
-	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	t.Cleanup(func() { finishBackgroundCaptureTest(t) })
 	tags := map[string]string{"operation": "http_request", "category": "http_fault", "status": "409", "error_code": "CHAT_RESUME_FAILED"}
 	CaptureErrorAsync(context.Background(), errors.New("private"), tags, "123456789abcdef0", telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{})
 	tags["operation"] = "mutated"
@@ -227,7 +241,7 @@ func TestModelDiscoveryFailuresAreNotReported(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	t.Cleanup(func() { finishBackgroundCaptureTest(t) })
 	SetPolicyCheck(func(context.Context) bool { return true })
 	// A missing or misconfigured agent CLI is user setup state, exec_exit included.
 	CaptureBackground(context.Background(), &exec.ExitError{}, "session_manager", "model_discovery", map[string]string{"agent": "codex"})

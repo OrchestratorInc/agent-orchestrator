@@ -181,7 +181,7 @@ function HomePageContent() {
 	}, []);
 	const recentProjects = useMemo(
 		() =>
-			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
+			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND && !project.standaloneAgent)).slice(
 				0,
 				RECENT_PROJECT_LIMIT,
 			),

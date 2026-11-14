@@ -27,6 +27,7 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		SessionMode:    sessionMode,
 		SessionOptions: sessionOptions,
 		VersionProbe:   probe,
+		SteerDrain:     steerDrain,
 		Capabilities: ports.ChatCapabilities{
 			// Qwen enforces approval modes over session/request_permission.
 			ports.ChatCapabilityApprovals: true,

@@ -1,8 +1,12 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import { noPRDetails } from "../lib/pr-display";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
+import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { activatePRTab, deactivatePRTab, openPRTab, resetPRTabs } from "../lib/pr-tabs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView } from "./SessionView";
 import { appShortcutBus } from "../test/app-shortcut-bus";
@@ -261,7 +265,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		{ id: "proj-1", name: "my-app", path: "/p", type: "main", sessions: [worker, secondWorker, orchestrator] },
 		{ id: "proj-2", name: "other-app", path: "/q", type: "main", sessions: [crossProjectWorker] },
 	];
-	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean } = {
+	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean; isStale?: boolean } = {
 		data: workspaces,
 		isLoading: false,
 	};
@@ -846,6 +850,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 			?.flatMap((workspace) => workspace.sessions)
 			.find((session) => session.id === sessionId),
 		isLoading: workspaceQueryState.directLoading ?? workspaceQueryState.isLoading,
+		isStale: workspaceQueryState.isStale ?? false,
 		});
 	},
 }));
@@ -855,7 +860,17 @@ vi.mock("../hooks/useShellTerminals", () => ({
 	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
 	useShellTerminals: () => ({ data: shellTerminalsState.loaded ? shellTerminalsState.data : undefined, isLoading: !shellTerminalsState.loaded }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
-	useCloseShellTerminal: () => ({ mutate: closeShellTerminalMock }),
+	useCloseShellTerminal: () => ({
+		mutate: closeShellTerminalMock,
+		// Settles on the mock's callbacks, like the real mutation does.
+		mutateAsync: (handleId: string) =>
+			new Promise<void>((resolve, reject) => {
+				closeShellTerminalMock(handleId, {
+					onSuccess: () => resolve(),
+					onError: (error: unknown) => reject(error),
+				});
+			}),
+	}),
 	useRenameShellTerminal: () => ({ mutate: vi.fn() }),
 }));
 
@@ -957,6 +972,31 @@ function render(ui: ReactNode) {
 	};
 }
 
+/** A PR the session's summary reports, as the inspector reads it. */
+function prSummaryFixture(number: number, url: string): SessionPRSummary {
+	return {
+		...noPRDetails(),
+		url,
+		htmlUrl: url,
+		number,
+		title: `PR ${number}`,
+		state: "open",
+		provider: "github",
+		repo: "acme/app",
+		author: "ada",
+		sourceBranch: `feat/${number}`,
+		targetBranch: "main",
+		headSha: `sha-${number}`,
+		additions: 1,
+		deletions: 0,
+		changedFiles: 1,
+		ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
+		review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "mergeable", reasons: [], prUrl: url, conflictFiles: [] },
+		updatedAt: "2026-06-15T12:00:00Z",
+	};
+}
+
 describe("SessionView", () => {
 	function inspectorWidthVariable() {
 		return screen
@@ -1000,8 +1040,10 @@ describe("SessionView", () => {
 		workspaceQueryState.data = workspaces;
 		workspaceQueryState.isLoading = false;
 		workspaceQueryState.directLoading = undefined;
+		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			prView: false,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
 			// "keeps the inspector closed" test); most tests here exercise the
@@ -1094,6 +1136,95 @@ describe("SessionView", () => {
 			}
 			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
 		});
+	});
+
+	it("shows no PR tab while the PR view is off, even one opened before", () => {
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			expect(screen.queryByTestId("pr-tab-pane")).not.toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: /^#7 Seven/ })).not.toBeInTheDocument();
+
+			// Turning the PR view on brings the tab back where it was.
+			act(() => useUiStore.setState({ developerMode: true, prView: true }));
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
+	it("keeps the tab of a PR the summary found before the session's facts did", async () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/9";
+		const defaultGet = reviewGetMock.getMockImplementation()!;
+		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) => path === "/api/v1/sessions/{sessionId}/pr"
+			? { data: { prs: [prSummaryFixture(9, url)], linkedPrs: [] }, error: undefined }
+			: defaultGet(path, ...args));
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr", expect.anything()));
+			// The workspace facts don't list PR #9 yet; its tab stays open.
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+		}
+	});
+
+	it("keeps a PR's tab mounted behind the others, so coming back finds it as it was", () => {
+		// A PR's tab is part of the PR view, a Developer mode preview.
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+
+			act(() => deactivatePRTab("sess-1"));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).toHaveClass("invisible");
+
+			act(() => activatePRTab("sess-1", url));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
+	it("lets go of a selected shell when a PR's tab opens, so the shell changing doesn't take the view back", () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		const shell = { handleId: "sh-a", sessionId: "sess-1", title: "build", workingDir: "/p", createdAt: "2026-07-24T00:00:00Z" };
+		shellTerminalsState.data = [shell];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => useUiStore.getState().setActiveShellTerminal("sh-a"));
+			act(() => openPRTab("sess-1", url));
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+			expect(useUiStore.getState().activeShellTerminalHandleId).toBeNull();
+
+			// The shell's title changes, as a running command renames it.
+			shellTerminalsState.data = [{ ...shell, title: "build (watching)" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(screen.getByTestId("pr-tab-pane").parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+			shellTerminalsState.data = [];
+		}
 	});
 
 	it("opens the Artifacts view for an artifact and consumes its feedback request once", async () => {
@@ -5785,6 +5916,196 @@ describe("SessionView", () => {
 			expect(await screen.findByText("selected out/report.md")).toBeInTheDocument();
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
 			expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("opens a newly registered artifact of any file type in the Artifacts view", async () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "data.parquet", path: "data.parquet", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(await screen.findByText("selected data.parquet")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-1")).toBe(true);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal a remote host's artifact that only its refetch after entry lists", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		// The sidebar's kept list from an earlier visit is stale and predates the artifact.
+		workspaceQueryState.isStale = true;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			workspaceQueryState.isStale = false;
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("reveals the next registration at once when a remote host's data is fresh on entry", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		workspaceQueryState.isStale = false;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("keeps Browser on a live page and only badges Artifacts when an artifact is registered", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		worker.previewUrl = "http://localhost:5173/";
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+			delete worker.previewUrl;
+		}
+	});
+
+	it("opens Artifacts for a registration while Browser has no page", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("dismisses a session's artifact toast when the user leaves that session", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		const toastFor = (key: string) => useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === key);
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeDefined();
+
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeUndefined();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("takes the baseline from a cloud session's artifact list once it loads", () => {
+		const worker = workerSession("sess-1");
+		// The session arrives before its artifact list.
+		worker.artifactFilesPending = true;
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			delete worker.artifactFilesPending;
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFilesPending;
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("only badges Artifacts for a registration while the user is in Files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			// The toast reaches a maximized Browser and screen readers; Open shows the file.
+			const toast = useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === "artifact-registered:sess-1");
+			expect(toast?.title).toContain("shot.png");
+			expect(toast?.action).toBeDefined();
+			act(() => toast?.action?.run());
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(screen.getByText("selected shot.png")).toBeInTheDocument();
+			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
+			act(() => useUiStore.getState().setInspectorView("sess-1", "artifacts"));
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(false);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal artifacts already registered on entry, or unregistered files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ kind: "file", name: "scratch.txt", path: "scratch.txt", size: 1, updatedAt: "2026-06-11T00:00:00Z" },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
 		} finally {
 			delete worker.artifactFiles;
 		}

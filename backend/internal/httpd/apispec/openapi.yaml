@@ -210,6 +210,68 @@ paths:
       summary: Read recognized login prompts and background process state
       tags:
       - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}/actions:
+    post:
+      operationId: actOnAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentLoginActionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Send a fixed action to a recognized native login menu
+      tags:
+      - agents
   /api/v1/agents/{agent}/auth/operations/{operationId}/code:
     post:
       operationId: submitAgentUILoginCode
@@ -270,6 +332,131 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Submit a one-time Claude sign-in code to the existing native login
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/providers:
+    get:
+      operationId: listAgentCatalogProviders
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogProvidersResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the key-only providers in an agent's own provider catalog on this
+        device
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/providers/{provider}/models:
+    get:
+      operationId: listAgentCatalogModels
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Provider ID from the harness's catalog.
+        in: path
+        name: provider
+        required: true
+        schema:
+          description: Provider ID from the harness's catalog.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogModelsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the model IDs an agent's own catalog offers for one provider
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/signed-in:
+    post:
+      operationId: recordAgentSignIn
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordAgentSignInResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Apply a sign-in completed in an agent's own terminal login
       tags:
       - agents
   /api/v1/agents/{agent}/chat/prewarm:
@@ -1703,6 +1890,162 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Resolve the safe installation plan for every supported agent harness
+      tags:
+      - agents
+  /api/v1/agents/provider-keys:
+    get:
+      operationId: listProviderKeys
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProviderKeysResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: List reviewed provider keys with display-safe saved state; values are
+        never returned
+      tags:
+      - agents
+  /api/v1/agents/provider-keys/{name}:
+    delete:
+      operationId: removeProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKey'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Remove a provider key from AO and from the OS user environment when
+        AO published it
+      tags:
+      - agents
+    put:
+      operationId: saveProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveProviderKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKey'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Save a provider key for AO sessions and set whether it is published
+        to the OS user environment
+      tags:
+      - agents
+  /api/v1/agents/provider-keys/{name}/check:
+    post:
+      operationId: checkProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckProviderKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKeyCheck'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Ask the provider whether it accepts a key and list the models it offers
       tags:
       - agents
   /api/v1/agents/readiness:
@@ -3776,6 +4119,60 @@ paths:
       summary: Run the legacy AO project import through the daemon store
       tags:
       - import
+  /api/v1/imports/github-availability:
+    get:
+      operationId: checkImportGitHubAvailability
+      parameters:
+      - description: GitHub user or organization the repository would be created under.
+        in: query
+        name: owner
+        schema:
+          description: GitHub user or organization the repository would be created
+            under.
+          type: string
+      - description: Repository name to check.
+        in: query
+        name: name
+        schema:
+          description: Repository name to check.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImporterGitHubAvailabilityResult'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check whether a GitHub repository name is free to create for a project
+        import
+      tags:
+      - import
+  /api/v1/imports/github-owners:
+    get:
+      operationId: listImportGitHubOwners
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImporterGitHubOwnersResult'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the GitHub accounts gh on this machine can create a project's
+        repository under
+      tags:
+      - import
   /api/v1/imports/prepare-git:
     post:
       operationId: prepareImportGit
@@ -5334,6 +5731,152 @@ paths:
       summary: Initialize a selected folder as a Git repository with an initial commit
       tags:
       - projects
+  /api/v1/prs/{id}/attachment-access:
+    get:
+      operationId: getPRAttachmentAccess
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
+        required: true
+        schema:
+          description: The pull request's URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PRAttachmentAccessResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Whether files can be attached to a pull request's comments, and where
+        they would be stored
+      tags:
+      - prs
+  /api/v1/prs/{id}/comments:
+    post:
+      operationId: postPRComment
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostPRCommentRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPRCommentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Post a pull request conversation comment or review-thread reply
+      tags:
+      - prs
+  /api/v1/prs/{id}/details:
+    post:
+      operationId: loadPRDetails
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoadPRDetailsRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a tracked pull request's details from its provider when none are
+        stored
+      tags:
+      - prs
   /api/v1/prs/{id}/merge:
     post:
       operationId: mergePR
@@ -5388,7 +5931,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Squash-merge a pull request
+      summary: Merge a pull request (squash, merge commit, or rebase)
       tags:
       - prs
   /api/v1/prs/{id}/resolve-comments:
@@ -5428,6 +5971,211 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Resolve review threads on a pull request
+      tags:
+      - prs
+  /api/v1/prs/{id}/stack:
+    get:
+      operationId: getPRStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
+        required: true
+        schema:
+          description: The pull request's URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a pull request's stack, or the open pull request it could be stacked
+        on
+      tags:
+      - prs
+    post:
+      operationId: addPRToStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPRToStackRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stack a pull request on the open pull request it is based on
+      tags:
+      - prs
+  /api/v1/prs/{id}/stack/merge:
+    post:
+      operationId: mergePRStack
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergePRStackRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergePRStackResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Merge a pull request and the unmerged layers below it, all or nothing
+      tags:
+      - prs
+  /api/v1/prs/{id}/state:
+    post:
+      operationId: changePRState
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePRStateRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChangePRStateResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Close, reopen, mark ready, or convert a pull request to draft
       tags:
       - prs
   /api/v1/push/devices:
@@ -6128,6 +6876,199 @@ paths:
       summary: Report a reviewer-owned hook signal
       tags:
       - reviews
+  /api/v1/search/index-status:
+    get:
+      operationId: getSessionSearchIndexStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSearchIndexStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report what the session search index covers
+      tags:
+      - sessions
+  /api/v1/search/reindex:
+    post:
+      operationId: reindexSessionSearch
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSearchIndexStatusResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Empty the session search index and rebuild it from scratch in the background
+      tags:
+      - sessions
+  /api/v1/search/sessions:
+    get:
+      operationId: searchSessions
+      parameters:
+      - description: Words to search for. Leave it out to browse by filters or sort=recent.
+          Words may carry operators such as harness:, project:, status:, before:,
+          after:, path:, !exclude, "exact phrase", 'exact, ^prefix.
+        in: query
+        name: q
+        schema:
+          description: Words to search for. Leave it out to browse by filters or sort=recent.
+            Words may carry operators such as harness:, project:, status:, before:,
+            after:, path:, !exclude, "exact phrase", 'exact, ^prefix.
+          type: string
+      - description: 'Restrict results to one project. Equivalent to project: in q.'
+        in: query
+        name: projectId
+        schema:
+          description: 'Restrict results to one project. Equivalent to project: in
+            q.'
+          type: string
+      - description: Restrict results to one agent harness, such as claude-code or
+          codex.
+        in: query
+        name: harness
+        schema:
+          description: Restrict results to one agent harness, such as claude-code
+            or codex.
+          type: string
+      - description: Restrict to sessions that touched a path containing this text.
+        in: query
+        name: path
+        schema:
+          description: Restrict to sessions that touched a path containing this text.
+          type: string
+      - description: Restrict to one session lifecycle state.
+        in: query
+        name: status
+        schema:
+          description: Restrict to one session lifecycle state.
+          enum:
+          - killed
+          - live
+          - hibernated
+          type: string
+      - description: Earliest result time, as an RFC 3339 date or date-time.
+        in: query
+        name: from
+        schema:
+          description: Earliest result time, as an RFC 3339 date or date-time.
+          type: string
+      - description: Latest result time, as an RFC 3339 date or date-time.
+        in: query
+        name: to
+        schema:
+          description: Latest result time, as an RFC 3339 date or date-time.
+          type: string
+      - description: Order by relevance (while typing) or recency (while browsing).
+          Defaults to relevance, or to recent for a filter-only query.
+        in: query
+        name: sort
+        schema:
+          description: Order by relevance (while typing) or recency (while browsing).
+            Defaults to relevance, or to recent for a filter-only query.
+          enum:
+          - relevance
+          - recent
+          type: string
+      - description: One result per session at its best match, with sessionMatches
+          counting the rest (session, the default), or one result per matching message
+          (message).
+        in: query
+        name: group
+        schema:
+          description: One result per session at its best match, with sessionMatches
+            counting the rest (session, the default), or one result per matching message
+            (message).
+          enum:
+          - session
+          - message
+          type: string
+      - description: Page size. Defaults to 20.
+        in: query
+        name: limit
+        schema:
+          description: Page size. Defaults to 20.
+          maximum: 100
+          minimum: 1
+          type: integer
+      - description: Page offset.
+        in: query
+        name: offset
+        schema:
+          description: Page offset.
+          minimum: 0
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionSearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search past sessions by title, message text, tool output, and touched
+        file paths
+      tags:
+      - sessions
   /api/v1/session-import:
     get:
       operationId: scanSessionImport
@@ -9394,8 +10335,8 @@ paths:
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback:
-    post:
-      operationId: rollbackSessionConversation
+    get:
+      operationId: previewSessionConversationRollback
       parameters:
       - description: Session identifier, e.g. project-1.
         in: path
@@ -9417,7 +10358,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RollbackConversationResponse'
+                $ref: '#/components/schemas/RollbackPreviewResponse'
           description: OK
         "404":
           content:
@@ -9443,7 +10384,71 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Discard a turn and everything after it from the agent's memory
+      summary: List the worktree files rolling back to a turn would restore
+      tags:
+      - conversations
+    post:
+      operationId: rollbackSessionConversation
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: AO conversation turn identifier, from the snapshot's turns array.
+        in: path
+        name: turnId
+        required: true
+        schema:
+          description: AO conversation turn identifier, from the snapshot's turns
+            array.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RollbackConversationRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollbackConversationResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Discard a turn and everything after it from the agent's memory, optionally
+        restoring its files
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer:
@@ -9548,6 +10553,90 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Exit the agent while preserving its AO session
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/fork:
+    post:
+      operationId: forkSession
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersForkSessionRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersForkSessionResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Fork a session at a finished turn
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/fork-options:
+    get:
+      operationId: getSessionForkOptions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersSessionForkOptionsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Report whether a session can be forked
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/history:
@@ -9900,6 +10989,293 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Configure whether PR completion terminates the session
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/panes:
+    get:
+      operationId: getSessionPanes
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPaneLayoutResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Read the split-pane layout the desktop window shows for a session
+      tags:
+      - sessions
+    post:
+      operationId: commandSessionPanes
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPaneCommandRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPaneLayoutResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Gateway Timeout
+      summary: Ask the desktop window to split, unsplit or focus a session's tabs
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/panes/input:
+    post:
+      operationId: typeIntoSessionPane
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPaneInputRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Type into, or interrupt, one of the session's own terminal tabs
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/panes/output:
+    get:
+      operationId: readSessionPaneOutput
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Key of one of this session's terminal tabs, from ao pane.
+        in: query
+        name: tab
+        schema:
+          description: Key of one of this session's terminal tabs, from ao pane.
+          type: string
+      - description: How many of the last lines to return. Defaults to 200.
+        in: query
+        name: lines
+        schema:
+          description: How many of the last lines to return. Defaults to 200.
+          maximum: 2000
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPaneOutputResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Read what one of the session's own terminal tabs shows
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/pin:
@@ -13016,6 +14392,44 @@ paths:
       summary: Read the daemon-owned user preferences
       tags:
       - settings
+  /api/v1/settings/account-handoff:
+    patch:
+      operationId: updateAccountHandoff
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountHandoffRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether a usage-limited Chat session moves to another account
+        and retries its prompt
+      tags:
+      - settings
   /api/v1/settings/chat-hibernation:
     patch:
       operationId: updateChatHibernation
@@ -14105,6 +15519,14 @@ components:
       required:
       - activeBranchId
       type: object
+    AddPRToStackRequest:
+      properties:
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      type: object
     AddProjectInput:
       properties:
         asWorkspace:
@@ -14263,14 +15685,29 @@ components:
           $ref: '#/components/schemas/AgentAccountLimits'
         loggedIn:
           type: boolean
+        orgId:
+          type: string
+        orgName:
+          type: string
         plan:
           type: string
         problem:
+          type: string
+        problemKind:
+          enum:
+          - slow
+          - rate_limited
+          - unavailable
+          - cli_missing
+          - other_login
+          - other_org
           type: string
         provider:
           enum:
           - claude
           - codex
+          type: string
+        sameLoginAs:
           type: string
         signedIn:
           type: boolean
@@ -14642,6 +16079,29 @@ components:
       required:
       - agents
       type: object
+    AgentLoginActionRequest:
+      properties:
+        action:
+          enum:
+          - previous
+          - next
+          - select
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+          - "7"
+          - "8"
+          - "9"
+          type: string
+        option:
+          maxLength: 256
+          type: string
+      required:
+      - action
+      type: object
     AgentLoginMethod:
       properties:
         id:
@@ -14672,6 +16132,18 @@ components:
           type: string
         method:
           type: string
+        nativeOptions:
+          items:
+            type: string
+          type: array
+        nativePrompt:
+          enum:
+          - waiting
+          - menu
+          - terminal_required
+          type: string
+        selectedOption:
+          type: string
         status:
           enum:
           - running
@@ -14680,6 +16152,8 @@ components:
           - cancelled
           - timed_out
           type: string
+        withdrawFailed:
+          type: boolean
       required:
       - id
       - agentId
@@ -15057,6 +16531,32 @@ components:
           type: string
       required:
       - data
+      type: object
+    AutoSpawnPause:
+      properties:
+        effort:
+          type: string
+        errorCode:
+          type: string
+        failures:
+          type: integer
+        harness:
+          type: string
+        kind:
+          type: string
+        message:
+          type: string
+        model:
+          type: string
+        pausedAt:
+          format: date-time
+          type: string
+      required:
+      - harness
+      - errorCode
+      - message
+      - failures
+      - pausedAt
       type: object
     AutomationEnvelope:
       properties:
@@ -15659,6 +17159,58 @@ components:
       - ok
       - sessionId
       type: object
+    CatalogProvider:
+      properties:
+        env:
+          type: string
+        id:
+          type: string
+        models:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
+      - models
+      type: object
+    ChangePRStateRequest:
+      properties:
+        action:
+          enum:
+          - close
+          - reopen
+          - ready
+          - draft
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - action
+      type: object
+    ChangePRStateResponse:
+      properties:
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        state:
+          enum:
+          - open
+          - draft
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type: string
+      required:
+      - ok
+      - prNumber
+      - state
+      - stateChangedAt
+      type: object
     ChatAgentPermissionModes:
       properties:
         agent:
@@ -15809,6 +17361,11 @@ components:
           type: array
       required:
       - agents
+      type: object
+    CheckProviderKeyRequest:
+      properties:
+        secret:
+          type: string
       type: object
     ClaimPRRequest:
       properties:
@@ -16814,6 +18371,26 @@ components:
       required:
       - files
       type: object
+    ControllersForkSessionRequest:
+      properties:
+        clientRequestId:
+          minLength: 1
+          type: string
+        turnId:
+          type: string
+      required:
+      - clientRequestId
+      type: object
+    ControllersForkSessionResponse:
+      properties:
+        displayName:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - displayName
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -16884,6 +18461,202 @@ components:
       required:
       - code
       - expiresAt
+      type: object
+    ControllersPaneBox:
+      properties:
+        height:
+          description: Height, 0 to 1.
+          format: double
+          type: number
+        key:
+          description: Key of the tab shown in this pane.
+          type: string
+        width:
+          description: Width, 0 to 1.
+          format: double
+          type: number
+        x:
+          description: Left edge, 0 to 1.
+          format: double
+          type: number
+        "y":
+          description: Top edge, 0 to 1.
+          format: double
+          type: number
+      required:
+      - key
+      - x
+      - "y"
+      - width
+      - height
+      type: object
+    ControllersPaneCommandRequest:
+      properties:
+        action:
+          description: split shows tab beside another; remove takes a tab out of its
+            group; ungroup dissolves a group; focus brings a tab on screen; close
+            closes a terminal tab.
+          enum:
+          - split
+          - remove
+          - ungroup
+          - focus
+          - close
+          type: string
+        beside:
+          description: 'For split: key of the tab to split beside. Defaults to the
+            tab on screen.'
+          type:
+          - "null"
+          - string
+        group:
+          description: 'For ungroup: group id. Defaults to the group on screen.'
+          type:
+          - "null"
+          - string
+        side:
+          description: 'For split: which side of beside the tab goes. Defaults to
+            right.'
+          enum:
+          - left
+          - right
+          - top
+          - bottom
+          type:
+          - "null"
+          - string
+        tab:
+          description: Tab key. For split, also terminal (open a new shell terminal)
+            or file:<workspace-relative path> (open the file).
+          type:
+          - "null"
+          - string
+      required:
+      - action
+      type: object
+    ControllersPaneGroup:
+      properties:
+        focus:
+          description: Key of the group's focused pane.
+          type: string
+        id:
+          description: Group id, for ungroup.
+          type: string
+        panes:
+          description: Every pane of the split with its position.
+          items:
+            $ref: '#/components/schemas/ControllersPaneBox'
+          type: array
+      required:
+      - id
+      - focus
+      - panes
+      type: object
+    ControllersPaneInputRequest:
+      properties:
+        close:
+          description: Close the terminal tab (its shell may already have exited).
+          type: boolean
+        enter:
+          description: Press Enter after the text. Defaults to true.
+          type:
+          - "null"
+          - boolean
+        interrupt:
+          description: Send Ctrl-C instead of text.
+          type: boolean
+        tab:
+          description: Key of one of this session's terminal tabs, from ao pane.
+          type: string
+        text:
+          description: Text to type. Sent as a command (followed by Enter) unless
+            enter is false.
+          type:
+          - "null"
+          - string
+      required:
+      - tab
+      type: object
+    ControllersPaneLayout:
+      properties:
+        enabled:
+          description: Whether split panes are on in the window (a Developer Mode
+            preview). Commands are refused while off.
+          type: boolean
+        groups:
+          description: Every split group of the session.
+          items:
+            $ref: '#/components/schemas/ControllersPaneGroup'
+          type: array
+        selected:
+          description: Key of the tab on screen (the focused pane when a split is
+            shown).
+          type: string
+        shown:
+          description: Id of the group on screen, when a split is shown.
+          type:
+          - "null"
+          - string
+        tabs:
+          description: Every tab of the session.
+          items:
+            $ref: '#/components/schemas/ControllersPaneTab'
+          type: array
+      required:
+      - enabled
+      - selected
+      - tabs
+      - groups
+      type: object
+    ControllersPaneLayoutResponse:
+      properties:
+        layout:
+          $ref: '#/components/schemas/ControllersPaneLayout'
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - layout
+      type: object
+    ControllersPaneOutputResponse:
+      properties:
+        output:
+          type: string
+        sessionId:
+          type: string
+        tab:
+          type: string
+      required:
+      - sessionId
+      - tab
+      - output
+      type: object
+    ControllersPaneTab:
+      properties:
+        agent:
+          description: Agent running in a terminal tab, when the window tracks it.
+          type:
+          - "null"
+          - string
+        key:
+          description: 'Stable tab key used by pane commands: session, a shell terminal''s
+            handle id, reviewer:<id>, reviewer-chat:<id> or file:<path>.'
+          type: string
+        kind:
+          description: What the tab shows.
+          enum:
+          - session
+          - terminal
+          - reviewer
+          - file
+          type: string
+        title:
+          description: The tab's label.
+          type: string
+      required:
+      - key
+      - kind
+      - title
       type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
@@ -16975,6 +18748,85 @@ components:
       - host
       - port
       - reason
+      type: object
+    ControllersSessionForkOptionsResponse:
+      properties:
+        allowed:
+          type: boolean
+        anyTurn:
+          type: boolean
+        forkedFrom:
+          $ref: '#/components/schemas/ControllersSessionForkOrigin'
+        forks:
+          items:
+            $ref: '#/components/schemas/ControllersSessionForkSummary'
+          type: array
+        refusal:
+          $ref: '#/components/schemas/ControllersSessionForkRefusal'
+        sourcePRs:
+          items:
+            $ref: '#/components/schemas/ControllersSessionForkSourcePR'
+          type: array
+        suggestedName:
+          type: string
+      required:
+      - allowed
+      type: object
+    ControllersSessionForkOrigin:
+      properties:
+        sessionId:
+          type: string
+        sourceExists:
+          type: boolean
+        textHandoff:
+          type: boolean
+        title:
+          type: string
+        turnId:
+          type: string
+      required:
+      - sessionId
+      - title
+      - sourceExists
+      type: object
+    ControllersSessionForkRefusal:
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
+      type: object
+    ControllersSessionForkSourcePR:
+      properties:
+        closed:
+          type: boolean
+        merged:
+          type: boolean
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - url
+      - number
+      - merged
+      - closed
+      type: object
+    ControllersSessionForkSummary:
+      properties:
+        exists:
+          type: boolean
+        sessionId:
+          type: string
+        title:
+          type: string
+      required:
+      - sessionId
+      - title
+      - exists
       type: object
     ControllersSessionView:
       properties:
@@ -17455,6 +19307,8 @@ components:
         annotationOrder:
           format: int64
           type: integer
+        comment:
+          type: string
         fileReference:
           $ref: '#/components/schemas/ConversationFileReferenceRequest'
         mimeType:
@@ -17507,6 +19361,9 @@ components:
       type: object
     ConversationExcerptReferenceRequest:
       properties:
+        comment:
+          maxLength: 4096
+          type: string
         conversationId:
           type: string
         id:
@@ -18083,6 +19940,7 @@ components:
         failureCode:
           enum:
           - provider_key_missing
+          - auth_required
           type: string
         hasHumanPrompt:
           type: boolean
@@ -18386,6 +20244,9 @@ components:
       type: object
     DelegateTaskRequest:
       properties:
+        accountId:
+          maxLength: 128
+          type: string
         agent:
           enum:
           - claude-code
@@ -18439,6 +20300,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        baseBranch:
+          maxLength: 255
+          type: string
         branch:
           maxLength: 255
           type: string
@@ -18623,6 +20487,8 @@ components:
       type: object
     DomainSideReference:
       properties:
+        comment:
+          type: string
         conversationId:
           type: string
         id:
@@ -18821,6 +20687,13 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GetPRStackResponse:
+      properties:
+        parent:
+          $ref: '#/components/schemas/PRStackParentResponse'
+        stack:
+          $ref: '#/components/schemas/PRStackResponse'
       type: object
     GitHubRepo:
       properties:
@@ -19051,8 +20924,41 @@ components:
       - root
       - nextStep
       type: object
+    ImporterGitHubAvailabilityResult:
+      properties:
+        available:
+          type: boolean
+        message:
+          type: string
+      required:
+      - available
+      type: object
+    ImporterGitHubOwner:
+      properties:
+        avatarUrl:
+          type: string
+        login:
+          type: string
+      required:
+      - login
+      - avatarUrl
+      type: object
+    ImporterGitHubOwnersResult:
+      properties:
+        owners:
+          items:
+            $ref: '#/components/schemas/ImporterGitHubOwner'
+          type: array
+      required:
+      - owners
+      type: object
     InitializeRepositoryInput:
       properties:
+        create:
+          type: boolean
+        createId:
+          maxLength: 64
+          type: string
         path:
           type: string
       required:
@@ -19272,6 +21178,8 @@ components:
       properties:
         description:
           type: string
+        faviconDarkUrl:
+          type: string
         faviconUrl:
           type: string
         imageUrl:
@@ -19356,6 +21264,24 @@ components:
           type: string
       required:
       - automations
+      type: object
+    ListCatalogModelsResponse:
+      properties:
+        models:
+          items:
+            type: string
+          type: array
+      required:
+      - models
+      type: object
+    ListCatalogProvidersResponse:
+      properties:
+        providers:
+          items:
+            $ref: '#/components/schemas/CatalogProvider'
+          type: array
+      required:
+      - providers
       type: object
     ListCompactSessionUsageResponse:
       properties:
@@ -19451,6 +21377,15 @@ components:
           type: array
       required:
       - projects
+      type: object
+    ListProviderKeysResponse:
+      properties:
+        keys:
+          items:
+            $ref: '#/components/schemas/ProviderKey'
+          type: array
+      required:
+      - keys
       type: object
     ListReportsResponse:
       properties:
@@ -19625,6 +21560,13 @@ components:
       - entries
       - truncated
       type: object
+    LoadPRDetailsRequest:
+      properties:
+        prUrl:
+          type: string
+      required:
+      - prUrl
+      type: object
     MarkAllNotificationsReadRequest:
       properties:
         ids:
@@ -19679,8 +21621,16 @@ components:
       type: object
     MergePRRequest:
       properties:
+        allowNoChecks:
+          type: boolean
         expectedHeadSha:
           minLength: 40
+          type: string
+        method:
+          enum:
+          - squash
+          - merge
+          - rebase
           type: string
         prUrl:
           minLength: 1
@@ -19709,6 +21659,57 @@ components:
       - prNumber
       - method
       - state
+      - stateChangedAt
+      type: object
+    MergePRStackRequest:
+      properties:
+        allowNoChecks:
+          type: boolean
+        expectedHeads:
+          items:
+            $ref: '#/components/schemas/PRStackHead'
+          minItems: 1
+          type: array
+        method:
+          enum:
+          - squash
+          - merge
+          - rebase
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - expectedHeads
+      type: object
+    MergePRStackResponse:
+      properties:
+        method:
+          type: string
+        numbers:
+          items:
+            type: integer
+          type: array
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+        stateChangedAt:
+          format: date-time
+          type: string
+        status:
+          enum:
+          - merged
+          - enqueued
+          - pending
+          type: string
+      required:
+      - ok
+      - prNumber
+      - numbers
+      - method
+      - status
       - stateChangedAt
       type: object
     MobileDeviceResponse:
@@ -20003,6 +22004,35 @@ components:
       - id
       - projectId
       type: object
+    PRAttachmentAccessResponse:
+      properties:
+        allowed:
+          type: boolean
+        location:
+          type: string
+        reason:
+          enum:
+          - no_write_access
+          - unsupported
+          type: string
+      required:
+      - allowed
+      type: object
+    PRCommentAttachment:
+      properties:
+        contentType:
+          type: string
+        data:
+          minLength: 1
+          type: string
+        name:
+          minLength: 1
+          type: string
+      required:
+      - name
+      - contentType
+      - data
+      type: object
     PRReviewState:
       properties:
         latestRun:
@@ -20031,6 +22061,121 @@ components:
       - title
       - targetSha
       - status
+      type: object
+    PRStackHead:
+      properties:
+        headSha:
+          minLength: 40
+          type: string
+        number:
+          type: integer
+      required:
+      - number
+      - headSha
+      type: object
+    PRStackLayerResponse:
+      properties:
+        ci:
+          type: string
+        headBranch:
+          type: string
+        headSha:
+          type: string
+        mergeability:
+          type: string
+        noChecks:
+          type: boolean
+        number:
+          type: integer
+        reviewDecision:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - draft
+          - open
+          - merged
+          - closed
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - number
+      - title
+      - url
+      - state
+      - headBranch
+      - headSha
+      type: object
+    PRStackParentResponse:
+      properties:
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - number
+      - url
+      type: object
+    PRStackResponse:
+      properties:
+        baseBranch:
+          type: string
+        layers:
+          items:
+            $ref: '#/components/schemas/PRStackLayerResponse'
+          type: array
+        number:
+          type: integer
+        open:
+          type: boolean
+        url:
+          type: string
+      required:
+      - number
+      - url
+      - baseBranch
+      - open
+      - layers
+      type: object
+    PostPRCommentRequest:
+      properties:
+        attachments:
+          items:
+            $ref: '#/components/schemas/PRCommentAttachment'
+          maxItems: 10
+          type: array
+        body:
+          minLength: 1
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+        threadId:
+          type: string
+      required:
+      - prUrl
+      - body
+      type: object
+    PostPRCommentResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        ok:
+          type: boolean
+        url:
+          type: string
+      required:
+      - ok
+      - id
+      - url
+      - createdAt
       type: object
     PrepareTaskResponse:
       properties:
@@ -20232,6 +22377,10 @@ components:
       type: object
     ProjectSummary:
       properties:
+        autoSpawnPauses:
+          items:
+            $ref: '#/components/schemas/AutoSpawnPause'
+          type: array
         folderMissing:
           type: boolean
         id:
@@ -20272,6 +22421,53 @@ components:
       - sourceTurnId
       - providerTurnId
       - activityId
+      type: object
+    ProviderKey:
+      properties:
+        agents:
+          items:
+            type: string
+          type: array
+        checkable:
+          type: boolean
+        configured:
+          type: boolean
+        device:
+          type: boolean
+        deviceAvailable:
+          type: boolean
+        hint:
+          type: string
+        label:
+          type: string
+        name:
+          type: string
+        withdrawFailed:
+          type: boolean
+      required:
+      - name
+      - label
+      - configured
+      - device
+      - deviceAvailable
+      - checkable
+      - agents
+      type: object
+    ProviderKeyCheck:
+      properties:
+        models:
+          items:
+            type: string
+          type: array
+        status:
+          enum:
+          - valid
+          - invalid
+          - unverified
+          - unreachable
+          type: string
+      required:
+      - status
       type: object
     ProviderSwitchRequest:
       properties:
@@ -20392,6 +22588,11 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    RecordAgentSignInResponse:
+      properties:
+        releasedKey:
+          type: string
       type: object
     RegisterArtifactsRequest:
       properties:
@@ -20890,12 +23091,55 @@ components:
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
       type: object
+    RollbackConversationRequest:
+      properties:
+        planId:
+          type: string
+        restoreFiles:
+          type: boolean
+      type: object
     RollbackConversationResponse:
       properties:
         turnsDiscarded:
           type: integer
       required:
       - turnsDiscarded
+      type: object
+    RollbackFileChange:
+      properties:
+        change:
+          enum:
+          - restored
+          - reverted
+          - removed
+          type: string
+        path:
+          type: string
+      required:
+      - path
+      - change
+      type: object
+    RollbackPreviewResponse:
+      properties:
+        commitsSince:
+          type: integer
+        files:
+          items:
+            $ref: '#/components/schemas/RollbackFileChange'
+          type: array
+        filesRestorable:
+          type: boolean
+        planId:
+          type: string
+        reason:
+          type: string
+        totalFiles:
+          type: integer
+      required:
+      - filesRestorable
+      - files
+      - totalFiles
+      - commitsSince
       type: object
     RollbackSessionResponse:
       properties:
@@ -20910,6 +23154,15 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SaveProviderKeyRequest:
+      properties:
+        device:
+          type: boolean
+        secret:
+          type: string
+      required:
+      - device
       type: object
     SaveRenderArtifactRequest:
       properties:
@@ -21087,6 +23340,11 @@ components:
           type: string
         registered:
           type: boolean
+        shareAccess:
+          enum:
+          - restricted
+          - anyone
+          type: string
         shareUrl:
           type: string
         size:
@@ -21104,8 +23362,18 @@ components:
       type: object
     SessionBranchState:
       properties:
+        base:
+          type: string
+        baseRef:
+          type: string
+        behind:
+          type: integer
         commits:
           type: integer
+        conflicts:
+          type: boolean
+        head:
+          type: string
         remoteBranch:
           type: string
         remoteHead:
@@ -21115,6 +23383,8 @@ components:
       required:
       - commits
       - unpushed
+      - behind
+      - conflicts
       type: object
     SessionHistoryResponse:
       properties:
@@ -21378,6 +23648,10 @@ components:
       properties:
         autoInjectCI:
           type: boolean
+        checks:
+          items:
+            $ref: '#/components/schemas/SessionPRCheck'
+          type: array
         failingChecks:
           items:
             $ref: '#/components/schemas/SessionPRFailingCheck'
@@ -21392,7 +23666,68 @@ components:
       required:
       - state
       - failingChecks
+      - checks
       - autoInjectCI
+      type: object
+    SessionPRCheck:
+      properties:
+        name:
+          type: string
+        status:
+          enum:
+          - unknown
+          - queued
+          - in_progress
+          - passed
+          - failed
+          - skipped
+          - cancelled
+          type: string
+        url:
+          type: string
+      required:
+      - name
+      - status
+      type: object
+    SessionPRComment:
+      properties:
+        author:
+          type: string
+        body:
+          type: string
+        createdAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        isBot:
+          type: boolean
+        url:
+          type: string
+      required:
+      - id
+      - author
+      - isBot
+      - body
+      type: object
+    SessionPRCommit:
+      properties:
+        author:
+          type: string
+        committedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        headline:
+          type: string
+        sha:
+          type: string
+      required:
+      - sha
+      - headline
       type: object
     SessionPRConflictFile:
       properties:
@@ -21471,6 +23806,15 @@ components:
       - status
       - conclusion
       type: object
+    SessionPRLabel:
+      properties:
+        color:
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -21517,6 +23861,17 @@ components:
       - host
       - repo
       - number
+      type: object
+    SessionPRRequestedReviewer:
+      properties:
+        avatarUrl:
+          type: string
+        isTeam:
+          type: boolean
+        login:
+          type: string
+      required:
+      - login
       type: object
     SessionPRReviewCommentLink:
       properties:
@@ -21610,6 +23965,16 @@ components:
         ciObservedAt:
           format: date-time
           type: string
+        commitCount:
+          type: integer
+        commits:
+          items:
+            $ref: '#/components/schemas/SessionPRCommit'
+          type: array
+        conversation:
+          items:
+            $ref: '#/components/schemas/SessionPRComment'
+          type: array
         createdAt:
           format: date-time
           type:
@@ -21617,10 +23982,23 @@ components:
           - string
         deletions:
           type: integer
+        description:
+          type: string
+        descriptionTruncated:
+          type: boolean
+        detailsObservedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         headSha:
           type: string
         htmlUrl:
           type: string
+        labels:
+          items:
+            $ref: '#/components/schemas/SessionPRLabel'
+          type: array
         mergeability:
           $ref: '#/components/schemas/SessionPRMergeabilitySummary'
         number:
@@ -21635,6 +24013,10 @@ components:
           type: string
         repo:
           type: string
+        requestedReviewers:
+          items:
+            $ref: '#/components/schemas/SessionPRRequestedReviewer'
+          type: array
         review:
           $ref: '#/components/schemas/SessionPRReviewSummary'
         reviewObservedAt:
@@ -21656,6 +24038,10 @@ components:
           - string
         targetBranch:
           type: string
+        threads:
+          items:
+            $ref: '#/components/schemas/SessionPRThread'
+          type: array
         title:
           type: string
         updatedAt:
@@ -21681,6 +24067,29 @@ components:
       - review
       - mergeability
       - updatedAt
+      - labels
+      - requestedReviewers
+      - commits
+      - commitCount
+      type: object
+    SessionPRThread:
+      properties:
+        comments:
+          items:
+            $ref: '#/components/schemas/SessionPRComment'
+          type: array
+        id:
+          type: string
+        line:
+          type: integer
+        path:
+          type: string
+        resolved:
+          type: boolean
+      required:
+      - id
+      - resolved
+      - comments
       type: object
     SessionPRUnresolvedReviewer:
       properties:
@@ -21754,6 +24163,155 @@ components:
           $ref: '#/components/schemas/ControllersSessionView'
       required:
       - session
+      type: object
+    SessionSearchCoverage:
+      properties:
+        backfilledAt:
+          format: date-time
+          type: string
+        indexedDocs:
+          format: int64
+          type: integer
+        indexedSources:
+          format: int64
+          type: integer
+        pendingSources:
+          format: int64
+          type: integer
+        state:
+          enum:
+          - ready
+          - backfilling
+          - unavailable
+          type: string
+        unavailableSources:
+          format: int64
+          type: integer
+        unindexedHarnesses:
+          items:
+            type: string
+          type: array
+        unsupportedSources:
+          format: int64
+          type: integer
+      required:
+      - state
+      - indexedSources
+      - pendingSources
+      - unsupportedSources
+      - unavailableSources
+      - indexedDocs
+      type: object
+    SessionSearchHighlight:
+      properties:
+        end:
+          type: integer
+        start:
+          type: integer
+      required:
+      - start
+      - end
+      type: object
+    SessionSearchIndexStatusResponse:
+      properties:
+        coverage:
+          $ref: '#/components/schemas/SessionSearchCoverage'
+      required:
+      - coverage
+      type: object
+    SessionSearchResponse:
+      properties:
+        coverage:
+          $ref: '#/components/schemas/SessionSearchCoverage'
+        group:
+          enum:
+          - session
+          - message
+          type: string
+        limit:
+          type: integer
+        offset:
+          type: integer
+        query:
+          type: string
+        results:
+          items:
+            $ref: '#/components/schemas/SessionSearchResult'
+          type: array
+        sort:
+          enum:
+          - relevance
+          - recent
+          type: string
+        total:
+          type: integer
+      required:
+      - query
+      - results
+      - total
+      - limit
+      - offset
+      - sort
+      - group
+      - coverage
+      type: object
+    SessionSearchResult:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        harness:
+          type: string
+        highlights:
+          items:
+            $ref: '#/components/schemas/SessionSearchHighlight'
+          type: array
+        kind:
+          enum:
+          - title
+          - user
+          - assistant
+          - tool
+          - command
+          - path
+          type: string
+        messageId:
+          type: string
+        projectId:
+          type: string
+        projectName:
+          type: string
+        rank:
+          format: double
+          type: number
+        resumeCommand:
+          type: string
+        reviewId:
+          type: string
+        seq:
+          format: int64
+          type: integer
+        sessionId:
+          type: string
+        sessionMatches:
+          type: integer
+        sessionName:
+          type: string
+        sessionState:
+          type: string
+        snippet:
+          type: string
+        title:
+          type: string
+      required:
+      - sessionId
+      - projectId
+      - harness
+      - kind
+      - seq
+      - snippet
+      - rank
+      - createdAt
       type: object
     SessionStaleBinary:
       properties:
@@ -22141,6 +24699,11 @@ components:
       type: object
     SettingsResponse:
       properties:
+        accountHandoff:
+          description: A Chat turn refused for a usage limit moves its session to
+            another signed-in account of the same agent with room, and the prompt
+            is retried there once (Settings, Agent accounts).
+          type: boolean
         chatHarnesses:
           items:
             type: string
@@ -22186,6 +24749,7 @@ components:
       - chatHibernationEnabled
       - versionRefresh
       - computerUse
+      - accountHandoff
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -22675,6 +25239,9 @@ components:
       type: object
     SpawnSessionRequest:
       properties:
+        accountId:
+          maxLength: 128
+          type: string
         approvalMode:
           enum:
           - default
@@ -22688,6 +25255,9 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        baseBranch:
+          maxLength: 255
+          type: string
         branch:
           type: string
         clientRequestId:
@@ -22875,7 +25445,15 @@ components:
       type: object
     StartAgentUILoginRequest:
       properties:
+        device:
+          type:
+          - "null"
+          - boolean
         method:
+          type: string
+        model:
+          type: string
+        provider:
           type: string
         secret:
           type: string
@@ -23396,6 +25974,15 @@ components:
       required:
       - token
       - deleted
+      type: object
+    UpdateAccountHandoffRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
       type: object
     UpdateArtifactFileRequest:
       properties:
@@ -23932,6 +26519,7 @@ components:
           - complete
           - duplicate
           - mismatch
+          - not_subscription
           type: string
       required:
       - status

@@ -30,4 +30,15 @@ describe("parseDelimitedText", () => {
 		expect(["a.csv", "b.TSV"].map(isDelimitedTextPath)).toEqual([true, true]);
 		expect(["a.txt", "csv", "a.csv.bak"].map(isDelimitedTextPath)).toEqual([false, false, false]);
 	});
+
+	it("keeps a final record that is one empty quoted field", () => {
+		expect(parseDelimitedText('header\n""', "data.csv")).toEqual([["header"], [""]]);
+		expect(parseDelimitedText('header\n""\n', "data.csv")).toEqual([["header"], [""]]);
+		expect(parseDelimitedText('header\n""', "data.tsv")).toEqual([["header"], [""]]);
+	});
+
+	it("does not add a row for a trailing newline alone", () => {
+		expect(parseDelimitedText("header\n", "data.csv")).toEqual([["header"]]);
+		expect(parseDelimitedText("header\n", "data.tsv")).toEqual([["header"]]);
+	});
 });

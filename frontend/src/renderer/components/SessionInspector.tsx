@@ -1,6 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
+import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
+import { ArtifactShareMark } from "./ArtifactShareMark";
+import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
@@ -8,7 +11,7 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -32,6 +35,7 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
+	PanelLeft,
 	GitPullRequest,
 	GitMerge,
 	Info,
@@ -39,7 +43,10 @@ import {
 	Loader2,
 	X,
 } from "@/components/app-icons";
+import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
+import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
+import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
@@ -53,14 +60,22 @@ import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
+import { SessionForksSection } from "./SessionForksSection";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
+import { usePRViewEnabled } from "../lib/pr-view";
+import { ClassicSessionBranchSummary } from "./ClassicSessionBranchSummary";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
-import { SessionBranchSummary } from "./SessionBranchSummary";
+import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
+import { PRActionButton } from "./PRActions";
+import { PRDescriptionPreview } from "./PRDescriptionPreview";
+import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
+import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -69,10 +84,12 @@ import {
 } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
+import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries, prRepositoryShortName } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -200,6 +217,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
+	const artifactsUnseen = useUiStore((state) =>
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
+	);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -262,7 +283,7 @@ export const SessionInspector = memo(function SessionInspector({
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: entry.id === "browser" && browserUnseen,
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
@@ -339,6 +360,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
+							onOpenReviewFile={onOpenReviewFile}
 							orchestrator={orchestrator}
 							session={session}
 						/>
@@ -374,6 +396,7 @@ const SummaryView = memo(function SummaryView({
 	hostId,
 	inspectorVisible,
 	onOpenFiles,
+	onOpenReviewFile,
 	onOpenReviews,
 	orchestrator,
 	session,
@@ -384,6 +407,8 @@ const SummaryView = memo(function SummaryView({
 	/** The Summary stays mounted while the inspector is closed. */
 	inspectorVisible: boolean;
 	onOpenFiles: () => void;
+	/** Opens a file's diff at a line, for a review thread's "View in diff". */
+	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onOpenReviews: () => void;
 	orchestrator: boolean;
 	session: WorkspaceSession;
@@ -426,7 +451,23 @@ const SummaryView = memo(function SummaryView({
 	const artifactSectionTitle = artifacts.length > 1
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
-	const openPRNumber = prSummaries.find((pr) => pr.state === "open" || pr.state === "draft")?.number;
+	const branchPR = sessionBranchPR(session, prSummaries);
+	const openPRNumber = branchPR?.number;
+	// One PR on screen: the one picked, else the PR the branch updates, else the
+	// newest open one; with several, pills over the card pick another. Until a
+	// pick, it follows the branch, which settles once the PR details load.
+	const focusStore = `${hostId ?? ""}:${session.id}`;
+	const [focusChoice, setFocusChoice] = useState<string | undefined>(() => prFocus.get(focusStore));
+	const focusedPR = prSummaries.find((pr) => prFocusKey(pr) === focusChoice)
+		?? branchPR
+		?? sortSessionPRs(prSummaries)[0];
+	const focusPR = (pr: SessionPRSummary) => {
+		prFocus.set(focusStore, prFocusKey(pr));
+		setFocusChoice(prFocusKey(pr));
+	};
+	const focusedIsBranchPR = Boolean(branchPR && focusedPR && prFocusKey(focusedPR) === prFocusKey(branchPR));
+	// Another PR of the session that conflicts: its card hands that to the agent.
+	const otherPRConflict = useOtherPRConflictStep(session, hostId, focusedIsBranchPR ? undefined : focusedPR);
 	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
 	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
@@ -436,12 +477,13 @@ const SummaryView = memo(function SummaryView({
 	// Reached through a share: this person sees the session's pull requests but
 	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
+	const prView = usePRViewEnabled();
 	return (
 		<SessionInspectorSummaryView
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId ? null : <SessionAccountSummary session={session} />}
+					<SessionAccountSummary session={session} hostId={hostId} />
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -455,12 +497,63 @@ const SummaryView = memo(function SummaryView({
 				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={orchestrator ? undefined : (
+			branch={orchestrator ? undefined : prView ? (
 				<SessionBranchSummary
+					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
+					openPRConflicting={branchPR?.mergeability.state === "conflicting"}
 					hostId={hostId}
+					onOpenFile={onOpenReviewFile}
 					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
+					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
+					pullRequests={hasPRs ? (work: BranchWork | undefined) => (
+						<>
+							{focusedPR ? (
+								// One card, one PR; with several, pills over it pick which.
+								<div className="flex min-w-0 flex-col rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-1" data-testid="pr-card">
+									{prSummaries.length > 1 ? (
+										<div className="pt-2 pb-1">
+											<PRPills
+												branchPR={branchPR}
+												focused={focusedPR}
+												onFocus={focusPR}
+												prs={prSummaries}
+												showRepository={prsSpanRepositories(prSummaries)}
+											/>
+										</div>
+									) : null}
+									<PRSummaryCard
+										canOpenReviews={canOpenReviews}
+										cloudOrgId={session.cloud?.orgId}
+										elsewhere={branchPR && prFocusKey(focusedPR) !== prFocusKey(branchPR) ? (
+											<BranchWorkElsewhere branchPR={branchPR} />
+										) : undefined}
+										guest={guest}
+										hostId={hostId}
+										key={prFocusKey(focusedPR)}
+										layout="focus"
+										onOpenReviews={onOpenReviews}
+										pr={focusedPR}
+										projectId={session.workspaceId}
+										sessionId={session.id}
+										showRepository={prsSpanRepositories(prSummaries)}
+										work={focusedIsBranchPR ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
+									/>
+								</div>
+							) : null}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectRepositories)} key={pr.url} pr={pr} />)}
+						</>
+					) : null}
+					session={session}
+					title={prSectionTitle}
+				/>
+			) : (
+				<ClassicSessionBranchSummary
+					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
+					onOpenFiles={onOpenFiles}
+					openPRNumber={prSummaries.find((pr) => pr.state === "open" || pr.state === "draft")?.number}
 					pullRequests={hasPRs ? (
 						<>
 							{prSummaries.map((pr) => (
@@ -486,7 +579,7 @@ const SummaryView = memo(function SummaryView({
 			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
-			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
+			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
 	);
 });
@@ -909,7 +1002,232 @@ function updateSessionMergePolicy(
 	}));
 }
 
-export function PRSummaryCard({
+/** The PR each session's card shows, once the person picked one; outlives the card's unmount. */
+const prFocus = new Map<string, string>();
+
+/** Forgets every remembered PR choice; for tests. */
+export function resetPRFocus() {
+	prFocus.clear();
+}
+
+/** Under a PR that is not the branch's: the git rows and actions belong to the PR the branch updates. */
+function BranchWorkElsewhere({ branchPR }: { branchPR: SessionPRSummary }) {
+	const { t } = useTranslation();
+	return (
+		<p className="m-0 border-t border-(--color-border-settings-input) pt-2 pb-2 text-xs text-passive" data-testid="branch-work-elsewhere">
+			{t("pr.others.branchOn", { number: branchPR.number })}
+		</p>
+	);
+}
+
+
+/**
+ * A PR's card: the PR view's (one PR in focus, its own tab, one action button)
+ * while that Developer mode preview is on, else the card as it was before it.
+ */
+export function PRSummaryCard(props: ComponentProps<typeof PRViewSummaryCard>) {
+	return usePRViewEnabled() ? <PRViewSummaryCard {...props} /> : <ClassicPRSummaryCard {...props} />;
+}
+
+function PRViewSummaryCard({
+	canOpenReviews,
+	elsewhere,
+	hostId,
+	cloudOrgId,
+	guest = false,
+	onOpenReviews,
+	pr,
+	projectId,
+	liveSessionId,
+	sessionId,
+	layout = "card",
+	showRepository = false,
+	work,
+}: {
+	canOpenReviews: boolean;
+	/** In focus without the branch's work: where that work is instead. */
+	elsewhere?: ReactNode;
+	hostId?: string;
+	cloudOrgId?: string;
+	/** Reached through a share: this person asks the project's owner to merge. */
+	guest?: boolean;
+	onOpenReviews: () => void;
+	pr: SessionPRSummary;
+	/** The cloud project, for a guest's merge requests. */
+	projectId?: string;
+	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
+	liveSessionId?: string;
+	sessionId: string;
+	/** "focus" is the inspector's one PR at a time, under a header row; "card" stands alone. */
+	layout?: "card" | "focus";
+	/** Label the card with its repository: the session has PRs on several. */
+	showRepository?: boolean;
+	/** The branch rows and git action, when new commits land on this PR. */
+	work?: BranchWork;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
+	usePRNoChecksClock([pr]);
+	const noChecks = prHasNoChecks(pr);
+	const detailsFailed = usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
+	const presentation = prCardPresentation(pr, { noChecks });
+	const canMerge = prCanMerge(pr, { noChecks }) && Boolean(pr.url && pr.headSha);
+	const mergePr = useMutation({
+		// Cloud sessions merge from here; a local session merges from its action button.
+		mutationFn: async () => {
+			if (usePreviewData || !cloudOrgId) return;
+			await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
+		},
+		onSuccess: () => Promise.all([
+			queryClient.invalidateQueries({ queryKey: ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] }),
+			queryClient.invalidateQueries({ queryKey: workspaceKey }),
+		]),
+	});
+	const asksToMerge = guest && Boolean(cloudOrgId);
+	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge, liveSessionId ?? sessionId);
+	const mergeRequestActions = useMergeRequestActions(cloudOrgId, projectId);
+	const pendingRequest = pendingMergeRequestFor(mergeRequests.data, pr.url);
+	const requestMerge = mergeRequestActions.request;
+	const mergeFailure = asksToMerge ? requestMerge.error : mergePr.error;
+	const mergeError = mergeFailure instanceof Error ? mergeFailure.message : null;
+	const viewModel: InspectorPullRequest = {
+		...pr,
+		card: presentation,
+		href: prBrowserUrl(pr),
+		stateLabel: t(prStateLabelKeys[pr.state]),
+		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
+		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
+			<Button className="whitespace-nowrap text-settings-muted" onClick={onOpenReviews} type="button" variant="link">
+				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
+			</Button>
+		) : undefined,
+	};
+	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
+	const cardView = (
+		<InspectorPullRequestCardView
+			compact
+			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
+			headerless={layout === "focus"}
+			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} detailsFailed={detailsFailed} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
+			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
+			externalLink={ProductExternalLink}
+			mergeAction={
+				canMerge && asksToMerge ? (
+					<Button
+						aria-label={t("pr.merge.requestFor", { number: pr.number })}
+						className="gap-1 px-2"
+						disabled={requestMerge.isPending || Boolean(pendingRequest)}
+						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
+						size="sm"
+						type="button"
+						variant="secondary"
+						data-request-merge
+					>
+						{requestMerge.isPending ? (
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<GitMerge className="size-icon-sm" aria-hidden="true" />
+						)}
+						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
+					</Button>
+				) : !cloudOrgId && !guest ? (
+					// A local session acts from the one action button at the card's foot.
+					undefined
+				) : canMerge ? (
+					<Button
+						aria-label={t("pr.merge.actionFor", { number: pr.number })}
+						className="gap-1 px-2 text-on-foreground [--button-color:var(--color-success)]"
+						disabled={mergePr.isPending}
+						onClick={() => mergePr.mutate()}
+						size="sm"
+						type="button"
+					>
+						{mergePr.isPending ? (
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<GitMerge className="size-icon-sm" aria-hidden="true" />
+						)}
+						{mergePr.isPending ? t("pr.merge.merging") : t("pr.merge.action")}
+					</Button>
+				) : undefined
+			}
+			mergeError={mergeError}
+			openLabel={t("inspector.openPR", { number: pr.number })}
+			openedViaLabel={t("pr.openedVia")}
+			pr={viewModel}
+			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
+			details={<PRLabelsAndReviewers pr={pr} />}
+			readinessDetails={(pr.ci.checks ?? []).length > 0 ? { ci: <PRChecksGroups pr={pr} /> } : undefined}
+		/>
+	);
+	if (layout === "card") return cardView;
+	const state = prStateIcon[pr.state];
+	// A local PR opens in its own tab, where its description, conversation and changes live.
+	const opensTab = !cloudOrgId && !guest && Boolean(pr.url);
+	const tabShowing = activeTabUrl === pr.url;
+	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
+	const titleLabel = (
+		<>
+			{/* The chips above name the repository in full on hover; here its short name leaves room for the title. */}
+			<span className="font-medium">{viewModel.repositoryLabel ? `${prRepositoryShortName(viewModel.repositoryLabel)} ` : ""}PR #{pr.number}</span>
+			{pr.title ? <span> {pr.title}</span> : null}
+			{/* The icon carries the state; keep it for screen readers. */}
+			<span className="sr-only"> {viewModel.stateLabel}</span>
+		</>
+	);
+	// The logo says this one leaves for GitHub; the row itself stays in the app.
+	const providerLink = (
+		<InfoRowLink
+			ariaLabel={t("inspector.openPR", { number: pr.number })}
+			href={viewModel.href}
+			icon={pr.provider === "github" ? <GitHubIcon className="size-icon-sm shrink-0 text-passive" /> : undefined}
+		/>
+	);
+	return (
+		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
+			{opensTab ? (
+				<InfoRowButton
+					action={providerLink}
+					icon={state.icon}
+					iconClassName={state.className}
+					label={titleLabel}
+					onClick={() => openTab()}
+					title={pr.title}
+					trailing={tabShowing ? undefined : (
+						<span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors group-hover:text-foreground">
+							<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
+							{t("pr.openTab")}
+						</span>
+					)}
+				/>
+			) : (
+				<InfoRow
+					action={providerLink}
+					icon={state.icon}
+					iconClassName={state.className}
+					label={titleLabel}
+					title={pr.title}
+				/>
+			)}
+			{cardView}
+
+			{work?.hasRows ? (
+				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
+			) : elsewhere}
+			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
+			{!cloudOrgId && !guest && pr.state !== "merged" ? (
+				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+				</div>
+			) : null}
+		</section>
+	);
+}
+
+/** The card as it was before the PR view; shown while that preview is off. Delete with the prView flag. */
+function ClassicPRSummaryCard({
 	canOpenReviews,
 	hostId,
 	cloudOrgId,
@@ -1075,6 +1393,8 @@ function ArtifactSummaryList({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	// Who each published file's link opens for, marked as on the Artifacts page.
+	const shareAccess = useReconciledShareLinks();
 	const container = useRef<HTMLDivElement>(null);
 	const [columns, setColumns] = useState(3);
 	const [expanded, setExpanded] = useState(false);
@@ -1100,14 +1420,14 @@ function ArtifactSummaryList({
 		<div className="flex min-w-0 flex-col" ref={container}>
 			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
 				{previews.map((artifact) => (
-					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} shareAccess={shareAccess} />
 				))}
 			</div>
 			{rest.length > 0 ? (
 				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
 					{rows.map((artifact) => (
 						<li key={artifact.path}>
-							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} shareAccess={shareAccess} />
 						</li>
 					))}
 					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
@@ -1127,19 +1447,21 @@ function ArtifactSummaryList({
 	);
 }
 
-/** One Summary preview: a small thumbnail with the file's name and last update. */
+/** One Summary preview: a small thumbnail with the file's name, how it is shared and last update. */
 function ArtifactPreviewTile({
 	artifact,
 	onOpenArtifact,
 	previewLive,
 	session,
+	shareAccess,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	previewLive: boolean;
 	session: WorkspaceSession;
+	shareAccess: ShareAccessByUrl;
 }) {
-	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
 	return (
 		<Pressable
 			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
@@ -1151,27 +1473,34 @@ function ArtifactPreviewTile({
 			</span>
 			<span className="flex min-w-0 flex-col">
 				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
-				{artifact.updatedAt ? (
-					<time
-						className="truncate text-caption leading-4 tabular-nums text-passive"
-						dateTime={artifact.updatedAt}
-						title={new Date(artifact.updatedAt).toLocaleString()}
-					>
-						{formatTimeCompact(artifact.updatedAt)}
-					</time>
+				{artifact.updatedAt || artifact.shareUrl ? (
+					<span className="flex min-w-0 items-center gap-1">
+						<ArtifactShareMark row={row} iconClassName="size-3" />
+						{artifact.updatedAt ? (
+							<time
+								className="truncate text-caption leading-4 tabular-nums text-passive"
+								dateTime={artifact.updatedAt}
+								title={new Date(artifact.updatedAt).toLocaleString()}
+							>
+								{formatTimeCompact(artifact.updatedAt)}
+							</time>
+						) : null}
+					</span>
 				) : null}
 			</span>
 		</Pressable>
 	);
 }
 
-/** One Summary row: icon, name and last update. */
+/** One Summary row: icon, name, how it is shared and last update. */
 function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
+	shareAccess,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	shareAccess: ShareAccessByUrl;
 }) {
 	const KindIcon = artifactFileIcon(artifact);
 	return (
@@ -1182,6 +1511,7 @@ function ArtifactSummaryRow({
 		>
 			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			<ArtifactShareMark row={{ shareUrl: artifact.shareUrl, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined }} iconClassName="size-icon-sm" />
 			{artifact.updatedAt ? (
 				<time
 					className="shrink-0 text-caption tabular-nums text-settings-muted"
@@ -1459,7 +1789,6 @@ function ReviewsSection({
 		return (
 			<CloudReviewsSection
 				onOpenReviewFile={onOpenReviewFile}
-				onOpenReviewerTerminal={onOpenReviewerTerminal}
 				onWorkerMessageSent={onWorkerMessageSent}
 				session={session}
 			/>
@@ -1610,17 +1939,8 @@ function LocalReviewsSection({
 			void queryClient.invalidateQueries({ queryKey: requestReviewsKey });
 			void queryClient.invalidateQueries({ queryKey: requestWorkspaceKey });
 			if (ownerKey !== reviewerOwnerKey) return;
-			const started = data?.reviews?.find((review) => review.status === "running" && review.latestRun);
-			if (!started?.latestRun) {
-				if (reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
-				return;
-			}
-			if (data?.reviewerSurface?.mode === "chat" && data.reviewerSurface.reviewId) {
-				onOpenReviewerChat?.(data.reviewerSurface.reviewId);
-			} else if (data?.reviewerHandleId) {
-				const harness = started.latestRun.harness || "reviewer";
-				onOpenReviewerTerminal?.({ handleId: data.reviewerHandleId, harness });
-			}
+			const started = data?.reviews?.some((review) => review.status === "running" && review.latestRun);
+			if (!started && reused && !rerun) setRerunConfirmation({ ownerKey, heads: reviewHeads });
 		},
 		onError: (_error, _variables, context) => {
 			void queryClient.invalidateQueries({ queryKey: context?.reviewsKey ?? reviewsKey });
@@ -1757,12 +2077,10 @@ function LocalReviewsSection({
 function CloudReviewsSection({
 	session,
 	onOpenReviewFile,
-	onOpenReviewerTerminal,
 	onWorkerMessageSent,
 }: {
 	session: WorkspaceSession;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
-	onOpenReviewerTerminal?: OpenReviewerTerminal;
 	onWorkerMessageSent?: () => void;
 }) {
 	const { t } = useTranslation();
@@ -1806,13 +2124,7 @@ function CloudReviewsSection({
 		onMutate: () => setReviewNotice(null),
 		onSuccess: (data) => {
 			queryClient.setQueryData(["cloud-session-reviews", baseUrl, orgId, session.id], data);
-			const running = data.reviews.find((review) => review.status === "running");
-			if (running && data.reviewerHandleId) {
-				onOpenReviewerTerminal?.({
-					handleId: data.reviewerHandleId,
-					harness: data.reviewerHarness || defaultReviewer,
-				});
-			} else if (!running) {
+			if (!data.reviews.some((review) => review.status === "running")) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
 			}
 		},
@@ -2076,25 +2388,7 @@ function MergedReviewsSection({
 		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceKey });
 	};
-	const sendMessageToWorker = async (message: string, fallbackError: string) => {
-		if (session.cloud) {
-			await cloudClient.sendSessionMessage(session.cloud.orgId, session.id, { text: message });
-			return;
-		}
-		if (session.mode === "chat") {
-			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/conversation/messages", {
-				params: { path: { sessionId: session.id } },
-				body: { text: message, clientMessageId: crypto.randomUUID() },
-			});
-			if (error) throw apiErrorException(error, fallbackError);
-			return;
-		}
-		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/send", {
-			params: { path: { sessionId: session.id } },
-			body: { message, userAuthored: true },
-		});
-		if (error) throw apiErrorException(error, fallbackError);
-	};
+	const sendMessageToWorker = useSendToSessionWorker(session, hostId);
 	const sendInlineCommentToWorker = async (comment: InspectorInlineComment & { reviewerId?: string }) => {
 		await sendMessageToWorker(formatInlineReviewCommentMessage(comment), "Unable to send review comment to worker agent");
 		onWorkerMessageSent?.();
@@ -2462,10 +2756,6 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	];
 	if (url) lines.push("", `Review URL: ${url}`);
 	return lines.join("\n");
-}
-
-function sanitizeWorkerMessagePart(value: string): string {
-	return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
 }
 
 function projectConfig(project: components["schemas"]["ProjectOrDegraded"] | undefined): ProjectConfig | undefined {

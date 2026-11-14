@@ -22,8 +22,14 @@ export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
 /** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
 export const SHARE_FEATURE = "share";
+/** Offering feature of a control plane that starts Cloud standalone agents (POST /orgs/{orgId}/standalone-agents). */
+export const STANDALONE_AGENTS_FEATURE = "standalone_agents";
 /** Offering feature the control plane sends while its session attachment routes are on. */
 export const ATTACHMENTS_FEATURE = "attachments";
+/** Offering feature the control plane sends when a queued chat message can be edited (editQueuedMessage). */
+export const QUEUED_EDIT_FEATURE = "queued-edit";
+/** Offering feature the control plane sends when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). */
+export const QUEUED_DELETE_FEATURE = "queued-delete";
 /** The largest Cloud attachment when the control plane takes files but names no limit. */
 export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 

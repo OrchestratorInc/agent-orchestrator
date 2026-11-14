@@ -57,7 +57,8 @@ describe("toCloudWorkspaceSession artifacts", () => {
 		expect(session.requestedOutput).toBe("artifact");
 		expect(session.outputType).toBe("artifact");
 		expect(session.artifactFiles).toEqual([
-			{ kind: "html", name: "report.html", path: "report.html", size: 12, updatedAt: "2026-10-16T01:00:00Z" },
+			// Its SHA-256 lets the Publish button tell it changed since publishing without reading it.
+			{ kind: "html", name: "report.html", path: "report.html", size: 12, updatedAt: "2026-10-16T01:00:00Z", sha256: "a".repeat(64) },
 		]);
 	});
 
@@ -65,6 +66,15 @@ describe("toCloudWorkspaceSession artifacts", () => {
 		const session = toCloudWorkspaceSession(cloudSession(), { id: "p-1", displayName: "Project" }, "org-1");
 		expect(session.artifactFiles).toBeUndefined();
 		expect(session.outputType).toBeUndefined();
+	});
+
+	it("marks the artifact list pending only while a live session counts files it has not loaded", () => {
+		const project = { id: "p-1", displayName: "Project" };
+		const file = { path: "report.md", name: "report.md", kind: "markdown" as const, contentType: "text/markdown", size: 1, sha256: "a".repeat(64), updatedAt: "2026-10-16T01:00:00Z" };
+		expect(toCloudWorkspaceSession(cloudSession({ artifactCount: 1 }), project, "org-1").artifactFilesPending).toBe(true);
+		expect(toCloudWorkspaceSession(cloudSession({ artifactCount: 1, artifactFiles: [file] }), project, "org-1").artifactFilesPending).toBeUndefined();
+		expect(toCloudWorkspaceSession(cloudSession({ artifactCount: 0 }), project, "org-1").artifactFilesPending).toBeUndefined();
+		expect(toCloudWorkspaceSession(cloudSession({ artifactCount: 1, isTerminated: true }), project, "org-1").artifactFilesPending).toBeUndefined();
 	});
 });
 

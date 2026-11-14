@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
@@ -45,7 +44,7 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions" | "sharing";
 
 /** Which failure a "Show diagnostics" shortcut is about: the job it produced,
  * if any, and the error the user saw. */
@@ -101,6 +100,8 @@ export type InspectorSessionState = {
 	browserContentRevealed?: boolean;
 	/** Real browser activity occurred while Browser was not visible. */
 	browserUnseen?: boolean;
+	/** An artifact was registered while the user was busy in Browser or Files. */
+	artifactsUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
 	filesChangedOnly?: boolean;
 	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
@@ -126,6 +127,7 @@ export type GlobalToast = {
 	tone?: "info" | "error" | "success";
 	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
+	/** Zero keeps the toast visible until explicitly dismissed. */
 	durationMs?: number;
 	dedupeKey?: string;
 	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
@@ -155,6 +157,40 @@ export type ChatMessageFocusRequest = {
 	/** Set when the message is in the session's reviewer chat for this review. */
 	reviewId?: string;
 	nonce: number;
+};
+
+/**
+ * A chat whose agent refused its login, waiting while the user logs in from the
+ * Agents page. A login that takes there closes the page; the chat then sends
+ * its refused message again when that is safe, or says the user is in.
+ */
+export type LoginReturn = {
+	sessionId: string;
+	agentId: string;
+	/** The remote host whose login is being fixed; omitted for this computer. */
+	hostId?: string;
+	/**
+	 * The account the session runs on, by id (the computer's own login is one
+	 * too). A login to another account does not fix the session, so it does not
+	 * count. Unknown for a remote host, whose accounts this app cannot read.
+	 */
+	accountId?: string;
+	/**
+	 * The account is still being read. A login that takes meanwhile is held until
+	 * it is known, since only that account's login fixes the session.
+	 */
+	accountPending?: boolean;
+	/** A login that took while the account was read, by the account it signed in. */
+	heldLogin?: { accountId?: string };
+	/** When the login took. */
+	loggedInAt?: number;
+	/** The chat has seen the login and sent nothing again: it says the user is in. */
+	settled?: boolean;
+	/**
+	 * The refused message the chat saw the login for. A refusal of another one
+	 * (the message sent again, refused once more) means the login did not fix it.
+	 */
+	turnId?: string;
 };
 
 /** What the archive modal shows. */
@@ -187,6 +223,8 @@ export type UiState = {
 	isSidebarOpen: boolean;
 	inspectorSessions: Record<string, InspectorSessionState>;
 	isCommandPaletteOpen: boolean;
+	/** The new chat page has sent its first message and is waiting to hand off to the session. */
+	newChatSending: boolean;
 	settingsModal: SettingsModal | null;
 	accountLogin: string | null;
 	themePreference: ThemePreference;
@@ -205,6 +243,8 @@ export type UiState = {
 	/** Home offers the session import once: until the user imports or dismisses it. */
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
+	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
+	prView: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
@@ -225,13 +265,6 @@ export type UiState = {
 	renderMath: boolean;
 	/** Show each project's repository owner avatar in the sidebar instead of a folder. Default on. */
 	projectAvatars: boolean;
-	/**
-	 * The new left sidebar design (markers, hover preview, avatars, pink
-	 * Validating, settled board loaders). Default on. The switch lives in
-	 * Developer mode, and turning it off only takes effect there: read it
-	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
-	 */
-	newSidebarDesign: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -250,7 +283,10 @@ export type UiState = {
 	// every request so a repeat press (even for the same project) still re-fires;
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	newTaskRequest: { projectId: string; hostId?: string; report?: boolean; nonce: number } | null;
+	// Bumped after writing the new chat draft from outside the page, so an open
+	// composer reloads it.
+	newChatDraftRevision: number;
 	// The archive modal, open over whatever page is showing (the shell hosts
 	// it). Null while closed. Every entry point (the board's Archive button,
 	// a sidebar project's menu, Cmd+K) opens it here; none navigates.
@@ -294,6 +330,7 @@ export type UiState = {
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
+	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setTerminalClickMode: (mode: TerminalClickMode) => void;
@@ -302,7 +339,6 @@ export type UiState = {
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
 	setProjectAvatars: (enabled: boolean) => void;
-	setNewSidebarDesign: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -311,6 +347,20 @@ export type UiState = {
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
+	loginReturn: LoginReturn | null;
+	/** Remember a chat whose agent refused its login while that login is fixed. */
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled" | "turnId">) => void;
+	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
+	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
+	/**
+	 * The account the waiting chat's session runs on, once read; only its login
+	 * counts. None (no account of its own, or the read failed) lets any login count.
+	 */
+	setLoginReturnAccount: (sessionId: string, accountId: string | undefined) => void;
+	/** The waiting chat saw the login for this refused message and sent nothing again. */
+	settleLoginReturn: (sessionId: string, turnId?: string) => void;
+	/** Drop the waiting chat, or only when it is this session's. */
+	clearLoginReturn: (sessionId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -327,6 +377,7 @@ export type UiState = {
 	initializeInspectorSession: (sessionId: string, hasBrowserContent: boolean, hasInspector: boolean) => void;
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
+	setArtifactsUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
 	/** Back to the checked-out branch and the default changes. */
@@ -336,6 +387,7 @@ export type UiState = {
 	setCloudReviewUi: (sessionId: string, repository: string | undefined, changes: CloudReviewUiState) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
+	setNewChatSending: (sending: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
 	setAutoStartOrchestrator: (projectId: string, autoStart: boolean) => void;
@@ -345,7 +397,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestNewTask: (projectId: string, hostId?: string, options?: { report?: boolean }) => void;
 	openArchive: (request: Omit<ArchiveModalRequest, "nonce">) => void;
 	closeArchive: () => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
@@ -372,6 +424,7 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const splitPanesStorageKey = "ao.splitPanes";
+const prViewStorageKey = "ao.prView";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const terminalClickModeStorageKey = "ao.terminalClickMode";
 const terminalSelectHintShownStorageKey = "ao.terminalSelectHintShown";
@@ -379,7 +432,9 @@ const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
-const newSidebarDesignStorageKey = "ao.newSidebarDesign";
+// The retired Developer Mode opt-out from the old left sidebar. Ignored, and
+// cleared at startup so a stored "false" leaves nothing behind.
+const retiredNewSidebarDesignStorageKey = "ao.newSidebarDesign";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -428,6 +483,17 @@ function syncDeveloperModeToUpdater(enabled: boolean): void {
 	void request?.catch(() => undefined);
 }
 
+/** The waiting chat's login took: mark when, and close global settings back to the chat. */
+function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
+	const modal = state.settingsModal;
+	// A login only finishes while the Agents page shows it, so closing global
+	// settings here returns the user to the chat they came from.
+	return {
+		loginReturn: { ...waiting, loggedInAt: Date.now() },
+		...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
+	};
+}
+
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
 	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
 }
@@ -471,6 +537,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	isSidebarOpen: initialSidebarOpen(),
 	inspectorSessions: {},
 	isCommandPaletteOpen: false,
+	newChatSending: false,
 	settingsModal: null,
 	accountLogin: null,
 	themePreference: initialThemePreference,
@@ -481,6 +548,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
+	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	terminalClickMode: initialTerminalClickMode(),
@@ -489,7 +557,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
-	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -501,6 +568,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToastSequence: 0,
 	newTaskRequest: null,
 	archiveModal: null,
+	newChatDraftRevision: 0,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -562,6 +630,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
 	},
+	setPRView: (prView) => {
+		getLocalStorage()?.setItem(prViewStorageKey, String(prView));
+		set({ prView });
+	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
 		set({ windowTranslucency });
@@ -589,10 +661,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setProjectAvatars: (projectAvatars) => {
 		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));
 		set({ projectAvatars });
-	},
-	setNewSidebarDesign: (newSidebarDesign) => {
-		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
-		set({ newSidebarDesign });
 	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
@@ -634,6 +702,31 @@ export const useUiStore = create<UiState>((set, get) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
+	loginReturn: null,
+	startLoginReturn: (intent) => set({ loginReturn: intent }),
+	completeLoginReturn: (agentId, hostId, accountId) => set((state) => {
+		const waiting = state.loginReturn;
+		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
+		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
+		// Settings reports a login once: kept until the account is known, then matched.
+		if (waiting.accountPending) return { loginReturn: { ...waiting, heldLogin: accountId ? { accountId } : {} } };
+		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
+		return loginTaken(state, waiting);
+	}),
+	setLoginReturnAccount: (sessionId, accountId) => set((state) => {
+		if (state.loginReturn?.sessionId !== sessionId || state.loginReturn.loggedInAt !== undefined) return {};
+		const { heldLogin, ...waiting } = state.loginReturn;
+		const known: LoginReturn = { ...waiting, accountPending: false, ...(accountId ? { accountId } : {}) };
+		// A login held while the account was read counts now, by the same rule as any.
+		const counts = heldLogin && (known.accountId === undefined || known.accountId === heldLogin.accountId);
+		return counts ? loginTaken(state, known) : { loginReturn: known };
+	}),
+	settleLoginReturn: (sessionId, turnId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
+			? { loginReturn: { ...state.loginReturn, settled: true, ...(turnId ? { turnId } : {}) } }
+			: {}),
+	clearLoginReturn: (sessionId) => set((state) =>
+		!state.loginReturn || (sessionId !== undefined && state.loginReturn.sessionId !== sessionId) ? {} : { loginReturn: null }),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;
@@ -674,10 +767,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set((state) => {
 			const current = inspectorState(state.inspectorSessions, sessionId);
 			const browserUnseen = view === "browser" ? false : current.browserUnseen;
+			const artifactsUnseen = view === "artifacts" ? false : current.artifactsUnseen;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, view, browserUnseen },
+					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen },
 				},
 			};
 		}),
@@ -724,6 +818,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, browserUnseen },
+				},
+			};
+		}),
+	setArtifactsUnseen: (sessionId, artifactsUnseen) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (Boolean(current.artifactsUnseen) === artifactsUnseen) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, artifactsUnseen },
 				},
 			};
 		}),
@@ -813,6 +918,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			};
 		}),
 	setCommandPaletteOpen: (isCommandPaletteOpen) => set({ isCommandPaletteOpen }),
+	setNewChatSending: (newChatSending) => set({ newChatSending }),
 	setProjectRestarting: (projectId, restarting, hostId) =>
 		set((state) => {
 			const restartingProjectIds = new Set(state.restartingProjectIds);
@@ -883,7 +989,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId, hostId) => {
+	requestNewTask: (projectId, hostId, options) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
@@ -895,7 +1001,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, report: options?.report, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
 	openArchive: (request) =>
 		set(() => {
@@ -952,14 +1058,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}),
 }));
 
-// With the new design off, status tokens fall back to the old palette
-// (yellow Validating). See --color-status-validating in tokens.css.
-function syncLegacyStatusColors(state: UiState) {
-	if (typeof document === "undefined") return;
-	document.documentElement.toggleAttribute("data-legacy-status-colors", !isNewSidebarDesign(state));
+try {
+	getLocalStorage()?.removeItem(retiredNewSidebarDesignStorageKey);
+} catch {
+	// Storage can be unavailable (private mode, quota); nothing to clean then.
 }
-syncLegacyStatusColors(useUiStore.getState());
-useUiStore.subscribe(syncLegacyStatusColors);
 
 // Hydration synchronizes legacy renderer-only Developer Mode state into the
 // main-process updater mirror. Until this completes, the updater is fail-closed.

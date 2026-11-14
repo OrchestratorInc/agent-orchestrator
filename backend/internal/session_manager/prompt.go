@@ -30,6 +30,8 @@ type taskPromptConfig struct {
 	Prompt       string
 	IssueID      string
 	IssueContext string
+	// BaseBranch is set for a task stacked on another pull request.
+	BaseBranch string
 }
 
 type systemPromptConfig struct {
@@ -39,7 +41,9 @@ type systemPromptConfig struct {
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
-	AdditionalSections    []string
+	// TimeZone is the user's IANA zone name; empty omits the section.
+	TimeZone           string
+	AdditionalSections []string
 }
 
 // projectRulesConfig loads standing rules text plus an optional repo-relative
@@ -56,6 +60,17 @@ type projectRulesConfig struct {
 }
 
 func buildTaskPrompt(cfg taskPromptConfig) string {
+	prompt := issueTaskPrompt(cfg)
+	base := strings.TrimSpace(cfg.BaseBranch)
+	if base == "" || prompt == "" {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\n" + fmt.Sprintf(
+		"This task is stacked on another pull request: your branch starts from `%s`. Open your pull request against `%s`, not the default branch, and don't merge either one.",
+		base, base)
+}
+
+func issueTaskPrompt(cfg taskPromptConfig) string {
 	issueContext := strings.TrimSpace(cfg.IssueContext)
 	if cfg.Prompt != "" {
 		if cfg.Role == sessionPromptRoleWorker && issueContext != "" {
@@ -106,7 +121,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
-	sections = append(sections, userOrientationPrompt(), publishingScopePrompt(), systemPromptGuard())
+	sections = append(sections, userOrientationPrompt(), publishingScopePrompt())
+	if zone := timeZonePrompt(cfg.TimeZone); zone != "" {
+		sections = append(sections, zone)
+	}
+	sections = append(sections, systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
 			sections = append(sections, section)
@@ -119,11 +138,17 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 // itself, Claude's narration varies widely from run to run in both the terminal
 // and chat (measured: anywhere from none to one per call on the same task), and
 // a run of bare "Ran command" rows leaves the user unable to tell what is
-// happening or what a later question refers to.
+// happening or what a later question refers to. The narration itself is
+// welcome; what reads as noise is Orchestrator's own plumbing (reading the ao
+// command guides, --help, report and artifact commands, ao output quirks). So
+// agents keep narrating, but describe Orchestrator steps in plain technical
+// terms and never mention the ao CLI or its internals.
 func userOrientationPrompt() string {
 	return `## Keeping the User Oriented
 
-The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write one short sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, branches or worktrees. Skip this only for a single trivial step.`
+The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write a short, friendly sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, functions, tests, branches or errors. Skip this only for a single trivial step.
+
+When a step uses Orchestrator's ` + "`ao`" + ` commands, describe what it does in plain technical terms, not the command: "Opening the page in the Browser panel", "Checking the page's console for errors", "Saving the page as a deliverable", "Letting the orchestrator know this is done". Do not mention the ` + "`ao`" + ` CLI, its command names, flags or output, the guides you read to use it, or how Orchestrator works internally, unless the user asks. Reading those guides and running ` + "`--help`" + ` need no narration at all. When you name the app, call it Orchestrator, not AO.`
 }
 
 // publishingScopePrompt clarifies authority without replacing the established
@@ -417,7 +442,7 @@ func workerMultiPRPrompt() string {
 
 Orchestrator attributes PRs to this session when the source branch is this session branch or lives under this session namespace.
 
-- If your current branch ends in ` + "`/root`" + `, create independent PR branches as siblings under the same namespace, for example ` + "`<namespace>/<topic>`" + ` from ` + "`<namespace>/root`" + `. Do not create ` + "`<namespace>/root/<topic>`" + `.
+- If your current branch ends in ` + "`/root`" + `, create independent PR branches as siblings under the same namespace, for example ` + "`<namespace>/<topic>`" + ` from ` + "`<namespace>/root`" + `. Do not create ` + "`<namespace>/root/<topic>`" + `. Name the topic after the change, such as ` + "`<namespace>/dev-warm-cache`" + `, and open the PR from that topic branch, never from ` + "`<namespace>/root`" + ` itself.
 - For a workspace project whose recorded session branch is ` + "`ao/<session-id>`" + ` or a collision variant such as ` + "`ao/<session-id>-2`" + `, use hyphen siblings such as ` + "`<session-branch>-<topic>`" + ` in each registered repository. The bare session ref prevents Git from creating slash children. Keep the full collision suffix. Claim a child-repository PR explicitly with ` + "`ao session claim-pr <full-pr-url>`" + ` when needed.
 - Otherwise, create each source branch as a child of this session branch, for example ` + "`<current-branch>/<topic>`" + `.
 - To stack a PR on top of another, create the new branch from the parent branch and target the parent branch in the PR. Use ` + "`<parent-branch>/<topic>`" + ` when Git permits slash children, or another ` + "`<session-branch>-<topic>`" + ` for bare workspace refs.

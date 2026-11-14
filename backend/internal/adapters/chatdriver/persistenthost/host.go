@@ -69,6 +69,24 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
+	// ACPSteerPromptMetaKey marks a session/prompt that steers the running turn
+	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
+	// and the turn's result is the answer of the last of its prompts to return.
+	ACPSteerPromptMetaKey = "ao.steerPrompt"
+	// ACPSteerKeepsTurnMetaKey also marks a steer prompt that the agent answers
+	// at once while the turn's earlier prompt keeps the work, as Hermes'
+	// `/steer` command is. Its answer is never the turn's result: the turn
+	// ends with the answer of its last other prompt, success or failure.
+	ACPSteerKeepsTurnMetaKey = "ao.steerKeepsTurn"
+	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
+	// host refused because the turn it was meant for had already ended. The
+	// agent never saw it, so the guidance can go as a new turn.
+	ACPSteerTurnEndedDataKey = "ao.steerTurnEnded"
+	// ACPPromptHandoffMethod is an AO-private notification carrying the
+	// non-final answer of a prompt an earlier daemon attachment sent, such as
+	// a running prompt handing the turn to a steer prompt. The reattached
+	// controller has no request of its own to match it to.
+	ACPPromptHandoffMethod = "_ao/persistent_prompt_handoff"
 )
 
 var (
@@ -663,7 +681,13 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	child.Stderr = io.Discard
+	// The adapter's stderr is the only record of why a turn went silent. Keep it
+	// beside the descriptor instead of discarding it.
+	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
+		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
+		defer func() { _ = adapterLog.Close() }()
+		child.Stderr = adapterLog
+	}
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
 		return err

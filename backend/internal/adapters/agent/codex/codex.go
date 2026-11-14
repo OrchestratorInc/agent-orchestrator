@@ -336,7 +336,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 	started := time.Now()
 	cmd := aoprocess.CommandContext(probeCtx, binary, "login", "status")
-	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary)
+	// The probe sees what Codex sessions see, without a key AO holds back.
+	cmd.Env = authprobe.Environ(ctx, agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary))
 	out, err := cmd.CombinedOutput()
 	status, recognized := codexAuthStatusFromOutput(out)
 	if !recognized {
