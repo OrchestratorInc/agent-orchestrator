@@ -4716,6 +4716,68 @@ describe("SessionInspector summary reviews", () => {
     );
   });
 
+  // A mode catalog: picking a mode reports the mode, then an empty model.
+  const modeCatalogGets = () =>
+    getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+      if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {
+        return {
+          data: {
+            agentId: "codex",
+            selectionMode: "mode",
+            models: [
+              { id: "agent", label: "Agent", isDefault: true, efforts: ["low"] },
+              { id: "plan", label: "Plan", efforts: ["low", "max"] },
+            ],
+            allowCustom: false,
+            source: "official-catalog",
+            fetchedAt: "2026-08-30T00:00:00Z",
+            stale: false,
+          },
+          error: undefined,
+        };
+      }
+      return commonGetsResponder([], "reviewer-pane", [reviewState(3, "needs_review", "sha-1")])(path);
+    });
+
+  it("keeps the reviewer effort when the picked mode offers it, though the default mode does not", async () => {
+    modeCatalogGets();
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex", reviewerConfig: { effort: "max" } })} />);
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer mode" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/reviews/switch", {
+        params: { path: { sessionId: "sess-1" } },
+        body: { harness: "codex", agentConfig: { mode: "plan", effort: "max" } },
+      }),
+    );
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(1);
+  });
+
+  it("drops the reviewer effort when returning to a default mode that does not offer it", async () => {
+    modeCatalogGets();
+    postMock.mockResolvedValue({ data: { reviewerHandleId: "", reviews: [] }, error: undefined, response: { status: 200 } });
+
+    renderWithQuery(
+      <SessionInspector session={session([pr(3, "open")], { reviewerHarness: "codex", reviewerConfig: { mode: "plan", effort: "max" } })} />,
+    );
+    await openReviewsSection();
+
+    // The default mode is saved as an empty mode, so the effort is checked against it.
+    await userEvent.click(await screen.findByRole("button", { name: "Reviewer mode" }));
+    await userEvent.click(await screen.findByRole("menuitemradio", { name: "Agent" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/reviews/switch", {
+        params: { path: { sessionId: "sess-1" } },
+        body: { harness: "codex", agentConfig: undefined },
+      }),
+    );
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/switch")).toHaveLength(1);
+  });
+
   it("keeps the reviewer effort when the new model offers it and drops it when not", async () => {
     getMock.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
       if (path === "/api/v1/agents/{agent}/models" && options?.params?.path?.agent === "codex") {

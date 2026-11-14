@@ -61,6 +61,10 @@ export function ReviewerModelEffortRows({
 			const next = pending.current;
 			pending.current = null;
 			if (!next) return;
+			// Re-check the effort once, against where the pick lands. A pick arrives
+			// as model-then-mode (a model catalog) or mode-then-empty-model (a mode
+			// catalog), so checking on each call would test the wrong entry.
+			if (next.model !== model || next.mode !== mode) next.effort = keptEffort(next.mode || next.model);
 			onChange({
 				...(next.model ? { model: next.model } : {}),
 				...(next.mode ? { mode: next.mode } : {}),
@@ -68,7 +72,8 @@ export function ReviewerModelEffortRows({
 			});
 		});
 	};
-	// Switching model keeps the chosen effort only when the new model offers it.
+	// Switching model or mode keeps the chosen effort only when the new one offers
+	// it; an empty id is the catalog default.
 	const keptEffort = (id: string) => (effort && catalogModel(catalog, id || defaultModelID(catalog))?.efforts?.includes(effort) ? effort : "");
 
 	// The daemon fills an empty session field from the project's reviewer for this
@@ -107,8 +112,8 @@ export function ReviewerModelEffortRows({
 						effort={shownEffort}
 						showEffort={false}
 						disabled={disabled}
-						onModelChange={(value) => update({ model: value, effort: keptEffort(value) })}
-						onModeChange={(value) => update({ mode: value, ...(value ? { effort: keptEffort(value) } : {}) })}
+						onModelChange={(value) => update({ model: value })}
+						onModeChange={(value) => update({ mode: value })}
 						onEffortChange={() => undefined}
 						onValidityChange={() => undefined}
 						warningClassName="basis-full pb-1 text-right"
