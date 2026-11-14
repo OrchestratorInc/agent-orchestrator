@@ -129,6 +129,16 @@ func (s *Service) install(ctx context.Context, m modelSpec) error {
 		if runtime.GOOS != "darwin" {
 			args = append(args, "--torch-backend", "cpu")
 		}
+		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+			// Phonon runs on MLX here and never loads PyTorch, which is more than half of the
+			// engine's download and disk size. The requirement is dropped with an override whose
+			// marker can never match. Other platforms have no MLX backend and need it.
+			override := filepath.Join(s.root, "uv-overrides.txt")
+			if err := os.WriteFile(override, []byte("torch ; sys_platform == \"never\"\n"), 0o600); err != nil {
+				return err
+			}
+			args = append(args, "--override", override)
+		}
 		stopEasing = s.easeStep(60 * time.Second)
 		err = s.run(ctx, uv, args...)
 		stopEasing()
