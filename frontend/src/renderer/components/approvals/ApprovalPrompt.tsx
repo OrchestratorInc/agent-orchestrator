@@ -82,7 +82,9 @@ export function ApprovalPrompt({
 			<div className="flex items-baseline gap-2 text-caption leading-snug text-muted-foreground">
 				<span className="size-1.5 shrink-0 self-center rounded-full bg-status-needs-you" aria-hidden="true" />
 				<span className="min-w-0 truncate">
-					{label} · {category} · {request.site || request.url}
+					{/* A saved login's category repeats its label; show it once. */}
+					{label}
+					{request.kind === "credential-use" ? null : <> · {category}</>} · {request.site || request.url}
 					{sessionLabel ? <> · {sessionLabel}</> : null}
 				</span>
 				<span className="ml-auto shrink-0 tabular-nums text-passive" data-testid="approval-countdown">

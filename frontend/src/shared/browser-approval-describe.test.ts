@@ -80,6 +80,28 @@ describe("describeApprovalTarget", () => {
 		});
 	});
 
+	it("is not fooled by fields named elements or action", () => {
+		const doc = page(`<form action="/orders" method="post"><input name="elements"><input name="action"><input autocomplete="cc-number"><button id="b">Continue</button></form>`);
+		const facts = describeApprovalTarget(doc, { mode: "element" }, doc.getElementById("b"));
+		expect(facts).toMatchObject({ formHasPayment: true, formMethod: "post" });
+		expect(facts?.formAction).toContain("/orders");
+	});
+
+	it("finds an image button as the default submitter for Enter", () => {
+		const doc = page(`<form method="get"><input id="d" aria-label="Details"><input type="password"><input type="image" alt="Continue" formmethod="post"></form>`);
+		(doc.getElementById("d") as HTMLInputElement).focus();
+		expect(describeApprovalTarget(doc, { mode: "focused" })).toMatchObject({ formMethod: "post", submitName: "Continue", formHasPassword: true });
+	});
+
+	it("tells a sign-in form from one that sets a new password", () => {
+		const login = page(`<form action="/login" method="post"><input type="email"><input type="password" autocomplete="current-password"><button id="b">Continue</button></form>`);
+		expect(describeApprovalTarget(login, { mode: "element" }, login.getElementById("b"))).toMatchObject({ formHasPassword: true, formHasNewPassword: false });
+		const change = page(`<form method="post"><input type="password"><input type="password" autocomplete="new-password"><button id="b">Update</button></form>`);
+		expect(describeApprovalTarget(change, { mode: "element" }, change.getElementById("b"))).toMatchObject({ formHasNewPassword: true });
+		const confirm = page(`<form method="post"><input type="password"><input type="password"><button id="b">Save</button></form>`);
+		expect(describeApprovalTarget(confirm, { mode: "element" }, confirm.getElementById("b"))).toMatchObject({ formHasNewPassword: true });
+	});
+
 	it("returns null when nothing matches or nothing is focused", () => {
 		const doc = page(`<button>Other</button>`);
 		expect(describeApprovalTarget(doc, { mode: "match", role: "button", name: "Delete" })).toBeNull();

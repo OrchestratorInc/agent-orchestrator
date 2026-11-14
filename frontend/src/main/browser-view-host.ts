@@ -340,6 +340,22 @@ export function shouldHandleAppShortcutInBrowserContext(
 // patch the DOM APIs it uses.
 const APPROVAL_DESCRIBE_WORLD_ID = 1013;
 
+// Input actions the approval binding (tab, document, element) is checked for.
+const APPROVAL_BOUND_ACTIONS = new Set(["click", "dblclick", "press"]);
+
+type ApprovalBinding = { tabId: string; document: number; ref?: string };
+
+/** The daemon's record of what the user approved, if this action was gated. */
+function parseApprovalBinding(value: unknown): ApprovalBinding | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { tabId, document, ref } = value as Record<string, unknown>;
+  if (typeof tabId !== "string" || typeof document !== "number") {
+    // A binding the runtime cannot read must not be ignored.
+    return { tabId: "", document: -1 };
+  }
+  return { tabId, document, ...(typeof ref === "string" && ref ? { ref: ref.replace(/^@/, "") } : {}) };
+}
+
 type BrowserWebContents = Pick<
   WebContents,
   | "id"
@@ -4386,6 +4402,7 @@ export function createBrowserViewHost(
           await openTab(session, undefined, true);
         }
         const entry = activeEntry(session);
+        const approvalBinding = parseApprovalBinding(args.approvalBinding);
         const runNative = async (
           nativeAction: string,
           nativeArgs: Record<string, unknown> = {},
@@ -4408,6 +4425,22 @@ export function createBrowserViewHost(
               const targetEntry = activeEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              // An approved action may only land on the tab, document, and (for
+              // act) element the user approved; checked in the same queued
+              // operation that dispatches it.
+              if (approvalBinding && APPROVAL_BOUND_ACTIONS.has(nativeAction)) {
+                const ref = typeof nativeArgs.ref === "string" ? nativeArgs.ref.replace(/^@/, "") : undefined;
+                if (
+                  approvalBinding.tabId !== targetEntry.tabId ||
+                  approvalBinding.document !== targetEntry.documentGeneration ||
+                  (approvalBinding.ref !== undefined && ref !== undefined && approvalBinding.ref !== ref)
+                ) {
+                  throw browserError(
+                    "BROWSER_TARGET_CHANGED",
+                    "The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
+                  );
+                }
+              }
               const targetBeforeAction = agentActionTarget(targetEntry);
               const activationRevision = session.activationRevision;
               let result: Record<string, unknown>;
@@ -4629,23 +4662,11 @@ export function createBrowserViewHost(
               };
             };
             let inputWasDispatched = false;
-            // The daemon passes the ref the user approved; a page that moved
-            // the match to another element during the wait is refused.
-            const expectRef =
-              typeof args.expectRef === "string" && args.expectRef
-                ? args.expectRef.replace(/^@/, "")
-                : undefined;
             const performMatchedAction = async (
               candidate: ActCandidate,
               retried: boolean,
               beforeSnapshot: string,
             ) => {
-              if (expectRef && candidate.ref !== expectRef) {
-                throw browserError(
-                  "BROWSER_TARGET_CHANGED",
-                  "The page changed while the action waited for approval, so the approved element is no longer the one this instruction matches. Take a new snapshot and try again.",
-                );
-              }
               const actionEntry = activeEntry(session);
               const before = actionFacts(actionEntry);
               const generations = {
@@ -5070,7 +5091,8 @@ export function createBrowserViewHost(
             const describeEntry = activeEntry(session);
             await describeEntry.ready;
             const contents = describeEntry.view.webContents;
-            return describePanelApprovalTarget({
+            const describeDocument = describeEntry.documentGeneration;
+            const described = await describePanelApprovalTarget({
               action: typeof args.action === "string" ? args.action : "",
               ref: typeof args.ref === "string" ? args.ref : undefined,
               instruction:
@@ -5102,6 +5124,17 @@ export function createBrowserViewHost(
                 },
               },
             });
+            const boundRef =
+              described.resolvedRef ??
+              (typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined);
+            return {
+              ...described,
+              binding: {
+                tabId: describeEntry.tabId,
+                document: describeDocument,
+                ...(boundRef ? { ref: boundRef } : {}),
+              },
+            };
           }
           default:
             throw browserError(

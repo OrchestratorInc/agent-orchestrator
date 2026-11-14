@@ -66,6 +66,7 @@ describe("describePanelApprovalTarget", () => {
 		page.evaluate.mockRejectedValue(new Error("blocked"));
 		const out = await describePanelApprovalTarget({ action: "click", ref: "e4", snapshot: async () => ({ refs }), page });
 		expect(out.target).toMatchObject({ role: "button", name: "Place order" });
+		expect(out.partial).toBe(true);
 	});
 
 	it("reports the matched ref for act so an approval can be bound to it", async () => {
@@ -85,5 +86,6 @@ describe("describePanelApprovalTarget", () => {
 		});
 		expect(page.evaluate).not.toHaveBeenCalled();
 		expect(out.target).toEqual({ role: "button", name: "Continue", pageUrl: "https://shop.example/checkout", pageTitle: "Checkout" });
+		expect(out.partial).toBe(true);
 	});
 });

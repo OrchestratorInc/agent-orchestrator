@@ -74,7 +74,8 @@ describe("ApprovalPrompt", () => {
 				more={2}
 			/>,
 		);
-		expect(screen.getByText(/Saved login · Saved login · shop\.example · Fix checkout bug/)).toBeInTheDocument();
+		expect(screen.getByText(/Saved login · shop\.example · Fix checkout bug/)).toBeInTheDocument();
+		expect(screen.queryByText(/Saved login · Saved login/)).not.toBeInTheDocument();
 		expect(screen.queryByTestId("approval-image")).not.toBeInTheDocument();
 		expect(screen.getByText("+2 more")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
