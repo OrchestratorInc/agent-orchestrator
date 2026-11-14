@@ -34,6 +34,13 @@ import type {
   Cue,
   CueDefinitionInput,
   InvokeCueResult,
+  Automation,
+  AutomationList,
+  AutomationRun,
+  AutomationRunList,
+  AutomationSubscription,
+  CreateAutomationInput,
+  UpdateAutomationInput,
   PutAgentProviderConnectionInput,
   RedactedProviderConnection,
   RequestOptions,
@@ -232,6 +239,61 @@ export class CloudClient {
   invokeProjectCue(orgId: string, cueId: string, sessionId: string, options: RequestOptions & { idempotencyKey?: string } = {}): Promise<InvokeCueResult> {
     return this.request(this.orgPath(orgId, `/cues/${encodeURIComponent(cueId)}/invoke`), {
       method: "POST", body: { sessionId }, idempotencyKey: options.idempotencyKey, signal: options.signal,
+    });
+  }
+
+  listAutomations(orgId: string, options: PaginationOptions & { projectId?: string } = {}): Promise<AutomationList> {
+    return this.request(
+      this.withQuery(this.orgPath(orgId, "/automations"), {
+        cursor: options.cursor,
+        limit: options.limit,
+        projectId: options.projectId,
+      }),
+      { signal: options.signal },
+    );
+  }
+
+  getAutomation(orgId: string, automationId: string, options: RequestOptions = {}): Promise<{ automation: Automation }> {
+    return this.request(this.orgPath(orgId, `/automations/${encodeURIComponent(automationId)}`), options);
+  }
+
+  createAutomation(orgId: string, input: CreateAutomationInput, options: RequestOptions = {}): Promise<{ automation: Automation }> {
+    return this.request(this.orgPath(orgId, "/automations"), {
+      method: "POST", body: input, signal: options.signal,
+    });
+  }
+
+  updateAutomation(orgId: string, automationId: string, input: UpdateAutomationInput, options: RequestOptions = {}): Promise<{ automation: Automation }> {
+    return this.request(this.orgPath(orgId, `/automations/${encodeURIComponent(automationId)}`), {
+      method: "PATCH", body: input, signal: options.signal,
+    });
+  }
+
+  async deleteAutomation(orgId: string, automationId: string, options: RequestOptions = {}): Promise<void> {
+    await this.request<unknown>(this.orgPath(orgId, `/automations/${encodeURIComponent(automationId)}`), {
+      method: "DELETE", signal: options.signal,
+    });
+  }
+
+  listAutomationRuns(orgId: string, automationId: string, options: PaginationOptions = {}): Promise<AutomationRunList> {
+    return this.request(
+      this.withQuery(this.orgPath(orgId, `/automations/${encodeURIComponent(automationId)}/runs`), {
+        cursor: options.cursor,
+        limit: options.limit,
+      }),
+      { signal: options.signal },
+    );
+  }
+
+  runAutomationNow(orgId: string, automationId: string, options: IdempotentRequestOptions): Promise<{ run: AutomationRun }> {
+    return this.request(this.orgPath(orgId, `/automations/${encodeURIComponent(automationId)}/runs`), {
+      method: "POST", idempotencyKey: options.idempotencyKey, signal: options.signal,
+    });
+  }
+
+  setAutomationSubscription(orgId: string, automationId: string, subscribed: boolean, options: RequestOptions = {}): Promise<AutomationSubscription> {
+    return this.request(this.orgPath(orgId, `/automations/${encodeURIComponent(automationId)}/subscription`), {
+      method: subscribed ? "PUT" : "DELETE", signal: options.signal,
     });
   }
 

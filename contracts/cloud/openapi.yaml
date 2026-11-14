@@ -33,6 +33,7 @@ tags:
   - name: Remote Hosts
   - name: Push Devices
   - name: Billing
+  - name: Automations
 paths:
   /api/cloud/v1/me:
     get:
@@ -1195,6 +1196,200 @@ paths:
                     $ref: "#/components/schemas/Project"
                   session:
                     $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listAutomations
+      tags: [Automations]
+      description: >-
+        The organization's automations, newest first, each with its latest
+        run. Every member sees every automation of the organization's
+        projects. Offered when offering.features lists automations; 404
+        otherwise.
+      parameters:
+        - name: projectId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of automations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createAutomation
+      tags: [Automations]
+      description: >-
+        Schedule a prompt for a project's worker to run in AO Cloud. It runs
+        as the caller, with their personal coding-agent credential for the
+        harness (agent_provider_required without one), and they are
+        subscribed to its results. Refused with AUTOMATION_LIMIT_REACHED when
+        the organization has as many as it may, and
+        AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAutomationInput"
+      responses:
+        "201":
+          description: Automation created.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [automation]
+                properties:
+                  automation:
+                    $ref: "#/components/schemas/Automation"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations/{automationId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/AutomationId"
+    get:
+      operationId: getAutomation
+      tags: [Automations]
+      responses:
+        "200":
+          description: The automation with its latest run.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [automation]
+                properties:
+                  automation:
+                    $ref: "#/components/schemas/Automation"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateAutomation
+      tags: [Automations]
+      description: >-
+        Change an automation; omitted fields keep their values. Only the
+        person it runs as, its creator and the organization's admins may
+        (AUTOMATION_EDIT_FORBIDDEN). A change to anything but enabled makes
+        the caller the person it runs as, and needs their credential for the
+        harness. The next run is computed afresh, so turning an automation
+        back on never runs the occurrences it missed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAutomationInput"
+      responses:
+        "200":
+          description: Automation updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [automation]
+                properties:
+                  automation:
+                    $ref: "#/components/schemas/Automation"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteAutomation
+      tags: [Automations]
+      description: >-
+        Delete an automation and its run history. Its runs' sessions and
+        artifacts stay. Allowed to whoever may edit it.
+      responses:
+        "204":
+          description: Automation deleted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations/{automationId}/runs:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/AutomationId"
+    get:
+      operationId: listAutomationRuns
+      tags: [Automations]
+      description: The automation's runs, newest occurrence first.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationRunList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: runAutomationNow
+      tags: [Automations]
+      description: >-
+        Run the automation now, as the caller with their own credential for
+        its harness. Any member may. Refused with AUTOMATION_RUN_ACTIVE while
+        a run is in flight. The run starts within seconds; follow it in the
+        run list.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Run queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [run]
+                properties:
+                  run:
+                    $ref: "#/components/schemas/AutomationRun"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations/{automationId}/subscription:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/AutomationId"
+    put:
+      operationId: subscribeAutomation
+      tags: [Automations]
+      description: Be notified when the automation's runs finish or fail.
+      responses:
+        "200":
+          description: Subscribed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationSubscription"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: unsubscribeAutomation
+      tags: [Automations]
+      responses:
+        "200":
+          description: Unsubscribed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationSubscription"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/chat-search:
@@ -4520,6 +4715,13 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    AutomationId:
+      name: automationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CueId:
       name: cueId
       in: path
@@ -5379,8 +5581,9 @@ components:
             sessions) and the deployment's own: attachments when the session
             attachment routes are on, queued-edit when a queued message can be
             edited (editQueuedMessage), queued-delete when a queued message can
-            be deleted without stopping a started turn (deleteQueuedMessage).
-            Empty when none apply.
+            be deleted without stopping a started turn (deleteQueuedMessage),
+            automations when cloud automations can be scheduled
+            (createAutomation). Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -6148,6 +6351,297 @@ components:
         lastError:
           type: string
           description: Why the last poll failed; absent when it did not.
+    AutomationHarness:
+      type: string
+      enum: [claude-code, codex, cursor]
+      description: >-
+        Harnesses an automation can run: those with a Chat controller, whose
+        opening turn tells the control plane the run finished.
+    AutomationMode:
+      type: string
+      enum: [standard, trusted]
+    AutomationRunStatus:
+      type: string
+      enum: [pending, starting, running, completed, failed, skipped, timed_out]
+      description: >-
+        pending, starting and running are in flight. completed means the
+        session's opening turn finished. skipped means it did not start: the
+        previous run was still going (PREVIOUS_RUN_ACTIVE), or the
+        organization or plan was full (the create-session refusal's code).
+        timed_out means it reached maxRuntimeMinutes and its session was
+        stopped.
+    AutomationRun:
+      type: object
+      additionalProperties: false
+      required: [id, automationId, scheduledFor, trigger, status, attemptCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        automationId:
+          type: string
+          format: uuid
+        scheduledFor:
+          type: string
+          format: date-time
+          description: The occurrence it ran for; the moment it was asked for, for a manual run.
+        trigger:
+          type: string
+          enum: [schedule, manual]
+        triggeredByUserId:
+          type: string
+          format: uuid
+          description: Who asked for a manual run.
+        status:
+          $ref: "#/components/schemas/AutomationRunStatus"
+        sessionId:
+          type: string
+          format: uuid
+          description: >-
+            The session it ran in, once started. Only the automation's latest
+            run keeps its session open; earlier runs' sessions are deleted
+            (and can be restored) when the next run starts.
+        attemptCount:
+          type: integer
+          minimum: 0
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    Automation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - projectId
+        - displayName
+        - prompt
+        - harness
+        - mode
+        - rrule
+        - timezone
+        - enabled
+        - maxRuntimeMinutes
+        - branch
+        - runAs
+        - consecutiveFailures
+        - subscribed
+        - canEdit
+        - createdAt
+        - updatedAt
+      description: >-
+        A prompt a project's worker runs on a schedule in AO Cloud. Each run
+        is one session, started as runAs. All runs share one branch and
+        keep at most one open pull request per repository on it: a run
+        updates the pull request an earlier run left open, and once that is
+        merged or closed the next run moves to a new branch. Run sessions
+        can be shared only to watch, with teams and by link.
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        prompt:
+          type: string
+        harness:
+          $ref: "#/components/schemas/AutomationHarness"
+        model:
+          type: string
+        reasoningEffort:
+          type: string
+        mode:
+          $ref: "#/components/schemas/AutomationMode"
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        rrule:
+          type: string
+          description: The canonical rule, with its DTSTART anchor.
+        timezone:
+          type: string
+          description: The IANA timezone the rule runs in.
+        enabled:
+          type: boolean
+        nextRunAt:
+          type: string
+          format: date-time
+          description: Absent while disabled.
+        maxRuntimeMinutes:
+          type: integer
+          minimum: 5
+          maximum: 480
+        branch:
+          type: string
+          description: The branch its runs work on.
+        runAs:
+          type: object
+          additionalProperties: false
+          required: [userId]
+          description: >-
+            Whose credential its scheduled runs use: whoever last changed
+            what it does or when.
+          properties:
+            userId:
+              type: string
+              format: uuid
+            email:
+              type: string
+            displayName:
+              type: string
+        createdByUserId:
+          type: string
+          format: uuid
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+        disabledReason:
+          type: string
+          description: Why it was turned off automatically, such as after 5 runs in a row that did not finish.
+        subscribed:
+          type: boolean
+          description: Whether the caller is notified of its runs.
+        canEdit:
+          type: boolean
+          description: Whether the caller may change or delete it.
+        latestRun:
+          $ref: "#/components/schemas/AutomationRun"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateAutomationInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, displayName, prompt, harness, timezone]
+      description: Exactly one of rrule and cron. Occurrences must be at least an hour apart.
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+        harness:
+          $ref: "#/components/schemas/AutomationHarness"
+        model:
+          type: string
+          maxLength: 200
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          allOf:
+            - $ref: "#/components/schemas/AutomationMode"
+          default: trusted
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        rrule:
+          type: string
+          description: An RFC 5545 rule (FREQ=HOURLY or slower, no COUNT or UNTIL).
+        cron:
+          type: string
+          description: >-
+            "minute hour * * weekdays", the desktop presets' subset of cron;
+            converted to a rule.
+        timezone:
+          type: string
+          description: An IANA timezone, or UTC.
+        maxRuntimeMinutes:
+          type: integer
+          minimum: 5
+          maximum: 480
+          default: 60
+        enabled:
+          type: boolean
+          default: true
+    UpdateAutomationInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Fields to change. rrule or cron replaces the schedule; timezone alone
+        moves the saved rule into the new zone.
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+        harness:
+          $ref: "#/components/schemas/AutomationHarness"
+        model:
+          type: string
+          maxLength: 200
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          $ref: "#/components/schemas/AutomationMode"
+        requestedOutput:
+          type: string
+          enum: ["", artifact]
+        rrule:
+          type: string
+        cron:
+          type: string
+        timezone:
+          type: string
+        maxRuntimeMinutes:
+          type: integer
+          minimum: 5
+          maximum: 480
+        enabled:
+          type: boolean
+    AutomationList:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Automation"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    AutomationRunList:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AutomationRun"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    AutomationSubscription:
+      type: object
+      additionalProperties: false
+      required: [subscribed]
+      properties:
+        subscribed:
+          type: boolean
     Cue:
       type: object
       additionalProperties: false
@@ -8382,6 +8876,13 @@ components:
           type: boolean
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
+        automationRunId:
+          type: string
+          format: uuid
+          description: >-
+            The automation run the session was started for. Such a session is
+            shared only to watch (viewer access), with teams and by link;
+            other shares are refused with AUTOMATION_SESSION_VIEW_ONLY.
         createdByUserId:
           type: string
           format: uuid
