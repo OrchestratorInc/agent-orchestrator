@@ -245,6 +245,10 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	if in.MoveID == "" || m.Branch == "" || m.Tip == "" || m.Harness == "" {
 		return MoveImportOutcome{}, apierr.Invalid("MOVE_MANIFEST_INVALID", "moveId, branch, tip and harness are required", nil)
 	}
+	// git would resolve any revision, such as HEAD, in place of the pushed commit.
+	if !fullCommitSHA.MatchString(m.Tip) {
+		return MoveImportOutcome{}, apierr.Invalid("MOVE_MANIFEST_INVALID", "tip must be a full commit id", nil)
+	}
 	hash := moveRequestHash(in)
 	if rec, found, err := s.replayClientRequest(ctx, in.MoveID, hash); err != nil {
 		return MoveImportOutcome{}, err

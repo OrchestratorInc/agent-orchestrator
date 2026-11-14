@@ -228,6 +228,21 @@ func TestImportMoveRefusesAnotherRepository(t *testing.T) {
 	}
 }
 
+func TestImportMoveRefusesATipThatIsNotACommitID(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	for _, tip := range []string{"HEAD", "origin/other", "--output=x", strings.Repeat("A", 40), strings.Repeat("a", 39)} {
+		fc := &fakeCommander{}
+		_, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+			ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip),
+		})
+		var got *apierr.Error
+		if !errors.As(err, &got) || got.Code != "MOVE_MANIFEST_INVALID" || fc.spawnCalls != 0 {
+			t.Fatalf("tip %q: err = %v, spawns = %d; want MOVE_MANIFEST_INVALID", tip, err, fc.spawnCalls)
+		}
+	}
+}
+
 func TestImportMoveReplaysTheSameMove(t *testing.T) {
 	in := MoveImportInput{ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(strings.Repeat("a", 40))}
 	st := newFakeStore()

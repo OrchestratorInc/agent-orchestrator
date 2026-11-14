@@ -1,7 +1,6 @@
 package sessionmove
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -38,9 +37,6 @@ type Capture struct {
 	// Commit is the WIP commit, or "" when the worktree matches Base.
 	Commit  string
 	Changes []Change
-	// LFS lists changed paths whose content is a Git LFS pointer. The objects
-	// they point at may exist only in this machine's LFS store.
-	LFS []string
 	// Submodules lists submodules checked out at a commit other than Base's.
 	// The target can check them out only if that commit is on their remote.
 	Submodules []string
@@ -136,7 +132,7 @@ func CaptureWorktree(ctx context.Context, opts CaptureOptions) (Capture, error) 
 		return Capture{}, err
 	}
 	c.Commit = strings.TrimSpace(commit)
-	if c.Changes, c.LFS, err = changes(ctx, wt, base, c.Commit); err != nil {
+	if c.Changes, err = changes(ctx, wt, base, c.Commit); err != nil {
 		return Capture{}, err
 	}
 	return c, nil
@@ -278,12 +274,11 @@ func identityEnv(ctx context.Context, wt string) []string {
 	}
 }
 
-// changes lists what commit changes relative to base, with blob sizes, and
-// the changed paths whose content is an LFS pointer.
-func changes(ctx context.Context, wt, base, commit string) ([]Change, []string, error) {
+// changes lists what commit changes relative to base, with blob sizes.
+func changes(ctx context.Context, wt, base, commit string) ([]Change, error) {
 	out, err := runGit(ctx, wt, nil, nil, "diff-tree", "-r", "-z", "--no-renames", "--raw", base, commit)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	fields := strings.Split(strings.TrimRight(out, "\x00"), "\x00")
 	var list []Change
@@ -292,7 +287,7 @@ func changes(ctx context.Context, wt, base, commit string) ([]Change, []string, 
 	for i := 0; i+1 < len(fields); i += 2 {
 		meta := strings.Fields(strings.TrimPrefix(fields[i], ":"))
 		if len(meta) != 5 {
-			return nil, nil, fmt.Errorf("diff-tree record %q", fields[i])
+			return nil, fmt.Errorf("diff-tree record %q", fields[i])
 		}
 		ch := Change{Path: fields[i+1], Status: meta[4][0]}
 		if ch.Status != 'D' && meta[1] != "160000" {
@@ -303,24 +298,10 @@ func changes(ctx context.Context, wt, base, commit string) ([]Change, []string, 
 	}
 	sizes, err := objectSizes(ctx, wt, ids)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	var small []string
 	for i, idx := range blobIdx {
 		list[idx].Size = sizes[i]
-		if sizes[i] > 0 && sizes[i] < 1024 {
-			small = append(small, ids[i])
-		}
 	}
-	contents, err := blobContents(ctx, wt, small)
-	if err != nil {
-		return nil, nil, err
-	}
-	var lfs []string
-	for i, idx := range blobIdx {
-		if bytes.HasPrefix(contents[ids[i]], []byte(lfsPointerPrefix)) {
-			lfs = append(lfs, list[idx].Path)
-		}
-	}
-	return list, lfs, nil
+	return list, nil
 }

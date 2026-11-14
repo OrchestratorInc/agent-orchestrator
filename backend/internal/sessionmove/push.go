@@ -67,15 +67,15 @@ func PushBranch(ctx context.Context, worktree string, c Capture, maxFileBytes in
 }
 
 // CheckPush returns the refusal PushBranch would give c before pushing: Git
-// LFS files, or files over maxFileBytes that origin does not have.
+// LFS files or files over maxFileBytes, in commits origin does not have.
 func CheckPush(ctx context.Context, worktree string, c Capture, maxFileBytes int64) error {
-	if len(c.LFS) > 0 {
-		// ponytail: refuses LFS; upload with `git lfs push origin <tip>` once git-lfs is a dependency.
-		return fmt.Errorf("%w: %s", ErrLFSObjects, strings.Join(c.LFS, ", "))
-	}
-	big, err := blobsOver(ctx, worktree, c.Tip(), maxFileBytes)
+	big, lfs, err := unpushedBlobs(ctx, worktree, c.Tip(), maxFileBytes)
 	if err != nil {
 		return err
+	}
+	if len(lfs) > 0 {
+		// ponytail: refuses LFS; upload with `git lfs push origin <tip>` once git-lfs is a dependency.
+		return fmt.Errorf("%w: %s", ErrLFSObjects, strings.Join(lfs, ", "))
 	}
 	if len(big) > 0 {
 		return &FileTooLargeError{Limit: maxFileBytes, Files: big}
