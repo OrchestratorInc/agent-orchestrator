@@ -6380,17 +6380,19 @@ describe("SessionInspector branch summary", () => {
     expect(conflicts).toHaveTextContent("ConflictsNone");
     expect(conflicts.querySelector("[data-state='passed'] svg")).not.toBeNull();
     expect(conflicts.parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
-    // The label is quiet and the state is what reads: one that is in the way takes
-    // its colour on the words, one that is fine stays plain.
-    expect(screen.getByText("Conflicts")).toHaveClass("text-muted-foreground");
+    // The label leads in full colour; a state that is in the way takes its colour
+    // on the words, one that is fine stays plain.
+    expect(screen.getByText("Conflicts")).toHaveClass("text-foreground");
     expect(conflicts.querySelector("[data-state='passed']")).not.toHaveClass("text-error");
     const tally = screen.getByTestId("pr-checks-tally");
-    expect(within(tally).getByText("Checks")).toHaveClass("text-muted-foreground");
+    expect(within(tally).getByText("Checks")).toHaveClass("text-foreground");
     expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-error");
     // What opens under a row sits in from it.
-    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-19");
-    // The label is a size down from its state, in a column the states line up after.
-    expect(screen.getByText("Conflicts")).toHaveClass("text-caption", "min-w-16");
+    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-4");
+    // The label keeps the row's size and its state sits two sizes below it.
+    expect(screen.getByText("Conflicts")).not.toHaveClass("text-micro");
+    expect(conflicts.querySelector("[data-state='passed']")).toHaveClass("text-micro");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {

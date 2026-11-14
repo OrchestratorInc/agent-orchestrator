@@ -442,7 +442,7 @@ function StatusRow({
 			? (
 				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
 					<span className={rowLabelClass}>{fact.title}</span>
-					<span className={cn("inline-flex min-w-0 items-center gap-1", attentionClass[status.tone])} data-state={fact.state}>
+					<span className={`${rowStateClass} ${cn("inline-flex min-w-0 items-center gap-1", attentionClass[status.tone])}`} data-state={fact.state}>
 						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
 						<span className="min-w-0 truncate">{fact.value}</span>
 					</span>
@@ -516,11 +516,12 @@ const checkStateClass: Record<PRCheckState, string> = {
 	skipped: "text-passive",
 };
 
-// A row's label is a size down from its state and holds a column, so the states
-// line up and are what the eye lands on.
-const rowLabelClass = "min-w-16 shrink-0 text-caption font-normal text-muted-foreground";
-// What belongs to a row starts under its state: the label column plus the gap.
-const rowChildClass = "pl-19";
+// A row's label leads at the row's own size, with its state two sizes below it.
+const rowLabelClass = "text-foreground";
+// Joined outside cn(): tailwind-merge reads this size as a colour and drops it for one.
+const rowStateClass = "text-micro";
+// What belongs to a row sits in from it.
+const rowChildClass = "pl-4";
 
 /** A state that is in the way takes its colour on the words too; one that is fine stays plain. */
 const attentionClass: Partial<Record<PRDisplayTone, string>> = {
@@ -529,11 +530,17 @@ const attentionClass: Partial<Record<PRDisplayTone, string>> = {
 	error: "text-error",
 };
 
-/** A check state's glyph in its colour; a running check's spins unless motion is reduced. */
-export function CheckStateGlyph({ className, state }: { className?: string; state: PRCheckState }) {
+const glyphSizeClass = { xs: "size-icon-xs", sm: "size-icon-sm" };
+
+/**
+ * A check state's glyph in its colour; a running check's spins unless motion is
+ * reduced. `size` is a prop because the two icon sizes don't override each other
+ * as classes.
+ */
+export function CheckStateGlyph({ className, size = "xs", state }: { className?: string; size?: keyof typeof glyphSizeClass; state: PRCheckState }) {
 	return (
 		<CheckStateIcon
-			className={cn("size-icon-xs shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
+			className={cn(glyphSizeClass[size], "shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
 			state={state}
 		/>
 	);
@@ -549,10 +556,10 @@ function ChecksTally({ tally }: { tally: PRChecksTally }) {
 			<span className={rowLabelClass}>{tally.title}</span>
 			{tally.counts.map((count, index) => (
 				<span
-					className={cn(
+					className={`${rowStateClass} ${cn(
 						"inline-flex items-center gap-1 tabular-nums",
 						index === 0 ? (count.state === "failed" ? "text-error" : "text-foreground") : "font-normal text-muted-foreground",
-					)}
+					)}`}
 					data-state={count.state}
 					key={count.state}
 				>
