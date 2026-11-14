@@ -42,7 +42,7 @@ export function resumeAgentOnOpen(sessionId: string, hostId?: string): Promise<v
 		const { error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});
-		if (error) throw resumeAgentError(error, response.status);
+		if (error && apiErrorCode(error) !== "AGENT_NOT_EXITED") throw resumeAgentError(error, response.status);
 	});
 }
 

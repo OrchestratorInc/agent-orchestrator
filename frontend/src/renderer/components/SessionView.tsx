@@ -647,21 +647,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// already-resumed session no longer flashes "Resuming agent…" while the
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
-		(!usesPreviewWorkspaceData && canResumeAgent(session, resumeStatus.transition) &&
+		(!usesPreviewWorkspaceData && !hostUnreachable && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
 	// This session's background resume failed; the chat shows why.
 	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
-	const remoteReadRequestedAt = useRef(0);
+	const remoteConnection = useRef({ base: remoteBase, at: 0 });
 	const refetchRemoteSession = remoteSessionQuery.refetch;
-	useEffect(() => {
-		if (!hostId || !remoteBase) return;
-		remoteReadRequestedAt.current = Date.now();
-		void refetchRemoteSession({ cancelRefetch: false });
-	}, [hostId, refetchRemoteSession, remoteBase, uiSessionId]);
+	const remoteReadAt = Math.max(remoteSessionQuery.dataUpdatedAt, remoteSessionQuery.errorUpdatedAt);
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.dataUpdatedAt < remoteReadRequestedAt.current : daemonStatus.state !== "ready") ||
+		if (hostId && remoteConnection.current.base !== remoteBase) {
+			remoteConnection.current = { base: remoteBase, at: remoteBase ? Date.now() : 0 };
+			if (remoteBase) void refetchRemoteSession({ cancelRefetch: false });
+		}
+		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.isFetching || remoteReadAt < remoteConnection.current.at : daemonStatus.state !== "ready") ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
 		if (!session.needsResume && !sessionAgentExited(session)) {
 			openedSession.current.checked = true;
@@ -673,7 +673,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		openedSession.current.checked = true;
 		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id, hostId));
 		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, remoteSessionQuery.dataUpdatedAt, resumeOnOpen, session, uiSessionId]);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, refetchRemoteSession, remoteBase, remoteReadAt, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);

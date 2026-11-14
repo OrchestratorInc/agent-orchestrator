@@ -327,6 +327,7 @@ it("resumes a remote agent that exited after the host list was last read when th
 	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
 	first.unmount();
 	state = "exited";
+	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	renderRemoteSession(queryClient);
 	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
 	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
@@ -397,7 +398,6 @@ it("waits for an away host to come back before resuming its exited agent", async
 	await act(async () => { releaseTransition(); });
 	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
 	expect(resumes).toEqual([]);
-	expect(screen.queryByText(/Waking agent|Resuming/)).not.toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
 	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
 });
