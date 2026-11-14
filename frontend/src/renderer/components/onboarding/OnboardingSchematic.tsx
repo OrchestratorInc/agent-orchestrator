@@ -775,10 +775,9 @@ const PILE_X = 300;
 const PILE_Y = 380;
 const PILE_STEP = 64;
 const pileSpot = (index: number) => ({ x: PILE_X + index * PILE_STEP, y: PILE_Y - index * PILE_STEP });
-/** When the pile's cards show, all together, after the orchestrator's reply,
- * and how long they take to fade in where they stand. */
-const PILE_SHOW_S = 1;
-const PILE_FADE = { duration: 0.7, ease: EASE_IN_OUT } as const;
+/** When the pile's cards start down, after the orchestrator's reply, and when each lands. */
+const pileDrop = (index: number) => 1 + index * 0.32;
+const pileLanding = (index: number) => pileDrop(index) + 0.5;
 
 /** The stack's upright bracket on the sheet, right of the stack: its x, top,
  * bottom, middle, and where the leader ends. */
@@ -798,17 +797,20 @@ function stackBracket(total: number) {
 /**
  * The stack's annotation while the orchestrator starts its workers: an
  * upright bracket spanning the stack, a leader out to the right, and the count
- * of workers while they appear, then a check once they have.
+ * of workers set down so far, then a check once they all have.
  */
 function StackBracket({ total }: { total: number }) {
 	const { t } = useTranslation();
 	const reduceMotion = useReducedMotion();
-	const [done, setDone] = useState(Boolean(reduceMotion));
+	const [landed, setLanded] = useState(reduceMotion ? total : 0);
 	useEffect(() => {
 		if (reduceMotion) return;
-		const timer = window.setTimeout(() => setDone(true), (PILE_SHOW_S + PILE_FADE.duration) * 1000);
-		return () => window.clearTimeout(timer);
-	}, [reduceMotion]);
+		const timers = Array.from({ length: total }, (_, index) =>
+			window.setTimeout(() => setLanded(index + 1), pileLanding(index) * 1000),
+		);
+		return () => timers.forEach((timer) => window.clearTimeout(timer));
+	}, [reduceMotion, total]);
+	const done = landed >= total;
 	const { x, top, bottom, middle, leader } = stackBracket(total);
 	const stroke = { stroke: "var(--schematic-line-strong)", strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const, fill: "none" };
 	return (
@@ -818,7 +820,7 @@ function StackBracket({ total }: { total: number }) {
 			initial={reduceMotion ? false : { opacity: 0 }}
 			animate={{ opacity: 1 }}
 			exit={{ opacity: 0 }}
-			transition={{ ...RISE, delay: reduceMotion ? 0 : PILE_SHOW_S - 0.2 }}
+			transition={{ ...RISE, delay: reduceMotion ? 0 : pileDrop(0) - 0.2 }}
 		>
 			<svg className="absolute left-0 top-0 overflow-visible" width={1} height={1}>
 				<path d={`M ${x - 9} ${top} L ${x} ${top} L ${x} ${bottom} L ${x - 9} ${bottom}`} {...stroke} />
@@ -829,7 +831,7 @@ function StackBracket({ total }: { total: number }) {
 				style={{ left: leader, top: middle }}
 			>
 				{done ? <Check className="size-3" {...ICON} /> : <StatusGlyph status="working" />}
-				{done ? t("firstRun.workersReady", { total }) : t("firstRun.creatingWorkers", { current: total, total })}
+				{done ? t("firstRun.workersReady", { total }) : t("firstRun.creatingWorkers", { current: landed, total })}
 			</span>
 		</motion.div>
 	);
@@ -895,7 +897,7 @@ type CardMove = { key: string; animate: TargetAndTransition; transition: Transit
 
 /**
  * The workers as cards, one layer over every page so the same card travels:
- * all fading in together on a pile in the orchestrator's chat as it starts
+ * set down one by one onto a pile in the orchestrator's chat as it starts
  * them, then dealt out from the pile into the board's lanes. A worker whose
  * pull request is going to review or merge takes it to GitHub first: the card
  * rises onto the floating GitHub tile, its CI and review run, and it comes
@@ -948,11 +950,10 @@ function WorkerCards({ page, cards, runId, github }: { page: ScenePage; cards: P
 				transition: { duration: ROUND_TRIP_S, ease: [...EASE_IN_OUT], times: ROUND_TRIP_TIMES },
 			};
 		} else {
-			// The pile shows after the orchestrator's reply, every card at once,
-			// fading in where it stands; dealing onto the board fans out card by
-			// card; a lane change goes at once.
-			const transition = page === "chat" ? { ...PILE_FADE, delay: PILE_SHOW_S } : { ...SETTLE, delay: pageChanged ? index * 0.08 : 0 };
-			move = { key, viaGitHub: false, animate: { ...slot, opacity }, transition: reduceMotion ? { duration: 0 } : transition };
+			// The pile builds after the orchestrator's reply, a card at a time;
+			// dealing onto the board fans out card by card; a lane change goes at once.
+			const delay = page === "chat" ? pileDrop(index) : pageChanged ? index * 0.08 : 0;
+			move = { key, viaGitHub: false, animate: { ...slot, opacity }, transition: reduceMotion ? { duration: 0 } : { ...SETTLE, delay } };
 		}
 		return { card, slot, move };
 	});
@@ -978,9 +979,8 @@ function WorkerCards({ page, cards, runId, github }: { page: ScenePage; cards: P
 						className="absolute left-0 top-0 will-change-transform"
 						// A card on its way to GitHub travels over everything else.
 						style={{ width: LANE_WIDTH, height: CARD_HEIGHT, zIndex: move.viaGitHub ? 50 : index + 1 }}
-						// On the pile, a card fades in where it stands; elsewhere it's set
-						// down onto its spot from straight above it.
-						initial={reduceMotion ? false : page === "chat" ? { ...slot, opacity: 0 } : { x: slot.x + CARD_DROP, y: slot.y - CARD_DROP, opacity: 0 }}
+						// Set down onto its spot from straight above it.
+						initial={reduceMotion ? false : { x: slot.x + CARD_DROP, y: slot.y - CARD_DROP, opacity: 0 }}
 						animate={move.animate}
 						exit={{ opacity: 0, transition: { duration: 0.35, ease: EASE_IN_OUT } }}
 						transition={move.transition}
