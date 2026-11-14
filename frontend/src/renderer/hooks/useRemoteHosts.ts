@@ -81,9 +81,13 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settle
 	const inFlight = useRef(new Set<string>());
 	const savedHostUrls = useRef(new Map<string, string>());
 	const refreshGeneration = useRef(0);
+	const latestAttempt = useRef(new Map<string, number>());
 
 	const attempt = useCallback(async (saved: SavedHost, generation: number, account: string) => {
-		const current = () => enabledRef.current && accountRef.current === account && refreshGeneration.current === generation;
+		const id = (latestAttempt.current.get(saved.hostId) ?? 0) + 1;
+		latestAttempt.current.set(saved.hostId, id);
+		const current = () => enabledRef.current && accountRef.current === account && refreshGeneration.current === generation
+			&& latestAttempt.current.get(saved.hostId) === id;
 		const shouldAdopt = () => current() && savedHostUrls.current.get(saved.hostId) === saved.url;
 		const settle = (change: Partial<RemoteHost>) => setHosts((list) => list.map((host) =>
 			host.hostId === saved.hostId && host.url === saved.url ? { ...host, failureReason: undefined, ...change } : host));

@@ -115,6 +115,27 @@ it("shows an incompatible API version after reconnect without retaining the old 
 	expect(connectedHosts()).not.toContain("box-a");
 });
 
+it("keeps a host connected when a refresh probe fails after a later check succeeded", async () => {
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts[0]?.status).toBe("connected"));
+	let failRefresh!: (reason: Error) => void;
+	remotes.connect.mockImplementationOnce(() => new Promise((_, reject) => { failRefresh = reject; }));
+	let refresh!: Promise<void>;
+	await act(async () => { refresh = result.current.refresh(); });
+	await waitFor(() => expect(remotes.connect).toHaveBeenCalledTimes(2));
+	act(() => requestRemoteHostCheck("box-a"));
+	await waitFor(() => expect(remotes.connect).toHaveBeenCalledTimes(3));
+	await act(async () => {
+		failRefresh(new Error("host http://box-a:3001 is offline"));
+		await refresh;
+	});
+	expect(result.current.hosts[0]?.status).toBe("connected");
+	expect(connectedHosts()).toContain("box-a");
+	expect(remotes.disconnect).not.toHaveBeenCalled();
+});
+
 it("keeps healthy hosts visible while rechecking a failed one", async () => {
 	useUiStore.setState({ remoteHosts: true });
 	const { result } = renderHook(() => useRemoteHosts());
