@@ -1,9 +1,9 @@
-import { ChevronLeft, ChevronRight, Gauge, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Gauge } from "lucide-react";
 import { Filter } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useAgentAccountActions, useAgentAccounts } from "../../hooks/useAgentAccounts";
+import { useAgentAccounts, useFreshAgentAccountsRead } from "../../hooks/useAgentAccounts";
 import { useUsageLimitWindows, useUsageReport } from "../../hooks/useUsageReport";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { formatRange } from "../../lib/usage-format";
@@ -52,13 +52,11 @@ export function UsageView() {
 	const { t, i18n } = useTranslation();
 	const [chosenTab, setTab] = useState<UsageTab>("spend");
 	const developerMode = useUiStore((state) => state.developerMode);
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const tab = chosenTab === "windows" && !developerMode ? "spend" : chosenTab;
 	const [unit, setUnit] = useState<UsageUnit>("cost");
 	const [days, setDays] = useState(7);
 	const [offset, setOffset] = useState(0);
 	const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
-	const [refreshingLimits, setRefreshingLimits] = useState(false);
 	const now = useNow(30_000);
 
 	const workspaces = useWorkspaceQuery({ includeCloud: false }).data;
@@ -74,29 +72,33 @@ export function UsageView() {
 	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
 	const limitWindows = useUsageLimitWindows(7, tab === "windows");
-	const accountActions = useAgentAccountActions();
+	const { read: readFreshLimits, error: freshLimitsError, failedAt: freshLimitsFailedAt } = useFreshAgentAccountsRead();
+	const limitsError = accounts.error ?? freshLimitsError;
+	// A poll only returns the cached reading, so it can't clear a failed fresh
+	// read; a poll that succeeds after one shows the daemon is back, so retry it.
+	const retryFreshLimits = freshLimitsError !== null && accounts.dataUpdatedAt > freshLimitsFailedAt;
 	const isLimits = tab === "limits";
 	const isWindows = tab === "windows";
+	const refetchReport = report.refetch;
+	const refetchLimitWindows = limitWindows.refetch;
 
-	const refresh = async () => {
-		if (isWindows) {
-			await limitWindows.refetch();
-			return;
-		}
-		if (!isLimits) {
-			await report.refetch();
-			return;
-		}
-		setRefreshingLimits(true);
-		try {
-			await accountActions.refresh();
-		} catch (error) {
-			showGlobalToast(t("usage.limits.refreshFailed"), error instanceof Error ? error.message : undefined, "error");
-		} finally {
-			setRefreshingLimits(false);
-		}
-	};
-	const refreshing = isWindows ? limitWindows.isFetching : isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
+	// Limits polls a reading the daemon reuses for five minutes, so opening the
+	// page, changing view, or coming back to the window reads them fresh.
+	useEffect(() => {
+		readFreshLimits();
+	}, [isLimits, readFreshLimits]);
+	useEffect(() => {
+		if (isLimits && retryFreshLimits) readFreshLimits();
+	}, [isLimits, retryFreshLimits, readFreshLimits]);
+	useEffect(() => {
+		const onFocus = () => {
+			readFreshLimits();
+			if (isWindows) void refetchLimitWindows();
+			else if (!isLimits) void refetchReport();
+		};
+		window.addEventListener("focus", onFocus);
+		return () => window.removeEventListener("focus", onFocus);
+	}, [isLimits, isWindows, readFreshLimits, refetchLimitWindows, refetchReport]);
 	const loading = <UsageSkeleton view={tab} />;
 	const failed = (error: Error) => <p role="alert" className="py-16 text-center text-sm text-destructive">{error.message}</p>;
 	const staleError = (error: Error | null) => (error ? <p role="alert" className="mb-4 text-xs text-destructive">{error.message}</p> : null);
@@ -167,14 +169,6 @@ export function UsageView() {
 									</Button>
 								</div>
 							) : null}
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("usage.refresh")} disabled={refreshing} onClick={() => void refresh()}>
-										<RefreshCw aria-hidden="true" className={cn("size-icon-sm", refreshing && "animate-spin motion-reduce:animate-none")} />
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{t("usage.refresh")}</TooltipContent>
-							</Tooltip>
 						</div>
 					</div>
 					{tab === "spend" && selectedProjectName ? (
@@ -207,13 +201,13 @@ export function UsageView() {
 							) : isLimits ? (
 								accounts.data ? (
 									<>
-										{staleError(accounts.error)}
+										{staleError(limitsError)}
 										<UsageLimits accounts={accounts.data} now={now} />
 									</>
 								) : accounts.isLoading ? (
 									loading
-								) : accounts.error ? (
-									failed(accounts.error)
+								) : limitsError ? (
+									failed(limitsError)
 								) : (
 									<UsageLimits accounts={[]} now={now} />
 								)

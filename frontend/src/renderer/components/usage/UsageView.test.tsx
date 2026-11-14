@@ -11,6 +11,9 @@ vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => null }));
 const mocks = vi.hoisted(() => ({
 	report: vi.fn(),
 	reportRefetch: vi.fn(),
+	readFreshLimits: vi.fn(),
+	freshLimitsError: null as Error | null,
+	accountsUpdatedAt: 0,
 	workspaces: [] as Array<{ id: string; name: string; kind?: string }>,
 }));
 
@@ -23,8 +26,8 @@ vi.mock("../../hooks/useUsageReport", () => ({
 	useUsageLimitWindows: () => ({ data: undefined, isLoading: false, isFetching: false, error: null, refetch: vi.fn() }),
 }));
 vi.mock("../../hooks/useAgentAccounts", () => ({
-	useAgentAccounts: () => ({ data: [], isLoading: false, isFetching: false, error: null }),
-	useAgentAccountActions: () => ({ refresh: vi.fn() }),
+	useAgentAccounts: () => ({ data: [], dataUpdatedAt: mocks.accountsUpdatedAt, isLoading: false, isFetching: false, error: null }),
+	useFreshAgentAccountsRead: () => ({ read: mocks.readFreshLimits, error: mocks.freshLimitsError, failedAt: 1_000 }),
 }));
 vi.mock("./UsageLimits", () => ({ UsageLimits: () => <p>Limits content</p> }));
 vi.mock("./UsageWindows", () => ({ UsageWindows: () => <p>Windows content</p> }));
@@ -38,6 +41,9 @@ describe("UsageView", () => {
 	beforeEach(() => {
 		mocks.report.mockReset();
 		mocks.reportRefetch.mockReset();
+		mocks.readFreshLimits.mockReset();
+		mocks.freshLimitsError = null;
+		mocks.accountsUpdatedAt = 0;
 		mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "web", name: "Web app" }];
 		useUiStore.setState({ developerMode: false });
 	});
@@ -54,10 +60,49 @@ describe("UsageView", () => {
 		await user.click(within(views).getByRole("button", { name: "Limits" }));
 		expect(within(views).getByRole("button", { name: "Limits" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getByText("Limits content")).toBeInTheDocument();
-		// Project and period only apply to spend; refresh stays for every view.
+		// Project and period only apply to spend; data refreshes on its own, so no view has a refresh button.
 		expect(screen.queryByRole("button", { name: "Filter" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Previous period" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+	});
+
+	it("reads limits fresh on open, on switching view, and on window focus", async () => {
+		const user = userEvent.setup();
+		renderView();
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(1);
+		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(2);
+		window.dispatchEvent(new Event("focus"));
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(3);
+		expect(mocks.reportRefetch).not.toHaveBeenCalled();
+	});
+
+	it("shows a failed fresh limits read on the Limits view", async () => {
+		const user = userEvent.setup();
+		mocks.freshLimitsError = new Error("Daemon unavailable");
+		renderView();
+		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Daemon unavailable");
+		expect(screen.getByText("Limits content")).toBeInTheDocument();
+	});
+
+	it("keeps a failed fresh read showing and retries it once a later poll succeeds", async () => {
+		const user = userEvent.setup();
+		mocks.freshLimitsError = new Error("Daemon unavailable");
+		mocks.accountsUpdatedAt = 2_000;
+		renderView();
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(1);
+		await user.click(within(screen.getByRole("group", { name: "Usage view" })).getByRole("button", { name: "Limits" }));
+		// The poll only carries the cached reading, so the failure stays until a fresh read succeeds.
+		expect(screen.getByRole("alert")).toHaveTextContent("Daemon unavailable");
+		// One read for the view switch, one retry because the poll succeeded after the failure.
+		expect(mocks.readFreshLimits).toHaveBeenCalledTimes(3);
+	});
+
+	it("refetches spend when the window regains focus", () => {
+		renderView();
+		window.dispatchEvent(new Event("focus"));
+		expect(mocks.reportRefetch).toHaveBeenCalledTimes(1);
 	});
 
 	it("offers the experimental windows view only in developer mode", () => {
