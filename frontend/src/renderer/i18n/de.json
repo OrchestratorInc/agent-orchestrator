@@ -2545,6 +2545,8 @@
 	"files.error.loadWorkspaceFile": "Workspace-Datei konnte nicht geladen werden",
 	"files.error.emptyResponse": "Antwort der Workspace-Datei war leer",
 	"files.binaryUnavailable": "Vorschau für Binärdateien ist nicht verfügbar.",
+	"files.previewUnavailableType": "Für {{type}}-Dateien ist keine Vorschau verfügbar.",
+	"files.previewUnavailable": "Für diesen Dateityp ist keine Vorschau verfügbar.",
 	"files.imageBefore": "Vorher",
 	"files.imageAfter": "Nachher",
 	"files.imageDimensions": "{{width}} × {{height}}",

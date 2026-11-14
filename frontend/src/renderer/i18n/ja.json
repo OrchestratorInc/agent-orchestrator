@@ -2545,6 +2545,8 @@
 	"files.error.loadWorkspaceFile": "ワークスペースファイルを読み込めません",
 	"files.error.emptyResponse": "ワークスペースファイルの応答が空でした",
 	"files.binaryUnavailable": "バイナリファイルのプレビューは利用できません。",
+	"files.previewUnavailableType": "{{type}} ファイルのプレビューは利用できません。",
+	"files.previewUnavailable": "この種類のファイルはプレビューできません。",
 	"files.imageBefore": "変更前",
 	"files.imageAfter": "変更後",
 	"files.imageDimensions": "{{width}} × {{height}}",

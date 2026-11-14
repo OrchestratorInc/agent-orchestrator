@@ -2585,6 +2585,8 @@
 	"files.error.loadWorkspaceFile": "Impossible de charger le fichier de l'espace de travail",
 	"files.error.emptyResponse": "La réponse du fichier de l'espace de travail était vide",
 	"files.binaryUnavailable": "L'aperçu des fichiers binaires n'est pas disponible.",
+	"files.previewUnavailableType": "L’aperçu n’est pas disponible pour les fichiers {{type}}.",
+	"files.previewUnavailable": "L’aperçu n’est pas disponible pour ce type de fichier.",
 	"files.imageBefore": "Avant",
 	"files.imageAfter": "Après",
 	"files.imageDimensions": "{{width}} × {{height}}",

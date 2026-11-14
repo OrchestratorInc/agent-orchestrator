@@ -2545,6 +2545,8 @@
 	"files.error.loadWorkspaceFile": "워크스페이스 파일을 불러올 수 없습니다",
 	"files.error.emptyResponse": "워크스페이스 파일 응답이 비어 있습니다",
 	"files.binaryUnavailable": "바이너리 파일 미리보기를 사용할 수 없습니다.",
+	"files.previewUnavailableType": "{{type}} 파일은 미리 볼 수 없습니다.",
+	"files.previewUnavailable": "이 파일 형식은 미리 볼 수 없습니다.",
 	"files.imageBefore": "변경 전",
 	"files.imageAfter": "변경 후",
 	"files.imageDimensions": "{{width}} × {{height}}",

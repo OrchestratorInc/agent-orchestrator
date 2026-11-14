@@ -2615,6 +2615,8 @@
 	"files.error.loadWorkspaceFile": "无法加载工作区文件",
 	"files.error.emptyResponse": "工作区文件响应为空",
 	"files.binaryUnavailable": "无法预览二进制文件。",
+	"files.previewUnavailableType": "无法预览 {{type}} 文件。",
+	"files.previewUnavailable": "无法预览此文件类型。",
 	"files.imageBefore": "变更前",
 	"files.imageAfter": "变更后",
 	"files.imageDimensions": "{{width}} × {{height}}",

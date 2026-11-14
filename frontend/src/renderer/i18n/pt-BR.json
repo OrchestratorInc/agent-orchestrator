@@ -2585,6 +2585,8 @@
 	"files.error.loadWorkspaceFile": "Não foi possível carregar o arquivo do workspace",
 	"files.error.emptyResponse": "A resposta do arquivo do workspace estava vazia",
 	"files.binaryUnavailable": "A pré-visualização de arquivo binário não está disponível.",
+	"files.previewUnavailableType": "A prévia não está disponível para arquivos {{type}}.",
+	"files.previewUnavailable": "A prévia não está disponível para este tipo de arquivo.",
 	"files.imageBefore": "Antes",
 	"files.imageAfter": "Depois",
 	"files.imageDimensions": "{{width}} × {{height}}",
