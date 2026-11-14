@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, win32 } from "node:path";
 
 const ROOT_BUILD_TOOLS = ["corepack", "corepack.cmd", "npm", "npm.cmd", "npx", "npx.cmd"];
@@ -571,6 +571,20 @@ export function pruneNodeDistribution(nodeRoot) {
 	}
 	for (const name of BUILD_ONLY_CONTENT) {
 		rmSync(join(nodeRoot, name), { recursive: true, force: true });
+	}
+}
+
+// Type declarations, source maps and docs are never loaded at runtime: Node runs
+// the adapter without --enable-source-maps. License and notice files stay, even
+// as markdown, because their licenses require them to ship with the code.
+const PACKAGE_DEV_FILE = /\.(d\.[cm]?ts|map|md)$/i;
+const PACKAGE_LEGAL_FILE = /^(licen[cs]e|notice|copying)/i;
+
+export function pruneRuntimePackages(nodeModules) {
+	for (const entry of readdirSync(nodeModules, { recursive: true, withFileTypes: true })) {
+		if (entry.isFile() && PACKAGE_DEV_FILE.test(entry.name) && !PACKAGE_LEGAL_FILE.test(entry.name)) {
+			rmSync(join(entry.parentPath, entry.name));
+		}
 	}
 }
 

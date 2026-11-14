@@ -73,7 +73,11 @@ if (workOSClientID) {
 	ldflags.push(`-X ${cliPackage}.defaultWorkOSClientID=${workOSClientID}`);
 }
 
-const result = spawnSync("go", ["build", "-ldflags", ldflags.join(" "), "-o", buildOutPath, "./cmd/ao"], {
+// Release builds drop the symbol table and DWARF (about 16 MB); panics still
+// name their functions. Dev builds keep them for profilers.
+const releaseFlags = process.argv.includes("--dev") ? [] : ["-trimpath"];
+if (!process.argv.includes("--dev")) ldflags.unshift("-s", "-w");
+const result = spawnSync("go", ["build", ...releaseFlags, "-ldflags", ldflags.join(" "), "-o", buildOutPath, "./cmd/ao"], {
 	cwd: backendRoot,
 	stdio: "inherit",
 	windowsHide: true,
