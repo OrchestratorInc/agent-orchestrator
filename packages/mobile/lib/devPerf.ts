@@ -23,12 +23,23 @@ export function startJsStallProbe(): void {
 	if (!dev || process.env.EXPO_PUBLIC_AO_JANK !== "1" || global[STARTED]) return;
 	global[STARTED] = true;
 	let last = Date.now();
-	// Timers stop in the background; coming back is not a stall.
-	AppState.addEventListener("change", () => { last = Date.now(); });
 	let windowStart = last;
 	let blocked = 0;
 	let worst = 0;
 	let stalls = 0;
+	let backgroundedAt: number | undefined;
+	// Timers stop in the background; coming back is not a stall, and the time
+	// away is left out of the summary's window, so it does not water down the
+	// share of time blocked.
+	AppState.addEventListener("change", (state) => {
+		const now = Date.now();
+		last = now;
+		if (state === "background") backgroundedAt ??= now;
+		else if (state === "active" && backgroundedAt !== undefined) {
+			windowStart = Math.min(now, windowStart + (now - backgroundedAt));
+			backgroundedAt = undefined;
+		}
+	});
 	setInterval(() => {
 		const now = Date.now();
 		const late = now - last - TICK_MS;
