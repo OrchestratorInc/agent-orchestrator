@@ -1098,6 +1098,65 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	return account.ID, *r.limits, nil
 }
 
+// HandoffTarget picks the account with the most verified room for a usage-limited session, or "" when none has room.
+func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", ports.ErrAgentAccountProviderMismatch
+	}
+	current, err := s.boundAccount(ctx, id, p)
+	if err != nil {
+		return "", err
+	}
+	accounts, err := s.accounts(ctx)
+	if err != nil {
+		return "", err
+	}
+	headroom := make([]float64, len(accounts))
+	var wg sync.WaitGroup
+	for i, account := range accounts {
+		if account.Provider != p || account.ID == current.ID || s.beingRemoved(account.ID) {
+			continue
+		}
+		wg.Go(func() {
+			if r := s.read(ctx, account); r != nil && r.identityErr == "" && r.identity.SignedIn && r.limitsErr == "" && r.limits != nil {
+				headroom[i], _ = r.limits.HandoffHeadroom(p, model)
+			}
+		})
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if after, err := s.boundAccount(ctx, id, p); err != nil {
+		return "", err
+	} else if after.ID != current.ID {
+		return "", ports.ErrAgentAccountChanged
+	}
+	best := -1
+	for i, room := range headroom {
+		if room > 0 && (best < 0 || room > headroom[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		s.log.Info("account handoff: no target", "session", id, "model", model)
+		return "", nil
+	}
+	s.log.Info("account handoff: target", "session", id, "model", model, "target", accounts[best].ID)
+	return accounts[best].ID, nil
+}
+
+// SessionStaysOnAccount reports the session's "Stay on this account" choice.
+func (s *Service) SessionStaysOnAccount(ctx context.Context, id domain.SessionID) (bool, error) {
+	return s.store.SessionAccountPinned(ctx, id)
+}
+
+// SetSessionStaysOnAccount records or clears the session's "Stay on this account" choice.
+func (s *Service) SetSessionStaysOnAccount(ctx context.Context, id domain.SessionID, stay bool) error {
+	return s.store.SetSessionAccountPinned(ctx, id, stay)
+}
+
 func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
 	accountID, bound, err := s.store.GetSessionAgentAccount(ctx, id, p)
 	if err != nil {

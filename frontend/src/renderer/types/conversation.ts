@@ -526,6 +526,7 @@ export interface SystemEventDetail {
 		| "workspace.setup"
 		| "workspace.script.run"
 		| "account.switched"
+		| "account.limit_handoff"
 		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
 		| "approval_mode.substituted"
 		/** A Cloud session started on its agent's default because the account cannot run the project's model; the summary says which. */
@@ -534,6 +535,7 @@ export interface SystemEventDetail {
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
+	retry?: "sent" | "skipped";
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */

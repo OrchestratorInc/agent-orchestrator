@@ -69,10 +69,10 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 
 // rendererOriginMiddleware gives credential-management and desktop-control
 // routes a stricter browser boundary, including on authenticated LAN requests.
-// Neither previews nor mobile clients may manage these credentials or drive
-// the desktop through Cua Driver. Native clients do not send Origin and remain
-// unauthenticated; browser clients must present one of the exact configured
-// renderer origins.
+// Previews may never manage these credentials or drive the desktop through Cua
+// Driver; paired mobile clients may manage only the subscription accounts.
+// Native clients do not send Origin and remain unauthenticated; browser
+// clients must present one of the exact configured renderer origins.
 func rendererOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
@@ -80,7 +80,7 @@ func rendererOriginMiddleware(allowedOrigins []string) func(http.Handler) http.H
 			origin := r.Header.Get("Origin")
 			if area := rendererOnlyArea(r.URL.Path); origin != "" && area != "" {
 				w.Header().Add("Vary", "Origin")
-				if _, ok := allowed[origin]; !ok {
+				if _, ok := allowed[origin]; !ok && !mobileAgentAccountsRequest(r, area) {
 					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
 						"Origin is not allowed to access "+area, nil)
 					return
@@ -89,6 +89,12 @@ func rendererOriginMiddleware(allowedOrigins []string) func(http.Handler) http.H
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+const agentAccountsArea = "agent accounts"
+
+func mobileAgentAccountsRequest(r *http.Request, area string) bool {
+	return area == agentAccountsArea && r.Header.Get("Origin") == "http://localhost" && authenticatedLANBearer(r)
 }
 
 func exactAllowedOrigins(origins []string) map[string]struct{} {
@@ -125,8 +131,8 @@ func rendererOnlyArea(path string) string {
 		{"Codex account management", []string{
 			"/api/v1/agents/codex/accounts",
 			"/api/v1/agents/codex/account-switches",
-			"/api/v1/agents/accounts",
 		}},
+		{agentAccountsArea, []string{"/api/v1/agents/accounts"}},
 		{"agent credential management", []string{
 			"/api/v1/agents/codex/auth/operations",
 			"/api/v1/agents/claude-code/auth/operations",

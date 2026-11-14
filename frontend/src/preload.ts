@@ -31,6 +31,7 @@ import {
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
 import type { DictationAuthorization, DictationEvent } from "./shared/dictation";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -184,6 +185,43 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 	}
 });
 
+// A session deep link (ao-app://sessions/…) flushed by main on renderer ready
+// races the same way as the folder path above: the readiness ping comes from a
+// child effect, before ShellLayout subscribes. Same dispatcher-and-buffer.
+// The payload is the raw URL; the shell re-reads it as its in-app ao:// form.
+let bufferedSessionDeepLink: string | null = null;
+let activeSessionDeepLinkListener: ((rawUrl: string) => void) | null = null;
+function isSessionDeepLinkUrl(value: unknown): value is string {
+	return typeof value === "string" && value.startsWith("ao-app://");
+}
+ipcRenderer.on(OPEN_SESSION_DEEP_LINK_CHANNEL, (_event, target: unknown) => {
+	if (!isSessionDeepLinkUrl(target)) return;
+	if (activeSessionDeepLinkListener) {
+		activeSessionDeepLinkListener(target);
+	} else {
+		bufferedSessionDeepLink = target;
+	}
+});
+
+// A billing return (ao-app://billing) flushed on the shell's readiness ping
+// races ShellLayout's settings subscription exactly like the channels above —
+// the ping comes from a child effect, before the parent effect subscribes.
+// Same dispatcher-and-buffer. A keyboard/menu open-settings event can only
+// exist once a shell exists to carry it, so replaying the one buffered event
+// on subscription honors the user's intent rather than dropping it.
+let bufferedOpenSettings: string | undefined = undefined;
+let hasBufferedOpenSettings = false;
+let activeOpenSettingsListener: ((section?: string) => void) | null = null;
+ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, (_event, section?: unknown) => {
+	const payload = typeof section === "string" ? section : undefined;
+	if (activeOpenSettingsListener) {
+		activeOpenSettingsListener(payload);
+	} else {
+		bufferedOpenSettings = payload;
+		hasBufferedOpenSettings = true;
+	}
+});
+
 let currentTelemetryPolicy: TelemetryPolicyView | null = null;
 const telemetryPolicyListeners = new Set<(view: TelemetryPolicyView) => void>();
 const rendererQueuePurgeListeners = new Set<() => void | Promise<void>>();
@@ -283,6 +321,20 @@ const api = {
 				if (activeOpenFolderPathListener === listener) activeOpenFolderPathListener = null;
 			};
 		},
+		// Fired by the main process for ao-app://sessions/… deep links from
+		// external tools; the payload is the raw URL and the shell resolves it
+		// with the same session-links path as in-app ao:// links.
+		onOpenSessionDeepLink: (listener: (rawUrl: string) => void) => {
+			activeSessionDeepLinkListener = listener;
+			if (bufferedSessionDeepLink) {
+				const target = bufferedSessionDeepLink;
+				bufferedSessionDeepLink = null;
+				listener(target);
+			}
+			return () => {
+				if (activeSessionDeepLinkListener === listener) activeSessionDeepLinkListener = null;
+			};
+		},
 		// Fired by the main process when the app-level new-session shortcut
 		// (⌘N / Ctrl+Shift+N) is pressed in any web contents.
 		onNewSessionShortcut: (listener: () => void) => {
@@ -332,10 +384,13 @@ const api = {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
 		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
-			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
-			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
+			activeOpenSettingsListener = listener;
+			if (hasBufferedOpenSettings) {
+				hasBufferedOpenSettings = false;
+				listener(bufferedOpenSettings);
+			}
 			return () => {
-				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
+				if (activeOpenSettingsListener === listener) activeOpenSettingsListener = null;
 			};
 		},
 		onPreviousSessionShortcut: (listener: () => void) => {

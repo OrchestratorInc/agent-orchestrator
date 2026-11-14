@@ -466,6 +466,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/accounts/sessions/{sessionId}/stay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Keep a session on its account, or let a usage limit move it */
+        put: operations["setSessionStayOnAccount"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/accounts/usage": {
         parameters: {
             query?: never;
@@ -3694,6 +3711,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork a session at a finished turn */
+        post: operations["forkSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/fork-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether a session can be forked */
+        get: operations["getSessionForkOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/history": {
         parameters: {
             query?: never;
@@ -4572,6 +4623,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/account-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether a usage-limited Chat session moves to another account and retries its prompt */
+        patch: operations["updateAccountHandoff"];
         trace?: never;
     };
     "/api/v1/settings/chat-hibernation": {
@@ -6121,6 +6189,14 @@ export interface components {
         ControllersConversationTurnArtifactsResponse: {
             files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
         };
+        ControllersForkSessionRequest: {
+            clientRequestId: string;
+            turnId?: string;
+        };
+        ControllersForkSessionResponse: {
+            displayName: string;
+            sessionId: string;
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -6190,6 +6266,37 @@ export interface components {
             host: string;
             port: number;
             reason: string;
+        };
+        ControllersSessionForkOptionsResponse: {
+            allowed: boolean;
+            anyTurn?: boolean;
+            forkedFrom?: components["schemas"]["ControllersSessionForkOrigin"];
+            forks?: components["schemas"]["ControllersSessionForkSummary"][];
+            refusal?: components["schemas"]["ControllersSessionForkRefusal"];
+            sourcePRs?: components["schemas"]["ControllersSessionForkSourcePR"][];
+            suggestedName?: string;
+        };
+        ControllersSessionForkOrigin: {
+            sessionId: string;
+            sourceExists: boolean;
+            textHandoff?: boolean;
+            title: string;
+            turnId?: string;
+        };
+        ControllersSessionForkRefusal: {
+            code: string;
+            message: string;
+        };
+        ControllersSessionForkSourcePR: {
+            closed: boolean;
+            merged: boolean;
+            number: number;
+            url: string;
+        };
+        ControllersSessionForkSummary: {
+            exists: boolean;
+            sessionId: string;
+            title: string;
         };
         ControllersSessionView: {
             activity: components["schemas"]["DomainActivity"];
@@ -6711,6 +6818,7 @@ export interface components {
             resolveError: string;
         };
         DelegateTaskRequest: {
+            accountId?: string;
             /** @enum {string} */
             agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "fake";
             /** @enum {string} */
@@ -7909,6 +8017,7 @@ export interface components {
         SessionAgentAccountsResponse: {
             claude?: string;
             codex?: string;
+            stayOnAccount: boolean;
         };
         SessionArchiveSummary: {
             byProject: {
@@ -8400,10 +8509,15 @@ export interface components {
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
         };
+        SetSessionStayOnAccountRequest: {
+            stay: null | boolean;
+        };
         SetTurnAutoResumeRequest: {
             enabled: null | boolean;
         };
         SettingsResponse: {
+            /** @description A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts). */
+            accountHandoff: boolean;
             chatHarnesses: string[];
             chatHibernationEnabled: boolean;
             client: string;
@@ -8620,6 +8734,7 @@ export interface components {
             orchestrator: components["schemas"]["OrchestratorResponse"];
         };
         SpawnSessionRequest: {
+            accountId?: string;
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             async?: boolean;
@@ -8900,6 +9015,9 @@ export interface components {
         UnregisterPushDeviceResponse: {
             deleted: boolean;
             token: string;
+        };
+        UpdateAccountHandoffRequest: {
+            enabled: null | boolean;
         };
         UpdateArtifactFileRequest: {
             /** @description The file's new UTF-8 text content. */
@@ -10928,6 +11046,60 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setSessionStayOnAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO session identifier. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetSessionStayOnAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAgentAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -22487,6 +22659,110 @@ export interface operations {
             };
         };
     };
+    forkSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersForkSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersForkSessionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionForkOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersSessionForkOptionsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getSessionHistory: {
         parameters: {
             query?: {
@@ -26343,6 +26619,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateAccountHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAccountHandoffRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

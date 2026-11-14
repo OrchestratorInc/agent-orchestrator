@@ -2759,6 +2759,18 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
+	// it so Stop does not wait for that steer to time out. Withdrawing also
+	// refuses later steers for the turn; a Stop that fails gives them back.
+	var restore func()
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		restore = withdrawer.WithdrawPendingSteers()
+	}
+	restoreSteering := func() {
+		if restore != nil {
+			restore()
+		}
+	}
 	// Commit the current batch before Stop settles the turn. The store keeps any
 	// later deltas settled while retaining text that arrives during cancellation.
 	c.flushDeltas(ctx)
@@ -2781,6 +2793,7 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		providerTurnIDs, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
 		if err != nil {
 			c.sendMu.Unlock()
+			restoreSteering()
 			return fmt.Errorf("check running turns: %w", err)
 		}
 		if len(providerTurnIDs) == 0 {
@@ -2831,10 +2844,11 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 			return c.reconcileDurableTurnsLocked(ctx, turn, providerTurnIDs, cutoff)
 		}
 		// The interrupt did not happen, so the queue it was going to cancel is
-		// still the user's to send.
+		// still the user's to send, and the turn can still be steered.
 		c.mu.Lock()
 		c.cancelQueuedAt = time.Time{}
 		c.mu.Unlock()
+		restoreSteering()
 		return fmt.Errorf("interrupt turn %s: %w", turn, err)
 	}
 	return nil
