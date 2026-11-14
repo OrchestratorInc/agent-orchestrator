@@ -15,35 +15,67 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeStakpak puts a `stakpak` script on PATH that answers --version and the
-// session commands the adapter runs, and returns the script's path.
+// fakeStakpak puts a copy of this test binary on PATH under Stakpak's
+// executable name; TestMain makes it answer --version and the session
+// commands the adapter runs. It returns the fake's path, which binary
+// discovery is expected to find.
 func fakeStakpak(t *testing.T, sessionsJSON string, knownSession string) string {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("fake CLI is a POSIX shell script")
-	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(sessionsJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	script := `#!/bin/sh
-case "$1" in
---version) echo "stakpak 0.3.88" ;;
-sessions)
-  case "$2" in
-  list) cat "` + filepath.Join(dir, "sessions.json") + `" ;;
-  show)
-    if [ "$3" = "` + knownSession + `" ]; then echo "ID:          $3"; else echo "Error: Not found: Session $3 not found" >&2; exit 1; fi ;;
-  esac ;;
-esac
-`
-	path := filepath.Join(dir, "stakpak")
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // test-only executable
+	if err := os.WriteFile(filepath.Join(dir, "known-session"), []byte(knownSession), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	name := binarySpec.Names[0]
+	if runtime.GOOS == "windows" {
+		name = binarySpec.WinNames[0]
+	}
+	path := filepath.Join(dir, name)
+	// A copy, not a link: Windows cannot delete a link to the running test
+	// binary when the temp dir is cleaned up.
+	copyTestBinary(t, path)
+	t.Setenv(fakeStakpakDirEnv, dir)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
 	return path
+}
+
+func copyTestBinary(t *testing.T, dst string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(exe) //nolint:gosec // the running test binary
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, data, 0o700); err != nil { //nolint:gosec // test-only executable
+		t.Fatal(err)
+	}
+}
+
+// fakeStakpakCalls returns the arguments of every call the fake answered.
+func fakeStakpakCalls(t *testing.T, bin string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(bin), "calls.log")) //nolint:gosec // test path
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+// breakFakeStakpak makes every later call to the fake fail.
+func breakFakeStakpak(t *testing.T, bin string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "broken"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestParseVersion(t *testing.T) {
@@ -135,13 +167,19 @@ func TestRestoreResumesByIDWithoutRepeatingInstructions(t *testing.T) {
 }
 
 func TestRestoreFallsBackWhenStakpakForgotTheConversation(t *testing.T) {
-	fakeStakpak(t, `{"sessions":[]}`, "")
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
 	argv, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		DataDir: t.TempDir(),
 		Session: ports.SessionRef{ID: "ao-1", WorkspacePath: t.TempDir(), Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}},
 	})
 	if err != nil || ok || argv != nil {
 		t.Fatalf("restore of a missing conversation = %q, %t, %v; want fresh-launch fallback", argv, ok, err)
+	}
+	// The fallback must come from Stakpak reporting the conversation missing,
+	// not from a restore that never asked.
+	calls := fakeStakpakCalls(t, bin)
+	if want := "sessions show " + nativeA + " --limit 1"; !slices.Contains(calls, want) {
+		t.Fatalf("fake stakpak calls = %q; want the conversation probed with %q", calls, want)
 	}
 }
 
@@ -219,9 +257,7 @@ func TestResolveNativeSessionIDListsOnlyUntilKnown(t *testing.T) {
 		t.Fatalf("first lookup = %q, %t, %v", id, ok, err)
 	}
 	// Break the CLI: a second lookup that still listed would now fail.
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil { //nolint:gosec // test-only executable
-		t.Fatal(err)
-	}
+	breakFakeStakpak(t, bin)
 	if id, ok, err := p.ResolveNativeSessionID(context.Background(), cfg); err != nil || !ok || id != nativeA {
 		t.Fatalf("cached lookup = %q, %t, %v", id, ok, err)
 	}
