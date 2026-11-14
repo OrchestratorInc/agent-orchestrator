@@ -289,7 +289,7 @@ func (d *Dispatcher) fromChange(ctx context.Context, e cdc.Event) (Payload, bool
 	if !known || prev == next {
 		return Payload{}, false
 	}
-	kind := ""
+	var kind string
 	switch {
 	case prev == domain.ActivityActive && next == domain.ActivityIdle:
 		kind = EventFinished
@@ -491,7 +491,7 @@ func (r *rateLimited) Error() string { return "rate limited: " + r.msg }
 func (d *Dispatcher) post(ctx context.Context, h Hook, p Payload) (time.Duration, error) {
 	body, err := json.Marshal(p)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", errPermanent, err)
+		return 0, fmt.Errorf("%w: %w", errPermanent, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.URL, bytes.NewReader(body))
 	if err != nil {
@@ -510,7 +510,7 @@ func (d *Dispatcher) post(ctx context.Context, h Hook, p Payload) (time.Duration
 		}
 		return 0, errors.New("could not reach the webhook")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	text := d.redact(strings.TrimSpace(string(raw)))
 	if len(text) > 200 {
