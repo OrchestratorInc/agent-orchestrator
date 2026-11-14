@@ -3017,6 +3017,8 @@
 	"settings.harness.models.empty": "このハーネスはモデルを報告していません。",
 	"settings.harness.models.notInstalled": "モデルを表示するには {{agent}} をインストールしてください。",
 	"settings.harness.models.needsLogin": "モデルを読み込むには {{agent}} にログインしてください。",
+	"settings.harness.models.manualTitle": "モデルの選択",
+	"settings.harness.models.manual": "{{agent}} はモデル一覧を提供せず、モデル ID を受け付けます。タスクを開始する前に、CLI でプロバイダーとデフォルトモデルを設定してください。",
 	"settings.harness.models.loadFailed": "モデルを読み込めませんでした。",
 	"settings.harness.health.status": "状態",
 	"settings.harness.health.details": "詳細",

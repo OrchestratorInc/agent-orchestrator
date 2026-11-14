@@ -3087,6 +3087,8 @@
 	"settings.harness.models.empty": "此 Harness 未报告任何模型。",
 	"settings.harness.models.notInstalled": "安装 {{agent}} 后即可查看其模型。",
 	"settings.harness.models.needsLogin": "登录 {{agent}} 后即可加载其模型。",
+	"settings.harness.models.manualTitle": "模型选择",
+	"settings.harness.models.manual": "{{agent}} 不提供模型列表，而是接受模型 ID。开始任务前，请在其 CLI 中配置提供商和默认模型。",
 	"settings.harness.models.loadFailed": "无法加载模型。",
 	"settings.harness.health.status": "状态",
 	"settings.harness.health.details": "详情",

@@ -3064,6 +3064,8 @@
 	"settings.harness.models.empty": "Este harness no informó ningún modelo.",
 	"settings.harness.models.notInstalled": "Instala {{agent}} para ver sus modelos.",
 	"settings.harness.models.needsLogin": "Inicia sesión en {{agent}} para cargar sus modelos.",
+	"settings.harness.models.manualTitle": "Selección de modelo",
+	"settings.harness.models.manual": "{{agent}} acepta ID de modelo en lugar de ofrecer una lista de modelos. Configura un proveedor y un modelo predeterminado en su CLI antes de iniciar una tarea.",
 	"settings.harness.models.loadFailed": "No se pudieron cargar los modelos.",
 	"settings.harness.health.status": "Estado",
 	"settings.harness.health.details": "Detalles",
