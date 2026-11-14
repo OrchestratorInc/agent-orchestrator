@@ -176,3 +176,13 @@ it("lists skills on focus for a restored / draft", async () => {
 	await act(async () => renderer.root.findByType(TextInput).props.onFocus());
 	expect(labels()).toEqual(["approve"]);
 });
+
+it("closes the list after replacing a token that already has a space after it", async () => {
+	const p = props();
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await type("/ap fix", 3);
+	expect(labels()).toEqual(["approve"]);
+	await act(async () => panels()[0].props.onSelect("approve"));
+	expect(renderer.root.findByType(TextInput).props.value).toBe("/approve fix");
+	expect(panels()).toHaveLength(0);
+});

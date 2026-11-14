@@ -594,7 +594,10 @@ function Composer({
 		const trigger = findComposerSuggestion(latestText.current, latestCursor.current);
 		if (!trigger) return;
 		const next = replaceComposerSuggestion(latestText.current, trigger, value);
-		const caret = next.length - (latestText.current.length - trigger.end);
+		// After the separator, whether inserted or already there: a caret left
+		// against the token would still read as the trigger and keep the list open.
+		const tokenEnd = next.length - (latestText.current.length - trigger.end);
+		const caret = /\s/.test(next[tokenEnd] ?? "") ? tokenEnd + 1 : tokenEnd;
 		latestText.current = next;
 		latestCursor.current = caret;
 		setText(next);
