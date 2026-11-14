@@ -58,7 +58,7 @@ func (s *Service) Install(requestCtx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	s.cancelInstall = cancel
 	s.installing = id
-	s.stage = "Preparing runtime"
+	s.stage, s.progressDone, s.progressTotal, s.stepFrom, s.stepTo = "Preparing runtime", 0, progressScale, 0, 0
 	s.failure = ""
 	s.installDone = make(chan struct{})
 	go func() {
@@ -74,7 +74,7 @@ func (s *Service) Install(requestCtx context.Context, id string) error {
 			}
 		}
 		s.installing = ""
-		s.stage, s.progressDone, s.progressTotal = "", 0, 0
+		s.stage, s.progressDone, s.progressTotal, s.stepFrom, s.stepTo = "", 0, 0, 0, 0
 		s.cancelInstall = nil
 		s.prepare()
 		close(s.installDone)
@@ -88,22 +88,39 @@ func (s *Service) install(ctx context.Context, m modelSpec) error {
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return err
 	}
+	runtimePath := filepath.Dir(filepath.Dir(s.python()))
+	marker := filepath.Join(runtimePath, "ao-ready")
+	_, markerErr := os.Stat(marker)
+	// Only the work still to do counts toward the bar, so a second model starts from zero
+	// and finishes at the end instead of skipping ahead.
+	weights := make([]int64, 0, 4)
+	if !fileExists(s.uvPath()) {
+		weights = append(weights, 4)
+	}
+	if markerErr != nil {
+		weights = append(weights, 8, 38)
+	}
+	step := s.planInstall(append(weights, 50)...)
+	if !fileExists(s.uvPath()) {
+		step("Downloading installer")
+	}
 	uv, err := s.ensureUV(ctx)
 	if err != nil {
 		return err
 	}
-	runtimePath := filepath.Dir(filepath.Dir(s.python()))
-	marker := filepath.Join(runtimePath, "ao-ready")
-	if _, err := os.Stat(marker); err != nil {
+	if markerErr != nil {
 		// Interrupted dependency installs are rebuilt; no half-installed runtime is used.
 		if err := os.RemoveAll(runtimePath); err != nil {
 			return err
 		}
-		s.stageIs("Installing Python runtime")
-		if err := s.run(ctx, uv, "venv", "--python", "3.12.15", runtimePath); err != nil {
+		step("Installing Python runtime")
+		stopEasing := s.easeStep(10 * time.Second)
+		err := s.run(ctx, uv, "venv", "--python", "3.12.15", runtimePath)
+		stopEasing()
+		if err != nil {
 			return err
 		}
-		s.stageIs("Installing speech engine (first download may take several minutes)")
+		step("Installing speech engine (first download may take several minutes)")
 		requirement := "fermion-research==" + runtimeVersion
 		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 			requirement = "fermion-research[mlx]==" + runtimeVersion
@@ -112,14 +129,17 @@ func (s *Service) install(ctx context.Context, m modelSpec) error {
 		if runtime.GOOS != "darwin" {
 			args = append(args, "--torch-backend", "cpu")
 		}
-		if err := s.run(ctx, uv, args...); err != nil {
+		stopEasing = s.easeStep(60 * time.Second)
+		err = s.run(ctx, uv, args...)
+		stopEasing()
+		if err != nil {
 			return err
 		}
 		if err := os.WriteFile(marker, []byte(runtimeVersion), 0o600); err != nil {
 			return err
 		}
 	}
-	s.stageIs("Downloading and verifying " + m.name)
+	step("Downloading and verifying " + m.name)
 	// Fermion 0.2.15 pins each model's SHA-256 and verifies unpacked members.
 	stopWatching := s.watchBlobs(filepath.Join(s.root, "models", "blobs"), m.bytes)
 	err = s.run(ctx, s.python(), "-c", "from fermion.cli import main; main()", "transcribe", m.id, "--download-only")
@@ -132,16 +152,24 @@ func (s *Service) install(ctx context.Context, m modelSpec) error {
 	}
 	return os.WriteFile(s.marker(m), []byte(runtimeVersion), 0o600)
 }
+func uvName() string {
+	if runtime.GOOS == "windows" {
+		return "uv.exe"
+	}
+	return "uv"
+}
+func (s *Service) uvPath() string { return filepath.Join(s.root, "tools", "uv-0.13.7", uvName()) }
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 func (s *Service) ensureUV(ctx context.Context) (string, error) {
 	a, ok := uvAsset()
 	if !ok {
 		return "", errors.New("unsupported platform")
 	}
-	name := "uv"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	dest := filepath.Join(s.root, "tools", "uv-0.13.7", name)
+	name := uvName()
+	dest := s.uvPath()
 	if _, err := os.Stat(dest); err == nil {
 		return dest, nil
 	}
@@ -167,7 +195,12 @@ func (s *Service) ensureUV(ctx context.Context) (string, error) {
 	defer func() { _ = os.Remove(archive.Name()) }()
 	defer func() { _ = archive.Close() }()
 	hash := sha256.New()
-	n, err := io.Copy(io.MultiWriter(archive, hash), io.LimitReader(response.Body, 100*1024*1024+1))
+	received := &progressWriter{on: func(n int64) {
+		if response.ContentLength > 0 {
+			s.stepProgress(float64(n) / float64(response.ContentLength))
+		}
+	}}
+	n, err := io.Copy(io.MultiWriter(archive, hash, received), io.LimitReader(response.Body, 100*1024*1024+1))
 	if err != nil {
 		return "", err
 	}

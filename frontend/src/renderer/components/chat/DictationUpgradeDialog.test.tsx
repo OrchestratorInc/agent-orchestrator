@@ -2,11 +2,14 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { dictationClient } from "../../lib/dictation-client";
+import { resetDictationInstall } from "../../lib/dictation-install";
 import { dictationUpgradeKey, useDictationUpgrade } from "./DictationUpgradeDialog";
 
-const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn(), explore: vi.fn() }));
+const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn(), explore: vi.fn(), toast: vi.fn() }));
 vi.mock("../../lib/api-client", () => ({ apiClient: api }));
-vi.mock("../../stores/ui-store", () => ({ useUiStore: { getState: () => ({ openGlobalSettings: api.explore }) } }));
+vi.mock("../../stores/ui-store", () => ({
+	useUiStore: { getState: () => ({ openGlobalSettings: api.explore, showGlobalToast: api.toast }) },
+}));
 const native = { id: "native-macos", installed: true, available: true, downloadBytes: 0 };
 const model = { id: "phonon-2.5", installed: false, available: true, downloadBytes: 156181652 };
 const initial = {
@@ -31,12 +34,16 @@ function Harness({ scope = "chat-a" }: { scope?: string }) {
 const authorize = vi.spyOn(dictationClient, "authorize");
 beforeEach(() => {
 	vi.clearAllMocks();
+	resetDictationInstall();
 	authorize.mockResolvedValue({ granted: true });
 	localStorage.clear();
 	api.GET.mockResolvedValue({ data: initial });
 	api.POST.mockResolvedValue({ data: initial });
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	resetDictationInstall();
+});
 
 it("offers a neutral choice on first use, including profiles that dismissed the old promotion", async () => {
 	localStorage.setItem("ao.dictation.models-upgrade.v1", "seen");
@@ -123,7 +130,7 @@ it("installs inside the chosen row, selects the model, then starts dictating wit
 	api.POST.mockResolvedValue({ data: busy });
 	api.GET.mockResolvedValue({ data: busy });
 	await userEvent.click(await screen.findByRole("button", { name: "Use recommended model" }));
-	expect(await screen.findByText("78 of 156 MB")).toBeInTheDocument();
+	expect(await screen.findByText("50%")).toBeInTheDocument();
 	expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
 	// One view: the other choices stay on screen but cannot be picked mid-download.
 	expect(screen.getByRole("dialog")).toHaveTextContent("Choose how you dictate");
@@ -136,22 +143,22 @@ it("installs inside the chosen row, selects the model, then starts dictating wit
 	expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	expect(localStorage.getItem(dictationUpgradeKey)).toBe("seen");
 });
-it("sweeps with a setup message while the size is not yet known", async () => {
+it("starts the bar at zero before the first measurement instead of sweeping", async () => {
 	render(<Harness />);
 	await userEvent.click(screen.getByText("Dictate"));
 	const busy = { ...initial, installing: model.id, stage: "Installing speech engine" };
 	api.POST.mockResolvedValue({ data: busy });
 	api.GET.mockResolvedValue({ data: busy });
 	await userEvent.click(await screen.findByRole("button", { name: "Use recommended model" }));
-	expect(await screen.findByRole("status")).toHaveTextContent("Setting up…");
-	expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+	expect(await screen.findByRole("status")).toHaveTextContent("0%");
+	expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
 });
 it("shows an install that is already running as that row's progress, without starting another", async () => {
 	const running = { ...initial, installing: model.id, progressDone: 39_000_000, progressTotal: 156_000_000 };
 	api.GET.mockResolvedValue({ data: running });
 	render(<Harness />);
 	await userEvent.click(screen.getByText("Dictate"));
-	expect(await screen.findByText("39 of 156 MB")).toBeInTheDocument();
+	expect(await screen.findByText("25%")).toBeInTheDocument();
 	expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
 	expect(api.POST).not.toHaveBeenCalled();
 	expect(start).not.toHaveBeenCalled();
@@ -202,7 +209,7 @@ it("cancels without switching or starting", async () => {
 	await userEvent.click(await screen.findByRole("button", { name: "Use recommended model" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
 	await screen.findByRole("button", { name: "Use recommended model" });
-	expect(api.POST).toHaveBeenLastCalledWith("/api/v1/dictation", { body: { action: "cancel", model: model.id } });
+	expect(api.POST).toHaveBeenLastCalledWith("/api/v1/dictation", { body: { action: "cancel", model: "" } });
 	expect(start).not.toHaveBeenCalled();
 });
 it("reopens setup when a previously chosen model is no longer installed", async () => {
@@ -247,4 +254,56 @@ it("does not select or start in another chat after a delayed install response", 
 	expect(api.POST).toHaveBeenCalledTimes(1);
 	expect(start).not.toHaveBeenCalled();
 	expect(localStorage.getItem(dictationUpgradeKey)).toBeNull();
+});
+
+it("lets the user close the chooser mid-download: it finishes in the background, selects the model and says so, without starting dictation", async () => {
+	render(<Harness />);
+	await userEvent.click(screen.getByText("Dictate"));
+	const busy = { ...initial, installing: model.id, progressDone: 78_000_000, progressTotal: 156_000_000 };
+	api.POST.mockResolvedValue({ data: busy });
+	api.GET.mockResolvedValue({ data: busy });
+	await userEvent.click(await screen.findByRole("button", { name: "Use recommended model" }));
+	await screen.findByText("50%");
+	await userEvent.click(screen.getByRole("button", { name: "Close" }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	api.GET.mockResolvedValue({ data: installed });
+	api.POST.mockResolvedValue({ data: { ...installed, selected: model.id } });
+	await waitFor(
+		() =>
+			expect(api.POST).toHaveBeenLastCalledWith("/api/v1/dictation", { body: { action: "select", model: model.id } }),
+		{ timeout: 3000 },
+	);
+	await waitFor(() =>
+		expect(api.toast).toHaveBeenCalledWith(
+			"Dictation is ready",
+			undefined,
+			expect.objectContaining({ tone: "success" }),
+		),
+	);
+	expect(start).not.toHaveBeenCalled();
+	expect(localStorage.getItem(dictationUpgradeKey)).toBe("seen");
+});
+it("shows a download that continues after the chooser was closed when the mic is pressed again", async () => {
+	const running = { ...initial, installing: model.id, progressDone: 39_000_000, progressTotal: 156_000_000 };
+	api.GET.mockResolvedValue({ data: running });
+	api.POST.mockResolvedValue({ data: running });
+	render(<Harness />);
+	await userEvent.click(screen.getByText("Dictate"));
+	await screen.findByText("25%");
+	await userEvent.click(screen.getByRole("button", { name: "Close" }));
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	await userEvent.click(screen.getByText("Dictate"));
+	expect(await screen.findByText("25%")).toBeInTheDocument();
+	expect(start).not.toHaveBeenCalled();
+});
+it("does not open the chooser for a download of a model it does not offer", async () => {
+	localStorage.setItem(dictationUpgradeKey, "seen");
+	api.GET.mockResolvedValue({
+		data: { ...installed, installing: "handy-computer/whisper-tiny", selected: model.id },
+	});
+	render(<Harness />);
+	await userEvent.click(screen.getByText("Dictate"));
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	expect(start).not.toHaveBeenCalled();
 });

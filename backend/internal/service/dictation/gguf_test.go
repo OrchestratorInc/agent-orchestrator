@@ -191,13 +191,14 @@ func TestWatchBlobsReportsGrowthCappedAtTotal(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	s.planInstall(1)("Downloading")
 	stop := s.watchBlobs(dir, 100)
 	if err := os.WriteFile(filepath.Join(dir, "abc.incomplete"), make([]byte, 250), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if status, err := s.Status(context.Background()); err == nil && status.ProgressTotal == 100 && status.ProgressDone == 100 {
+		if status, err := s.Status(context.Background()); err == nil && status.ProgressTotal == progressScale && status.ProgressDone == progressScale {
 			stop()
 			return
 		}
@@ -205,4 +206,36 @@ func TestWatchBlobsReportsGrowthCappedAtTotal(t *testing.T) {
 	}
 	stop()
 	t.Fatal("watcher never reported the capped progress")
+}
+
+func TestInstallProgressIsOneRangeThatNeverGoesBackwards(t *testing.T) {
+	s := New(t.TempDir())
+	defer s.Close()
+	step := s.planInstall(1, 3)
+	read := func() int64 {
+		status, err := s.Status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return status.ProgressDone
+	}
+	step("first")
+	s.stepProgress(1)
+	if got := read(); got != progressScale/4 {
+		t.Fatalf("end of the first step = %d, want %d", got, progressScale/4)
+	}
+	step("second")
+	if got := read(); got != progressScale/4 {
+		t.Fatalf("starting the second step moved progress to %d", got)
+	}
+	s.stepProgress(0.5)
+	half := read()
+	s.stepProgress(0.1)
+	if got := read(); got != half {
+		t.Fatalf("progress went backwards from %d to %d", half, got)
+	}
+	s.stepProgress(1)
+	if got := read(); got != progressScale {
+		t.Fatalf("end of the last step = %d, want %d", got, progressScale)
+	}
 }

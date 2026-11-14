@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -50,8 +51,10 @@ type Status struct {
 	Models     []Model `json:"models"`
 	Installing string  `json:"installing"`
 	Stage      string  `json:"stage"`
-	// ProgressDone and ProgressTotal are bytes for the current download stage;
-	// a zero total means the stage has no measurable size.
+	// ProgressDone runs from 0 to ProgressTotal across the whole installation
+	// (runtime, speech engine and model together) and never goes backwards. It
+	// follows real bytes where they can be measured and eases toward the end of
+	// a step where they cannot. ProgressTotal is zero when nothing is installing.
 	ProgressDone  int64  `json:"progressDone"`
 	ProgressTotal int64  `json:"progressTotal"`
 	Error         string `json:"error"`
@@ -111,6 +114,7 @@ type Service struct {
 	mu                                         sync.Mutex
 	root, selected, installing, stage, failure string
 	progressDone, progressTotal                int64
+	stepFrom, stepTo                           int64
 	cancelInstall                              context.CancelFunc
 	installDone                                chan struct{}
 	worker                                     *worker
@@ -467,36 +471,84 @@ func (s *Session) reset(done chan struct{}) {
 	}
 	close(done)
 }
-func (s *Service) stageIs(stage string) {
-	s.mu.Lock()
-	s.stage, s.progressDone, s.progressTotal = stage, 0, 0
-	s.mu.Unlock()
-}
-func (s *Service) progressIs(done, total int64) {
-	s.mu.Lock()
-	s.progressDone, s.progressTotal = done, total
-	s.mu.Unlock()
+
+// progressScale is the whole installation: ProgressDone runs from 0 up to it.
+const progressScale = 1000
+
+// planInstall splits the installation into steps sized by weight. The returned
+// func starts the next step, so progress moves through one continuous range
+// instead of restarting for each download.
+func (s *Service) planInstall(weights ...int64) func(stage string) {
+	var sum int64
+	for _, w := range weights {
+		sum += w
+	}
+	bounds := make([]int64, 1, len(weights)+1)
+	var acc int64
+	for _, w := range weights {
+		acc += w
+		bounds = append(bounds, acc*progressScale/sum)
+	}
+	next := 0
+	return func(stage string) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		i := min(next, len(weights)-1)
+		next++
+		s.stage, s.stepFrom, s.stepTo = stage, bounds[i], bounds[i+1]
+		s.progressDone, s.progressTotal = max(s.progressDone, s.stepFrom), progressScale
+	}
 }
 
-// watchBlobs reports how much of total has landed in dir while a helper process
-// downloads into it. The returned func stops the watcher.
-func (s *Service) watchBlobs(dir string, total int64) func() {
-	baseline := dirSize(dir)
+// stepProgress moves the current step to the given fraction. It never moves back.
+func (s *Service) stepProgress(fraction float64) {
+	fraction = min(max(fraction, 0), 1)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stepTo == 0 {
+		return
+	}
+	s.progressDone = max(s.progressDone, s.stepFrom+int64(fraction*float64(s.stepTo-s.stepFrom)))
+}
+
+// every runs fn on a timer until the returned func is called.
+func every(interval time.Duration, fn func()) func() {
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-stop:
 				return
 			case <-ticker.C:
-				s.progressIs(min(max(dirSize(dir)-baseline, 0), total), total)
+				fn()
 			}
 		}
 	}()
 	return func() { close(stop); <-done }
+}
+
+// easeStep advances a step that has nothing to measure. It slows as it nears
+// the end of the step and never reaches it, so the bar keeps moving without
+// claiming to be done before the work is.
+func (s *Service) easeStep(tau time.Duration) func() {
+	start := time.Now()
+	return every(250*time.Millisecond, func() {
+		s.stepProgress(0.95 * (1 - math.Exp(-float64(time.Since(start))/float64(tau))))
+	})
+}
+
+// watchBlobs reports how much of total has landed in dir while a helper process
+// downloads into it. The returned func stops the watcher.
+func (s *Service) watchBlobs(dir string, total int64) func() {
+	baseline := dirSize(dir)
+	return every(500*time.Millisecond, func() {
+		if total > 0 {
+			s.stepProgress(float64(max(dirSize(dir)-baseline, 0)) / float64(total))
+		}
+	})
 }
 
 func dirSize(dir string) int64 {

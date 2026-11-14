@@ -1,6 +1,8 @@
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { useDictationUpgrade } from "./DictationUpgradeDialog";
+import { DictationInstallRing } from "./DictationProgress";
+import { refreshDictationStatus, useDictationInstall } from "../../lib/dictation-install";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -563,6 +565,13 @@ export const ChatComposer = memo(function ChatComposer({
 	const dictating = dictation.phase !== "idle";
 	// Dictation remains in preview while native platform coverage expands.
 	const canDictate = useUiStore((state) => state.developerMode);
+	// A model download carries on in the background: the mic button shows how far along it is.
+	const dictationInstall = useDictationInstall();
+	useEffect(() => {
+		if (canDictate) void refreshDictationStatus();
+	}, [canDictate]);
+	const downloadingModel = canDictate && dictationInstall.model !== "" && !dictating;
+	const downloadPercent = Math.round(dictationInstall.fraction * 100);
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -2649,10 +2658,16 @@ export const ChatComposer = memo(function ChatComposer({
 												else void dictationUpgrade.requestStart(dictation.toggle);
 											}}
 											data-shortcut-target="dictate"
-											aria-label={dictating ? "Finish dictation" : "Dictate"}
+											aria-label={
+												dictating
+													? "Finish dictation"
+													: downloadingModel
+														? `Downloading dictation model, ${downloadPercent}%`
+														: "Dictate"
+											}
 											aria-pressed={dictating}
 											className={cn(
-												"mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
+												"relative mr-1 h-7 overflow-hidden p-0 transition-[width,background-color,color] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
 												dictating ? "w-[76px]" : "w-7",
 											)}
 										>
@@ -2661,10 +2676,11 @@ export const ChatComposer = memo(function ChatComposer({
 											) : (
 												<Mic aria-hidden="true" className="size-3.5" />
 											)}
+											{downloadingModel ? <DictationInstallRing fraction={dictationInstall.fraction} /> : null}
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : "Dictate"}</TooltipContent>
+								<TooltipContent side="bottom">{dictation.phase === "starting" ? "Starting local dictation…" : dictation.phase === "finishing" ? "Finishing dictation…" : dictating ? "Finish dictation" : downloadingModel ? `Downloading dictation model… ${downloadPercent}%` : "Dictate"}</TooltipContent>
 							</Tooltip>
 						) : null}
 						<Tooltip>

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resetDictationInstall } from "../../lib/dictation-install";
 import { DictationSection } from "./DictationSection";
 
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
@@ -29,9 +30,13 @@ const initial = {
 };
 beforeEach(() => {
 	vi.clearAllMocks();
+	resetDictationInstall();
 	api.GET.mockResolvedValue({ data: initial });
 });
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	resetDictationInstall();
+});
 function show() {
 	return render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
