@@ -646,7 +646,8 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 	if err != nil {
 		return runtimeLaunch{}, err
 	}
-	return runtimeLaunch{command: node, args: []string{entry}}, nil
+	// Limit each adapter's young generation without capping its retained heap.
+	return runtimeLaunch{command: node, args: []string{"--max-semi-space-size=2", entry}}, nil
 }
 
 func runtimeDirectoryBesideExecutable() string {
