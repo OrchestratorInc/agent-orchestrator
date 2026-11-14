@@ -214,15 +214,17 @@ export const CommandPalette = memo(function CommandPalette() {
 	const avatarProjects = useMemo(() => (currentProject ? [currentProject] : []), [currentProject]);
 	const headingAvatars = useProjectAvatars(avatarProjects);
 	const actionsHeading = currentProject ? (
-		<span className="inline-flex min-w-0 items-center gap-1.5">
-			<ProjectIcon avatarUrl={headingAvatars.get(currentProject.id)} className="size-icon-sm" expanded={false} name={currentProject.name} seed={currentProject.path || currentProject.id} />
+		<span className="inline-flex min-w-0 items-center gap-2.5">
+			<span className="flex size-icon-base shrink-0 items-center justify-center" aria-hidden="true">
+				<ProjectIcon avatarUrl={headingAvatars.get(currentProject.id)} className="size-icon-sm" expanded={false} name={currentProject.name} seed={currentProject.path || currentProject.id} />
+			</span>
 			<span className="truncate">{currentProject.name}</span>
 		</span>
 	) : undefined;
 	const sessionStatus = currentSession ? getSessionStatusDotView(currentSession) : undefined;
 	const sessionHeading = currentSession ? (
-		<span className="inline-flex min-w-0 items-center gap-1.5">
-			<span className="flex size-icon-sm shrink-0 items-center justify-center" aria-hidden="true">
+		<span className="inline-flex min-w-0 items-center gap-2.5">
+			<span className="flex size-icon-base shrink-0 items-center justify-center" aria-hidden="true">
 				<span className={cn("size-2 rounded-full", sessionStatus?.className, sessionStatus?.breathe && "animate-status-pulse")} />
 			</span>
 			<span className="truncate">{currentSession.title}</span>
@@ -1263,6 +1265,13 @@ export const CommandPalette = memo(function CommandPalette() {
 									onSelectItem(selectedItem, true);
 									return;
 								}
+								// → on a row that opens a list (the ones with ›) opens it, as Enter does.
+								if (wantsSecondary && event.key === "ArrowRight" && selectedItem && !selectedItem.disabled && rowOpensList(selectedItem)) {
+									event.preventDefault();
+									event.stopPropagation();
+									onSelectItem(selectedItem);
+									return;
+								}
 								if (event.key === "Backspace" && query === "" && viewRef.current.mode !== "root") {
 									event.preventDefault();
 									requestDismiss("pop");
@@ -1419,7 +1428,7 @@ function PaletteRow({
 	const Icon = iconForCommand(item);
 	const pathSubtitle = PATH_SUBTITLE_GROUPS.has(item.group);
 	// A row that leads to a list of choices rather than doing something.
-	const opensPicker = (item.action?.kind === "open-file-search" && !item.action.target) || item.action?.kind === "open-view";
+	const opensPicker = rowOpensList(item);
 	return (
 		<CommandItem
 			value={item.id}
@@ -1486,6 +1495,11 @@ function PaletteRow({
 			) : null}
 		</CommandItem>
 	);
+}
+
+/** A row whose action opens a nested list rather than doing something; drawn with ›. */
+function rowOpensList(item: CommandItemModel): boolean {
+	return (item.action?.kind === "open-file-search" && !item.action.target) || item.action?.kind === "open-view";
 }
 
 function Highlighted({ text, spans }: { text: string; spans: readonly { start: number; end: number }[] }) {
