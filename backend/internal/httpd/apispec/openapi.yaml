@@ -3305,6 +3305,69 @@ paths:
       summary: Execute a target-scoped command in a session's desktop browser
       tags:
       - browser
+  /api/v1/browser/remote-commands:
+    post:
+      operationId: executeRemoteBrowserCommand
+      parameters:
+      - description: Opaque browser capability injected into the owning AO worker.
+        in: header
+        name: X-AO-Browser-Capability
+        schema:
+          description: Opaque browser capability injected into the owning AO worker.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowserRemoteCommandRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserRemoteCommandResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run an agent-browser command on this host's self-hosted agent browser,
+        after the approval gate
+      tags:
+      - browser
   /api/v1/browser/status:
     get:
       operationId: getBrowserStatus
@@ -17564,6 +17627,38 @@ components:
       - sessionId
       - action
       - result
+      type: object
+    BrowserRemoteCommandRequest:
+      properties:
+        args:
+          description: agent-browser arguments, e.g. ["click", "@e2"].
+          items:
+            type: string
+          type: array
+        files:
+          additionalProperties:
+            type: string
+          description: Uploaded files by path, base64.
+          type: object
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - args
+      type: object
+    BrowserRemoteCommandResponse:
+      properties:
+        error:
+          type: string
+        files:
+          additionalProperties:
+            type: string
+          description: Files the command wrote, by path, base64.
+          type: object
+        output:
+          type: string
+      required:
+      - output
       type: object
     BrowserStatusResponse:
       properties:

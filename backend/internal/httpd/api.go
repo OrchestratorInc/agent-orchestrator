@@ -351,7 +351,7 @@ func (a *API) Register(root chi.Router) {
 					// own readiness reads.
 					// A consequential browser action waits for the user's approval
 					// (browsersvc.DefaultApprovalTimeout) before it runs.
-					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/browser/commands" {
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/browser/commands" || pattern == "/api/v1/browser/remote-commands" {
 						browserCommand.ServeHTTP(w, req)
 						return
 					}

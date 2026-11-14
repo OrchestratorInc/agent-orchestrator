@@ -47,6 +47,7 @@ type Service struct {
 
 	approvals       approvalGate
 	approvalTimeout time.Duration
+	remote          RemoteBrowser
 	// approvalsErr is why the gate could not load. While set, actions that
 	// may need approval are refused rather than run unasked.
 	approvalsErr error
