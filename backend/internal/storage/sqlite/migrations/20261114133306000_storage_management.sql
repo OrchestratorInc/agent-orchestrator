@@ -2,7 +2,9 @@
 -- Storage management: the user's cleanup preferences (one row, seeded so a read
 -- never handles absence), per-session dependency offload facts, and an audit
 -- log of every storage action. Times are Unix milliseconds; 0 means never.
-CREATE TABLE storage_settings (
+-- Idempotent: a pre-release build applied this file under an earlier version
+-- number, so a database may already hold these tables.
+CREATE TABLE IF NOT EXISTS storage_settings (
     id                          INTEGER PRIMARY KEY CHECK (id = 1),
     auto_clean                  INTEGER NOT NULL DEFAULT 1 CHECK (auto_clean IN (0, 1)),
     offload_enabled             INTEGER NOT NULL DEFAULT 1 CHECK (offload_enabled IN (0, 1)),
@@ -17,11 +19,11 @@ CREATE TABLE storage_settings (
     template_days               INTEGER NOT NULL DEFAULT 30 CHECK (template_days BETWEEN 1 AND 3650),
     updated_at_ms               INTEGER NOT NULL DEFAULT 0
 );
-INSERT INTO storage_settings (id) VALUES (1);
+INSERT OR IGNORE INTO storage_settings (id) VALUES (1);
 
 -- One row per session whose dependencies were ever offloaded. Facts only:
 -- whether a session reads as offloaded is derived from the two times.
-CREATE TABLE session_storage_facts (
+CREATE TABLE IF NOT EXISTS session_storage_facts (
     session_id      TEXT NOT NULL PRIMARY KEY REFERENCES sessions (id) ON DELETE CASCADE,
     offloaded_at_ms INTEGER NOT NULL DEFAULT 0,
     offloaded_bytes INTEGER NOT NULL DEFAULT 0,
@@ -33,7 +35,7 @@ CREATE TABLE session_storage_facts (
 
 -- What every cleanup did or would do. session_id is plain text, not a foreign
 -- key: the log outlives the sessions it mentions.
-CREATE TABLE storage_actions (
+CREATE TABLE IF NOT EXISTS storage_actions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     at_ms      INTEGER NOT NULL,
     kind       TEXT NOT NULL,
@@ -45,10 +47,10 @@ CREATE TABLE storage_actions (
     result     TEXT NOT NULL CHECK (result IN ('planned', 'done', 'skipped', 'failed')),
     error      TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX idx_storage_actions_at ON storage_actions (at_ms);
+CREATE INDEX IF NOT EXISTS idx_storage_actions_at ON storage_actions (at_ms);
 
 -- +goose Down
-DROP INDEX idx_storage_actions_at;
-DROP TABLE storage_actions;
-DROP TABLE session_storage_facts;
-DROP TABLE storage_settings;
+DROP INDEX IF EXISTS idx_storage_actions_at;
+DROP TABLE IF EXISTS storage_actions;
+DROP TABLE IF EXISTS session_storage_facts;
+DROP TABLE IF EXISTS storage_settings;
