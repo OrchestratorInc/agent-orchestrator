@@ -62,7 +62,11 @@ export function useFreshAgentAccountsRead() {
 		const now = Date.now();
 		if (now - lastFreshRead < freshReadEvery) return;
 		lastFreshRead = now;
-		void fetchAgentAccounts(true).then((accounts) => queryClient.setQueryData(agentAccountsQueryKey, accounts), () => undefined);
+		void fetchAgentAccounts(true).then(async (accounts) => {
+			// A poll still in flight carries the older cached reading; drop it so it can't land after this one.
+			await queryClient.cancelQueries({ queryKey: agentAccountsQueryKey, exact: true }, { revert: false });
+			queryClient.setQueryData(agentAccountsQueryKey, accounts);
+		}, () => undefined);
 	}, [queryClient]);
 }
 
