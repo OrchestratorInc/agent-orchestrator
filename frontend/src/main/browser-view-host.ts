@@ -48,6 +48,7 @@ import type {
   ShortcutChord,
 } from "../shared/shortcuts";
 import type { AgentBrowserRuntime } from "./agent-browser-runtime";
+import type { CredentialFiller } from "./browser-vault-fill";
 import type {
   AgentBrowserTarget,
   AgentBrowserTargetProvider,
@@ -512,6 +513,9 @@ export type BrowserViewHostOptions = {
   getKeybindingOverrides?: () => KeybindingOverrides;
   isKeybindingRecording?: () => boolean;
   agentBrowserRuntime?: AgentBrowserRuntime;
+  // Fills vault credentials at the edge and scrubs filled secrets from every
+  // result returned to the agent.
+  credentialFiller?: CredentialFiller;
   isCloseShellTerminalShortcutEnabled?: () => boolean;
   browserProfileStore?: BrowserProfileStore;
   browserHistoryStore?: BrowserHistoryStore;
@@ -4354,6 +4358,7 @@ export function createBrowserViewHost(
       if (action === "__destroy-session") {
         const viewId = viewIdsBySessionId.get(sessionId);
         await options.agentBrowserRuntime?.closeSession(sessionId);
+        options.credentialFiller?.forget(sessionId);
         if (viewId) destroy(viewId);
         return { destroyed: Boolean(viewId) };
       }
@@ -4982,6 +4987,49 @@ export function createBrowserViewHost(
             return stopNetworkCapture(networkEntryFor(session), "stopped");
           case "network-clear":
             return clearNetworkCapture(networkEntryFor(session));
+          case "fill-secret":
+          case "login": {
+            const filler = options.credentialFiller;
+            if (!filler) {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "The credential vault is unavailable");
+            }
+            const projectId = typeof args.projectId === "string" ? args.projectId : "";
+            if (!projectId) {
+              throw browserError("BROWSER_VAULT_UNAVAILABLE", "Credential fills need a project");
+            }
+            if (action === "fill-secret") {
+              const field = args.field;
+              if (field !== "username" && field !== "password" && field !== "totp") {
+                throw browserError("INVALID_ARGUMENT", "field must be username, password, or totp");
+              }
+              const itemId = stringArg(args, "itemId", "INVALID_ARGUMENT", "item is required");
+              await runNative("focus", {
+                ref: stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
+              });
+              const target = activeEntry(session);
+              await ensureDebugger(target);
+              return filler.fillSecret(
+                {
+                  cdp: target.view.webContents.debugger,
+                  sessionId,
+                  projectId,
+                  pageURL: () => target.view.webContents.getURL(),
+                },
+                { itemId, field },
+              );
+            }
+            const target = activeEntry(session);
+            await ensureDebugger(target);
+            return filler.login(
+              {
+                cdp: target.view.webContents.debugger,
+                sessionId,
+                projectId,
+                pageURL: () => target.view.webContents.getURL(),
+              },
+              { itemId: typeof args.itemId === "string" && args.itemId ? args.itemId : undefined },
+            );
+          }
           case "console":
             return normalizeNativeMessages(await runNative(action), action);
           case "errors": {
@@ -5033,7 +5081,10 @@ export function createBrowserViewHost(
         }
       };
       try {
-        return await run();
+        const result = await run();
+        return options.credentialFiller
+          ? options.credentialFiller.scrub(sessionId, result)
+          : result;
       } finally {
         setAgentBrowserActivity(session, action, false, commandId, "finished");
       }
