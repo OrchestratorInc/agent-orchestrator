@@ -1,11 +1,16 @@
-import { render, screen, within } from "@testing-library/react";
+import { render as renderBare, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { noPRDetails } from "../lib/pr-display";
 import { resetPRTabs, usePRTabs } from "../lib/pr-tabs";
 import type { WorkspaceSession } from "../types/workspace";
 import { ActivityRail } from "./ActivityRail";
+import { TooltipProvider } from "./ui/tooltip";
+
+// The rail's filter button has a tooltip, which the app's root provides for.
+const render = (ui: ReactElement) => renderBare(ui, { wrapper: TooltipProvider });
 
 const URL = "https://api.github.com/repos/acme/repo/pulls/7";
 
@@ -187,5 +192,84 @@ describe("ActivityRail", () => {
 	it("says a standalone session was created, not a workspace", () => {
 		render(<ActivityRail commits={[]} prs={[]} session={{ ...session, workspaceId: "__standalone__" }} status={null} />);
 		expect(screen.getByText("Created session")).toBeInTheDocument();
+	});
+
+	// A session keeps its filter while the app is open, so each test filters its own.
+	const filtered = (id: string) => (
+		<ActivityRail
+			commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: "2026-10-20T09:00:00Z", author: "ada" }]}
+			prs={[pr({
+				createdAt: "2026-10-20T10:00:00Z",
+				conversation: [
+					{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: "2026-10-21T10:00:00Z" },
+					{ id: "c2", author: "review-bot", isBot: true, body: "Summary", createdAt: "2026-10-21T11:00:00Z" },
+				],
+			})]}
+			session={{ ...session, id }}
+			status={<span>Idle</span>}
+		/>
+	);
+	const rowTexts = () => within(screen.getByTestId("activity-rail")).queryAllByRole("listitem").map((row) => row.textContent ?? "");
+
+	it("filters the rail by kind from a menu that counts each kind", async () => {
+		render(filtered("sess-kinds"));
+		expect(rowTexts()).toHaveLength(5);
+		const button = screen.getByRole("button", { name: "Filter activity" });
+		expect(button).not.toHaveAttribute("data-filtered");
+
+		await userEvent.click(button);
+		expect(screen.getByRole("menuitemcheckbox", { name: /Comments and reviews\s*2/ })).toBeChecked();
+		// Ticking several kinds keeps the menu open.
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /Commits\s*1/ }));
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /Session events\s*1/ }));
+		expect(screen.getByRole("menuitemcheckbox", { name: /Commits/ })).not.toBeChecked();
+		await userEvent.keyboard("{Escape}");
+
+		const rows = rowTexts();
+		expect(rows).toHaveLength(3);
+		expect(rows.join(" ")).not.toContain("Fix the chart");
+		expect(rows.join(" ")).not.toContain("Created workspace");
+		expect(screen.getByRole("button", { name: "Filter activity" })).toHaveAttribute("data-filtered", "true");
+	});
+
+	it("hides what bots did, and brings everything back", async () => {
+		render(filtered("sess-bots"));
+		await userEvent.click(screen.getByRole("button", { name: "Filter activity" }));
+		expect(screen.getByRole("menuitem", { name: "Show everything" })).toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "Hide bots" }));
+		expect(rowTexts().join(" ")).not.toContain("review-bot");
+		expect(rowTexts()).toHaveLength(4);
+
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show everything" }));
+		expect(rowTexts()).toHaveLength(5);
+		expect(screen.getByRole("button", { name: "Filter activity" })).not.toHaveAttribute("data-filtered");
+	});
+
+	it("says so when the filter hides every row, with a way back", async () => {
+		render(<ActivityRail commits={[]} prs={[]} session={{ ...session, id: "sess-empty" }} status={null} />);
+		await userEvent.click(screen.getByRole("button", { name: "Filter activity" }));
+		// A kind with no rows is not offered.
+		expect(screen.queryByRole("menuitemcheckbox", { name: /Commits/ })).toBeNull();
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /Session events/ }));
+		await userEvent.keyboard("{Escape}");
+		expect(rowTexts()).toHaveLength(0);
+		expect(screen.getByTestId("activity-rail-empty")).toHaveTextContent("Nothing matches the filter.");
+
+		await userEvent.click(screen.getByRole("button", { name: "Show everything" }));
+		expect(rowTexts()).toHaveLength(1);
+	});
+
+	it("keeps a session's filter when the rail is shown again", async () => {
+		const kept = { ...session, id: "sess-kept" };
+		const view = render(<ActivityRail commits={[]} prs={[]} session={kept} status={null} />);
+		await userEvent.click(screen.getByRole("button", { name: "Filter activity" }));
+		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /Session events/ }));
+		view.unmount();
+
+		render(<ActivityRail commits={[]} prs={[]} session={kept} status={null} />);
+		expect(rowTexts()).toHaveLength(0);
+		// Another session starts unfiltered.
+		render(<ActivityRail commits={[]} prs={[]} session={{ ...session, id: "sess-other" }} status={null} />);
+		expect(screen.getAllByText("Created workspace")).toHaveLength(1);
 	});
 });

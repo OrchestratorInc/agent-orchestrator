@@ -34,6 +34,46 @@ export type RailEvent = {
 	pr?: { number: number; url: string };
 };
 
+/** What a row is about, as the rail's filter groups it. */
+export type RailGroup = "talk" | "commits" | "pr" | "session";
+
+export const RAIL_GROUPS: readonly RailGroup[] = ["talk", "commits", "pr", "session"];
+
+export function railGroup(kind: RailKind): RailGroup {
+	switch (kind) {
+		case "commits":
+			return "commits";
+		case "created":
+			return "session";
+		case "opened":
+		case "draft":
+		case "merged":
+		case "closed":
+			return "pr";
+		default:
+			return "talk";
+	}
+}
+
+/** What the rail leaves out: whole groups of rows, and anything a bot did. */
+export type RailFilter = { hidden: readonly RailGroup[]; hideBots: boolean };
+
+export const NO_RAIL_FILTER: RailFilter = { hidden: [], hideBots: false };
+
+export const railFilterActive = (filter: RailFilter) => filter.hidden.length > 0 || filter.hideBots;
+
+export function filterRail(events: RailEvent[], filter: RailFilter): RailEvent[] {
+	if (!railFilterActive(filter)) return events;
+	return events.filter((event) => !filter.hidden.includes(railGroup(event.kind)) && !(filter.hideBots && event.bot));
+}
+
+/** How many rows each group has, before any filter. */
+export function railGroupCounts(events: RailEvent[]): Record<RailGroup, number> {
+	const counts: Record<RailGroup, number> = { talk: 0, commits: 0, pr: 0, session: 0 };
+	for (const event of events) counts[railGroup(event.kind)] += 1;
+	return counts;
+}
+
 export type RailCommit = { sha: string; subject: string; timestamp: string; author?: string };
 
 type RailInput = {

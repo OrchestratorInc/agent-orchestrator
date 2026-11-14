@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { buildActivityRail, commentExcerpt } from "./activity-rail";
+import { buildActivityRail, commentExcerpt, filterRail, NO_RAIL_FILTER, railFilterActive, railGroup, railGroupCounts, type RailEvent } from "./activity-rail";
 import { noPRDetails } from "./pr-display";
 
 const pr = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
@@ -127,5 +127,35 @@ describe("commentExcerpt", () => {
 		expect(commentExcerpt("<!-- bot marker -->\n\n> earlier text\n@grace I've **fixed** `it`\nmore")).toBe("I've fixed it");
 		expect(commentExcerpt("<details><summary>Walkthrough</summary>")).toBe("Walkthrough");
 		expect(commentExcerpt("")).toBe("");
+	});
+});
+
+describe("rail filter", () => {
+	const row = (kind: RailEvent["kind"], bot = false): RailEvent => ({ key: `${kind}:${bot}`, kind, at: "2026-10-20T10:00:00Z", count: 1, bot });
+	const events = [row("comment"), row("comment", true), row("reviewNotes", true), row("approved"), row("commits"), row("opened"), row("merged"), row("created")];
+
+	it("groups every kind of row", () => {
+		expect((["comment", "reviewNotes", "reply", "approved", "changes", "reviewed"] as const).map(railGroup)).toEqual(Array(6).fill("talk"));
+		expect((["opened", "draft", "merged", "closed"] as const).map(railGroup)).toEqual(Array(4).fill("pr"));
+		expect(railGroup("commits")).toBe("commits");
+		expect(railGroup("created")).toBe("session");
+	});
+
+	it("counts rows per group before any filter", () => {
+		expect(railGroupCounts(events)).toEqual({ talk: 4, commits: 1, pr: 2, session: 1 });
+	});
+
+	it("returns the same rows when nothing is hidden", () => {
+		expect(railFilterActive(NO_RAIL_FILTER)).toBe(false);
+		expect(filterRail(events, NO_RAIL_FILTER)).toBe(events);
+	});
+
+	it("drops hidden groups and, when asked, what bots did", () => {
+		expect(filterRail(events, { hidden: ["commits", "session"], hideBots: false }).map((event) => event.kind)).toEqual(["comment", "comment", "reviewNotes", "approved", "opened", "merged"]);
+		const noBots = filterRail(events, { hidden: [], hideBots: true });
+		expect(noBots).toHaveLength(6);
+		expect(noBots.some((event) => event.bot)).toBe(false);
+		expect(railFilterActive({ hidden: [], hideBots: true })).toBe(true);
+		expect(filterRail(events, { hidden: ["talk", "commits", "pr", "session"], hideBots: false })).toEqual([]);
 	});
 });

@@ -2,12 +2,13 @@ import { Check, ChevronRight, Eye, FileDiff, GitBranch, GitCommitHorizontal, Git
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { buildActivityRail, localDay, type RailCommit, type RailEvent, type RailKind } from "../lib/activity-rail";
+import { buildActivityRail, filterRail, localDay, NO_RAIL_FILTER, railFilterActive, railGroupCounts, type RailCommit, type RailEvent, type RailFilter, type RailKind } from "../lib/activity-rail";
 import { sessionUiKey } from "../lib/hosts";
 import { openPRTab } from "../lib/pr-tabs";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { cn } from "../lib/utils";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
+import { ActivityRailFilter } from "./ActivityRailFilter";
 import { PRAvatar } from "./PRComments";
 import { Pressable } from "./ui/pressable";
 
@@ -63,6 +64,9 @@ function prLogins(prs: SessionPRSummary[]): Set<string> {
 // What people said on a PR: these rows open the PR at its comments.
 const isTalk = (kind: RailKind) => kind === "comment" || kind === "reviewNotes" || kind === "reply" || kind === "approved" || kind === "changes" || kind === "reviewed";
 
+// Each session's filter, for as long as the app is open.
+const rememberedFilter = new Map<string, RailFilter>();
+
 // Folded commits listed under their row, beyond which the Files tab is the place to look.
 const COMMIT_LIST_LIMIT = 10;
 
@@ -85,10 +89,22 @@ export function ActivityRail({ commits, hostId, prs, session, status, statusAt }
 	const { t, i18n } = useTranslation();
 	// A provisional branch stays private until its worktree and name are final.
 	const branch = sessionBranchPresentation(session).branch;
-	const events = useMemo(
+	const allEvents = useMemo(
 		() => buildActivityRail({ createdAt: session.createdAt ?? session.updatedAt, branch, commits, prs }),
 		[branch, commits, prs, session.createdAt, session.updatedAt],
 	);
+	const sessionKey = sessionUiKey(session.id, hostId);
+	// The filter is this session's: it stays while the app is open, so leaving
+	// the session and coming back keeps what was hidden.
+	const [filterState, setFilterState] = useState(() => ({ key: sessionKey, filter: rememberedFilter.get(sessionKey) ?? NO_RAIL_FILTER }));
+	if (filterState.key !== sessionKey) setFilterState({ key: sessionKey, filter: rememberedFilter.get(sessionKey) ?? NO_RAIL_FILTER });
+	const filter = filterState.filter;
+	const setFilter = (next: RailFilter) => {
+		rememberedFilter.set(sessionKey, next);
+		setFilterState({ key: sessionKey, filter: next });
+	};
+	const counts = useMemo(() => railGroupCounts(allEvents), [allEvents]);
+	const events = useMemo(() => filterRail(allEvents, filter), [allEvents, filter]);
 	const logins = useMemo(() => prLogins(prs), [prs]);
 	const standalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
 	const timeFormat = useMemo(() => new Intl.DateTimeFormat(i18n.language, { hour: "numeric", minute: "2-digit" }), [i18n.language]);
@@ -99,7 +115,6 @@ export function ActivityRail({ commits, hostId, prs, session, status, statusAt }
 		const day = localDay(iso);
 		return day === today ? t("inspector.rail.today") : day === yesterday ? t("inspector.rail.yesterday") : dayFormat.format(new Date(iso));
 	};
-	const sessionKey = sessionUiKey(session.id, hostId);
 
 	const days: { day: string; label: string; events: RailEvent[] }[] = [];
 	for (const event of events) {
@@ -114,7 +129,16 @@ export function ActivityRail({ commits, hostId, prs, session, status, statusAt }
 			<div className="flex min-w-0 items-center gap-2 text-xs">
 				<span className="min-w-0 flex-1">{status}</span>
 				{statusTime ? <span className="shrink-0 text-passive tabular-nums">{statusTime}</span> : null}
+				{allEvents.length > 0 ? <ActivityRailFilter counts={counts} filter={filter} onChange={setFilter} /> : null}
 			</div>
+			{events.length === 0 && railFilterActive(filter) ? (
+				<p className="mt-4 text-xs text-passive" data-testid="activity-rail-empty">
+					{t("inspector.rail.filterEmpty")}{" "}
+					<button className="font-medium text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => setFilter(NO_RAIL_FILTER)} type="button">
+						{t("inspector.rail.filterShowAll")}
+					</button>
+				</p>
+			) : null}
 			{days.map((group) => (
 				<Fragment key={group.day}>
 					<div className="mt-4 mb-1 flex items-center gap-2 text-xs text-passive">
