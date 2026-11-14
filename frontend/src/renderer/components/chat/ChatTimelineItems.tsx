@@ -3331,7 +3331,7 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
  * continues on the new account with the next message. */
 function AccountSwitchedRow({ accountId }: { accountId?: string }) {
 	const { t } = useTranslation();
-	const label = useAgentAccountLabel();
+	const label = useAgentAccountLabel(true, useContext(ChatHostId));
 	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
 }
 

@@ -3,8 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
+import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
 import { useSettings, useUpdateAccountHandoff } from "../../hooks/useSettings";
+import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
@@ -15,9 +17,9 @@ import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
 
 const providerNames = agentAccountProviderNames;
 
-// One sign-in per provider, kept outside the page so leaving Settings does not
-// lose a browser sign-in in progress.
-let pendingLogins: Partial<Record<AgentAccountProvider, AgentAccountLogin>> = {};
+// One sign-in per host and provider, kept outside the page so leaving Settings
+// does not lose a browser sign-in in progress.
+let pendingLogins: Partial<Record<string, AgentAccountLogin>> = {};
 
 /** The CLI's own login signs in and out through the harness's login terminal. */
 export type CliLoginControls = {
@@ -30,11 +32,12 @@ export type CliLoginControls = {
 
 /** One CLI's subscription accounts on its Harness Account tab: the CLI's own
  * login and the accounts added in AO, with their limits, default and sign-in. */
-export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls }) {
+export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string }) {
 	const { t } = useTranslation();
-	const accounts = useAgentAccounts();
-	const usage = useAgentAccountUsage();
-	const actions = useAgentAccountActions();
+	const accounts = useAgentAccounts(true, hostId);
+	const usage = useAgentAccountUsage(30, hostId);
+	const actions = useAgentAccountActions(hostId);
+	const loginKey = `${hostId ?? ""}|${provider}`;
 	const [logins, setLogins] = useState(() => pendingLogins);
 	const [loginNote, setLoginNote] = useState("");
 	const [busy, setBusy] = useState<string | null>(null);
@@ -44,7 +47,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
-	const login = logins[provider];
+	const login = logins[loginKey];
 
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
 		setBusy(key);
@@ -59,7 +62,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	}, []);
 
 	const setLogin = (next: AgentAccountLogin | undefined) => {
-		pendingLogins = { ...pendingLogins, [provider]: next };
+		pendingLogins = { ...pendingLogins, [loginKey]: next };
 		setLogins(pendingLogins);
 	};
 	// accountId signs that saved account in again, in its own folder.
@@ -74,7 +77,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	const verifying = useRef(false);
 	const checkLogin = (current: AgentAccountLogin) => {
 		// A closed sign-in's terminal still reports its exit; there is nothing left to check.
-		if (pendingLogins[provider]?.operationId !== current.operationId || verifying.current) return;
+		if (pendingLogins[loginKey]?.operationId !== current.operationId || verifying.current) return;
 		void verifyLogin(current);
 	};
 	const verifyLogin = (current: AgentAccountLogin) => run(`verify:${provider}`, async () => {
@@ -94,12 +97,13 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 	};
 	const requestedLogin = useUiStore((state) => state.accountLogin);
 	useEffect(() => {
+		if (hostId) return;
 		const account = rows.find((row) => row.id === requestedLogin);
 		if (!account || (account.device && (!cliLogin || cliLogin.disabled))) return;
 		useUiStore.setState({ accountLogin: null });
 		if (account.device) cliLogin?.onSignIn();
 		else void startLogin(account.id);
-	}, [requestedLogin, accounts.data, cliLogin?.disabled]);
+	}, [requestedLogin, accounts.data, cliLogin?.disabled, hostId]);
 
 	return <>
 		<HarnessDetailGroup
@@ -110,7 +114,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 			</div>}
 		>
 			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
-			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
+			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
 			{/* The CLI login does not wait on the list: a cold read can take a while, and a failed one has no row. */}
@@ -130,7 +134,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
-			<AccountHandoffRow />
+			{hostId ? null : <AccountHandoffRow />}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
@@ -281,8 +285,9 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 	</>;
 }
 
-function LoginTerminal({ login, note, pending, onCheck, onClose }: {
+function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
 	login: AgentAccountLogin;
+	hostId?: string;
 	note: string;
 	pending: boolean;
 	onCheck: (login: AgentAccountLogin) => void;
@@ -292,6 +297,11 @@ function LoginTerminal({ login, note, pending, onCheck, onClose }: {
 	const theme = useResolvedTheme();
 	const shell = useShellMaybe();
 	const [state, setState] = useState<TerminalSessionState>("connecting");
+	const createMux = useCallback(() => {
+		const base = hostId ? baseUrlForHost(hostId) : undefined;
+		if (!base) throw new Error("Remote host disconnected");
+		return createTerminalMux(muxUrlFromApiBase(base));
+	}, [hostId]);
 	const checkRef = useRef(onCheck);
 	checkRef.current = onCheck;
 	// The CLI exits when its sign-in finishes, so check once without a click.
@@ -304,7 +314,7 @@ function LoginTerminal({ login, note, pending, onCheck, onClose }: {
 			<p className="truncate text-xs font-medium text-foreground">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</p>
 			<Button type="button" size="icon-sm" variant="quiet" aria-label={t("settings.codexAccounts.loginClose")} className="shrink-0" onClick={() => onClose(login)}><X aria-hidden="true" /></Button>
 		</div>
-		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
+		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} createMux={hostId ? createMux : undefined} daemonReady={hostId || !shell ? true : shell.daemonStatus.state === "ready"} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
 		<div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">
 			<p className="min-w-0 truncate text-xs text-muted-foreground" role="status" aria-live="polite">{note}</p>
 			<Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onCheck(login)}>{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.agentAccounts.checkSignIn")}</Button>
