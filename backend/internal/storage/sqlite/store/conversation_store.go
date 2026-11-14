@@ -1638,10 +1638,14 @@ func (s *Store) AppendImportedUserMessage(
 func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
-	if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
+	rows, err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
 		ID: turnID,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("mark turn %s dispatching: %w", turnID, err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("mark turn %s dispatching: %w", turnID, ErrTurnSettled)
 	}
 	return nil
 }
@@ -1672,14 +1676,18 @@ func expectBatchRow(action, id string, rows int64, err error) error {
 func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
-	if err := q.BindConversationTurnProviderID(ctx, gen.BindConversationTurnProviderIDParams{
+	rows, err := q.BindConversationTurnProviderID(ctx, gen.BindConversationTurnProviderIDParams{
 		ProviderTurnID: providerTurnID,
 		StartedAt:      sql.NullTime{Time: now, Valid: true},
 		ID:             turnID,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("bind turn %s to provider turn %s: %w", turnID, providerTurnID, err)
 	}
-	if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
+	if rows == 0 {
+		return fmt.Errorf("bind turn %s to provider turn %s: %w", turnID, providerTurnID, ErrTurnSettled)
+	}
+	if _, err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{
 		StartedAt: sql.NullTime{Time: now, Valid: true},
 		ID:        turnID,
 	}); err != nil {
@@ -1687,6 +1695,9 @@ func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID s
 	}
 	return nil
 }
+
+// ErrTurnSettled means the turn already reached a terminal state, so a late provider acceptance must not reopen it.
+var ErrTurnSettled = errors.New("turn is already settled")
 
 // SettleTurn records a turn's terminal state. An interrupted turn is not an
 // error and carries no message.
@@ -2721,8 +2732,9 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 			})
 		}
 		if dispatch && len(batch) > 0 {
-			if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{ID: batch[0].TurnID}); err != nil {
-				return err
+			rows, err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{ID: batch[0].TurnID})
+			if checkErr := expectBatchRow("dispatch queued batch turn", batch[0].TurnID, rows, err); checkErr != nil {
+				return checkErr
 			}
 		}
 		return nil

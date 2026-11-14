@@ -712,15 +712,15 @@ SELECT * FROM conversation_turns
 WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 LIMIT 1;
 
--- name: BindConversationTurnProviderID :exec
+-- name: BindConversationTurnProviderID :execrows
 UPDATE conversation_turns
 SET provider_turn_id = ?, started_at = COALESCE(started_at, ?)
-WHERE id = ?;
+WHERE id = ? AND state IN ('queued', 'running');
 
--- name: MarkConversationTurnStarted :exec
+-- name: MarkConversationTurnStarted :execrows
 UPDATE conversation_turns
 SET state = 'running', started_at = COALESCE(started_at, ?)
-WHERE id = ?;
+WHERE id = ? AND state IN ('queued', 'running');
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
