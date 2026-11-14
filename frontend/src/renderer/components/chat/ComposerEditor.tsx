@@ -55,6 +55,7 @@ import {
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
@@ -189,13 +190,6 @@ const COMPOSER_TEXT_INSET = "px-[7px]";
  * nor pushes the text off-centre; overlay scrollbars reserve nothing.
  */
 const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
-/**
- * Pulls the composer's trailing send controls in from the right edge. The leading +
- * is a 28px ghost button whose glyph's ink starts ~10px inside it (7px of centring
- * plus the icon's own margin); the filled send circle is its own edge. This inset
- * puts the circle that same ~22px from the right as the + glyph is from the left.
- */
-export const COMPOSER_SEND_INSET = "me-2.5";
 
 /**
  * One letter of a dictation in progress. A letter fades in once, when it first
@@ -635,6 +629,17 @@ const EditorBridge = forwardRef<
 	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
+
+	// Links typed or pasted here load their site icons before they are sent.
+	useEffect(() => {
+		const warmer = createDraftFaviconWarmer();
+		warmer.update(editor.getEditorState().read(() => $getRoot().getTextContent()));
+		const unregister = editor.registerTextContentListener((text) => warmer.update(text));
+		return () => {
+			unregister();
+			warmer.dispose();
+		};
+	}, [editor]);
 
 	useImperativeHandle(
 		ref,

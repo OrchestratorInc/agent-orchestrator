@@ -40,6 +40,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			getTeamShareAccess: async () => ({ members: [] }),
 			listShareCandidates: async () => ({ candidates: [] }),
 			listShareLinks: async () => ({ links: structuredClone(mocks.links) }),
+			listOrgMembers: async () => ({ members: [{ userId: "u-asha" }, { userId: "u-dana" }] }),
 			createShareGrants: async (...args: unknown[]) => {
 				mocks.calls.push(["createShareGrants", ...args]);
 				const request = args[2] as { subjects: Array<{ email: string }>; role: CloudCpShareEntry["role"]; modeCap: CloudCpShareEntry["modeCap"] };
@@ -66,6 +67,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 		},
 	}),
 }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org", displayName: "Northwind" } }) }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: { user: { email: "asha@northwind.dev" } } }) }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => true }));
 
@@ -130,8 +132,8 @@ describe("Project settings › Sharing", () => {
 		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Add people or teams" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "People with access" })).toBeInTheDocument();
-		// AO has no workspaces to list: only the people and teams the project is shared with.
-		expect(within(list).queryByText(/People in |Workspace members/)).toBeNull();
+		expect(within(list).getByText("Everyone in your workspace")).toBeInTheDocument();
+		expect(within(list).getByText("Northwind · 2 members")).toBeInTheDocument();
 		expect(within(list).getByText("Data infra")).toBeInTheDocument();
 		// General access, with Link settings and Copy link beside its heading.
 		const section = generalSection();
@@ -174,9 +176,10 @@ describe("Project settings › Sharing", () => {
 		await userEvent.click(within(rowOf(list, "Data infra")).getByRole("button", { name: /Change access/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Remove access" }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "revokeShareGrant")).toEqual(["revokeShareGrant", "org", "proj", "g-data"]));
-		// The last share gone, the page shows no empty list under its heading.
-		await waitFor(() => expect(screen.queryByText("Data infra")).toBeNull());
-		expect(screen.queryByRole("heading", { name: "People with access" })).toBeNull();
+		await waitFor(() => expect(within(list).queryByText("Data infra")).toBeNull());
+		// The last share gone, the workspace's people still have access: the list stays, with them on it.
+		expect(screen.getByRole("heading", { name: "People with access" })).toBeInTheDocument();
+		expect(within(list).getByText("Everyone in your workspace")).toBeInTheDocument();
 		const notice = await within(pane()!).findByRole("status");
 		expect(notice).toHaveTextContent("Removed Data infra's access");
 		expect(within(notice).getByRole("button", { name: "Undo" })).toBeInTheDocument();

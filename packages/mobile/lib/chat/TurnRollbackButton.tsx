@@ -54,6 +54,5 @@ export function TurnRollbackButton({ turnId, onRollback }: { turnId: string; onR
 }
 
 const styles = StyleSheet.create({
-	// The glyph lines up with the reply's right edge; the target reaches past it.
-	rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginRight: -(touchTarget - iconSize.md) / 2 },
+	rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 });

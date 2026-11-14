@@ -138,6 +138,9 @@ func (c *conversation) HandleExtensionMethod(
 		return nil, nil
 	}
 	original, configured := c.extensionMethods[method]
+	if drain := c.steering.drain; drain != nil && (method == drain.Method || (configured && original == drain.Method)) {
+		return c.collectSteers(params), nil
+	}
 	if !configured || c.extensionFor == nil {
 		return nil, acpsdk.NewMethodNotFound(method)
 	}

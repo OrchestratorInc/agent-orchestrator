@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError, type CloudCpShareLink } from "../lib/cloud-cp";
 import { createdShareLinkUrl } from "../lib/share-links";
-import { broadestLink, forgetUrlsMadeHere, remainingHours, shareLinkRequest, urlForBroadest } from "./share/linkAccess";
+import { broadestLink, forgetUrlsMadeHere, isPersonalWorkspace, remainingHours, shareLinkRequest, urlForBroadest } from "./share/linkAccess";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -18,9 +18,13 @@ const mocks = vi.hoisted(() => ({
 		getShareAccess: vi.fn(async (): Promise<unknown> => ({ entries: [] })),
 		listTeams: vi.fn(async () => ({ teams: [] })),
 		listShareCandidates: vi.fn(async () => ({ candidates: [] })),
+		// Three people in the workspace.
+		listOrgMembers: vi.fn(async () => ({ members: [{ userId: "a" }, { userId: "b" }, { userId: "c" }] })),
 	},
+	org: { id: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b", displayName: "Northwind", offering: { kind: "b2b" } } as Record<string, unknown>,
 }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: mocks.client, ready: true, baseUrl: "https://cp.example.test", userId: "me" }) }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org }) }));
 
 const ORG = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
 const CODE = "k7Hq2x9PmB4wR5tY8uI0oP";
@@ -80,6 +84,7 @@ describe("general access", () => {
 		vi.restoreAllMocks();
 	});
 	beforeEach(() => {
+		mocks.org = { id: ORG, displayName: "Northwind", offering: { kind: "b2b" } };
 		mocks.client.listShareLinks.mockReset().mockResolvedValue({ links: [] });
 		mocks.client.createShareLink.mockReset().mockResolvedValue({ link: shareLink({ id: NEW_LINK, sessionId: "s1", code: CODE, shortUrl: SHORT }) });
 		mocks.client.revokeShareLink.mockReset().mockResolvedValue({});
@@ -91,7 +96,7 @@ describe("general access", () => {
 		renderDialog();
 		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
 		expect(screen.getByText("Session in acme/web")).toBeInTheDocument();
-		expect(await sentence()).toBe("Only people added above can open this session.");
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session.");
 		// Disabled for screen readers too, with the reason, but still focusable.
 		expect(copyButton()).toHaveAttribute("aria-disabled", "true");
 		expect(copyButton()).not.toBeDisabled();
@@ -102,10 +107,49 @@ describe("general access", () => {
 		expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
 	});
 
-	it("names no workspace: no row for its people, and only the people added above can open it", async () => {
+	it.each([
+		["a team workspace", { displayName: "Northwind", kind: "team" }, false],
+		["an enterprise workspace", { displayName: "Northwind", kind: "enterprise" }, false],
+		["a personal workspace", { displayName: "Northwind", kind: "personal" }, true],
+		["a team workspace named like someone's", { displayName: "Pritom's organization", kind: "team" }, false],
+		// An older control plane names no kind: a name or an offering never makes one personal.
+		["one named \"<name>'s organization\" by an older control plane", { displayName: "Pritom's organization", offering: { kind: "both" } }, false],
+		["one named after the account by an older control plane", { displayName: "asha@northwind.dev", offering: { kind: "b2c" } }, false],
+		["one still loading", undefined, false],
+	])("knows %s is personal or not", (_name, org, personal) => {
+		expect(isPersonalWorkspace(org as { kind?: string } | undefined)).toBe(personal);
+	});
+
+	it("says only you and people added above, with no workspace row, when the control plane says the workspace is personal", async () => {
+		mocks.org = { id: ORG, displayName: "Asha's organization", kind: "personal" };
 		renderDialog();
-		expect(await sentence()).toBe("Only people added above can open this session.");
-		expect(screen.queryByText(/Workspace members|People in /)).toBeNull();
+		expect(await sentence()).toBe("Only you and people added above can open this session.");
+		expect(document.querySelector("[data-share-workspace-row]")).toBeNull();
+	});
+
+	it("lists the workspace's people when the control plane says it is a team's, whatever its name", async () => {
+		mocks.org = { id: ORG, displayName: "Pritom's organization", kind: "team" };
+		renderDialog();
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session.");
+		await waitFor(() => expect(document.querySelector("[data-share-workspace-row]")).toHaveTextContent("Everyone in your workspacePritom's organization · 3 members"));
+	});
+
+	it("lists the workspace's people against an older control plane, even with a name like someone's", async () => {
+		mocks.org = { id: ORG, displayName: "Pritom's organization", offering: { kind: "b2c" } };
+		renderDialog();
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session.");
+		await waitFor(() => expect(document.querySelector("[data-share-workspace-row]")).toHaveTextContent("Everyone in your workspacePritom's organization · 3 members"));
+	});
+
+	it.each([
+		["still loading", undefined],
+		["unreadable or another organization's", { id: "another-org", displayName: "Elsewhere", kind: "personal" }],
+	])("never says \"only you\" while the workspace is %s", async (_state, org) => {
+		mocks.org = org as Record<string, unknown>;
+		renderDialog();
+		expect(await sentence()).toBe("Only people with access can open this session.");
+		// The workspace's people still have access, so they still show.
+		await waitFor(() => expect(document.querySelector("[data-share-workspace-row]")).not.toBeNull());
 	});
 
 	it("turns link access on with a Can watch link for 7 days, then copies the link it made", async () => {
@@ -258,7 +302,7 @@ describe("general access", () => {
 		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ id: LINK_B, role: "editor", interaction: "interact", modeCap: "standard" })] });
 		renderDialog();
 		// The project's link opens this session too.
-		expect(await sentence()).toBe("Only people added above can open this session. A link to the whole project opens it too.");
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session. A link to the whole project opens it too.");
 		fireEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
 		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
 		await waitFor(async () => expect(await sentence()).toBe("Anyone signed in to Orchestrator.inc with the link can watch every session in this project and start their own, which run in your sandbox with your repository access and its secrets."));
@@ -290,7 +334,9 @@ describe("general access", () => {
 		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
 		expect(screen.getByText("Standalone agent")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Share the whole project instead" })).toBeNull();
-		expect(await sentence()).toBe("Only people added above can open this session.");
+		// Nobody else in the workspace can open it until added.
+		expect(await sentence()).toBe("Only you and people added above can open this session.");
+		expect(document.querySelector("[data-share-workspace-row]")).toBeNull();
 		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", "s1"));
 	});
 
@@ -301,7 +347,7 @@ describe("general access", () => {
 		// No session to go back to.
 		expect(screen.queryByRole("button", { name: "Share only this session" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Share the whole project instead" })).toBeNull();
-		expect(await sentence()).toBe("Only people added above can open this project.");
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this project.");
 		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", undefined));
 		expect(mocks.client.getShareAccess).not.toHaveBeenCalledWith(ORG, "project", expect.any(String));
 		// Turning link access on makes a link to the whole project, naming no session.
@@ -328,7 +374,7 @@ describe("general access", () => {
 		view.rerender(dialog({}));
 		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Share only this session" })).toBeNull();
-		expect(await sentence()).toBe("Only people added above can open this project.");
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this project.");
 	});
 
 	it("is General access and Copy link only in a build without Teams", async () => {
@@ -404,6 +450,7 @@ describe("link access, made safe", () => {
 		document.querySelector("[data-testid=terminal]")?.remove();
 	});
 	beforeEach(() => {
+		mocks.org = { id: ORG, displayName: "Northwind", kind: "team" };
 		mocks.client.listShareLinks.mockReset().mockResolvedValue({ links: [] });
 		mocks.client.createShareLink.mockReset().mockResolvedValue({ link: shareLink({ id: NEW_LINK, sessionId: "s1", code: CODE, shortUrl: SHORT }) });
 		mocks.client.revokeShareLink.mockReset().mockResolvedValue({});

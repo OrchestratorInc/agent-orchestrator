@@ -509,6 +509,15 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
 	}
+	if m.forkRetry != nil && m.isSessionFork(ctx, rec.ID) {
+		// A fork that failed to start is copied again from its original;
+		// a plain restart would leave an empty chat in a blank worktree.
+		fork, err := m.forkRetry(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, false, fmt.Errorf("retry fork %s: %w", rec.ID, err)
+		}
+		cfg.Fork = fork
+	}
 	if rec.Harness == domain.HarnessCodex {
 		// ChatUI can change the saved model independently of effort, and provider
 		// capabilities can change between attempts. Validate the actual pair

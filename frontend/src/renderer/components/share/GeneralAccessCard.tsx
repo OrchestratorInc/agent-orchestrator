@@ -23,7 +23,7 @@ const TRUSTED_LINK_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "tr
 export function GeneralAccessCard({ scope, access, restricted, locale, label = true, onTurnOn, onTurnOff, onChangeRole, onOpenSettings }: {
 	scope: ShareScope;
 	access: LinkAccess;
-	/** The sentence for "Only people with access". */
+	/** The sentence for "Only people with access" in this workspace. */
 	restricted: string;
 	locale: string;
 	/** "General access" over the card; off where a section heading says it. */

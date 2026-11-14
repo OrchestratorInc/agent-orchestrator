@@ -57,6 +57,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			getTeamShareAccess: async (_org: string, _project: string, _session: string | undefined, teamId: string) => ({ members: mocks.teamMembers[teamId] ?? [] }),
 			listShareCandidates: async () => ({ candidates: mocks.candidates }),
 			listShareLinks: async () => ({ links: [] }),
+			listOrgMembers: async () => ({ members: [{ userId: "u-asha" }, { userId: "u-farah" }, { userId: "u-ben" }, { userId: "u-dana" }] }),
 			createShareGrants: async (...args: unknown[]) => {
 				mocks.calls.push(["createShareGrants", ...args]);
 				await held("createShareGrants");
@@ -82,6 +83,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: { user: { email: "asha@northwind.dev" } } }) }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org", displayName: "Northwind" } }) }));
 
 const member = (id: string, name: string, access: CloudCpTeamMemberAccess["access"], extra: Partial<CloudCpTeamMemberAccess["member"]> = {}): CloudCpTeamMemberAccess => ({
 	member: { id, teamId: "t-platform", name, email: `${name.toLowerCase().split(" ")[0]}@northwind.dev`, role: "member", invited: false, you: false, workspaceMember: false, addedAt: "2026-10-30T00:00:00Z", ...extra },
@@ -161,16 +163,16 @@ describe("ShareSessionDialog people and teams", () => {
 		mocks.candidates = [{ kind: "team", teamId: "t-checkout", name: "Checkout", memberCount: 6, memberNames: ["Ben", "Dana"] }];
 	});
 
-	it("lists access broadest first: owner, the project's shares, teams, people, pending emails", async () => {
+	it("lists access broadest first: owner, workspace, the project's shares, teams, people, pending emails", async () => {
 		renderDialog();
 		const list = await accessList();
 		await within(list).findByText("Platform");
 		expect(within(list).getByText(/Asha Rao/).textContent).toContain("(you)");
 		expect(within(list).getByText("Owner")).toBeInTheDocument();
-		// AO has no workspaces to list: nobody gets a row for being in one.
-		expect(list).not.toHaveTextContent("People in Northwind");
-		expect(list).not.toHaveTextContent("Workspace members");
-		expect(list.querySelector("[data-share-owner-row]")).toBe(list.firstElementChild);
+		const workspace = list.querySelector("[data-share-workspace-row]")!;
+		expect(workspace.textContent).toContain("Everyone in your workspace");
+		expect(workspace.textContent).toContain("Northwind · 4 members");
+		expect(workspace.textContent).toContain("Full access");
 		const rows = [...list.querySelectorAll("[data-share-entry]")];
 		expect(rows.map((element) => element.getAttribute("data-share-row"))).toEqual([
 			"project::team:t-data", "session:sess:team:t-platform", "session:sess:email:riya@acme.co", "session:sess:email:sam@contractor.io",
@@ -197,26 +199,30 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(await screen.findByRole("heading", { name: "Share project" })).toBeInTheDocument();
 	});
 
-	it("lists only the people and teams a project is shared with, with no workspace row on top", async () => {
+	it("puts the workspace on top of a project's list, as a session's owner is on top of its own", async () => {
 		mocks.projectAccess = { entries: [entry("g-data", { kind: "team", teamId: "t-data", teamName: "Data infra", memberCount: 4 }, { scope: "project", sessionId: undefined, source: "team" })] };
 		renderDialog();
 		await screen.findByText("Platform");
 		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
-		const team = await screen.findByText("Data infra");
-		const first = team.closest("li")!;
+		const workspace = await screen.findByText("Everyone in your workspace");
+		const first = workspace.closest("li")!;
+		expect(first.hasAttribute("data-share-workspace-row")).toBe(true);
+		expect(first.textContent).toContain("Full access");
 		expect(first.parentElement!.firstElementChild).toBe(first);
-		expect(screen.queryByText("People in Northwind")).toBeNull();
 	});
 
-	it("shows no empty list for a project nobody has been added to", async () => {
+	it("still lists the workspace for a project nobody has been added to", async () => {
 		mocks.projectAccess = { entries: [] };
 		renderDialog();
 		await screen.findByText("Platform");
 		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
 		expect(await screen.findByRole("heading", { name: /Share project/ })).toBeInTheDocument();
 		await waitFor(() => expect(mocks.calls).toContainEqual(["getShareAccess", undefined]));
-		await waitFor(() => expect(document.querySelector("[data-share-access-list]")).toBeNull());
-		expect(screen.queryByText("People with access")).toBeNull();
+		const workspace = await screen.findByText("Everyone in your workspace");
+		const list = workspace.closest("[data-share-access-list]")!;
+		expect(list.querySelectorAll("li")).toHaveLength(1);
+		expect(list.firstElementChild!.hasAttribute("data-share-workspace-row")).toBe(true);
+		expect(screen.getByText("People with access")).toBeInTheDocument();
 	});
 
 	it("shows a team's people its new access at once, before the change is saved", async () => {
