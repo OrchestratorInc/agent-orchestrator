@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiRequest } from "./api";
 import type { ServerConfig } from "./config";
 import type { PickerOption } from "./NativePickerList";
@@ -93,5 +93,13 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 			});
 		return () => { cancelled = true; clearTimeout(retry); };
 	}, [attempt, cfgKey, provider, reloadKey, sessionId]);
-	return { provider, accounts, current };
+	const reload = useCallback(async () => {
+		const cfg = cfgRef.current;
+		if (!cfg || !provider) return undefined;
+		const [list, id] = await Promise.all([getAgentAccounts(cfg, provider), sessionId ? getSessionAgentAccount(cfg, sessionId, provider) : undefined]);
+		setAccounts(list);
+		setCurrent(id);
+		return { accounts: list, current: id };
+	}, [provider, sessionId]);
+	return { provider, accounts, current, reload };
 }

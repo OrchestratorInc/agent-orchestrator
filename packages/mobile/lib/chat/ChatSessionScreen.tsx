@@ -639,19 +639,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
-		account: () => {
+		account: async () => {
 			if (!config) return;
 			const move = (accountId: string, stop: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stop)
 				.then(() => interfaceSwitch.refresh())
 				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
+			const { accounts, current } = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
 			void presentSheet({
 				kind: "account-picker",
 				subtitle: "The agent resumes this conversation on the account you choose.",
-				options: agentAccountOptions(agentAccounts.accounts),
-				selected: agentAccounts.current ?? "",
+				options: agentAccountOptions(accounts),
+				selected: current ?? "",
 				onSelect: (accountId) => {
 					if (!turnActive) return move(accountId, false);
-					const target = agentAccounts.accounts.find((account) => account.id === accountId);
+					const target = accounts.find((account) => account.id === accountId);
 					haptics.warning();
 					Alert.alert(
 						"Stop the turn and move?",

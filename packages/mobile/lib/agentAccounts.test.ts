@@ -89,6 +89,27 @@ describe("useAgentAccounts", () => {
 		probe.unmount();
 	});
 
+	it("reads a move made elsewhere when asked again, while still mounted", async () => {
+		let bound = "c1";
+		vi.mocked(fetch).mockImplementation(async (url) => String(url).includes("/sessions/")
+			? json({ claude: bound })
+			: json({ accounts: [
+				{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true },
+				{ id: "c2", provider: "claude", email: "b@x.dev", signedIn: true, default: false },
+			] }));
+		const probe = mount();
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(probe.get().current).toBe("c1");
+		bound = "c2";
+		await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+		expect(probe.get().current).toBe("c1");
+		let fresh: Awaited<ReturnType<ReturnType<typeof useAgentAccounts>["reload"]>>;
+		await act(async () => { fresh = await probe.get().reload(); });
+		expect(fresh!.current).toBe("c2");
+		expect(probe.get().current).toBe("c2");
+		probe.unmount();
+	});
+
 	it("does not retry a machine that refuses the phone", async () => {
 		vi.mocked(fetch).mockImplementation(async () => json({ code: "ORIGIN_FORBIDDEN", message: "Origin is not allowed" }, 403));
 		const probe = mount();
