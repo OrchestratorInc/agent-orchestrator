@@ -326,3 +326,63 @@ func clientKill(addr string) error {
 	}
 	return nil
 }
+
+// clientWatchForeground calls fn for every MsgForegroundState until ctx ends
+// or the host goes away.
+func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload)) error {
+	return clientWatchFrames(ctx, addr, MsgWatchForegroundReq, MsgForegroundState, func(payload []byte) {
+		var state ForegroundPayload
+		if json.Unmarshal(payload, &state) == nil {
+			fn(state)
+		}
+	})
+}
+
+// clientWatchTitle calls fn for every MsgTitleState until ctx ends or the host
+// goes away. The host sends its current title first.
+func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload)) error {
+	return clientWatchFrames(ctx, addr, MsgWatchTitleReq, MsgTitleState, func(payload []byte) {
+		var state TitlePayload
+		if json.Unmarshal(payload, &state) == nil {
+			fn(state)
+		}
+	})
+}
+
+// clientWatchFrames subscribes with request and passes each response frame's
+// payload to fn. The replay sent before the request is ignored.
+func clientWatchFrames(ctx context.Context, addr string, request, response byte, fn func(payload []byte)) error {
+	conn, err := dialHostContext(ctx, addr, dialTimeout)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	frame, err := EncodeMessage(request, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(frame); err != nil {
+		return err
+	}
+	parser := NewMessageParser(func(msgType byte, payload []byte) {
+		if msgType == response {
+			fn(payload)
+		}
+	})
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			parser.Feed(buf[:n])
+		}
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return err
+		}
+	}
+}

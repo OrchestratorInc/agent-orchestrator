@@ -48,7 +48,7 @@ Use the help output for the current target and message flags. For an independent
 Merge is always an explicit action:
 
 ```bash
-ao pr merge <pr-number>
+ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>
 ```
 
 For work on a schedule, use **Automations** rather than lifecycle reaction keys. For a reusable manual instruction or command, use project **Cues**. See [Automation reference](/configuration/lifecycle-automation) for both workflows and local-daemon scheduling limits.

@@ -69,6 +69,24 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
+	// ACPSteerPromptMetaKey marks a session/prompt that steers the running turn
+	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
+	// and the turn's result is the answer of the last of its prompts to return.
+	ACPSteerPromptMetaKey = "ao.steerPrompt"
+	// ACPSteerKeepsTurnMetaKey also marks a steer prompt that the agent answers
+	// at once while the turn's earlier prompt keeps the work, as Hermes'
+	// `/steer` command is. Its answer is never the turn's result: the turn
+	// ends with the answer of its last other prompt, success or failure.
+	ACPSteerKeepsTurnMetaKey = "ao.steerKeepsTurn"
+	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
+	// host refused because the turn it was meant for had already ended. The
+	// agent never saw it, so the guidance can go as a new turn.
+	ACPSteerTurnEndedDataKey = "ao.steerTurnEnded"
+	// ACPPromptHandoffMethod is an AO-private notification carrying the
+	// non-final answer of a prompt an earlier daemon attachment sent, such as
+	// a running prompt handing the turn to a steer prompt. The reattached
+	// controller has no request of its own to match it to.
+	ACPPromptHandoffMethod = "_ao/persistent_prompt_handoff"
 )
 
 var (
@@ -130,6 +148,10 @@ type ACPState struct {
 	ActivePrompt         bool            `json:"activePrompt,omitempty"`
 	ActiveCompaction     bool            `json:"activeCompaction,omitempty"`
 	PendingResultEventID string          `json:"pendingResultEventId,omitempty"`
+	// AvailableCommands is the latest available_commands_update catalog for
+	// SessionID. Adapters announce it once, as a notification after session
+	// setup, so a controller that reattaches later would otherwise never see it.
+	AvailableCommands json.RawMessage `json:"availableCommands,omitempty"`
 }
 
 // Transport is one authenticated attachment to a persistent provider host.
@@ -227,12 +249,17 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 	return func() { _ = os.Remove(path) }, nil
 }
 
-func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+func readDescriptorOnce(dataDir, sessionID string) (Descriptor, error) {
 	path, err := descriptorPath(dataDir, sessionID)
 	if err != nil {
 		return Descriptor{}, err
 	}
-	b, err := os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
+	f, err := openHostFile(path)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	b, err := io.ReadAll(f)
+	_ = f.Close()
 	if err != nil {
 		return Descriptor{}, err
 	}
@@ -523,8 +550,40 @@ func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, true)
 }
 
+func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(context.Background(), dataDir, sessionID)
+}
+
+func readDescriptorContext(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	d, err := readDescriptorOnce(dataDir, sessionID)
+	if !isDescriptorSharingViolation(err) {
+		return d, err
+	}
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return Descriptor{}, ctx.Err()
+		case <-timeout.C:
+			return Descriptor{}, err
+		case <-ticker.C:
+			d, err = readDescriptorOnce(dataDir, sessionID)
+			if !isDescriptorSharingViolation(err) {
+				return d, err
+			}
+		}
+	}
+}
+
+func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(ctx, dataDir, sessionID)
+}
+
 func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
-	d, err := readDescriptor(dataDir, sessionID)
+	d, err := readShutdownDescriptor(ctx, dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -566,7 +625,7 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		current, readErr := readDescriptor(dataDir, sessionID)
+		current, readErr := readShutdownDescriptor(waitCtx, dataDir, sessionID)
 		if readErr == nil && current.Token != d.Token {
 			return nil // A new owner could only publish after the old lock released.
 		}
@@ -577,7 +636,9 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 			} else if lockErr != nil {
 				return lockErr
 			}
-		} else if readErr != nil {
+		} else if readErr != nil && !hostFileBusy(readErr) {
+			// A busy descriptor is the exiting host deleting it, or another
+			// reader; the next poll sees it gone.
 			return readErr
 		}
 		select {
@@ -620,13 +681,20 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	child.Stderr = io.Discard
+	// The adapter's stderr is the only record of why a turn went silent. Keep it
+	// beside the descriptor instead of discarding it.
+	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
+		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
+		defer func() { _ = adapterLog.Close() }()
+		child.Stderr = adapterLog
+	}
 	closeProviderTree, err := startProviderProcess(child)
 	if err != nil {
 		return err
 	}
 	// The job owns descendants even if the direct provider exits first. Close
-	// it before releasing the host lock so Shutdown follows the kill request.
+	// it before waiting for inherited pipes and before releasing the host lock.
+	closeProviderTree = sync.OnceFunc(closeProviderTree)
 	defer closeProviderTree()
 
 	d := Descriptor{
@@ -733,6 +801,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
+	// A surviving descendant can keep child.Wait blocked on the stderr-copy
+	// goroutine after the provider exits. Reap the job before that final wait.
+	closeProviderTree()
 	_ = wait()
 	return runErr
 }

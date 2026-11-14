@@ -196,7 +196,7 @@ describe("resolveDaemonFromRunFile", () => {
 			pid: 4242,
 			executablePath: undefined,
 			workingDirectory: undefined,
-			message: "An AO daemon is already running, but it is not ready yet.",
+			message: "An Orchestrator daemon is already running, but it is not ready yet.",
 			code: "not_ready",
 		});
 	});
@@ -209,13 +209,13 @@ describe("resolveDaemonFromRunFile", () => {
 				"3001:healthz": { status: "ok", service: DAEMON_SERVICE_NAME, pid: 4242 },
 				"3001:readyz": { status: "ready", service: DAEMON_SERVICE_NAME, pid: 4242, workingDirectory: "/other" },
 			}),
-			identityError: () => "Another AO daemon is already running from /other.",
+			identityError: () => "Another Orchestrator daemon is already running from /other.",
 		});
 		expect(result).toMatchObject({
 			state: "error",
 			pid: 4242,
 			port: 3001,
-			message: "Another AO daemon is already running from /other.",
+			message: "Another Orchestrator daemon is already running from /other.",
 		});
 	});
 
@@ -279,6 +279,22 @@ describe("resolveDaemonFromPort", () => {
 		});
 	});
 
+	it("reports the daemon's IPv6 loopback listener only when its readiness probe says so", async () => {
+		const ready = (ipv6Loopback: unknown) => resolveDaemonFromPort({
+			expectedPort: 3001,
+			probe: fakeProbe({
+				"3001:healthz": { status: "ok", service: DAEMON_SERVICE_NAME, pid: 777 },
+				"3001:readyz": parseDaemonProbe("readyz", { status: "ready", service: DAEMON_SERVICE_NAME, pid: 777, ipv6Loopback }),
+			}),
+			identityError: NO_IDENTITY_ERROR,
+		});
+		expect(await ready(true)).toEqual({ state: "ready", port: 3001, pid: 777, ipv6Loopback: true });
+		// Down, or an older daemon that does not say: 127.0.0.1 only.
+		expect(await ready(false)).toEqual({ state: "ready", port: 3001, pid: 777 });
+		expect(await ready(undefined)).toEqual({ state: "ready", port: 3001, pid: 777 });
+		expect(await ready("true")).toEqual({ state: "ready", port: 3001, pid: 777 });
+	});
+
 	it("reports an error (not a spawn) when the serving daemon is not ready yet", async () => {
 		const result = await resolveDaemonFromPort({
 			expectedPort: 3001,
@@ -294,7 +310,7 @@ describe("resolveDaemonFromPort", () => {
 			pid: 777,
 			executablePath: undefined,
 			workingDirectory: undefined,
-			message: "An AO daemon is already running, but it is not ready yet.",
+			message: "An Orchestrator daemon is already running, but it is not ready yet.",
 			code: "not_ready",
 		});
 	});
@@ -309,13 +325,13 @@ describe("resolveDaemonFromPort", () => {
 			identityError: (probe) =>
 				probe.executablePath === "/new/ao"
 					? null
-					: `Another AO daemon is already running from ${probe.executablePath}.`,
+					: `Another Orchestrator daemon is already running from ${probe.executablePath}.`,
 		});
 		expect(result).toMatchObject({
 			state: "error",
 			port: 3001,
 			pid: 777,
-			message: "Another AO daemon is already running from /old/ao.",
+			message: "Another Orchestrator daemon is already running from /old/ao.",
 		});
 	});
 
@@ -460,13 +476,13 @@ describe("end-to-end against a real daemon server", () => {
 			identityError: (probe) =>
 				probe.executablePath === "/expected/ao"
 					? null
-					: `Another AO daemon is already running from ${probe.executablePath}.`,
+					: `Another Orchestrator daemon is already running from ${probe.executablePath}.`,
 		});
 		expect(result).toMatchObject({
 			state: "error",
 			port,
 			pid: 909,
-			message: "Another AO daemon is already running from /old/build/ao.",
+			message: "Another Orchestrator daemon is already running from /old/build/ao.",
 		});
 	});
 

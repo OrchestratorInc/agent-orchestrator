@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { UpdateErrorInfo } from "../shared/update-error-message";
 
 /** A refreshed target must be shown and explicitly confirmed before installation. */
 export type UpdateInstallResult = void | {
@@ -79,6 +80,11 @@ export interface UpdateStatus {
 	// rendering nothing at all.
 	checksFailing?: boolean;
 	checkError?: string;
+	// What `message` (on an error status) and `checkError` say, when the main
+	// process rewrote an updater failure. The renderer shows that sentence in the
+	// person's language and falls back to the English text (#5755).
+	errorInfo?: UpdateErrorInfo;
+	checkErrorInfo?: UpdateErrorInfo;
 	// Present only when state === "error" and the failure is a Chromium
 	// network-stack error (net::ERR_*). The renderer localizes restart guidance
 	// from this flag instead of receiving pre-built English prose (#3526).

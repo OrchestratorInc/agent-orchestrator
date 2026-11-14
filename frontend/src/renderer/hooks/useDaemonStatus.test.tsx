@@ -147,13 +147,9 @@ describe("useDaemonStatus", () => {
 			exact: true,
 		});
 		expect(queryClient.removeQueries).toHaveBeenCalledWith({
-			queryKey: ["codex-accounts"],
-			exact: true,
-		});
-		expect(queryClient.removeQueries).toHaveBeenCalledWith({
 			queryKey: ["system-requirements"],
 		});
-		expect(queryClient.removeQueries).toHaveBeenCalledTimes(9);
+		expect(queryClient.removeQueries).toHaveBeenCalledTimes(6);
 	});
 
 	it("ensures display readiness when the window regains focus", async () => {

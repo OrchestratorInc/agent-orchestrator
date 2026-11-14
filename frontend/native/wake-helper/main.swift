@@ -131,11 +131,11 @@ struct WakeAssertions {
         if !requestedIdle && idle != 0 { IOPMAssertionRelease(idle); idle = 0 }
         if requestedIdle && idle == 0 {
             guard IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
-                IOPMAssertionLevel(kIOPMAssertionLevelOn), "AO Stay Awake" as CFString, &idle) == kIOReturnSuccess else { return false }
+                IOPMAssertionLevel(kIOPMAssertionLevelOn), "Orchestrator Stay Awake" as CFString, &idle) == kIOReturnSuccess else { return false }
         }
         if requestedDisplay && display == 0 {
             guard IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
-                IOPMAssertionLevel(kIOPMAssertionLevelOn), "AO Stay Awake display" as CFString, &display) == kIOReturnSuccess else { return false }
+                IOPMAssertionLevel(kIOPMAssertionLevelOn), "Orchestrator Stay Awake display" as CFString, &display) == kIOReturnSuccess else { return false }
         }
         return true
     }
@@ -441,7 +441,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "probe"] {
                         }
                         break
                     } catch {
-                        detail = "Disable Low Power Mode in other AO instances and resolve pending power recovery before revoking authorization. An older helper must be upgraded first."
+                        detail = "Disable Low Power Mode in other Orchestrator instances and resolve pending power recovery before revoking authorization. An older helper must be upgraded first."
                         usleep(100_000)
                     }
                 } while ProcessInfo.processInfo.systemUptime < until

@@ -69,7 +69,7 @@ func validateProviderConfig(cfg providerConfig) error {
 		return errors.New("unreal agent provider requires absolute data and workspace paths")
 	}
 	if cfg.AOSessionID == "" || filepath.Base(cfg.AOSessionID) != cfg.AOSessionID || strings.ContainsAny(cfg.AOSessionID, `/\\`) {
-		return errors.New("invalid Unreal Agent AO session id")
+		return errors.New("invalid Orchestrator-managed session id for Unreal Agent")
 	}
 	if cfg.ProviderConversationID == "" || filepath.Base(cfg.ProviderConversationID) != cfg.ProviderConversationID || strings.ContainsAny(cfg.ProviderConversationID, `/\\`) {
 		return errors.New("invalid Unreal Agent provider conversation id")

@@ -105,7 +105,7 @@ it("opens an artifact from the worker's artifact folder in the viewer", async ()
 	const links = renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityRole === "link");
 	expect(links.map((node) => node.props.accessibilityLabel)).toEqual(["Open audit.md"]);
 	await act(async () => links[0]!.props.onPress());
-	expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/artifact/[sessionId]", params: { sessionId: "w-1", entry: "audit.md", hostId: "h1" } });
+	expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/artifact/[sessionId]", params: { sessionId: "w-1", path: "audit.md", hostId: "h1" } });
 });
 
 it("shows a report headed by its first sentence once when opened, not twice", async () => {

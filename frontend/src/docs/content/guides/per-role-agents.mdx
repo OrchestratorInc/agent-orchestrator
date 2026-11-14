@@ -44,7 +44,7 @@ For a full configuration replacement, the stored JSON shape is:
 
 This example uses `bypass-permissions`, which lets provider tools act without their normal approval prompts. Use it only when intended; available permission modes depend on the provider.
 
-The `--config-json` flag takes a JSON string, not a file, and `set-config` replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
+The `--config-json` flag takes a JSON string, not a file, and replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
 
 ## Choose which models a harness offers
 
@@ -90,7 +90,7 @@ Only agents that are installed and ready on that computer are offered, and Chat 
 
 ## Project rules
 
-Use `agentRules` and `agentRulesFile` for worker instructions. Use `orchestratorRules` for supervision-specific guidance. These are stored in the typed project config and injected into the appropriate session role.
+Use `agentRules` and `agentRulesFile` for worker instructions. Use `orchestratorRules` and `orchestratorRulesFile` for supervision-specific guidance. These are stored in the typed project config and injected into the appropriate session role.
 
 <Callout type="info">
 	Orchestrator uses the provider CLI already installed and authenticated on your machine. Run `ao doctor` if a configured harness fails preflight.

@@ -3,14 +3,132 @@ package shellterm
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestCueCommandInput(t *testing.T) {
+	command := "printf '%s\\n' 'left\tright'\n# '\"雪\r\n"
+	for _, shell := range []string{"bash", "zsh", "sh", "fish", "bash.exe", "sh.exe", "pwsh.exe", "powershell.exe"} {
+		t.Run(shell, func(t *testing.T) {
+			delivery, err := prepareCueCommand(t.TempDir(), []string{filepath.Join("shells", shell)}, command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer delivery.cleanup()
+			payload, err := os.ReadFile(delivery.file)
+			if err != nil || !strings.HasSuffix(string(payload), cueEvaluationSuffix([]string{shell}, command)) {
+				t.Fatalf("payload = %q, err = %v, want exact evaluated command %q", payload, err, command)
+			}
+			if strings.ContainsAny(delivery.input, "\t\r\n") || strings.Contains(delivery.input, "left") || !strings.Contains(delivery.input, "command") {
+				t.Fatalf("input is not a single-line file dispatcher: %q", delivery.input)
+			}
+		})
+	}
+	for _, argv := range [][]string{nil, {"cmd.exe"}, {"unknown"}} {
+		delivery, err := prepareCueCommand(t.TempDir(), argv, command)
+		if err != nil || delivery.input != command || delivery.file != "" {
+			t.Fatalf("legacy shell %v: delivery = %+v, err = %v", argv, delivery, err)
+		}
+	}
+}
+
+func cueEvaluationSuffix(argv []string, command string) string {
+	switch strings.ToLower(filepath.Base(argv[0])) {
+	case "fish":
+		return "eval " + fishSingleQuote("set -e AO_CUE_COMMAND; "+command) + "\n"
+	case "pwsh.exe", "powershell.exe":
+		return "Invoke-Expression " + powershellSingleQuote("Remove-Item Env:AO_CUE_COMMAND -ErrorAction SilentlyContinue; "+command) + "\n"
+	default:
+		return "eval " + shellSingleQuote("unset AO_CUE_COMMAND; "+command) + "\n"
+	}
+}
+
+func TestCueCommandDoesNotExposePayloadDuringStartup(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint(ready), func(t *testing.T) {
+			rt := newFakeShellRuntime()
+			rt.cueReady = ready
+			rt.childExited = !ready
+			rt.onCreate = func(cfg ports.RuntimeConfig) {
+				for key, value := range cfg.Env {
+					if strings.Contains(value, "private-cue-payload") {
+						t.Errorf("command payload exposed in startup environment key %s", key)
+					}
+				}
+				files, err := filepath.Glob(filepath.Join(filepath.Dir(filepath.Dir(cfg.Env["AO_CUE_READY_FILE"])), "cue-commands", "*", "command"))
+				if err != nil || len(files) != 0 {
+					t.Errorf("payload created before readiness: %v, %v", files, err)
+				}
+			}
+			svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"project": t.TempDir()}})
+			svc.dataDir = t.TempDir()
+			_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "project", Shell: cueTestShell(t), Command: "echo private-cue-payload"})
+			if ready && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCueCommandPayloadLifetime(t *testing.T) {
+	previousTimeout := cueCommandConsumeTimeout
+	cueCommandConsumeTimeout = 80 * time.Millisecond
+	t.Cleanup(func() { cueCommandConsumeTimeout = previousTimeout })
+	for _, phase := range []string{"consumed", "create failure", "persist failure", "send failure", "consume timeout", "consume cancellation"} {
+		t.Run(phase, func(t *testing.T) {
+			rt := newFakeShellRuntime()
+			rt.cueReady = true
+			st := &fakeShellTerminalStore{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch phase {
+			case "create failure":
+				rt.createErr = errors.New("create failed")
+			case "persist failure":
+				st.insertErr = errors.New("persist failed")
+			case "send failure":
+				rt.sendErr = errors.New("ambiguous send")
+			case "consume timeout":
+				rt.cueDoNotConsume = true
+			case "consume cancellation":
+				rt.cueDoNotConsume = true
+				rt.onSendMessage = cancel
+			}
+			svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"project": t.TempDir()}})
+			svc.dataDir = t.TempDir()
+			_, err := svc.RunCueCommand(ctx, RunCueCommandInput{ProjectID: "project", Shell: cueTestShell(t), Command: "echo payload"})
+			if (err == nil) != (phase == "consumed") {
+				t.Fatalf("unexpected result for %s: %v", phase, err)
+			}
+			if phase == "consume cancellation" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation lost: %v", err)
+			}
+			if phase == "consume timeout" {
+				var apiErr *apierr.Error
+				if !errors.As(err, &apiErr) || apiErr.Code != "CUE_COMMAND_NOT_CONSUMED" {
+					t.Fatalf("consume timeout = %v", err)
+				}
+			}
+			files, globErr := filepath.Glob(filepath.Join(svc.dataDir, "cue-commands", "*"))
+			if globErr != nil || len(files) != 0 {
+				t.Fatalf("payload artifacts remain: %v, %v", files, globErr)
+			}
+			if len(rt.sentCh) > 1 {
+				t.Fatal("delivery was retried")
+			}
+		})
+	}
+}
 
 func cueTestShell(t *testing.T) string {
 	t.Helper()
@@ -19,6 +137,21 @@ func cueTestShell(t *testing.T) string {
 	}
 	t.Setenv("SHELL", "/bin/sh")
 	return ""
+}
+
+func assertCueDelivery(t *testing.T, rt *fakeShellRuntime, handleID, command string) {
+	t.Helper()
+	sent := <-rt.sentCh
+	cfg := rt.created[len(rt.created)-1]
+	if sent.handleID != handleID || !strings.Contains(sent.input, filepath.Base(sent.payloadFile)) || !strings.HasSuffix(sent.payload, cueEvaluationSuffix(cfg.Argv, command)) {
+		t.Fatalf("sent = %+v, want handle %q and exact evaluated command %q", sent, handleID, command)
+	}
+	if cfg.Env["AO_CUE_COMMAND"] != "" {
+		t.Fatal("command payload was passed in the environment")
+	}
+	if _, err := os.Stat(sent.payloadFile); !os.IsNotExist(err) {
+		t.Fatalf("command file remains after delivery: %v", err)
+	}
 }
 
 func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
@@ -36,9 +169,7 @@ func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 	if first.WorkingDir != root || first.SessionID != "" || len(rt.created) != 1 || st.records[0].Transient {
 		t.Fatalf("first terminal = %+v, creates = %+v, records = %+v", first, rt.created, st.records)
 	}
-	if sent := <-rt.sentCh; sent.handleID != first.HandleID || sent.input != input.Command {
-		t.Fatalf("sent = %+v", sent)
-	}
+	assertCueDelivery(t, rt, first.HandleID, input.Command)
 	input.Command = "npm run build"
 	second, err := svc.RunCueCommand(context.Background(), input)
 	if err != nil {
@@ -47,9 +178,7 @@ func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 	if second.HandleID == first.HandleID || second.Title == first.Title || len(rt.created) != 2 || len(st.records) != 2 || st.records[1].Transient {
 		t.Fatalf("second = %+v, creates = %+v", second, rt.created)
 	}
-	if sent := <-rt.sentCh; sent.handleID != second.HandleID || sent.input != input.Command {
-		t.Fatalf("sent = %+v", sent)
-	}
+	assertCueDelivery(t, rt, second.HandleID, input.Command)
 }
 
 func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
@@ -58,7 +187,7 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	rt.cueReady = true
 	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{
 		roots: map[domain.ProjectID]string{"portfolio": root},
-		envs:  map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "cue-value", "AO_CUE_READY_FILE": "untrusted"}},
+		envs:  map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "cue-value", "AO_CUE_READY_FILE": "untrusted", "AO_CUE_COMMAND": "untrusted"}},
 	})
 	svc.dataDir = t.TempDir()
 	_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "pwd"})
@@ -70,6 +199,9 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	}
 	if got := rt.created[0].Env["AO_CUE_READY_FILE"]; got == "untrusted" || got == "" {
 		t.Fatalf("cue readiness marker = %q", got)
+	}
+	if got := rt.created[0].Env["AO_CUE_COMMAND"]; got != "" {
+		t.Fatalf("cue command = %q", got)
 	}
 }
 
@@ -96,25 +228,19 @@ func TestCueCommandDoesNotSendToExistingTerminals(t *testing.T) {
 	if err != nil || term.HandleID == "old" || term.HandleID == "new" || term.WorkingDir != workspace || term.SessionID != "session" {
 		t.Fatalf("new session terminal = %+v, err = %v", term, err)
 	}
-	if sent := <-rt.sentCh; sent.handleID != term.HandleID || sent.input != "pwd" {
-		t.Fatalf("session send = %+v", sent)
-	}
+	assertCueDelivery(t, rt, term.HandleID, "pwd")
 	firstHandle := term.HandleID
 	term, err = svc.RunCueCommand(context.Background(), input)
 	if err != nil || term.HandleID == firstHandle {
 		t.Fatalf("next session terminal = %+v, err = %v", term, err)
 	}
-	if sent := <-rt.sentCh; sent.handleID != term.HandleID || sent.input != "pwd" {
-		t.Fatalf("next session send = %+v", sent)
-	}
+	assertCueDelivery(t, rt, term.HandleID, "pwd")
 	input.SessionID = ""
 	term, err = svc.RunCueCommand(context.Background(), input)
 	if err != nil || term.HandleID == "board" || term.SessionID != "" || term.WorkingDir != root {
 		t.Fatalf("new board terminal = %+v, err = %v", term, err)
 	}
-	if sent := <-rt.sentCh; sent.handleID != term.HandleID || sent.input != "pwd" {
-		t.Fatalf("board send = %+v", sent)
-	}
+	assertCueDelivery(t, rt, term.HandleID, "pwd")
 	if len(rt.created) != 3 {
 		t.Fatalf("creates = %+v, want one per invocation", rt.created)
 	}
@@ -193,9 +319,7 @@ func TestCueCommandWaitsForShellPrompt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("cue did not dispatch after shell readiness")
 	}
-	if sent := <-rt.sentCh; sent.input != "pwd" {
-		t.Fatalf("sent = %+v", sent)
-	}
+	assertCueDelivery(t, rt, st.records[0].HandleID, "pwd")
 }
 
 func TestCueCommandDoesNotSendWhenShellExitsBeforePrompt(t *testing.T) {

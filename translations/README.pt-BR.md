@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<h3>Pare de vigiar agentes. Comece a fazer merge de trabalho de verdade.</h3>
+### Orchestrator.inc
+
+<h4>Pare de vigiar agentes. Comece a fazer merge de trabalho de verdade.</h4>
 
 <p>
   Execute uma frota de agentes de programação mantendo branches, revisões e falhas de CI sob controle.
@@ -153,8 +155,8 @@ Baixe em [orchestrator.inc/download](https://orchestrator.inc/download/) ou nas 
 
 | Plataforma | Download |
 | :-- | :-- |
-| **macOS** (Apple silicon) | [`agent-orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg) |
-| **macOS** (Intel) | [`agent-orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg) |
+| **macOS** (Apple silicon) | [`Orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-arm64.dmg) |
+| **macOS** (Intel) | [`Orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/Orchestrator-darwin-x64.dmg) |
 | **Windows** | [`agent-orchestrator-win32-x64.exe`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe) |
 | **Linux** (AppImage) | [`agent-orchestrator-linux-x64.AppImage`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
 | **Linux** (Debian/Ubuntu) | [`agent-orchestrator-linux-x64.deb`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) |

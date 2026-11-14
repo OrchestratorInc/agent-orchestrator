@@ -26,6 +26,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessOpenCode,
 		domain.HarnessOpenCodeV2,
 		domain.HarnessDroid,
+		domain.HarnessGrok,
 		domain.HarnessKimi,
 		domain.HarnessKimchi,
 		domain.HarnessPi,
@@ -35,6 +36,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
+		domain.HarnessHermes,
 	} {
 		if !r.SupportsChat(harness) {
 			t.Errorf("%s has no chat driver", harness)
@@ -48,8 +50,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
-		domain.HarnessHermes, // TUI-only until a chat driver is qualified
-		domain.HarnessStrands,
+		domain.HarnessStrands, // TUI-only: native ACP is not qualified
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

@@ -13,13 +13,15 @@ import type { NetworkCapture } from "./network";
 import { evaluateUrl, parsePolicy, type SitePolicy, trustedInputAllowed } from "./policy";
 import { BridgeError, isRecord, stringArg } from "./protocol";
 import { annotatePng, base64ToBytes, bytesToBase64, MAX_SCREENSHOT_BYTES, pngSize } from "./screenshot";
-import type { ActiveTab, SessionTabRegistry, SessionTabs } from "./sessions";
+import { groupTitle, type ActiveTab, type SessionTabRegistry, type SessionTabs } from "./sessions";
 import type { RefInfo } from "./snapshot";
 import type { TrustedInput } from "./trusted-input";
 import { normalizeAgentURL, originOf } from "./urls";
 
 const ACT_VERBS = new Set(["click", "dblclick", "focus", "hover", "fill", "type", "check", "uncheck"]);
 const NAVIGATION_TIMEOUT_MS = 30_000;
+// Heavy pages can take many seconds to fire load after they are usable.
+const LOAD_GRACE_MS = 1_500;
 const POSTCONDITION_POLL_MS = 150;
 const CONTENT_TIMEOUT_MS = 15_000;
 export const POLICY_KEY = "aoSitePolicy";
@@ -276,7 +278,7 @@ export class Executor {
 			try {
 				await this.deps.chrome.scripting.executeScript({ target: { tabId: page.tabId, frameIds: [frameId] }, files: ["content.js"] });
 			} catch (error) {
-				throw new BridgeError("BROWSER_PAGE_RESTRICTED", `AO cannot work on this page: ${error instanceof Error ? error.message : String(error)}`);
+				throw new BridgeError("BROWSER_PAGE_RESTRICTED", `Orchestrator cannot work on this page: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			response = await send();
 		}
@@ -312,22 +314,33 @@ export class Executor {
 		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));
 	}
 
+	/** The user is on a tab no agent owns in this tab's window. */
+	private async userChoseAnotherTab(page: ActiveTab): Promise<boolean> {
+		if (page.tab.active) return false;
+		const [front] = await this.deps.chrome.tabs.query({ windowId: page.tab.windowId, active: true });
+		return front?.id !== undefined && !this.deps.sessions.ownerOf(front.id);
+	}
+
 	/**
-	 * Chrome drops trusted input to hidden pages, so show the agent's tab in
-	 * its window (without focusing the window) and wait until it is visible.
+	 * captureVisibleTab needs the agent's tab painted, so bring it to the front
+	 * of its window (never focusing the window) and wait until it is visible.
+	 * A minimized window stays minimized: restoring it would take focus.
 	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
-		if (!page.tab.active) await this.deps.chrome.tabs.update(page.tabId, { active: true });
+		const chrome = this.deps.chrome;
+		const hidden = () =>
+			new BridgeError(
+				"BROWSER_TAB_HIDDEN",
+				`Screenshots on this site need the "${groupTitle(ctx.sessionId)}" window on screen, and Chrome is hiding it. Use \`ao browser snapshot\` instead of a screenshot`,
+			);
+		const window = await chrome.windows.get(page.tab.windowId).catch(() => undefined);
+		if (window?.state === "minimized") throw hidden();
+		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
 		const deadline = Date.now() + 2_000;
 		for (;;) {
 			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
 			if (state.visibility !== "hidden") return;
-			if (Date.now() >= deadline) {
-				throw new BridgeError(
-					"BROWSER_TAB_HIDDEN",
-					"Chrome is hiding the AO tab (is its window minimized?); trusted input needs the tab on screen",
-				);
-			}
+			if (Date.now() >= deadline) throw hidden();
 			await sleep(50, ctx.signal);
 		}
 	}
@@ -342,15 +355,33 @@ export class Executor {
 			const finish = (loaded: boolean, error?: Error) => {
 				if (done) return;
 				done = true;
+				chrome.webNavigation.onCommitted.removeListener(onCommitted);
+				chrome.webNavigation.onReferenceFragmentUpdated.removeListener(onFragment);
+				chrome.webNavigation.onDOMContentLoaded.removeListener(onDomContentLoaded);
 				chrome.webNavigation.onCompleted.removeListener(onCompleted);
 				chrome.webNavigation.onErrorOccurred.removeListener(onError);
 				clearTimeout(timer);
+				clearTimeout(graceTimer);
 				signal.removeEventListener("abort", onAbort);
 				if (error) reject(error);
 				else resolve(loaded);
 			};
-			const onCompleted = (details: { tabId: number; frameId: number }) => {
+			// Until this navigation commits, load events belong to the page that
+			// was already loading.
+			let committed = false;
+			const onCommitted = (details: { tabId: number; frameId: number }) => {
+				if (details.tabId === tabId && details.frameId === 0) committed = true;
+			};
+			// A same-document navigation is done at once and fires no load events.
+			const onFragment = (details: { tabId: number; frameId: number }) => {
 				if (details.tabId === tabId && details.frameId === 0) finish(true);
+			};
+			let graceTimer: ReturnType<typeof setTimeout> | undefined;
+			const onDomContentLoaded = (details: { tabId: number; frameId: number }) => {
+				if (committed && details.tabId === tabId && details.frameId === 0) graceTimer ??= setTimeout(() => finish(false), LOAD_GRACE_MS);
+			};
+			const onCompleted = (details: { tabId: number; frameId: number }) => {
+				if (committed && details.tabId === tabId && details.frameId === 0) finish(true);
 			};
 			const onError = (details: { tabId: number; frameId: number; error?: string }) => {
 				if (details.tabId === tabId && details.frameId === 0 && details.error !== "net::ERR_ABORTED") {
@@ -359,6 +390,9 @@ export class Executor {
 			};
 			const onAbort = () => finish(false, new BridgeError("BROWSER_COMMAND_CANCELED", "Browser command was canceled"));
 			const timer = setTimeout(() => finish(false), NAVIGATION_TIMEOUT_MS);
+			chrome.webNavigation.onCommitted.addListener(onCommitted);
+			chrome.webNavigation.onReferenceFragmentUpdated.addListener(onFragment);
+			chrome.webNavigation.onDOMContentLoaded.addListener(onDomContentLoaded);
 			chrome.webNavigation.onCompleted.addListener(onCompleted);
 			chrome.webNavigation.onErrorOccurred.addListener(onError);
 			signal.addEventListener("abort", onAbort, { once: true });
@@ -426,7 +460,7 @@ export class Executor {
 			if (matches.length !== 1) {
 				throw new BridgeError(
 					"FRAME_NOT_FOUND",
-					matches.length === 0 ? "That frame has not loaded" : "Several frames load the same address; AO cannot tell them apart",
+					matches.length === 0 ? "That frame has not loaded" : "Several frames load the same address; Orchestrator cannot tell them apart",
 				);
 			}
 			const current = ctx.extras.frame && ctx.extras.frame.logicalTabId === page.logicalId ? ctx.extras.frame.chain : [];
@@ -607,7 +641,6 @@ export class Executor {
 				case "click":
 				case "dblclick":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), {
 							clicks: action === "dblclick" ? 2 : 1,
 							human: args.human === true,
@@ -620,7 +653,6 @@ export class Executor {
 					break;
 				case "hover":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						value = { hovered: true, ...(await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true, ctx.signal)) };
 					} else {
 						value = await this.content(page, ctx, { op: "hover", ref });
@@ -628,7 +660,6 @@ export class Executor {
 					break;
 				case "type":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						await this.content(page, ctx, { op: "focus", ref });
 						value = { typed: true, ...(await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""), ctx.signal)) };
 					} else {
@@ -647,7 +678,6 @@ export class Executor {
 		return this.withPage(ctx, async (page) => {
 			let input = {};
 			if (await this.useTrustedInput(ctx, page)) {
-				await this.showTab(ctx, page);
 				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
 			} else await this.content(page, ctx, { op: "press", key });
 			return { pressed: key, ...input, ...this.result(await this.refreshed(page)) };
@@ -659,7 +689,6 @@ export class Executor {
 			if (!(await this.useTrustedInput(ctx, page))) {
 				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
 			}
-			await this.showTab(ctx, page);
 			const from = await this.point(ctx, page, ref);
 			const to = await this.point(ctx, page, targetRef);
 			const input = await this.deps.trusted.drag(page.tabId, from, to, human, ctx.signal);
@@ -740,6 +769,32 @@ export class Executor {
 	}
 
 	/**
+	 * The session's tab as base64 PNG. The debugger captures the tab itself,
+	 * so its window may be covered or the user may be on another tab. Sites
+	 * that keep the debugger away fall back to captureVisibleTab.
+	 */
+	private async captureTab(ctx: Context, page: ActiveTab): Promise<string> {
+		if (ctx.approval.trusted && trustedInputAllowed(ctx.policy, page.tab.url)) {
+			try {
+				return await this.deps.trusted.screenshot(page.tabId, ctx.signal);
+			} catch (error) {
+				// A page that loaded while its window was minimized has never
+				// painted. Restoring the window would take focus from the user
+				// on macOS, so leave it minimized.
+				if (error instanceof BridgeError && error.code === "SCREENSHOT_TIMEOUT") {
+					throw new BridgeError(
+						"SCREENSHOT_UNAVAILABLE",
+						"Chrome has not painted the session's tab (its window is minimized); use `ao browser snapshot` instead of a screenshot",
+					);
+				}
+				throw error;
+			}
+		}
+		const dataUrl = await this.captureOwnTab(ctx, page);
+		return dataUrl.slice(dataUrl.indexOf(",") + 1);
+	}
+
+	/**
 	 * captureVisibleTab captures whatever tab is in front of a window, not a
 	 * given tab. Serialize activation and capture per window across sessions,
 	 * and refuse the pixels if the window showed any other tab meanwhile, so a
@@ -749,6 +804,9 @@ export class Executor {
 		const chrome = this.deps.chrome;
 		for (let attempt = 0; ; attempt++) {
 			const fresh = await this.refreshed(page);
+			if (await this.userChoseAnotherTab(fresh)) {
+				throw new BridgeError("BROWSER_TAB_BUSY", "The user is on another tab in the agent's window, and a screenshot would need to switch it. Use snapshot instead, or retry later");
+			}
 			const windowId = fresh.tab.windowId;
 			const previous = this.captureLocks.get(windowId) ?? Promise.resolve();
 			const run = previous.catch(() => undefined).then(async () => {
@@ -794,10 +852,9 @@ export class Executor {
 				items = value.annotations;
 				dpr = value.dpr || 1;
 			}
-			const dataUrl = await this.captureOwnTab(ctx, page);
-			let png = base64ToBytes(dataUrl.slice(dataUrl.indexOf(",") + 1));
+			let png = base64ToBytes(await this.captureTab(ctx, page));
 			if (annotate && items.length > 0) png = await annotatePng(png, items, dpr);
-			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded AO's size limit");
+			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded Orchestrator's size limit");
 			const { width, height } = pngSize(png);
 			return {
 				data: bytesToBase64(png),
