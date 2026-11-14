@@ -215,6 +215,16 @@ const HIDDEN_RECT: BrowserRect = { x: 0, y: 0, width: 0, height: 0 };
 // newly loaded shell a newer range while staying below Number.MAX_SAFE_INTEGER.
 let nextLayoutRevision = Math.floor(globalThis.performance?.timeOrigin ?? Date.now()) * 1_000;
 
+function sameRect(a: BrowserRect, b: BrowserRect): boolean {
+	return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+function scrollCanMoveSlot(target: EventTarget | null, slot: Element | null): boolean {
+	if (!slot || !(target instanceof Node)) return true;
+	if (target.nodeType === Node.DOCUMENT_NODE) return true;
+	return target.contains(slot);
+}
+
 function claimLayoutRevision(): number {
 	nextLayoutRevision += 1;
 	return nextLayoutRevision;
@@ -350,6 +360,10 @@ export function useBrowserView({
 	const frameRef = useRef<number | null>(null);
 	const appliedLayoutRevisionRef = useRef(0);
 	const settleTimerRef = useRef<number | null>(null);
+	// What the last setBounds told main, so a scroll that moved nothing sends nothing.
+	const lastSentBoundsRef = useRef<{ viewId: string; rect: BrowserRect; visible: boolean } | null>(null);
+	// The queued measure came only from scrolling; any other trigger clears it.
+	const scrollOnlyMeasureRef = useRef(false);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
 	const tabNoticeTimerRef = useRef<number | null>(null);
@@ -393,6 +407,7 @@ export function useBrowserView({
 	const sendHiddenBounds = useCallback((id = viewIdRef.current) => {
 		if (!id) return;
 		publishBrowserHole(id, null);
+		lastSentBoundsRef.current = { viewId: id, rect: HIDDEN_RECT, visible: false };
 		window.ao?.browser.setBounds({
 			viewId: id,
 			revision: claimLayoutRevision(),
@@ -401,7 +416,10 @@ export function useBrowserView({
 		});
 	}, []);
 
-	const measureAndSend = useCallback(() => {
+	// onlyIfChanged is for scroll-driven measures alone. Main can hide a view on
+	// its own (clearing the page, closing the last tab), so every other trigger
+	// always re-sends the geometry.
+	const measureAndSend = useCallback((onlyIfChanged = false) => {
 		// measureAndSend runs both from the scheduleMeasure() rAF callback and as a
 		// direct synchronous call (parking on overlay open, the settle timer). A
 		// direct call may land while a scheduled frame is still queued, so cancel
@@ -421,12 +439,11 @@ export function useBrowserView({
 			return;
 		}
 		const rect = visibleSlotRect(node);
-		const payload = {
-			viewId: id,
-			revision: claimLayoutRevision(),
-			rect,
-			visible: rect.width > 0 && rect.height > 0,
-		};
+		const visible = rect.width > 0 && rect.height > 0;
+		const last = lastSentBoundsRef.current;
+		if (onlyIfChanged && last?.viewId === id && last.visible === visible && sameRect(last.rect, rect)) return;
+		const payload = { viewId: id, revision: claimLayoutRevision(), rect, visible };
+		lastSentBoundsRef.current = { viewId: id, rect, visible };
 		publishBrowserHole(id, payload.visible ? rect : null);
 		window.ao?.browser.setBounds(payload);
 	}, [sendHiddenBounds]);
@@ -441,10 +458,22 @@ export function useBrowserView({
 	}, []);
 
 	const scheduleMeasure = useCallback(() => {
+		scrollOnlyMeasureRef.current = false;
 		if (frameRef.current !== null) return;
 		frameRef.current = window.requestAnimationFrame
-			? window.requestAnimationFrame(() => measureAndSend())
-			: window.setTimeout(() => measureAndSend(), 16);
+			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
+	}, [measureAndSend]);
+
+	// Scrolling only moves the slot when the document or an element containing
+	// it scrolls; chat, terminal and list scrolling beside it cannot.
+	const scheduleScrollMeasure = useCallback((event: Event) => {
+		if (!scrollCanMoveSlot(event.target, slotNodeRef.current)) return;
+		if (frameRef.current !== null) return;
+		scrollOnlyMeasureRef.current = true;
+		frameRef.current = window.requestAnimationFrame
+			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
 	// A ResizeObserver only fires on size changes, so a position-only layout shift
@@ -870,17 +899,17 @@ export function useBrowserView({
 		// leading edge, and the restore on exit waits for the final geometry.
 		const handleFullscreenChange = () => scheduleSettleMeasure();
 		window.addEventListener("resize", handle);
-		window.addEventListener("scroll", handle, true);
+		window.addEventListener("scroll", scheduleScrollMeasure, true);
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
 		return () => {
 			window.removeEventListener("resize", handle);
-			window.removeEventListener("scroll", handle, true);
+			window.removeEventListener("scroll", scheduleScrollMeasure, true);
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 			observerRef.current?.disconnect();
 			cancelScheduledMeasure();
 			if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
 		};
-	}, [cancelScheduledMeasure, scheduleMeasure, scheduleSettleMeasure]);
+	}, [cancelScheduledMeasure, scheduleMeasure, scheduleScrollMeasure, scheduleSettleMeasure]);
 
 	const withView = useCallback(async (fn: (id: string) => Promise<BrowserNavState | void>) => {
 		const id = viewIdRef.current;
