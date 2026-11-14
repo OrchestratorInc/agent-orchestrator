@@ -79,7 +79,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, cloudOrgId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, cloudOrgId, reviewerWarning, autoReviewDescription, intakeDescription, intakeWarning, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -97,6 +97,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	autoReviewDescription?: string;
 	/** The issue intake row's description, for an intake with rules of its own. */
 	intakeDescription?: string;
+	/** Shown while intake is on, when another computer also picks up this repository's issues. */
+	intakeWarning?: string;
 	save: (values: ProjectSettingsDraft) => Promise<{ values?: ProjectSettingsDraft; replacementError?: string | null }>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	saveUnchanged?: boolean;
@@ -186,7 +188,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
 						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
 					</ProjectSettingsSection>
-					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
+					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} />{draft.intakeEnabled && intakeWarning ? <p className="px-(--settings-row-inset) text-xs text-warning" role="status">{intakeWarning}</p> : null}</ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
 						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
 						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}

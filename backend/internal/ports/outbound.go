@@ -394,6 +394,29 @@ type Workspace interface {
 	AddExclude(ctx context.Context, info WorkspaceInfo, patterns ...string) error
 }
 
+// WorkspaceTransfer moves a session's git state between machines through origin.
+type WorkspaceTransfer interface {
+	// PushTransfer pushes the worktree's branch and, when preservedRef is set,
+	// that ref to remotePreservedRef on origin, never forcing. It returns the
+	// branch head.
+	PushTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, err error)
+	// FetchTransfer fetches a moved branch and, when set, a preserved ref from origin.
+	FetchTransfer(ctx context.Context, repoPath, branch, remotePreservedRef string) error
+	// AlignTransferBranch points the local branch at head when it is missing or
+	// behind, and returns ErrTransferBranchDiverged when it does not lead there.
+	AlignTransferBranch(ctx context.Context, repoPath, branch, head string) error
+	// RevParse resolves a ref in the repository.
+	RevParse(ctx context.Context, repoPath, ref string) (string, error)
+	// ReleaseTransferBranch detaches HEAD in a moved session's worktree so the
+	// branch can be checked out again. Files and index are kept.
+	ReleaseTransferBranch(ctx context.Context, info WorkspaceInfo) error
+	// UnstageTransfer unstages moved uncommitted work after ApplyPreserved.
+	UnstageTransfer(ctx context.Context, info WorkspaceInfo) error
+	// DeleteTransferRef removes a preserved ref from origin once it is no
+	// longer needed.
+	DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error
+}
+
 // WorkspaceDefaultBranchRefresher is an optional capability for Git-backed
 // workspaces. Resolution is local-only so callers can retain the canonical ref
 // even when the subsequent best-effort network refresh fails.
@@ -522,6 +545,11 @@ var (
 	// conflict markers for manual resolution. Adapters wrap this sentinel via
 	// fmt.Errorf so callers can match it with errors.Is.
 	ErrPreservedConflict = errors.New("workspace: preserved apply produced conflicts")
+	// ErrTransferBranchDiverged is returned when this machine already has the
+	// moved session's branch and it does not lead to the moved head.
+	ErrTransferBranchDiverged = errors.New("workspace: local branch has commits the moved session does not")
+	// ErrDetachedHead is returned when a moved session's worktree is not on its branch.
+	ErrDetachedHead = errors.New("workspace: worktree is not on its branch")
 	// ErrRuntimePrerequisite reports a missing host prerequisite for the selected
 	// runtime before a session can be created.
 	ErrRuntimePrerequisite = errors.New("runtime: prerequisite missing")

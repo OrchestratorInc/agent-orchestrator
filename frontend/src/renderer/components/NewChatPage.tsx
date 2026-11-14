@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-icons";
+import { Cloud, Folder, Monitor, Plus, Smartphone, StickyNote } from "@/components/app-icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -12,6 +12,8 @@ import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { dropReportPrompt, sessionNameFromBrief } from "../lib/report-problem";
 import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
+import { LOCAL_HOST } from "../lib/hosts";
+import { hostsWithRepo } from "../lib/repo-hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
@@ -85,6 +87,18 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const draftId = `new-chat:${hostKey}`;
 	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
 	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
+	// Drafts are kept per computer, so the typed brief follows the switch and
+	// joins any brief already waiting there. Staged attachments live on the
+	// computer that staged them and stay behind.
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const switchHost = (nextHost: string | undefined, nextProject: string) => {
+		const { text, attachments } = readChatSessionDraft(draftScope).composer;
+		const nextScope = newChatDraftScope(nextHost);
+		const waiting = readChatSessionDraft(nextScope).composer.text;
+		if (text && waiting !== text) writeChatComposerText(nextScope, waiting.trim() ? `${waiting}\n\n${text}` : text);
+		if (attachments.length > 0) showGlobalToast(t("newTask.attachmentsStay", { count: attachments.length }));
+		void navigate({ to: "/new", search: { project: nextProject, host: nextHost }, replace: true });
+	};
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
@@ -480,6 +494,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				composerTray={
 					<>
 						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen || report} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatHostPicker projectId={projectId} hostId={hostId} disabled={frozen || report} onChange={switchHost} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
@@ -726,6 +741,40 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 					<ProjectIcon projectId={option.value} cloud={cloudProjectIds.has(option.value)} className="size-icon-sm" />
 					<span className="min-w-0 truncate">{option.label}</span>
 				</>
+			)}
+		/>
+	);
+}
+
+/** Picks which computer runs the task, among those with a project for this repository. */
+function NewChatHostPicker({ projectId, hostId, disabled, onChange }: { projectId: string; hostId?: string; disabled?: boolean; onChange: (hostId: string | undefined, projectId: string) => void }) {
+	const { t } = useTranslation();
+	const local = useWorkspaceQuery().data ?? [];
+	const remote = useRemoteWorkspaces().data ?? [];
+	const current = hostId ?? LOCAL_HOST;
+	const repoKey = (hostId ? remote.filter((workspace) => workspace.hostId === hostId) : local).find((workspace) => workspace.id === projectId)?.repoKey;
+	const hosts = hostsWithRepo(local, remote, repoKey);
+	if (hosts.length < 2) return null;
+	const label = (host: string) => (host === LOCAL_HOST ? t("remote.thisComputer") : labelForHost(host) ?? host);
+	return (
+		<SettingsOptionMenu
+			aria-label={t("newTask.runOn", { host: label(current) })}
+			value={current}
+			options={hosts.map((host) => ({ value: host.hostId, label: label(host.hostId) }))}
+			onChange={(value) => {
+				const host = hosts.find((each) => each.hostId === value);
+				if (host && host.hostId !== current) onChange(host.hostId === LOCAL_HOST ? undefined : host.hostId, host.projectId);
+			}}
+			disabled={disabled}
+			menuAlign="start"
+			menuClassName="w-56 max-h-72"
+			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
+			showCaret={false}
+			renderTrigger={() => (
+				<span className="inline-flex min-w-0 items-center gap-1.5">
+					<Monitor aria-hidden="true" className="size-3.5 text-muted-foreground" />
+					<span className="min-w-0 truncate">{label(current)}</span>
+				</span>
 			)}
 		/>
 	);

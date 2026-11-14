@@ -183,6 +183,19 @@ func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionReco
 	return domain.BuildHandoffNote(input), nil
 }
 
+// RemoteHandoffNote builds the note a session continuing on another machine
+// starts from when its native conversation cannot be resumed there. source
+// names this machine as the user sees it.
+func (s *Service) RemoteHandoffNote(ctx context.Context, record domain.SessionRecord, source string) (string, error) {
+	input, err := s.handoffNoteInput(ctx, record, record.Harness, "")
+	if err != nil {
+		return "", err
+	}
+	input.RemoteSource = source
+	input.ChangedFiles = handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
+	return domain.BuildHandoffNote(input), nil
+}
+
 // handoffNoteInput is the note's input without the changed files, which need
 // git and can run while the outgoing provider stops.
 func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (domain.HandoffNoteInput, error) {

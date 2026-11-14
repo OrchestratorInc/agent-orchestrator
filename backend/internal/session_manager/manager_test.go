@@ -5834,6 +5834,26 @@ func TestSpawn_FetchesDefaultBranchBeforeCreatingWorkerWorktree(t *testing.T) {
 	}
 }
 
+func TestSpawn_FetchesRequestedBranchBeforeCreatingWorktree(t *testing.T) {
+	m, st, _, ws := newManager()
+	cfg := testRoleAgents()
+	cfg.DefaultBranch = "main"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: cfg}
+	var calls []string
+	ws.sharedLog = &calls
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/x"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := calls[:3], []string{"FetchDefaultBranch:origin/main", "FetchDefaultBranch:origin/feat/x", "Create"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("workspace call order = %#v, want %#v", calls, want)
+	}
+	if got, want := ws.fetches[1].baseRef, "refs/remotes/origin/feat/x"; got != want {
+		t.Fatalf("requested branch fetch base ref = %q, want %q", got, want)
+	}
+}
+
 func TestSpawn_FetchesWorkspaceChildDefaultBranchesBeforeCreatingProject(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}

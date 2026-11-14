@@ -206,7 +206,7 @@ export function CreateProjectFlow({
 	// create-project flow instead of a separate delegating component.
 	openSignal?: number;
 	// Home-page action cards: each new nonce jumps straight to its source.
-	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number } | null;
+	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number; remoteUrl?: string } | null;
 }) {
 	const { t } = useTranslation();
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
@@ -334,7 +334,7 @@ export function CreateProjectFlow({
 		transitionToChild(open);
 	};
 
-	const selectSource = async (source: ProjectSource) => {
+	const selectSource = async (source: ProjectSource, remoteUrl = "") => {
 		if (preparedClone.current() && !(await abandonPreparedClone())) return;
 		const presetPath = pendingDropPath;
 		setPendingDropPath(null);
@@ -342,7 +342,7 @@ export function CreateProjectFlow({
 		setValidationScan(null);
 		resetProjectImportState();
 		if (source === "clone") {
-			setCloneDetails(initialCloneDetails(hostId));
+			setCloneDetails({ ...initialCloneDetails(hostId), remoteUrl });
 			setCloneSelection(null);
 			if (firstRunClone) setCloneDialogOpen(true);
 			else transitionToChild(() => setCloneDialogOpen(true));
@@ -535,7 +535,7 @@ export function CreateProjectFlow({
 			if (cloudEnabled) startFlow(undefined, "cloud");
 			return;
 		}
-		void selectSource(sourceSignal.source);
+		void selectSource(sourceSignal.source, sourceSignal.remoteUrl);
 	}, [sourceSignal]);
 
 	const createProject = async (setup: CreateProjectSetup) => {
@@ -852,7 +852,7 @@ export function CreateProjectFlow({
 							<CloudSignInPanel disabled={isBusy} onBack={() => setOffering("local")} onSignIn={cloudSignIn} />
 						)
 					) : (
-						<ImportSourcePicker cloudEnabled={cloudEnabled} cloudGateLoading={cloudGateLoading} localChosen={localChosen} onLocalChosenChange={setLocalChosen} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={selectSource} onCreateStandaloneAgent={onCreateStandaloneAgent} hostId={hostId} hostLabel={hostLabel} remoteHosts={remoteHosts} onSelectHost={onSelectHost} />
+						<ImportSourcePicker cloudEnabled={cloudEnabled} cloudGateLoading={cloudGateLoading} localChosen={localChosen} onLocalChosenChange={setLocalChosen} disabled={isBusy || !connected} onCloudSelect={() => setOffering("cloud")} onSelect={(source: ProjectSource) => void selectSource(source)} onCreateStandaloneAgent={onCreateStandaloneAgent} hostId={hostId} hostLabel={hostLabel} remoteHosts={remoteHosts} onSelectHost={onSelectHost} />
 					)}
 					{error && !folderPickerOpen && selectedPath === null && (
 						<p className="text-caption leading-body text-error" role="status">
@@ -898,7 +898,7 @@ export function CreateProjectFlow({
 								onDismiss?.();
 							}
 						}}
-						onSelect={selectSource}
+						onSelect={(source: ProjectSource) => void selectSource(source)}
 						onSelectHost={(nextHostId) => {
 							onSelectHost?.(nextHostId);
 						}}

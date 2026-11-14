@@ -94,6 +94,9 @@ type HandoffNoteInput struct {
 	// fork given its conversation as text: the conversation from before it,
 	// which its own turns don't hold.
 	Inherited string
+	// RemoteSource names the machine a moved session came from. The note then
+	// leaves out the workspace, artifact and history paths, which exist only there.
+	RemoteSource string
 }
 
 // HandoffFork names the session a text-handoff fork was copied from.
@@ -212,11 +215,16 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	b.WriteString("- Orchestrator copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
 	b.WriteString("- The files in the workspace and git are the truth. Check them before relying on this record.\n")
 	b.WriteString("- Do not redo work that is already finished.\n")
+	if in.RemoteSource != "" {
+		fmt.Fprintf(&b, "- This session moved here from %s. The branch and uncommitted changes came with it; check the workspace before relying on paths in this record.\n", quoteHandoffLine(in.RemoteSource, handoffChangedFileCap))
+	}
 
 	b.WriteString("\n## Session\n")
 	writeHandoffNoteField(&b, "Title", in.SessionTitle)
 	writeHandoffNoteField(&b, "Project", in.Project)
-	writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
+	if in.RemoteSource == "" {
+		writeHandoffNoteField(&b, "Workspace", in.WorkspacePath)
+	}
 	writeHandoffNoteField(&b, "Git branch", in.Branch)
 	if in.Fork != nil {
 		writeHandoffNoteField(&b, "Forked at", in.At.UTC().Format(time.RFC3339))
@@ -241,7 +249,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		}
 	}
 
-	if len(in.Artifacts) > 0 {
+	if len(in.Artifacts) > 0 && in.RemoteSource == "" {
 		fmt.Fprintf(&b, "\n## Session artifacts\nFiles already in the session artifact directory `%s` (%d). Read the one a request is about before writing it again, and update it instead of starting over:\n",
 			quoteHandoffLine(in.ArtifactDir, handoffHistoryPathCap), len(in.Artifacts))
 		for _, file := range in.Artifacts[:artifacts] {
@@ -284,7 +292,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 		b.WriteByte('\n')
 	}
 
-	if len(in.HistoryFiles) > 0 {
+	if len(in.HistoryFiles) > 0 && in.RemoteSource == "" {
 		b.WriteString("\n## Earlier agents' own history\n")
 		b.WriteString("Orchestrator did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
 		for _, file := range in.HistoryFiles {
@@ -301,7 +309,9 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	if omitted := len(in.Turns) - len(older) - len(recent); omitted > 0 {
 		fmt.Fprintf(&b, "%d earlier turns are not shown. ", omitted)
 	}
-	if in.Fork != nil {
+	if in.RemoteSource != "" {
+		fmt.Fprintf(&b, "The full history stays on %s.\n", quoteHandoffLine(in.RemoteSource, handoffChangedFileCap))
+	} else if in.Fork != nil {
 		fmt.Fprintf(&b, "Run `ao session history %s` to read the original session's conversation in full when you need something this note does not show.\n", in.Fork.SourceSessionID)
 	} else {
 		b.WriteString("Run `ao session history` to read the conversation in full when you need something this note does not show.\n")

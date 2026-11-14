@@ -144,6 +144,18 @@ func (o *Observer) Poll(ctx context.Context) error {
 		return err
 	}
 	seen := seenIssueIDs(sessions)
+	if lister, ok := o.store.(movedSessionLister); ok {
+		moved, err := lister.ListMovedSessionIDs(ctx)
+		if err != nil {
+			return err
+		}
+		// A session that moved to another machine still holds its issue there.
+		for _, sess := range sessions {
+			if sess.IssueID != "" && moved[sess.ID] {
+				seen[sess.IssueID] = true
+			}
+		}
+	}
 	for _, project := range enabledProjects {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -247,6 +259,10 @@ func containsFold(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+type movedSessionLister interface {
+	ListMovedSessionIDs(ctx context.Context) (map[domain.SessionID]bool, error)
 }
 
 func seenIssueIDs(sessions []domain.SessionRecord) map[domain.IssueID]bool {

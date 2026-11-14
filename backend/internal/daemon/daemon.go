@@ -673,6 +673,7 @@ func Run(buildVersion string) (retErr error) {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
+	sessionSvc.SetRemoteHandoffNote(chatSvc.RemoteHandoffNote)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
 		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
 		ChatHostPID: func(id domain.SessionID) (int, bool) {
