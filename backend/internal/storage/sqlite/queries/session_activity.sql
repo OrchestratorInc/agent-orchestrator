@@ -21,6 +21,12 @@ UPDATE sessions SET
     native_transcript_path = sqlc.arg(native_transcript_path),
     claude_activity_facts = sqlc.arg(claude_activity_facts),
     codex_activity_facts = sqlc.arg(codex_activity_facts),
+    -- Only a prompt carrying an AO delivery id writes the accepted delivery,
+    -- so a human prompt never erases it.
+    accepted_delivery_id = CASE WHEN CAST(sqlc.arg(accepted_delivery_id) AS TEXT) = ''
+        THEN accepted_delivery_id ELSE CAST(sqlc.arg(accepted_delivery_id) AS TEXT) END,
+    accepted_delivery_launch_id = CASE WHEN CAST(sqlc.arg(accepted_delivery_id) AS TEXT) = ''
+        THEN accepted_delivery_launch_id ELSE runtime_launch_id END,
     updated_at = sqlc.arg(updated_at)
 WHERE sessions.id = sqlc.arg(id)
   AND sessions.revision = sqlc.arg(expected_revision)
@@ -29,3 +35,11 @@ WHERE sessions.id = sqlc.arg(id)
   AND sessions.session_mode = sqlc.arg(expected_session_mode)
   AND ((sqlc.arg(expected_session_mode) <> 'chat' AND sessions.runtime_launch_id = sqlc.arg(expected_runtime_launch_id))
     OR (sqlc.arg(expected_session_mode) = 'chat' AND sessions.controller_generation = sqlc.arg(expected_controller_generation)));
+
+-- name: SessionAcceptedDelivery :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions
+    WHERE id = sqlc.arg(id)
+      AND accepted_delivery_id = sqlc.arg(delivery_id)
+      AND accepted_delivery_launch_id = sqlc.arg(runtime_launch_id)
+);

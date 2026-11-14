@@ -11167,27 +11167,11 @@ type semanticDeliveryKey struct {
 
 type fakeSemanticReceiptStore struct {
 	*fakeStore
-	registered   map[semanticDeliveryKey]bool
-	accepted     map[semanticDeliveryKey]bool
-	reserveCalls int
+	accepted map[semanticDeliveryKey]bool
 }
 
 func newFakeSemanticReceiptStore(st *fakeStore) *fakeSemanticReceiptStore {
-	return &fakeSemanticReceiptStore{
-		fakeStore:  st,
-		registered: map[semanticDeliveryKey]bool{},
-		accepted:   map[semanticDeliveryKey]bool{},
-	}
-}
-
-func (s *fakeSemanticReceiptStore) RegisterSemanticDelivery(_ context.Context, id domain.SessionID, launchID, deliveryID string) (bool, error) {
-	s.reserveCalls++
-	rec, found := s.sessions[id]
-	if !found || rec.IsTerminated || rec.Activity.State == domain.ActivityExited || rec.Metadata.RuntimeLaunchID != launchID {
-		return false, nil
-	}
-	s.registered[semanticDeliveryKey{sessionID: id, runtimeLaunchID: launchID, deliveryID: deliveryID}] = true
-	return true, nil
+	return &fakeSemanticReceiptStore{fakeStore: st, accepted: map[semanticDeliveryKey]bool{}}
 }
 
 func (s *fakeSemanticReceiptStore) SemanticDeliveryAccepted(_ context.Context, id domain.SessionID, launchID, deliveryID string) (bool, error) {
@@ -11195,10 +11179,7 @@ func (s *fakeSemanticReceiptStore) SemanticDeliveryAccepted(_ context.Context, i
 }
 
 func (s *fakeSemanticReceiptStore) accept(id domain.SessionID, launchID, deliveryID string) {
-	key := semanticDeliveryKey{sessionID: id, runtimeLaunchID: launchID, deliveryID: deliveryID}
-	if s.registered[key] {
-		s.accepted[key] = true
-	}
+	s.accepted[semanticDeliveryKey{sessionID: id, runtimeLaunchID: launchID, deliveryID: deliveryID}] = true
 }
 
 func TestSend_SkipsConfirmForHooklessHarness(t *testing.T) {
@@ -11261,9 +11242,6 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 	}
 	if len(msg.msgs) != 1 {
 		t.Fatalf("retry pane writes = %d, want 1", len(msg.msgs))
-	}
-	if receipts.reserveCalls != 1 {
-		t.Fatalf("receipt reservations = %d, want one across retry", receipts.reserveCalls)
 	}
 }
 

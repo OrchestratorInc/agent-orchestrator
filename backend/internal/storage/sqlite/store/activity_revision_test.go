@@ -54,12 +54,9 @@ func TestActivityProjectionCannotOverwriteHumanMessageWithUnchangedTimestamp(t *
 }
 
 func TestSemanticDeliveryAcceptanceRequiresCurrentRevisionAndLaunch(t *testing.T) {
-	s, sessionID, _ := semanticDeliveryFixture(t)
+	s, sessionID := semanticDeliveryFixture(t)
 	ctx := context.Background()
 	const deliveryID = "report-batch:fenced1"
-	if registered, err := s.RegisterSemanticDelivery(ctx, sessionID, "launch-1", deliveryID); err != nil || !registered {
-		t.Fatalf("register receipt: registered=%v err=%v", registered, err)
-	}
 	stale, found, err := s.GetSession(ctx, sessionID)
 	if err != nil || !found {
 		t.Fatalf("load session: found=%v err=%v", found, err)
@@ -71,7 +68,7 @@ func TestSemanticDeliveryAcceptanceRequiresCurrentRevisionAndLaunch(t *testing.T
 	if err := s.UpdateSession(ctx, newer); err != nil {
 		t.Fatalf("write newer prompt: %v", err)
 	}
-	if applied, err := s.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(ctx, stale, stale.Revision, "launch-1", deliveryID); err != nil || applied {
+	if applied, err := s.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(ctx, stale, stale.Revision, deliveryID); err != nil || applied {
 		t.Fatalf("stale revision projection: applied=%v err=%v", applied, err)
 	}
 	if accepted, err := s.SemanticDeliveryAccepted(ctx, sessionID, "launch-1", deliveryID); err != nil || accepted {
@@ -87,7 +84,7 @@ func TestSemanticDeliveryAcceptanceRequiresCurrentRevisionAndLaunch(t *testing.T
 	if err := s.UpdateSession(ctx, ownerAfter); err != nil {
 		t.Fatalf("transfer runtime launch: %v", err)
 	}
-	if applied, err := s.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(ctx, ownerBefore, ownerBefore.Revision, "launch-1", deliveryID); err != nil || applied {
+	if applied, err := s.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(ctx, ownerBefore, ownerBefore.Revision, deliveryID); err != nil || applied {
 		t.Fatalf("stale launch projection: applied=%v err=%v", applied, err)
 	}
 	if accepted, err := s.SemanticDeliveryAccepted(ctx, sessionID, "launch-1", deliveryID); err != nil || accepted {

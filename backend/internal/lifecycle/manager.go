@@ -59,7 +59,6 @@ type semanticDeliveryActivityStore interface {
 		domain.SessionRecord,
 		int64,
 		string,
-		string,
 	) (bool, error)
 }
 
@@ -981,7 +980,7 @@ retryProjection:
 	project := func(next domain.SessionRecord) (applied, retry bool, err error) {
 		if semanticDeliveryStore != nil {
 			applied, err = semanticDeliveryStore.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
-				ctx, next, observedRevision, s.LaunchID, s.CoordinationID,
+				ctx, next, observedRevision, s.CoordinationID,
 			)
 		} else {
 			applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)

@@ -549,58 +549,51 @@ func (s *Store) UpdateSessionFromActivitySignal(
 	rec domain.SessionRecord,
 	expectedRevision int64,
 ) (bool, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, activitySignalProjectionParams(rec, expectedRevision))
-	if err != nil {
-		return false, fmt.Errorf("update session %s from activity signal: %w", rec.ID, err)
-	}
-	return rows > 0, nil
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, activitySignalProjectionParams(rec, expectedRevision))
 }
 
-// UpdateSessionFromActivitySignalAndAcceptSemanticDelivery commits a fenced
-// activity projection and its correlated delivery receipt together. The
-// receipt is marked only when the projection still owns the observed revision,
-// harness, mode, and runtime launch.
+// UpdateSessionFromActivitySignalAndAcceptSemanticDelivery is
+// UpdateSessionFromActivitySignal that also records deliveryID as accepted by
+// the session's runtime launch. It is one fenced write, so acceptance lands
+// only with a projection that still owns that launch.
 func (s *Store) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
 	ctx context.Context,
 	rec domain.SessionRecord,
 	expectedRevision int64,
-	runtimeLaunchID, deliveryID string,
+	deliveryID string,
 ) (bool, error) {
-	if runtimeLaunchID == "" || deliveryID == "" {
-		return false, fmt.Errorf("semantic delivery launch and id are required")
+	if deliveryID == "" {
+		return false, fmt.Errorf("semantic delivery id is required")
 	}
-	if runtimeLaunchID != rec.Metadata.RuntimeLaunchID || domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+	params := activitySignalProjectionParams(rec, expectedRevision)
+	params.AcceptedDeliveryID = deliveryID
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, params)
+}
+
+func (s *Store) updateSessionFromActivitySignal(ctx context.Context, id domain.SessionID, params gen.UpdateSessionFromActivitySignalParams) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, params)
+	if err != nil {
+		return false, fmt.Errorf("update session %s from activity signal: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SemanticDeliveryAccepted reports whether runtimeLaunchID of session id
+// accepted deliveryID, even if later prompts replaced the conversation
+// checkpoint.
+func (s *Store) SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error) {
+	if runtimeLaunchID == "" || deliveryID == "" {
 		return false, nil
 	}
-	if _, inTransaction := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); !inTransaction {
-		s.writeMu.Lock()
-		defer s.writeMu.Unlock()
-	}
-	var applied bool
-	err := s.inTxDB(ctx, "project activity signal and accept semantic delivery", func(q *gen.Queries, _ gen.DBTX) error {
-		rows, err := q.UpdateSessionFromActivitySignal(ctx, activitySignalProjectionParams(rec, expectedRevision))
-		if err != nil {
-			return fmt.Errorf("update session %s from activity signal: %w", rec.ID, err)
-		}
-		if rows == 0 {
-			return nil
-		}
-		if _, err := q.AcceptSemanticDelivery(ctx, gen.AcceptSemanticDeliveryParams{
-			SessionID:       rec.ID,
-			RuntimeLaunchID: runtimeLaunchID,
-			DeliveryID:      deliveryID,
-		}); err != nil {
-			return fmt.Errorf("accept semantic delivery %s for session %s: %w", deliveryID, rec.ID, err)
-		}
-		applied = true
-		return nil
+	accepted, err := s.qr.SessionAcceptedDelivery(ctx, gen.SessionAcceptedDeliveryParams{
+		ID: id, DeliveryID: deliveryID, RuntimeLaunchID: runtimeLaunchID,
 	})
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("read accepted delivery %s for session %s: %w", deliveryID, id, err)
 	}
-	return applied, nil
+	return accepted, nil
 }
 
 func activitySignalProjectionParams(rec domain.SessionRecord, expectedRevision int64) gen.UpdateSessionFromActivitySignalParams {

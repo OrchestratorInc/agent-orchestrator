@@ -148,7 +148,7 @@ func (f *fakeSemanticDeliveryActivityStore) UpdateSessionFromActivitySignalAndAc
 	ctx context.Context,
 	rec domain.SessionRecord,
 	expectedRevision int64,
-	_, _ string,
+	_ string,
 ) (bool, error) {
 	return f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
 }
@@ -801,9 +801,6 @@ func TestActivity_MixedHumanPromptKeepsSemanticReceiptAfterCheckpointOverwrite(t
 		t.Fatalf("create session: %v", err)
 	}
 	const deliveryID = "report-batch:mixedhuman1"
-	if registered, err := store.RegisterSemanticDelivery(ctx, rec.ID, "launch-1", deliveryID); err != nil || !registered {
-		t.Fatalf("register semantic delivery: registered=%v err=%v", registered, err)
-	}
 	manager := New(store, nil)
 	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",

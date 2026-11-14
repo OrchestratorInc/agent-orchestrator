@@ -5345,7 +5345,6 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 }
 
 type semanticDeliveryStore interface {
-	RegisterSemanticDelivery(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
 	SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
 }
 
@@ -5391,27 +5390,6 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	}
 	if !m.harnessSemanticAcceptance(rec.Harness) {
 		return ErrSemanticAcceptanceUnsupported
-	}
-	registered, err := receipts.RegisterSemanticDelivery(ctx, id, launchID, clientMessageID)
-	if err != nil {
-		return err
-	}
-	if !registered {
-		accepted, err = receipts.SemanticDeliveryAccepted(ctx, id, launchID, clientMessageID)
-		if err != nil {
-			return err
-		}
-		if accepted {
-			return nil
-		}
-		return fmt.Errorf("%w: session launch changed before delivery reservation", ErrSemanticAcceptanceUnsupported)
-	}
-	accepted, err = receipts.SemanticDeliveryAccepted(ctx, id, launchID, clientMessageID)
-	if err != nil {
-		return err
-	}
-	if accepted {
-		return nil
 	}
 	wrapped := domain.WrapReportDelivery(clientMessageID, message)
 	stopConfirmation := func(stopCtx context.Context) (bool, error) {
