@@ -311,9 +311,7 @@ export class Executor {
 		await this.assertFrameAllowed(ctx, page, this.frameFor(ctx, page));
 		if (!ctx.approval.trusted || !trustedInputAllowed(ctx.policy, page.tab.url)) return false;
 		const urls = await this.frameChainUrls(page, this.frameFor(ctx, page));
-		if (!urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url))) return false;
-		// Trusted input needs the tab in front. Never take that from the user.
-		return !(await this.userChoseAnotherTab(page));
+		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));
 	}
 
 	/** The user is on a tab no agent owns in this tab's window. */
@@ -324,24 +322,25 @@ export class Executor {
 	}
 
 	/**
-	 * Chrome drops trusted input to hidden pages, so show the agent's tab in
-	 * its own window (without focusing the window) and wait until it is visible.
+	 * captureVisibleTab needs the agent's tab painted, so bring it to the front
+	 * of its window (never focusing the window) and wait until it is visible.
+	 * A minimized window stays minimized: restoring it would take focus.
 	 */
 	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
 		const chrome = this.deps.chrome;
-		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
+		const hidden = () =>
+			new BridgeError(
+				"BROWSER_TAB_HIDDEN",
+				`Screenshots on this site need the "${groupTitle(ctx.sessionId)}" window on screen, and Chrome is hiding it. Use \`ao browser snapshot\` instead of a screenshot`,
+			);
 		const window = await chrome.windows.get(page.tab.windowId).catch(() => undefined);
-		if (window?.state === "minimized") await chrome.windows.update(page.tab.windowId, { state: "normal" }).catch(() => undefined);
+		if (window?.state === "minimized") throw hidden();
+		if (!page.tab.active) await chrome.tabs.update(page.tabId, { active: true });
 		const deadline = Date.now() + 2_000;
 		for (;;) {
 			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
 			if (state.visibility !== "hidden") return;
-			if (Date.now() >= deadline) {
-				throw new BridgeError(
-					"BROWSER_TAB_HIDDEN",
-					`Chrome is hiding the "${groupTitle(ctx.sessionId)}" window; keep it on screen (it may sit beside your other windows) so trusted input and screenshots can reach it`,
-				);
-			}
+			if (Date.now() >= deadline) throw hidden();
 			await sleep(50, ctx.signal);
 		}
 	}
@@ -642,7 +641,6 @@ export class Executor {
 				case "click":
 				case "dblclick":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), {
 							clicks: action === "dblclick" ? 2 : 1,
 							human: args.human === true,
@@ -655,7 +653,6 @@ export class Executor {
 					break;
 				case "hover":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						value = { hovered: true, ...(await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true, ctx.signal)) };
 					} else {
 						value = await this.content(page, ctx, { op: "hover", ref });
@@ -663,7 +660,6 @@ export class Executor {
 					break;
 				case "type":
 					if (trusted) {
-						await this.showTab(ctx, page);
 						await this.content(page, ctx, { op: "focus", ref });
 						value = { typed: true, ...(await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""), ctx.signal)) };
 					} else {
@@ -682,7 +678,6 @@ export class Executor {
 		return this.withPage(ctx, async (page) => {
 			let input = {};
 			if (await this.useTrustedInput(ctx, page)) {
-				await this.showTab(ctx, page);
 				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
 			} else await this.content(page, ctx, { op: "press", key });
 			return { pressed: key, ...input, ...this.result(await this.refreshed(page)) };
@@ -692,9 +687,8 @@ export class Executor {
 	private async drag(ctx: Context, ref: string, targetRef: string, human: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
 			if (!(await this.useTrustedInput(ctx, page))) {
-				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site or needs the agent's tab in front");
+				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
 			}
-			await this.showTab(ctx, page);
 			const from = await this.point(ctx, page, ref);
 			const to = await this.point(ctx, page, targetRef);
 			const input = await this.deps.trusted.drag(page.tabId, from, to, human, ctx.signal);
@@ -775,6 +769,32 @@ export class Executor {
 	}
 
 	/**
+	 * The session's tab as base64 PNG. The debugger captures the tab itself,
+	 * so its window may be covered or the user may be on another tab. Sites
+	 * that keep the debugger away fall back to captureVisibleTab.
+	 */
+	private async captureTab(ctx: Context, page: ActiveTab): Promise<string> {
+		if (ctx.approval.trusted && trustedInputAllowed(ctx.policy, page.tab.url)) {
+			try {
+				return await this.deps.trusted.screenshot(page.tabId, ctx.signal);
+			} catch (error) {
+				// A page that loaded while its window was minimized has never
+				// painted. Restoring the window would take focus from the user
+				// on macOS, so leave it minimized.
+				if (error instanceof BridgeError && error.code === "SCREENSHOT_TIMEOUT") {
+					throw new BridgeError(
+						"SCREENSHOT_UNAVAILABLE",
+						"Chrome has not painted the session's tab (its window is minimized); use `ao browser snapshot` instead of a screenshot",
+					);
+				}
+				throw error;
+			}
+		}
+		const dataUrl = await this.captureOwnTab(ctx, page);
+		return dataUrl.slice(dataUrl.indexOf(",") + 1);
+	}
+
+	/**
 	 * captureVisibleTab captures whatever tab is in front of a window, not a
 	 * given tab. Serialize activation and capture per window across sessions,
 	 * and refuse the pixels if the window showed any other tab meanwhile, so a
@@ -832,8 +852,7 @@ export class Executor {
 				items = value.annotations;
 				dpr = value.dpr || 1;
 			}
-			const dataUrl = await this.captureOwnTab(ctx, page);
-			let png = base64ToBytes(dataUrl.slice(dataUrl.indexOf(",") + 1));
+			let png = base64ToBytes(await this.captureTab(ctx, page));
 			if (annotate && items.length > 0) png = await annotatePng(png, items, dpr);
 			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded Orchestrator's size limit");
 			const { width, height } = pngSize(png);
