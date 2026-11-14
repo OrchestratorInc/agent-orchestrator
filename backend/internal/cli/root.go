@@ -263,6 +263,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newPRCommand(ctx))
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newAutomationCommand(ctx))
+	root.AddCommand(newWebhookCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
 	root.AddCommand(newSearchCommand(ctx))
 	root.AddCommand(newCompletionCommand())

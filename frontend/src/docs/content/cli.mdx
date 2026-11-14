@@ -28,6 +28,7 @@ ao
 ├── preview                        select/clear a target; start, status, stop a server
 ├── browser                        Control the selected session browser
 ├── remote-host                    status, enable, disable, link
+├── webhook                        add, list, set, remove, test
 ├── import                         Import projects from legacy product data
 ├── completion                     Generate shell completions
 └── version                        Print build information
@@ -246,6 +247,24 @@ Lets your other devices use this machine through its authenticated remote listen
 | `ao remote-host link` | Add this machine to your AO account: it prints a sign-in link and a QR code, and waits up to 5 minutes for you to sign in from any device. The machine then gets a fixed address and appears on every device signed in to the account. `--label` sets its name (default: the name the account already has for it, else the hostname); `--no-qr` prints only the link. On a LAN-only listener it adds a Cloudflare tunnel, as `--tunnel` does. |
 
 `link` is how a VM or other machine without the desktop app joins your account. See [Connect a VM or other headless machine](/configuration/remote-access#connect-a-vm-or-other-headless-machine).
+
+## Webhooks
+
+### `ao webhook`
+
+Sends one JSON POST per event to webhooks you add, such as a chat bot's webhook routine. Webhook settings are stored in `~/.ao/data/webhooks.json` (readable only by you) and can only be changed from this machine.
+
+| Command | Purpose |
+| --- | --- |
+| `ao webhook add NAME` | Add or replace a webhook. It reads two lines from stdin, without echoing them: the URL (`https://`), then the `Authorization` header or an empty line. `--project ID` (repeatable) limits it to those projects, `--events` to a comma-separated list of kinds, and `--quiet-at-desk` skips events while the Orchestrator app is in front and in use (macOS). |
+| `ao webhook list` | Show each webhook's host, filters and delivery state. The URL path and header values are never shown. |
+| `ao webhook set NAME` | Change `--project`/`--all-projects`, `--events`/`--all-events` or `--quiet-at-desk` and keep the URL and key. |
+| `ao webhook test NAME` | Send a `test` event and print `OK` or the webhook's answer. |
+| `ao webhook remove NAME` | Remove a webhook. |
+
+Event kinds: `needs_input` (with `input_resolved` when the wait ends), `finished` (an orchestrator ended its turn; carries the end of its reply in `lastReply`), `worker_finished`, `failed` (a Chat turn that started and then failed; a send rejected at once returns its error to the sender instead; carries `turnId`, `error` and, for a usage limit, `usageLimit` with `resetsAt`), `exited` (an agent exited by itself), `ready_to_merge`, `pr_merged`, `pr_closed`, `review_completed`, `review_changes_requested`. A webhook without `--events` gets every kind except `worker_finished`.
+
+Every body has `event`, `eventId`, `at`, `hostId`, `machine`, `projectId`, `sessionId`, `sessionName`, `sessionKind`, `title` and `text`, plus `prUrl` for pull request events. Questions, failed turns and exits are sent first. More than 10 finished turns in a minute, or turns that end while the webhook is down or rate limited, arrive together as one `summary` event with `count`, `sessions`, `firstAt` and `lastAt`. A webhook that answers HTTP 429 or "rate limit" is paused until its `Retry-After` time (15 minutes without one); other failures are retried for up to an hour.
 
 ## Migration and shell integration
 
