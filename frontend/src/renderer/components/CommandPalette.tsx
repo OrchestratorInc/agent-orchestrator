@@ -190,6 +190,10 @@ export const CommandPalette = memo(function CommandPalette() {
 	// cmdk selects the first row by itself whenever the query changes; only a
 	// navigation key or pointer move counts as the user choosing one.
 	const userPickRef = useRef(false);
+	// cmdk only re-applies a controlled value when the string changes.
+	// Flipping a trailing space (cmdk trims it) puts the best match back
+	// after cmdk selects its own first row.
+	const [valueResync, setValueResync] = useState(false);
 	const runGenerationRef = useRef(0);
 	const viewRef = useRef(view);
 	viewRef.current = view;
@@ -1283,12 +1287,13 @@ export const CommandPalette = memo(function CommandPalette() {
 				}}
 				commandProps={{
 					shouldFilter: false,
-					value,
+					value: valueResync ? `${value} ` : value,
 					// cmdk picks the first row in the list after each query; the palette
 					// picks the best match instead, so only a row the person moved to
 					// (arrow keys, pointer) replaces it.
 					onValueChange: (next: string) => {
 						if (userPickRef.current) setSelectedValue(next);
+						else if (next !== value) setValueResync((on) => !on);
 					},
 					onKeyDownCapture: (event) => {
 						if (isRowNavigationKey(event)) userPickRef.current = true;
