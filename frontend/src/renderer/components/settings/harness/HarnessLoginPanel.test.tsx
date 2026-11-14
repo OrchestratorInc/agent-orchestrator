@@ -364,10 +364,15 @@ describe("HarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "gemini", method: "gemini_api_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined, withdrawFailed: true };
 		vi.mocked(startAgentUILogin).mockResolvedValue(saved);
-		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		const onClose = vi.fn();
+		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={onClose} onTerminal={vi.fn()} />);
 		await user.type(screen.getByLabelText("API key"), "sk-gemini");
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 		expect(await screen.findByText("Saved, but apps outside AO can still see this key until you log out.")).toBeVisible();
+		// The warning stays until the user dismisses it.
+		expect(onClose).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
 	});
 	it("says nothing about the user environment when the key left it", async () => {
 		const user = userEvent.setup();
