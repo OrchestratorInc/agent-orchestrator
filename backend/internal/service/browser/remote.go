@@ -320,7 +320,9 @@ if (form) {
   out.formMethod = (form.getAttribute("method") || "get").toLowerCase();
   out.formAction = clean(form.action);
   out.formHasPayment = [...form.querySelectorAll("input,select")].some(pay);
-  out.formHasPassword = !!form.querySelector("input[type=password]");
+  const passwords = [...form.querySelectorAll("input[type=password]")];
+  out.formHasPassword = passwords.length > 0;
+  out.formHasNewPassword = passwords.length > 1 || passwords.some((f) => /\bnew-password\b/i.test(f.getAttribute("autocomplete") || ""));
   out.submitName = submit ? clean(submit.getAttribute("aria-label") || submit.innerText || submit.value) : undefined;
   const textField = tag === "input" && !["checkbox", "radio", "submit", "button", "reset", "image", "file"].includes(type);
   out.isSubmit = (tag === "button" && (type || "submit") === "submit") || ["submit", "image"].includes(type) || (req.mode === "focused" && textField);
