@@ -15,7 +15,6 @@ import {
 	findSession,
 	visibleForQuery,
 	MAX_ATTENTION_SEARCH_RESULTS,
-	MAX_ITEMS_PER_GROUP,
 	MAX_SEARCH_RESULTS,
 	type CommandItem,
 } from "./command-palette";
@@ -546,7 +545,9 @@ describe("result caps", () => {
 
 	it("caps the pre-typing suggestion view per group so huge installs never render every row", () => {
 		const grouped = displayGroups(buildCommands({ workspaces: manyProjects(50) }), "");
-		expect(grouped.find((g) => g.id === "projects")?.items.length).toBe(MAX_ITEMS_PER_GROUP);
+		// Projects wait for a search; the sidebar already lists them.
+		expect(grouped.some((g) => g.id === "projects")).toBe(false);
+		expect(filterCommands(buildCommands({ workspaces: manyProjects(50) }), "project-7").some((item) => item.id === "project:p7")).toBe(true);
 		expect(grouped.find((g) => g.id === "global")?.items.length).toBeGreaterThan(0);
 	});
 

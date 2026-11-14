@@ -1000,10 +1000,10 @@ export const SEARCH_GROUP_ROWS = 6;
 
 /**
  * Rows the blank palette lists per navigation group: a short start (the most
- * recent sessions, the first projects in sidebar order) rather than every one.
- * Typing searches them all.
+ * recent sessions) rather than every one. Projects wait for a search, since
+ * the sidebar already lists them. Typing searches them all.
  */
-export const BLANK_GROUP_ROWS: Partial<Record<CommandGroupId, number>> = { attention: 5, sessions: 6, projects: 5 };
+export const BLANK_GROUP_ROWS: Partial<Record<CommandGroupId, number>> = { attention: 5, sessions: 6, projects: 0 };
 
 function capBlankGroups(items: CommandItem[]): CommandItem[] {
 	const seen = new Map<CommandGroupId, number>();
