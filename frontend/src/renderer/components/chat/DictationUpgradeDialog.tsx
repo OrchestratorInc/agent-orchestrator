@@ -15,7 +15,7 @@ import {
 	publishDictationStatus,
 	useDictationInstall,
 } from "../../lib/dictation-install";
-import { DictationProgressBar, useDictationPercent } from "./DictationProgress";
+import { DictationRingGlyph, useDictationPercent } from "./DictationProgress";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogTitle } from "../ui/dialog";
 import { CloseButton } from "../ui/close-button";
 import { cn } from "../../lib/utils";
@@ -55,7 +55,7 @@ function DictationRow({
 	installing?: { fraction: number; cancelling: boolean; onCancel: () => void };
 	onClick: () => void;
 }) {
-	if (installing) return <DictationInstallingRow icon={icon} label={label} {...installing} />;
+	if (installing) return <DictationInstallingRow label={label} {...installing} />;
 	return (
 		<Pressable
 			className="group flex w-full items-center gap-4 rounded-lg bg-interactive-hover px-4 py-3 text-left hover:bg-interactive-active disabled:pointer-events-none disabled:opacity-50"
@@ -80,13 +80,11 @@ function DictationRow({
 }
 
 function DictationInstallingRow({
-	icon,
 	label,
 	fraction,
 	cancelling,
 	onCancel,
 }: {
-	icon: ReactNode;
 	label: string;
 	fraction: number;
 	cancelling: boolean;
@@ -96,16 +94,25 @@ function DictationInstallingRow({
 	const percent = useDictationPercent(fraction);
 	return (
 		<div className="flex w-full items-center gap-4 rounded-lg bg-interactive-hover px-4 py-3">
-			<span className="flex shrink-0 text-muted-foreground">{icon}</span>
-			<div className="min-w-0 flex-1 space-y-2.5">
-				<div className="flex items-baseline justify-between gap-3">
-					<span className="truncate text-[14px] font-medium text-foreground">{label}</span>
-					<span className="shrink-0 text-[12px] leading-5 tabular-nums text-muted-foreground" role="status">
-						{percent}
-					</span>
-				</div>
-				<DictationProgressBar fraction={fraction} label={label} />
-			</div>
+			<span
+				className="flex shrink-0"
+				role="progressbar"
+				aria-label={label}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={Math.round(fraction * 100)}
+			>
+				<DictationRingGlyph
+					fraction={fraction}
+					icon={<Download aria-hidden="true" />}
+					className="size-6"
+					iconClass="[&_svg]:size-3.5"
+				/>
+			</span>
+			<span className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground">{label}</span>
+			<span className="shrink-0 text-[12px] leading-5 tabular-nums text-muted-foreground" role="status">
+				{percent}
+			</span>
 			<Button variant="ghost" size="sm" disabled={cancelling} onClick={onCancel}>
 				{t("dictation.cancel")}
 			</Button>

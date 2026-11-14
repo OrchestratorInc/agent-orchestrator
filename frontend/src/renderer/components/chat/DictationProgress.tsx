@@ -1,4 +1,7 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { cn } from "../../lib/utils";
+import { ProgressRing } from "../ui/progress-ring";
 
 /** The bar alone. It only ever fills: the daemon's progress runs from start to finish and never goes back. */
 export function DictationProgressBar({ fraction, label }: { fraction: number; label: string }) {
@@ -41,42 +44,25 @@ export function DictationProgress({ stage, fraction }: { stage: string; fraction
 	);
 }
 
-const RING_SIZE = 28;
-const RING_STROKE = 2;
-const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2 - 0.5;
-const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
-
-/** A circle stroke around the mic button that fills as the model downloads. */
-export function DictationInstallRing({ fraction }: { fraction: number }) {
-	const done = Math.min(1, Math.max(0, fraction));
-	const center = RING_SIZE / 2;
+/**
+ * The update indicator's look: a glyph inside a hairline ring that fills with
+ * the download. The ring is sized by the caller's width and height.
+ */
+export function DictationRingGlyph({
+	fraction,
+	icon,
+	className,
+	iconClass = "[&_svg]:size-3",
+}: {
+	fraction: number;
+	icon: ReactNode;
+	className?: string;
+	iconClass?: string;
+}) {
 	return (
-		<svg
-			aria-hidden="true"
-			viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
-			className="pointer-events-none absolute inset-0 size-full -rotate-90"
-		>
-			<circle
-				cx={center}
-				cy={center}
-				r={RING_RADIUS}
-				fill="none"
-				stroke="var(--color-border)"
-				strokeWidth={RING_STROKE}
-			/>
-			<circle
-				cx={center}
-				cy={center}
-				r={RING_RADIUS}
-				fill="none"
-				stroke="var(--color-accent)"
-				strokeWidth={RING_STROKE}
-				strokeLinecap="round"
-				strokeDasharray={RING_LENGTH}
-				strokeDashoffset={RING_LENGTH * (1 - done)}
-				style={{ transition: "stroke-dashoffset 500ms linear" }}
-				className="motion-reduce:transition-none"
-			/>
-		</svg>
+		<span className={cn("relative grid place-items-center text-logo-accent", className)}>
+			<ProgressRing className="absolute inset-0 size-full" percent={Math.min(1, Math.max(0, fraction)) * 100} />
+			<span className={cn("grid place-items-center [&_svg]:stroke-[2.5]", iconClass)}>{icon}</span>
+		</span>
 	);
 }
