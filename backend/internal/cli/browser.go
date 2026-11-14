@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"net/http"
 	"net/url"
 	"os"
@@ -705,9 +706,10 @@ func (c *commandContext) browserAction(ctx context.Context, action string, args 
 	return out, err
 }
 
-// browserCommandTimeout matches the daemon's budget for a browser command,
-// which includes waiting up to 90s for the user to approve a risky action.
-const browserCommandTimeout = 3*time.Minute + 10*time.Second
+// browserCommandTimeout outlasts the daemon's budget for a browser command,
+// which includes waiting for the user to approve a risky action, so a slow
+// decision reaches the agent as a clean deny, never as a CLI timeout.
+const browserCommandTimeout = approval.BrowserCommandBudget + 10*time.Second
 
 // approvalHintDelay is how long a possibly-gated command runs before the CLI
 // says it may be waiting for the user.
@@ -736,7 +738,7 @@ func (c *commandContext) runBrowserAction(cmd *cobra.Command, action string, arg
 			defer close(finished)
 			select {
 			case <-time.After(approvalHintDelay):
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "ao browser: still waiting. If this action pays, sends, posts, or deletes, it is waiting for the user's approval in Orchestrator (up to 90s; no answer means deny).")
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "ao browser: still waiting. If this action pays, sends, posts, or deletes, it is waiting for the user's approval in Orchestrator (up to "+approval.BrowserWaitTimeout.String()+"; no answer means deny).")
 			case <-done:
 			}
 		}()

@@ -17,8 +17,7 @@ import (
 const describeAction = "describe"
 
 // DefaultApprovalTimeout is how long an agent's command waits for the user.
-// It stays under the common two-minute tool-call limit of agent harnesses.
-const DefaultApprovalTimeout = 90 * time.Second
+const DefaultApprovalTimeout = approval.BrowserWaitTimeout
 
 type approvalGate interface {
 	SessionMode(sessionID string) approval.Mode

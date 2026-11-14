@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -271,7 +272,7 @@ const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
 // browserCommandBudget covers a command's own run plus the time it may wait
 // for the user to approve it.
-const browserCommandBudget = 3 * time.Minute
+const browserCommandBudget = approval.BrowserCommandBudget
 
 // setupRoute reports a request that may run the project's Setup steps.
 func setupRoute(req *http.Request) bool {

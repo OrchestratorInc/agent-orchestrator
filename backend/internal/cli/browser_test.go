@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -877,5 +878,20 @@ func TestMayWaitForApproval(t *testing.T) {
 		if got := mayWaitForApproval(tc.action, tc.args); got != tc.want {
 			t.Errorf("%s %v = %v", tc.action, tc.args, got)
 		}
+	}
+}
+
+// TestBrowserTimeoutsNest keeps a slow approval decision a clean deny: the
+// approval wait ends before the daemon's command budget, which ends before
+// the CLI gives up. The approval wait also stays under the CLI's generic
+// two-minute command timeout and the remote-browser timeout, which other
+// browser callers (batch steps, self-hosted browsers) use.
+func TestBrowserTimeoutsNest(t *testing.T) {
+	wait := approval.BrowserWaitTimeout
+	if !(wait < approval.BrowserCommandBudget && approval.BrowserCommandBudget < browserCommandTimeout) {
+		t.Fatalf("approval wait %s, daemon budget %s, CLI browser timeout %s must increase", wait, approval.BrowserCommandBudget, browserCommandTimeout)
+	}
+	if wait >= commandTimeout || wait >= remoteBrowserTimeout {
+		t.Fatalf("approval wait %s must stay below the CLI command timeout %s and remote browser timeout %s", wait, commandTimeout, remoteBrowserTimeout)
 	}
 }

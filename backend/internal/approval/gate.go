@@ -24,6 +24,17 @@ const (
 // DefaultTimeout is how long a request waits for the user before denying.
 const DefaultTimeout = 2 * time.Minute
 
+// BrowserWaitTimeout is how long an agent's browser command waits for the
+// user. It stays under the common two-minute tool-call limit of agent
+// harnesses, so the agent sees a clean deny rather than its own timeout.
+const BrowserWaitTimeout = 90 * time.Second
+
+// BrowserCommandBudget is the daemon's whole budget for one browser command:
+// the approval wait plus the command's own run. The CLI waits slightly
+// longer than this so the daemon's answer (a deny) always arrives first.
+// TestBrowserTimeoutsNest keeps the three in order.
+const BrowserCommandBudget = BrowserWaitTimeout + 90*time.Second
+
 // MaxTimeout bounds caller-chosen timeouts.
 const MaxTimeout = 10 * time.Minute
 
