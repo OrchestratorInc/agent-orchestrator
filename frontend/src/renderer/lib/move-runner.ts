@@ -8,6 +8,7 @@ export type MovePhase = "waiting" | "moving" | "failed" | "done";
 export type MoveState = {
 	phase: MovePhase;
 	targetHostId: string;
+	targetProjectId: string;
 	targetLabel: string;
 	step?: MoveStep;
 	progress?: { sent: number; total: number };
@@ -63,7 +64,7 @@ export type RunMoveOptions = {
 export async function runMove(key: string, input: MoveInput, options: RunMoveOptions = {}): Promise<void> {
 	cancelled.delete(key);
 	useMoveStore.setState((state) => ({
-		moves: { ...state.moves, [key]: { phase: options.afterTurn ? "waiting" : "moving", targetHostId: input.target.hostId, targetLabel: input.target.label } },
+		moves: { ...state.moves, [key]: { phase: options.afterTurn ? "waiting" : "moving", targetHostId: input.target.hostId, targetProjectId: input.target.projectId, targetLabel: input.target.label } },
 	}));
 	for (;;) {
 		if (options.afterTurn) {

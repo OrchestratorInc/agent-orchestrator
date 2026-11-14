@@ -926,7 +926,7 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 		queries: hostIds.map((hostId) => ({
 			queryKey: remoteProjectsQueryKey(hostId),
 			queryFn: () => fetchRemoteProjects(hostId),
-			enabled: connected.includes(hostId),
+			enabled: options.enabled !== false && connected.includes(hostId),
 			retry: 1,
 			refetchInterval: 15_000,
 			subscribed: options.subscribed,
@@ -936,7 +936,7 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 		queries: hostIds.map((hostId) => ({
 			queryKey: remoteSessionsQueryKey(hostId),
 			queryFn: () => fetchRemoteSessions(hostId),
-			enabled: connected.includes(hostId),
+			enabled: options.enabled !== false && connected.includes(hostId),
 			retry: 1,
 			refetchInterval: 15_000,
 			subscribed: options.subscribed,
