@@ -222,24 +222,6 @@ export function buildChoiceCommands(menu: string, t: TFunction, prefs: PalettePr
 	}));
 }
 
-/** Labels of the lists whose options a search can pick directly. */
-const SEARCHABLE_CHOICES: Partial<Record<string, MessageKey>> = { theme: "settings.theme", "color-theme": "settings.colorTheme", language: "settings.language" };
-
-/**
- * Every option of Theme, Color theme and Language as its own search-only row
- * ("Color theme: Nord"), so typing a theme's name picks it without opening the list.
- */
-export function buildChoiceSearchCommands(t: TFunction, prefs: PalettePreferences): CommandItem[] {
-	return Object.entries(SEARCHABLE_CHOICES).flatMap(([menu, label]) =>
-		buildChoiceCommands(menu, t, prefs).map((item) => ({
-			...item,
-			group: "settings" as const,
-			title: `${t(label!)}: ${item.title}`,
-			searchOnly: true,
-			keepOpen: false,
-		})));
-}
-
 /** The value a choice row stands for, for previewing a color theme while it is selected. */
 export function choiceValue(itemId: string): string | undefined {
 	return itemId.startsWith("choice:") ? itemId.split(":").slice(2).join(":") : undefined;
@@ -272,7 +254,10 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 			group: "settings",
 			title,
 			subtitle: isPage ? undefined : pageLabel(entry.section),
-			keywords: isPage ? [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])] : entry.keywords,
+			// A list's option names find the list ("nord" → Color theme ›), not each option.
+			keywords: isPage
+				? [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])]
+				: choice ? [...entry.keywords, ...choice.options(t).map((option) => option.label)] : entry.keywords,
 			searchOnly: true,
 			...(toggle ? { toggled: on, keepOpen: true } : {}),
 			...(choice && prefs ? { state: choice.options(t).find((option) => option.value === choice.current(prefs))?.label } : {}),

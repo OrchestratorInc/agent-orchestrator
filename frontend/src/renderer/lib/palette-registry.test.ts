@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appI18n } from "../i18n";
-import { buildChoiceCommands, buildChoiceSearchCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "./palette-registry";
+import { buildChoiceCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "./palette-registry";
 import { filterCommands } from "./command-palette";
 
 const t = appI18n.t.bind(appI18n);
@@ -129,9 +129,9 @@ describe("palette registry", () => {
 		expect(choiceValue("setting:theme")).toBeUndefined();
 	});
 
-	it("finds a color theme by name without opening the list", () => {
-		const rows = buildChoiceSearchCommands(t, prefs);
-		expect(rows.every((row) => row.searchOnly && !row.keepOpen)).toBe(true);
-		expect(filterCommands(rows, "nord")[0]).toMatchObject({ id: "choice:color-theme:nord", title: `${t("settings.colorTheme")}: Nord` });
+	it("finds a list by one of its options rather than listing the option", () => {
+		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false, prefs });
+		expect(filterCommands(items, "nord")[0]?.id).toBe("setting:color-theme");
+		expect(items.some((item) => item.id.startsWith("choice:"))).toBe(false);
 	});
 });

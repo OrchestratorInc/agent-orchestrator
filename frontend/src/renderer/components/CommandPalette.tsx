@@ -46,7 +46,7 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { startProblemReport } from "../lib/report-problem";
-import { buildChoiceCommands, buildChoiceSearchCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "../lib/palette-registry";
+import { buildChoiceCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "../lib/palette-registry";
 import { previewDocumentThemeStyle } from "../lib/theme";
 import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { runAppMenuAction } from "../hooks/useAppMenuCommand";
@@ -440,7 +440,6 @@ export const CommandPalette = memo(function CommandPalette() {
 					: {}),
 			}),
 			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac, prefs }),
-			...buildChoiceSearchCommands(t, prefs),
 			// The bell's panel and the footer's Connect mobile, which have no route.
 			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
 			...(isMac && stayAwake.supported
