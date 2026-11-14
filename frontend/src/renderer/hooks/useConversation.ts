@@ -383,6 +383,21 @@ const PERMANENT_CODES = new Set([
 	"CHAT_AUTH_REQUIRED",
 ]);
 
+// A resolve/resolveInput call can race a request the provider's own relay is
+// concurrently re-parking (e.g. after a brief upstream reconnect), so a
+// genuinely current, user-clicked decision sometimes lands in the split
+// second the daemon's live tracking briefly disagrees with its durable
+// "pending" read model and answers CHAT_REQUEST_NOT_PENDING even though
+// nothing was ever actually resolved. Retrying shortly after reliably
+// succeeds once that window passes. Bounded and code-scoped so a genuinely
+// stale (superseded-by-a-newer-request) or invalid decision still fails fast
+// instead of retrying a hopeless call.
+const STALE_REQUEST_RETRY_LIMIT = 3;
+const STALE_REQUEST_RETRY_DELAY_MS = 400;
+function retryOnlyStaleRequestConflict(failureCount: number, error: unknown): boolean {
+	return failureCount < STALE_REQUEST_RETRY_LIMIT && apiErrorCode(error) === "CHAT_REQUEST_NOT_PENDING";
+}
+
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
 	isLoading: boolean;
@@ -878,8 +893,15 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			);
 			if (error && !(hostId && apiErrorCode(error) === "CHAT_REQUEST_NOT_PENDING")) throw error;
 		},
-		onSettled: hostId ? invalidate : undefined,
-		onSuccess: hostId ? undefined : invalidate,
+		// Refetch on success and on any rejection (remote hosts swallow
+		// CHAT_REQUEST_NOT_PENDING upstream, so it settles as success there).
+		onSettled: invalidate,
+		// A rejected decision (e.g. CHAT_REQUEST_NOT_PENDING because the provider
+		// already superseded this request with a newer one) means the cached
+		// approval card is stale. Refetch so the UI shows whatever is actually
+		// pending now instead of leaving a dead card the user cannot get past.
+		retry: retryOnlyStaleRequestConflict,
+		retryDelay: STALE_REQUEST_RETRY_DELAY_MS,
 	});
 
 	const resolveInput = useMutation({
@@ -902,8 +924,13 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			);
 			if (error && !(hostId && apiErrorCode(error) === "CHAT_REQUEST_NOT_PENDING")) throw error;
 		},
-		onSettled: hostId ? invalidate : undefined,
-		onSuccess: hostId ? undefined : invalidate,
+		// Refetch on success and on any rejection (remote hosts swallow
+		// CHAT_REQUEST_NOT_PENDING upstream, so it settles as success there).
+		onSettled: invalidate,
+		// Same reasoning as resolve's onError: a stale/superseded input request
+		// must refresh so the UI stops showing an unanswerable card.
+		retry: retryOnlyStaleRequestConflict,
+		retryDelay: STALE_REQUEST_RETRY_DELAY_MS,
 	});
 
 	const interrupt = useMutation({
