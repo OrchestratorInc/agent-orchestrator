@@ -6746,6 +6746,25 @@ describe("hidden browser background throttling", () => {
 		expect(throttled(views[0]!)).toBe(true);
 	});
 
+	it("throttles a hidden idle session again when its network capture expires", async () => {
+		const { emit, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		emit("browser:setBounds", { viewId, revision: 101, rect: hiddenRect, visible: false });
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+		try {
+			await host.execute("sess-1", "network-start", { durationSeconds: 5 });
+			expect(throttled(views[0]!)).toBe(false);
+			// No further command or bounds change: only the expiry timer runs.
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(throttled(views[0]!)).toBe(true);
+			// (Checked last: a status command would itself re-sync throttling.)
+			expect(await host.execute("sess-1", "network-status", {})).toMatchObject({ active: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("never throttles a tab that is playing audio", async () => {
 		const { emit, invoke, views } = setupTabHost();
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
