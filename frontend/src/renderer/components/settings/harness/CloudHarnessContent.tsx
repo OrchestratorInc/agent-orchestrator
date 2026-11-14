@@ -7,7 +7,7 @@ import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/us
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../../hooks/useProviderConnections";
-import type { CloudCpProviderConnection } from "../../../lib/cloud-cp";
+import { CloudCpError, type CloudCpProviderConnection } from "../../../lib/cloud-cp";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../../lib/cloud-agents";
 import { cn } from "../../../lib/utils";
@@ -86,6 +86,11 @@ function hasSavedGitHubToken(connections: CloudCpProviderConnection[] | undefine
 	return (connections ?? []).some((connection) => connection.provider === "github" && connection.label === "default");
 }
 
+/** The control plane has no saved GitHub token for this person (DELETE /me/github-pat answered 404 not_found). */
+function isTokenAlreadyGone(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 404 && error.code === "not_found";
+}
+
 /**
  * Nothing saves a GitHub token for Cloud any more, but the control plane keeps
  * one saved earlier and can still use it, so its owner can remove it here. The
@@ -96,8 +101,16 @@ function SavedGitHubTokenRow() {
 	const { client } = useCloudCp();
 	const queryClient = useQueryClient();
 	const remove = useMutation({
-		mutationFn: () => client.deleteGitHubPAT(),
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
+		mutationFn: async () => {
+			try {
+				await client.deleteGitHubPAT();
+			} catch (error) {
+				// Already gone (removed from another device) is what Remove asked for.
+				if (!isTokenAlreadyGone(error)) throw error;
+			}
+		},
+		// Refetch either way, so the row matches what the control plane holds.
+		onSettled: () => queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
 	});
 	return <SettingsRow
 		data-saved-github-token=""
