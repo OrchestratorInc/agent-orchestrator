@@ -737,6 +737,7 @@ describe("browser shortcut matching", () => {
 	it("leaves dictation and terminal splits to the page", () => {
 		const option = { key: "∂", code: "KeyD", ctrl: false, meta: false, shift: false, alt: true };
 		expect(shouldHandleAppShortcutInBrowserContext("dictate", option, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("add-selection-to-chat", option, true)).toBe(false);
 		const command = { key: "d", code: "KeyD", ctrl: false, meta: true, shift: false, alt: false };
 		expect(shouldHandleAppShortcutInBrowserContext("split-shell-terminal", command, true)).toBe(false);
 		expect(shouldHandleAppShortcutInBrowserContext("split-shell-terminal-down", { ...command, key: "D", shift: true }, true)).toBe(false);

@@ -190,6 +190,9 @@ describe("turn rollback", () => {
 	it("offers the confirming control on a settled turn the provider knows", () => {
 		expect(actions).toContain("const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;");
 		expect(actions).toContain("{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}");
+		// Fork shares the row: it shows on a turn a fork can copy, beside Roll back.
+		expect(actions).toContain("const canFork = Boolean(onFork) && forkableTurn(turn);");
+		expect(actions).toContain("{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}");
 		expect(actions).not.toContain("rollbackConfirm");
 		expect(actions).not.toContain("setConfirming");
 	});

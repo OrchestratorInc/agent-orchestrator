@@ -6,13 +6,13 @@ import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
-const { deleteMock, getMock, postMock, terminalState } = vi.hoisted(() => ({
-	deleteMock: vi.fn(), getMock: vi.fn(), postMock: vi.fn(),
+const { deleteMock, getMock, patchMock, postMock, terminalState } = vi.hoisted(() => ({
+	deleteMock: vi.fn(), getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(),
 	terminalState: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { DELETE: deleteMock, GET: getMock, POST: postMock },
+	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
 }));
 
@@ -142,6 +142,51 @@ it("checks a sign-in once when the CLI exits during a check", async () => {
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+// A chat turn refused for its login sent the user here: the account that signs
+// in takes them back to it.
+it("returns to the chat turn waiting on a Claude login once its account signs in", async () => {
+	const user = userEvent.setup();
+	useUiStore.setState({
+		settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+		loginReturn: { sessionId: "s1", agentId: "claude-code", accountId: saved.id },
+	});
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+
+	await waitFor(() => expect(useUiStore.getState().loginReturn?.loggedInAt).toBeDefined());
+	expect(useUiStore.getState().settingsModal).toBeNull();
+	useUiStore.setState({ loginReturn: null });
+});
+
+// The session runs on its own account; signing another one in does not fix it.
+it("keeps the chat waiting when a different account signs in", async () => {
+	const user = userEvent.setup();
+	useUiStore.setState({
+		settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
+		loginReturn: { sessionId: "s1", agentId: "claude-code", accountId: "the-sessions-account" },
+	});
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+
+	await waitFor(() => expect(postMock.mock.calls.some(([path]) => path === "/api/v1/agents/accounts/login/{operationId}/verify")).toBe(true));
+	await waitFor(() => expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument());
+	expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+	expect(useUiStore.getState().settingsModal).not.toBeNull();
+	useUiStore.setState({ loginReturn: null, settingsModal: null });
+});
+
 // The CLI's own login has no card of its own: its row signs it in again and
 // out through the harness's login terminal, and has no folder to remove.
 it("signs the CLI login in again and out from its own row", async () => {
@@ -182,6 +227,58 @@ it("shows an API-key CLI login as logged in without a subscription and keeps its
 	expect(row).not.toHaveTextContent("Signed out");
 	await user.click(within(row).getByRole("button", { name: "Log out" }));
 	expect(cliLogin.onLogout).toHaveBeenCalledTimes(1);
+});
+
+function renderWithAccounts(accounts: unknown[]) {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts },
+	}));
+	renderPanel();
+}
+
+const findProblem = (id: string) => waitFor(() => {
+	const note = document.querySelector<HTMLElement>(`[data-agent-account="${id}"] [data-account-problem]`);
+	if (!note) throw new Error("no problem note");
+	return note;
+});
+
+it("says a slow check plainly, keeps the old numbers' age, and puts the CLI's error under Details", async () => {
+	const fetchedAt = new Date(Date.now() - 6 * 60_000).toISOString();
+	renderWithAccounts([{ ...device, problem: "context deadline exceeded", problemKind: "slow", limits: { fetchedAt, windows: [{ id: "five_hour", label: "Session (5h)", usedPercent: 28 }] } }]);
+
+	const note = await findProblem("device-claude");
+	expect(note).toHaveTextContent("Updated 6 minutes ago · Claude Code took too long to report its limits. Trying again shortly.");
+	expect(note).not.toHaveTextContent("context deadline exceeded");
+	expect(note).toHaveClass("text-muted-foreground");
+	expect(note.querySelector("svg")).toBeNull();
+	// The numbers from the last good check stay.
+	expect(screen.getByRole("progressbar", { name: /Session \(5h\)/ })).toBeInTheDocument();
+
+	await userEvent.setup().hover(within(note).getByRole("button", { name: "Details" }));
+	expect(await screen.findByRole("tooltip")).toHaveTextContent("context deadline exceeded");
+});
+
+it("words an older daemon's bare error as a check that will be tried again", async () => {
+	renderWithAccounts([{ ...device, problem: "claude ended without answering get_usage" }]);
+
+	const note = await findProblem("device-claude");
+	expect(note).toHaveTextContent("Couldn't check limits right now. Trying again shortly.");
+	expect(note).not.toHaveTextContent("get_usage");
+});
+
+it("warns when the folder is signed in as another login or the CLI is missing", async () => {
+	renderWithAccounts([
+		{ ...saved, signedIn: false, problem: "the folder is now signed in as c@example.com, not b@example.com", problemKind: "other_login" },
+		{ ...device, problem: "claude: executable file not found in $PATH", problemKind: "cli_missing" },
+	]);
+
+	const other = await findProblem("acct-b");
+	expect(other).toHaveTextContent("This account's folder is now signed in to a different login. Sign in again to use it.");
+	expect(other).toHaveClass("text-warning");
+	expect(other.querySelector("svg")).not.toBeNull();
+	const missing = await findProblem("device-claude");
+	expect(missing).toHaveTextContent("Claude Code isn't installed, so its limits can't be checked.");
+	expect(missing).toHaveClass("text-warning");
 });
 
 it("lists a login the CLI and a saved account share once", async () => {
@@ -265,4 +362,26 @@ it("says an API key is not a subscription sign-in and keeps the sign-in open", a
 	await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("This is an API key, not a subscription. Sign in with your subscription account."));
 	expect(screen.getByTestId("agent-account-login-terminal")).toBeInTheDocument();
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("turns the usage-limit handoff on through the daemon and shows what it stored", async () => {
+	const user = userEvent.setup();
+	let stored = false;
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/settings" ? { accountHandoff: stored }
+			: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
+	}));
+	patchMock.mockReset().mockImplementation((_path: string, { body }: { body: { enabled: boolean } }) => {
+		stored = body.enabled;
+		return Promise.resolve({ data: { accountHandoff: stored } });
+	});
+	renderPanel();
+	const toggle = await screen.findByRole("switch", { name: "Move to another account at a usage limit" });
+	await waitFor(() => expect(toggle).toBeEnabled());
+	expect(toggle).not.toBeChecked();
+
+	await user.click(toggle);
+
+	expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/account-handoff", { body: { enabled: true } });
+	await waitFor(() => expect(toggle).toBeChecked());
 });

@@ -517,6 +517,28 @@ describe("merge readiness rows", () => {
 		verdict,
 	});
 
+	it("splits the conflicts and review rows the way the checks row reads: what it is about, then where it stands", () => {
+		const facts = (pr: SessionPRSummary) => prCardPresentation(pr).readinessRows?.filter((row) => row.key !== "ci").map((row) => row.fact);
+		expect(facts(summary({ review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] } }))).toEqual([
+			{ title: "Conflicts", value: "None", state: "passed" },
+			{ title: "Review", value: "Required", state: "pending" },
+		]);
+		expect(facts(summary({
+			mergeability: { state: "conflicting", reasons: [], prUrl: "", conflictFiles: [] },
+			review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [reviewEntry("grace", "approved")] },
+		}))).toEqual([
+			{ title: "Conflicts", value: "Conflicts with the base branch", state: "failed" },
+			{ title: "Review", value: "Approved by grace", state: "passed" },
+		]);
+		expect(facts(summary({
+			mergeability: { state: "unknown", reasons: [], prUrl: "", conflictFiles: [] },
+			review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [reviewEntry("linus", "changes_requested")] },
+		}))).toEqual([
+			{ title: "Conflicts", value: "Unknown", state: "pending" },
+			{ title: "Review", value: "Changes requested by linus", state: "failed" },
+		]);
+	});
+
 	it("always shows conflicts, checks and review, saying no reviews yet instead of no review required", () => {
 		const pr = summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
 		expect(labels(pr)).toEqual(["No conflicts", "Checks passing", "No reviews yet"]);
@@ -1172,6 +1194,20 @@ describe("pull request repositories", () => {
 		const { prsSpanRepositories } = await import("./pr-display");
 		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/a/pull/2" }])).toBe(false);
 		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/b/pull/1" }])).toBe(true);
+	});
+
+	it("calls a repository by its short name, and by its full name when two owners share it", async () => {
+		const { prRepositoryLabels, prRepositoryShortName } = await import("./pr-display");
+		expect(prRepositoryShortName("acme-platform/landing-site")).toBe("landing-site");
+		expect(prRepositoryShortName("landing-site")).toBe("landing-site");
+		const apart = prRepositoryLabels([{ repo: "acme-platform/landing-site" }, { repo: "acme-platform/control-plane" }]);
+		expect(apart.get("acme-platform/landing-site")).toBe("landing-site");
+		expect(apart.get("acme-platform/control-plane")).toBe("control-plane");
+		// A fork and its upstream share a short name, so each keeps its owner.
+		const fork = prRepositoryLabels([{ repo: "acme/app" }, { repo: "ada/app" }, { url: "https://github.com/acme/docs/pull/3" }]);
+		expect(fork.get("acme/app")).toBe("acme/app");
+		expect(fork.get("ada/app")).toBe("ada/app");
+		expect(fork.get("acme/docs")).toBe("docs");
 	});
 });
 

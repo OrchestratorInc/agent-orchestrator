@@ -20,6 +20,13 @@ export const TURN_ACTION_SIZE = 28;
 export const TURN_ACTION_SLOP = Math.ceil((touchTarget - TURN_ACTION_SIZE) / 2);
 
 /**
+ * One control in a turn's action row (copy, fork, roll back): every one the
+ * same square, given TURN_ACTION_SLOP as its hitSlop, so each reaches the same
+ * minimum target on either platform.
+ */
+export const turnActionControl = { width: TURN_ACTION_SIZE, height: TURN_ACTION_SIZE, borderRadius: TURN_ACTION_SIZE / 2, alignItems: "center", justifyContent: "center" } as const;
+
+/**
  * Makes the agent forget a settled turn and everything after it. That cannot be
  * undone, so the system's destructive confirmation asks first, the way Archive
  * does.
@@ -68,7 +75,6 @@ export function TurnRollbackButton({ turnId, onRollback, compact = false }: {
 }
 
 const styles = StyleSheet.create({
-	// The glyph lines up with the reply's right edge; the target reaches past it.
-	rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginRight: -(touchTarget - iconSize.md) / 2 },
-	compact: { width: TURN_ACTION_SIZE, height: TURN_ACTION_SIZE, borderRadius: TURN_ACTION_SIZE / 2, alignItems: "center", justifyContent: "center" },
+	rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	compact: turnActionControl,
 });

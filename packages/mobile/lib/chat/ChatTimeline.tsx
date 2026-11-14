@@ -34,6 +34,7 @@ import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FirstLineMarker } from "./FirstLineMarker";
+import { ProviderSwitchMarker } from "./ProviderSwitchMarker";
 import { RenderFrame } from "./RenderFrame";
 import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
@@ -107,7 +108,9 @@ import { iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
-import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton } from "./TurnRollbackButton";
+import { forkableTurn, latestForkableTurnId } from "./forkTurns";
+import { TurnForkButton } from "./TurnForkButton";
+import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton, turnActionControl } from "./TurnRollbackButton";
 import { formatReplyTime } from "./replyTime";
 import { CONVERSATION_END_GAP, KEYBOARD_END_GAP_TUCK } from "../session/keyboardInset";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
@@ -138,6 +141,8 @@ function Timeline({
 	onDecide,
 	onResolveInput,
 	onRollback,
+	onFork,
+	forkAnyTurn = false,
 	onEditMessage,
 	onEditingChange,
 	jumpToSequence,
@@ -159,6 +164,10 @@ function Timeline({
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
+	/** Forks the session as a turn left it. Absent when session forks are off. */
+	onFork?(turnId: string): Promise<void>;
+	/** Every finished turn can be forked, not just the latest. */
+	forkAnyTurn?: boolean;
 	/** Branches before an earlier human prompt and resends it edited. */
 	onEditMessage?(turnId: string, text: string, clientMessageId: string): Promise<void>;
 	/** Whether a prompt is open in its inline editor, so the screen can make room. */
@@ -305,6 +314,7 @@ function Timeline({
 	const editsRef = useRef(nextEdits);
 	if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;
 	const edits = editsRef.current;
+	const latestForkTurnId = useMemo(() => latestForkableTurnId(snapshot.turns), [snapshot.turns]);
 	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
 	const { editDraft, editing, detached, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than
@@ -520,6 +530,7 @@ function Timeline({
 								onDecide={onDecide}
 								onResolveInput={onResolveInput}
 								onRollback={onRollback}
+								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? onFork : undefined}
 								editableTurns={edits?.editable}
 								onEditMessage={onEditMessage ? startEdit : undefined}
 								editDraft={editDraft}
@@ -547,7 +558,7 @@ function Timeline({
 	);
 }
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -555,6 +566,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
+	onFork?(turnId: string): Promise<void>;
 	editableTurns?: ReadonlySet<string>;
 	onEditMessage?(message: ConversationMessage): void;
 	editDraft?: MessageEditDraft;
@@ -604,7 +616,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
-	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} />;
+	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} onFork={onFork} />;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
@@ -711,6 +723,9 @@ const TimelineItem = memo(function TimelineItem({
 	if (item.activityKind === "system" && item.detail?.event === "compaction") {
 		return <CompactionMarker activity={item} />;
 	}
+	if (item.detail?.event === "provider_switch") {
+		return <ProviderSwitchMarker activity={item} />;
+	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
 		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
@@ -730,7 +745,7 @@ const TimelineItem = memo(function TimelineItem({
 });
 
 /**
- * The row a turn closes on, under its reply: copy, roll back, and when the reply
+ * The row a turn closes on, under its reply: copy, fork, roll back, and when the reply
  * was written (the desktop's TurnActions; the time shows outright, a phone
  * having no hover). One per turn, not one under every fragment of prose.
  *
@@ -738,15 +753,17 @@ const TimelineItem = memo(function TimelineItem({
  * rather than adding one, and the controls are small with their touch taken out
  * by slop: the row never moves the conversation or the composer over it.
  */
-function TurnActions({ turn, reply, onRollback }: { turn: ConversationTurn; reply?: ConversationMessage; onRollback?(turnId: string): Promise<number> }) {
+function TurnActions({ turn, reply, onRollback, onFork }: { turn: ConversationTurn; reply?: ConversationMessage; onRollback?(turnId: string): Promise<number>; onFork?(turnId: string): Promise<void> }) {
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const copyText = settled && reply && !reply.streaming && reply.text.trim() ? reply.text : undefined;
 	const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	const canFork = Boolean(onFork) && forkableTurn(turn);
 	const time = settled ? formatReplyTime(reply?.createdAt ?? turn.completedAt) : "";
 	return (
 		<View style={styles.turnActions}>
 			{copyText ? <CopyResponseButton text={copyText} /> : null}
+			{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}
 			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
 			{time ? <Text style={styles.turnTime} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
 		</View>
@@ -1586,7 +1603,7 @@ const makeStyles = (t: Theme) => {
 		// A full touch target, so the controls' slop is inside it; the margins
 		// keep its footprint at the controls' size.
 		turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP, flexDirection: "row", alignItems: "center", gap: space.xxs, marginLeft: -(TURN_ACTION_SIZE - iconSize.sm) / 2 },
-		turnAction: { width: TURN_ACTION_SIZE, height: TURN_ACTION_SIZE, borderRadius: TURN_ACTION_SIZE / 2, alignItems: "center", justifyContent: "center" },
+		turnAction: turnActionControl,
 		turnTime: { fontFamily: "DMSans_400Regular", paddingHorizontal: space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontVariant: ["tabular-nums"] },
 		// Full width with a rule under it, matching the desktop's Working / Worked
 		// rows and the setup checklist header, so the line holds through the handoff.

@@ -38,6 +38,7 @@ import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
+import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
@@ -120,6 +121,11 @@ export default function SpawnScreen() {
 	// before it is picked. The picked agent's list is the project-aware catalog.
 	const [agentModelLists, setAgentModelLists] = useState<Record<string, AgentModelInfo[]>>({});
 	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
+	const [accountPick, setAccountPick] = useState<string>();
+	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
+	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);
+	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
+	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -586,6 +592,7 @@ export default function SpawnScreen() {
 				model: modelOverride(displayedModel, modelTouched),
 				// Only a level picked here; otherwise the model's default applies.
 				effort: chosenEffort,
+				accountId: accountPick || undefined,
 				// Only a mode picked here overrides the project's; an untouched
 				// picker names the project's mode, which the daemon applies anyway.
 				approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,
@@ -675,6 +682,9 @@ export default function SpawnScreen() {
 						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
+					accounts={accountOptions}
+					accountId={shownAccountId}
+					onSelectAccount={setAccountPick}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}

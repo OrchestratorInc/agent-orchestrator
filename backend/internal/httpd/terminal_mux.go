@@ -52,14 +52,23 @@ func terminalMuxHandler(mgr *terminal.Manager, log *slog.Logger, allowedOrigins 
 			return
 		}
 		c.SetReadLimit(terminalMuxReadLimit)
-		mgr.Serve(r.Context(), &terminalMuxConn{c: c})
+		// A browser page always sends an Origin (already checked above); a local
+		// program may not. Only the former may drive split panes.
+		mgr.Serve(r.Context(), &terminalMuxConn{c: c, fromPage: r.Header.Get("Origin") != ""})
 	}
 }
 
 // terminalMuxConn adapts a coder/websocket connection to terminal.wsConn. JSON framing
 // uses wsjson (text messages); Ping is a control frame; Close sends a normal
 // closure.
-type terminalMuxConn struct{ c *websocket.Conn }
+type terminalMuxConn struct {
+	c        *websocket.Conn
+	fromPage bool
+}
+
+// AllowsPanes tells the terminal manager this connection came from an allowed
+// page, not a bare local client.
+func (a *terminalMuxConn) AllowsPanes() bool { return a.fromPage }
 
 func (a *terminalMuxConn) ReadJSON(ctx context.Context, v any) error { return wsjson.Read(ctx, a.c, v) }
 func (a *terminalMuxConn) WriteJSON(ctx context.Context, v any) error {
