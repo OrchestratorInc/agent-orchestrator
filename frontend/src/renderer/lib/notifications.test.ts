@@ -6,6 +6,7 @@ import type { NotificationDTO, NotificationsCache, NotificationsPage } from "./n
 const {
 	apiDeleteMock,
 	apiGetMock,
+	dismissNotificationMock,
 	getApiBaseUrlMock,
 	onStatusMock,
 	removeStatusMock,
@@ -15,6 +16,7 @@ const {
 } = vi.hoisted(() => ({
 	apiDeleteMock: vi.fn(),
 	apiGetMock: vi.fn(),
+	dismissNotificationMock: vi.fn(),
 	getApiBaseUrlMock: vi.fn(() => "http://127.0.0.1:3001"),
 	onStatusMock: vi.fn(),
 	removeStatusMock: vi.fn(),
@@ -35,7 +37,7 @@ vi.mock("./api-client", () => ({
 vi.mock("./bridge", () => ({
 	aoBridge: {
 		daemon: { onStatus: onStatusMock },
-		notifications: { show: showNotificationMock },
+		notifications: { dismiss: dismissNotificationMock, show: showNotificationMock },
 	},
 }));
 
@@ -124,6 +126,7 @@ beforeEach(() => {
 	onStatusMock.mockReset().mockReturnValue(removeStatusMock);
 	removeStatusMock.mockReset();
 	showNotificationMock.mockReset().mockResolvedValue(undefined);
+	dismissNotificationMock.mockReset().mockResolvedValue(undefined);
 	subscribeApiBaseUrlMock.mockReset().mockReturnValue(unsubscribeBaseUrlMock);
 	unsubscribeBaseUrlMock.mockReset();
 	(globalThis as unknown as { EventSource: unknown }).EventSource = EventSourceStub;
@@ -602,6 +605,248 @@ describe("createNotificationsTransport", () => {
 		]);
 		expect(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey)?.pages[0]?.unresolvedCount).toBe(0);
 		expect(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey)?.pages[0]?.unresolvedCount).toBe(0);
+	});
+
+	it("withdraws the OS toast for exactly the resolved id without marking it read", () => {
+		const qc = queryClient();
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+		source.dispatch("notification_created", notification());
+		source.dispatch("notification_created", notification({ id: "ntf_2", sessionId: "mer-2" }));
+		expect(showNotificationMock).toHaveBeenCalledTimes(2);
+
+		source.dispatch("notification_resolved", notification({ resolvedAt: "2026-06-16T11:00:00Z" }));
+
+		expect(dismissNotificationMock).toHaveBeenCalledTimes(1);
+		expect(dismissNotificationMock).toHaveBeenCalledWith("ntf_1");
+		// Concurrent request on another session is still open, and both stay unseen.
+		const unread = qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey);
+		const rows = getCachedNotifications(unread);
+		expect(rows.find((item) => item.id === "ntf_1")).toEqual(
+			expect.objectContaining({ status: "unread", resolvedAt: "2026-06-16T11:00:00Z" }),
+		);
+		expect(rows.find((item) => item.id === "ntf_2")).toEqual(expect.objectContaining({ status: "unread" }));
+		expect(rows.find((item) => item.id === "ntf_2")?.resolvedAt).toBeUndefined();
+		expect(getCachedUnreadCount(unread)).toBe(2);
+		expect(unread?.pages[0]?.unresolvedCount).toBe(1);
+	});
+
+	// A rejected or failed answer, or answering one of several pending requests,
+	// produces no authoritative resolution; the toast must stay up.
+	it("keeps the OS toast when no authoritative resolution arrives", () => {
+		const qc = queryClient();
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+		source.dispatch("notification_created", notification());
+
+		source.dispatch("notification_resolved", notification());
+
+		expect(dismissNotificationMock).not.toHaveBeenCalled();
+		expect(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey)?.pages[0]?.unresolvedCount).toBe(1);
+	});
+
+	it("does not reopen or re-toast a notification when its create is replayed after the resolution", () => {
+		const qc = queryClient();
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+		source.dispatch("notification_created", notification());
+		source.dispatch("notification_resolved", notification({ resolvedAt: "2026-06-16T11:00:00Z" }));
+		source.dispatch("notification_resolved", notification({ resolvedAt: "2026-06-16T11:00:00Z" }));
+
+		source.dispatch("notification_created", notification());
+
+		expect(showNotificationMock).toHaveBeenCalledTimes(1);
+		for (const queryKey of [unreadNotificationsQueryKey, recentNotificationsQueryKey] as const) {
+			const cache = qc.getQueryData<NotificationsCache>(queryKey);
+			expect(getCachedNotifications(cache)).toEqual([
+				expect.objectContaining({ id: "ntf_1", resolvedAt: "2026-06-16T11:00:00Z" }),
+			]);
+			expect(cache?.pages[0]?.unresolvedCount).toBe(0);
+		}
+	});
+
+	it("never raises a toast for a create that arrives after its resolution", async () => {
+		const qc = queryClient();
+		vi.spyOn(qc, "invalidateQueries").mockResolvedValue(undefined);
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+
+		// Unknown row: the resolution triggers a snapshot reconcile first.
+		source.dispatch("notification_resolved", notification({ resolvedAt: "2026-06-16T11:00:00Z" }));
+		await reconcileNotifications(qc);
+		source.dispatch("notification_created", notification());
+
+		expect(showNotificationMock).not.toHaveBeenCalled();
+		const unread = qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey);
+		expect(getCachedNotifications(unread)).toEqual([
+			expect.objectContaining({ id: "ntf_1", status: "unread", resolvedAt: "2026-06-16T11:00:00Z" }),
+		]);
+		expect(unread?.pages[0]?.unresolvedCount).toBe(0);
+	});
+
+	// The resolved copy may predate a read the snapshot already reflects.
+	it("does not let a resolution overwrite the seen state", () => {
+		const qc = queryClient();
+		qc.setQueryData<NotificationsCache>(recentNotificationsQueryKey, {
+			pageParams: [""],
+			pages: [{ notifications: [notification({ status: "read" })], unreadCount: 0, unresolvedCount: 1 }],
+		});
+
+		applyResolvedNotification(qc, notification({ status: "unread", resolvedAt: "2026-06-16T11:00:00Z" }));
+
+		const recent = qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey);
+		expect(getCachedNotifications(recent)).toEqual([
+			expect.objectContaining({ id: "ntf_1", status: "read", resolvedAt: "2026-06-16T11:00:00Z" }),
+		]);
+		expect(getCachedUnreadCount(recent)).toBe(0);
+	});
+
+	it("withdraws toasts whose resolution was missed while disconnected once the reconnect snapshot lands", async () => {
+		const qc = queryClient();
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+		source.dispatch("notification_created", notification());
+		source.dispatch("notification_created", notification({ id: "ntf_2", sessionId: "mer-2" }));
+		// The stream dropped; the daemon resolved ntf_1 meanwhile. The snapshot
+		// fetched on reopen is the only record of it.
+		invalidateSpy.mockImplementation(async () => {
+			for (const queryKey of [unreadNotificationsQueryKey, recentNotificationsQueryKey] as const) {
+				qc.setQueryData<NotificationsCache>(queryKey, {
+					pageParams: [""],
+					pages: [{
+						notifications: [
+							notification({ id: "ntf_2", sessionId: "mer-2" }),
+							notification({ resolvedAt: "2026-06-16T11:00:00Z" }),
+							notification({ id: "never-shown", resolvedAt: "2026-06-16T09:00:00Z" }),
+						],
+						unreadCount: 3,
+						unresolvedCount: 1,
+					}],
+				});
+			}
+		});
+
+		source.onopen?.();
+
+		await vi.waitFor(() => expect(dismissNotificationMock).toHaveBeenCalledTimes(1));
+		expect(dismissNotificationMock).toHaveBeenCalledWith("ntf_1");
+		// A later reconciliation of the same snapshot does not dismiss again.
+		await reconcileNotifications(qc);
+		expect(dismissNotificationMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not let a replayed create mark an already-read row unread", () => {
+		const qc = queryClient();
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+		source.dispatch("notification_created", notification());
+		markAllCachedNotificationsRead(qc, ["ntf_1"], 1);
+
+		source.dispatch("notification_created", notification());
+
+		for (const queryKey of [unreadNotificationsQueryKey, recentNotificationsQueryKey] as const) {
+			const cache = qc.getQueryData<NotificationsCache>(queryKey);
+			expect(getCachedNotifications(cache)).toEqual([expect.objectContaining({ id: "ntf_1", status: "read" })]);
+			expect(getCachedUnreadCount(cache)).toBe(0);
+		}
+		expect(showNotificationMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps every live toast dismissable across a reconnect, even beyond 256 of them", async () => {
+		const qc = queryClient();
+		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+		apiGetMock.mockResolvedValue({ data: { notifications: [], unreadCount: 0, unresolvedCount: 0 } });
+		createNotificationsTransport(qc).connect();
+		const source = EventSourceStub.instances[0];
+		for (let i = 0; i < 300; i++) {
+			source.dispatch("notification_created", notification({ id: `ntf_${i}`, sessionId: `mer-${i}` }));
+		}
+		// Missed while disconnected: the oldest prompt was answered.
+		invalidateSpy.mockImplementation(async () => {
+			qc.setQueryData<NotificationsCache>(unreadNotificationsQueryKey, {
+				pageParams: [""],
+				pages: [{ notifications: [notification({ id: "ntf_0", resolvedAt: "2026-06-16T11:00:00Z" })], unreadCount: 300, unresolvedCount: 299 }],
+			});
+		});
+
+		source.onopen?.();
+
+		await vi.waitFor(() => expect(dismissNotificationMock).toHaveBeenCalledWith("ntf_0"));
+		expect(dismissNotificationMock).toHaveBeenCalledTimes(1);
+	});
+
+	describe("reconciling a live toast whose row is not on the cached first page", () => {
+		const older = notification({ id: "ntf_older", sessionId: "mer-older", createdAt: "2026-06-15T10:00:00Z" });
+
+		async function reconnectWithFirstPageMissing(pages: Record<string, unknown>) {
+			const qc = queryClient();
+			const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+			apiGetMock.mockImplementation(async (_path: string, init: { params: { query: { status: string; cursor?: string } } }) => {
+				const result = pages[init.params.query.cursor ?? ""];
+				if (result instanceof Error) throw result;
+				return result ?? { error: { message: "unknown cursor" } };
+			});
+			createNotificationsTransport(qc).connect();
+			const source = EventSourceStub.instances[0];
+			source.dispatch("notification_created", older);
+			// The reconnect snapshot's first page no longer shows the older row
+			// (it was read and newer rows pushed it back). Absence proves nothing.
+			invalidateSpy.mockImplementation(async () => {
+				for (const queryKey of [unreadNotificationsQueryKey, recentNotificationsQueryKey] as const) {
+					qc.setQueryData<NotificationsCache>(queryKey, {
+						pageParams: [""],
+						pages: [{ notifications: [notification({ id: "ntf_newer" })], nextCursor: "page-2", unreadCount: 1, unresolvedCount: 1 }],
+					});
+				}
+			});
+			source.onopen?.();
+			await reconcileNotifications(qc);
+			return qc;
+		}
+
+		it("dismisses it once a later history page shows it resolved", async () => {
+			await reconnectWithFirstPageMissing({
+				"": { data: { notifications: [notification({ id: "ntf_newer" })], nextCursor: "page-2", unreadCount: 1, unresolvedCount: 1 } },
+				"page-2": { data: { notifications: [{ ...older, status: "read", resolvedAt: "2026-06-16T11:00:00Z" }], unreadCount: 1, unresolvedCount: 1 } },
+			});
+
+			await vi.waitFor(() => expect(dismissNotificationMock).toHaveBeenCalledWith("ntf_older"));
+			expect(apiGetMock).toHaveBeenCalledWith("/api/v1/notifications", expect.objectContaining({
+				params: { query: expect.objectContaining({ status: "all", cursor: "page-2" }) },
+			}));
+		});
+
+		it("keeps it when history shows it still open", async () => {
+			await reconnectWithFirstPageMissing({
+				"": { data: { notifications: [notification({ id: "ntf_newer" })], nextCursor: "page-2", unreadCount: 1, unresolvedCount: 1 } },
+				"page-2": { data: { notifications: [{ ...older, status: "read" }], unreadCount: 1, unresolvedCount: 2 } },
+			});
+
+			await vi.waitFor(() => expect(apiGetMock).toHaveBeenCalledWith("/api/v1/notifications", expect.objectContaining({
+				params: { query: expect.objectContaining({ cursor: "page-2" }) },
+			})));
+			expect(dismissNotificationMock).not.toHaveBeenCalled();
+		});
+
+		it("keeps it when the history fetch fails or the row is nowhere in history", async () => {
+			await reconnectWithFirstPageMissing({
+				"": { data: { notifications: [notification({ id: "ntf_newer" })], nextCursor: "page-2", unreadCount: 1, unresolvedCount: 1 } },
+				"page-2": new Error("daemon unreachable"),
+			});
+			await vi.waitFor(() => expect(apiGetMock).toHaveBeenCalledWith("/api/v1/notifications", expect.objectContaining({
+				params: { query: expect.objectContaining({ cursor: "page-2" }) },
+			})));
+			expect(dismissNotificationMock).not.toHaveBeenCalled();
+
+			apiGetMock.mockReset();
+			dismissNotificationMock.mockClear();
+			await reconnectWithFirstPageMissing({
+				"": { data: { notifications: [notification({ id: "ntf_newer" })], unreadCount: 1, unresolvedCount: 1 } },
+			});
+			await vi.waitFor(() => expect(apiGetMock).toHaveBeenCalled());
+			expect(dismissNotificationMock).not.toHaveBeenCalled();
+		});
 	});
 
 	it("reconciles counts when a resolved notification is outside the loaded pages", async () => {

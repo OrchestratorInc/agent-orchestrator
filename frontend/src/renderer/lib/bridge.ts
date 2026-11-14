@@ -377,6 +377,7 @@ export const aoBridge: AoBridge =
 		},
 		notifications: {
 			show: async () => undefined,
+			dismiss: async () => undefined,
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,
 			onClick: () => () => undefined,

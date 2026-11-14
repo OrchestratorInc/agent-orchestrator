@@ -286,6 +286,40 @@ describe("NotificationsScreen", () => {
 		}
 	});
 
+	// A reload after reconnecting is the authoritative snapshot: a prompt answered
+	// while the phone was away leaves "Needs attention" without becoming "seen",
+	// and a prompt the user already saw stays there until AO resolves it.
+	it("moves an approval out of Needs attention only when a reload reports it resolved", async () => {
+		const approval = { id: "dev-approval", sessionId: "worker-1", projectId: "project-1", prUrl: "", type: "needs_input", title: "Approve rm", body: "", createdAt: "2026-10-08T10:00:00Z" };
+		const other = { ...approval, id: "dev-other", title: "Approve push", createdAt: "2026-10-08T09:30:00Z" };
+		let resolved = false;
+		fixtures.getNotifications.mockImplementation(async (config: { hostId: "dev" | "mac" }) => ({
+			notifications: config.hostId === "dev"
+				? [
+					resolved ? { ...approval, status: "unread", resolvedAt: "2026-10-08T10:05:00Z" } : { ...approval, status: "read" },
+					{ ...other, status: "read" },
+				]
+				: [],
+			nextCursor: undefined as string | undefined,
+			unreadCount: resolved ? 1 : 0,
+			tracksResolution: true,
+		}));
+		const attention = () => renderer!.root.findAllByType("ListSectionHeader" as never).map((header) => header.props.count);
+
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		// Both seen, both still open: the seen state does not settle a prompt.
+		expect(attention()).toEqual([2]);
+
+		resolved = true;
+		const list = renderer!.root.findByType("SectionList" as never);
+		await act(async () => { await list.props.refreshControl.props.onRefresh(); });
+
+		// Only the resolved one leaves; the concurrent prompt is still waiting.
+		expect(attention()).toEqual([1]);
+		// Resolution is not acknowledgement: the row is kept and still reads unread.
+		expect(renderer!.root.findAll((node) => String(node.type) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Unread, Approve rm"))).not.toHaveLength(0);
+	});
+
 	it("ignores a failure from an ack that a newer successful ack superseded", async () => {
 		let rejectFirst!: (cause: Error) => void;
 		fixtures.markAllNotificationsRead.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectFirst = reject; }));

@@ -1100,12 +1100,16 @@ export type NotificationRecord = {
 	body: string;
 	status: "unread" | "read" | string;
 	createdAt: string;
+	/** Set by AO when the issue went away (the input arrived). Absent means still open. */
+	resolvedAt?: string;
 };
 
 export type NotificationPage = {
 	notifications: NotificationRecord[];
 	nextCursor?: string;
 	unreadCount: number;
+	/** Whether the daemon reports resolution (`unresolvedCount`) at all. */
+	tracksResolution?: boolean;
 };
 
 // History behind the Settings → Notifications row. Push only ever surfaces the
@@ -1127,6 +1131,7 @@ export async function getNotifications(
 		notifications: Array.isArray(data?.notifications) ? data.notifications : [],
 		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : undefined,
 		unreadCount: typeof data?.unreadCount === "number" ? data.unreadCount : 0,
+		tracksResolution: typeof data?.unresolvedCount === "number",
 	};
 }
 

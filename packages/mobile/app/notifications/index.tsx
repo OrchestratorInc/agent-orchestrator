@@ -67,6 +67,8 @@ type HostFeed = {
 	items: NotificationRecord[];
 	nextCursor?: string;
 	unreadCount: number;
+	/** The daemon stamps `resolvedAt`, so a needs-input row can prove it was answered. */
+	tracksResolution?: boolean;
 	error?: string;
 };
 
@@ -130,7 +132,10 @@ function NotificationsContent() {
 			items: feed.items,
 		};
 	})), [feeds, hostStates]);
-	const sections = useMemo(() => notificationSections(items), [items]);
+	const sections = useMemo(
+		() => notificationSections(items, (item) => feeds[item.hostId]?.tracksResolution === true),
+		[feeds, items],
+	);
 	const unavailableFeeds = useMemo(() => Object.values(feeds).filter((feed) => feed.error), [feeds]);
 	const hasMore = useMemo(() => Object.values(feeds).some((feed) => Boolean(feed.nextCursor)), [feeds]);
 	const knownHostIds = useMemo(() => new Set(hostStates.map((host) => host.hostId)), [hostStates]);
@@ -194,6 +199,7 @@ function NotificationsContent() {
 						items: retained?.items ?? [],
 						nextCursor: retained?.nextCursor,
 						unreadCount: retained?.unreadCount ?? host.notificationsUnread,
+						tracksResolution: retained?.tracksResolution,
 						error: `${host.name} is offline.`,
 					};
 				}
@@ -207,6 +213,7 @@ function NotificationsContent() {
 							items: previousFeed?.items ?? [],
 							nextCursor: previousFeed?.nextCursor,
 							unreadCount: previousFeed?.unreadCount ?? result.host.notificationsUnread,
+							tracksResolution: previousFeed?.tracksResolution,
 							error: result.error,
 						};
 						continue;
@@ -219,6 +226,7 @@ function NotificationsContent() {
 						items: [...priorItems, ...result.page.notifications.filter((item) => !seen.has(item.id))],
 						nextCursor: result.page.nextCursor,
 						unreadCount: result.page.unreadCount,
+						tracksResolution: result.page.tracksResolution,
 					};
 				}
 				if (cloudResult) {

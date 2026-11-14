@@ -87,3 +87,51 @@ export function toastSilent(
 export function dockBounceType(type: string | undefined): "critical" | "informational" {
 	return type === "needs_input" ? "critical" : "informational";
 }
+
+/** The part of an Electron Notification the registry needs. */
+export interface DismissibleToast {
+	close(): void;
+}
+
+/**
+ * Retains shown OS toasts by their exact notification id so AO can withdraw one
+ * when the issue behind it is resolved. Without a reference the toast cannot be
+ * closed (and Electron may collect it, dropping its click handler).
+ *
+ * Ids are the exact strings the renderer passed to `notifications:show`: a bare
+ * daemon id for this machine, a host-qualified id for a remote one, so two
+ * machines reusing a daemon id never dismiss each other's toast.
+ *
+ * Dismissing only withdraws the OS banner. It is not acknowledgement: the
+ * stored notification's read state is untouched.
+ */
+export function createToastRegistry<T extends DismissibleToast>() {
+	const toasts = new Map<string, T>();
+	return {
+		/** Tracks a newly shown toast, closing an older one shown for the same id. */
+		retain(id: string, toast: T): void {
+			const previous = toasts.get(id);
+			toasts.delete(id);
+			if (previous && previous !== toast) previous.close();
+			// No eviction: forgetting a live toast would make its later resolution
+			// unable to withdraw it. Entries leave only through release (the OS or
+			// the user closed it) or dismiss (AO resolved it).
+			toasts.set(id, toast);
+		},
+		/** Forgets a toast the OS or the user already closed, if it is still the current one. */
+		release(id: string, toast: T): void {
+			if (toasts.get(id) === toast) toasts.delete(id);
+		},
+		/** Closes the toast shown for exactly this id. Unknown ids are a no-op. */
+		dismiss(id: string): boolean {
+			const toast = toasts.get(id);
+			if (!toast) return false;
+			toasts.delete(id);
+			toast.close();
+			return true;
+		},
+		get size(): number {
+			return toasts.size;
+		},
+	};
+}

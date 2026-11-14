@@ -339,3 +339,34 @@ it("shows only new remote OS notifications and opens their host-qualified sessio
 		params: { hostId: "host-b", projectId: "same-project", sessionId: "new-session" },
 	});
 });
+
+it("withdraws a remote toast only when its own host's snapshot reports it resolved", async () => {
+	const shown = vi.spyOn(aoBridge.notifications, "show").mockResolvedValue(undefined);
+	const dismissed = vi.spyOn(aoBridge.notifications, "dismiss").mockResolvedValue(undefined);
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const runtime = () => <QueryClientProvider client={queryClient}><NotificationRuntime /></QueryClientProvider>;
+	const view = render(runtime());
+	const approval: NotificationDTO = { ...notification("Approve"), id: "approval" };
+
+	// Two concurrent approvals on two machines that share a daemon-local id.
+	remoteA = [approval];
+	remoteB = [approval];
+	view.rerender(runtime());
+	await waitFor(() => expect(shown).toHaveBeenCalledTimes(2));
+
+	// A reconnect or poll brings host A's resolution; host B is still waiting.
+	remoteA = [{ ...approval, resolvedAt: "2026-09-30T10:05:00Z" }];
+	view.rerender(runtime());
+	await waitFor(() => expect(dismissed).toHaveBeenCalledTimes(1));
+	expect(dismissed).toHaveBeenCalledWith("remote-notification:host-a:approval");
+
+	// Replaying the same snapshot does not dismiss again.
+	view.rerender(runtime());
+	expect(dismissed).toHaveBeenCalledTimes(1);
+
+	// A row first seen already resolved never raises a toast.
+	remoteB = [approval, { ...approval, id: "answered-between-polls", resolvedAt: "2026-09-30T10:06:00Z" }];
+	view.rerender(runtime());
+	expect(shown).toHaveBeenCalledTimes(2);
+	expect(dismissed).toHaveBeenCalledTimes(1);
+});

@@ -257,6 +257,7 @@ import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/exter
 import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
+	createToastRegistry,
 	dockBounceType,
 	shouldReplaceBounce,
 	shouldSignalAttention,
@@ -536,6 +537,9 @@ let isFlashing = false;
 // one object so the id and its criticality can never drift apart; a pending
 // critical bounce is not replaced by a later informational notification.
 let pendingBounce: { id: number; critical: boolean } | null = null;
+// Shown OS toasts by exact notification id, so a resolved prompt's banner can
+// be withdrawn (notifications:dismiss) instead of lingering in the OS center.
+const nativeToasts = createToastRegistry<ElectronNotification>();
 // Live mirror of the persisted `soundNotificationsEnabled` UI setting, kept in sync by the
 // uiSettings:set handler so a toggle flip takes effect without an app restart.
 let soundNotificationsEnabled = DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
@@ -4089,13 +4093,16 @@ ipcMain.handle(
 				// single main icon.
 				icon: process.platform === "darwin" ? undefined : windowIconPath(),
 			});
+			toast.on("close", () => nativeToasts.release(notification.id, toast));
 			toast.on("click", () => {
+				nativeToasts.release(notification.id, toast);
 				if (!mainWindow) return;
 				if (mainWindow.isMinimized()) mainWindow.restore();
 				mainWindow.show();
 				mainWindow.focus();
 				getShellWebContents()?.send("notifications:click", notification.id);
 			});
+			nativeToasts.retain(notification.id, toast);
 			toast.show();
 		}
 
@@ -4132,6 +4139,14 @@ ipcMain.handle(
 		}
 	},
 );
+
+// AO resolved the issue behind a notification (the agent got its answer).
+// Withdraw only the OS banner shown for this exact id; the stored row's read
+// state is a separate axis and is not touched here.
+ipcMain.handle("notifications:dismiss", (_event, id: unknown) => {
+	if (typeof id !== "string" || !id) return;
+	nativeToasts.dismiss(id);
+});
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.

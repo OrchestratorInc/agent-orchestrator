@@ -55,7 +55,7 @@ import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
-import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
+import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, reconcileRemoteToastsFromSnapshot, REMOTE_NOTIFICATION_PREFIX, remoteNativeNotificationId, remoteNotificationsQueryKey, trackRemoteToast, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
 type SessionMeta = { projectId: string; projectName: string; sessionName: string };
@@ -64,7 +64,6 @@ type NotificationCenterProps = {
 	style?: React.CSSProperties;
 };
 
-const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
 const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
 
 function useNotificationTargetNavigation() {
@@ -194,6 +193,7 @@ export function NotificationRuntime() {
 	routeRef.current = params;
 	const seenRemoteIds = useRef(new Map<HostId, Set<string>>());
 	const shownRemoteNotifications = useRef(new Map<string, NotificationDTO>());
+	const reconciledRemoteSnapshots = useRef(new Map<HostId, NotificationsPage>());
 
 	// Being on the session route is not the same as watching the agent: its pane
 	// renders one terminal at a time, so a shell or reviewer tab hides the agent
@@ -222,14 +222,22 @@ export function NotificationRuntime() {
 		for (const host of remoteUnread.hosts) {
 			if (!host.data) continue;
 			const currentIds = new Set(host.data.notifications.map((item) => item.id));
+			// A new snapshot settles toasts whose resolution event was missed
+			// (polling host, reconnect). Unchanged data needs no second look.
+			if (reconciledRemoteSnapshots.current.get(host.hostId) !== host.data) {
+				reconciledRemoteSnapshots.current.set(host.hostId, host.data);
+				reconcileRemoteToastsFromSnapshot(host.hostId, host.data.notifications);
+			}
 			const previousIds = seenRemoteIds.current.get(host.hostId);
 			if (!previousIds) {
 				seenRemoteIds.current.set(host.hostId, currentIds);
 				continue; // Reconnecting to a host must not replay its existing inbox.
 			}
 			for (const notification of host.data.notifications) {
-				if (previousIds.has(notification.id)) continue;
-				const id = `${REMOTE_NOTIFICATION_PREFIX}${notificationKey(host.hostId, notification.id)}`;
+				// Resolved between polls: the prompt is already answered.
+				if (previousIds.has(notification.id) || notification.resolvedAt) continue;
+				const id = remoteNativeNotificationId(host.hostId, notification.id);
+				trackRemoteToast(host.hostId, notification);
 				shownRemoteNotifications.current.set(id, notification);
 				if (shownRemoteNotifications.current.size > 256) {
 					shownRemoteNotifications.current.delete(shownRemoteNotifications.current.keys().next().value!);
