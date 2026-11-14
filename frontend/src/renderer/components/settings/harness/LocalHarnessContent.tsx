@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert }
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
-import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
+import { agentAccountProviderFor, agentAccountsQueryKeyFor, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
 import { CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
@@ -34,6 +34,7 @@ import {
 	type HarnessInUse,
 	type InstallJob,
 } from "../../../hooks/useHarnessUpdates";
+import { useInvalidateProviderKeys, useProviderKeys } from "../../../hooks/useProviderKeys";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hooks/useShellTerminals";
 import { AgentCheckError } from "../../../lib/agent-check-error";
 import { agentLoginKey, isAgentLoginPending, pendingAgentLogins, subscribeAgentLogins } from "../../../lib/agent-login-lifecycle";
@@ -54,6 +55,7 @@ import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperati
 import { HarnessAccountTab } from "./HarnessAccountTab";
 import { cloudNeedsAttention, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
+import { HarnessSavedKeys } from "./HarnessSavedKeys";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
@@ -202,6 +204,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const agentAuthPlans = useMemo(() => new Map(authPlans.data?.map((plan) => [plan.agentId, plan]) ?? []), [authPlans.data]);
 	const readinessAgents = useMemo(() => new Map(agents.data?.agents.map((agent) => [agent.id, agent]) ?? []), [agents.data]);
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
+	// Saved provider keys, fetched only while a panel that offers one is open,
+	// or while a harness that is not installed is open: its saved keys can
+	// only be removed from its page.
+	const providerKeys = useProviderKeys(hostId, Boolean(uiLoginAgent && agentAuthPlans.get(uiLoginAgent)?.methods?.some((method) => method.id.startsWith("env_") || method.id === "gemini_api_key"))
+		|| Boolean(selectedAgentId && agents.data && !agents.error && !installed.has(selectedAgentId)));
+	const invalidateProviderKeys = useInvalidateProviderKeys(hostId);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
 		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
 		const options = agentModelsQueryOptions(agentId, "", hostId, true);
@@ -579,7 +587,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login", terminal = false): Promise<boolean> => {
 		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
-		if (action === "login" && !terminal && agentAuthPlans.get(agentId)?.methods?.length) {
+		const authPlan = agentAuthPlans.get(agentId);
+		// Any plan with inline methods opens the Account login panel; a plan
+		// without methods falls back to its terminal or documentation flow.
+		if (action === "login" && !terminal && authPlan?.methods?.length) {
 			uiLoginAgentRef.current = agentId;
 			setUiLoginAgent(agentId);
 			return true;
@@ -666,11 +677,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// changed, and returns whether the CLI is logged in by any method, an API
 	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
-		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		const provider = agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
-		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
+		const accounts = await fetchAgentAccounts(true, hostId).catch(() => undefined);
 		if (!accounts) return undefined;
-		queryClient.setQueryData(agentAccountsQueryKey, accounts);
+		queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
 		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
@@ -810,18 +821,38 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				agentId={agentId}
 				methods={agentAuthPlans.get(agentId)?.methods ?? []}
 				hostId={hostId}
+				providerKeys={providerKeys.data}
+				providerKeysError={providerKeys.isError ? providerKeys.error.message : undefined}
+				onRetryProviderKeys={() => void providerKeys.refetch()}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
 				onClose={closeUILogin}
 				onTerminal={async () => { closeUILogin(); await startAuth(agentId, "login", true); }}
-				onVerify={async () => {
+				onVerify={async (methodId) => {
+					if (methodId.startsWith("env_")) {
+						// A saved key proves local configuration, never provider acceptance.
+						await checkAuth(agentId, { fresh: true }).catch(() => undefined);
+						return "configured";
+					}
 					for (let attempt = 0; attempt < AUTH_VERIFY_ATTEMPTS; attempt++) {
 						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
 						const cliLoggedIn = await refreshCliLogin(agentId);
 						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
+						// A saved key, or a native sign-in whose harness can only report
+						// its own credentials as present (Gemini, Hermes, MiMo Code),
+						// counts as configured, never as verified.
+						if (agentAuthPlans.get(agentId)?.methods?.some((method) => method.id === methodId && (method.secret || method.id === "native")) && result?.agent?.authStatus === "configured") return "configured";
 					}
 					return false;
 				}}
+			/> : undefined}
+			savedKeys={!details.isInstalled && !details.installationPending ? <HarnessSavedKeys
+				key={agentId}
+				agentId={agentId}
+				hostId={hostId}
+				providerKeys={providerKeys.data}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
 			/> : undefined}
 			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
 			copied={copiedAgent === agentId}

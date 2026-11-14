@@ -16,7 +16,7 @@ import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
 import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
-import { COMPOSER_SEND_INSET, ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
+import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
@@ -37,13 +37,16 @@ import { useUiStore } from "../../stores/ui-store";
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
 
-function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
-	const duplicate = draft.references.some(ref => ref.conversationId === excerpt.conversationId &&
+export function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
+	const duplicate = draft.references.find(ref => ref.conversationId === excerpt.conversationId &&
 		ref.messageId === excerpt.messageId && ref.revision === excerpt.revision && ref.text === excerpt.text &&
 		JSON.stringify(ref.snapshot?.sourceRange) === JSON.stringify(excerpt.snapshot?.sourceRange) &&
 		JSON.stringify(ref.snapshot?.renderedRange) === JSON.stringify(excerpt.snapshot?.renderedRange) &&
 		JSON.stringify(ref.snapshot?.diagramRange) === JSON.stringify(excerpt.snapshot?.diagramRange));
-	if (duplicate) return { draft };
+	if (duplicate) {
+		if (!excerpt.comment || excerpt.comment === duplicate.comment) return { draft };
+		return { draft: { ...draft, references: draft.references.map(ref => (ref === duplicate ? { ...ref, comment: excerpt.comment } : ref)) } };
+	}
 	const error = excerptSizeError([...draft.references, excerpt]);
 	if (error) return { draft, error };
 	const order = excerpt.order ?? Math.max(Date.now(), ...draft.references.map(ref => (ref.order ?? 0) + 1));
@@ -333,7 +336,6 @@ export function SideComposer({
 							size="icon-sm"
 							shape="pill"
 							aria-label={running && !canSend ? t("sideChat.stopTurn") : t("sideChat.sendMessage")}
-							className={COMPOSER_SEND_INSET}
 							onClick={running && !canSend ? onInterrupt : undefined}
 							disabled={running && !canSend ? false : !canSend}
 						>
@@ -920,7 +922,7 @@ export function useIndependentSideChats(
 									text: text.slice(btw?.[0].length ?? 0).trim(),
 									resources: [...submitted.attachments.map((file) => file.path), ...staged].map((path) => ({ uri: path, name: path.split(/[\\/]/).at(-1) || "Attachment" })),
 									attachments: nativeImages ? images : [],
-									references: submitted.references.map(({ conversationId, messageId, revision, text, snapshot, id, order }) => ({ conversationId, messageId, revision, text, snapshot, id, order })),
+									references: submitted.references.map(({ conversationId, messageId, revision, text, comment, snapshot, id, order }) => ({ conversationId, messageId, revision, text, comment, snapshot, id, order })),
 								},
 							},
 						};
@@ -1034,7 +1036,7 @@ export function useIndependentSideChats(
 								conversationId: ref.conversationId,
 								messageId: ref.messageId,
 								revision: ref.revision,
-								text: ref.text, snapshot: ref.snapshot, id: ref.id, order: ref.order,
+								text: ref.text, comment: ref.comment, snapshot: ref.snapshot, id: ref.id, order: ref.order,
 							})),
 						},
 					};
@@ -1080,12 +1082,14 @@ export function useIndependentSideChats(
 				const d = draftsRef.current[sideId];
 				if (d?.pendingDelivery === frozen) {
 					const { pendingDelivery: _, ...rest } = d;
-					const unchanged =
+					const sentTextUnchanged =
 						d.text === frozen.submitted.text &&
-						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments) &&
-						JSON.stringify(d.references) === JSON.stringify(frozen.submitted.references);
+						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments);
+					const unsentReferences = d.references.filter((reference) =>
+						!frozen.submitted.references.some((submitted) => JSON.stringify(submitted) === JSON.stringify(reference)));
 					const next: SideChatDraft = {
-						...(unchanged ? emptySideChatDraft() : rest),
+						...(sentTextUnchanged ? emptySideChatDraft() : rest),
+						references: unsentReferences,
 						lastHandoffDelivery: handoffClientMessageId ? frozen : d.lastHandoffDelivery,
 					};
 					draftsRef.current = { ...draftsRef.current, [sideId]: next };
@@ -1563,6 +1567,13 @@ export function useIndependentSideChats(
 									onLoadOlder={() => void loadOlder()}
 									excerptsEnabled
 									onAddToChat={(excerpt) => addReference(activeId, excerpt)}
+									annotations={drafts[activeId]?.references}
+									onAnnotationsChange={(references) =>
+										setDrafts((current) => ({
+											...current,
+											[activeId]: { ...(current[activeId] ?? emptySideChatDraft()), references },
+										}))
+									}
 									onForeignAnnotation={(annotation) => onNavigate?.(annotation)}
 									onDecide={(requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
 									busy={conversation.controller.state === "busy"}

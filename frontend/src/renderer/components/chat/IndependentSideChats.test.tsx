@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SideComposer } from "./IndependentSideChats";
+import { SideComposer, appendReference } from "./IndependentSideChats";
 import { emptySideChatDraft } from "./sideChatDraft";
 import { typeInLexicalEditor } from "../../test/lexical";
 
@@ -196,6 +196,16 @@ describe("side composer slash menu", () => {
 	it("insets its draft and send button the same from both sides as the main composer", () => {
 		const { field } = renderSideComposer();
 		expect(field).toHaveClass("px-[7px]", "[scrollbar-gutter:stable_both-edges]");
-		expect(screen.getByRole("button", { name: "Send message" })).toHaveClass("me-2.5");
+		expect(screen.getByRole("button", { name: "Send message" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
+	});
+});
+
+describe("side chat references", () => {
+	it("keeps a new comment when the same selection is added again", () => {
+		const selection = { id: "a", conversationId: "c", messageId: "m", revision: 1, role: "assistant" as const, text: "quoted", order: 1 };
+		const first = appendReference(emptySideChatDraft(), { ...selection, comment: "first" }).draft;
+		const again = appendReference(first, { ...selection, id: "b", comment: "second" }).draft;
+		expect(again.references).toEqual([{ ...selection, comment: "second" }]);
+		expect(appendReference(again, { ...selection, id: "c" }).draft).toBe(again);
 	});
 });

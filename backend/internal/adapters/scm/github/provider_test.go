@@ -1425,6 +1425,204 @@ func TestCISummaryCancelledChecksAreNotFailures(t *testing.T) {
 	}
 }
 
+// suiteCheckRun is actionsCheckRun with the conclusion of the check suite
+// (workflow run) the job belongs to; "" leaves it null, as GitHub reports it
+// while the run is still going.
+func suiteCheckRun(workflow, name, conclusion, suiteConclusion string, id float64) map[string]any {
+	n := actionsCheckRun(workflow, name, conclusion, id)
+	suite := n["checkSuite"].(map[string]any)
+	if suiteConclusion != "" {
+		suite["conclusion"] = suiteConclusion
+	} else {
+		suite["conclusion"] = nil
+	}
+	return n
+}
+
+// Issue #7823: a gate job such as build-test fails when the jobs it needs were
+// cancelled. Repro on PR #7822: run 42027469065 was cancelled by a PR edit,
+// its build-test ended FAILURE inside a check suite that concluded CANCELLED,
+// and AO told the worker "CI is failing ... build-test (failed)" while the
+// replacement run was still queued.
+func TestCISummaryGateFailureInCancelledSuiteIsNotAFailure(t *testing.T) {
+	running := func(workflow, name string, id float64) map[string]any {
+		n := suiteCheckRun(workflow, name, "", "", id)
+		n["status"] = "IN_PROGRESS"
+		return n
+	}
+	cancelledRun := []any{
+		suiteCheckRun("Go", "lint", "CANCELLED", "CANCELLED", 1),
+		suiteCheckRun("Go", "backend-core (0)", "CANCELLED", "CANCELLED", 2),
+		suiteCheckRun("Go", "windows-workspace", "SKIPPED", "CANCELLED", 3),
+		suiteCheckRun("Go", "build-test", "FAILURE", "CANCELLED", 4),
+	}
+	cancelledRun[3].(map[string]any)["cancelledGateFailure"] = true
+	cases := []struct {
+		name       string
+		nodes      []any
+		wantStatus domain.PRCheckStatus // of the build-test check
+		wantCI     domain.CIState
+		wantFailed []string
+	}{
+		{
+			name:       "replacement run still going",
+			nodes:      append(slices.Clone(cancelledRun), running("Go", "lint", 10), running("Go", "backend-core (0)", 11)),
+			wantStatus: domain.PRCheckCancelled,
+			wantCI:     domain.CIPending,
+		},
+		{
+			name:       "cancelled run with no replacement settles as unknown",
+			nodes:      cancelledRun,
+			wantStatus: domain.PRCheckCancelled,
+			wantCI:     domain.CIUnknown,
+		},
+		{
+			name: "real failures before cancellation stay failed",
+			nodes: []any{
+				suiteCheckRun("CI", "go / lint", "FAILURE", "CANCELLED", 131433772348),
+				suiteCheckRun("CI", "go / storage-race", "FAILURE", "CANCELLED", 131433772189),
+				suiteCheckRun("CI", "go / backend-core (1)", "CANCELLED", "CANCELLED", 131433772537),
+				suiteCheckRun("CI", "ci-ok", "FAILURE", "CANCELLED", 131435963322),
+			},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"go / lint", "go / storage-race", "ci-ok"},
+		},
+		{
+			name: "gate failure in a run that failed is still a failure",
+			nodes: []any{
+				suiteCheckRun("Go", "lint", "FAILURE", "FAILURE", 1),
+				suiteCheckRun("Go", "build-test", "FAILURE", "FAILURE", 2),
+			},
+			wantStatus: domain.PRCheckFailed,
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"lint", "build-test"},
+		},
+		{
+			name: "failure while its run is still going is a failure",
+			nodes: []any{
+				suiteCheckRun("Go", "build-test", "FAILURE", "", 1),
+				running("Go", "lint", 2),
+			},
+			wantStatus: domain.PRCheckFailed,
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build-test"},
+		},
+		{
+			name:       "failure without a readable check suite is a failure",
+			nodes:      []any{actionsCheckRun("", "build-test", "FAILURE", 1)},
+			wantStatus: domain.PRCheckFailed,
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build-test"},
+		},
+		{
+			name: "timed out job in a cancelled run is still a failure",
+			nodes: []any{
+				suiteCheckRun("Go", "lint", "CANCELLED", "CANCELLED", 1),
+				suiteCheckRun("Go", "build-test", "TIMED_OUT", "CANCELLED", 2),
+			},
+			wantStatus: domain.PRCheckFailed,
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build-test"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, raw := range tc.nodes {
+				n := raw.(map[string]any)
+				if n["name"] != "build-test" {
+					continue
+				}
+				if got := checkStatusFromGraphQL(n); got != tc.wantStatus {
+					t.Fatalf("checkStatusFromGraphQL(build-test) = %q, want %q", got, tc.wantStatus)
+				}
+			}
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				commit := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["commit"].(map[string]any)
+				roll := commit["statusCheckRollup"].(map[string]any)
+				roll["state"] = "FAILURE"
+				roll["contexts"] = map[string]any{"nodes": tc.nodes, "pageInfo": map[string]any{"hasNextPage": false}}
+			})
+			if got := ciSummaryFromGraphQL(pr); got != tc.wantCI {
+				t.Fatalf("ciSummaryFromGraphQL = %q, want %q", got, tc.wantCI)
+			}
+			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}, Number: 42}, pr)
+			if obs.CI.Summary != string(tc.wantCI) {
+				t.Fatalf("observer CI summary = %q, want %q", obs.CI.Summary, tc.wantCI)
+			}
+			var failed []string
+			for _, ch := range obs.CI.FailedChecks {
+				failed = append(failed, ch.Name)
+			}
+			if !slices.Equal(failed, tc.wantFailed) {
+				t.Fatalf("failed checks = %v, want %v", failed, tc.wantFailed)
+			}
+			if tc.wantCI != domain.CIFailing && obs.CI.FailedFingerprint != "" {
+				t.Fatalf("failed fingerprint = %q, want empty so no CI-failure nudge fires", obs.CI.FailedFingerprint)
+			}
+			if tc.wantCI == domain.CIFailing && obs.CI.FailedFingerprint == "" {
+				t.Fatal("failed fingerprint is empty for a real failure")
+			}
+		})
+	}
+}
+
+func TestCancelledGateFailureRequiresEvidence(t *testing.T) {
+	const gateLog = "2026Z ##[group]Run gate\n2026Z \x1b[36;1mtest 'cancelled' = success\x1b[0m\n2026Z shell: /usr/bin/bash -e {0}\n"
+	const jqLog = "2026Z ##[group]Run gate\n2026Z jq 'map_values(.result)' <<< \"$NEEDS\"\n2026Z jq -e 'all(.[]; .result == \"success\" or .result == \"skipped\")' <<< \"$NEEDS\"\n2026Z shell: /usr/bin/bash -e {0}\n2026Z env: {\"result\": \"cancelled\"}\n2026Z false\n"
+	cases := []struct {
+		name, log           string
+		failureSuite        string
+		paginated, noAccess bool
+		want                domain.PRCheckStatus
+	}{
+		{name: "backend gate", log: gateLog, want: domain.PRCheckCancelled},
+		{name: "lane gate", log: jqLog, want: domain.PRCheckCancelled},
+		{name: "real failure in same run", log: gateLog, failureSuite: "run", want: domain.PRCheckFailed},
+		{name: "failure in different run", log: gateLog, failureSuite: "other", want: domain.PRCheckCancelled},
+		{name: "ordinary job", log: strings.ReplaceAll(gateLog, "test 'cancelled' = success", "go test ./..."), want: domain.PRCheckFailed},
+		{name: "additional work", log: strings.ReplaceAll(gateLog, "shell:", "go test ./...\n2026Z shell:"), want: domain.PRCheckFailed},
+		{name: "another step", log: gateLog + gateLog, want: domain.PRCheckFailed},
+		{name: "failed dependency", log: jqLog + "2026Z {\"result\": \"failure\"}\n", want: domain.PRCheckFailed},
+		{name: "incomplete checks", log: gateLog, paginated: true, want: domain.PRCheckFailed},
+		{name: "unreadable log", log: gateLog, noAccess: true, want: domain.PRCheckFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := suiteCheckRun("CI", "any job name", "FAILURE", "CANCELLED", 2)
+			cancelled := suiteCheckRun("CI", "dependency", "CANCELLED", "CANCELLED", 1)
+			for _, n := range []map[string]any{gate, cancelled} {
+				n["checkSuite"].(map[string]any)["id"] = "run"
+			}
+			checks := []any{cancelled, gate}
+			if tc.failureSuite != "" {
+				failure := suiteCheckRun("CI", "lint", "FAILURE", "CANCELLED", 3)
+				failure["checkSuite"].(map[string]any)["id"] = tc.failureSuite
+				checks = append(checks, failure)
+			}
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				commit := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["commit"].(map[string]any)
+				commit["statusCheckRollup"].(map[string]any)["contexts"] = map[string]any{"nodes": checks, "pageInfo": map[string]any{"hasNextPage": tc.paginated}}
+			})
+			fake := newFakeGH(t)
+			fake.on(http.MethodGet, "/repos/octocat/hello/actions/jobs/2/logs", func(w http.ResponseWriter, _ *http.Request) {
+				if tc.noAccess {
+					w.WriteHeader(http.StatusForbidden)
+				}
+				_, _ = io.WriteString(w, tc.log)
+			})
+			p := newProviderForTest(t, fake)
+			p.markCancelledGateFailures(ctx(), "octocat", "hello", pr)
+			if got := checkStatusFromGraphQL(gate); got != tc.want {
+				t.Fatalf("gate status = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A token without Actions read access gets FORBIDDEN on each
 // checkSuite.workflowRun; the PR must still be observed.
 func TestFetchPullRequestsToleratesWorkflowRunAccessErrors(t *testing.T) {
@@ -1433,8 +1631,8 @@ func TestFetchPullRequestsToleratesWorkflowRunAccessErrors(t *testing.T) {
 	basePRFixture().prData(func(m map[string]any) { pr = m })
 	fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), "checkSuite{ workflowRun{ event workflow{ name } } }") {
-			t.Fatalf("batch query should request each check run's workflow, body=%s", body)
+		if !strings.Contains(string(body), "checkSuite{ conclusion id workflowRun{ event workflow{ name } } }") {
+			t.Fatalf("batch query should request each check run's suite conclusion and workflow, body=%s", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
