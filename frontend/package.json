@@ -3,7 +3,7 @@
 	"productName": "Orchestrator",
 	"version": "0.14.8",
 	"private": true,
-	"description": "Electron + TypeScript frontend for the agent-orchestrator rewrite",
+	"description": "Run and manage a fleet of AI coding agents",
 	"author": "Orchestrator.inc",
 	"license": "MIT",
 	"homepage": "https://github.com/aoagents/agent-orchestrator",
