@@ -6,7 +6,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
+import { agentAccountLabel, agentAccountOptions, agentAccountProvider, getAgentAccounts, getSessionAgentAccount, moveSessionAgentAccount, useAgentAccounts } from "./agentAccounts";
 import { delegateTask, spawnSession } from "./api";
 import type { ServerConfig } from "./config";
 
@@ -34,6 +34,20 @@ describe("agent accounts on mobile", () => {
 		]);
 		expect(await getSessionAgentAccount(cfg, "ao 1", "claude")).toBe("c2");
 		expect(vi.mocked(fetch).mock.calls[1][0]).toBe("http://ao.test:3011/api/v1/agents/accounts/sessions/ao%201");
+	});
+
+	it("tells same-email accounts in different organizations apart", () => {
+		const accounts = [
+			{ id: "p", provider: "claude" as const, email: "a@x.dev", orgId: "org-personal-1", orgName: "Personal", signedIn: true, default: false },
+			{ id: "t", provider: "claude" as const, email: "A@x.dev", orgId: "org-team-22", orgName: "Team", signedIn: true, default: false },
+			{ id: "u", provider: "claude" as const, email: "b@x.dev", signedIn: true, default: false },
+		];
+		expect(agentAccountOptions(accounts).map((option) => option.title)).toEqual(["a@x.dev · Personal", "A@x.dev · Team", "b@x.dev"]);
+		const sameName = [
+			{ id: "1", provider: "claude" as const, email: "a@x.dev", orgId: "aaaaaaaa-1111", orgName: "Acme" },
+			{ id: "2", provider: "claude" as const, email: "a@x.dev", orgId: "bbbbbbbb-2222", orgName: "Acme" },
+		];
+		expect(sameName.map((account) => agentAccountLabel(account, sameName))).toEqual(["a@x.dev · Acme · aaaaaaaa", "a@x.dev · Acme · bbbbbbbb"]);
 	});
 
 	it("moves a session, stopping its turn only when asked", async () => {
@@ -86,6 +100,27 @@ describe("useAgentAccounts", () => {
 		await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
 		expect(probe.get().accounts.map((account) => account.id)).toEqual(["c1"]);
 		expect(probe.get().current).toBe("c1");
+		probe.unmount();
+	});
+
+	it("reads a move made elsewhere when asked again, while still mounted", async () => {
+		let bound = "c1";
+		vi.mocked(fetch).mockImplementation(async (url) => String(url).includes("/sessions/")
+			? json({ claude: bound })
+			: json({ accounts: [
+				{ id: "c1", provider: "claude", email: "a@x.dev", signedIn: true, default: true },
+				{ id: "c2", provider: "claude", email: "b@x.dev", signedIn: true, default: false },
+			] }));
+		const probe = mount();
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(probe.get().current).toBe("c1");
+		bound = "c2";
+		await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+		expect(probe.get().current).toBe("c1");
+		let fresh: Awaited<ReturnType<ReturnType<typeof useAgentAccounts>["reload"]>>;
+		await act(async () => { fresh = await probe.get().reload(); });
+		expect(fresh!.current).toBe("c2");
+		expect(probe.get().current).toBe("c2");
 		probe.unmount();
 	});
 

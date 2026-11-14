@@ -9,3 +9,12 @@ SET pr_state = 'merged',
     updated_at = ?,
     observed_at = ?
 WHERE url = ?;
+
+-- name: MarkPRState :execrows
+UPDATE pr
+SET pr_state = ?,
+    is_draft = ?,
+    is_closed = ?,
+    state_changed_at = ?,
+    updated_at = ?
+WHERE url = ? AND pr_state != 'merged';

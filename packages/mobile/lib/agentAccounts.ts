@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiRequest } from "./api";
 import type { ServerConfig } from "./config";
 import type { PickerOption } from "./NativePickerList";
@@ -13,6 +13,9 @@ export type AgentAccount = {
 	id: string;
 	provider: AgentAccountProvider;
 	email?: string;
+	device?: boolean;
+	orgId?: string;
+	orgName?: string;
 	signedIn: boolean;
 	default: boolean;
 };
@@ -26,6 +29,22 @@ export function agentAccountProvider(harness?: string): AgentAccountProvider | u
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">): string {
 	if (account.email) return account.email;
 	return account.provider === "claude" ? "OAuth token" : "Codex CLI login";
+}
+
+type LabelPeer = Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">;
+
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName">, peers: readonly LabelPeer[]): string {
+	const name = agentAccountName(account);
+	const email = account.email?.toLowerCase();
+	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
+	if (twins.length === 0) return name;
+	const org = (peer: Pick<AgentAccount, "orgId" | "orgName">) => peer.orgId ?? `name:${peer.orgName ?? ""}`;
+	const otherOrgs = twins.filter((twin) => org(twin) !== org(account));
+	const parts = [name];
+	if (otherOrgs.length > 0 && account.orgName) parts.push(account.orgName);
+	if (account.orgId && otherOrgs.some((twin) => (twin.orgName ?? "") === (account.orgName ?? ""))) parts.push(account.orgId.slice(0, 8));
+	if (account.device && twins.some((twin) => org(twin) === org(account))) parts.push(account.provider === "claude" ? "Claude Code CLI login" : "Codex CLI login");
+	return parts.join(" · ");
 }
 
 export async function getAgentAccounts(cfg: ServerConfig, provider: AgentAccountProvider): Promise<AgentAccount[]> {
@@ -50,7 +69,7 @@ export async function moveSessionAgentAccount(cfg: ServerConfig, sessionId: stri
 export function agentAccountOptions(accounts: readonly AgentAccount[]): PickerOption[] {
 	return accounts.map((account) => ({
 		id: account.id,
-		title: agentAccountName(account),
+		title: agentAccountLabel(account, accounts),
 		detail: !account.signedIn ? "Signed out" : account.default ? "Default" : undefined,
 		disabled: !account.signedIn,
 	}));
@@ -93,5 +112,13 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 			});
 		return () => { cancelled = true; clearTimeout(retry); };
 	}, [attempt, cfgKey, provider, reloadKey, sessionId]);
-	return { provider, accounts, current };
+	const reload = useCallback(async () => {
+		const cfg = cfgRef.current;
+		if (!cfg || !provider) return undefined;
+		const [list, id] = await Promise.all([getAgentAccounts(cfg, provider), sessionId ? getSessionAgentAccount(cfg, sessionId, provider) : undefined]);
+		setAccounts(list);
+		setCurrent(id);
+		return { accounts: list, current: id };
+	}, [provider, sessionId]);
+	return { provider, accounts, current, reload };
 }

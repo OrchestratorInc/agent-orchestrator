@@ -212,3 +212,28 @@ export function XIcon(props: IconProps) {
 		</Icon>
 	);
 }
+
+/** A check's state as a shape, so colour never carries it alone (lucide drawings). */
+export function CheckStateIcon({
+	state,
+	...props
+}: IconProps & {
+	state: "failed" | "running" | "pending" | "passed" | "skipped";
+}) {
+	return (
+		<Icon frame="full" name={`check-${state}`} strokeWidth="2" {...props}>
+			{state === "running" ? (
+				<>
+					<circle cx="12" cy="12" opacity="0.3" r="10" />
+					<path d="M22 12A10 10 0 0 0 12 2" />
+				</>
+			) : (
+				<circle cx="12" cy="12" r="10" />
+			)}
+			{state === "passed" ? <path d="m8.5 12.5 2.5 2.5 4.5-5" /> : null}
+			{state === "failed" ? <path d="m15 9-6 6m0-6 6 6" /> : null}
+			{state === "pending" ? <path d="M12 7v5l3 2" /> : null}
+			{state === "skipped" ? <path d="m8.5 15.5 7-7" /> : null}
+		</Icon>
+	);
+}

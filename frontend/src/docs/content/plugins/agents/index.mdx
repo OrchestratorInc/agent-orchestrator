@@ -24,7 +24,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `codex` | Yes | Yes | Yes |
 | `opencode` | Yes | Yes | Yes |
 | `opencode-v2` | Yes | Yes | Yes |
-| `grok` | Yes | — | Yes |
+| `grok` | Yes | Yes | Yes |
 | `cursor` | Yes | Yes | Yes |
 | `qwen` | Yes | Yes | — |
 | `gemini` | Yes | — | — |
@@ -87,6 +87,7 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `opencode` | Native ACP (OpenCode 1) |
 | `opencode-v2` | Native ACP (OpenCode 2) |
 | `droid` | Native ACP |
+| `grok` | Native ACP (`grok agent stdio`) |
 | `kimi` | Native ACP |
 | `kimchi` | Native ACP |
 | `pi` | Separately installed ACP adapter; explicit bypass permissions required |
@@ -105,6 +106,20 @@ Qwen Chat needs version 0.16 or newer; OMP Chat needs version 15 or newer. MiMo 
 Chat registration does not imply interface handoff support. Use the switch action and its disabled reason in the session UI. Experimental reviewer modes and prompts do not sandbox tools or network access.
 
 ## Choosing and configuring a harness
+
+Grok Build Chat uses the installed `grok agent stdio` and its existing cached
+login. Model and reasoning effort come from the live ACP session. Default
+permissions surface tool approvals in Chat. Auto enables Grok's native command
+reviewer through ACP metadata; only bypass-permissions launches Grok with
+`--always-approve`. Standing instructions are passed as native system rules.
+Accept-edits is unsupported, and changing permissions on a running Grok Chat
+requires restarting it. Native session history is loaded when the session is
+reopened. Restart existing Grok Chat providers after updating to apply these
+session-creation settings.
+
+Grok Chat does not yet support tool-free background tasks. Automatic task naming
+uses the prompt-derived fallback because the driver refuses launches that cannot
+enforce disabled native tools.
 
 ```bash
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat

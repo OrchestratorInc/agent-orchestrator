@@ -27,6 +27,7 @@ type spawnOptions struct {
 	kind            string
 	mode            string
 	branch          string
+	baseBranch      string
 	prompt          string
 	issue           string
 	name            string
@@ -51,6 +52,7 @@ type spawnRequest struct {
 	Mode                string `json:"mode,omitempty"`
 	Harness             string `json:"harness,omitempty"`
 	Branch              string `json:"branch,omitempty"`
+	BaseBranch          string `json:"baseBranch,omitempty"`
 	Prompt              string `json:"prompt,omitempty"`
 	Model               string `json:"model,omitempty"`
 	Effort              string `json:"effort,omitempty"`
@@ -121,8 +123,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				if opts.kind == "orchestrator" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
 				}
-				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
-					return usageError{fmt.Errorf("standalone sessions do not support --branch, --issue, or --claim-pr")}
+				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
+					return usageError{fmt.Errorf("standalone sessions do not support --branch, --base, --issue, or --claim-pr")}
 				}
 				if strings.TrimSpace(opts.harness) == "" {
 					return usageError{fmt.Errorf("--agent is required with --standalone")}
@@ -159,6 +161,9 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				if strings.TrimSpace(opts.branch) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --branch")}
 				}
+				if strings.TrimSpace(opts.baseBranch) != "" {
+					return usageError{fmt.Errorf("scratch projects do not support --base")}
+				}
 				if strings.TrimSpace(opts.claimPR) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --claim-pr")}
 				}
@@ -185,6 +190,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Harness:             opts.harness,
 				Mode:                opts.mode,
 				Branch:              opts.branch,
+				BaseBranch:          strings.TrimSpace(opts.baseBranch),
 				Prompt:              opts.prompt,
 				Model:               strings.TrimSpace(opts.model),
 				Effort:              strings.TrimSpace(opts.effort),
@@ -256,6 +262,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
+	f.StringVar(&opts.baseBranch, "base", "", "Start the session's branch from this branch, to stack on its pull request (default: the project's default branch); with --branch, that branch must be new")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
 	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")

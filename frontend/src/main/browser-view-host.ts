@@ -314,7 +314,7 @@ export function shouldHandleAppShortcutInBrowserContext(
   chord: ShortcutChord,
   isMac: boolean,
 ): boolean {
-  if (id === "find-in-chat") return false;
+  if (id === "find-in-chat" || id === "add-selection-to-chat") return false;
   if (id === "new-shell-terminal" || id === "close-shell-terminal" || id === "split-shell-terminal" || id === "split-shell-terminal-down")
     return false;
   // Dictation types into the chat composer, never a page.

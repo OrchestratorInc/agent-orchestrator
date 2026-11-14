@@ -56,11 +56,31 @@ type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentA
 
 /** An account's name: its email. A Claude login without one is a
  * CLAUDE_CODE_OAUTH_TOKEN login, which reports no identity. */
-export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">, t: AccountNameT): string {
+export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean }, t: AccountNameT): string {
 	if (account.email) return account.email;
-	return account.provider === "claude"
+	return account.provider === "claude" && account.signedIn
 		? t("settings.agentAccounts.oauthToken")
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
+}
+
+export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
+	const ids = new Set(accounts.map((account) => account.id));
+	const twinOf = (account: T) => account.sameLoginAs && ids.has(account.sameLoginAs) ? account.sameLoginAs : undefined;
+	return accounts.filter((account) => account.id === keepId || !twinOf(account));
+}
+
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
+	const name = agentAccountName(account, t);
+	const email = account.email?.toLowerCase();
+	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
+	if (twins.length === 0) return name;
+	const org = (peer: Pick<AgentAccount, "orgId" | "orgName">) => peer.orgId ?? `name:${peer.orgName ?? ""}`;
+	const otherOrgs = twins.filter((twin) => org(twin) !== org(account));
+	const parts = [name];
+	if (otherOrgs.length > 0 && account.orgName) parts.push(account.orgName);
+	if (account.orgId && otherOrgs.some((twin) => (twin.orgName ?? "") === (account.orgName ?? ""))) parts.push(account.orgId.slice(0, 8));
+	if (account.device && twins.some((twin) => org(twin) === org(account))) parts.push(t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] }));
+	return parts.join(" · ");
 }
 
 /** Names an account by id in status text, such as "Moved from … to …". */
@@ -85,7 +105,7 @@ export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: 
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
+		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
 	});
 }
 
@@ -128,5 +148,9 @@ export function useAgentAccountActions(hostId?: HostId) {
 			return result.transition;
 		},
 		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId, hostId) }),
+		setStayOnAccount: async (sessionId: string, stay: boolean) =>
+			queryClient.setQueryData(sessionAccountsKey(sessionId, hostId), unwrap(await client(hostId).PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
+				params: { path: { sessionId } }, body: { stay },
+			}))),
 	};
 }

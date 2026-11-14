@@ -91,6 +91,10 @@ export type SessionArtifact = {
 	previousPaths?: string[];
 	/** The file's public link while it is published from this computer. */
 	shareUrl?: string;
+	/** A cloud file's SHA-256, from its listing: the Publish button compares it with the published one. */
+	sha256?: string;
+	/** Who shareUrl opens for, as this computer last recorded it; the link list has the final say. */
+	shareAccess?: "restricted" | "anyone";
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -105,7 +109,23 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; remoteHead?: string; unpushed: number };
+export type SessionBranchState = {
+	commits: number;
+	remoteBranch?: string;
+	/** The commit the remote branch points at, as last read. */
+	remoteHead?: string;
+	unpushed: number;
+	/** Short name of the branch commits and behind are counted against, such as "main". Absent when the daemon only knows the base as a commit. */
+	base?: string;
+	/** The exact ref that was read for base, such as "origin/main". */
+	baseRef?: string;
+	/** Commits on base the branch does not have. Only meaningful when base is set. */
+	behind: number;
+	/** Merging into base would conflict, read locally. Absent from daemons that predate it. */
+	conflicts?: boolean;
+	/** The branch's tip commit. */
+	head?: string;
+};
 
 /** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };

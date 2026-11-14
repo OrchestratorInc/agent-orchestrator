@@ -16,6 +16,19 @@ describe("iOS chat controls row", () => {
 		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
 		expect(source).not.toContain("Turn settings");
 	});
+
+	// As the new task's menu: each other agent opens onto its models, default
+	// first. A model chosen there only records the pick (the switch runs with
+	// the next message), and the running agent's model chosen again drops it.
+	it("lists the other agents after the models, each opening onto its models", () => {
+		expect(source).toContain('<Section title="Other agents">');
+		expect(source).toContain('label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}');
+		expect(source).toContain("[{ id: AUTOMATIC_MODEL, label: defaultModelChoice(list?.defaultLabel) }, ...(list?.models ?? [])].map(choice)");
+		expect(source).toContain("onChoose={() => otherAgents.onPick({");
+		expect(source).toContain("if (pending) otherAgents?.onPick(undefined);");
+		expect(source).toContain("<ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />");
+		expect(source.indexOf('<Section title="Other agents">')).toBeLessThan(source.indexOf("{otherRows.map((row) => <SettingPicker"));
+	});
 });
 
 describe("iOS other settings", () => {

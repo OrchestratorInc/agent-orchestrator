@@ -18,6 +18,7 @@ import { setNewTaskHandler } from "../../../lib/newTaskAction";
 import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
+import { useMenuRowWidths } from "../../../lib/useMenuRowWidth";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
 import { isArchived } from "../../../lib/agentsView";
 import { latestEventAt } from "../../../lib/archive/archiveOrder";
@@ -130,6 +131,7 @@ export default function FleetScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- archiveSourcesKey covers every field read here
 	}, [archiveSourcesKey]);
 	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;
+	const rowWidths = useMenuRowWidths();
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
 	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
@@ -250,6 +252,9 @@ export default function FleetScreen() {
 			<WorkerBoardList
 				onScroll={largeTitle.onScroll}
 				key={boardIdentityKey}
+				// Held here, above the key, so the board rebuilt for a new filter
+				// starts its rows at the width the last board's rows measured.
+				rowWidths={rowWidths}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
 				archiveFooter

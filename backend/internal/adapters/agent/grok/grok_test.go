@@ -65,6 +65,12 @@ func TestPromptReadinessHints(t *testing.T) {
 	if !reflect.DeepEqual(hints.Patterns, []string{"Grok Build"}) {
 		t.Fatalf("patterns = %#v, want Grok Build", hints.Patterns)
 	}
+	if !hints.RenderedScreen {
+		t.Fatal("RenderedScreen = false; Grok's footer is only visible on the rendered alternate screen")
+	}
+	if !reflect.DeepEqual(hints.BlockingPatterns, []string{"Do you trust the contents of this directory?"}) {
+		t.Fatalf("blocking patterns = %#v, want Grok's trust dialog heading", hints.BlockingPatterns)
+	}
 }
 
 func TestGetLaunchCommand(t *testing.T) {

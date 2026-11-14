@@ -6,6 +6,7 @@ import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from ".
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 import type { ApprovalMode } from "./spawnApproval";
@@ -457,6 +458,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	let bodyText = "";
 	try {
 		const installId = cachedInstallId();
+		const startedAt = Date.now();
 		await Promise.race([aborted, (async () => {
 			received = await fetch(url, {
 				...init,
@@ -468,6 +470,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...(init?.headers ?? {}),
 				},
 			});
+			noteRequestAnswered(startedAt);
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
