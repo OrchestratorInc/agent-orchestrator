@@ -5,7 +5,11 @@ import (
 	"testing"
 )
 
-const miniMaxCodeMigrationVersion int64 = 20261020181912014
+const miniMaxCodeMigrationVersion int64 = 20261114174101605
+
+// miniMaxCodePreviousVersion is the newest migration before MiniMax Code's.
+// Rolling back to it undoes only the MiniMax step, not unrelated later schema.
+const miniMaxCodePreviousVersion int64 = 20261114072016988
 
 // TestMigrationAllowsMiniMaxCodeAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
@@ -27,7 +31,7 @@ func TestMigrationAllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testing.T
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
 				mustExec(t, db, `PRAGMA writable_schema = RESET`)
 			}
-			upTo(t, db, 194)
+			upTo(t, db, miniMaxCodePreviousVersion)
 			var before string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
 				t.Fatal(err)
@@ -48,7 +52,7 @@ func TestMigrationAllowsMiniMaxCodeAndReversesBothHistoricalSchemas(t *testing.T
 			}
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'minimax-code'`)
-			downTo(t, db, 194)
+			downTo(t, db, miniMaxCodePreviousVersion)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
 				t.Fatalf("down migration did not restore original schema: %v", err)
@@ -81,13 +85,13 @@ func TestMiniMaxCodeDownAfterHarnessRepair(t *testing.T) {
 				t.Fatalf("migrate: %v", err)
 			}
 			assertAppliedMigrations(t, db, miniMaxCodeMigrationVersion)
-			downTo(t, db, 200)
+			downTo(t, db, miniMaxCodePreviousVersion)
 			var after string
 			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&after); err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(after, "'minimax-code'") || !strings.Contains(after, "'command-code'") {
-				t.Fatalf("harness constraint after rollback to 200: %s", after)
+			if strings.Contains(after, "'minimax-code'") || !strings.Contains(after, "'command-code'") || !strings.Contains(after, "'memcode'") {
+				t.Fatalf("harness constraint after MiniMax Code rollback: %s", after)
 			}
 		})
 	}
