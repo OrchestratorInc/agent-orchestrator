@@ -16,6 +16,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestIdentityRequiresExactPinnedVersion(t *testing.T) {
+	for _, tt := range []struct {
+		output string
+		want   bool
+	}{
+		{"jarvis, version 1.0.4\n", true},
+		{"jarvis, version 1.0.4\r\n", true},
+		{"UserWarning: slow import\njarvis, version 1.0.4\n", true},
+		{"jarvis, version 1.0.40\n", false},
+		{"jarvis, version 1.0.41\n", false},
+		{"jarvis, version 1.0.3\n", false},
+		{"other-jarvis 2.0 (compatible with jarvis, version 1.0.4)\n", false},
+		{"", false},
+	} {
+		if got := reportsPinnedVersion(tt.output); got != tt.want {
+			t.Errorf("reportsPinnedVersion(%q) = %t, want %t", tt.output, got, tt.want)
+		}
+	}
+}
+
 func TestInputFailsClosed(t *testing.T) {
 	p := New()
 	for _, message := range []string{"", "one\ntwo", "one\rtwo", "yes\x03", "\x1b[200~yes", "/clear", strings.Repeat("é", 1501), " leading", "trailing ", "Explain You>", "Confirm: yes"} {

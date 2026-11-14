@@ -58,8 +58,8 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 			identityErr = fmt.Errorf("native --version probe: %w", err)
 			return false
 		}
-		if !strings.Contains(string(b), "jarvis, version 1.0.4") {
-			identityErr = fmt.Errorf("native CLI did not report pinned OpenJarvis1.0.4 identity")
+		if !reportsPinnedVersion(string(b)) {
+			identityErr = fmt.Errorf("native CLI did not report pinned OpenJarvis 1.0.4 identity")
 			return false
 		}
 		return true
@@ -68,6 +68,21 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("%w: %w", resolveErr, identityErr)
 	}
 	return path, resolveErr
+}
+
+// pinnedVersionLine is the exact `jarvis --version` line of the qualified release.
+const pinnedVersionLine = "jarvis, version 1.0.4"
+
+// reportsPinnedVersion requires a whole output line to be the pinned version,
+// so a later 1.0.40 release or a lookalike `jarvis` that merely mentions it is
+// refused. Other lines (Python warnings on stderr) are ignored.
+func reportsPinnedVersion(output string) bool {
+	for line := range strings.SplitSeq(output, "\n") {
+		if strings.TrimSpace(line) == pinnedVersionLine {
+			return true
+		}
+	}
+	return false
 }
 
 // GetConfigSpec implements the scoped native adapter contract.
