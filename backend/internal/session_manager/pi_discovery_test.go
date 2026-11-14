@@ -32,12 +32,14 @@ func TestSpawn_TUIPiDiscoveredEffort(t *testing.T) {
 			t.Setenv("HOME", root)
 			files := map[string]string{
 				"package.json": `{"name":"` + owner + `","dependencies":{"@earendil-works/pi-ai":"1"}}`,
-				"dist/cli.mjs": "#!/usr/bin/env node\nconsole.log('provider model context\\nfixture reasoning 128k\\nfixture plain 128k');\n",
+				"dist/cli.mjs": "#!/usr/bin/env node\nconsole.log('provider model context\\nfixture reasoning 128k\\nfixture plain 128k\\nfixture unmapped 128k\\nfixture partial 128k');\n",
 				"node_modules/@earendil-works/pi-ai/package.json":  `{"name":"` + aiName + `","type":"module","exports":{".":{"import":"./dist/index.js"}}}`,
 				"node_modules/@earendil-works/pi-ai/dist/index.js": "throw new Error('do not initialize the SDK');",
 				"node_modules/@earendil-works/pi-ai/dist/models.generated.js": `export const MODELS = {fixture:{
 				 reasoning:{id:"reasoning",provider:"fixture",reasoning:true,thinkingLevelMap:{minimal:null,low:"low",medium:null,high:"high",xhigh:null}},
-				 plain:{id:"plain",provider:"fixture",reasoning:false,thinkingLevelMap:{high:"high"}}
+				 plain:{id:"plain",provider:"fixture",reasoning:false,thinkingLevelMap:{high:"high"}},
+				 unmapped:{id:"unmapped",provider:"fixture",reasoning:true},
+				 partial:{id:"partial",provider:"fixture",reasoning:true,thinkingLevelMap:{minimal:null,max:"max"}}
 				}};`,
 			}
 			for name, contents := range files {
@@ -56,13 +58,20 @@ func TestSpawn_TUIPiDiscoveredEffort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(catalog.Models) != 2 {
-				t.Fatalf("discovered models = %#v, want reasoning and plain", catalog.Models)
+			if len(catalog.Models) != 4 {
+				t.Fatalf("discovered models = %#v, want reasoning, plain, unmapped and partial", catalog.Models)
 			}
 			for _, model := range catalog.Models {
 				var want []string
-				if model.ID == "fixture/reasoning" {
+				switch model.ID {
+				case "fixture/reasoning":
 					want = []string{"low", "high"}
+				case "fixture/unmapped":
+					// Pi treats a reasoning model without a map as minimal-high.
+					want = []string{"minimal", "low", "medium", "high"}
+				case "fixture/partial":
+					// xhigh is offered only when the map names it.
+					want = []string{"low", "medium", "high"}
 				}
 				if !slices.Equal(model.Efforts, want) {
 					t.Errorf("%s discovered efforts = %v, want %v", model.ID, model.Efforts, want)
@@ -76,6 +85,9 @@ func TestSpawn_TUIPiDiscoveredEffort(t *testing.T) {
 				{"inherited", "fixture/reasoning", "high", true, false},
 				{"unsupported level", "fixture/reasoning", "xhigh", false, true},
 				{"no reasoning", "fixture/plain", "high", false, true},
+				{"unmapped inherited", "fixture/unmapped", "high", true, false},
+				{"unmapped xhigh", "fixture/unmapped", "xhigh", false, true},
+				{"partial xhigh", "fixture/partial", "xhigh", false, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					m, st, rt, _ := newManager()
