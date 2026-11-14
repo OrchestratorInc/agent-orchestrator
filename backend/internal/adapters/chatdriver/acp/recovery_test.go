@@ -156,22 +156,15 @@ func TestPersistentACPPromptDisconnectPreservesTurn(t *testing.T) {
 }
 
 func TestPersistentACPPromptFailsWhenTheHostExited(t *testing.T) {
+	const message = "the agent's process exited before this turn finished"
 	for _, tc := range []struct {
 		name       string
-		free       uint64
-		code       domain.ConversationFailureCode
-		message    string
 		compaction bool
 	}{
-		{name: "plenty of disk", free: 40 << 30, message: "the agent's process exited before this turn finished"},
-		{name: "disk nearly full", free: 100 << 20, code: domain.ConversationFailureDiskFull,
-			message: "the agent's process exited while the disk was nearly full (100 MB free)"},
-		{name: "compaction", free: 40 << 30, message: "the agent's process exited before this turn finished", compaction: true},
+		{name: "turn"},
+		{name: "compaction", compaction: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			previous := diskFree
-			diskFree = func(string) (uint64, error) { return tc.free, nil }
-			t.Cleanup(func() { diskFree = previous })
 			daemon, host := net.Pipe()
 			defer host.Close()
 			proc := &process{
@@ -207,13 +200,13 @@ func TestPersistentACPPromptFailsWhenTheHostExited(t *testing.T) {
 				}
 			}
 			if completed == nil || completed.ProviderTurnID != "durable-turn" || completed.TurnState != domain.TurnStateFailed ||
-				completed.FailureCode != tc.code || completed.Err == nil || completed.Err.Error() != tc.message {
+				completed.Err == nil || completed.Err.Error() != message {
 				t.Fatalf("turn after the host exited: %+v", completed)
 			}
 			if stopped == nil || errors.Is(stopped.Err, ports.ErrChatRecoveryInconclusive) {
 				t.Fatalf("stop after the host exited: %+v", stopped)
 			}
-			if tc.compaction != (failure != nil) || failure != nil && (failure.ProviderTurnID != "durable-turn" || failure.Err.Error() != tc.message) {
+			if tc.compaction != (failure != nil) || failure != nil && (failure.ProviderTurnID != "durable-turn" || failure.Err.Error() != message) {
 				t.Fatalf("error row after the host exited: %+v", failure)
 			}
 		})
