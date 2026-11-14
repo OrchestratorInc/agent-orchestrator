@@ -480,7 +480,8 @@ type ChatUserMessage struct {
 	SenderSessionID string
 	// SenderProjectID and SenderDisplayName are resolved from SenderSessionID when
 	// the source session is available. They are persisted on steer activities so
-	// the renderer can show a stable label and safe AO session link.
+	// the renderer can show a stable label and safe AO session link. With no
+	// SenderSessionID, SenderDisplayName is the name an outside sender gave.
 	SenderProjectID   string
 	SenderDisplayName string
 	// Content carries native images and resources for providers that negotiated
@@ -515,7 +516,10 @@ type MessageDeliveryOptions struct {
 	InteractionAt time.Time
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
-	AuthoredByUser  bool
+	// SenderName labels a sender outside AO's sessions (a bot, `ao send` from a
+	// terminal). Presentation only; a resolved SenderSessionID's name replaces it.
+	SenderName     string
+	AuthoredByUser bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the

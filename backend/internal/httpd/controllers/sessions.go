@@ -51,6 +51,8 @@ const (
 	maxModelLen       = 256
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
+	// maxSenderNameRunes matches SendSessionMessageRequest.SenderName's maxLength.
+	maxSenderNameRunes = 60
 
 	// Attachment limits guard the daemon against oversized spawn bodies. Files
 	// are pasted/dropped into the task brief and inlined as base64 in the JSON
@@ -2256,14 +2258,18 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		attachment = &decoded
 	}
 	message := domain.SanitizeControlChars(in.Message)
+	options := ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID}
+	if in.SenderSessionID == "" {
+		options.SenderName = outsideSenderName(in.SenderName)
+	}
 	var err error
-	if in.UserAuthored || in.SenderSessionID != "" {
+	if in.UserAuthored || in.SenderSessionID != "" || options.SenderName != "" {
 		sender, ok := c.Svc.(sessionMessageOptionsSender)
 		if !ok {
 			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
 			return
 		}
-		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, options)
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
@@ -2351,6 +2357,16 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, DelegateTaskResponse{OK: true, WorkerID: out.WorkerID, OrchestratorID: out.OrchestratorID})
+}
+
+// outsideSenderName is a send request's sender label as one line of at most
+// maxSenderNameRunes, since the timeline draws it in front of the message.
+func outsideSenderName(name string) string {
+	name = strings.Join(strings.Fields(domain.SanitizeControlChars(name)), " ")
+	if runes := []rune(name); len(runes) > maxSenderNameRunes {
+		name = strings.TrimSpace(string(runes[:maxSenderNameRunes]))
+	}
+	return name
 }
 
 func validClientRequestID(id string) bool {

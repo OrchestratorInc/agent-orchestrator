@@ -2984,7 +2984,7 @@ func (s *Service) relayChatTurn(
 ) (string, error) {
 	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
 		Text: text, ClientMessageID: clientMessageID,
-		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
+		SenderSessionID: options.SenderSessionID, SenderDisplayName: options.SenderName, InteractionAt: options.InteractionAt,
 		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
 	})
 	// A relay never wakes a sleeping session inline: it queues and wakes in the

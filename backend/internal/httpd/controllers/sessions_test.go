@@ -5028,6 +5028,28 @@ func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.
 	}
 }
 
+func TestSessionsAPI_SendNamesAnOutsideSenderOnlyWithoutASession(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Catch me up.","senderName":"  Grok\nBot  "}`)
+	if status != http.StatusOK {
+		t.Fatalf("send = %d, want 200; body=%s", status, body)
+	}
+	if got := svc.sentDeliveryOptions.SenderName; got != "Grok Bot" {
+		t.Fatalf("SenderName = %q, want it on one line as %q", got, "Grok Bot")
+	}
+
+	svc.sentDeliveryOptions = ports.MessageDeliveryOptions{}
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Rebased.","senderSessionId":"ao-2","senderName":"Grok Bot"}`)
+	if status != http.StatusOK {
+		t.Fatalf("send = %d, want 200; body=%s", status, body)
+	}
+	if got := svc.sentDeliveryOptions; got.SenderSessionID != "ao-2" || got.SenderName != "" {
+		t.Fatalf("options = %+v, want the AO session as sender and no outside name", got)
+	}
+}
+
 func TestSessionsAPI_SendRejectsUnsupportedAttachmentType(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
 
