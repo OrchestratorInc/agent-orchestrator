@@ -7,6 +7,23 @@ export function isCommandPaletteEnabled(version?: string, isDev: boolean = impor
 }
 
 /**
+ * Whether this build has Teams (sharing with people and teams, the Teams
+ * settings page, shared-with-you notices, access tags). VITE_AO_TEAMS decides
+ * when the build set it ("on" or "off"); otherwise dev and nightly builds have
+ * Teams and stable ones don't. Without Teams, Share makes links only, as
+ * before Teams. See src/shared/teams-flag.ts.
+ */
+export function isTeamsEnabled(
+	version?: string,
+	isDev: boolean = import.meta.env.DEV,
+	flag: string | undefined = import.meta.env.VITE_AO_TEAMS,
+): boolean {
+	if (flag === "on") return true;
+	if (flag === "off") return false;
+	return isDev || isNightlyBuild(version);
+}
+
+/**
  * Splits a nightly version into the parts worth putting in front of a user.
  *
  * A raw nightly string ("0.12.11-nightly.202609021713") truncates to noise in a

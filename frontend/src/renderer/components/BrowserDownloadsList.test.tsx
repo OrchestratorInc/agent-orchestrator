@@ -68,8 +68,8 @@ describe("BrowserDownloadsList", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("button", { name: "Open report.txt" }).querySelector(".lucide-folder")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Show report.txt in File Explorer" }).querySelector(".lucide-folder-open")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open report.txt" }).querySelector(".icon-folder")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show report.txt in File Explorer" }).querySelector(".icon-folder-open")).toBeInTheDocument();
 	});
 
 	it("asks before downloading a blocked file and lets it be dismissed", async () => {

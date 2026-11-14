@@ -45,10 +45,10 @@ func (e *IncompatibleVersionError) ReplacedOpenCode1Message() string {
 		// The linked keg also blocks linking OpenCode 1's formula, and an npm
 		// reinstall of OpenCode 2 would leave it linked, so unlink it first.
 		return fmt.Sprintf("OpenCode 1 is not installed: %s is OpenCode 2 (%s), linked by Homebrew's opencode-v2 formula where OpenCode 1 belongs. "+
-			"Run `brew unlink opencode-v2` (AO still finds OpenCode 2 through Homebrew's opt link), then reinstall OpenCode 1 and check again.", e.Path, e.FoundVersion)
+			"Run `brew unlink opencode-v2` (Orchestrator still finds OpenCode 2 through Homebrew's opt link), then reinstall OpenCode 1 and check again.", e.Path, e.FoundVersion)
 	}
 	return fmt.Sprintf("OpenCode 1 is not installed: %s is OpenCode 2 (%s), which replaced OpenCode 1 at its default location. "+
-		"To run both, first reinstall OpenCode 2 from AO, which keeps it in its own folder, then reinstall OpenCode 1 "+
+		"To run both, first reinstall OpenCode 2 from Orchestrator, which keeps it in its own folder, then reinstall OpenCode 1 "+
 		"(official installer, Homebrew, or npm opencode-ai) and check again.", e.Path, e.FoundVersion)
 }
 

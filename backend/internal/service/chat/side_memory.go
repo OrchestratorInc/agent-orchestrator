@@ -568,6 +568,12 @@ func (m *memorySideStore) ReserveSideTurn(_ context.Context, turn domain.SideTur
 	if side.State != "ready" && side.State != "opening" {
 		return domain.SideTurn{}, false, ErrSideNotReady
 	}
+	if len(m.turns[side.ID]) == 0 && !side.ManualLabel {
+		if label := NormalizeTitle(strings.TrimSpace(turn.Text)); label != "" {
+			side.Label = label
+			side.UpdatedAt = turn.CreatedAt
+		}
+	}
 	side.ReferencePending = false
 	m.sides[side.ID] = side
 	turn.State = "queued"

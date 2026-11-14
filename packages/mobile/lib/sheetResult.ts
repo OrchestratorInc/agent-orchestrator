@@ -8,6 +8,7 @@
 // hang a provider on. Keys are released when the route unmounts (including a
 // swipe-dismiss with no selection), so a closure can't outlive its sheet.
 
+import { branchId, selectionParams, type FilesBranch, type FilesChanges, type FilesSelection } from "./files/selection";
 import type { MachineAppearance } from "./machineAppearance";
 import type { MachineNameChoice } from "./pairFlow";
 
@@ -37,29 +38,9 @@ export function resetSheetResults(): void {
 	seq = 0;
 }
 
-/**
- * Route + params for opening the project sheet. Kept here beside `parkSheetResult`
- * so callers can't forget to park the callback, and so the "0"/"1" param encoding
- * (route params are strings) lives in one place rather than at every call site.
- */
-export function projectSheetRoute(opts: {
-	selected: string;
-	onSelect: (id: string) => void;
-	includeAll?: boolean;
-	title?: string;
-	subtitle?: string;
-}) {
-	return {
-		pathname: "/sheets/project" as const,
-		params: {
-			resultKey: parkSheetResult(opts.onSelect),
-			selected: opts.selected,
-			includeAll: opts.includeAll === false ? "0" : "1",
-			...(opts.title ? { title: opts.title } : {}),
-			...(opts.subtitle ? { subtitle: opts.subtitle } : {}),
-		},
-	};
-}
+// Route + params for each sheet, kept here beside `parkSheetResult` so callers
+// can't forget to park the callback, and so the string encoding of each param
+// (route params are strings) lives in one place rather than at every call site.
 
 export function agentSheetRoute(opts: { selected: string; onSelect: (id: string) => void; allowed?: string[]; mode?: "chat" | "tui" }) {
 	return {
@@ -73,7 +54,8 @@ export function agentSheetRoute(opts: { selected: string; onSelect: (id: string)
 	};
 }
 
-export function modelSheetRoute(opts: { agentId: string; projectId: string; selected: string; onSelect: (id: string) => void }) {
+/** The model sheet; `hostId` names Orchestrator Cloud when its catalog is the one to browse. */
+export function modelSheetRoute(opts: { agentId: string; projectId: string; selected: string; hostId?: string; onSelect: (id: string) => void }) {
 	return {
 		pathname: "/sheets/model" as const,
 		params: {
@@ -81,13 +63,14 @@ export function modelSheetRoute(opts: { agentId: string; projectId: string; sele
 			agentId: opts.agentId,
 			projectId: opts.projectId,
 			selected: opts.selected,
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
 		},
 	};
 }
 
-export function connectSheetRoute(onConnected: () => void, hostId?: string) {
+export function connectRoute(onConnected: () => void, hostId?: string) {
 	return {
-		pathname: "/sheets/connect" as const,
+		pathname: "/connect" as const,
 		params: {
 			resultKey: parkSheetResult(onConnected),
 			...(hostId ? { hostId } : {}),
@@ -114,24 +97,29 @@ export function machineNameSheetRoute(opts: {
 	};
 }
 
-/**
- * Route + params for the store-update nudge. One parked callback carries both
- * outcomes: taking the update, or dismissing it (which is what the snooze
- * counter counts, so the opener has to hear about it).
- */
-export function storeUpdateSheetRoute(opts: {
-	version?: string;
-	storeConfirmed: boolean;
-	onAction: (action: "update" | "dismiss") => void;
-}) {
+/** The Files screen's branch picker for one session. */
+export function filesBranchSheetRoute(opts: { sessionId: string; hostId?: string; selected: FilesBranch; onSelect: (branch: FilesBranch) => void }) {
 	return {
-		pathname: "/sheets/store-update" as const,
+		pathname: "/sheets/files-branch" as const,
 		params: {
-			resultKey: parkSheetResult(opts.onAction),
-			// Route params are strings, so the flag is encoded here rather than at
-			// the call site — same reason as projectSheetRoute's "0"/"1".
-			storeConfirmed: opts.storeConfirmed ? "1" : "0",
-			...(opts.version ? { version: opts.version } : {}),
+			resultKey: parkSheetResult(opts.onSelect),
+			sessionId: opts.sessionId,
+			selected: branchId(opts.selected),
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
+		},
+	};
+}
+
+/** The Files screen's changes picker, for the branch `selection` names; `base` names what all changes compare with. */
+export function filesChangesSheetRoute(opts: { sessionId: string; hostId?: string; selection: FilesSelection; base?: string; onSelect: (changes: FilesChanges) => void }) {
+	return {
+		pathname: "/sheets/files-changes" as const,
+		params: {
+			resultKey: parkSheetResult(opts.onSelect),
+			sessionId: opts.sessionId,
+			...selectionParams(opts.selection),
+			...(opts.base ? { base: opts.base } : {}),
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
 		},
 	};
 }

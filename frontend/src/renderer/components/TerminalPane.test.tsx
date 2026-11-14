@@ -10,6 +10,7 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -78,7 +79,9 @@ vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
 }));
 
+const cloudRestoreMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("../hooks/useCloudCp", () => ({
+	createRendererCloudCpClient: () => ({ restoreSession: cloudRestoreMock }),
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
 		client: { createTerminalTicket: cloudTicketMock },
@@ -992,6 +995,48 @@ describe("TerminalCacheProvider", () => {
 		}
 	});
 
+	it("shows a terminal in each split pane and moves one between panes without remounting it", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionA, sessionB]));
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		const tree = (left?: WorkspaceSession, right?: WorkspaceSession) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<TerminalCacheProvider daemonReady theme="dark">
+						<div data-testid="left-pane">
+							{left ? <TerminalPane daemonReady fontSize={12} session={left} theme="dark" /> : null}
+						</div>
+						<div data-testid="right-pane">
+							{right ? <TerminalPane daemonReady fontSize={12} session={right} theme="dark" /> : null}
+						</div>
+					</TerminalCacheProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree(sessionA, sessionB));
+		try {
+			await waitFor(() => expect(within(screen.getByTestId("left-pane")).getByTestId("xterm")).toBeInTheDocument());
+			await waitFor(() => expect(within(screen.getByTestId("right-pane")).getByTestId("xterm")).toBeInTheDocument());
+			const hostA = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionA.id}:worker|"]`);
+			const hostB = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionB.id}:worker|"]`);
+			// Both panes are on screen at once: neither terminal is parked.
+			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
+			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "visible");
+			const mounts = xtermMounts.value;
+
+			// A moves to the right pane and B leaves: A's live renderer is re-parented.
+			view.rerender(tree(undefined, sessionA));
+			await waitFor(() => expect(screen.getByTestId("right-pane").contains(hostA)).toBe(true));
+			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
+			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "parked");
+			expect(xtermMounts.value).toBe(mounts);
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
 	it("focuses each retained TUI terminal when switching among TUI sessions", async () => {
 		const tuiA = { ...sessionA, mode: "tui" as const };
 		const tuiB = { ...sessionB, mode: "tui" as const };
@@ -1289,6 +1334,38 @@ describe("terminal restore", () => {
 		try {
 			expect(screen.queryByText("This terminal process ended, but the session is not marked terminated yet.")).not.toBeInTheDocument();
 			expect(screen.queryByText("TERMINAL ENDED")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("restores an archived Cloud session from the strip through the control plane", async () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		// Restore finds a Cloud session in the Cloud listing, which keeps archived rows.
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			await waitFor(() => expect(cloudRestoreMock).toHaveBeenCalledWith("org-1", worker.id));
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+			// The restore leaves the session waiting for its new box; later tests reuse its id.
+			useTerminalResetStore.getState().markConnected(worker.id);
+		}
+	});
+
+	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
+		// Only the sharer's organization restores a session; a guest's restore
+		// would not even reach the control plane (the session is not in their
+		// own Cloud listing), it would go to this machine's daemon instead.
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", shared: true }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
 		} finally {
 			view.restore();
 		}

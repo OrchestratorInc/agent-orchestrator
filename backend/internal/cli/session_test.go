@@ -429,6 +429,42 @@ func TestSessionGet_JSONOutputDecodes(t *testing.T) {
 	}
 }
 
+func TestSessionGet_PrintsArtifactsWithPublicLinks(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/sessions/demo-1" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"session":{"id":"demo-1","projectId":"demo","kind":"worker","status":"working","prs":[],"artifactFiles":[`+
+			`{"path":"explainer.html","kind":"html","shareUrl":"https://share.test/abc"},{"path":"notes.md","kind":"markdown"}]}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, errOut, err := executeCLI(t, deps, "session", "get", "demo-1")
+	if err != nil {
+		t.Fatalf("session get failed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "artifacts:\n  explainer.html (public link: https://share.test/abc)\n  notes.md\n") {
+		t.Fatalf("artifacts not listed with their links:\n%s", out)
+	}
+
+	out, errOut, err = executeCLI(t, deps, "session", "get", "demo-1", "--json")
+	if err != nil {
+		t.Fatalf("session get --json failed: %v\nstderr=%s", err, errOut)
+	}
+	var got sessionResponse
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := []sessionArtifactDTO{{Path: "explainer.html", Kind: "html", ShareURL: "https://share.test/abc"}, {Path: "notes.md", Kind: "markdown"}}; !reflect.DeepEqual(got.Session.ArtifactFiles, want) {
+		t.Fatalf("artifactFiles = %#v, want %#v", got.Session.ArtifactFiles, want)
+	}
+}
+
 func TestSessionKill_SuccessWithProjectScope(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, log := sessionCommandServer(t)
@@ -1160,5 +1196,31 @@ func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
 				t.Fatalf("%s request deadline in %s, want no client timeout", tc.call, time.Until(deadline).Round(time.Minute))
 			}
 		})
+	}
+}
+
+// The session that spawned the killed one shows the termination only when it
+// ran the kill, so the CLI names the AO session it runs in.
+func TestSessionKill_SendsCallerSession(t *testing.T) {
+	cfg := setConfigEnv(t)
+	t.Setenv("AO_SESSION_ID", "orchestrator-1")
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/kill" {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","freed":true}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "kill", "demo-1"); err != nil {
+		t.Fatalf("session kill failed: %v\nstderr=%s", err, errOut)
+	}
+	if body["callerSessionId"] != "orchestrator-1" {
+		t.Fatalf("kill body = %v, want callerSessionId orchestrator-1", body)
 	}
 }

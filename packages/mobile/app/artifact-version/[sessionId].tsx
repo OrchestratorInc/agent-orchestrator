@@ -3,7 +3,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
-import { getArtifactVersion, restoreArtifactVersion } from "../../lib/api";
 import { artifactLanguage, artifactViewKind, shownText } from "../../lib/artifacts";
 import { inlineArtifactPage } from "../../lib/artifactPageInliner";
 import { formatVersionTime, versionPageHtml, type ArtifactVersion } from "../../lib/artifactVersions";
@@ -11,16 +10,17 @@ import { backOr } from "../../lib/backNavigation";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
-import type { ServerConfig } from "../../lib/config";
+import type { ArtifactsBackend } from "../../lib/artifactsBackend";
+import { useArtifactsBackend } from "../../lib/useArtifactsBackend";
 import { userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
-import { artifactAssetLoader } from "../../lib/useInlinedArtifactPage";
 
 // Past this, a version shows as plain text: a full grammar pass would stall the JS thread.
 const MAX_HIGHLIGHTED_CHARS = 100 * 1024;
@@ -37,6 +37,7 @@ export default function ArtifactVersionScreen() {
 }
 
 function ArtifactVersionContent() {
+	const glassInset = useGlassBarInset();
 	const { sessionId: rawId, path: rawPath, version: rawVersion, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; path?: string; version?: string; hostId?: string }>();
 	const sessionId = String(rawId ?? "");
 	const path = String(rawPath ?? "");
@@ -44,8 +45,10 @@ function ArtifactVersionContent() {
 	const navigation = useNavigation();
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { config, currentHostId, refresh } = useApp();
+	const { currentHostId, refresh } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
+	const { backend, unavailable } = useArtifactsBackend(hostMatches ? sessionId : "");
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [loaded, setLoaded] = useState<ArtifactVersion>();
@@ -61,21 +64,21 @@ function ArtifactVersionContent() {
 	}, [navigation, path]);
 
 	useEffect(() => {
-		if (!config || !hostMatches || !valid) return;
+		if (!backend || !hostMatches || !valid) return;
 		const controller = new AbortController();
 		setLoadError(undefined);
-		getArtifactVersion(config, sessionId, path, version, { signal: controller.signal })
+		backend.version(sessionId, path, version, controller.signal)
 			.then(setLoaded)
 			.catch((cause) => { if (!controller.signal.aborted) setLoadError(userFacingError(cause, "Couldn't load this version.")); });
 		return () => controller.abort();
-	}, [attempt, config, hostMatches, path, sessionId, valid, version]);
+	}, [attempt, backend, hostMatches, path, sessionId, valid, version]);
 
 	const restore = useCallback(async () => {
-		if (!config) return;
+		if (!backend) return;
 		setRestoring(true);
 		setRestoreError(undefined);
 		try {
-			await restoreArtifactVersion(config, sessionId, path, version);
+			await backend.restore(sessionId, path, version);
 			haptics.success();
 			// The file's new modified time reloads the viewer behind this screen.
 			void refresh().catch(() => {});
@@ -86,10 +89,11 @@ function ArtifactVersionContent() {
 		} finally {
 			setRestoring(false);
 		}
-	}, [config, path, refresh, router, sessionId, version]);
+	}, [backend, path, refresh, router, sessionId, version]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." /></View>;
-	if (!valid) return <View style={styles.center}><EmptyState icon="clock" title="This version can't be opened" message="Open it again from the artifact's history." /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="This artifact belongs to another machine" message="Open it from that machine's session." /></View>;
+	if (!valid) return <View style={styles.center}><EmptyState icon="history" title="This version can't be opened" message="Open it again from the artifact's history." /></View>;
+	if (unavailable) return <View style={styles.center}><EmptyState icon="cloud" title="This version is unavailable" message={unavailable} /></View>;
 	if (!loaded && loadError) return <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't load this version" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => setAttempt((n) => n + 1)} />} /></View>;
 	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 
@@ -99,15 +103,15 @@ function ArtifactVersionContent() {
 	// Only the path is known here; the daemon calls .html and .htm files pages.
 	const page = /\.html?$/i.test(path) && !loaded.truncated;
 	return (
-		<View style={styles.screen}>
+		<View style={[styles.screen, { paddingTop: glassInset }]}>
 			<View style={styles.banner}>
 				<Text style={styles.bannerText}>Viewing the version from {formatVersionTime(loaded.createdAt, now) || `version ${loaded.version}`}</Text>
 			</View>
 			{loaded.truncated || shown.truncated ? (
 				<View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this version. Restoring it writes the whole file.</Text></View>
 			) : null}
-			{page && config ? (
-				<VersionPage config={config} sessionId={sessionId} path={path} version={loaded} />
+			{page && backend ? (
+				<VersionPage backend={backend} sessionId={sessionId} path={path} version={loaded} />
 			) : (
 				<ScrollView style={styles.screen} contentContainerStyle={markdown ? styles.document : styles.code}>
 					{markdown ? (
@@ -121,7 +125,8 @@ function ArtifactVersionContent() {
 				{restoreError ? <Text accessibilityRole="alert" style={styles.error}>{restoreError}</Text> : null}
 				<View style={styles.actions}>
 					<Button title="Back to current" variant="ghost" onPress={() => backOr(router)} style={styles.action} />
-					<Button title={restoring ? "Restoring" : "Restore this version"} icon="rotate-ccw" loading={restoring} disabled={restoring} onPress={() => void restore()} style={styles.action} />
+					{/* On Cloud only the session's creator may restore its files. */}
+					{backend?.canChange !== false ? <Button title={restoring ? "Restoring" : "Restore this version"} icon={{ ios: "arrow.counterclockwise", android: "restore" }} loading={restoring} disabled={restoring} onPress={() => void restore()} style={styles.action} /> : null}
 				</View>
 			</View>
 		</View>
@@ -134,7 +139,7 @@ function ArtifactVersionContent() {
  * artifact folder as for the live page (they are today's files, not the
  * version's). If inlining fails, the page shows without them.
  */
-function VersionPage({ config, sessionId, path, version }: { config: ServerConfig; sessionId: string; path: string; version: ArtifactVersion }) {
+function VersionPage({ backend, sessionId, path, version }: { backend: ArtifactsBackend; sessionId: string; path: string; version: ArtifactVersion }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const theme = useRenderTheme();
@@ -142,11 +147,11 @@ function VersionPage({ config, sessionId, path, version }: { config: ServerConfi
 	const [inlined, setInlined] = useState<{ from: string; html: string }>();
 	useEffect(() => {
 		let live = true;
-		inlineArtifactPage(themed, path, artifactAssetLoader(config, sessionId), sessionId)
+		inlineArtifactPage(themed, path, backend.assetLoader(sessionId), sessionId)
 			.then((result) => { if (live) setInlined({ from: themed, html: result.html }); })
 			.catch(() => { if (live) setInlined({ from: themed, html: themed }); });
 		return () => { live = false; };
-	}, [config, path, sessionId, themed]);
+	}, [backend, path, sessionId, themed]);
 	const html = inlined?.from === themed ? inlined.html : undefined;
 	if (!html) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
