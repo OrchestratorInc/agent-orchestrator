@@ -6391,6 +6391,25 @@ func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 	}
 }
 
+// The Copilot directive sends new tasks to new workers, like the orchestrator
+// system prompt, but still honours a user message that names a worker.
+func TestCopilotOrchestratorMessage_NewTaskNewWorkerUnlessNamed(t *testing.T) {
+	directive := copilotOrchestratorMessage("demo", "Give the follow-up to worker demo-3")
+	for _, want := range []string{
+		"If a worker already owns this task or its PR, use ao send",
+		"Give any new task to a new worker",
+		"unless the user message asks for a specific worker; then use ao send to give the task to that worker",
+		"Give the follow-up to worker demo-3",
+	} {
+		if !strings.Contains(directive, want) {
+			t.Fatalf("copilot directive missing %q:\n%s", want, directive)
+		}
+	}
+	if strings.Contains(directive, "If a suitable worker already exists") {
+		t.Fatalf("copilot directive still tells the orchestrator to reuse workers for new tasks:\n%s", directive)
+	}
+}
+
 func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
