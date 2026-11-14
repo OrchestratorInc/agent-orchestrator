@@ -177,16 +177,18 @@ describe("CloudHarnessLoginPanel", () => {
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
 	});
 
-	it("saves a login as another account without changing local sessions' login", async () => {
+	it("saves a login as another account, leaving the local login to the main process", async () => {
 		bridgeMocks.connectProviderAuth.mockResolvedValue(undefined);
 		const user = userEvent.setup();
-		const { onClose } = renderPanel("claude-code", { id: "new", isDefault: false });
+		const { onClose } = renderPanel("claude-code", { id: "new" });
 		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
 
+		// The main process keeps it for local sessions only if the control plane
+		// saved it as the default account.
 		expect(bridgeMocks.connectProviderAuth).toHaveBeenCalledWith({
 			baseUrl: "https://cloud.example.test",
 			provider: "claude-code",
-			persistLocalClaudeToken: false,
+			persistLocalClaudeToken: true,
 			account: "new",
 		});
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -196,12 +198,12 @@ describe("CloudHarnessLoginPanel", () => {
 		cloudMocks.addAgentAccount.mockResolvedValue({ agentAccount: { validationState: "valid" } });
 		cloudMocks.replaceAgentAccountCredential.mockResolvedValue({ agentAccount: { validationState: "invalid" } });
 		const user = userEvent.setup();
-		const { onClose } = renderPanel("cursor", { id: "new", isDefault: true });
+		const { onClose } = renderPanel("cursor", { id: "new" });
 		await user.type(screen.getByPlaceholderText("Paste your Cursor API key"), "cursor-key{Enter}");
 		expect(cloudMocks.addAgentAccount).toHaveBeenCalledWith({ agent: "cursor", credentialType: "api_key", secret: "cursor-key" });
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
 
-		renderPanel("cursor", { id: "account-2", isDefault: false });
+		renderPanel("cursor", { id: "account-2" });
 		await user.type(screen.getAllByPlaceholderText("Paste your Cursor API key").at(-1) as HTMLElement, "other-key{Enter}");
 		expect(cloudMocks.replaceAgentAccountCredential).toHaveBeenCalledWith("account-2", { credentialType: "api_key", secret: "other-key" });
 		expect(await screen.findByRole("alert")).toHaveTextContent("state: invalid");

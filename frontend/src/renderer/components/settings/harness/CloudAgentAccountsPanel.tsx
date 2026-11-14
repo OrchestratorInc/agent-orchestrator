@@ -36,7 +36,7 @@ export function CloudAgentAccountsPanel({ agent, addFirst = false }: { agent: Cl
 		}
 	};
 	const loginPanel = (id: string) => login === id
-		? <div className="px-3 py-2.5"><CloudHarnessLoginPanel agent={agent} account={{ id, isDefault: id === "new" ? rows.length === 0 : rows.some((row) => row.id === id && row.isDefault) }} onClose={() => setLogin(null)} /></div>
+		? <div className="px-3 py-2.5"><CloudHarnessLoginPanel agent={agent} account={{ id }} onClose={() => setLogin(null)} /></div>
 		: null;
 
 	return <>

@@ -59,7 +59,7 @@ const CLOUD_LOGIN_METHODS: Record<CloudHarness, readonly LoginMethod[]> = {
 
 /** Where a login goes when the harness can hold several accounts: "new" saves
  * it as another account, an account id signs that account in again. */
-export type CloudHarnessLoginAccount = { id: "new" | string; isDefault: boolean };
+export type CloudHarnessLoginAccount = { id: "new" | string };
 
 // Logs one harness in for cloud sessions, expanded inline under its row on the
 // Harness settings page (the only place cloud agent logins are made). Every
@@ -150,11 +150,12 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 			// One login for local and cloud: the credential becomes the caller's
 			// personal cloud connection and, for Claude Code, is also persisted
 			// locally so local sessions use the same login. Only the default
-			// account's: another account must not change what local sessions use.
+			// account's (the main process reads which account the control plane
+			// saved it as): another account must not change what local sessions use.
 			await aoBridge.cloud.connectProviderAuth({
 				baseUrl,
 				provider: agent,
-				persistLocalClaudeToken: agent === "claude-code" && (!account || account.isDefault),
+				persistLocalClaudeToken: agent === "claude-code",
 				...(account ? { account: account.id } : {}),
 			});
 			await finish();

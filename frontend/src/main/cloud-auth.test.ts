@@ -399,6 +399,33 @@ describe("native WorkOS authentication", () => {
       await expect(connect()).rejects.toThrow("fetch failed");
       await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
+
+    // Local sessions use the default account's login: an account login is
+    // kept locally only when the control plane saved it as the default.
+    const connectAccount = async (account: string) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "claude-code", persistLocalClaudeToken: true, account });
+    };
+
+    it("keeps an added account's token only when the control plane made it the default", async () => {
+      const answer = (isDefault: boolean) => new Response(JSON.stringify({ agentAccount: { id: "a", isDefault } }), { status: 201 });
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(answer(false));
+      await connectAccount("new");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(answer(true));
+      await connectAccount("new");
+      await expect(readFile(tokenFile(), "utf8")).resolves.toBe("sk-ant-oat01-test-token");
+    });
+
+    it("keeps a signed-in-again account's token only when it is the default", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(JSON.stringify({ agentAccount: { id: "a", isDefault: false } }), { status: 200 }));
+      await connectAccount("33333333-3333-4333-8333-333333333333");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   describe("Cloud agent accounts", () => {

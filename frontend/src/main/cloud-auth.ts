@@ -759,6 +759,17 @@ async function controlPlaneRefusal(response: Response): Promise<string | undefin
   }
 }
 
+// Whether the control plane saved an account login as its harness's default
+// account, from its answer ({ agentAccount: { isDefault } }).
+async function savedAsDefaultAccount(response: Response): Promise<boolean> {
+  try {
+    const answer = (await response.json()) as { agentAccount?: { isDefault?: unknown } };
+    return answer.agentAccount?.isDefault === true;
+  } catch {
+    return false;
+  }
+}
+
 export function installCloudIPC(
   getDataDir: () => string,
   notifyRenderers: (session: CloudAccount | null) => void,
@@ -866,7 +877,11 @@ export function installCloudIPC(
     // sessions, only once the cloud copy is saved: a failed cloud save must not
     // leave a local login behind. The daemon's claudecode adapter injects it only
     // when no native login is present, so it never shadows an existing login.
-    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token") {
+    // Of a harness's several accounts only the default's: the control plane
+    // says which account the login became (an added one is the default when it
+    // is the first, or when the default stopped working).
+    if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token" &&
+      (account === undefined || await savedAsDefaultAccount(response))) {
       await persistLocalClaudeOAuthToken(dataDir, credential.secret);
     }
     return undefined;
