@@ -114,6 +114,8 @@ vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer"
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));
 vi.mock("./ChatMarkdown", async () => ({ ChatLinkProvider: await host("ChatLinkProvider") }));
 vi.mock("./ChatTimeline", async () => ({ ChatTimeline: await host("ChatTimeline") }));
+// The transcript's one-frame deferral is not under test here.
+vi.mock("../useAfterPush", () => ({ useAfterPush: () => true }));
 vi.mock("./McpServerNotice", async () => ({ McpServerNotice: await host("McpServerNotice") }));
 vi.mock("./ProviderSwitchMarker", async () => ({ ProviderSwitchLine: await host("ProviderSwitchLine") }));
 vi.mock("./useChatKeyboard", () => ({

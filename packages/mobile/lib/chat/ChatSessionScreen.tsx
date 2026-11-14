@@ -33,6 +33,7 @@ import { ChatComposer } from "./ChatComposer";
 import { useComposerSnapshot } from "./composerSnapshot";
 import { useKeepUnchanged } from "../keepUnchanged";
 import { useStableFunctionProps } from "../useStableFunctionProps";
+import { useAfterPush } from "../useAfterPush";
 import { KeyboardFollower } from "./KeyboardFollower";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
@@ -491,6 +492,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The composer's view of the conversation: unchanged while a reply streams,
 	// so the composer does not re-render with every word (see composerSnapshot).
 	const composerSnapshot = useComposerSnapshot(conversation.snapshot, startupView?.openingTurnId);
+	// The transcript is drawn a frame after the page: rendered with it, it held
+	// the push back by its whole first render (see useAfterPush).
+	const pushed = useAfterPush();
 	const composerChanges = useMemo(
 		() => changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined,
 		[changeSummary, filesNavigation.openChanges],
@@ -878,7 +882,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<TurnArtifactsContext.Provider value={turnArtifacts}>
-				<ChatTimeline
+				{pushed ? <ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
 					onLoadOlder={conversation.loadOlder}
@@ -899,7 +903,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					topInset={bannersHeight}
 					bottomInset={composerHeight}
 					jumpHidden={composerOpen}
-				/>
+				/> : null}
 				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
