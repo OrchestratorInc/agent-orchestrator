@@ -14,6 +14,7 @@ import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
+import { discardPendingAgentModelReads } from "../hooks/useAgentModelsQuery";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 import { persistRemoteCache } from "./remote-chat-cache";
@@ -128,8 +129,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// Do not repeatedly cancel a slow fetch under continuous CDC traffic. A
 			// key receives at most one in-flight refresh and one queued catch-up.
 			const refreshes = new Map<string, { dirty: boolean }>();
-			const invalidate = (queryKey: QueryKey) => {
+			const invalidate = (queryKey: QueryKey, { catalogChanged = false }: { catalogChanged?: boolean } = {}) => {
 				if (disposed) return;
+				// TanStack skips a repeat invalidation while a query is still marked
+				// invalidated, and an unmounted catalog read gets no catch-up. Stop
+				// sharing those reads on every event, including coalesced ones. Only
+				// an actual catalog change restarts reads already awaiting them:
+				// remote polling repeats faster than a slow read can finish.
+				discardPendingAgentModelReads(queryKey, { reread: catalogChanged });
 				const key = JSON.stringify(queryKey);
 				const running = refreshes.get(key);
 				if (running) {
@@ -209,10 +216,13 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 								const decoded = JSON.parse(String((event as MessageEvent).data)) as {
 									type?: unknown;
 									sessionId?: unknown;
-									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown };
+									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown; kind?: unknown; agentId?: unknown };
 								};
 								const payload = typeof decoded.payload === "object" && decoded.payload !== null ? decoded.payload : undefined;
 								const sessionId = typeof decoded.sessionId === "string" && decoded.sessionId ? decoded.sessionId : undefined;
+								if (payload?.kind === "model_catalog" && typeof payload.agentId === "string") {
+									discardPendingAgentModelReads(["agent-models", hostId, payload.agentId], { reread: true });
+								}
 								if (typeof payload?.reviewId === "string") {
 									invalidate(["reviewer-conversation", hostId, payload.reviewId]);
 									conversationOnly = typeof payload.conversationId === "string";
@@ -325,7 +335,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// Catalogs are device-wide: pickers key them by agent, not by the
 					// project the event names, so refresh every view of this agent
 					// (pickers and Settings) together.
-					invalidate(["agent-models", scope.agentId]);
+					invalidate(["agent-models", scope.agentId], { catalogChanged: true });
 				}
 				pendingModelCatalogScopes.clear();
 			};
