@@ -67,7 +67,14 @@ export async function reservePendingSend(key: string, candidate: PendingSendReco
 		}
 		return existing;
 	}
-	await AsyncStorage.setItem(key, JSON.stringify(candidate));
+	// The record lets a send cut short by the app closing be retried under the
+	// same id after it reopens. A phone whose storage is full or failing cannot
+	// keep it, and that must not stop the message: it still goes, and this
+	// session's retry (which keeps the send in memory) still works. Only the
+	// retry after a relaunch is lost.
+	try {
+		await AsyncStorage.setItem(key, JSON.stringify(candidate));
+	} catch { /* sent without the relaunch record */ }
 	return candidate;
 }
 

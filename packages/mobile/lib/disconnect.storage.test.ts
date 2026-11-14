@@ -6,6 +6,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => plain.get(key) ?? null,
 	setItem: vi.fn(async (key: string, value: string) => void plain.set(key, value)),
 	removeItem: async (key: string) => void plain.delete(key),
+	multiRemove: async (keys: string[]) => { for (const key of keys) plain.delete(key); },
+	getAllKeys: async () => [...plain.keys()],
 } }));
 vi.mock("expo-secure-store", () => ({
 	getItemAsync: async (key: string) => secure.get(key) ?? null,
@@ -22,6 +24,7 @@ import { rememberedTurnOptions, rememberTurnOptions } from "./chat/lastTurnOptio
 import { loadConfig, saveConfig } from "./config";
 import { activeHost, loadHosts, migrateLegacyConfig, persistResolvedConfig, saveHost } from "./hosts";
 import { resolveActiveConfig } from "./resolveConfig";
+import { createConversationSaver, loadSavedConversation } from "./chat/savedConversations";
 
 const host = { id: "h_one", name: "One", platform: "darwin", endpoints: [{ kind: "lan" as const, host: "host-one", port: 3011, secure: false }], token: "secret", lastConnected: 1, accountUserId: "user-a" };
 beforeEach(() => { plain.clear(); secure.clear(); });
@@ -88,4 +91,20 @@ it("drops remembered turn-setting catalogs when a machine is forgotten", async (
 	rememberTurnOptions("chat-on-one", catalog);
 	await forgetServer(host);
 	expect(rememberedTurnOptions("chat-on-one")).toBeUndefined();
+});
+
+it("removes a forgotten machine's chats saved on the phone and keeps another machine's", async () => {
+	await saveHost(host);
+	const saver = createConversationSaver();
+	const page = { sessionId: "s", items: [], turns: [] } as unknown as import("./chat/snapshot").ConversationPage;
+	saver.schedule("host.h_one/s", page);
+	saver.schedule("host.h_other/s", page);
+	await saver.flush();
+	expect(await loadSavedConversation("host.h_one/s")).not.toBeNull();
+
+	await forgetPairedHost(host, { ignoreAccount: false });
+
+	expect(await loadSavedConversation("host.h_one/s")).toBeNull();
+	expect(await loadSavedConversation("host.h_other/s")).not.toBeNull();
+	expect([...plain.keys()].filter((key) => key.startsWith("ao.chat.saved.v1.host.h_one"))).toEqual([]);
 });

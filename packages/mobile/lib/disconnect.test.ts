@@ -65,6 +65,11 @@ vi.mock("./chat/eventCursor", () => ({
 		calls.push(`clearEventCursor:${host.id}`);
 	}),
 }));
+vi.mock("./chat/savedConversations", () => ({
+	forgetSavedConversations: vi.fn(async (host: typeof active | null) => {
+		calls.push(`forgetSavedConversations:${host?.id ?? "all"}`);
+	}),
+}));
 vi.mock("./onboardingStore", () => ({
 	clearOnboardingSkipped: vi.fn(async () => {
 		calls.push("clearOnboardingSkipped");
@@ -89,6 +94,7 @@ describe("forgetPairedHost", () => {
 			"unpairFromServer",
 			"removeHost:h_other",
 			"clearEventCursor:h_other",
+			"forgetSavedConversations:h_other",
 		]);
 		expect(calls).not.toContain("clearConfig");
 		expect(calls).not.toContain("clearOnboardingSkipped");
@@ -105,7 +111,7 @@ describe("forgetPairedHost", () => {
 	it("hides a manually paired machine from the signed-in account before removing it", async () => {
 		accountId = "user-a";
 		await forgetPairedHost(other);
-		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other"]);
+		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other", "forgetSavedConversations:h_other"]);
 	});
 
 	it("preserves pairing when hiding it from account sync cannot be persisted", async () => {
@@ -118,7 +124,7 @@ describe("forgetPairedHost", () => {
 	it("unpairs sign-out removals without hiding them on the next sign-in", async () => {
 		accountId = "user-a";
 		await forgetPairedHost(other, { ignoreAccount: false });
-		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other"]);
+		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other", "forgetSavedConversations:h_other"]);
 	});
 });
 
@@ -140,6 +146,7 @@ describe("forgetServer", () => {
 			"unpairFromServer",
 			"removeHost:h_active",
 			"clearEventCursor:h_active",
+			"forgetSavedConversations:h_active",
 			"clearConfig",
 			"clearOnboardingSkipped",
 		]);
@@ -183,6 +190,8 @@ describe("forgetServer", () => {
 		expect(calls).toContain("unpairFromServer");
 		expect(calls).toContain("clearConfig");
 		expect(calls).toContain("clearOnboardingSkipped");
+		// With the machine unknown, no machine's chats are left saved on the phone.
+		expect(calls).toContain("forgetSavedConversations:all");
 	});
 });
 
