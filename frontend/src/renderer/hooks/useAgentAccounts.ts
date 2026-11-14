@@ -53,6 +53,7 @@ export function useAgentAccounts(enabled = true, hostId?: HostId) {
 
 const freshReadEvery = 60_000;
 let lastFreshRead = Number.NEGATIVE_INFINITY;
+let freshReadAttempt = 0;
 // Counts account changes, such as a removal or a new default, so a slow fresh
 // read started before one doesn't put the older list back.
 let accountWrites = 0;
@@ -67,14 +68,18 @@ export function useFreshAgentAccountsRead() {
 		const now = Date.now();
 		if (now - lastFreshRead < freshReadEvery) return;
 		lastFreshRead = now;
+		const attempt = ++freshReadAttempt;
 		const writes = accountWrites;
+		// A read that outlived the throttle was overtaken by a newer one; only the latest may write or report.
 		void fetchAgentAccounts(true).then(async (accounts) => {
+			if (attempt !== freshReadAttempt) return;
 			setError(null);
 			// A poll still in flight carries the older cached reading; drop it so it can't land after this one.
 			await queryClient.cancelQueries({ queryKey: agentAccountsQueryKey, exact: true }, { revert: false });
 			if (writes === accountWrites) queryClient.setQueryData(agentAccountsQueryKey, accounts);
 			else void queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey, exact: true });
 		}, (cause: unknown) => {
+			if (attempt !== freshReadAttempt) return;
 			lastFreshRead = Number.NEGATIVE_INFINITY;
 			setError(cause instanceof Error ? cause : new Error(String(cause)));
 		});
@@ -85,6 +90,7 @@ export function useFreshAgentAccountsRead() {
 /** Lets tests start each case without a recent fresh read. */
 export function resetFreshAgentAccountsReadForTests() {
 	lastFreshRead = Number.NEGATIVE_INFINITY;
+	freshReadAttempt = 0;
 	accountWrites = 0;
 }
 

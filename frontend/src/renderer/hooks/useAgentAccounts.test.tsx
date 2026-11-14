@@ -79,6 +79,22 @@ describe("useFreshAgentAccountsRead", () => {
 		expect(client.getQueryData(agentAccountsQueryKey)).toEqual([{ id: "acct-2", default: true }]);
 	});
 
+	it("ignores a read overtaken by a newer one", async () => {
+		let rejectFirst: ((reason: unknown) => void) | undefined;
+		getMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }));
+		getMock.mockResolvedValueOnce({ data: { accounts: [{ id: "newer" }] } });
+		const { client, result } = renderRead();
+		act(() => result.current.fresh.read());
+		vi.mocked(Date.now).mockReturnValue(1_060_000);
+		act(() => result.current.fresh.read());
+		await waitFor(() => expect(client.getQueryData(agentAccountsQueryKey)).toEqual([{ id: "newer" }]));
+		await act(async () => { rejectFirst?.(new Error("timed out")); });
+		expect(result.current.fresh.error).toBeNull();
+		// The throttle still counts the newer read, so no extra read starts.
+		act(() => result.current.fresh.read());
+		expect(getMock).toHaveBeenCalledTimes(2);
+	});
+
 	it("reports a failed read and tries again on the next call", async () => {
 		getMock.mockRejectedValueOnce(new Error("daemon down"));
 		const { client, result } = renderRead();
