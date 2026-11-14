@@ -16,11 +16,8 @@ vi.mock("../lib/host-clients", async (importOriginal) => ({
 	clientForHost: () => ({ GET: remote.get, POST: remote.post }),
 }));
 
-const { trackerIntakeGate } = vi.hoisted(() => ({ trackerIntakeGate: { enabled: true } }));
-
-vi.mock("../hooks/useSettings", () => ({
-	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
-}));
+// The create flow reads the daemon's intake gate and passes it in.
+const trackerIntakeGate = { enabled: true };
 
 beforeEach(() => {
 	trackerIntakeGate.enabled = true;
@@ -46,6 +43,7 @@ function renderSheet(
 			<TooltipProvider>
 				<CreateProjectAgentSheet
 					hostId={options.hostId}
+					intakeVisible={trackerIntakeGate.enabled}
 					isCreating={false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
@@ -218,8 +216,10 @@ describe("CreateProjectAgentSheet", () => {
 		const role = variant === "stacked" ? "option" : "menuitem";
 		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
-		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
-		expect(screen.getByRole(role, { name: /OpenCode.*Auth unknown/ })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole(role, { name: "fx" })).toBeInTheDocument();
+		expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+		expect(screen.getByRole(role, { name: "OpenCode" })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByText("Auth unknown")).not.toBeInTheDocument();
 		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
 		await userEvent.keyboard("{End}{Enter}");
 		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));
@@ -417,5 +417,75 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
 		expect(screen.queryByText("Repository")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Reads credentials from/)).not.toBeInTheDocument();
+	});
+});
+
+// Developer Mode: the project starts on the most preferred ready agent, so the
+// sheet asks for no agents and only appears for intake, setup, or an error.
+describe("CreateProjectAgentSheet without agent pickers", () => {
+	function renderAutomaticSheet(
+		options: { intakeVisible?: boolean; error?: string; repositorySetupNeeded?: boolean; settingsLoading?: boolean } = {},
+	) {
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TooltipProvider>
+					<CreateProjectAgentSheet
+						chooseAgents={false}
+						error={options.error}
+						intakeVisible={options.intakeVisible ?? true}
+						isCreating={false}
+						kind="single_repo"
+						onOpenChange={() => undefined}
+						onSubmit={onSubmit}
+						open={true}
+						path="/repo/new-project"
+						repositorySetupNeeded={options.repositorySetupNeeded}
+						settingsLoading={options.settingsLoading}
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		return onSubmit;
+	}
+
+	it("asks for no agents", () => {
+		renderAutomaticSheet();
+
+		expect(screen.queryByLabelText("Worker agent")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Orchestrator agent")).not.toBeInTheDocument();
+	});
+
+	it("holds Create until settings say whether intake applies", () => {
+		renderAutomaticSheet({ intakeVisible: false, settingsLoading: true });
+
+		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
+	});
+
+	it("shows a failed create and retries with the primary button", async () => {
+		const onSubmit = renderAutomaticSheet({ intakeVisible: false, error: "Setup failed: disk full" });
+
+		expect(screen.getByRole("alert")).toHaveTextContent("disk full");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ trackerIntake: undefined }));
+	});
+
+	it("shows the repository setup notice", () => {
+		renderAutomaticSheet({ intakeVisible: false, repositorySetupNeeded: true });
+
+		expect(screen.getByRole("dialog")).toHaveTextContent(/git/i);
+	});
+
+	it("submits only the intake payload", async () => {
+		const onSubmit = renderAutomaticSheet();
+
+		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
+		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
+		await userEvent.type(screen.getByLabelText("Assignee"), "octocat");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({
+			trackerIntake: { enabled: true, assignee: "octocat" },
+		}));
 	});
 });

@@ -5,11 +5,13 @@ import {
 	filterWorkersByEnvironmentAndProject,
 	filterWorkersByProject,
 	spawnProjectParam,
+	workerEnvironmentLabel,
 	workerEnvironmentOptions,
 	workerProjectForEnvironment,
 	workerProjectLabel,
 	workerProjectOptions,
-	workerSearchPresentation,
+	showsEnvironmentFilter,
+	sortWorkerEnvironments,
 } from "./worker-controls";
 import { hostedProjectKey } from "./hostedRows";
 
@@ -62,7 +64,7 @@ describe("environment worker filtering", () => {
 			{ id: "mac", name: "Studio Mac" },
 			{ id: "dev", name: "Dev" },
 		])).toEqual([
-			{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+			{ id: ALL_WORKER_ENVIRONMENTS, label: "All machines" },
 			{ id: "mac", label: "Studio Mac" },
 			{ id: "dev", label: "Dev" },
 		]);
@@ -79,21 +81,19 @@ describe("environment worker filtering", () => {
 	});
 });
 
-describe("workerSearchPresentation", () => {
-	it("stays expanded while a non-empty query is visible", () => {
-		expect(workerSearchPresentation(false, "compiler")).toBe("expanded");
-	});
-
-	it("collapses only when search is closed and empty", () => {
-		expect(workerSearchPresentation(false, "")).toBe("collapsed");
-		expect(workerSearchPresentation(true, "")).toBe("expanded");
-	});
-});
-
 describe("workerProjectLabel", () => {
 	it("uses a stable fallback if a selected project was removed", () => {
 		expect(workerProjectLabel([{ id: "alpha", name: "Alpha" }], "missing")).toBe("All projects");
 		expect(workerProjectLabel([{ id: "alpha", name: "Alpha" }], "alpha")).toBe("Alpha");
+	});
+});
+
+describe("workerEnvironmentLabel", () => {
+	it("names the selected machine, and falls back to All environments once it is gone", () => {
+		const environments = [{ id: "mac", name: "Mac" }];
+		expect(workerEnvironmentLabel(environments, "mac")).toBe("Mac");
+		expect(workerEnvironmentLabel(environments, ALL_WORKER_ENVIRONMENTS)).toBe("All machines");
+		expect(workerEnvironmentLabel(environments, "missing")).toBe("All machines");
 	});
 });
 
@@ -119,5 +119,25 @@ describe("spawnProjectParam", () => {
 
 	it("leaves project selection open when Workers shows every project", () => {
 		expect(spawnProjectParam(ALL_WORKER_PROJECTS)).toBeUndefined();
+	});
+});
+
+describe("sortWorkerEnvironments", () => {
+	it("orders machines by name regardless of case, then by id", () => {
+		const sorted = sortWorkerEnvironments([
+			{ id: "h4", name: "Work laptop" },
+			{ id: "h2", name: "macBook Pro" },
+			{ id: "h3", name: "Linux box" },
+			{ id: "h1", name: "Linux box" },
+		]);
+		expect(sorted.map((environment) => environment.id)).toEqual(["h1", "h3", "h2", "h4"]);
+	});
+});
+
+describe("showsEnvironmentFilter", () => {
+	it("needs at least two machines", () => {
+		expect(showsEnvironmentFilter([])).toBe(false);
+		expect(showsEnvironmentFilter([{ id: "h1", name: "Studio" }])).toBe(false);
+		expect(showsEnvironmentFilter([{ id: "h1", name: "Studio" }, { id: "h2", name: "Laptop" }])).toBe(true);
 	});
 });

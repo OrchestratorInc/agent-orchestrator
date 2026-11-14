@@ -10,9 +10,10 @@ import { apiClient } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { CreateProjectAgentSheet } from "./CreateProjectAgentSheet";
-import { NewTaskDialog } from "./NewTaskDialog";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { TooltipProvider } from "./ui/tooltip";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 // Routing and daemon requests are external boundaries; every modal, settings
 // form, selector, and recovery action in these tests is the real component.
@@ -27,18 +28,17 @@ const project = {
 };
 let catalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] };
 
-function RecoveryDialogs({ origin }: { origin?: "create-project" | "new-task" }) {
+function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
-			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
-			{origin === "new-task" && <NewTaskDialog open={open} onOpenChange={setOpen} projectId="proj-1" onCreated={() => undefined} />}
+			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} intakeVisible isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
 			<SettingsDialog />
 		</>
 	);
 }
 
-function renderDialogs(origin?: "create-project" | "new-task") {
+function renderDialogs(origin?: "create-project") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
 	client.setQueryData(agentReadinessQueryKey, catalog);
 	client.setQueryData(workspaceQueryKey, []);
@@ -67,13 +67,14 @@ beforeEach(() => {
 		if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
 		if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal" }] } } as never;
+		if (path === "/api/v1/agents/accounts") return { data: { accounts: [] } } as never;
+		if (path === "/api/v1/agents/accounts/usage") return { data: { usage: [] } } as never;
 		if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "codex", models: [], selectionMode: "text", allowCustom: true, source: "manual", fetchedAt: "2026-09-19T00:00:00Z", stale: false } } as never;
 		if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: [], cloudEnabled: false, localEnabled: true, trackerIntakeEnabled: true } } as never;
 		throw new Error(`Unexpected GET ${path}`);
 	});
 	vi.spyOn(apiClient, "POST").mockImplementation(async (path) => {
 		if (path === "/api/v1/agents/readiness/ensure") return { data: catalog } as never;
-		if (path === "/api/v1/agents/codex/accounts/ensure") return { data: { accountRevision: 0, accounts: [], capabilities: {}, deviceReconciliation: { status: "verified", activeAccountVerified: false, reasonCode: "verified", retryable: false } } } as never;
 		throw new Error(`Unexpected POST ${path}`);
 	});
 	vi.spyOn(apiClient, "PUT").mockResolvedValue({ data: { project } } as never);
@@ -129,19 +130,20 @@ describe("Settings recovery modal integration", () => {
 	});
 
 	it("leaves focus on the targeted Harness action when readiness is already cached", async () => {
-		requireCodexLogin();
+		// Cursor has no subscription accounts, so Login is its Account tab's primary action.
+		catalog = { agents: [...catalog.agents, agentReadiness("cursor", "Cursor", { authentication: "unauthorized" })] };
 		const client = renderDialogs();
 		act(() => {
 			client.setQueryData(agentReadinessQueryKey, catalog);
 			client.setQueryData(["agent-installers"], []);
 			client.setQueryData(["agent-install-jobs"], []);
 			client.setQueryData(agentAuthPlansQueryKey, [
-				{ agentId: "codex", action: "login", available: true, launchMode: "terminal" },
+				{ agentId: "cursor", action: "login", available: true, launchMode: "terminal" },
 			]);
-			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex" });
+			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "cursor" });
 		});
 
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = (await screen.findByText("Cursor")).closest('[data-agent="cursor"]') as HTMLElement;
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await waitFor(() => expect(document.activeElement).toBe(login));
 	});
@@ -187,19 +189,6 @@ describe("Settings recovery modal integration", () => {
 
 		expect(await screen.findByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Codex");
 		expect(screen.getByLabelText("Assignee")).toHaveValue("octocat");
-		expect(useUiStore.getState().settingsModal).toBeNull();
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
-	});
-
-	it("Escape dismisses recovery settings and brings the new-task dialog back", async () => {
-		requireCodexLogin();
-		renderDialogs("new-task");
-		await openAgentManagement("Agent");
-		await screen.findByRole("tab", { name: "Account" });
-		await userEvent.keyboard("{Escape}");
-
-		expect(await screen.findByRole("textbox", { name: "Task" })).toBeInTheDocument();
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());

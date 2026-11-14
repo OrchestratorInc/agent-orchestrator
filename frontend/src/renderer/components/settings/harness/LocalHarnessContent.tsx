@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "@/components/app-icons";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
-import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
+import { agentAccountProviderFor, agentAccountsQueryKeyFor, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
+import { CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import {
 	agentReadinessQueryKeyForHost,
 	cacheAgentReadiness,
@@ -33,10 +34,13 @@ import {
 	type HarnessInUse,
 	type InstallJob,
 } from "../../../hooks/useHarnessUpdates";
+import { useInvalidateProviderKeys, useProviderKeys } from "../../../hooks/useProviderKeys";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hooks/useShellTerminals";
 import { AgentCheckError } from "../../../lib/agent-check-error";
+import { agentLoginKey, isAgentLoginPending, pendingAgentLogins, subscribeAgentLogins } from "../../../lib/agent-login-lifecycle";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../../lib/agent-options";
 import { apiErrorMessage } from "../../../lib/api-client";
+import { captureRendererEvent } from "../../../lib/telemetry";
 import { aoBridge } from "../../../lib/bridge";
 import { clientForSessionHost, labelForHost } from "../../../lib/host-clients";
 import { LOCAL_HOST } from "../../../lib/hosts";
@@ -45,15 +49,21 @@ import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { Button } from "../../ui/button";
+import { Pressable } from "../../ui/pressable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
+import { cloudNeedsAttention, type HarnessCloudState } from "./HarnessCloudLine";
+import { HarnessLoginPanel } from "./HarnessLoginPanel";
+import { HarnessSavedKeys } from "./HarnessSavedKeys";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
+import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
+import { SessionImportPanel } from "./SessionImportPanel";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -61,6 +71,11 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // a few times before the panel reports it did not take.
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
+
+function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
+	if (workflow.action === "logout") return status === "unauthorized";
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "claude-code"));
+}
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
 type AgentAuthProbeResult = Awaited<ReturnType<typeof probeAgentAuth>>;
@@ -104,6 +119,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [expandedDiagnostics, setExpandedDiagnostics] = useState<Partial<Record<AgentId, boolean>>>({});
 	const [copiedAgent, setCopiedAgent] = useState<AgentId | null>(null);
 	const [authWorkflow, setAuthWorkflow] = useState<AuthTerminalWorkflow | null>(null);
+	const [uiLoginAgent, setUiLoginAgent] = useState<AgentId | null>(null);
+	const pendingUILogins = useSyncExternalStore(subscribeAgentLogins, pendingAgentLogins);
+	const uiLoginAgentRef = useRef<AgentId | null>(null);
+	const closeUILogin = () => { uiLoginAgentRef.current = null; setUiLoginAgent(null); };
 	const authWorkflowRef = useRef<AuthTerminalWorkflow | null>(null);
 	const authStartPendingRef = useRef(false);
 	const mountedRef = useRef(true);
@@ -132,12 +151,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// Opening a page refreshes its models once readiness says it is installed.
 	const modelsRefreshPending = useRef<AgentId | null>(null);
 	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
+		if (uiLoginAgentRef.current && (uiLoginAgentRef.current !== agentId || tab !== "account")) closeUILogin();
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
 		modelsRefreshPending.current = agentId;
 	};
 	const closeDetail = () => {
+		closeUILogin();
 		selectedAgentRef.current = null;
 		setSelectedAgentId(null);
 	};
@@ -152,12 +173,43 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// The API has no durable update history. Only record verified updates we
 	// actually observed here; a restored job/check timestamp is not an update date.
 	const [lastUpdatedAt, setLastUpdatedAt] = useState<Partial<Record<AgentId, string>>>({});
+	// AO Cloud runs some of these harnesses too: its side is a second line of
+	// the same harness's row, and one Update covers both.
+	const cloud = useCloudHarnessVersions();
+	const [cloudPending, setCloudPending] = useState<ReadonlySet<AgentId>>(new Set());
+	const cloudPendingRef = useRef(new Set<AgentId>());
+	const [cloudErrors, setCloudErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const cloudState = (agentId: AgentId): HarnessCloudState | undefined => !cloud.expected || !CLOUD_VERSIONED_HARNESSES.has(agentId) ? undefined : {
+		details: describeCloudHarness(cloud.data, agentId),
+		loading: cloud.isPending,
+		pending: cloudPending.has(agentId),
+		error: cloudErrors[agentId],
+	};
+	const runCloudChange = async (agentId: AgentId, change: (agentId: AgentId) => Promise<{ error?: string }>) => {
+		if (cloudPendingRef.current.has(agentId)) return;
+		cloudPendingRef.current.add(agentId);
+		setCloudPending(new Set(cloudPendingRef.current));
+		setCloudErrors((current) => ({ ...current, [agentId]: undefined }));
+		try {
+			const result = await change(agentId);
+			if (mountedRef.current && result.error) setCloudErrors((current) => ({ ...current, [agentId]: result.error }));
+		} finally {
+			cloudPendingRef.current.delete(agentId);
+			if (mountedRef.current) setCloudPending(new Set(cloudPendingRef.current));
+		}
+	};
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
 	const agentAuthPlans = useMemo(() => new Map(authPlans.data?.map((plan) => [plan.agentId, plan]) ?? []), [authPlans.data]);
 	const readinessAgents = useMemo(() => new Map(agents.data?.agents.map((agent) => [agent.id, agent]) ?? []), [agents.data]);
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
+	// Saved provider keys, fetched only while a panel that offers one is open,
+	// or while a harness that is not installed is open: its saved keys can
+	// only be removed from its page.
+	const providerKeys = useProviderKeys(hostId, Boolean(uiLoginAgent && agentAuthPlans.get(uiLoginAgent)?.methods?.some((method) => method.id.startsWith("env_") || method.id === "gemini_api_key"))
+		|| Boolean(selectedAgentId && agents.data && !agents.error && !installed.has(selectedAgentId)));
+	const invalidateProviderKeys = useInvalidateProviderKeys(hostId);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
 		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
 		const options = agentModelsQueryOptions(agentId, "", hostId, true);
@@ -432,12 +484,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation): Promise<boolean> => {
 		if (isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(jobsKey)?.find((job) => job.target === agentId))
+			|| uiLoginAgentRef.current === agentId || isAgentLoginPending(agentId, hostId)
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return false;
 		if (operation === "update" && (!installed.has(agentId)
 			|| operationMethodId(agentId) !== method
 			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
+		if (operation === "install") void captureRendererEvent("ao.agents.install_clicked", { agent: agentId });
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
 		const fail = (message: string) => {
@@ -451,7 +505,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				const result = await startHarnessUpdate({
 					agentId,
 					methodId: method,
-					canStart: () => mountedRef.current,
+					canStart: () => mountedRef.current && uiLoginAgentRef.current !== agentId && !isAgentLoginPending(agentId, hostId),
 				});
 				// Sessions are not a failure to retry: show what to end.
 				if (result.inUse) {
@@ -482,6 +536,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	const requestUpdate = (agentId: AgentId) => {
 		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))
+			|| uiLoginAgentRef.current === agentId || isAgentLoginPending(agentId, hostId)
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return;
 		const methods = plans.get(agentId)?.methods ?? [];
 		const method = operationMethodId(agentId);
@@ -490,6 +545,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		const inUse = advisoryInUse(queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId)));
 		if (inUse) { setInUseSessions({ agentId, inUse }); return; }
 		void startAgentOperation(agentId, method, "update");
+	};
+
+	// The one Update a harness's row offers: AO Cloud's side starts at once
+	// (it only saves the release new Cloud sessions run), this host's as before.
+	const requestCombinedUpdate = (agentId: AgentId) => {
+		if (cloudState(agentId)?.details?.actionable) void runCloudChange(agentId, cloud.startUpdate);
+		requestUpdate(agentId);
 	};
 
 	const verifyInstall = async (agentId: AgentId) => {
@@ -522,9 +584,17 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		window.setTimeout(() => setCopiedAgent((current) => (current === agentId ? null : current)), 1_500);
 	};
 
-	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login"): Promise<boolean> => {
-		if (authWorkflowRef.current || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
+	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login", terminal = false): Promise<boolean> => {
+		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
+		const authPlan = agentAuthPlans.get(agentId);
+		// Any plan with inline methods opens the Account login panel; a plan
+		// without methods falls back to its terminal or documentation flow.
+		if (action === "login" && !terminal && authPlan?.methods?.length) {
+			uiLoginAgentRef.current = agentId;
+			setUiLoginAgent(agentId);
+			return true;
+		}
 		authStartPendingRef.current = true;
 		updateAuthState(agentId, { pending: true, error: null });
 		try {
@@ -604,14 +674,15 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
 	// Reads the accounts again, so the CLI login's row shows a sign-in that just
-	// changed, and returns whether that login is signed in.
+	// changed, and returns whether the CLI is logged in by any method, an API
+	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
-		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		const provider = agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
-		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
+		const accounts = await fetchAgentAccounts(true, hostId).catch(() => undefined);
 		if (!accounts) return undefined;
-		queryClient.setQueryData(agentAccountsQueryKey, accounts);
-		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
+		queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
+		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
@@ -620,16 +691,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		setAuthWorkflow(authWorkflowRef.current);
 		const signingIn = workflow.action !== "logout";
 		const ownRow = cliLoginOnOwnRow(workflow.agentId);
-		let cliSignedIn: boolean | undefined;
+		let cliLoggedIn: boolean | undefined;
 		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
 			if (ownRow) {
-				cliSignedIn = await refreshCliLogin(workflow.agentId);
-				return cliSignedIn === signingIn;
+				cliLoggedIn = await refreshCliLogin(workflow.agentId);
+				return cliLoggedIn === signingIn;
 			}
-			// MiMo can confirm a stored provider key locally without validating it upstream.
-			return !signingIn
-				? candidate?.agent?.authStatus === "unauthorized"
-				: candidate?.agent?.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent?.authStatus === "configured");
+			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
 		};
 		let result = await checkAuth(workflow.agentId, { fresh: true });
 		let done = await completed(result);
@@ -640,7 +708,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			done = await completed(result);
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		const signedOut = ownRow ? cliSignedIn === false : result?.agent?.authStatus === "unauthorized";
+		const signedOut = ownRow ? cliLoggedIn === false : result?.agent?.authStatus === "unauthorized";
 		if (done) {
 			if (!ownRow) void refreshCliLogin(workflow.agentId);
 			try {
@@ -685,8 +753,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
 		if (cliLoginOnOwnRow(authWorkflow.agentId)) return;
-		const expected = authWorkflow.action === "logout" ? "unauthorized" : "authorized";
-		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === expected) void closeAuth(authWorkflow);
+		if (authWorkflowSucceeded(authWorkflow, readinessAgents.get(authWorkflow.agentId)?.authentication.state)) void closeAuth(authWorkflow);
 	}, [authWorkflow, readinessAgents, closeAuth, cliLoginOnOwnRow]);
 
 	useEffect(() => {
@@ -735,7 +802,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authPlan: agentAuthPlans.get(agentId),
 		authPlansPending: authPlans.isPending,
 		authPlansFailed: authPlans.isError,
-		authState: authStates[agentId],
+		authState: { error: authStates[agentId]?.error ?? null, pending: Boolean(authStates[agentId]?.pending || uiLoginAgent === agentId || pendingUILogins.has(agentLoginKey(agentId, hostId))) },
 		authWorkflow: authWorkflow?.agentId === agentId ? authWorkflow : null,
 		updatedAt: lastUpdatedAt[agentId],
 	});
@@ -746,7 +813,48 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return <HarnessAccountTab
 			details={details}
 			hostId={hostId}
-			authWorkflowActive={Boolean(authWorkflow)}
+			cloud={cloudState(agentId)}
+			onCloudUpdate={() => void runCloudChange(agentId, cloud.startUpdate)}
+			onCloudReset={() => void runCloudChange(agentId, cloud.resetVersion)}
+			loginPanel={uiLoginAgent === agentId ? <HarnessLoginPanel
+				key={agentId}
+				agentId={agentId}
+				methods={agentAuthPlans.get(agentId)?.methods ?? []}
+				hostId={hostId}
+				providerKeys={providerKeys.data}
+				providerKeysError={providerKeys.isError ? providerKeys.error.message : undefined}
+				onRetryProviderKeys={() => void providerKeys.refetch()}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
+				onClose={closeUILogin}
+				onTerminal={async () => { closeUILogin(); await startAuth(agentId, "login", true); }}
+				onVerify={async (methodId) => {
+					if (methodId.startsWith("env_")) {
+						// A saved key proves local configuration, never provider acceptance.
+						await checkAuth(agentId, { fresh: true }).catch(() => undefined);
+						return "configured";
+					}
+					for (let attempt = 0; attempt < AUTH_VERIFY_ATTEMPTS; attempt++) {
+						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
+						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
+						const result = await checkAuth(agentId, { fresh: true });
+						const cliLoggedIn = await refreshCliLogin(agentId);
+						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
+						// A saved key, or a native sign-in whose harness can only report
+						// its own credentials as present (Gemini, Hermes, MiMo Code),
+						// counts as configured, never as verified.
+						if (agentAuthPlans.get(agentId)?.methods?.some((method) => method.id === methodId && (method.secret || method.id === "native")) && result?.agent?.authStatus === "configured") return "configured";
+					}
+					return false;
+				}}
+			/> : undefined}
+			savedKeys={!details.isInstalled && !details.installationPending ? <HarnessSavedKeys
+				key={agentId}
+				agentId={agentId}
+				hostId={hostId}
+				providerKeys={providerKeys.data}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
+			/> : undefined}
+			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
 			copied={copiedAgent === agentId}
 			diagnosticsExpanded={expandedDiagnostics[agentId] === true}
 			onToggleDiagnostics={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}
@@ -754,7 +862,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onInstall={(methodId) => void startAgentOperation(agentId, methodId, "install")}
 			onSelectMethod={(methodId) => setSelectedMethods((current) => ({ ...current, [agentId]: methodId }))}
 			onCopyCommand={(command) => void copyText(agentId, command)}
-			onUpdate={() => requestUpdate(agentId)}
+			onUpdate={() => requestCombinedUpdate(agentId)}
 			onViewSessions={(waiting) => setInUseSessions({ agentId, inUse: waiting })}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
@@ -774,6 +882,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	};
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
+	// Import reads this computer's chat files, so other hosts have no Import tab.
+	const importable = !hostId && selectedDetails !== null && IMPORTABLE_AGENTS.has(selectedDetails.agentId);
 	const detailsOpen = Boolean(selectedDetails);
 	// The list and the open page each scroll on their own, so the layout always
 	// fills the Settings body and the body itself never scrolls. Its scrolling is
@@ -804,16 +914,18 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
+							const cloudSide = cloudState(agentId);
+							const localUpdate = details.isInstalled && details.updateAvailable;
+							const cloudUpdate = Boolean(cloudSide?.details?.actionable);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
-							return <button key={agentId}
-								type="button"
+							return <Pressable key={agentId}
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
 								aria-describedby={statusId}
 								aria-current={selected ? "true" : undefined}
 								className={cn(
-									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+									"flex w-full items-center gap-3",
 									split ? "min-h-11 shrink-0 px-3" : "min-h-12 shrink-0 px-3",
 									selected
 										? (split ? "bg-(--color-bg-tertiary) font-medium" : "bg-accent font-medium")
@@ -828,17 +940,19 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
-									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
-									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
+								{/* AO Cloud's side shares it: one mark per harness, whichever places it covers. */}
+								{details.busy || cloudSide?.pending ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.busy ? details.progressLabel : t("settings.harness.updating")}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+									: localUpdate || cloudUpdate ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										strokeWidth={1.75}
-										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
+										aria-label={localUpdate && cloudUpdate ? (hostId ? t("settings.harness.cloud.updatesAvailableBoth", { host: labelForHost(hostId) ?? hostId }) : t("settings.harness.cloud.updatesAvailableBothLocal"))
+											: localUpdate ? t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })
+											: t("settings.harness.cloud.versionAvailable", { version: versionLabel(cloudSide!.details!.latestVersion!) })}
 										role="img"
 									/>
-									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
+									: details.listTone === "error" || cloudNeedsAttention(cloudSide) ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
-							</button>;
+							</Pressable>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>
@@ -851,7 +965,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						ref={detailRef}
 					>
 						{split ? null : <div className="shrink-0">
-							<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
+							<Button type="button" size="sm" variant="quiet" className="-ml-2 gap-1 px-2" onClick={closeDetail}>
 								<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
 							</Button>
 						</div>}
@@ -862,11 +976,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab === "import" && !importable ? "account" : detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+								{importable ? <TabsTrigger className={HARNESS_TAB_CLASS} value="import">{t("settings.harness.tabImport")}</TabsTrigger> : null}
 							</TabsList>
 							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
@@ -894,10 +1009,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									})()}
 								/>
 							</TabsContent>
+							{importable ? <TabsContent value="import" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
+								<SessionImportPanel harness={selectedDetails.agentId} />
+							</TabsContent> : null}
 						</Tabs>
 					</div>
 				) : null}
 			</div>
+
 			<ConfirmDialog
 				open={logoutRequest !== null}
 				title={t("settings.harness.logoutConfirmTitle", { agent: logoutRequest ? agentLabel(logoutRequest) : "" })}

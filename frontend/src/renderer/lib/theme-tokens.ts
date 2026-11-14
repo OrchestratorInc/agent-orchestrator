@@ -1,22 +1,19 @@
-import { contrastRatio, mixColor, withAlpha } from "./theme-color";
+import { mixColor, relativeLuminance, withAlpha } from "./theme-color";
 import { THEMES, type ThemeDefinition, type ThemePalette } from "./theme-palettes";
 
 type Mode = "dark" | "light";
 
-/**
- * Label color for a filled surface: white when it clears AA (the conventional
- * choice on saturated fills), otherwise whichever of white or black contrasts
- * more. Mid-tone fills like #da702c or #4493f8 get black.
- */
+/** Match the selected 22% lighter label bias, also used by button.css. */
 function textOn(fill: string): string {
-	const onWhite = contrastRatio(fill, "#ffffff");
-	return onWhite >= 4.5 || onWhite >= contrastRatio(fill, "#000000") ? "#ffffff" : "#000000";
+	const automatic = Math.sqrt(0.05 * 1.05) - 0.05;
+	const cutoff = automatic + (1 - automatic) * 0.22;
+	return relativeLuminance(fill) < cutoff ? "#ffffff" : "#000000";
 }
 
 /**
- * Resolve a palette into every color token tokens.css defines, as concrete
+ * Resolve a palette into its theme-dependent color tokens, as concrete
  * hex. Covers the shadcn base, status, links, brand mark, charts/passive text
- * and the terminal ANSI slots so no Orchestrate color leaks into a named theme.
+ * and terminal ANSI slots. Destructive colors stay shared in tokens.css.
  */
 export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, string> {
 	const dark = mode === "dark";
@@ -28,6 +25,10 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);
 	const bright = (color: string) => mixColor(color, dark ? "#ffffff" : p.text, 0.22);
 	const inReview = mixColor(p.orange, p.yellow, 0.5);
+	// Pink, as in Orchestrate: a red/purple mix stays apart from Building, Ready
+	// and In review. Palettes have no pink role, and `p.cyan` would not do: it
+	// equals blue in Dracula and Monokai and green in Rosé Pine.
+	const validating = mixColor(p.red, p.purple, 0.5);
 
 	return {
 		"--background": p.bg,
@@ -44,7 +45,6 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 		"--muted-foreground": p.muted,
 		"--accent": p.element,
 		"--accent-foreground": p.text,
-		"--destructive": p.red,
 		"--border": withAlpha(p.text, dark ? 0.09 : 0.11),
 		"--input": withAlpha(p.text, dark ? 0.06 : 0.07),
 		"--ring": p.accent,
@@ -71,7 +71,7 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 
 		"--color-status-working": p.blue,
 		"--color-status-needs-you": p.orange,
-		"--color-status-validating": p.yellow,
+		"--color-status-validating": validating,
 		"--color-status-in-review": inReview,
 		"--color-status-ready": p.green,
 		"--color-status-merged": p.purple,

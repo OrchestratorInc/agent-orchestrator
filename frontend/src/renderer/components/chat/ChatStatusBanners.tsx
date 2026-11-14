@@ -13,226 +13,103 @@
  * without displacing the conversation.
  */
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, LoaderCircle, Plug, TriangleAlert, X } from "lucide-react";
-import {
-	agentAccountName,
-	agentAccountProviderFor,
-	useAgentAccountActions,
-	useAgentAccounts,
-	useSessionAgentAccounts,
-	type AgentAccount,
-	type AgentAccountLogin,
-} from "../../hooks/useAgentAccounts";
+import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
+import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useSettings } from "../../hooks/useSettings";
-import { AgentAccountLoginDialog } from "../settings/AgentAccountsSection";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
+import { agentLabel } from "../../lib/agent-options";
+import type { AgentBlock } from "../../lib/session-import";
+import { labelForHost } from "../../lib/host-clients";
 import { cn, truncateMiddle } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
-/**
- * A current provider credential demand; dismissal affects presentation only.
- *
- * A session on a saved account offers to sign that account in again here, in its
- * own folder, and any session offers to continue on another signed-in account.
- * Both leave the failed turn for the user to retry.
- */
-export const ReauthBanner = memo(function ReauthBanner({
-	account,
-	harness,
-	sessionId,
-	reasonInTimeline = false,
-}: {
-	account: ConversationAccount;
-	harness: string;
-	sessionId: string;
-	reasonInTimeline?: boolean;
-}) {
-	const [dismissedFailure, setDismissedFailure] = useState<string>();
-	const failure = account.authFailureId ?? `${harness}:${account.reauthRequiredAt}:${account.reauthReason}`;
-	const required = account.authenticationState === "required" ||
-		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
-	if (!required || dismissedFailure === failure) return null;
-	return <ReauthNotice account={account} harness={harness} sessionId={sessionId} reasonInTimeline={reasonInTimeline}
-		onDismiss={() => setDismissedFailure(failure)} />;
-});
-
-/** The shown notice. Its account reads run only while a failure is shown. */
-function ReauthNotice({ account, harness, sessionId, reasonInTimeline, onDismiss }: {
-	account: ConversationAccount;
-	harness: string;
-	sessionId: string;
-	reasonInTimeline: boolean;
-	onDismiss: () => void;
-}) {
+export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
 	const { t } = useTranslation();
-	const provider = agentAccountProviderFor(harness);
-	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
-	const accounts = useAgentAccounts(provider !== null);
-	const actions = useAgentAccountActions();
-	const actionsRef = useRef(actions);
-	actionsRef.current = actions;
-	const [login, setLogin] = useState<AgentAccountLogin>();
-	const openLogin = useRef<string | undefined>(undefined);
-	const verifying = useRef(false);
-	const [loginNote, setLoginNote] = useState("");
-	const [busy, setBusy] = useState<"login" | "verify" | "move" | null>(null);
-	const [error, setError] = useState("");
-	const [done, setDone] = useState<string>();
-	// A sign-in left open when the chat goes away is cancelled, not abandoned.
-	useEffect(() => () => {
-		if (openLogin.current) void actionsRef.current.cancelLogin(openLogin.current).catch(() => undefined);
-	}, []);
-	const command = signInCommand(harness);
-	const accountId = provider ? sessionAccounts.data?.[provider] : undefined;
-	const current = accounts.data?.find((candidate) => candidate.id === accountId);
-	const saved = current && !current.device ? current : undefined;
-	const other = accountId
-		? accounts.data?.find((candidate) => candidate.provider === provider && candidate.id !== accountId && candidate.signedIn)
-		: undefined;
-	const name = (target: AgentAccount) => agentAccountName(target, t);
-
-	const run = async (kind: "login" | "move", action: () => Promise<void>) => {
-		setBusy(kind);
-		setError("");
-		try {
-			await action();
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(null);
-		}
-	};
-	const signIn = (target: AgentAccount) => run("login", async () => {
-		setLoginNote("");
-		const next = await actions.signInAgain(target.id);
-		openLogin.current = next.operationId;
-		setLogin(next);
-	});
-	const checkLogin = async (current: AgentAccountLogin) => {
-		// The CLI exiting checks on its own; a click racing it would find the
-		// sign-in already finished and report an error.
-		if (openLogin.current !== current.operationId || verifying.current) return;
-		verifying.current = true;
-		setBusy("verify");
-		try {
-			const result = await actions.verifyLogin(current.operationId);
-			if (result.status === "waiting") {
-				setLoginNote(t("settings.agentAccounts.loginWaiting"));
-				return;
-			}
-			openLogin.current = undefined;
-			setLogin(undefined);
-			if (result.status === "complete") setDone(t("chat.reauth.signedInAgain"));
-			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
-			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: result.account?.email ?? "" }));
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			verifying.current = false;
-			setBusy(null);
-		}
-	};
-	const closeLogin = (current: AgentAccountLogin) => {
-		openLogin.current = undefined;
-		setLogin(undefined);
-		void actions.cancelLogin(current.operationId).catch(() => undefined);
-	};
-	const moveTo = (target: AgentAccount) => run("move", async () => {
-		await actions.switchSession(sessionId, target.id);
-		await actions.refreshSession(sessionId);
-		setDone(t("chat.reauth.movedTo", { account: name(target) }));
-	});
-
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const signedOut = block === "signed_out";
+	const Icon = signedOut ? KeyRound : Download;
 	return (
-		<div
-			role="alert"
-			className="flex shrink-0 items-start gap-2.5 border-b border-destructive/40 bg-destructive/10 px-4 py-3"
-		>
-			<KeyRound aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
-			<div className="flex min-w-0 flex-col gap-1">
-				<strong className="text-xs font-semibold text-destructive">
-					{saved && !saved.signedIn ? t("chat.reauth.accountSignedOut", { account: name(saved) }) : "Provider authentication needs attention"}
-				</strong>
-				{!reasonInTimeline ? (
-					<p className="text-xs leading-relaxed text-foreground">
-						{account.reauthReason ??
-							"The provider rejected this session's credentials."}
-					</p>
-				) : null}
-				{done ? (
-					<p role="status" className="text-xs leading-relaxed text-foreground">{done}</p>
-				) : saved ? (
-					<p className="text-xs leading-relaxed text-muted-foreground">{t("chat.reauth.savedAccountHint")}</p>
-				) : (
-				<p className="text-xs leading-relaxed text-muted-foreground">
-					{command ? (
-						<>
-							Run{" "}
-							<code className="rounded bg-background px-1 py-0.5 font-mono text-xs text-foreground">
-								{command}
-							</code>{" "}
-							in a terminal if needed. This chat may need to reconnect before it can use updated credentials.
-						</>
-					) : (
-						<>
-							Sign in with the agent&rsquo;s own CLI if needed, then reconnect this chat.
-						</>
-					)}
-				</p>
-				)}
-				{!done && (saved || other) ? (
-					<div className="flex flex-wrap items-center gap-2 pt-1">
-						{saved ? (
-							<Button type="button" size="sm" variant="outline" data-terminal-focus-handoff="true" disabled={busy !== null}
-								onClick={() => void signIn(saved)}>
-								{busy === "login" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
-								{t("settings.agentAccounts.signInAgain")}
-							</Button>
-						) : null}
-						{other ? (
-							<Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => void moveTo(other)}>
-								{busy === "move" ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : null}
-								{t("chat.reauth.continueOn", { account: name(other) })}
-							</Button>
-						) : null}
-					</div>
-				) : null}
-				{error ? <p role="alert" className="text-xs leading-relaxed text-destructive">{error}</p> : null}
-			</div>
-			<Button variant="ghost" size="icon" className="ml-auto size-6 shrink-0"
-				aria-label="Dismiss authentication notice" title="Hide this notice; authentication state is unchanged"
-				onClick={onDismiss}>
-				<X aria-hidden="true" className="size-3.5" />
+		<div role="status" className="flex items-center gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5">
+			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-sm text-foreground">
+				{t(signedOut ? "sessionImport.blockedSignedOut" : "sessionImport.blockedMissing", { agent: agentLabel(agent) })}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant="primary"
+				className="shrink-0"
+				onClick={() => openGlobalSettings("harness", { focusAgentId: agent, startLogin: signedOut, preserveProject: true })}
+			>
+				{t(signedOut ? "sessionImport.signIn" : "sessionImport.install")}
 			</Button>
-			{login ? (
-				<AgentAccountLoginDialog login={login} note={loginNote} pending={busy === "verify"}
-					onCheck={(current) => void checkLogin(current)} onClose={closeLogin} />
-			) : null}
 		</div>
 	);
 }
 
 /**
- * The sign-in command for a harness, or nothing.
+ * The provider refused this session's login.
  *
- * Named per harness rather than described generically, because a user staring at a
- * blocked session wants the line to type. Unknown harnesses get the generic wording
- * instead of a guessed command that would fail.
+ * An expired login is routine, so the notice says so plainly and offers one way
+ * out: the Harness page, which signs in on the computer that runs the session,
+ * a remote host or the cloud connection included. The failed turn stays for the
+ * user to retry.
  */
-function signInCommand(harness: string): string | undefined {
-	switch (harness) {
-		case "codex":
-			return "codex login";
-		case "claude-code":
-		case "claude":
-			return "claude auth login";
-		default:
-			return undefined;
-	}
+export const ReauthBanner = memo(function ReauthBanner({
+	account,
+	harness,
+	sessionId,
+	hostId,
+	cloud = false,
+}: {
+	account: ConversationAccount;
+	harness: string;
+	sessionId?: string;
+	/** The remote host that runs the session; omitted for this computer's. */
+	hostId?: string;
+	/** The session runs in the cloud, so its login is the cloud connection's. */
+	cloud?: boolean;
+}) {
+	const { t } = useTranslation();
+	const required = account.authenticationState === "required" ||
+		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
+	if (!required) return null;
+	const agent = agentLabel(harness);
+	const host = hostId ? labelForHost(hostId) ?? hostId : undefined;
+	return (
+		<div role="status" className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2">
+			<KeyRound aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
+				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
+			</p>
+			<ReauthLogInButton harness={harness} sessionId={sessionId} hostId={hostId} cloud={cloud} />
+		</div>
+	);
+});
+
+function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: string; sessionId?: string; hostId?: string; cloud: boolean }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const provider = !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
+	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
+	return (
+		<Button type="button" size="sm" variant="secondary" className="shrink-0" disabled={provider !== null && sessionAccounts.isPending}
+			onClick={() => openGlobalSettings("harness", {
+				focusAgentId: harness,
+				...(hostId ? { hostId } : {}),
+				harnessView: cloud ? "cloud" : "local",
+				...(sessionAccountId ? { loginAccountId: sessionAccountId } : { startLogin: true }),
+				preserveProject: true,
+			})}>
+			{t("chat.reauth.logInAgain")}
+		</Button>
+	);
 }
 
 /**
@@ -260,11 +137,11 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 		status === "system_error"
 			? {
 					title: "The agent's thread hit an internal error",
-					body: "The provider reported a fault in this thread, not in AO's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
+					body: "The provider reported a fault in this thread, not in Orchestrator's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
 				}
 			: {
 					title: "The agent closed this thread",
-					body: "The provider dropped the conversation on its side. AO kept the history, but the agent no longer holds it.",
+					body: "The provider dropped the conversation on its side. Orchestrator kept the history, but the agent no longer holds it.",
 				};
 
 	return (
@@ -381,20 +258,24 @@ export const McpServerBanner = memo(function McpServerBanner({
  * A harness update replaced the release this session's agent runs. With
  * "move open sessions to new versions" on, the daemon restarts the agent on
  * the new release once it is idle, or before the next message; a failed
- * restart keeps the queued messages for a manual resume.
+ * restart keeps the queued messages for a manual resume. A stopped agent is
+ * never moved on its own: resuming it starts the new release.
  */
 export const VersionSwitchBanner = memo(function VersionSwitchBanner({
 	staleBinary,
 	hostId,
+	agentStopped,
 }: {
 	staleBinary?: SessionStaleBinary;
 	hostId?: string;
+	/** The agent controller stopped and waits for the user to resume it. */
+	agentStopped?: boolean;
 }) {
 	// Most sessions are current; only a marked one reads the setting.
-	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} /> : null;
+	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
 });
 
-function VersionSwitchNotice({ staleBinary, hostId }: { staleBinary: SessionStaleBinary; hostId?: string }) {
+function VersionSwitchNotice({ staleBinary, hostId, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; agentStopped?: boolean }) {
 	const { t } = useTranslation();
 	const { settings } = useSettings(hostId);
 	const version = truncateMiddle(versionLabel(staleBinary.version));
@@ -414,9 +295,11 @@ function VersionSwitchNotice({ staleBinary, hostId }: { staleBinary: SessionStal
 		<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5">
 			<span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-caption text-muted-foreground">
 				<CircleArrowUp aria-hidden="true" className="size-3 shrink-0 text-settings-accent" />
-				{t("chat.versionSwitch.pending", { version })}
+				{t(agentStopped ? "chat.versionSwitch.installed" : "chat.versionSwitch.pending", { version })}
 			</span>
-			<span className="min-w-0 truncate text-caption text-muted-foreground">{t("chat.versionSwitch.pendingHint")}</span>
+			<span className="min-w-0 truncate text-caption text-muted-foreground">
+				{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingHint")}
+			</span>
 		</div>
 	);
 }

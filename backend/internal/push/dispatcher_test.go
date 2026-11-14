@@ -302,38 +302,37 @@ func TestDispatcherSweepPrunesOnReceipt(t *testing.T) {
 	}
 }
 
-func TestDispatchSkipsMutedDevices(t *testing.T) {
+// Every paired phone with a push token gets the notification; there is no
+// per-device opt-out on the daemon side any more.
+func TestDispatchSendsToEveryTokenedDevice(t *testing.T) {
 	now := time.Now().UTC()
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
-		{InstallID: "i1", Token: "ExponentPushToken[live]", CreatedAt: now, LastSeenAt: now},
-		{InstallID: "i2", Token: "ExponentPushToken[muted]", Muted: true, CreatedAt: now, LastSeenAt: now},
+		{InstallID: "i1", Token: "ExponentPushToken[a]", CreatedAt: now, LastSeenAt: now},
+		{InstallID: "i2", Token: "ExponentPushToken[b]", CreatedAt: now, LastSeenAt: now},
 	}}
-	sender := newFakeSender([]Ticket{{Status: "ok"}})
+	sender := newFakeSender([]Ticket{{Status: "ok"}, {Status: "ok"}})
 	d := NewDispatcher(nil, store, sender, "h_machine_a", slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	d.dispatch(context.Background(), domain.NotificationRecord{ID: "n1", Title: "hi"})
 
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
-	if len(sender.gotMsgs) != 1 {
-		t.Fatalf("messages = %d, want 1 (the muted device must be skipped)", len(sender.gotMsgs))
-	}
-	if sender.gotMsgs[0].To != "ExponentPushToken[live]" {
-		t.Fatalf("sent to %q, want the unmuted device", sender.gotMsgs[0].To)
+	if len(sender.gotMsgs) != 2 {
+		t.Fatalf("messages = %d, want 2 (one per tokened device)", len(sender.gotMsgs))
 	}
 }
 
-// TestDispatchAllMutedNeverCallsSend pins the early return in dispatch: when
-// every registered device is muted, the filtered messages slice is empty and
-// Send must never be called at all (not called-with-empty-slice, which would
-// draw a 400 from Expo). TestDispatchSkipsMutedDevices only covers the mixed
-// case, so a regression that dropped the `len(messages) == 0` guard would slip
-// past it silently.
-func TestDispatchAllMutedNeverCallsSend(t *testing.T) {
+// TestDispatchAllTokenlessNeverCallsSend pins the early return in dispatch:
+// when no registered device has a push token, the filtered messages slice is
+// empty and Send must never be called at all (not called-with-empty-slice,
+// which would draw a 400 from Expo). TestDispatchSkipsDevicesWithoutToken only
+// covers the mixed case, so a regression that dropped the `len(messages) == 0`
+// guard would slip past it silently.
+func TestDispatchAllTokenlessNeverCallsSend(t *testing.T) {
 	now := time.Now().UTC()
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
-		{InstallID: "i1", Token: "ExponentPushToken[muted1]", Muted: true, CreatedAt: now, LastSeenAt: now},
-		{InstallID: "i2", Token: "ExponentPushToken[muted2]", Muted: true, CreatedAt: now, LastSeenAt: now},
+		{InstallID: "i1", Token: "", CreatedAt: now, LastSeenAt: now},
+		{InstallID: "i2", Token: "", CreatedAt: now, LastSeenAt: now},
 	}}
 	sender := newFakeSender(nil)
 	d := NewDispatcher(nil, store, sender, "h_machine_a", slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -343,15 +342,15 @@ func TestDispatchAllMutedNeverCallsSend(t *testing.T) {
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
 	if sender.sent {
-		t.Fatal("Send was called despite every device being muted")
+		t.Fatal("Send was called despite no device having a push token")
 	}
 }
 
-// TestDispatchSkipsDevicesWithoutToken pins the third dispatcher-side guard: a
-// row can now represent a paired phone that never minted a push token (no
-// permission granted, or a build that can't mint one). Sending to an empty
-// token would be a wasted/erroring Expo call, so those rows must be filtered
-// out exactly like muted ones, and the survivor must still be the tokened one.
+// TestDispatchSkipsDevicesWithoutToken pins the dispatcher-side guard: a row
+// can represent a paired phone that never minted a push token (no permission
+// granted, or a build that can't mint one). Sending to an empty token would be
+// a wasted/erroring Expo call, so those rows must be filtered out, and the
+// survivor must still be the tokened one.
 func TestDispatchSkipsDevicesWithoutToken(t *testing.T) {
 	now := time.Now().UTC()
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
@@ -403,7 +402,6 @@ func TestDispatcherSweepSkipsFreshAndDropsExpired(t *testing.T) {
 func TestDispatcherPartialSendTracksAcceptedPrefix(t *testing.T) {
 	now := time.Unix(10000, 0)
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
-		{Token: "muted", Muted: true},
 		{Token: ""},
 		{Token: "accepted"},
 		{Token: "dead"},

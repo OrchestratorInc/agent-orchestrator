@@ -29,14 +29,17 @@ type ShellTerminal struct {
 	SessionID  domain.SessionID `json:"sessionId,omitempty"`
 	WorkingDir string           `json:"workingDir"`
 	Title      string           `json:"title"`
-	CreatedAt  time.Time        `json:"createdAt"`
+	// TerminalTitle is present only when the program's title should label the tab.
+	TerminalTitle string    `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty
 // ProjectID opens the shell in the daemon's data dir instead of a project root,
 // which is what the topbar action does when no project is selected. SessionID
 // scopes the shell to an agent session so it appears only in that session's tab
-// strip; an empty SessionID makes it a standalone shell on the /terminals screen.
+// strip; an empty SessionID makes it a standalone shell, which no client shows
+// (ReapShellTerminalsFromPreviousAppRuns destroys it on the next launch).
 type OpenShellTerminalInput struct {
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
@@ -50,15 +53,23 @@ type OpenShellTerminalInput struct {
 	// title it shows, so the tab keeps its name when the shell arrives; empty
 	// numbers it after the existing shells.
 	Title string `json:"title,omitempty"`
+	// Cols and Rows give the grid the requesting client will show. When both
+	// are set the shell starts immediately at that grid, in parallel with the
+	// client mounting its terminal, instead of waiting for the attach that
+	// StartOnAttach waits for (saving that round trip before the first prompt).
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 }
 
 // InitialInputReadyState describes a terminal state relevant to the command's
 // initial input. SkipInput marks a state where the requested action is already
-// open, so the command should not be sent.
+// open, so the command should not be sent. SubmitReadyText can require a
+// completion marker before submitting a RawPrefix.
 type InitialInputReadyState struct {
-	Text      string
-	RawPrefix string
-	SkipInput bool
+	Text            string
+	RawPrefix       string
+	SubmitReadyText string
+	SkipInput       bool
 }
 
 // OpenCommandTerminalInput is a daemon-trusted command terminal request. It
@@ -68,7 +79,13 @@ type InitialInputReadyState struct {
 // values from the reviewed auth registry; the input is sent only after the
 // harness renders one of its known editor-ready states.
 type OpenCommandTerminalInput struct {
-	Argv                    []string
+	// Owner is a trusted workflow identity, independent of the editable title.
+	// It is persisted so the workflow can reconcile commands after a restart.
+	Owner string
+	Argv  []string
+	// HideFromList keeps a daemon-owned guided login PTY out of the user's
+	// terminal drawer. The auth service still owns and closes its handle.
+	HideFromList            bool
 	Env                     map[string]string
 	WorkingDir              string
 	Title                   string

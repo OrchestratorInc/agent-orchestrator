@@ -67,3 +67,33 @@ func TestClientPayloadHashDistinguishesContinuation(t *testing.T) {
 		t.Fatal("matching continuation must remain idempotent")
 	}
 }
+
+func TestClientPayloadFileFormattingPreservesLegacyRetryIdentity(t *testing.T) {
+	ref := testFileReference()
+	msg := ports.ChatUserMessage{ClientMessageID: "receipt", Text: "question", Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}}
+	legacy, err := clientPayloadHash(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(msg.Content)
+	stored := domain.ConversationMessage{Text: msg.Text, Origin: domain.MessageOriginHuman, DeliveryContentJSON: string(raw)}
+	msg.Content[0].Text = FileReferenceQuotedPath
+	current, err := clientPayloadHash(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != legacy || !legacyMessageMatches(stored, msg) {
+		t.Fatal("prompt format changed a frozen client receipt")
+	}
+	if msg.Content[0].Text != FileReferenceQuotedPath {
+		t.Fatal("hashing mutated the saved dispatch format")
+	}
+	ref.Lines[0].Text = "different code"
+	changed, err := clientPayloadHash(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == legacy || legacyMessageMatches(stored, msg) {
+		t.Fatal("changed captured code reused a receipt")
+	}
+}

@@ -1,5 +1,10 @@
 import { classifyConnectionFailure, isSessionGone } from "../connectionError";
 import type { SessionInterfaceTransitionStatus } from "../chat/api";
+import {
+	interfaceTransitionPollDelay,
+	nativeSessionReadinessAttempts,
+	speculativeFailureAttempts,
+} from "../../../shared/session/interface-transition-poll";
 
 type InterfaceTransition = { phase: string; errorCode?: string; errorDetail?: string };
 
@@ -21,7 +26,6 @@ const activePhases = new Set([
 // proves which native conversation it is running, so rechecking is what lets the
 // switch enable itself.
 const nativeSessionReadinessCodes = new Set(["NATIVE_SESSION_MISSING", "NATIVE_SESSION_UNVERIFIED"]);
-const nativeSessionReadinessPoll = 1_000;
 
 // The recheck is bounded because these codes are not guaranteed to clear at all:
 // a `--resume` relaunch stays UNVERIFIED indefinitely (#4122), so "poll until it
@@ -37,11 +41,37 @@ const nativeSessionReadinessPoll = 1_000;
 // Only ANSWERS are counted here — a timeout says nothing about whether the
 // native session became ready, so it must not spend the window. That leaves
 // this budget unable to end a wait against a daemon that never answers, which
-// is what `speculativeFailureAttempts` below is for.
-export const nativeSessionReadinessAttempts = 10;
+// is what `speculativeFailureAttempts` below is for. The budget itself lives in
+// packages/shared/session/interface-transition-poll.ts, shared with desktop.
+export { nativeSessionReadinessAttempts };
 
 export function mobileInterfaceTransitionIsActive(transition?: InterfaceTransition): boolean {
 	return Boolean(transition && activePhases.has(transition.phase));
+}
+
+/**
+ * Whether a switch away from this screen has finished on the daemon but the
+ * route has not caught up yet. The route picks Chat or Terminal from the
+ * board's session row, and that row only learns the new mode on its next poll,
+ * so for a moment the screen still shows the source it just stopped: a
+ * terminal whose PTY exited reads as "Session terminated". Keeping the switch
+ * card up through that gap makes the handoff one continuous wait.
+ *
+ * Only for a switch this screen watched while it was live (`watchedId`), so an
+ * old completed transition never brings the card back on a later visit.
+ */
+export function interfaceHandoffPending(
+	transition: { id: string; phase: string; targetMode: string } | undefined,
+	screenMode: "chat" | "tui",
+	watchedId: string | undefined,
+): boolean {
+	return Boolean(
+		transition &&
+			watchedId !== undefined &&
+			transition.id === watchedId &&
+			transition.phase === "completed" &&
+			transition.targetMode !== screenMode,
+	);
 }
 
 export function mobileInterfaceTransitionRecoveryMessage(transition?: InterfaceTransition): string | undefined {
@@ -59,6 +89,17 @@ export function mobileInterfaceTransitionIsCancellable(transition?: InterfaceTra
 	);
 }
 
+/**
+ * The switch has begun stopping the source controller. Before this
+ * (`requested`, `preflighting`, `draining`) the source keeps working, and
+ * `draining` lasts as long as the agent's current turn, so the source screen
+ * stays readable behind a banner. From here on its controller is going away,
+ * and the screen holds the switch card until the route swaps it out.
+ */
+export function mobileInterfaceTransitionStoppingSource(transition?: InterfaceTransition): boolean {
+	return mobileInterfaceTransitionIsActive(transition) && !mobileInterfaceTransitionIsCancellable(transition);
+}
+
 function nativeSessionReadinessPending(status?: InterfaceTransitionStatus): boolean {
 	return Boolean(status?.reasonCode && nativeSessionReadinessCodes.has(status.reasonCode));
 }
@@ -70,15 +111,8 @@ export function interfaceTransitionPollInterval(
 	status?: InterfaceTransitionStatus,
 	readinessAttempts = 0,
 ): number | undefined {
-	if (mobileInterfaceTransitionRecoveryMessage(status?.transition)) return undefined;
-	if (mobileInterfaceTransitionIsActive(status?.transition)) return 300;
-	if (nativeSessionReadinessPending(status) && readinessAttempts < nativeSessionReadinessAttempts) {
-		return nativeSessionReadinessPoll;
-	}
-	return undefined;
+	return interfaceTransitionNextPoll({ status, readinessAttempts });
 }
-
-const failureBackoff = [1_000, 2_000, 4_000, 8_000];
 
 /**
  * How many consecutive failures a poll with nothing in flight will absorb
@@ -109,7 +143,7 @@ const failureBackoff = [1_000, 2_000, 4_000, 8_000];
  * fresh request: a rejection is a request that landed, so `refresh` clears the
  * count rather than spending it, and `pollable` owns that stop on its own.
  */
-export const speculativeFailureAttempts = 5;
+export { speculativeFailureAttempts };
 
 /**
  * The one scheduler for the status poll. Failures back off on their own count,
@@ -129,22 +163,20 @@ export function interfaceTransitionNextPoll(args: {
 	consecutiveFailures?: number;
 	failureStatus?: number;
 }): number | undefined {
-	if (mobileInterfaceTransitionRecoveryMessage(args.status?.transition)) return undefined;
-	const failures = args.consecutiveFailures ?? 0;
-	if (failures > 0) {
-		// A failed request never advances `status`, so a poll rescheduled from the
-		// last known status re-arms on it: a session deleted mid-transition would
-		// 404 at 300ms indefinitely. 401/403/429 never reach the scheduler: the hook
-		// stops polling on those (see `shouldKeepPolling`), because retrying a
-		// rejected password arms the lockout.
-		if (isSessionGone(args.failureStatus)) return undefined;
-		// A live handoff is retried for as long as the screen is open; anything
-		// else is speculative and stops. See speculativeFailureAttempts.
-		const live = mobileInterfaceTransitionIsActive(args.status?.transition);
-		if (!live && failures >= speculativeFailureAttempts) return undefined;
-		return failureBackoff[Math.min(failures - 1, failureBackoff.length - 1)];
-	}
-	return interfaceTransitionPollInterval(args.status, args.readinessAttempts ?? 0);
+	// A failed request never advances `status`, so a poll rescheduled from the
+	// last known status re-arms on it: a session deleted mid-transition would
+	// 404 at 300ms indefinitely. 401/403/429 never reach the scheduler: the hook
+	// stops polling on those (see `shouldKeepPolling`), because retrying a
+	// rejected password arms the lockout.
+	return interfaceTransitionPollDelay({
+		blocked: Boolean(mobileInterfaceTransitionRecoveryMessage(args.status?.transition)),
+		live: mobileInterfaceTransitionIsActive(args.status?.transition),
+		livePollMs: 300,
+		readinessPending: nativeSessionReadinessPending(args.status),
+		readinessAttempts: args.readinessAttempts ?? 0,
+		consecutiveFailures: args.consecutiveFailures ?? 0,
+		sessionGone: isSessionGone(args.failureStatus),
+	});
 }
 
 // The daemon's reason is a Go error: fair for a verdict, useless for a wait.

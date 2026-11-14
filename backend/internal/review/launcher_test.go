@@ -13,6 +13,7 @@ import (
 	codexreview "github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -125,6 +126,35 @@ func TestLauncherSpawnEnvCannotOverrideWorkerContext(t *testing.T) {
 	}
 }
 
+func TestLauncherSpawnWithholdsKeysTheReviewerHarnessNeverReceives(t *testing.T) {
+	dataDir := t.TempDir()
+	// The daemon exports AO's stored keys to itself; reviewers inherit that.
+	t.Setenv("ANTHROPIC_API_KEY", "ao-key")
+	if err := providerkeys.Save(context.Background(), dataDir, "ANTHROPIC_API_KEY", "ao-key"); err != nil {
+		t.Fatal(err)
+	}
+	spawn := func() map[string]string {
+		t.Helper()
+		rt := &fakeRuntime{}
+		l := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, rt, dataDir)
+		if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+			t.Fatalf("Spawn: %v", err)
+		}
+		return rt.createCfg.Env
+	}
+	// Saved from another harness's panel: a Claude Code reviewer must not
+	// bill the API account instead of the subscription.
+	if value, ok := spawn()["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("reviewer ANTHROPIC_API_KEY = %q (set %v), want blanked", value, ok)
+	}
+	if err := providerkeys.ClaimForHarness(context.Background(), dataDir, "ANTHROPIC_API_KEY", string(domain.ReviewerClaudeCode)); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := spawn()["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("Claude Code's own key was withheld from its reviewer: %q", value)
+	}
+}
+
 func TestLauncherSpawnPinsPATHToAOExecutable(t *testing.T) {
 	aoDir := t.TempDir()
 	aoExe := filepath.Join(aoDir, "ao")
@@ -144,6 +174,9 @@ func TestLauncherSpawnPinsPATHToAOExecutable(t *testing.T) {
 	parts := strings.Split(rt.createCfg.Env["PATH"], string(os.PathListSeparator))
 	if len(parts) < 2 || parts[0] != aoDir || parts[1] != "/reviewer/bin" {
 		t.Fatalf("reviewer PATH = %q, want AO dir before adapter PATH", rt.createCfg.Env["PATH"])
+	}
+	if env := rt.createCfg.Env; runtime.GOOS != "windows" && (env["AO_PATH_PIN"] != aoDir || env["ZDOTDIR"] == "" || env["BASH_ENV"] == "") {
+		t.Fatalf("reviewer env = %v, want the login-shell re-pin for %s", env, aoDir)
 	}
 }
 
@@ -208,7 +241,7 @@ func TestLauncherSpawnWarnsWhenPATHPinAndShimFail(t *testing.T) {
 		t.Fatalf("PATH = %q, want original reviewer PATH", rt.createCfg.Env["PATH"])
 	}
 	warning := rt.createCfg.Env[EnvAOCommandWarning]
-	if !strings.Contains(warning, "PATH pin failed") || !strings.Contains(warning, "AO shim fallback failed") || !strings.Contains(warning, "executable unavailable") {
+	if !strings.Contains(warning, "PATH pin failed") || !strings.Contains(warning, "Orchestrator shim fallback failed") || !strings.Contains(warning, "executable unavailable") {
 		t.Fatalf("%s = %q, want combined PATH/shim warning", EnvAOCommandWarning, warning)
 	}
 }
@@ -664,7 +697,7 @@ func TestLauncherRestoreTerminalStartsIdlePane(t *testing.T) {
 		"verdict: changes_requested",
 		"GitHub review: 484",
 		"Fix the restore path.",
-		"Wait for AO to send the next review task",
+		"Wait for Orchestrator to send the next review task",
 	} {
 		if !strings.Contains(reviewer.gotInv.Prompt, want) {
 			t.Fatalf("restore prompt missing %q: %q", want, reviewer.gotInv.Prompt)

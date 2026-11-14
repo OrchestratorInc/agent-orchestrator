@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -45,7 +46,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 	lock := newLockout(time.Now)
 	auth := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))
 	m := &LANManager{
-		handler:     lanControlBlock(auth(handler)),
+		handler:     lanControlBlock(auth(remoteJSONCompression(handler))),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
@@ -59,10 +60,11 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // prefixes that must never be reachable through the LAN listener: /shutdown,
 // the telemetry routes under /internal/, and the Connect Mobile control
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
-// host-mutating installer routes under /api/v1/system/install, and personal
+// host-mutating installer routes under /api/v1/system/install, desktop control
+// through Cua Driver under /api/v1/computer-use and the switch that hands it to
+// new chat sessions at /api/v1/settings/computer-use, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
-// /api/v1/agents/codex/account-switches, and agent accounts under
-// /api/v1/agents/accounts (the harmless read-only Codex model
+// /api/v1/agents/codex/account-switches (the harmless read-only Codex model
 // routes stay reachable so mobile can pick a model). Some routes
 // are gated in the shared router by localControlRequest, which trusts the
 // client-supplied Host header. That header is spoofable by any LAN client. The
@@ -79,9 +81,10 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/desktop",
 	"/api/v1/side-chats/launch",
 	"/api/v1/system/install",
+	"/api/v1/computer-use",
+	"/api/v1/settings/computer-use",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
-	"/api/v1/agents/accounts",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested
@@ -146,7 +149,7 @@ func expectedHostGuard(hostID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if expected := r.Header.Get("X-AO-Expected-Host-ID"); expected != "" && expected != hostID {
-				envelope.WriteAPIError(w, r, http.StatusMisdirectedRequest, "conflict", "HOST_ID_MISMATCH", "This address belongs to another AO host; reconnect to the intended host.", nil)
+				envelope.WriteAPIError(w, r, http.StatusMisdirectedRequest, "conflict", "HOST_ID_MISMATCH", "This address belongs to another Orchestrator host; reconnect to the intended host.", nil)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -193,6 +196,54 @@ func (m *LANManager) SetAccountTokenHash(hash string) {
 	if ln != nil && previous != "" {
 		_ = ln.closeConnections(previous)
 	}
+}
+
+// UseDeviceCredentials makes the listener accept device tokens and pairing
+// codes. Call it before Start.
+func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, codes *mobilebridge.PairingCodes) {
+	m.state.devices, m.state.codes = devices, codes
+}
+
+// SetPasswordLoginDisabled turns the pairing password off or on. Off closes its connections.
+func (m *LANManager) SetPasswordLoginDisabled(off bool) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	if m.state.passwordOff.Swap(off) == off || !off {
+		return
+	}
+	m.DisconnectCredential(m.state.currentHash())
+}
+
+// DisconnectCredential closes the connections of the credential with this SHA-256.
+func (m *LANManager) DisconnectCredential(hash string) {
+	if hash == "" {
+		return // closeConnections("") would close every connection
+	}
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil {
+		_ = ln.closeConnections(hash)
+	}
+}
+
+// ConnectedCredentials returns the SHA-256 of each credential with an open connection.
+func (m *LANManager) ConnectedCredentials() map[string]bool {
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	connected := map[string]bool{}
+	if ln == nil {
+		return connected
+	}
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	for conn := range ln.conns {
+		if conn.tokenHash != "" {
+			connected[conn.tokenHash] = true
+		}
+	}
+	return connected
 }
 
 // AccountTokenHash returns the currently accepted account credential digest.

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
+import { CloseButton } from "./ui/close-button";
+import { Button } from "./ui/button";
 
 const TOAST_DISMISS_MS = 3_500;
 const ERROR_TOAST_DISMISS_MS = 8_000;
@@ -14,7 +16,8 @@ export function GlobalToast() {
 	return (
 		<>
 			<GlobalToastStack placement="top-center" toasts={toasts.filter((toast) => toast.placement === "top-center")} />
-			<GlobalToastStack placement="bottom-right" toasts={toasts.filter((toast) => toast.placement !== "top-center")} />
+			<GlobalToastStack placement="bottom-center" toasts={toasts.filter((toast) => toast.placement === "bottom-center")} />
+			<GlobalToastStack placement="bottom-right" toasts={toasts.filter((toast) => !toast.placement || toast.placement === "bottom-right")} />
 		</>
 	);
 }
@@ -23,8 +26,8 @@ function GlobalToastStack({ placement, toasts }: { placement: NonNullable<Toast[
 	if (toasts.length === 0) return null;
 	return (
 		<div
-			className={`pointer-events-none fixed z-[calc(var(--z-overlay)+1)] flex w-[min(360px,calc(100vw-24px))] items-stretch gap-2 ${
-				placement === "top-center" ? "left-1/2 top-12 max-h-[184px] -translate-x-1/2 flex-col overflow-y-auto overscroll-contain" : "right-3 bottom-3 flex-col-reverse"
+			className={`pointer-events-none fixed z-[calc(var(--z-overlay)+1)] flex max-w-[calc(100vw-24px)] gap-2 ${
+				placement === "top-center" ? "w-[min(360px,calc(100vw-24px))] items-stretch left-1/2 top-12 max-h-[184px] -translate-x-1/2 flex-col overflow-y-auto overscroll-contain" : placement === "bottom-center" ? "left-1/2 bottom-3 -translate-x-1/2 w-max items-center flex-col-reverse" : "w-[min(360px,calc(100vw-24px))] items-stretch right-3 bottom-3 flex-col-reverse"
 			}`}
 			data-browser-native-overlay="true"
 			data-state="open"
@@ -39,12 +42,13 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const [exiting, setExiting] = useState(false);
 	const dismissGlobalToast = useUiStore((state) => state.dismissGlobalToast);
 	const isError = toast.tone === "error";
+	const isSuccess = toast.tone === "success";
 	const dismissMs = toast.durationMs ?? (isError ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
 	// Hovering or focusing a toast pauses its timer so it can be read and acted on.
 	const [paused, setPaused] = useState(false);
 
 	useEffect(() => {
-		if (paused) return;
+		if (paused || dismissMs === 0) return;
 		const exitTimer = window.setTimeout(() => setExiting(true), Math.max(0, dismissMs - 180));
 		const dismissTimer = window.setTimeout(() => dismissGlobalToast(toast.nonce), dismissMs);
 		return () => {
@@ -56,28 +60,42 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	return (
 		<section
 			aria-live={isError ? "assertive" : "polite"}
-			className={`${exiting ? "toast-exit" : "toast-enter"} pointer-events-auto flex items-start gap-3 rounded-welcome-panel px-3.5 py-3 text-xs shadow-[var(--shadow-import-modal)] ${
-				isError ? "border border-destructive/40 bg-destructive/10" : "border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]"
+			className={`${exiting ? "toast-exit" : "toast-enter"} pointer-events-auto flex rounded-welcome-panel ${isSuccess ? "items-center gap-2 px-3 py-2" : "items-start gap-3 px-3.5 py-3"} text-xs shadow-[var(--shadow-import-modal)] ${
+				isError ? "border border-destructive/40 bg-destructive/10" : "border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)]"
 			}`}
 			role={isError ? "alert" : "status"}
+			data-global-toast=""
 			onMouseEnter={() => setPaused(true)}
 			onMouseLeave={() => setPaused(false)}
 			onFocus={() => setPaused(true)}
 			onBlur={() => setPaused(false)}
 		>
+			{isSuccess && <Check aria-hidden="true" className="size-4 shrink-0 text-green-500" />}
 			<div className="min-w-0 flex-1">
 				<p className={`wrap-break-word font-medium ${isError ? "text-destructive" : "text-(--color-text-import-title)"}`}>{toast.title}</p>
 				{toast.body ? <p className="mt-0.5 wrap-break-word text-pretty text-[var(--color-text-import-muted)]">{toast.body}</p> : null}
 			</div>
-			{toast.dismissible ? (
-				<button
+			{toast.action ? (
+				<Button
 					type="button"
+					variant="ghost"
+					size="xs"
+					onClick={() => {
+						toast.action?.run();
+						dismissGlobalToast(toast.nonce);
+					}}
+					className="-my-1 font-medium"
+					data-toast-action=""
+				>
+					{toast.action.label}
+				</Button>
+			) : null}
+			{toast.dismissible ? (
+				<CloseButton
 					aria-label={t("shortcut.dismissNotification")}
 					onClick={() => dismissGlobalToast(toast.nonce)}
-					className="shrink-0 rounded p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
-				>
-					<X aria-hidden="true" className="size-3" />
-				</button>
+					size="icon-xs"
+				/>
 			) : null}
 		</section>
 	);

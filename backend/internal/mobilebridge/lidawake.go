@@ -28,7 +28,7 @@ const lidHelperLabel = "com.aoagents.mobile-wake"
 // upgraded before the native coordinator can be used.
 func IsLidHelperUpgrade(err error) bool { return errors.Is(err, errLidHelperUpgrade) }
 
-var errLidHelperUpgrade = errors.New("registered wake helper is incompatible; open the lid, turn closed-lid wake off in every AO instance and wait for recovery to finish, then run in Terminal: launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake; turn closed-lid wake on again")
+var errLidHelperUpgrade = errors.New("registered wake helper is incompatible; open the lid, turn closed-lid wake off in every Orchestrator instance and wait for recovery to finish, then run in Terminal: launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake; turn closed-lid wake on again")
 
 // LidAwake is a lease client for the independent, launchd-owned coordinator.
 // Default-data AO instances for this login share ~/.ao/data/wake. Custom data

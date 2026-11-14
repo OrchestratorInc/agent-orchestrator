@@ -1,8 +1,7 @@
 import type { SearchAddon } from "@xterm/addon-search";
-import { CaseSensitive, ChevronDown, ChevronUp, Regex, X } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronUp, Regex, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 
 type SearchOptions = Parameters<SearchAddon["findNext"]>[1];
@@ -187,59 +186,54 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			<Button
 				aria-label={t("terminal.searchCaseSensitive")}
 				aria-pressed={caseSensitive}
-				className={cn("size-7 text-muted-foreground", caseSensitive && "bg-muted text-primary")}
 				onClick={() => setCaseSensitive((current) => !current)}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
 				type="button"
-				variant="ghost"
+				variant="quiet"
 			>
 				<CaseSensitive className="size-icon-sm" aria-hidden="true" />
 			</Button>
 			<Button
 				aria-label={t("terminal.searchRegex")}
 				aria-pressed={regex}
-				className={cn("size-7 text-muted-foreground", regex && "bg-muted text-primary")}
 				onClick={() => setRegex((current) => !current)}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
 				type="button"
-				variant="ghost"
+				variant="quiet"
 			>
 				<Regex className="size-icon-sm" aria-hidden="true" />
 			</Button>
 			<div className="mx-0.5 h-4 w-px bg-border" />
 			<Button
 				aria-label={t("terminal.searchPrevious")}
-				className="size-7 text-muted-foreground"
 				disabled={!query || !queryIsValid}
 				onClick={() => find("previous")}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
 				type="button"
-				variant="ghost"
+				variant="quiet"
 			>
 				<ChevronUp className="size-icon-sm" aria-hidden="true" />
 			</Button>
 			<Button
 				aria-label={t("terminal.searchNext")}
-				className="size-7 text-muted-foreground"
 				disabled={!query || !queryIsValid}
 				onClick={() => find("next")}
 				onMouseDown={keepInputFocus}
 				size="icon-sm"
 				type="button"
-				variant="ghost"
+				variant="quiet"
 			>
 				<ChevronDown className="size-icon-sm" aria-hidden="true" />
 			</Button>
 			<Button
 				aria-label={t("files.closeSearch")}
-				className="size-7 text-muted-foreground"
 				onClick={close}
 				size="icon-sm"
 				type="button"
-				variant="ghost"
+				variant="quiet"
 			>
 				<X className="size-icon-sm" aria-hidden="true" />
 			</Button>

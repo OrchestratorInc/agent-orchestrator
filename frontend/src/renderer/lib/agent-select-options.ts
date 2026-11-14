@@ -1,4 +1,5 @@
 import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { defaultReviewerHarness } from "./reviewer-harnesses";
 
 export type AgentInfo = {
 	authentication: {
@@ -103,6 +104,73 @@ function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): b
 	return role === "orchestrator" ? isOrchestratorSession(session) : !isOrchestratorSession(session);
 }
 
+export type ProjectAgentDefaults = {
+	workerAgent: string;
+	orchestratorAgent: string;
+	reviewerAgent: string;
+};
+
+// The daemon's own default agent, used when no agent could be checked at all.
+const FALLBACK_PROJECT_AGENT = DEFAULT_AGENT_PRIORITY[0];
+
+function isConfirmedAgent(agent: AgentInfo): boolean {
+	return agent.installation.state === "installed" &&
+		["authorized", "not_applicable", "configured"].includes(agent.authentication.state);
+}
+
+/**
+ * The agents a new project can start on, most preferred first. Agents AO found
+ * installed and signed in come before agents it has not confirmed yet; within
+ * each group, AO's integration priority decides. Missing or signed-out agents
+ * are left out. "configured" counts as signed in: AO cannot verify most
+ * credentials, and that is not a reason to pass over an agent.
+ */
+export function preferredAgentList(agents: readonly AgentInfo[]): string[] {
+	const priority = (agent: AgentInfo) => DEFAULT_AGENT_PRIORITY_RANK.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
+	return agents
+		.filter(isLaunchableAgent)
+		.sort(
+			(a, b) =>
+				Number(isConfirmedAgent(b)) - Number(isConfirmedAgent(a)) ||
+				priority(a) - priority(b) ||
+				agentLabelCompare(a, b),
+		)
+		.map((agent) => agent.id);
+}
+
+/**
+ * Whether checks AO has not finished could still change the pick: the agent AO
+ * prefers most among the usable ones is not confirmed yet. A snapshot taken
+ * before the daemon's first checks reads "not checked" for every agent, and
+ * ranking it would start the project on Claude Code even when only Codex is
+ * installed.
+ */
+export function preferredAgentNeedsChecks(agents: readonly AgentInfo[]): boolean {
+	const priority = (agent: AgentInfo) => DEFAULT_AGENT_PRIORITY_RANK.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
+	const first = agents
+		.filter(isLaunchableAgent)
+		.sort((a, b) => priority(a) - priority(b) || agentLabelCompare(a, b))[0];
+	return first !== undefined && !isConfirmedAgent(first);
+}
+
+/**
+ * A new project starts the worker and orchestrator on the most preferred agent;
+ * project settings can change each one. Only the unattended-safe reviewers can
+ * review by default (other reviewers need an explicit choice, and an older
+ * remote host may not know them), so the reviewer is the most preferred of
+ * those this machine has, and Claude Code, the daemon's own fallback, when it
+ * has none.
+ */
+export function defaultProjectAgents(agents: readonly AgentInfo[]): ProjectAgentDefaults {
+	const ranked = preferredAgentList(agents);
+	const top = ranked[0] ?? FALLBACK_PROJECT_AGENT;
+	return {
+		workerAgent: top,
+		orchestratorAgent: top,
+		reviewerAgent: ranked.find((id) => defaultReviewerHarness(id) === id) ?? defaultReviewerHarness(top),
+	};
+}
+
 function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {
 	if (agent.installation.state === "not_installed") {
 		return { status: "Needs install", statusTone: "muted" };
@@ -114,13 +182,13 @@ function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "stat
 		return { status: "Install unknown", statusTone: "warning" };
 	}
 	if (agent.authentication.state === "unknown") {
-		return { status: "Auth unknown", statusTone: "warning" };
+		// Inconclusive checks belong on Agent Harnesses, not in agent pickers.
+		return { status: "", statusTone: "muted" };
 	}
-	// A credential exists but nothing proved it works. It must not fall through
-	// to the known-good branch below: rendering an unverified credential green
-	// is precisely how a revoked key came to look like a working agent.
+	// Keep credential verification details on Agent Harnesses. A configured
+	// credential stays neutral rather than inheriting the known-good tone.
 	if (agent.authentication.state === "configured") {
-		return { status: "Unverified", statusTone: "muted" };
+		return { status: "", statusTone: "muted" };
 	}
 	// Known-good agents stay selectable even while stale or checking; freshness
 	// is informative coordinator state, not a reason for the renderer to block.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 // SessionTurns returns every turn AO holds for a session, oldest first: the
@@ -132,6 +135,54 @@ func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, 
 	return domain.BuildHandoffNote(input), nil
 }
 
+// ForkHandoffNote builds the note a text-handoff fork's fresh agent starts
+// with: source's conversation as AO recorded it, pointed at the fork's own
+// worktree and artifact folder. terminalOutput is the end of source's
+// terminal screen, for a terminal session. A non-zero upTo leaves out turns
+// asked after it, so the note stops at the turn the fork copies.
+func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionRecord, target ports.ForkTarget, terminalOutput string, upTo time.Time) (string, error) {
+	input, err := s.handoffNoteInput(ctx, source, source.Harness, "")
+	if err != nil {
+		return "", err
+	}
+	if !upTo.IsZero() {
+		kept := input.Turns[:0]
+		for _, turn := range input.Turns {
+			if !turn.At.After(upTo) {
+				kept = append(kept, turn)
+			}
+		}
+		input.Turns = kept
+	}
+	input.Fork = &domain.HandoffFork{SourceSessionID: source.ID, SourceTitle: sessionfork.Title(source)}
+	// The fork's own name, worktree, and branch are in its standing
+	// instructions; the original's would send it to the wrong place.
+	input.SessionTitle, input.Branch = "", ""
+	input.WorkspacePath = target.WorkspacePath
+	if target.SessionID != "" {
+		input.ArtifactDir = filepath.ToSlash(sessionartifacts.Dir(s.dataDir, target.SessionID))
+	}
+	input.TerminalOutput = terminalOutput
+	// A source that was itself a text-copy fork keeps its conversation from
+	// before it in its saved note, not in its own turns. A terminal source
+	// may have no conversation at all.
+	conversation, err := s.store.ConversationForSession(ctx, source.ID)
+	switch {
+	case errors.Is(err, domain.ErrNoConversation):
+	case err != nil:
+		return "", fmt.Errorf("read conversation of %s: %w", source.ID, err)
+	default:
+		branch, err := s.store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+		if err != nil {
+			return "", fmt.Errorf("read conversation branch of %s: %w", source.ID, err)
+		}
+		input.Inherited = branch.HandoffNote
+	}
+	// The fork starts with the same uncommitted changes.
+	input.ChangedFiles = handoffChangedFiles(ctx, source.Metadata.WorkspacePath, source.Metadata.DiffBaseSHA)
+	return domain.BuildHandoffNote(input), nil
+}
+
 // handoffNoteInput is the note's input without the changed files, which need
 // git and can run while the outgoing provider stops.
 func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (domain.HandoffNoteInput, error) {
@@ -139,6 +190,7 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 	if err != nil {
 		return domain.HandoffNoteInput{}, err
 	}
+	artifactDir, artifacts := s.handoffArtifacts(ctx, record)
 	return domain.HandoffNoteInput{
 		SwitchID:      switchID,
 		SourceHarness: record.Harness,
@@ -149,10 +201,25 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 		Branch:        record.Metadata.Branch,
 		At:            s.now(),
 		OriginalTask:  record.Metadata.Prompt,
+		ArtifactDir:   artifactDir,
+		Artifacts:     artifacts,
 		Turns:         turns,
 		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
 		HistoryFiles:  s.handoffHistoryFiles(record, turns),
 	}, nil
+}
+
+// handoffArtifacts returns the session's artifact directory and its files,
+// most recently updated first. A directory that cannot be read lists none.
+func (s *Service) handoffArtifacts(ctx context.Context, record domain.SessionRecord) (string, []domain.SessionArtifactFile) {
+	dir := cmp.Or(record.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, record.ID))
+	files, err := sessionartifacts.List(ctx, dir)
+	if err != nil {
+		s.log.Debug("list artifacts for handoff note", "session", record.ID, "error", err)
+		return filepath.ToSlash(dir), nil
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].UpdatedAt.After(files[j].UpdatedAt) })
+	return filepath.ToSlash(dir), files
 }
 
 // SessionHistory returns one page of a session's turns, newest first, with the

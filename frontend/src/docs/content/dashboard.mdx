@@ -93,7 +93,7 @@ Opening the panel marks loaded unread alerts as read, but leaves them in the fee
 
 In **Settings → Connect Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
 
-Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Mute or unpair a device in Connect Mobile. On supported Macs, **Keep awake** can help keep the computer reachable.
+Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Turn notifications off on the phone, or remove it in Connect Mobile. On supported Macs, **Keep awake** can help keep the computer reachable.
 
 ## Project settings
 
@@ -101,7 +101,7 @@ Project settings configure worker and orchestrator roles without changing the re
 
 GitHub and GitLab provide pull-request and issue data. **Cues** belong to a project. Create a Cue to save an agent instruction or shell command. An agent Cue sends a prompt to an eligible session or starts a worker. A blocked session cannot accept an ordinary prompt. A command Cue runs the exact command in a fresh local terminal; it does not ask an agent to interpret it.
 
-Use **General** to choose the default session interface. **Harness** shows setup and readiness. **Agents → Codex** manages device accounts. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
+Use **General** to choose the default session interface. **Harness** shows setup and readiness, and the subscription accounts of Claude Code and Codex. **Browser** manages profiles and downloads. Project settings hold role-specific model, effort, permission, and rules overrides.
 
 Closing a terminal or switching views does not archive a session. Some detached terminal and Chat processes can survive a daemon restart; reconnecting depends on the computer and provider state. **Archive** ends the Orchestrator session. Stopping only its agent leaves a session you can resume. See [session commands](/cli#ao-session) for resume, restore, and cleanup.
 

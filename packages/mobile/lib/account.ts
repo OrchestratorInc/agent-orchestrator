@@ -2,19 +2,25 @@ import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
 
-// The desktop uses this public AuthKit client and HTTPS callback. The callback
+// The production AuthKit client (auth.orchestrator.inc), the same one desktop
+// release builds get from the VITE_WORKOS_CLIENT_ID repository variable, so a
+// phone signs in to the same AO account as the desktop. The HTTPS callback
 // returns to ao-app://callback; mobile registers that scheme as well.
-const CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
+const CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
 const REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
 const APP_CALLBACK = "ao-app://callback";
 const AUTH_URL = "https://api.workos.com/user_management/authorize";
 const TOKEN_URL = "https://api.workos.com/user_management/authenticate";
 const STORE_KEY = "ao.account.session";
+const PREVIOUS_KEY = "ao.account.previous";
 
-export type Account = { id: string; email: string };
-type StoredAccount = Account & { refreshToken: string };
+/** `name` and `avatarUrl` are the person's own, from the sign-in provider, when it has them. */
+export type Account = { id: string; email: string; name?: string; avatarUrl?: string };
+/** clientId is the AuthKit client that issued the refresh token. Sessions from
+ * before it was stored came from the previous WorkOS environment. */
+type StoredAccount = Account & { refreshToken: string; clientId?: string };
 type TokenResponse = {
-	user?: { id?: string; email?: string };
+	user?: { id?: string; email?: string; first_name?: string | null; last_name?: string | null; profile_picture_url?: string | null };
 	access_token?: string;
 	refresh_token?: string;
 	error?: string;
@@ -59,26 +65,91 @@ async function authenticate(body: Record<string, string>): Promise<TokenResponse
 	return result;
 }
 
+// WorkOS user IDs are per environment, so a session from another AuthKit
+// client names the same person under a different ID. This client cannot
+// refresh it. Its ID and email are kept so account-host sync can move this
+// phone's machines to the new ID (adoptPreviousAccount in accountHosts.ts).
+function otherClientSession(raw: string | null): StoredAccount | null {
+	if (!raw) return null;
+	try {
+		const stored = JSON.parse(raw) as StoredAccount;
+		return stored.clientId !== CLIENT_ID && stored.id && stored.email ? stored : null;
+	} catch {
+		return null;
+	}
+}
+
+async function rememberPreviousAccount(raw: string | null, nextId?: string): Promise<void> {
+	const previous = otherClientSession(raw);
+	if (previous && previous.id !== nextId) {
+		await SecureStore.setItemAsync(PREVIOUS_KEY, JSON.stringify({ id: previous.id, email: previous.email } satisfies Account));
+	}
+}
+
+// Retire another client's session up front rather than waiting for WorkOS to
+// refuse its refresh token: any other failure would leave it looking signed in
+// while every sync fails.
+async function readSession(): Promise<StoredAccount | null> {
+	const raw = await SecureStore.getItemAsync(STORE_KEY);
+	if (!raw) return null;
+	if (otherClientSession(raw)) {
+		await mutateCredentials(async () => {
+			if (await SecureStore.getItemAsync(STORE_KEY) !== raw) return;
+			await rememberPreviousAccount(raw);
+			await SecureStore.deleteItemAsync(STORE_KEY);
+		});
+		return null;
+	}
+	try {
+		const stored = JSON.parse(raw) as StoredAccount;
+		return stored.id && stored.email && stored.refreshToken ? stored : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The person as the desktop's account row shows them: their name, as the provider gives it, and photo. */
+function profile(user: NonNullable<TokenResponse["user"]>): Pick<Account, "name" | "avatarUrl"> {
+	const name = [user.first_name, user.last_name].map((part) => part?.trim()).filter(Boolean).join(" ");
+	return { ...(name ? { name } : {}), ...(user.profile_picture_url ? { avatarUrl: user.profile_picture_url } : {}) };
+}
+
 async function saveAccount(result: TokenResponse, generation: number): Promise<Account> {
 	const { id, email } = result.user ?? {};
 	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("Orchestrator sign-in returned an incomplete session.");
-	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, refreshToken: result.refresh_token } satisfies StoredAccount));
+	// Refreshed with every token, so a name or photo changed at the provider shows up here too.
+	const person = profile(result.user!);
+	await rememberPreviousAccount(await SecureStore.getItemAsync(STORE_KEY), id);
+	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, ...person, refreshToken: result.refresh_token, clientId: CLIENT_ID } satisfies StoredAccount));
 	if (generation === accountGeneration) {
 		accessToken = result.access_token;
 		accessTokenExpiresAt = tokenExpiry(result.access_token);
 	}
-	return { id, email };
+	return { id, email, ...person };
 }
 
 export async function loadAccount(): Promise<Account | null> {
-	const raw = await SecureStore.getItemAsync(STORE_KEY);
+	const stored = await readSession();
+	return stored ? { id: stored.id, email: stored.email, ...(stored.name ? { name: stored.name } : {}), ...(stored.avatarUrl ? { avatarUrl: stored.avatarUrl } : {}) } : null;
+}
+
+/** The account a retired session from another AuthKit client belonged to. */
+export async function loadPreviousAccount(): Promise<Account | null> {
+	const raw = await SecureStore.getItemAsync(PREVIOUS_KEY);
 	if (!raw) return null;
 	try {
-		const { id, email, refreshToken } = JSON.parse(raw) as StoredAccount;
-		return id && email && refreshToken ? { id, email } : null;
+		const { id, email } = JSON.parse(raw) as Account;
+		return id && email ? { id, email } : null;
 	} catch {
 		return null;
 	}
+}
+
+/** Account-host sync calls this once it has dealt with that account's machines. */
+export function clearPreviousAccount(id: string): Promise<void> {
+	return mutateCredentials(async () => {
+		if ((await loadPreviousAccount())?.id === id) await SecureStore.deleteItemAsync(PREVIOUS_KEY);
+	});
 }
 
 export async function signInToAccount(): Promise<Account | null> {
@@ -104,7 +175,9 @@ export async function signInToAccount(): Promise<Account | null> {
 	const code = callback.searchParams.get("code");
 	if (!code) throw new Error("Orchestrator sign-in did not return a code.");
 	const session = await authenticate({ grant_type: "authorization_code", code, code_verifier: verifier });
-	return mutateCredentials(async () => generation === accountGeneration ? saveAccount(session, generation) : null);
+	const account = await mutateCredentials(async () => generation === accountGeneration ? saveAccount(session, generation) : null);
+	if (account) notifyAccountChange(account);
+	return account;
 }
 
 export async function signOutOfAccount(): Promise<void> {
@@ -113,6 +186,22 @@ export async function signOutOfAccount(): Promise<void> {
 	accessToken = null;
 	accessTokenExpiresAt = 0;
 	await mutateCredentials(() => SecureStore.deleteItemAsync(STORE_KEY));
+	notifyAccountChange(null);
+}
+
+type AccountListener = (account: Account | null) => void;
+const accountListeners = new Set<AccountListener>();
+
+function notifyAccountChange(account: Account | null): void {
+	for (const listener of accountListeners) {
+		try { listener(account); } catch { /* One listener must not stop the others. */ }
+	}
+}
+
+/** Hear about sign-in and sign-out wherever they happen (Settings, Cloud, an expired refresh). */
+export function onAccountChange(listener: AccountListener): () => void {
+	accountListeners.add(listener);
+	return () => { accountListeners.delete(listener); };
 }
 
 /** Account APIs use this token; it must never be sent to an AO daemon. */
@@ -125,11 +214,8 @@ export async function getAccountAccessToken(): Promise<string | null> {
 }
 
 async function refreshAccountToken(generation: number): Promise<string | null> {
-	const raw = await SecureStore.getItemAsync(STORE_KEY);
-	if (!raw) return null;
-	let stored: StoredAccount;
-	try { stored = JSON.parse(raw) as StoredAccount; } catch { return null; }
-	if (!stored.refreshToken || generation !== accountGeneration) return null;
+	const stored = await readSession();
+	if (!stored || generation !== accountGeneration) return null;
 	try {
 		const result = await authenticate({ grant_type: "refresh_token", refresh_token: stored.refreshToken });
 		// A sign-out or a new sign-in during the request must not resurrect the

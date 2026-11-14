@@ -43,6 +43,10 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 			if !drivers.SupportsChat(agent.Harness) {
 				launcher.err = ports.ErrChatUnsupported
 				want = "fix-login-redirect"
+			} else if agent.Harness == domain.HarnessGrok {
+				// Grok cannot enforce tool-disabled background launches yet.
+				launcher.err = ports.ErrChatCapabilityUnavailable
+				want = "fix-login-redirect"
 			}
 			m, st, _ := newChatManager(launcher)
 			m.dataDir = t.TempDir()
@@ -57,6 +61,9 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 			}
 			if len(launcher.backgroundHarnesses) != 1 || launcher.backgroundHarnesses[0] != agent.Harness || launcher.background[0].Model != "selected-model" {
 				t.Fatalf("selected agent/model not preserved: %v, %+v", launcher.backgroundHarnesses, launcher.background)
+			}
+			if agent.Harness == domain.HarnessGrok && launcher.background[0].Permissions != ports.PermissionModeDefault {
+				t.Fatalf("Grok naming permissions = %q, want supported default mode", launcher.background[0].Permissions)
 			}
 		})
 	}
@@ -280,6 +287,19 @@ func launchedTaskSession(t *testing.T, m *Manager, st *fakeStore, ws ports.Works
 
 func nameNow(name generatedTaskName) func() generatedTaskName {
 	return func() generatedTaskName { return name }
+}
+
+// A send while the prepared worktree is still being created reads the session
+// before preparation publishes its workspace; naming must still name it.
+func TestTaskNamingAcceptsWorkspacePublishedAfterRead(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	stale := rec
+	stale.Metadata.Branch, stale.Metadata.WorkspacePath = "", ""
+	m.nameTaskBranchLater(context.Background(), stale, root, nil, nameNow(generatedTaskName{Slug: "login-redirect"}), func() {})
+	if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/login-redirect/root" || actual.Metadata.WorkspacePath != root.Path {
+		t.Fatalf("naming refused a workspace published after the read: %+v", actual.Metadata)
+	}
 }
 
 func TestTaskNamingPreservesManualRename(t *testing.T) {

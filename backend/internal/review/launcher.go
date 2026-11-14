@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -212,7 +213,7 @@ func WithRunFilePath(path string) LauncherOption {
 
 // NewLauncher builds the production reviewer launcher.
 func NewLauncher(reviewers ports.ReviewerResolver, rt reviewerRuntime, dataDir string, opts ...LauncherOption) Launcher {
-	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: os.Executable}
+	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: agentlaunch.Executable}
 	for _, opt := range opts {
 		opt(l)
 	}
@@ -370,7 +371,7 @@ func (l *agentLauncher) prepareInvocation(ctx context.Context, spec LaunchSpec) 
 	}
 	systemPath := filepath.Join(promptRoot, "system.md")
 	systemPrompt := strings.TrimRight(inv.SystemPrompt, "\n") + "\n\n" +
-		"AO stores each review task in an immutable file. Whenever AO asks you to start a review task, " +
+		"Orchestrator stores each review task in an immutable file. Whenever Orchestrator asks you to start a review task, " +
 		"read the exact file path in that request first and follow it completely.\n"
 	if err := os.WriteFile(systemPath, []byte(systemPrompt), 0o600); err != nil {
 		return ports.ReviewInvocation{}, fmt.Errorf("write reviewer system prompt: %w", err)
@@ -390,14 +391,14 @@ func (l *agentLauncher) prepareIdleInvocation(spec LaunchSpec) (ports.ReviewInvo
 	promptRoot := filepath.Join(l.dataDir, "prompts", string(spec.WorkerID), "reviewer")
 	systemPath := filepath.Join(promptRoot, "system.md")
 	systemPrompt := reviewSystemPrompt() + "\n\n" +
-		"AO may restore your terminal before a new review task exists. In that state, wait for AO to send a review task file path before reviewing or submitting results.\n"
+		"Orchestrator may restore your terminal before a new review task exists. In that state, wait for Orchestrator to send a review task file path before reviewing or submitting results.\n"
 	if err := os.MkdirAll(promptRoot, 0o700); err != nil {
 		return ports.ReviewInvocation{}, fmt.Errorf("create reviewer prompt directory: %w", err)
 	}
 	if err := os.WriteFile(systemPath, []byte(systemPrompt), 0o600); err != nil {
 		return ports.ReviewInvocation{}, fmt.Errorf("write reviewer system prompt: %w", err)
 	}
-	prompt := fmt.Sprintf("Reviewer terminal restored for worker session %s.\n\n%s\n\nWait for AO to send the next review task file path before submitting a new review.", spec.WorkerID, previousReviewHistoryText(spec.PreviousRuns))
+	prompt := fmt.Sprintf("Reviewer terminal restored for worker session %s.\n\n%s\n\nWait for Orchestrator to send the next review task file path before submitting a new review.", spec.WorkerID, previousReviewHistoryText(spec.PreviousRuns))
 	return ports.ReviewInvocation{
 		ReviewerID:       reviewerHandleID(spec.WorkerID),
 		WorkerSessionID:  spec.WorkerID,
@@ -566,7 +567,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if strings.TrimSpace(spec.LaunchID) != "" {
 		executable, resolveErr := l.executable()
 		if resolveErr != nil {
-			return LaunchResult{}, fmt.Errorf("resolve AO executable: %w", resolveErr)
+			return LaunchResult{}, fmt.Errorf("resolve Orchestrator executable: %w", resolveErr)
 		}
 		env[sessionmanager.EnvSupervisedProcess] = "1"
 		supervisorArgv := []string{executable, "agent-process", "supervise", "--session", handleID}
@@ -671,6 +672,16 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 	}
 	env[sessionmanager.EnvProjectID] = string(spec.ProjectID)
 	env[sessionmanager.EnvDataDir] = l.dataDir
+	// A reviewer inherits the daemon's environment, which holds every AO-saved
+	// provider key. Hold back the ones this harness's sessions never receive,
+	// as a worker would, unless the project sets them itself.
+	if strings.TrimSpace(l.dataDir) != "" {
+		for key, value := range providerkeys.Withheld(l.dataDir, string(spec.Harness)) {
+			if _, set := spec.ProjectEnv[key]; !set {
+				env[key] = value
+			}
+		}
+	}
 	if strings.TrimSpace(l.runFile) != "" {
 		env[EnvRunFile] = l.runFile
 	}
@@ -686,39 +697,48 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 		env["PATH"] = prependPathDir(shimDir, env["PATH"])
 		pinnedDir = shimDir
 	} else {
-		env[EnvAOCommandWarning] = fmt.Sprintf("PATH pin failed: %v; AO shim fallback failed: %v", err, shimErr)
+		env[EnvAOCommandWarning] = fmt.Sprintf("PATH pin failed: %v; Orchestrator shim fallback failed: %v", err, shimErr)
 	}
 	sessionmanager.AugmentRuntimePATHForLaunchBinary(ctx, env, argv, exec.LookPath, pinnedDir)
+	if pinnedDir != "" {
+		loginEnv, err := agentlaunch.LoginShellEnv(env["PATH"], os.Getenv, env, l.dataDir)
+		if err != nil {
+			env[EnvAOCommandWarning] = fmt.Sprintf("login-shell PATH pin failed: %v", err)
+		}
+		for key, value := range loginEnv {
+			env[key] = value
+		}
+	}
 	return env
 }
 
 func (l *agentLauncher) ensureAOShimDir() (string, error) {
 	if strings.TrimSpace(l.dataDir) == "" {
-		return "", fmt.Errorf("reviewer AO shim data directory is required")
+		return "", fmt.Errorf("reviewer Orchestrator shim data directory is required")
 	}
 	exe, err := l.executable()
 	if err != nil {
-		return "", fmt.Errorf("resolve AO executable: %w", err)
+		return "", fmt.Errorf("resolve Orchestrator executable: %w", err)
 	}
 	if !filepath.IsAbs(exe) {
 		exe, err = filepath.Abs(exe)
 		if err != nil {
-			return "", fmt.Errorf("make AO executable absolute: %w", err)
+			return "", fmt.Errorf("make Orchestrator executable absolute: %w", err)
 		}
 	}
 	shimDir := filepath.Join(l.dataDir, "reviewer-runtime", "bin")
 	if err := os.MkdirAll(shimDir, 0o700); err != nil {
-		return "", fmt.Errorf("create reviewer AO shim directory: %w", err)
+		return "", fmt.Errorf("create reviewer Orchestrator shim directory: %w", err)
 	}
 	shimPath := filepath.Join(shimDir, "ao")
 	if runtime.GOOS == "windows" {
 		shimPath += ".cmd"
 	}
 	if err := os.WriteFile(shimPath, []byte(aoShimScript(exe)), 0o600); err != nil {
-		return "", fmt.Errorf("write reviewer AO shim: %w", err)
+		return "", fmt.Errorf("write reviewer Orchestrator shim: %w", err)
 	}
 	if err := os.Chmod(shimPath, 0o700); err != nil { // #nosec G302 -- the reviewer shim must be executable by the AO user.
-		return "", fmt.Errorf("mark reviewer AO shim executable: %w", err)
+		return "", fmt.Errorf("mark reviewer Orchestrator shim executable: %w", err)
 	}
 	return shimDir, nil
 }

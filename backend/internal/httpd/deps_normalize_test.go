@@ -105,6 +105,5 @@ func (f fakeLiveSet) LastSeen(string) (time.Time, bool) { return time.Time{}, fa
 
 type fakeDeviceRoster struct{}
 
-func (fakeDeviceRoster) List() []mobilebridge.PushDevice             { return nil }
-func (fakeDeviceRoster) SetMuted(installID string, muted bool) error { return nil }
-func (fakeDeviceRoster) Delete(installID string) error               { return nil }
+func (fakeDeviceRoster) List() []mobilebridge.PushDevice { return nil }
+func (fakeDeviceRoster) Delete(installID string) error   { return nil }

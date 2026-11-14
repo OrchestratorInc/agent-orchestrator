@@ -30,6 +30,133 @@ class FakeDebugger extends EventEmitter implements AgentBrowserDebugger {
 }
 
 describe("worker-scoped agent-browser CDP bridge", () => {
+	it("announces external target changes once without letting enumeration suppress discovery", async () => {
+		const target = { id: "t1", url: "https://first.example/", title: "First", debugger: new FakeDebugger() };
+		const targets: AgentBrowserTarget[] = [target];
+		const bridge = new AgentBrowserCDPBridge({
+			listTargets: () => targets,
+			createTarget: async () => target,
+			activateTarget: () => undefined,
+			closeTarget: () => undefined,
+		});
+		const socket = await connect(await bridge.start());
+		const events = recordLifecycle(socket);
+		try {
+			await rpc(socket, 1, "Target.getTargets");
+			await rpc(socket, 2, "Target.setDiscoverTargets", { discover: true });
+			bridge.reconcileTargets();
+			const popup = { id: "t2", url: "about:blank", title: "", debugger: new FakeDebugger() };
+			targets.push(popup);
+			await rpc(socket, 3, "Target.getTargets");
+			bridge.reconcileTargets();
+			popup.url = "https://popup.example/";
+			popup.title = "Popup";
+			bridge.reconcileTargets();
+			bridge.reconcileTargets();
+			targets.pop();
+			bridge.reconcileTargets();
+			bridge.reconcileTargets();
+			await rpc(socket, 4, "Browser.getVersion");
+			expect(events).toMatchObject([
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t1", title: "First" } } },
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t2", title: "", url: "about:blank" } } },
+				{ method: "Target.targetInfoChanged", params: { targetInfo: { targetId: "t2", title: "Popup", url: "https://popup.example/" } } },
+				{ method: "Target.targetDestroyed", params: { targetId: "t2" } },
+			]);
+			const outsideWorker = await rpc(socket, 5, "Target.attachToTarget", { targetId: "sibling-worker-tab" });
+			expect(outsideWorker.error?.message).toBe("Target is outside this worker");
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
+	it("broadcasts create and close only to discovering clients with independent discovery epochs", async () => {
+		const first = { id: "t1", url: "https://first.example/", title: "First", debugger: new FakeDebugger() };
+		const targets: AgentBrowserTarget[] = [first];
+		const bridge = new AgentBrowserCDPBridge({
+			listTargets: () => targets,
+			createTarget: async (url) => {
+				const popup = { id: "t2", url, title: "Popup", debugger: new FakeDebugger() };
+				targets.push(popup);
+				return popup;
+			},
+			activateTarget: () => undefined,
+			closeTarget: (id) => {
+				const index = targets.findIndex((target) => target.id === id);
+				if (index >= 0) targets.splice(index, 1);
+			},
+		});
+		const endpoint = await bridge.start();
+		const firstClient = await connect(endpoint);
+		const secondClient = await connect(endpoint);
+		const firstEvents = recordLifecycle(firstClient);
+		const secondEvents = recordLifecycle(secondClient);
+		try {
+			await rpc(firstClient, 1, "Target.setDiscoverTargets", { discover: true });
+			await rpc(secondClient, 2, "Target.createTarget", { url: "https://popup.example/" });
+			bridge.reconcileTargets();
+			await rpc(firstClient, 3, "Target.setDiscoverTargets", { discover: false });
+			await rpc(secondClient, 4, "Target.setDiscoverTargets", { discover: true });
+			first.title = "First changed";
+			bridge.reconcileTargets();
+			await rpc(firstClient, 5, "Target.setDiscoverTargets", { discover: true });
+			await rpc(secondClient, 6, "Target.closeTarget", { targetId: "t2" });
+			bridge.reconcileTargets();
+			await rpc(firstClient, 7, "Browser.getVersion");
+			await rpc(secondClient, 8, "Browser.getVersion");
+			expect(firstEvents).toMatchObject([
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t1", title: "First" } } },
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t2" } } },
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t1", title: "First changed" } } },
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t2" } } },
+				{ method: "Target.targetDestroyed", params: { targetId: "t2" } },
+			]);
+			expect(secondEvents).toMatchObject([
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t1", title: "First" } } },
+				{ method: "Target.targetCreated", params: { targetInfo: { targetId: "t2" } } },
+				{ method: "Target.targetInfoChanged", params: { targetInfo: { targetId: "t1", title: "First changed" } } },
+				{ method: "Target.targetDestroyed", params: { targetId: "t2" } },
+			]);
+		} finally {
+			firstClient.close();
+			secondClient.close();
+			await bridge.close();
+		}
+	});
+
+	it.each([false, true])("expires undiscovered target attachments while preserving external debugger ownership (%s)", async (alreadyAttached) => {
+		const debug = new FakeDebugger();
+		debug.attached = alreadyAttached;
+		const target = { id: "t1", url: "https://first.example/", title: "First", debugger: debug };
+		const targets: AgentBrowserTarget[] = [target];
+		const bridge = new AgentBrowserCDPBridge({
+			listTargets: () => targets,
+			createTarget: async () => target,
+			activateTarget: () => undefined,
+			closeTarget: () => undefined,
+		});
+		const socket = await connect(await bridge.start());
+		try {
+			const attached = await rpc(socket, 1, "Target.attachToTarget", { targetId: "t1", flatten: true });
+			const result = attached.result;
+			if (!result || typeof result !== "object" || !("sessionId" in result) || typeof result.sessionId !== "string") {
+				throw new Error("Expected a target session");
+			}
+			expect(await rpc(socket, 2, "Runtime.enable", {}, result.sessionId)).toMatchObject({ result: { method: "Runtime.enable" } });
+			targets.pop();
+			bridge.reconcileTargets();
+			expect(await rpc(socket, 3, "Runtime.enable", {}, result.sessionId)).toMatchObject({
+				error: { message: "Unknown or expired target session" },
+			});
+			expect(debug.attached).toBe(alreadyAttached);
+			expect(await rpc(socket, 4, "Browser.getVersion")).toMatchObject({ result: { protocolVersion: "1.3" } });
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
 	it("exposes only provider targets and forwards flattened target commands", async () => {
 		const debug = new FakeDebugger();
 		const targets: AgentBrowserTarget[] = [
@@ -79,7 +206,7 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 			expect(blockedNavigation.error?.message).toContain("Navigation scheme is not permitted");
 
 			const sibling = await rpc(socket, 4, "Target.attachToTarget", { targetId: "other-worker" });
-			expect(sibling.error?.message).toContain("outside this AO worker");
+			expect(sibling.error?.message).toContain("outside this worker");
 
 			const close = await rpc(socket, 5, "Browser.close");
 			expect(close.error?.message).toContain("not permitted");
@@ -279,6 +406,158 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 			await bridge.close();
 		}
 	});
+
+	it("turns Runtime off between AO commands and back on for the next one", async () => {
+		const debug = new FakeDebugger();
+		const targets: AgentBrowserTarget[] = [
+			{ id: "t1", url: "https://example.com/", title: "Example", debugger: debug },
+		];
+		const provider = {
+			listTargets: () => targets,
+			createTarget: vi.fn(async () => targets[0]),
+			activateTarget: vi.fn(),
+			closeTarget: vi.fn(),
+		};
+		const bridge = new AgentBrowserCDPBridge(provider);
+		const endpoint = await bridge.start();
+		const socket = await connect(endpoint);
+		const methods = () => debug.sendCommand.mock.calls.map(([method]) => method);
+
+		try {
+			await bridge.beginCommand();
+			const attached = await rpc(socket, 1, "Target.attachToTarget", { targetId: "t1", flatten: true });
+			const sessionId = (attached.result as { sessionId: string }).sessionId;
+			await expectRPCResult(socket, 2, "Runtime.enable", {}, sessionId);
+			await bridge.endCommand();
+			expect(methods()).toEqual(["Runtime.enable", "Runtime.disable"]);
+
+			const cleared = nextCDPEvent(socket, "Runtime.executionContextsCleared");
+			await bridge.beginCommand();
+			await expect(cleared).resolves.toMatchObject({ sessionId });
+			expect(methods()).toEqual(["Runtime.enable", "Runtime.disable", "Runtime.enable"]);
+
+			// Nested commands keep Runtime on until the last one ends.
+			await bridge.beginCommand();
+			await bridge.endCommand();
+			expect(methods().at(-1)).toBe("Runtime.enable");
+			await bridge.endCommand();
+			expect(methods().at(-1)).toBe("Runtime.disable");
+
+			// A client command that arrives while quiet wakes Runtime first.
+			await expectRPCResult(socket, 3, "Runtime.evaluate", { expression: "1" }, sessionId);
+			expect(methods().slice(-2)).toEqual(["Runtime.enable", "Runtime.evaluate"]);
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
+	it("goes quiet again after client traffic between AO commands", async () => {
+		const debug = new FakeDebugger();
+		const targets: AgentBrowserTarget[] = [
+			{ id: "t1", url: "https://example.com/", title: "Example", debugger: debug },
+		];
+		const provider = {
+			listTargets: () => targets,
+			createTarget: vi.fn(async () => targets[0]),
+			activateTarget: vi.fn(),
+			closeTarget: vi.fn(),
+		};
+		const bridge = new AgentBrowserCDPBridge(provider);
+		const endpoint = await bridge.start();
+		const socket = await connect(endpoint);
+		const methods = () => debug.sendCommand.mock.calls.map(([method]) => method);
+
+		try {
+			await bridge.beginCommand();
+			const attached = await rpc(socket, 1, "Target.attachToTarget", { targetId: "t1", flatten: true });
+			const sessionId = (attached.result as { sessionId: string }).sessionId;
+			await expectRPCResult(socket, 2, "Runtime.enable", {}, sessionId);
+			await bridge.endCommand();
+
+			// A background command wakes Runtime, which must not stay on.
+			await expectRPCResult(socket, 3, "Runtime.evaluate", { expression: "1" }, sessionId);
+			await waitFor(() => expect(methods().at(-1)).toBe("Runtime.disable"));
+
+			// A client enabling Runtime while idle, as for a new popup, goes quiet too.
+			await expectRPCResult(socket, 4, "Runtime.disable", {}, sessionId);
+			await expectRPCResult(socket, 5, "Runtime.enable", {}, sessionId);
+			expect(methods().at(-1)).toBe("Runtime.enable");
+			await waitFor(() => expect(methods().at(-1)).toBe("Runtime.disable"));
+
+			// A running command is never interrupted by the idle timer.
+			await bridge.beginCommand();
+			await expectRPCResult(socket, 6, "Runtime.evaluate", { expression: "2" }, sessionId);
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			expect(methods().at(-1)).toBe("Runtime.evaluate");
+			await bridge.endCommand();
+			expect(methods().at(-1)).toBe("Runtime.disable");
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
+	it("does not quiet a target whose clients never enabled Runtime", async () => {
+		const debug = new FakeDebugger();
+		const targets: AgentBrowserTarget[] = [
+			{ id: "t1", url: "https://example.com/", title: "Example", debugger: debug },
+		];
+		const provider = {
+			listTargets: () => targets,
+			createTarget: vi.fn(async () => targets[0]),
+			activateTarget: vi.fn(),
+			closeTarget: vi.fn(),
+		};
+		const bridge = new AgentBrowserCDPBridge(provider);
+		const endpoint = await bridge.start();
+		const socket = await connect(endpoint);
+
+		try {
+			await bridge.beginCommand();
+			await rpc(socket, 1, "Target.attachToTarget", { targetId: "t1", flatten: true });
+			await bridge.endCommand();
+			expect(debug.sendCommand).not.toHaveBeenCalled();
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
+	it("keeps the page's real viewport", async () => {
+		const debug = new FakeDebugger();
+		const targets: AgentBrowserTarget[] = [
+			{ id: "t1", url: "https://example.com/", title: "Example", debugger: debug },
+		];
+		const provider = {
+			listTargets: () => targets,
+			createTarget: vi.fn(async () => targets[0]),
+			activateTarget: vi.fn(),
+			closeTarget: vi.fn(),
+		};
+		const bridge = new AgentBrowserCDPBridge(provider);
+		const endpoint = await bridge.start();
+		const socket = await connect(endpoint);
+
+		try {
+			const attached = await rpc(socket, 1, "Target.attachToTarget", { targetId: "t1", flatten: true });
+			const sessionId = (attached.result as { sessionId: string }).sessionId;
+			const set = await rpc(
+				socket,
+				2,
+				"Emulation.setDeviceMetricsOverride",
+				{ width: 1280, height: 720, deviceScaleFactor: 0, mobile: false },
+				sessionId,
+			);
+			const clear = await rpc(socket, 3, "Emulation.clearDeviceMetricsOverride", {}, sessionId);
+			expect(set.error).toBeUndefined();
+			expect(clear.error).toBeUndefined();
+			expect(debug.sendCommand).not.toHaveBeenCalled();
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
 });
 
 type RPCResponse = {
@@ -292,6 +571,17 @@ type CDPEvent = {
 	params?: Record<string, unknown>;
 	sessionId?: string;
 };
+
+function recordLifecycle(socket: WebSocket): Array<{ method: string; params: unknown }> {
+	const events: Array<{ method: string; params: unknown }> = [];
+	socket.on("message", (raw) => {
+		const message: unknown = JSON.parse(raw.toString());
+		if (!message || typeof message !== "object" || !("method" in message) || typeof message.method !== "string") return;
+		if (!["Target.targetCreated", "Target.targetInfoChanged", "Target.targetDestroyed"].includes(message.method) || "sessionId" in message) return;
+		events.push({ method: message.method, params: "params" in message ? message.params : undefined });
+	});
+	return events;
+}
 
 async function connect(endpoint: string): Promise<WebSocket> {
 	const socket = new WebSocket(endpoint);

@@ -1,45 +1,56 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
+import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
-import { lazy, memo, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderPlus } from "lucide-react";
+import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
+import { useLatestCallback } from "../hooks/useStable";
+import { isRemoveTarget, useRemoveProject } from "../hooks/useRemoveProject";
+import { clearOptimisticProjectRemoval } from "../hooks/optimistic-project-removals";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
-import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
+import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
+import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
-import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
+import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
+import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
-import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
-import { ShellTopbar } from "../components/ShellTopbar";
+import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
+import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
-import { TelemetryConsentRenewalDialog } from "../components/TelemetryConsentRenewalDialog";
+import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
-import { TitlebarNav } from "../components/TitlebarNav";
+import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
+import { SwipeNavigation } from "../components/SwipeNavigation";
 import { WindowTitlebar } from "../components/WindowTitlebar";
 import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
 import { scheduleIdle } from "../lib/idle";
 import { LazyChunkBoundary, LazyChunkErrorPanel } from "../components/LazyChunkBoundary";
-import { loadSessionView } from "../lib/session-view-chunk";
+import { loadedSessionView, loadSessionView } from "../lib/session-view-chunk";
+import type { SessionView as LoadedSessionView } from "../components/SessionView";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
+import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -48,6 +59,7 @@ import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
+import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -61,14 +73,16 @@ import {
 	isLinuxPlatform,
 	isMacPlatform,
 	isWindowsPlatform,
-	usesFramedAppTopbar,
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
-import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
+import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useHeldSession } from "../hooks/useHeldSession";
+import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
@@ -76,8 +90,13 @@ import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset"
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { pageHasTopbar } from "../lib/shell-topbar";
+import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
+import { watchRemoteUnpins } from "../lib/remote-session-unpins";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
@@ -89,12 +108,34 @@ const loadOrchestratorStartingChat = () => import("../components/chat/Orchestrat
 const OrchestratorStartingChat = lazy(() =>
 	loadOrchestratorStartingChat().then((module) => ({ default: module.OrchestratorStartingChat })),
 );
+
+const EMPTY_PAUSE_PROJECTS: never[] = [];
 function preloadOrchestratorStartingChat(): void {
 	void loadOrchestratorStartingChat().catch(() => undefined);
 }
-const SessionView = lazy(() => loadSessionView().then((module) => ({ default: module.SessionView })));
+const LazySessionView = lazy(() => loadSessionView().then((module) => ({ default: module.SessionView })));
+// React.lazy suspends on its first render even when the code has already loaded,
+// which drew a blank pane on the first session open (the hand-off from the new
+// chat page flickered once). Once loaded, the component renders directly.
+function SessionView(props: ComponentProps<typeof LoadedSessionView>) {
+	const [Loaded] = useState(() => loadedSessionView()?.SessionView);
+	return Loaded ? <Loaded {...props} /> : <LazySessionView {...props} />;
+}
 function preloadSessionView(): void {
 	void loadSessionView().catch(() => undefined);
+}
+
+const LAST_PROJECT_KEY = "ao.newTask.lastProject";
+
+/** The last project the user was in, while it still exists. */
+function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
+	let id: string | null = null;
+	try {
+		id = localStorage.getItem(LAST_PROJECT_KEY);
+	} catch {
+		return undefined;
+	}
+	return workspaces.some((workspace) => workspace.id === id && !isScratchpadWorkspace(workspace)) ? id ?? undefined : undefined;
 }
 
 export const Route = createFileRoute("/_shell")({
@@ -141,6 +182,7 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 				{startingChat}
 			</div>
 			<SettingsPane />
+			<ShareLinkHost />
 		</>
 	);
 }
@@ -168,13 +210,18 @@ function LocalSessionHost() {
 		select: (match) => match.params,
 	});
 	const { org } = useCloudOrg();
-	const sessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const cloudOrgId = org?.id;
+	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const liveProjectId = projectSession?.projectId;
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const view = useMemo(
+		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
+		[cloudOrgId, projectId, sessionId],
+	);
 	if (!sessionId) return null;
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
-			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
-			</Suspense>
+			<Suspense fallback={null}>{view}</Suspense>
 		</CatchBoundary>
 	);
 }
@@ -197,6 +244,7 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 type CreateProjectConfigInput = {
 	workerAgent: string;
 	orchestratorAgent: string;
+	reviewerAgent?: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -206,6 +254,7 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
+		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -218,8 +267,7 @@ const PROVISIONING_TIMEOUT_MS = 120_000;
 const isMac = isMacPlatform();
 const isWindows = isWindowsPlatform();
 const isLinux = isLinuxPlatform();
-const framedAppTopbar = usesFramedAppTopbar();
-const shellTopbarHiddenByPlatform = hidesShellTopbar();
+const macTrafficLightBand = hidesShellTopbar();
 
 /**
  * The shell must observe the complete workspace list for the sidebar, but a
@@ -228,51 +276,46 @@ const shellTopbarHiddenByPlatform = hidesShellTopbar();
  * board own their more granular workspace subscriptions.
  */
 const ShellCenter = memo(function ShellCenter({
-	hideShellTopbar,
 	isSessionRoute,
+	isHomeRoute,
+	isNewChatRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
 	startingCloudOrchestrator,
 	startingSteps,
 	startingCoderWorkspaceUrl,
+	startingHarness,
 }: {
-	hideShellTopbar: boolean;
 	isSessionRoute: boolean;
+	isHomeRoute: boolean;
+	isNewChatRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
 	startingSteps?: WorkspaceSession["provisionSteps"];
 	startingCoderWorkspaceUrl?: string;
+	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
-	// Linux retains an outer drag strip. macOS uses the shared header itself;
-	// an extra strip there would displace session tabs from the native controls.
-	// Windows already owns a separate WindowTitlebar.
-	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
-	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
-	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
+	// Once the new chat page sends, it takes the session's top bar so the first
+	// message lands where the session will show it, and nothing moves at handoff.
+	const newChatSending = useUiStore((state) => state.newChatSending);
+	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
-		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
+		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
 	</>;
-	if (hideShellTopbar) {
-		return selfFramedCenterPanel ? selfFramedOutlet : (
-			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				<ShellOutlet startingChat={startingChat} />
-			</CenterPanelShell>
-		);
-	}
-	if (framedAppTopbar) {
-		return (
-			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <ShellTopbar />}
-				<ShellOutlet startingChat={startingChat} />
-			</CenterPanelShell>
-		);
-	}
+	// Pages own their header content; the panel owns the shared workspace controls,
+	// so every page carries the bell except the welcome start page.
+	if (selfFramedCenterPanel) return selfFramedOutlet;
 	return (
-		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
+		<CenterPanelShell
+			className={panelClassName}
+			notifications={!isHomeRoute || startingOrchestrator}
+			// The home and unsent new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute: isNewChatRoute && !newChatSending, startingOrchestrator })}
+		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -285,10 +328,14 @@ const ShellCenter = memo(function ShellCenter({
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
+	useSetupCheckedTelemetry();
 	useSessionSwitchSnap();
+	useLinkThisComputerOnSignIn();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
+	const canGoForward = useCanGoForward();
+	const settingsPage = useSettingsPage();
 	const matchRoute = useMatchRoute();
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
@@ -296,8 +343,25 @@ function ShellLayout() {
 	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, refresh: refreshRemoteHosts } = useRemoteHosts();
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
+	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
+	// What each host showed last stays only for the hosts still saved, and shows
+	// while they connect or are offline.
+	useEffect(() => {
+		if (!remoteHostsListed) return;
+		void syncRemoteCache(queryClient, remoteHostIds);
+		// Pins removed here for a host that is no longer saved have no row left to hide.
+		useRemoteUnpinStore.getState().keepHosts(remoteHostIds);
+	}, [queryClient, remoteHostIds, remoteHostsListed]);
+	// Pins removed here while a host was unreachable reach it once its list loads.
+	useEffect(() => watchRemoteUnpins(queryClient), [queryClient]);
+	const refusedRemoteHostKey = remoteHosts.filter((host) => host.failureReason === "unauthorized").map((host) => host.hostId).join("\0");
+	useEffect(() => {
+		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
+	}, [queryClient, refusedRemoteHostKey]);
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -323,8 +387,10 @@ function ShellLayout() {
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
+	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
+	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
@@ -332,26 +398,12 @@ function ShellLayout() {
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
-	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
 	// The drag strip above the sidebar must be exactly as wide as the sidebar.
 	// `--ao-sidebar-w` only reaches the strip if it already exists when the
-	// sidebar first applies its saved width, so measure the sidebar instead.
+	// sidebar first applies its saved width, so measure the sidebar instead
+	// (see the effect after `isStartupLoading`).
 	const [sidebarWidthPx, setSidebarWidthPx] = useState<number | null>(null);
-	useEffect(() => {
-		if (!isMac || !sidebarHasLayout) return;
-		let observer: ResizeObserver | undefined;
-		const frame = requestAnimationFrame(() => {
-			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
-			if (!el) return;
-			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
-			observer.observe(el);
-		});
-		return () => {
-			cancelAnimationFrame(frame);
-			observer?.disconnect();
-		};
-	}, [sidebarHasLayout]);
 	const syncSystemTheme = useUiStore((state) => state.syncSystemTheme);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
@@ -359,10 +411,12 @@ function ShellLayout() {
 	const requestNewShellTerminal = useUiStore((state) => state.requestNewShellTerminal);
 	const newShellTerminalNonce = useUiStore((state) => state.newShellTerminalNonce);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
-	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
-	useWindowZoomFactor();
+	// Body-level popout portals sit outside #root; they read the platform here.
+	useDocumentFlag("data-shell-windows", isWindows);
+	useDocumentFlag("data-shell-linux", isLinux);
+	const windowZoomFactor = useWindowZoomFactor();
 	// Drag is on immediately for a normal windowed launch. After leaving fullscreen,
 	// wait for the pad/height transition so the growing strip cannot steal clicks.
 	const [trafficLightDragActive, setTrafficLightDragActive] = useState(isMac);
@@ -390,15 +444,15 @@ function ShellLayout() {
 	// Seeded to the current value so a mount never opens a terminal unasked.
 	const handledShellNonceRef = useRef(newShellTerminalNonce);
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
-	const [isKeyboardShortcutsSettingsOpen, setIsKeyboardShortcutsSettingsOpen] = useState(false);
 	const customizeKeyboardShortcuts = useCallback(() => {
 		setIsKeyboardShortcutsOpen(false);
-		setIsKeyboardShortcutsSettingsOpen(true);
+		useUiStore.getState().openGlobalSettings("shortcuts", { preserveProject: true });
 	}, []);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const openShellTerminal = useOpenShellTerminal(routeParams.hostId);
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
-	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status: accountStatus, session: cloudAccount } = useCloudSession();
 	useEffect(() => {
 		if ((!remoteHostsEnabled || accountStatus === "unauthenticated") && routeParams.hostId) void navigate({ to: "/", replace: true });
@@ -411,7 +465,9 @@ function ShellLayout() {
 			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
 		leavePage: () => void navigate({ to: "/", replace: true }),
 	});
-	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
+	const linkSession = (routeParams.hostId ? remoteWorkspaces ?? [] : workspaces)
+		.flatMap((workspace) => workspace.sessions)
+		.find((session) => session.id === routeParams.sessionId && session.hostId === routeParams.hostId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
 	useEffect(() => {
@@ -482,6 +538,19 @@ function ShellLayout() {
 		: routeParams.sessionId
 			? workspaces.find((workspace) => workspace.sessions.some((session) => session.id === routeParams.sessionId))?.id
 			: undefined;
+	// The last project the user was in, so a new session started from outside any
+	// project opens there rather than in the scratchpad.
+	const scopedIsProject = Boolean(scopedProjectId) && workspaces.some(
+		(workspace) => workspace.id === scopedProjectId && !isScratchpadWorkspace(workspace),
+	);
+	useEffect(() => {
+		if (!scopedIsProject || !scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
+		try {
+			localStorage.setItem(LAST_PROJECT_KEY, scopedProjectId);
+		} catch {
+			// Without it a new session outside a project starts in the scratchpad.
+		}
+	}, [scopedIsProject, scopedProjectId]);
 	const scopedSession = routeParams.sessionId
 		? (routeParams.hostId ? remoteWorkspaces : workspaces)
 			.flatMap((workspace) => workspace.sessions)
@@ -507,7 +576,7 @@ function ShellLayout() {
 					const { data, error: apiError } = await apiClient.GET("/api/v1/projects/{id}", {
 						params: { path: { id: scopedProjectId } },
 					});
-					if (apiError) throw new Error(apiErrorMessage(apiError));
+					if (apiError) throw apiErrorException(apiError);
 					if (data?.status !== "ok") throw new Error("Project config unavailable");
 					return data.project as components["schemas"]["Project"];
 				},
@@ -523,10 +592,20 @@ function ShellLayout() {
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
 	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	// The new chat page is a session that does not exist yet, so it takes the
+	// session frame and the session view replaces it without the chrome moving.
+	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	// The new chat page keeps its host in the search, not the path.
+	const newChatHost = useRouterState({
+		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
+	});
+	// The new chat page's project is a search param, so routeParams never carries it.
+	const newChatProject = useRouterState({
+		select: (state) => (isNewChatRoute ? (state.location.search as { project?: string }).project : undefined),
+	});
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isTerminalsRoute = Boolean(matchRoute({ to: "/terminals" }));
 	const isSettingsRoute =
 		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
 		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
@@ -537,7 +616,9 @@ function ShellLayout() {
 	// rounded center panel. Settings owns its complete frame and remains
 	// self-framed.
 	const selfFramedCenterPanel = isSettingsRoute;
-	const hideShellTopbar = isHomeRoute || selfFramedCenterPanel || shellTopbarHiddenByPlatform;
+	// macOS, home and settings reserve only the traffic-light band above the sidebar;
+	// other routes reserve a full toolbar row.
+	const trafficLightBand = isHomeRoute || selfFramedCenterPanel || macTrafficLightBand;
 	const restartingProjectIds = useUiStore((state) => state.restartingProjectIds);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const orchestratorReplacementErrors = useUiStore((state) => state.orchestratorReplacementErrors);
@@ -556,19 +637,38 @@ function ShellLayout() {
 	const startingSteps = startingOrchestratorSession?.provisionSteps;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
+const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	const isStartupLoading =
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// The startup loader renders no sidebar, so measure again once the shell
+	// mounts it. Otherwise the strip keeps the 240px default and its fill
+	// paints over the center panel's top-left corner beside a narrower sidebar.
+	useEffect(() => {
+		if (!isMac || !sidebarHasLayout || isStartupLoading) return;
+		let observer: ResizeObserver | undefined;
+		const frame = requestAnimationFrame(() => {
+			const el = document.querySelector<HTMLElement>('[data-slot="sidebar-container"]');
+			if (!el) return;
+			observer = new ResizeObserver(([entry]) => setSidebarWidthPx(entry.target.getBoundingClientRect().width));
+			observer.observe(el);
+		});
+		return () => {
+			cancelAnimationFrame(frame);
+			observer?.disconnect();
+		};
+	}, [sidebarHasLayout, isStartupLoading]);
 	// Session shortcuts walk the sidebar's own order (pinned, projects in the
 	// user's drag order, scratchpad), not the daemon's raw list, so "next" always
 	// means the row below the current one on screen.
 	const sidebarSessionOrder = useCallback(() => {
-		const { projectOrder, sessionOrders } = useSidebarOrderStore.getState();
+		const { projectOrder, pinnedProjectIds, sessionOrders } = useSidebarOrderStore.getState();
 		return buildSidebarSessionOrder({
 			workspaces: workspacesRef.current,
 			remoteWorkspaces: remoteWorkspacesRef.current,
 			projectOrder,
+			pinnedProjectIds,
 			sessionOrders,
 		});
 	}, []);
@@ -627,10 +727,6 @@ function ShellLayout() {
 			);
 		}, PROVISIONING_TIMEOUT_MS);
 		try {
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", {
-				project_id: workspace.id,
-				source,
-			});
 			const {
 				data: spawnData,
 				error: spawnError,
@@ -640,6 +736,9 @@ function ShellLayout() {
 					projectId: workspace.id,
 					kind: "orchestrator",
 					harness: input.orchestratorAgent as components["schemas"]["SpawnSessionRequest"]["harness"],
+					// The daemon already starts orchestrators in the background; say so
+					// explicitly, as the CLI does, so the request never holds a Setup.
+					async: true,
 				},
 			});
 			if (spawnError || !spawnData?.session?.id) {
@@ -648,7 +747,7 @@ function ShellLayout() {
 					: `Failed to spawn orchestrator (${spawnResponse.status})`;
 				throw new Error(message);
 			}
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", {
+			void captureRendererEvent("ao.orchestrators.spawned", {
 				project_id: workspace.id,
 				source,
 			});
@@ -660,23 +759,26 @@ function ShellLayout() {
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
+				await navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				}).catch(() => undefined);
+			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Follow the new orchestrator only if the user is still waiting on
-			// this project's board; do not pull them back from another page.
-			const current = routeParamsRef.current;
-			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: workspace.id, sessionId },
-				});
-			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+			void captureRendererEvent("ao.orchestrators.spawn_failed", {
 				project_id: workspace.id,
 				source,
 			});
@@ -704,9 +806,12 @@ function ShellLayout() {
 				orchestratorAgent: input.orchestratorAgent as WorkspaceSummary["orchestratorAgent"],
 				sessions: [],
 			};
-			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
+			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
+			// Ids come from the folder name: a folder removed and added again is the same id.
+			clearOptimisticProjectRemoval(workspace.id);
+			useSidebarOrderStore.getState().moveProjectToTop(workspace.id);
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
 			setProjectProvisioning(workspace.id, true);
@@ -721,6 +826,7 @@ function ShellLayout() {
 			path: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -730,10 +836,14 @@ function ShellLayout() {
 				operation: "project_add",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_add_requested");
+			const reportFailure = (code: string | undefined) => captureProjectAddFailed(
+				(event, properties) => { void captureRendererEvent(event, properties); },
+				code,
+			);
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
-				throw new Error(status.message || "AO daemon is not ready.");
+				reportFailure("DAEMON_NOT_READY");
+				throw new Error(status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
@@ -742,9 +852,12 @@ function ShellLayout() {
 					clonePreparationId: input.clonePreparationId,
 					config: createProjectConfig(input),
 				},
+			}).catch((requestError: unknown) => {
+				reportFailure("REQUEST_FAILED");
+				throw requestError;
 			});
 			if (error) {
-				const failure = new Error(apiErrorMessage(error)) as Error & {
+				const failure = apiErrorException(error) as Error & {
 					code?: string;
 					details?: Record<string, unknown>;
 					requestId?: string;
@@ -789,14 +902,18 @@ function ShellLayout() {
 						return;
 					}
 				}
+				reportFailure(failure.code);
 				void captureRendererException(failure, {
 					source: "project-add",
 					operation: "project_add",
 					surface: "project_board",
-					});
-					throw failure;
+				});
+				throw failure;
 			}
-			if (!data?.project) throw new Error("Project creation returned no project");
+			if (!data?.project) {
+				reportFailure("NO_PROJECT");
+				throw new Error("Project creation returned no project");
+			}
 			await completeProjectCreation(data.project, input, "project_add");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
@@ -808,6 +925,7 @@ function ShellLayout() {
 			destinationParent: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {
@@ -816,10 +934,13 @@ function ShellLayout() {
 				operation: "project_clone",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_clone_requested");
+			const reportFailure = (code: string | undefined) => {
+				void captureRendererEvent("ao.projects.clone_failed", { error_code: code || "unknown" });
+			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
-				throw new Error(status.message || "AO daemon is not ready.");
+				reportFailure("DAEMON_NOT_READY");
+				throw new Error(status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects/clone", {
 				signal: input.signal,
@@ -828,9 +949,13 @@ function ShellLayout() {
 					destinationParent: input.destinationParent,
 					config: createProjectConfig(input),
 				},
+			}).catch((requestError: unknown) => {
+				// A clone the user cancelled is not a failure.
+				if (!input.signal?.aborted) reportFailure("REQUEST_FAILED");
+				throw requestError;
 			});
 			if (error) {
-				const failure = new Error(apiErrorMessage(error)) as Error & {
+				const failure = apiErrorException(error) as Error & {
 					code?: string;
 					details?: Record<string, unknown>;
 					requestId?: string;
@@ -838,6 +963,7 @@ function ShellLayout() {
 				failure.code = apiErrorCode(error);
 				failure.details = apiErrorDetails(error);
 				failure.requestId = apiErrorRequestId(error);
+				reportFailure(failure.code);
 				void captureRendererException(failure, {
 					source: "project-clone",
 					operation: "project_clone",
@@ -845,7 +971,10 @@ function ShellLayout() {
 				});
 				throw failure;
 			}
-			if (!data?.project) throw new Error("Project clone returned no project");
+			if (!data?.project) {
+				reportFailure("NO_PROJECT");
+				throw new Error("Project clone returned no project");
+			}
 			await completeProjectCreation(data.project, input, "project_clone");
 		},
 		[completeProjectCreation],
@@ -856,7 +985,7 @@ function ShellLayout() {
 			body: { path },
 		});
 		if (error) {
-			const failure = new Error(apiErrorMessage(error)) as Error & { code?: string };
+			const failure = apiErrorException(error) as Error & { code?: string };
 			failure.code = apiErrorCode(error);
 			throw failure;
 		}
@@ -879,7 +1008,8 @@ function ShellLayout() {
 				if (!existing.error && existing.data?.status === "ok" && existing.data.project.id === existingProjectId) projectId = existingProjectId;
 			}
 		}
-		if (!projectId) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
+		if (!projectId) throw Object.assign(apiErrorException(error, "Could not add project on this host."), { code: apiErrorCode(error) });
+		clearOptimisticProjectRemoval(projectId, hostId);
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));
@@ -892,7 +1022,7 @@ function ShellLayout() {
 			setOrchestratorStartupError(projectId, "Project added, but orchestrator startup timed out. Try starting it again.", hostId);
 		}, PROVISIONING_TIMEOUT_MS);
 		void client.POST("/api/v1/orchestrators", { body: { projectId } }).then(({ data, error }) => {
-			if (error || !data?.orchestrator?.id) throw new Error(apiErrorMessage(error, "Could not start the orchestrator."));
+			if (error || !data?.orchestrator?.id) throw apiErrorException(error, "Could not start the orchestrator.");
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(projectId, false, hostId);
 			setOrchestratorStartupError(projectId, null, hostId);
@@ -907,108 +1037,44 @@ function ShellLayout() {
 	}, [navigate, queryClient, remoteHosts, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast]);
 	const initializeRemoteProject = useCallback(async (hostId: string, path: string) => {
 		const { error } = await clientForHost(hostId).POST("/api/v1/projects/initialize", { body: { path } });
-		if (error) throw Object.assign(new Error(apiErrorMessage(error)), { code: apiErrorCode(error) });
+		if (error) throw Object.assign(apiErrorException(error), { code: apiErrorCode(error) });
 	}, []);
 
 	const validateImport = useCallback(
 		async (input: { path: string; importKind: "project" | "workspace" }) => {
 			const { data, error } = await apiClient.POST("/api/v1/imports/validate", { body: input });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!data) throw new Error("Import validation returned no result");
 			return data;
 		},
 		[],
 	);
 
+	// Removal is optimistic: the project leaves every list on confirm and the
+	// daemon's teardown runs in the background (see useRemoveProject).
+	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string, cloud?: boolean) =>
+		(hostId ? remoteWorkspacesRef.current ?? [] : workspacesRef.current)
+			.find((workspace) => isRemoveTarget(workspace, projectId, hostId, cloud)), []);
+	const isViewingProject = useCallback((workspace: WorkspaceSummary) => {
+		const route = routeParamsRef.current;
+		if (route.hostId !== workspace.hostId) return false;
+		return route.projectId === workspace.id ||
+			(route.sessionId !== undefined && workspace.sessions.some((session) => session.id === route.sessionId));
+	}, []);
+	const removeProjectById = useRemoveProject({
+		findWorkspace: findWorkspaceToRemove,
+		isViewing: isViewingProject,
+		cloud: { client: cloudClient, orgId: cloudOrg?.id },
+	});
+	// The flag tells a local project from a cloud project with the same id.
 	const removeProject = useCallback(
-		async (projectId: string) => {
-			const isLastWorkspace =
-              workspaces.length === 1 && workspaces[0]?.id === projectId;
-			void addRendererExceptionStep("Project removal requested", {
-				source: "project-remove",
-				operation: "project_remove",
-				surface: "project_board",
-				project_id: projectId,
-			});
-			// Cloud projects live in the control plane, not the local daemon: route
-			// their delete to the CP (which archives the project and all its
-			// sessions) instead of the local project endpoint.
-			const isCloudProject =
-				workspaces.find((item) => item.id === projectId)?.kind === CLOUD_PROJECT_KIND;
-			if (isCloudProject) {
-				if (!cloudOrg?.id) {
-					const failure = new Error("The cloud control plane is not ready. Sign in and try again.") as Error & {
-						code?: string;
-					};
-					failure.code = "cloud_not_ready";
-					void captureRendererException(failure, {
-						source: "project-remove",
-						operation: "project_remove",
-						surface: "project_board",
-						project_id: projectId,
-					});
-					throw failure;
-				}
-				try {
-					await cloudClient.deleteProject(cloudOrg.id, projectId);
-				} catch (error) {
-					const failure = new Error(
-						error instanceof Error ? error.message : "Unable to delete cloud project",
-					) as Error & { code?: string };
-					void captureRendererException(failure, {
-						source: "project-remove",
-						operation: "project_remove",
-						surface: "project_board",
-						project_id: projectId,
-					});
-					throw failure;
-				}
-				void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
-				// The archive is asynchronous (202); refresh the cloud queries so the
-				// merged board drops the project and its sessions on the next fetch.
-				await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
-				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				if (isLastWorkspace) {
-					void navigate({ to: "/" });
-				}
-				return;
-			}
-			const { error } = await apiClient.DELETE("/api/v1/projects/{id}", {
-				params: { path: { id: projectId } },
-			});
-			if (error) {
-				const failure = new Error(apiErrorMessage(error)) as Error & { code?: string };
-				failure.code = apiErrorCode(error);
-				void captureRendererException(failure, {
-					source: "project-remove",
-					operation: "project_remove",
-					surface: "project_board",
-					project_id: projectId,
-				});
-				throw failure;
-			}
-			void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
-			updateWorkspaces((current) => current.filter((item) => item.id !== projectId));
-			if (isLastWorkspace) {
-              void navigate({ to: "/" });
-}
-		},
-		[cloudClient, cloudOrg?.id, navigate, queryClient, updateWorkspaces, workspaces],
+		(projectId: string, cloud: boolean) => removeProjectById(projectId, undefined, cloud),
+		[removeProjectById],
 	);
-	const removeRemoteProject = useCallback(async (hostId: string, projectId: string) => {
-		const selectedProject = routeParams.hostId === hostId && (
-			routeParams.projectId === projectId || remoteWorkspaces.some((workspace) =>
-				workspace.hostId === hostId && workspace.id === projectId &&
-				workspace.sessions.some((session) => session.id === routeParams.sessionId),
-			)
-		);
-		const { error } = await clientForHost(hostId).DELETE("/api/v1/projects/{id}", {
-			params: { path: { id: projectId } },
-		});
-		if (error) throw new Error(apiErrorMessage(error));
-		void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
-		if (selectedProject) void navigate({ to: "/" });
-	}, [navigate, queryClient, remoteWorkspaces, routeParams.hostId, routeParams.projectId, routeParams.sessionId]);
+	const removeRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => removeProjectById(projectId, hostId),
+		[removeProjectById],
+	);
 	const openRemoteProjectOrchestrator = useCallback(async (hostId: string, projectId: string) => {
 		const workspace = remoteWorkspaces.find((item) => item.hostId === hostId && item.id === projectId);
 		if (!workspace) return;
@@ -1022,7 +1088,9 @@ function ShellLayout() {
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
 			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
-			await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
+			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
+			// Only a new orchestrator must be in the list before its route can find it.
+			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;
 			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
@@ -1030,6 +1098,27 @@ function ShellLayout() {
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
 		}
 	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
+	// The sidebar is memoized, and the shell re-renders several times per route
+	// change. Handlers that keep their identity let those renders skip it.
+	const openRemoteProjectFromSidebar = useCallback((hostId: string, projectId: string) => {
+		void navigate(projectNavigateTarget(projectId, hostId));
+	}, [navigate]);
+	const openRemoteOrchestratorFromSidebar = useLatestCallback((hostId: string, projectId: string) => {
+		void openRemoteProjectOrchestrator(hostId, projectId);
+	});
+	const configureRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
+		[openProjectSettings],
+	);
+	const retryRemoteHosts = useCallback(() => {
+		void refreshRemoteHosts();
+		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
+	}, [queryClient, refreshRemoteHosts]);
+	// A new handler on every shell render would rebuild the sidebar context and
+	// re-render every row button that reads it.
+	const handleSidebarOpenChange = useCallback((open: boolean) => {
+		if (open !== isSidebarOpen) toggleSidebar();
+	}, [isSidebarOpen, toggleSidebar]);
 
 	const restartOrchestrator = useCallback(
 		async (projectId: string, mode?: "chat" | "tui", approvalMode?: "bypass-permissions") => {
@@ -1071,6 +1160,10 @@ function ShellLayout() {
 					body: { enabled: developerMode },
 				});
 				if (error) throw error;
+				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
+					body: { enabled: developerMode },
+				});
+				if (limitHistoryError) throw limitHistoryError;
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
@@ -1142,34 +1235,29 @@ function ShellLayout() {
 		workspaceStartupState,
 	]);
 
-	// Keep Electron's nativeTheme in step with the shell so the embedded preview
-	// WebContentsView (which follows prefers-color-scheme) flips at the same time.
-	// Send the preference, not the resolved theme, so "system" keeps both surfaces
-	// following the OS instead of freezing matchMedia to a forced value.
-	useEffect(() => {
-		void aoBridge.theme?.set(themePreference);
-	}, [themePreference]);
-
 	// Cursor Agent reads TERM_THEME at spawn from this file. Persist the same
 	// resolved light/dark scheme the terminal uses, not nativeTheme alone.
 	useEffect(() => {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
+	// macOS Appearance preference: the shell becomes one
+	// translucent plate over the native vibrancy blur (styles.css, "macOS window
+	// transparency").
+	const windowTranslucent = isMac && windowTranslucency;
+
 	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read.
+	// data-theme has been applied before the token is read. A translucent window
+	// paints no background, and the read forces a whole-document style recalc
+	// mid-switch, so it is skipped there.
 	useEffect(() => {
+		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
 			const color = resolveCssColorToHex("--sidebar");
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme]);
-
-	// macOS Appearance preference: the shell becomes one
-	// translucent plate over the native vibrancy blur (styles.css, "macOS window
-	// transparency").
-	const windowTranslucent = isMac && windowTranslucency;
+	}, [resolvedTheme, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1199,9 +1287,19 @@ function ShellLayout() {
 	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
 	useAppShortcut("next-attention-session", () => navigateSession(1, true));
 	useAppShortcut("history-back", () => {
+		// Settings covers the current route without adding a router history entry.
+		if (settingsPage) {
+			settingsPage.close();
+			return;
+		}
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
+	// The shell is mounted on every route, so these menu items always apply.
+	useAppMenuAvailable("new-session", true);
+	useAppMenuAvailable("toggle-sidebar", true);
+	useAppMenuAvailable("history-back", true);
+	useAppMenuAvailable("history-forward", true);
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
@@ -1210,6 +1308,15 @@ function ShellLayout() {
 	useEffect(
 		() =>
 			aoBridge.app.onNewSessionShortcut(() => {
+			// On the new chat page, stay with the project and host it shows.
+			if (newChatHost) {
+				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
+				return;
+			}
+			if (isNewChatRoute) {
+				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID);
+				return;
+			}
 			if (routeParams.hostId) {
 				if (routeParams.projectId) requestNewTask(routeParams.projectId, routeParams.hostId);
 				else requestNewTask(STANDALONE_WORKSPACE_ID, routeParams.hostId);
@@ -1218,14 +1325,32 @@ function ShellLayout() {
 				if (scopedProjectId) {
 					requestNewTask(scopedProjectId);
 				} else {
-					requestNewTask(STANDALONE_WORKSPACE_ID);
+					requestNewTask(lastProjectId(workspaces) ?? STANDALONE_WORKSPACE_ID);
 				}
 			}),
-		[routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask],
+		[isNewChatRoute, newChatHost, newChatProject, routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask, workspaces],
 	);
 
 	// ⌘/ toggles: a second press closes the sheet.
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
+	// The command palette runs the help shortcut through the app shortcut bus.
+	useAppShortcut("keyboard-shortcuts", () => setIsKeyboardShortcutsOpen((open) => !open));
+
+	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
+	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
+	const [quitKeepsRunning, setQuitKeepsRunning] = useState(false);
+	useEffect(
+		() =>
+			aoBridge.app.onQuitConfirmRequest(({ keepsRunning }) => {
+				setQuitKeepsRunning(keepsRunning);
+				setIsQuitConfirmOpen(true);
+			}),
+		[],
+	);
+	const resolveQuitConfirm = useCallback((confirmed: boolean) => {
+		setIsQuitConfirmOpen(false);
+		aoBridge.app.resolveQuitConfirm(confirmed);
+	}, []);
 
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
@@ -1235,46 +1360,32 @@ function ShellLayout() {
 		[requestCreateProjectFromPath],
 	);
 
-	// New standalone terminal (⌘T / Ctrl+T), also detected in the main process so it
-	// fires from inside a terminal pane. It raises the same store signal as the
-	// tab-strip + button so the two cannot drift apart.
+	// New session terminal (⌘T / Ctrl+T), also detected in the main process so it
+	// fires from inside a terminal pane. Terminals only live in a session's tab
+	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
 			aoBridge.app.onNewShellTerminalShortcut(() => {
-				// The project board is not a terminal surface — ⌘T here used to yank
-				// users into the standalone /terminals route (#4772). Sessions and the
-				// dedicated terminals view keep the shortcut; explicit UI can still
-				// open shells from the board.
-				if (!routeParams.hostId && (routeParams.sessionId || isTerminalsRoute)) {
-					requestNewShellTerminal();
-				}
+				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
-		[isTerminalsRoute, requestNewShellTerminal, routeParams.hostId, routeParams.sessionId],
+		[requestNewShellTerminal, routeParams.sessionId],
 	);
 
 	// The shell layout is the single consumer of that signal, because it is the
-	// only component mounted on EVERY route. Owning it here is what lets the
-	// topbar + button and the keyboard shortcut work from a session or the
-	// standalone terminals view alike — when the session view owned it, both
-	// silently did nothing outside a session, since nothing was listening.
-	//
-	// Where the new shell becomes visible depends on where the user is: inside a
-	// session it joins that pane's tab strip; on /terminals it joins that strip;
-	// explicit board UI can still route here without the keyboard shortcut.
+	// only component mounted on every route. The new shell joins the tab strip
+	// of the session on screen; with no session on screen there is nowhere to
+	// show it, so the request is dropped.
 	useEffect(() => {
 		if (handledShellNonceRef.current === newShellTerminalNonce) return;
 		handledShellNonceRef.current = newShellTerminalNonce;
-		if (routeParams.hostId) return;
+		if (!routeParams.sessionId) return;
 		const shell = openShellTerminal.open({
-			projectId: scopedProjectId,
+			projectId: routeParams.hostId ? routeParams.projectId : scopedProjectId,
 			sessionId: routeParams.sessionId,
 			cloud: scopedSession?.cloud,
 		});
 		if (!shell) return;
 		setActiveShellTerminal(shell.handleId);
-		if (!routeParams.sessionId) {
-			void navigate({ to: "/terminals" });
-		}
 	}, [
 		newShellTerminalNonce,
 		openShellTerminal,
@@ -1282,7 +1393,7 @@ function ShellLayout() {
 		scopedSession?.cloud,
 		routeParams.sessionId,
 		routeParams.hostId,
-		navigate,
+		routeParams.projectId,
 		setActiveShellTerminal,
 	]);
 
@@ -1295,6 +1406,98 @@ function ShellLayout() {
 			)),
 		[queryClient],
 	);
+
+	// ao-app://sessions/… deep links from external tools. The raw URL is
+	// re-read as its in-app ao:// form and resolved through the same
+	// session-links path as ao:// links, so both schemes behave alike:
+	// artifact routes open the file in the destination session, a terminated
+	// session refuses with the same toast, and a stale link focuses the app
+	// with a quiet toast instead of navigating to a wrong session.
+	//
+	// A link is handled only once its evidence can be trusted, and held until
+	// then (flushed as soon as that flips true):
+	// - the confirmed startup fetch has landed — a green query alone is not
+	//   enough, since the route loader can cache a stale [] from before the
+	//   daemon port was known (same gate the startup loader uses);
+	// - remote hosts that are on have finished loading (or failed) — a
+	//   cold-start link must not race a host's project query, whose workspaces
+	//   carry sessions only after the session query lands too. An offline host
+	//   has concluded its connect attempt, so it counts as settled and never
+	//   holds the gate open;
+	// - the remote side has concluded — useRemoteHosts' settled flag mirrors
+	//   its own enable rule (disabled or signed out never lists), so the gate
+	//   cannot drift from it; a listed host counts as settled once offline,
+	//   failed, or its project and session queries have both landed.
+	const remoteWorkspaceLoadSettled = remoteHostsSettled
+		&& (!remoteHostsListed || remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
+			|| (remoteLoadedProjectHostIds.includes(hostId) && remoteLoadedSessionHostIds.includes(hostId))
+			|| remoteFailedHostIds.includes(hostId)));
+	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
+	const pendingSessionDeepLinkRef = useRef<string | null>(null);
+	const handleSessionDeepLink = useCallback(
+		(rawUrl: string) => {
+			const link = `ao://${rawUrl.slice("ao-app://".length)}`;
+			const artifact = parseArtifactLink(link);
+			const target = parseSessionLink(link) ?? artifact;
+			const workspaces = workspacesRef.current;
+			const remoteWorkspaces = remoteWorkspacesRef.current;
+			// Resolve the session and its owning workspace from the same list:
+			// a local and a remote project can share an id, and the workspace
+			// supplies the hostId for the route and artifact requests.
+			const resolvedLocal = target ? resolveSessionLink(link, workspaces) : undefined;
+			const resolvedRemote = target ? resolveSessionLink(link, remoteWorkspaces) : undefined;
+			if (resolvedLocal && resolvedRemote) {
+				// Session ids are <project>-<n> per daemon, so a paired machine
+				// running the same repo can host a session with the same id. The
+				// URL carries no host, so honoring either side is a guess that
+				// can open the wrong session — refuse instead.
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionAmbiguous"));
+				return;
+			}
+			const resolved = resolvedLocal ?? resolvedRemote;
+			const workspace = resolvedLocal
+				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)
+				: resolvedRemote
+					// Hosts merge into one list and can share an id (standalone), so
+					// the workspace must be the one holding the resolved session.
+					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId && entry.sessions.some((session) => session.id === resolvedRemote.sessionId))
+					: undefined;
+			if (!resolved || !workspace) {
+				// A failed host query settles the gate with that host's projects
+				// holding empty session lists, so a miss on such a project is
+				// "could not load", not "does not exist" (CodeRabbit round 4).
+				const missOnFailedHost = target !== undefined && remoteFailedHostIds.some((hostId) =>
+					remoteWorkspacesRef.current.some((entry) => entry.hostId === hostId && entry.id === target.projectId));
+				useUiStore.getState().showGlobalToast(t(missOnFailedHost ? "deepLink.sessionHostUnavailable" : "deepLink.sessionNotFound"));
+				return;
+			}
+			// Same refusal as in-app ao:// links; a terminated session's
+			// artifact files are still served.
+			if (resolved.isTerminated && !artifact) {
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionTerminated", { sessionId: resolved.sessionId }));
+				return;
+			}
+			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
+			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
+		},
+		[navigate, remoteFailedHostIds, t],
+	);
+	useEffect(() => {
+		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
+			if (!sessionDeepLinksReady) {
+				pendingSessionDeepLinkRef.current = rawUrl;
+				return;
+			}
+			handleSessionDeepLink(rawUrl);
+		});
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
+	useEffect(() => {
+		if (!sessionDeepLinksReady) return;
+		const pending = pendingSessionDeepLinkRef.current;
+		if (!pending) return;
+		pendingSessionDeepLinkRef.current = null;
+		handleSessionDeepLink(pending);
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
 
 	useEffect(() => {
 		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
@@ -1318,6 +1521,8 @@ function ShellLayout() {
 			initializeProjectRepository,
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 		}),
 		[
@@ -1327,6 +1532,8 @@ function ShellLayout() {
 			initializeProjectRepository,
 			openProjectSettings,
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
 		],
@@ -1336,7 +1543,19 @@ function ShellLayout() {
 	// Rendering the sidebar with an empty query while the home outlet shows its
 	// loader creates a visible two-stage launch and can make the home page flash
 	// before the project list arrives.
-	if (isStartupLoading) return <DaemonStartupLoader />;
+	// ⌘Q can arrive at any time, including during startup or a daemon
+	// reconnect, so the quit confirm renders outside the readiness gate.
+	const quitConfirmDialog = (
+		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
+	);
+	if (isStartupLoading) {
+		return (
+			<>
+				<div className="flex h-full min-h-0 flex-col"><PageTopbar /><DaemonStartupLoader /></div>
+				{quitConfirmDialog}
+			</>
+		);
+	}
 
 	return (
 		<ShellProvider
@@ -1345,15 +1564,16 @@ function ShellLayout() {
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
+				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
 				<TrayRuntime />
+				<SharedWithYouNotifier />
 				{isDragActive ? (
 					<div
 						aria-hidden="true"
 						className="dialog-overlay pointer-events-none flex items-center justify-center"
 						data-testid="folder-drop-overlay"
 					>
-						<div className="relative isolate flex w-[min(420px,calc(100vw-48px))] flex-col items-center gap-3 rounded-welcome-panel border border-dashed border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-8 text-center shadow-[var(--shadow-import-modal)]">
+						<div className="relative isolate flex w-[min(420px,calc(100vw-48px))] flex-col items-center gap-3 rounded-welcome-panel border border-dashed border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] p-8 text-center shadow-[var(--shadow-import-modal)]">
 							<span className="grid size-11 place-items-center rounded-xl bg-[var(--color-bg-import-chip)] text-[var(--color-text-import-muted)]">
 								<FolderPlus className="size-5" aria-hidden="true" />
 							</span>
@@ -1363,18 +1583,16 @@ function ShellLayout() {
 						</div>
 					</div>
 				) : null}
-				<GlobalNewTaskDialog />
+				<NewTaskNavigator />
+				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
-				<TelemetryConsentRenewalDialog />
+				<SessionImportDialog />
+				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
 					onOpenChange={setIsKeyboardShortcutsOpen}
 					onCustomize={customizeKeyboardShortcuts}
-				/>
-				<KeyboardShortcutsSettingsDialog
-					open={isKeyboardShortcutsSettingsOpen}
-					onOpenChange={setIsKeyboardShortcutsSettingsOpen}
 				/>
 				<TerminalCacheProvider
 					daemonReady={daemonStatus.state === "ready"}
@@ -1400,18 +1618,14 @@ function ShellLayout() {
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on
             macOS/Linux. */}
-				<WindowTitlebar />
-				{/* App routes render their topbar inside the framed panel, matching the board chrome across platforms while leaving OS titlebars native. */}
-				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !openingOrchestrator && !settingsOpen ? <ShellTopbar /> : null}
+				<WindowTitlebar onBack={settingsPage?.close} />
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
 				<SidebarProvider
 					className="min-h-0 flex-1 flex-col overflow-x-hidden"
 					keyboardShortcut={false}
-					onOpenChange={(open) => {
-						if (open !== isSidebarOpen) toggleSidebar();
-					}}
+					onOpenChange={handleSidebarOpenChange}
 					open={!isStartupLoading && isSidebarOpen}
 					style={
 						{
@@ -1428,9 +1642,8 @@ function ShellLayout() {
 			      cluster above a full-height sidebar; Windows hangs the sidebar
 			      below its custom titlebar. */}
 					<Sidebar
-						hideEdgeBorder={isHomeRoute}
 						underTopbar={isMac || isWindows || isLinux}
-						topbarOffset={isWindows ? "titlebar" : hideShellTopbar ? "trafficLights" : "toolbar"}
+						topbarOffset={isWindows ? "titlebar" : trafficLightBand ? "trafficLights" : "toolbar"}
 						onCloneProject={cloneProject}
 						onCreateProject={createProject}
 						onInitializeProject={initializeProjectRepository}
@@ -1441,37 +1654,42 @@ function ShellLayout() {
 						remoteHosts={remoteHosts}
 						onCreateRemoteProject={createRemoteProject}
 						onInitializeRemoteProject={initializeRemoteProject}
-						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
-						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
-						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}
-						onRemoveRemoteProject={removeRemoteProject}
-						onRetryRemoteHosts={() => {
-							void refreshRemoteHosts();
-							void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-						}}
+						onOpenRemoteProject={openRemoteProjectFromSidebar}
+						onOpenRemoteOrchestrator={openRemoteOrchestratorFromSidebar}
+						onConfigureRemoteProject={configureRemoteProjectFromSidebar}
+						onRemoveRemoteProject={removeRemoteProjectFromSidebar}
+						onRetryRemoteHosts={retryRemoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
-						<div className="relative min-h-0 flex-1 overflow-x-hidden">
+						<div className="relative min-h-0 flex-1 overflow-x-hidden" ref={centerPaneRef}>
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
-								hideShellTopbar={hideShellTopbar}
-								isSessionRoute={Boolean(routeParams.sessionId)}
+								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
+								isHomeRoute={isHomeRoute}
+								isNewChatRoute={isNewChatRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
+								startingHarness={startingWorkspace?.orchestratorAgent ?? startingOrchestratorSession?.provider}
 							/>
+							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
+								canGoBack: !isHomeRoute && router.history.canGoBack(),
+								canGoForward,
+								back: () => router.history.back(),
+								forward: () => router.history.forward(),
+							}} />
 						</div>
 						</main>
 					</div>
 					<DaemonFailureBanner status={daemonStatus} />
-					{/* When ShellTopbar is hidden, keep a macOS window-drag strip over
+					{/* On macOS, keep a window-drag strip over
               the traffic-light band only. The fixed TitlebarNav renders after
               this strip so its no-drag buttons remain clickable. */}
-					{hideShellTopbar && isMac ? (
+					{trafficLightBand && isMac ? (
 						<div
 							aria-hidden="true"
 							data-slot="titlebar-drag-region"
@@ -1482,7 +1700,7 @@ function ShellLayout() {
 								// must stay opaque rather than reveal the darker native window.
 								"fixed top-0 left-0 z-chrome transition-[height] duration-200 ease-out motion-reduce:transition-none",
 								sidebarHasLayout ? "w-(--ao-sidebar-w,var(--size-sidebar-default))" : "w-titlebar-content-offset",
-								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
+								isFullScreen ? "pointer-events-none h-0" : sidebarHasLayout ? "h-traffic-light-clearance" : "h-mac-panel-header-bottom",
 							)}
 							ref={sidebarDragStripRef}
 							style={{
@@ -1490,15 +1708,14 @@ function ShellLayout() {
 								...(trafficLightDragActive ? ({ WebkitAppRegion: "drag" } as CSSProperties) : null),
 							}}
 						>
-							{/* Closed-sidebar band: the page's topbar color behind the traffic
-							    lights and history arrows. Always present; the sidebar-colored
-							    layer slides over it. */}
-							<div className="pointer-events-none absolute inset-y-0 left-0 w-titlebar-content-offset bg-background" />
 							{/* Sidebar-colored top of the sidebar. Rides the sidebar's own spring,
 							    so the fake top and the real sidebar slide in and out together. */}
 							<motion.div
 								animate={{ x: sidebarHasLayout ? "0%" : "-100%" }}
 								className="pointer-events-none absolute inset-y-0 left-0 w-(--ao-sidebar-w,var(--size-sidebar-default)) bg-sidebar"
+								// Same measured width as the strip: the fill overflows the strip,
+								// so a var fallback wider than the sidebar would cover the panel.
+								style={sidebarWidthPx ? { width: sidebarWidthPx } : undefined}
 								initial={false}
 								transition={prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING}
 							/>
@@ -1508,19 +1725,22 @@ function ShellLayout() {
               once here so the toggle/history buttons never move when the
               sidebar collapses or expands. History arrows stay visible but
               locked on the empty start page. MUST come after the drag strip
-              (ShellTopbar or the welcome substitute) in the DOM: Electron
+              (the page topbars or the welcome substitute) in the DOM: Electron
               builds the window-drag region in document order (drag rects add,
               no-drag rects subtract), so the cluster's no-drag holes only
               survive if they're processed after the drag strips they overlap.
               Rendered first, real clicks get swallowed by window-drag even
               though DOM hit-testing looks correct. */}
 					<TitlebarNav
+						onBack={settingsPage?.close}
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
+						zoomFactor={windowZoomFactor}
 					/>
 				</SidebarProvider>
 				<OrchestratorReplacementDialog
 					pending={Boolean(replacementErrorProjectId && restartingProjectIds.has(replacementErrorProjectId))}
+					pendingCount={replacementErrorCount}
 					error={replacementErrorProjectId ? orchestratorReplacementErrors[replacementErrorProjectId] : undefined}
 					onOpenChange={(open) => {
 						if (!open && replacementErrorProjectId) setOrchestratorReplacementError(replacementErrorProjectId, null);

@@ -104,7 +104,7 @@ func (c *ConversationsController) sideSnapshot(w http.ResponseWriter, r *http.Re
 		writeSideChatError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SideChatSnapshotResponse{Snapshot: snapshot})
+	envelope.WriteJSON(w, http.StatusOK, SideChatSnapshotResponse{Snapshot: sideSnapshotSummary(snapshot)})
 }
 
 func (c *ConversationsController) streamSideChat(w http.ResponseWriter, r *http.Request) {
@@ -171,7 +171,7 @@ func (c *ConversationsController) sendSideQuestion(w http.ResponseWriter, r *htt
 	}
 	excerpts := make([]ports.ChatExcerptReference, 0, len(req.References))
 	for _, ref := range req.References {
-		excerpts = append(excerpts, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Text})
+		excerpts = append(excerpts, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Text, ID: ref.ID, Order: ref.Order, Snapshot: ref.Snapshot, Comment: ref.Comment})
 	}
 	turn, err := svc.SendSideQuestion(r.Context(), sideSession(r), sideID(r), ports.ChatUserMessage{
 		Text: req.Text, ClientMessageID: req.ClientMessageID, Content: content, Excerpts: excerpts, Origin: domain.MessageOriginHuman})
@@ -179,7 +179,7 @@ func (c *ConversationsController) sendSideQuestion(w http.ResponseWriter, r *htt
 		writeSideChatError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusAccepted, SideQuestionResponse{Turn: turn})
+	envelope.WriteJSON(w, http.StatusAccepted, SideQuestionResponse{Turn: sideTurnSummary(turn)})
 }
 
 func (c *ConversationsController) editSideQuestion(w http.ResponseWriter, r *http.Request) {

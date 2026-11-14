@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useTranslation } from "react-i18next";
-import { Loader2, X } from "lucide-react";
+import { Loader2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -9,6 +9,7 @@ import { migrationOfferQueryKey, useMigrationOffer } from "../hooks/useMigration
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	settingsDialogBodyClass,
 	settingsDialogContentClass,
@@ -33,7 +34,7 @@ export function MigrationPopup() {
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	if (!open) return null;
 
-	const legacyRoot = offer.data?.legacyRoot || "your earlier AO";
+	const legacyRoot = offer.data?.legacyRoot || "your earlier Orchestrator install";
 	const nowIso = () => new Date().toISOString();
 
 	const proceed = async () => {
@@ -80,15 +81,7 @@ export function MigrationPopup() {
 					onCloseAutoFocus={restoreFocusOnClose}
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-lg -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
-					<button
-						type="button"
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("common.close")}
-						disabled={busy}
-						onClick={() => setSkipped(true)}
-					>
-						<X className="size-5" aria-hidden="true" />
-					</button>
+					<CloseButton floating aria-label={t("common.close")} disabled={busy} onClick={() => setSkipped(true)} />
 					<div className={settingsDialogHeaderClass}>
 						<Dialog.Title className="settings-dialog-title">{t("migration.title")}</Dialog.Title>
 						<Dialog.Description className="text-control leading-body text-settings-muted">
@@ -102,14 +95,14 @@ export function MigrationPopup() {
 						<p className="text-caption text-settings-muted">{t("migration.againLater")}</p>
 					</div>
 					<div className={`${settingsDialogFooterClass} justify-between`}>
-						<Button type="button" variant="footer" className="text-destructive" onClick={dontMigrate} disabled={busy}>
+						<Button type="button" variant="destructive-ghost" onClick={dontMigrate} disabled={busy}>
 							{t("migration.dontMigrate")}
 						</Button>
 						<div className="flex flex-wrap items-center justify-end gap-3">
-							<Button type="button" variant="footer" onClick={() => setSkipped(true)} disabled={busy}>
+							<Button type="button" variant="secondary" onClick={() => setSkipped(true)} disabled={busy}>
 								{t("migration.skip")}
 							</Button>
-							<Button type="button" variant="footer-primary" onClick={proceed} disabled={busy}>
+							<Button type="button" variant="primary" onClick={proceed} disabled={busy}>
 								{busy ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 								{error ? t("migration.retry") : t("migration.proceed")}
 							</Button>

@@ -1,4 +1,15 @@
-import type { SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
+
+export type AppIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+export function BrowserIcon(props: SVGProps<SVGSVGElement>) {
+	// Myna UI "globe", matching the app icon set (components/app-icons).
+	return (
+		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="1.2 1.2 21.6 21.6" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" {...props}>
+			<path d="M12 21a9 9 0 1 0 0-18m0 18a9 9 0 1 1 0-18m0 18c2.761 0 3.941-5.163 3.941-9S14.761 3 12 3m0 18c-2.761 0-3.941-5.163-3.941-9S9.239 3 12 3M3.5 9h17m-17 6h17" />
+		</svg>
+	);
+}
 
 // Codex mark: a rounded terminal tile holding a `<` prompt and a caret bar,
 // drawn monochrome in lucide's 24x24 stroke style so it inherits color/size

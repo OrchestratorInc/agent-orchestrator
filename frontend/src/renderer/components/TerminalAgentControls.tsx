@@ -1,5 +1,4 @@
-import { MoreHorizontal } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
@@ -8,49 +7,37 @@ import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { AgentModelPicker, DismissButton, switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
-import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransition";
-import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
-import { TopbarButton } from "./TopbarButton";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { useCloseMenu } from "./menu-model";
+import { Button } from "./ui/button";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
 
 /**
- * A local session tab's menu: the switch to the other interface and, in a terminal, the
- * agent picker. A picked agent adds Switch and Cancel, since a terminal has no next message
- * to wait on; a chat picks its agent in the composer.
+ * A terminal session tab's agent row, in either of the tab's menus. A picked
+ * agent adds Switch and Cancel, since a terminal has no next message to wait
+ * on; a successful switch closes the menu. A chat picks its agent in the composer.
  */
-export function SessionTabMenu({
+export function TerminalAgentPickerRow({
 	session,
 	hostId,
 	blocked,
-	switchTarget,
-	switchAction,
-	switchControl,
 }: {
 	session: WorkspaceSession;
 	hostId?: string;
 	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
-	switchTarget: SessionInterfaceMode;
-	switchAction?: { disabled: boolean; reason?: string; run: () => void };
-	/** Shown in place of the menu while an interface switch is running. */
-	switchControl?: ReactNode;
 }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
+	const closeMenu = useCloseMenu();
 	const [pending, setPending] = useState<PendingAgentSwitch>();
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	// Agent switching ships behind Developer Mode for its first week.
-	const switching = useUiStore((state) => state.developerMode) && switchTarget === "chat";
 	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
-	if (!switchAction && (switchControl || !switching)) return switchControl ? <div className="inline-flex shrink-0 items-center">{switchControl}</div> : null;
 	const switchNow = () => {
 		if (!pending) return;
 		const { harness: targetHarness, model, fastMode, ultracode, autoCompactWindow } = pending;
 		void providerSwitch.mutateAsync({ targetHarness, model, effort: switchEffort(pending), fastMode, ultracode, autoCompactWindow })
-			.then(() => { setPending(undefined); setOpen(false); })
+			.then(() => { setPending(undefined); closeMenu(); })
 			.catch((error) => showGlobalToast(t("agentSwitch.switchFailed"), apiErrorMessage(error), "error"));
 	};
 	const target = pending ? [agentLabel(pending.harness), pending.modelLabel].filter(Boolean).join(" · ") : "";
@@ -61,42 +48,20 @@ export function SessionTabMenu({
 				<ProviderMark provider={pending.harness} className="size-3.5" />
 				{/* The mark names the agent, so the model alone fits beside Switch. */}
 				<span className="min-w-0 flex-1 truncate" title={target}>{pending.modelLabel ?? agentLabel(pending.harness)}</span>
-				<button
+				<Button
 					type="button"
 					disabled={blocked || providerSwitch.isPending}
 					title={blocked ? t("agentSwitch.busy") : t("agentSwitch.switchTerminalTo", { target })}
 					onClick={switchNow}
-					className="shrink-0 rounded-md bg-primary px-2 py-px text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+					className="disabled:pointer-events-auto disabled:cursor-not-allowed"
+					size="xs"
+					variant="primary"
 				>
 					{providerSwitch.isPending ? t("agentSwitch.switchingNow") : t("agentSwitch.switchAction")}
-				</button>
+				</Button>
 				<DismissButton label={t("agentSwitch.cancel")} disabled={providerSwitch.isPending} onClick={() => setPending(undefined)} />
 			</div>
 		</div>
 	) : null;
-	return (
-		<DropdownMenu open={open} onOpenChange={setOpen}>
-			<DropdownMenuTrigger asChild>
-				<TopbarButton
-					aria-label={t("session.actionsMenu")}
-					className="size-7 !bg-transparent text-muted-foreground hover:!bg-transparent active:!bg-transparent focus:!bg-transparent data-[state=open]:!bg-transparent hover:text-foreground"
-					data-session-actions-trigger
-					title={t("session.actionsMenu")}
-					type="button"
-					variant="icon"
-				>
-					<MoreHorizontal aria-hidden="true" className="size-icon-md" />
-				</TopbarButton>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start" className="min-w-48">
-				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}
-				{switchAction ? (
-					<DropdownMenuItem disabled={switchAction.disabled} title={switchAction.reason} onSelect={switchAction.run}>
-						<RoundedInterfaceIcon target={switchTarget} className="size-icon-lg" />
-						{switchTarget === "chat" ? t("agentSwitch.switchToChat") : t("agentSwitch.switchToTerminal")}
-					</DropdownMenuItem>
-				) : null}
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
+	return <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} />;
 }

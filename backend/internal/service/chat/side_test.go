@@ -124,6 +124,18 @@ func TestSideQuestionWithMultipleReferencesKeepsQuestionLast(t *testing.T) {
 	}
 }
 
+func TestSideQuestionDeliversCommentsOnReferencesWithoutSnapshots(t *testing.T) {
+	turn := domain.SideTurn{Text: "Compare them.", References: []domain.SideReference{
+		{Selection: "sun"},
+		{Selection: "moon", Comment: "  is this a planet?  "},
+	}}
+	got := sideQuestionWithReferences(turn)
+	comment := strings.Index(got, "User's comment on selected text 2:\nis this a planet?")
+	if comment < 0 || comment < strings.Index(got, "> moon") || comment > strings.Index(got, turn.Text) || strings.Count(got, "User's comment") != 1 {
+		t.Fatalf("comment missing or misplaced: %q", got)
+	}
+}
+
 func TestSideRejectsOtherSideOriginAnnotations(t *testing.T) {
 	svc := New(Options{AppRunID: "run"})
 	side := domain.SideConversation{PolicyVersion: 1, ID: "side", MainConversationID: "main"}
@@ -438,9 +450,9 @@ func TestSideNumberingResetsAfterAllTabsCloseAndIgnoresLegacyCounters(t *testing
 	if two.Label != "Side Chat" {
 		t.Fatal(two.Label)
 	}
-	_, _, _ = store.ReserveSideTurn(ctx, domain.SideTurn{ID: "q", SideID: two.ID, Text: "Do not rename me", ClientMessageID: "q"}, "run")
+	_, _, _ = store.ReserveSideTurn(ctx, domain.SideTurn{ID: "q", SideID: two.ID, Text: "Name from first question", ClientMessageID: "q"}, "run")
 	two, _ = store.SideConversation(ctx, two.ID)
-	if two.Label != "Side Chat" {
+	if two.Label != "Name from first question" {
 		t.Fatal(two.Label)
 	}
 	_ = store.RenameSide(ctx, two.ID, "Side Chat 99", time.Now())

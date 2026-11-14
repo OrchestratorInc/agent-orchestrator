@@ -168,6 +168,35 @@ func TestAccountTransitionResumesTheSameChatConversationOnTheNewAccount(t *testi
 	}
 }
 
+// A chat that was never messaged has no native conversation to name, yet its
+// session row still holds the reserved provider handle. The move must resume
+// (replacing that unpersisted provider) rather than start fresh, which blanked
+// the handle only in memory and failed the controller-owner fence.
+func TestAccountTransitionMovesANeverMessagedChat(t *testing.T) {
+	manager, store, _, chat, accounts, _ := newAccountTransitionManager(t, domain.SessionModeChat)
+	manager.agents = singleAgent{agent: emptyTransitionAgent{}}
+	manager.browserCapabilities = fixedBrowserCapability("capability-1")
+	withFreshChatHistory(manager, store)
+
+	transition, err := manager.StartAccountTransition(context.Background(), "session-1", "acct-b", domain.SessionInterfaceTransitionDrain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transition.NativeConversationID != "" {
+		t.Fatalf("native conversation = %q, want none for a never-messaged chat", transition.NativeConversationID)
+	}
+	settled := awaitTransition(t, store, transition.ID)
+	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %s, error = %s %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
+	}
+	if got := chat.start.Env["CLAUDE_CONFIG_DIR"]; got != "/accounts/b" {
+		t.Fatalf("chat started with CLAUDE_CONFIG_DIR=%q, want /accounts/b", got)
+	}
+	if accounts.boundTo("session-1") != "acct-b" {
+		t.Fatal("binding did not move to acct-b")
+	}
+}
+
 // If the new account's agent fails to start, neither half happens: the old
 // agent restarts on the old account and the binding never changed.
 func TestAccountTransitionRollsBackToTheOldAccountWhenTheTargetFails(t *testing.T) {

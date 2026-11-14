@@ -11,12 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	archiveExtraction,
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeContextWindowProbe,
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
@@ -180,15 +181,24 @@ describe("patchClaudeHibernationCheck", () => {
 });
 
 describe("patchClaudeContextUsage", () => {
-	it("publishes the SDK context snapshot through ACP after a result", async () => {
+	function patchedUsageBlock() {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
 		writeFileSync(adapterPath, `
                             // Send usage_update notification
                             if (lastAssistantTotalUsage !== null) {
                                 await sendUpdate({
+                                    sessionId: params.sessionId,
                                     update: {
+                                        sessionUpdate: "usage_update",
                                         used: lastAssistantTotalUsage,
                                         size: session.contextWindowSize,
+                                        cost: {
+                                            amount: message.total_cost_usd,
+                                            currency: "USD",
+                                        },
+                                        ...(message.origin && {
+                                            _meta: { "_claude/origin": message.origin },
+                                        }),
                                     },
                                 });
                             }
@@ -198,52 +208,319 @@ describe("patchClaudeContextUsage", () => {
 		expect(patchClaudeContextUsage(adapterPath)).toBe(true);
 		expect(patchClaudeContextUsage(adapterPath)).toBe(false);
 		const patched = readFileSync(adapterPath, "utf8");
-		expect(patched).toContain("session.query.getContextUsage()");
-		expect(patched).toContain("lastAssistantTotalUsage = contextUsage.totalTokens");
-		expect(patched).toContain("session.contextWindowSize = contextUsage.rawMaxTokens");
-
-		const start = patched.indexOf("// AO: use the SDK's context snapshot.");
+		const start = patched.indexOf("// AO: publish the SDK's context snapshot");
 		const end = patched.indexOf("if (session.cancelled) {", start);
 		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		const run = new AsyncFunction("session", "sendUpdate", `
+		return new AsyncFunction("session", "sendUpdate", "state", `
+			const params = { sessionId: "s" };
+			const message = { total_cost_usd: 1.5 };
 			let lastAssistantTotalUsage = 9;
 			${patched.slice(start, end)}
+			state.read = () => lastAssistantTotalUsage;
 		`);
-		const updates = [];
-		const session = {
+	}
+
+	function claudeSession(getContextUsage) {
+		return {
 			contextWindowSize: 100,
 			contextWindowAuthoritative: false,
-			query: { getContextUsage: async () => ({ totalTokens: 17, rawMaxTokens: 200 }) },
+			models: { currentModelId: "sonnet" },
+			query: { getContextUsage },
 		};
+	}
+
+	async function publish(run, session, sendUpdate) {
+		const updates = [];
+		const errors = [];
+		const state = {};
+		await run.call({ logger: { error: (...args) => errors.push(args) } }, session, async (notification) => {
+			updates.push(notification.update);
+			await sendUpdate?.();
+		}, state);
+		await vi.waitFor(() => expect(updates.length + errors.length).toBeGreaterThan(0));
+		return { updates, errors, state };
+	}
+
+	it("settles the result before the SDK context snapshot arrives", async () => {
+		const run = patchedUsageBlock();
+		let resolveSnapshot;
+		const session = claudeSession(() => new Promise((resolve) => { resolveSnapshot = resolve; }));
+		const updates = [];
+		const state = {};
+
 		await run.call({ logger: { error: () => {} } }, session, (notification) => {
 			updates.push(notification.update);
-		});
-		expect(updates.map(({ used, size }) => [used, size])).toEqual([[17, 200]]);
+		}, state);
+		expect(updates).toEqual([]);
+
+		resolveSnapshot({ totalTokens: 17, rawMaxTokens: 200 });
+		await vi.waitFor(() => expect(updates).toHaveLength(1));
+		expect(updates[0]).toMatchObject({ sessionUpdate: "usage_update", used: 17, size: 200, cost: { amount: 1.5 } });
 		expect(session.contextWindowAuthoritative).toBe(true);
+		expect(state.read()).toBe(17);
+	});
 
-		const fallback = {
-			contextWindowSize: 100,
-			contextWindowAuthoritative: false,
-			query: { getContextUsage: async () => { throw new Error("unavailable"); } },
-		};
-		const fallbackUpdates = [];
-		await run.call({ logger: { error: () => {} } }, fallback, (notification) => {
-			fallbackUpdates.push(notification.update);
-		});
-		expect(fallbackUpdates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
-		expect(fallback.contextWindowAuthoritative).toBe(false);
+	it("falls back to the message usage when the snapshot is unusable", async () => {
+		const run = patchedUsageBlock();
+		for (const getContextUsage of [
+			async () => { throw new Error("unavailable"); },
+			async () => ({ totalTokens: 0, rawMaxTokens: 200 }),
+		]) {
+			const session = claudeSession(getContextUsage);
+			const { updates } = await publish(run, session);
+			expect(updates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
+			expect(session.contextWindowAuthoritative).toBe(false);
+		}
+	});
 
-		const zero = {
-			contextWindowSize: 100,
-			contextWindowAuthoritative: false,
-			query: { getContextUsage: async () => ({ totalTokens: 0, rawMaxTokens: 200 }) },
-		};
-		const zeroUpdates = [];
-		await run.call({ logger: { error: () => {} } }, zero, (notification) => {
-			zeroUpdates.push(notification.update);
+	it("keeps the window a model switch seeded while the snapshot was pending", async () => {
+		const run = patchedUsageBlock();
+		const session = claudeSession(async () => {
+			session.models.currentModelId = "opus";
+			session.contextWindowSize = 1000;
+			return { totalTokens: 17, rawMaxTokens: 200 };
 		});
-		expect(zeroUpdates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
-		expect(zero.contextWindowAuthoritative).toBe(false);
+		const { updates } = await publish(run, session);
+		expect(updates.map(({ used, size }) => [used, size])).toEqual([[17, 1000]]);
+		expect(session.contextWindowAuthoritative).toBe(false);
+	});
+
+	it("logs a failed usage publish instead of rejecting", async () => {
+		const run = patchedUsageBlock();
+		const session = claudeSession(async () => ({ totalTokens: 17, rawMaxTokens: 200 }));
+		const { errors } = await publish(run, session, async () => { throw new Error("closed"); });
+		await vi.waitFor(() => expect(errors).toHaveLength(1));
+		expect(errors[0][0]).toBe("Failed to publish Claude context usage:");
+	});
+});
+
+describe("patchClaudeContextWindowProbe", () => {
+	// The pinned adapter's top-level stream branch, as 0.70.0 ships it.
+	const streamBranch = `
+                switch (message.type) {
+                    case "stream_event": {
+                        if (message.parent_tool_use_id === null &&
+                            (message.event.type === "message_start" || message.event.type === "message_delta")) {
+                            if (message.event.type === "message_start") {
+                                lastAssistantUsage = snapshotFromUsage(message.event.message.usage);
+                                const model = message.event.message.model;
+                                if (model && model !== "<synthetic>") {
+                                    lastAssistantModel = model;
+                                    // Only upgrade from the heuristic default.
+                                    if (!session.contextWindowAuthoritative &&
+                                        session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {
+                                        const inferred = inferContextWindowFromModel(model);
+                                        if (inferred !== null) {
+                                            session.contextWindowSize = inferred;
+                                        }
+                                    }
+                                }
+                            }
+                            else {
+                                const usage = message.event.usage;
+                                const prev = lastAssistantUsage ?? ZERO_USAGE;
+                                lastAssistantUsage = {
+                                    input_tokens: usage.input_tokens ?? prev.input_tokens,
+                                    output_tokens: usage.output_tokens,
+                                    cache_read_input_tokens: usage.cache_read_input_tokens ?? prev.cache_read_input_tokens,
+                                    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? prev.cache_creation_input_tokens,
+                                };
+                            }
+                            const nextUsage = totalTokens(lastAssistantUsage);
+                            if (nextUsage !== lastAssistantTotalUsage) {
+                                lastAssistantTotalUsage = nextUsage;
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: nextUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                            }
+                        }
+                        for (const notification of streamEventToAcpNotifications(message, params.sessionId)) {}
+                        break;
+                    }
+                }
+`;
+
+	// One consumer per session, holding its usage counters across messages the
+	// way the adapter's runConsumer closure does.
+	function patchedConsumer() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamBranch);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(false);
+		const consumer = new Function("session", "sendUpdate", "logger", `
+			const params = { sessionId: "s" };
+			const DEFAULT_CONTEXT_WINDOW = 200000;
+			const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+			const inferContextWindowFromModel = (text) => /\\b1m\\b/i.test(text) ? 1000000 : null;
+			const snapshotFromUsage = (usage) => ({ ...ZERO_USAGE, ...usage });
+			const totalTokens = (usage) => Object.values(usage).reduce((sum, tokens) => sum + tokens, 0);
+			const streamEventToAcpNotifications = () => [];
+			let lastAssistantUsage = null, lastAssistantModel, lastAssistantTotalUsage = null;
+			return {
+				logger,
+				newTurn() { session.activeTurn = {}; lastAssistantUsage = null; lastAssistantTotalUsage = null; },
+				async stream(message) { ${readFileSync(adapterPath, "utf8")} },
+			};
+		`);
+		const updates = [];
+		const errors = [];
+		const logger = { error: (...args) => errors.push(args) };
+		const consume = (session) => consumer(session, async ({ update }) => { updates.push([update.used, update.size]); }, logger);
+		return { consume, updates, errors };
+	}
+
+	const start = (model, input_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { model, usage: { input_tokens } } } });
+	const delta = (output_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens } } });
+
+	function freshSession(modelId, getContextUsage) {
+		return {
+			contextWindowSize: 200000,
+			contextWindowAuthoritative: false,
+			models: { currentModelId: modelId },
+			query: { getContextUsage: vi.fn(getContextUsage) },
+		};
+	}
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	it("publishes a fable session's 1M window with the latest usage, however late the SDK answers", async () => {
+		const { consume, updates } = patchedConsumer();
+		let answer;
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve) => { answer = resolve; }));
+		const turn = consume(session);
+		vi.useFakeTimers();
+		try {
+			await turn.stream(start("claude-fable-5-1", 206000));
+			await turn.stream(start("claude-fable-5-1", 207000));
+			await turn.stream(delta(500));
+			await vi.advanceTimersByTimeAsync(10000);
+			answer({ totalTokens: 206000, rawMaxTokens: 1000000 });
+		} finally {
+			vi.useRealTimers();
+		}
+		await settle();
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(1);
+		expect(updates).toEqual([[206000, 200000], [207000, 200000], [207500, 200000], [207500, 1000000]]);
+		expect(session.contextWindowAuthoritative).toBe(true);
+	});
+
+	it("leaves a window the adapter already knows", async () => {
+		const { consume } = patchedConsumer();
+		const known = freshSession("claude-fable-5-1", async () => ({ rawMaxTokens: 1 }));
+		known.contextWindowAuthoritative = true;
+		const named = freshSession("opus[1m]", async () => ({ rawMaxTokens: 1 }));
+		await consume(known).stream(start("claude-fable-5-1", 10));
+		await consume(named).stream(start("claude-opus-4-8[1m]", 10));
+		expect(named.contextWindowSize).toBe(1000000);
+		for (const session of [known, named]) expect(session.query.getContextUsage).not.toHaveBeenCalled();
+	});
+
+	it("publishes nothing more when the probe fails, confirms 200k, loses a race, or a new turn starts", async () => {
+		const { consume, updates, errors } = patchedConsumer();
+		// A result, then a model switch, set the window while the probe ran.
+		const racing = (change) => async (session) => { await null; Object.assign(session, change); return { rawMaxTokens: 1000000 }; };
+		const cases = [
+			[async () => { throw new Error("closed"); }, [200000, false]],
+			[async () => ({ rawMaxTokens: 0 }), [200000, false]],
+			[async () => ({}), [200000, false]],
+			[async () => ({ rawMaxTokens: 200000 }), [200000, true]],
+			[racing({ contextWindowSize: 900000, contextWindowAuthoritative: true }), [900000, true]],
+			[racing({ contextWindowSize: 150000, models: { currentModelId: "claude-haiku-5-5" } }), [150000, false]],
+			[async (_, turn) => { await null; turn.newTurn(); return { rawMaxTokens: 1000000 }; }, [1000000, true]],
+		];
+		for (const [answer, window] of cases) {
+			const session = freshSession("claude-fable-5-1", () => answer(session, turn));
+			const turn = consume(session);
+			await turn.stream(start("claude-fable-5-1", 10));
+			await settle();
+			expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual(window);
+		}
+		expect(errors).toHaveLength(1);
+		expect(updates).toEqual(cases.map(() => [10, 200000]));
+	});
+
+	it("probes again after switching back to a model, whatever became of its earlier probe", async () => {
+		for (const earlier of ["discarded", "failed", "pending"]) {
+			const { consume, updates } = patchedConsumer();
+			const answers = [];
+			const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+			const turn = consume(session);
+			// The adapter's switch path replaces session.models and reseeds the window from the "1m" heuristic.
+			const switchTo = (model) => Object.assign(session, {
+				models: { currentModelId: model }, contextWindowSize: model.includes("[1m]") ? 1000000 : 200000,
+			});
+			await turn.stream(start("claude-fable-5-1", 300));
+			switchTo("claude-opus-4-8[1m]");
+			await turn.stream(start("claude-opus-4-8[1m]", 300));
+			if (earlier === "discarded") answers[0].resolve({ rawMaxTokens: 1000000 });
+			if (earlier === "failed") answers[0].reject(new Error("closed"));
+			await settle();
+			switchTo("claude-fable-5-1");
+			await turn.stream(start("claude-fable-5-1", 310));
+			expect(answers).toHaveLength(2);
+			// Still pending, the first answer may describe the other model.
+			answers[0].resolve({ rawMaxTokens: 1 });
+			await settle();
+			expect(session.contextWindowSize).toBe(200000);
+			answers[1].resolve({ rawMaxTokens: 1000000 });
+			await settle();
+			expect(updates.at(-1)).toEqual([310, 1000000]);
+		}
+	});
+
+	it("retries a failed probe on a later turn, never while one is pending", async () => {
+		const { consume, updates } = patchedConsumer();
+		const answers = [];
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+		const turn = consume(session);
+		await turn.stream(start("claude-fable-5-1", 100));
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 200));
+		expect(answers).toHaveLength(1);
+		answers[0].reject(new Error("closed"));
+		await settle();
+		// This turn has not asked yet.
+		await turn.stream(start("claude-fable-5-1", 210));
+		answers[1].resolve({ rawMaxTokens: 0 });
+		await settle();
+		await turn.stream(start("claude-fable-5-1", 220));
+		expect(answers).toHaveLength(2);
+		// The turn was cancelled before its result corrected the window.
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 230));
+		answers[2].resolve({ rawMaxTokens: 1000000 });
+		await settle();
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(3);
+		expect(updates.at(-1)).toEqual([230, 1000000]);
+	});
+
+	it("ignores indentation but fails packaging without modifying a changed adapter", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamBranch.replace(/^ {8}/gm, ""));
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		const publish = /lastAssistantTotalUsage = nextUsage;[\s\S]*?\}\);/;
+		for (const changed of [
+			streamBranch.replace("!session.contextWindowAuthoritative &&", ""),
+			streamBranch.replace("message.parent_tool_use_id === null &&", ""),
+			streamBranch.replace("if (nextUsage !== lastAssistantTotalUsage)", "if (nextUsage !== lastAssistantTotalUsage && false)"),
+			streamBranch.replace(publish, (code) => `/* ${code} */`),
+			streamBranch + streamBranch,
+			// A brace in a comment must not become the insertion point.
+			streamBranch.replace("session.contextWindowSize = inferred;", "$&\n// } end heuristic"),
+			// The branch is commented out from outside the compared text.
+			streamBranch.replace(/if \(message\.parent_tool_use_id[\s\S]*?(?=break;)/, (code) => `/*\n${code}*/ `),
+			streamBranch.replace("if (message.parent_tool_use_id === null &&", "if (message.event &&\n// $&"),
+			streamBranch.replace('case "stream_event": {', 'case "assistant": {'),
+		]) {
+			writeFileSync(adapterPath, changed);
+			expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");
+			expect(readFileSync(adapterPath, "utf8")).toBe(changed);
+		}
 	});
 });
 
