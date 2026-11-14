@@ -127,7 +127,7 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tAGENT\tACCOUNT\tORG\tPLAN\tSTATE")
+	_, _ = fmt.Fprintln(tw, "ID\tAGENT\tACCOUNT\tORG\tPLAN\tSTATE")
 	for _, account := range accounts {
 		state := "signed in"
 		if !account.SignedIn {
@@ -139,7 +139,7 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 		if account.Problem != "" {
 			state += " (" + account.Problem + ")"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", account.ID, accountAgentLabel(account.Provider), accountLabel(account), accountOrg(account, accounts), dash(account.Plan), state)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", account.ID, accountAgentLabel(account.Provider), accountLabel(account), accountOrg(account, accounts), dash(account.Plan), state)
 	}
 	return tw.Flush()
 }
@@ -228,8 +228,7 @@ func newAccountShowCommand(ctx *commandContext) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "claude-code: %s\n", dash(res.Claude))
-			_, err = fmt.Fprintf(out, "codex: %s\n", dash(res.Codex))
+			_, err = fmt.Fprintf(out, "claude-code: %s\ncodex: %s\n", dash(res.Claude), dash(res.Codex))
 			return err
 		},
 	}
