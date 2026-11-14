@@ -184,6 +184,15 @@ func TestProjectTimesStayReadableInEveryZone(t *testing.T) {
 				t.Fatalf("list projects after writing %q: %v (err %v)", at.String(), projects, err)
 			}
 			assertUTCInstant(t, "registered_at", projects[0].RegisteredAt, at)
+			archivedAt := at.Add(time.Hour)
+			if archived, err := s.ArchiveProject(ctx, "p1", archivedAt); err != nil || !archived {
+				t.Fatalf("archive project: archived=%v err=%v", archived, err)
+			}
+			project, ok, err := s.GetProject(ctx, "p1")
+			if err != nil || !ok {
+				t.Fatalf("read archived project: ok=%v err=%v", ok, err)
+			}
+			assertUTCInstant(t, "archived_at", project.ArchivedAt, archivedAt)
 		})
 	}
 }
