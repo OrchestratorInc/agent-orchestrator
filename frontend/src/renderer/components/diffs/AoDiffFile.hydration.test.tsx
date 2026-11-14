@@ -32,7 +32,7 @@ it("retries failed hydration for the same request and highlights without reopeni
 		content: "keep\nnew();\n", contentTruncated: false, diffTruncated: false, workspaceVersion: "v1", fileFingerprint: "hydration-test",
 		diff: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n keep\n-old();\n+new();\n",
 	};
-	const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+	const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn(), consumeOpened: () => false };
 	revision.mockRejectedValue(new Error("temporary source failure"));
 	const view = render(<QueryClientProvider client={client}><AoDiffFile annotation={annotation} annotationRange={range} detail={detail} fallback={null} onActiveSelectionChange={vi.fn()} sessionId="session" split={false} /></QueryClientProvider>);
 	expect(await screen.findByRole("alert")).toHaveTextContent("Could not load the selected lines.");
