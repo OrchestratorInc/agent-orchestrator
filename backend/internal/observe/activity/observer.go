@@ -17,6 +17,11 @@ const (
 	DefaultOutputLines  = 40
 )
 
+// quietAfter is how long a stale active terminal without an activity detector
+// must show the same screen, with no command running, before it reads as
+// waiting on the user.
+const quietAfter = 5 * time.Minute
+
 // Config controls activity reconciliation polling.
 type Config struct {
 	DataDir     string
@@ -51,6 +56,9 @@ type Observer struct {
 	outputLines int
 	clock       func() time.Time
 	logger      *slog.Logger
+	// quiet holds the last screen of each stale terminal reconcileUndetected
+	// is watching. Poll runs serially, so it needs no lock.
+	quiet map[domain.SessionID]quietScreen
 }
 
 // New builds an activity observer.
@@ -102,13 +110,16 @@ func (o *Observer) Poll(ctx context.Context) error {
 		return err
 	}
 	now := o.clock()
+	// Only sessions still being watched this pass carry their screen forward.
+	previous := o.quiet
+	o.quiet = make(map[domain.SessionID]quietScreen)
 	for _, session := range sessions {
-		o.reconcile(ctx, session, now)
+		o.reconcile(ctx, session, now, previous[session.ID])
 	}
 	return nil
 }
 
-func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time) {
+func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time, previous quietScreen) {
 	if session.IsTerminated || session.Metadata.RuntimeHandleID == "" || o.agents == nil {
 		return
 	}
@@ -118,6 +129,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	detector, ok := agent.(ports.TerminalActivityDetector)
 	if !ok {
+		o.reconcileUndetected(ctx, session, agent, now, previous)
 		return
 	}
 	var options ports.TerminalActivityOptions
@@ -176,6 +188,21 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if state == session.Activity.State {
 		return
 	}
+	event := "terminal-" + string(state)
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
+		// A current native composer/busy frame resolves the prior modal. Keep
+		// its observed destination state: lifecycle accepts this boundary for
+		// active, idle, and waiting input, and clears the blocked tool flight.
+		event = "permission-resolved"
+	} else if state == domain.ActivityWaitingInput {
+		event = "terminal-waiting-input"
+	}
+	o.apply(ctx, session, agent, state, event, now)
+}
+
+// apply reports an observed state, fenced to the session revision and runtime
+// launch the observation was made against.
+func (o *Observer) apply(ctx context.Context, session domain.SessionRecord, agent ports.Agent, state domain.ActivityState, event string, now time.Time) {
 	nativeID := ""
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
 		resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
@@ -188,16 +215,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 			nativeID = id
 		}
 	}
-	event := "terminal-" + string(state)
-	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
-		// A current native composer/busy frame resolves the prior modal. Keep
-		// its observed destination state: lifecycle accepts this boundary for
-		// active, idle, and waiting input, and clears the blocked tool flight.
-		event = "permission-resolved"
-	} else if state == domain.ActivityWaitingInput {
-		event = "terminal-waiting-input"
-	}
-	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
+	err := o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
 		AgentSessionID:   nativeID,
 		Valid:            true,
 		State:            state,
