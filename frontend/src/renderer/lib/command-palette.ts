@@ -126,9 +126,11 @@ export type CommandItem = {
 	emphasis?: string;
 	/** A menu entry's own icon, drawn in place of the group's. */
 	icon?: ReactNode;
-	/** A choice's or toggle's current state: a check, or On/Off at the end of the row. */
+	/** A choice's current state: a check, or its value at the end of the row. */
 	checked?: boolean;
 	state?: string;
+	/** A switch row: drawn as an on/off switch at the end of the row. */
+	toggled?: boolean;
 	/** The palette stays open after it runs, to show the new state (choices, toggles). */
 	keepOpen?: boolean;
 };

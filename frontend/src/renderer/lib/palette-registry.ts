@@ -274,7 +274,7 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 			subtitle: isPage ? undefined : pageLabel(entry.section),
 			keywords: isPage ? [...entry.keywords, ...(SECTION_KEYWORDS[entry.section] ?? [])] : entry.keywords,
 			searchOnly: true,
-			...(toggle ? { state: on ? t("command.on") : t("command.off"), keepOpen: true } : {}),
+			...(toggle ? { toggled: on, keepOpen: true } : {}),
 			...(choice && prefs ? { state: choice.options(t).find((option) => option.value === choice.current(prefs))?.label } : {}),
 			// A switch flips; a choice opens its list; a page entry opens the page;
 			// any other lands on its own row.

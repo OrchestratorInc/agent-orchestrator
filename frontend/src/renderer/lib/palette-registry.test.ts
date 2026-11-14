@@ -103,12 +103,12 @@ describe("palette registry", () => {
 		toggles: { "render-math": true, sound: false },
 	};
 
-	it("flips a switch in place and shows its state", () => {
+	it("flips a switch in place and shows it as a switch", () => {
 		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false, prefs });
 		const math = items.find((item) => item.id === "setting:render-math");
 		const sound = items.find((item) => item.id === "setting:sound");
-		expect(math).toMatchObject({ state: t("command.on"), keepOpen: true, action: { kind: "run" } });
-		expect(sound).toMatchObject({ state: t("command.off"), keepOpen: true, action: { kind: "run" } });
+		expect(math).toMatchObject({ toggled: true, keepOpen: true, action: { kind: "run" } });
+		expect(sound).toMatchObject({ toggled: false, keepOpen: true, action: { kind: "run" } });
 	});
 
 	it("opens a choice list from its setting, naming the current choice", () => {

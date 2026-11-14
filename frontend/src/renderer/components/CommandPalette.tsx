@@ -88,6 +88,7 @@ import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
 import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
+import { Switch } from "./ui/switch";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
 const PALETTE_REVIEW_DEFER_MS = 120;
@@ -417,7 +418,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			// The bell's panel and the footer's Connect mobile, which have no route.
 			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
 			...(isMac && stayAwake.supported
-				? [{ id: "global-stay-awake", group: "global" as const, title: t("awake.title"), icon: <Coffee aria-hidden="true" />, keywords: ["awake", "sleep", "caffeinate", "lid closed", "keep awake"], searchOnly: true, state: stayAwake.on ? t("command.on") : t("command.off"), keepOpen: true, action: { kind: "run" as const, run: () => stayToggleRef.current() } }]
+				? [{ id: "global-stay-awake", group: "global" as const, title: t("awake.title"), icon: <Coffee aria-hidden="true" />, keywords: ["awake", "sleep", "caffeinate", "lid closed", "keep awake"], searchOnly: true, toggled: stayAwake.on, keepOpen: true, action: { kind: "run" as const, run: () => stayToggleRef.current() } }]
 				: []),
 			...switchItemFor(params.sessionId),
 			{ id: "global-connect-mobile", group: "global" as const, title: t("settings.connectMobile"), icon: <Smartphone aria-hidden="true" />, keywords: ["phone", "pair", "ios", "android", "qr code"], searchOnly: true, action: { kind: "run" as const, run: () => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }) } },
@@ -1424,6 +1425,12 @@ function PaletteRow({
 				<Loader2 className="size-icon-md animate-spin" aria-hidden="true" />
 			) : item.disabled && item.disabledReason ? (
 				<span className="max-w-[45%] shrink-0 truncate text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
+			) : item.toggled !== undefined ? (
+				// Shows the state only; the row itself is what flips it.
+				<span className="flex shrink-0 items-center">
+					<span className="sr-only">{item.toggled ? t("command.on") : t("command.off")}</span>
+					<Switch checked={item.toggled} tabIndex={-1} aria-hidden="true" className="pointer-events-none" />
+				</span>
 			) : item.checked ? (
 				<Check className="size-icon-md" aria-label={t("command.on")} />
 			) : keys ? (
