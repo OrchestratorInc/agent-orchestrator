@@ -168,8 +168,12 @@ const INITIALISMS = new Set([
 	"ai", "api", "btw", "ce", "ci", "cli", "cso", "css", "dx", "gh", "html", "ide", "json", "llm", "mcp",
 	"pdf", "pr", "prd", "qa", "sdk", "seo", "sql", "svg", "tdd", "ui", "url", "ux", "yaml",
 ]);
-/** Words with their own casing. */
-const WORD_CASING: Record<string, string> = { github: "GitHub", ios: "iOS", macos: "macOS" };
+/** Words with their own casing. A Map, so a skill named `constructor` finds nothing inherited. */
+const WORD_CASING = new Map([
+	["github", "GitHub"],
+	["ios", "iOS"],
+	["macos", "macOS"],
+]);
 
 /**
  * A slug as a title: `ce-plan` is "CE Plan", `__remote-workflow` is "Remote
@@ -182,7 +186,8 @@ function titleFromSlug(slug: string): string {
 		.map((word) => {
 			if (/[A-Z]/.test(word)) return word;
 			const lower = word.toLowerCase();
-			if (WORD_CASING[lower]) return WORD_CASING[lower];
+			const cased = WORD_CASING.get(lower);
+			if (cased) return cased;
 			if (INITIALISMS.has(lower)) return lower.toUpperCase();
 			return lower.charAt(0).toUpperCase() + lower.slice(1);
 		})
@@ -316,15 +321,19 @@ export function rankFiles(paths: readonly string[], query: string): Suggestion[]
  * A description cut to what a one-line row can say. Skill descriptions are
  * written for the model and run on ("…. Use when the user asks …"); the first
  * sentence is the summary. Claude also appends where a skill came from, such
- * as "(user)", which the row does not need.
+ * as "(user)", which the row does not need. Other trailing parentheses, such as
+ * "(PDF)", are part of the description and stay.
  */
 function summary(text: string | undefined): string | undefined {
-	const line = firstLine(text)?.replace(/(?:\s*\([\w:.-]+\))+$/, "");
+	const line = firstLine(text)?.replace(PROVENANCE_TAGS, "");
 	if (!line) return undefined;
 	// A sentence ends where the next one starts with a capital, so "e.g. this" stays whole.
 	const sentence = line.split(/(?<=[\w)\]`'"][.!?])\s+(?=[A-Z(`"'])/, 1)[0]!;
 	return sentence.replace(/(?<!\.)\.$/, "") || undefined;
 }
+
+/** Claude's trailing source tags: "(user)", "(project)", "(plugin)" and the like. */
+const PROVENANCE_TAGS = /(?:\s*\((?:user|project|local|managed|plugin|builtin|bundled|policy)\))+$/i;
 
 function firstLine(text: string | undefined): string | undefined {
 	if (!text) return undefined;

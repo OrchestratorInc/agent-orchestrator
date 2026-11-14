@@ -180,6 +180,11 @@ describe("rankSkills", () => {
 		});
 	});
 
+	it("titles a slug that names an Object property as a word", () => {
+		const [row] = rankSkills([skill("constructor", "", "agent")], "");
+		expect(row?.label).toBe("Constructor");
+	});
+
 	it("shows a name with nothing after its namespace whole rather than blank", () => {
 		const [row] = rankSkills([skill("plugin:", "", "agent")], "");
 		expect(row?.label).toBe("plugin:");
@@ -199,12 +204,14 @@ describe("rankSkills", () => {
 			skill("gstack", "Router for the gstack skill suite. (gstack) (user)", "agent"),
 			skill("promote", "Draft launch copy for a shipped feature (user)", "agent"),
 			skill("example", "Check e.g. this file. Then stop.", "agent"),
+			skill("export", "Export reports (PDF) (user)", "agent"),
 		];
 		expect(Object.fromEntries(rankSkills(listed, "").map((item) => [item.value, item.detail]))).toEqual({
 			"ce-ideate": "Generate and evaluate grounded ideas",
 			gstack: "Router for the gstack skill suite",
 			promote: "Draft launch copy for a shipped feature",
 			example: "Check e.g. this file",
+			export: "Export reports (PDF)",
 		});
 	});
 
