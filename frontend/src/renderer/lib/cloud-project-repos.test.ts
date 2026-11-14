@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+	DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES,
+	DEFAULT_SETUP_STEP_TIMEOUT_MINUTES,
+	parseLocalScriptStep,
+	parseTimedScriptCommand,
+	scriptStepTimeoutMinutes,
+	serializeLocalScriptStep,
+	timedScriptCommand,
 	additionalReposProblem,
+	gitHubRepositoryNameFromFolder,
+	isCloudWorkspaceProject,
+	isValidGitHubRepositoryName,
 	isStandaloneCloudProject,
+	projectRepositoryUrls,
+	workspaceRepositoriesProblem,
+	normalizeWorkingDirectory,
 	parseRepoScriptCommand,
 	parseScriptSteps,
 	projectAdditionalRepos,
@@ -56,6 +69,49 @@ describe("cloud project repositories", () => {
 		expect(scriptStepFolders({ postCreate: [wrapped], preRemove: ["ls"] }, main)).toEqual(new Set(["11x"]));
 	});
 
+	it("round-trips each step's own time limit as its first line, outside a repository wrapper", () => {
+		const timed = "# ao-timeout: 45m\n(\ncd -- '../11x' || exit 1\nmake up\n)";
+		const steps = parseScriptSteps(["# ao-timeout: 10m\nnpm ci", timed, { command: "make db", timeoutMinutes: 90 }, "# a comment\nls"], main);
+		expect(steps).toEqual([
+			{ command: "npm ci", folder: "", timeout: "10" },
+			{ command: "make up", folder: "11x", timeout: "45" },
+			{ command: "make db", folder: "", timeout: "90" },
+			{ command: "# a comment\nls", folder: "" },
+		]);
+		// A step without a limit is stored as the plain command; every limit a step sets is kept.
+		expect(serializeScriptSteps(steps ?? [])).toEqual(["# ao-timeout: 10m\nnpm ci", timed, "# ao-timeout: 90m\nmake db", "# a comment\nls"]);
+		expect(serializeScriptSteps([{ command: "npm ci", folder: "", timeout: "" }])).toEqual(["npm ci"]);
+		expect(timedScriptCommand(undefined, "x")).toBe("x");
+		expect(parseTimedScriptCommand("# ao-timeout: 5m\nx")).toEqual({ minutes: 5, command: "x" });
+		expect(parseLocalScriptStep("# ao-timeout: 3m\nnpm ci")).toEqual({ command: "npm ci", folder: "", timeout: "3" });
+		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "3" })).toBe("# ao-timeout: 3m\nnpm ci");
+		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "" })).toBe("npm ci");
+	});
+
+	it("keeps a typed limit equal to a default, as Setup and Cleanup defaults differ", () => {
+		expect(serializeLocalScriptStep({ command: "make down", folder: "", timeout: "10" })).toBe("# ao-timeout: 10m\nmake down");
+		expect(parseLocalScriptStep("# ao-timeout: 10m\nmake down")).toEqual({ command: "make down", folder: "", timeout: "10" });
+		// Setup's 30-minute default typed into a Cloud step stays the step's own limit.
+		expect(timedScriptCommand(DEFAULT_SETUP_STEP_TIMEOUT_MINUTES, "npm ci")).toBe("# ao-timeout: 30m\nnpm ci");
+		expect(timedScriptCommand(DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES, "make down")).toBe("# ao-timeout: 10m\nmake down");
+		expect(parseScriptSteps(["# ao-timeout: 30m\nnpm ci"])).toEqual([{ command: "npm ci", folder: "", timeout: "30" }]);
+	});
+
+	it("accepts a time limit of 1 to 120 whole minutes", () => {
+		expect(scriptStepTimeoutMinutes("")).toBeUndefined();
+		expect(scriptStepTimeoutMinutes(" 1 ")).toBe(1);
+		expect(scriptStepTimeoutMinutes("120")).toBe(120);
+		for (const bad of ["0", "121", "1.5", "-3", "ten"]) expect(scriptStepTimeoutMinutes(bad)).toBeNull();
+	});
+
+	it("normalizes a working folder as the control plane stores it", () => {
+		expect(normalizeWorkingDirectory("/work/{repo}/")).toBe("/work/{repo}");
+		expect(normalizeWorkingDirectory(" ~/work//{repo}/ ")).toBe("~/work/{repo}");
+		expect(normalizeWorkingDirectory("$HOME//src/")).toBe("$HOME/src");
+		expect(normalizeWorkingDirectory("~/")).toBe("~/");
+		expect(normalizeWorkingDirectory("work/")).toBe("work/");
+	});
+
 	it("rejects working folders the control plane rejects", () => {
 		for (const ok of ["", "  ", "~/work/{repo}", "$HOME/work", "/srv/work/{repo}"]) expect(workingDirectoryProblem(ok)).toBeUndefined();
 		expect(workingDirectoryProblem("~")).toBe("form");
@@ -63,6 +119,8 @@ describe("cloud project repositories", () => {
 		expect(workingDirectoryProblem("/")).toBe("form");
 		expect(workingDirectoryProblem("work")).toBe("form");
 		expect(workingDirectoryProblem("~/work/../x")).toBe("segments");
+		expect(workingDirectoryProblem("~/.ao/{repo}")).toBe("aoState");
+		expect(workingDirectoryProblem("/home/coder/.ao/work")).toBe("aoState");
 		expect(workingDirectoryProblem("~/work/{name}")).toBe("placeholder");
 		expect(workingDirectoryProblem("~/work/$USER")).toBe("placeholder");
 		expect(workingDirectoryProblem("~/a\tb")).toBe("characters");
@@ -75,5 +133,40 @@ describe("cloud project repositories", () => {
 		expect(isStandaloneCloudProject({ repositoryUrl: "https://github.com/acme/alice", config: {} })).toBe(false);
 		expect(projectAgentStartsIn({ agentStartsIn: "parent" })).toBe("parent");
 		expect(projectAgentStartsIn({ agentStartsIn: "elsewhere" })).toBe("repository");
+	});
+});
+
+describe("cloud workspaces", () => {
+	it("recognizes the workspace layout and lists every repository", () => {
+		const workspace = { repositoryUrl: "https://github.com/acme/api", config: { layout: "workspace", repos: [{ url: "https://github.com/acme/web" }] } };
+		expect(isCloudWorkspaceProject(workspace as never)).toBe(true);
+		expect(isCloudWorkspaceProject({ config: { repos: [] } } as never)).toBe(false);
+		expect(projectRepositoryUrls(workspace as never)).toEqual(["https://github.com/acme/api", "https://github.com/acme/web"]);
+	});
+
+	it("names a folder's repository the way GitHub would take it", () => {
+		expect(gitHubRepositoryNameFromFolder("My Notes")).toBe("My-Notes");
+		expect(gitHubRepositoryNameFromFolder(".dotfiles")).toBe("dotfiles");
+		expect(gitHubRepositoryNameFromFolder("café & co")).toBe("caf-co");
+		expect(gitHubRepositoryNameFromFolder("...")).toBe("repo");
+		expect(gitHubRepositoryNameFromFolder("a".repeat(120))).toHaveLength(100);
+		// The control plane refuses a name ending in ".git".
+		expect(gitHubRepositoryNameFromFolder("site.git")).toBe("site");
+		expect(gitHubRepositoryNameFromFolder("site.GIT.git")).toBe("site");
+		expect(gitHubRepositoryNameFromFolder("site-.git")).toBe("site");
+		expect(gitHubRepositoryNameFromFolder("-.git")).toBe("git");
+		expect(gitHubRepositoryNameFromFolder("digit")).toBe("digit");
+		expect(isValidGitHubRepositoryName("api-v2.1_x")).toBe(true);
+		expect(isValidGitHubRepositoryName("gitops")).toBe(true);
+		for (const name of ["", ".hidden", "a b", "a/b", "x".repeat(101), "site.git", "site.Git"]) expect(isValidGitHubRepositoryName(name), name).toBe(false);
+	});
+
+	it("checks a workspace's repositories as equals", () => {
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/api", "https://github.com/acme/web"])).toBeUndefined();
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/api", "https://github.com/acme/api"])).toMatchObject({ kind: "duplicate" });
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/api", "https://github.com/other/api"])).toMatchObject({ kind: "folder", folder: "api" });
+		expect(workspaceRepositoriesProblem(["https://github.com/acme/repository"])).toMatchObject({ kind: "reserved" });
+		expect(workspaceRepositoriesProblem(Array.from({ length: 12 }, (_, i) => `https://github.com/acme/r${i}`))).toMatchObject({ kind: "limit" });
+		expect(workspaceRepositoriesProblem(Array.from({ length: 11 }, (_, i) => `https://github.com/acme/r${i}`))).toBeUndefined();
 	});
 });

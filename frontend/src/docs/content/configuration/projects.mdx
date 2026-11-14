@@ -7,7 +7,7 @@ A project groups work in one repository, a multi-repository workspace, or an Orc
 
 To start, choose **Add project** in the desktop sidebar, select a repository, choose a worker agent in Project Settings, and create a small task. A worker implements the task in its own workspace. An orchestrator supervises workers. A reviewer is a separate agent run that checks a worker's pull request.
 
-Use Project Settings for interactive edits. The CLI's `set-config` command replaces the full configuration, and its project-config mirror has limits described in [Update from the CLI](#update-from-the-cli).
+Use Project Settings for interactive edits. The CLI's `set-config` command has the limits described in [Update from the CLI](#update-from-the-cli).
 
 ## Project kinds
 
@@ -46,25 +46,28 @@ ao project rm <project-id>
 | `sessionPrefix` | Prefix for generated session identifiers. |
 | `env` | Extra environment variables passed to agent runtimes. |
 | `symlinks` | Repository-relative paths linked into each session workspace. |
-| `postCreate` | Shell commands Orchestrator runs after creating a workspace. |
-| `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. |
+| `postCreate` | Shell commands Orchestrator runs after creating a workspace. A step whose first line is `# ao-timeout: <N>m` runs for at most N minutes (1 to 120). |
+| `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. A step may set its own time limit the same way. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
 | `worker` | Worker harness and agent-config overrides. |
 | `orchestrator` | Orchestrator harness and agent-config overrides. |
 | `agentRules` | Standing instructions for workers. |
 | `agentRulesFile` | Repository-relative instructions appended to worker instructions. |
 | `orchestratorRules` | Standing instructions for orchestrators. |
+| `orchestratorRulesFile` | Repository-relative instructions appended to orchestrator instructions. |
 | `reviewers` | Harnesses used for Orchestrator review runs. |
 | `trackerIntake` | Opt-in, read-only issue intake that can start workers. Also requires `AO_TRACKER_INTAKE=on` in the daemon environment. |
 | `containerReap` | Project-wide opt-out from Orchestrator's session-container cleanup. |
 
-`symlinks` and `agentRulesFile` must stay inside the repository. Orchestrator rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
+`symlinks`, `agentRulesFile`, and `orchestratorRulesFile` must stay inside the repository. Orchestrator rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
 
 ### Choose a base branch
 
 The default `defaultBranch: "auto"` resolves each repository separately. Orchestrator chooses the remote named by Git's `checkout.defaultRemote`, then `origin`, or the repository's only remote. It reads that remote's symbolic `HEAD` and fetches the advertised branch. When offline, Orchestrator can use the same remote's cached `HEAD`.
 
 Orchestrator does not guess from the checked-out branch, `main`, or `master`. If a repository has no authoritative remote default, or its remotes are ambiguous, spawning fails with `DEFAULT_BRANCH_UNRESOLVED`.
+
+If a new task asks for a specific branch name, that name must be unused in the project repository and its remotes. Workspace projects check every registered repository. Choose another name if a branch already exists; Orchestrator will not switch to it or silently add a suffix.
 
 For a single repository or workspace root, set `defaultBranch` explicitly. For a workspace child, configure its primary remote with `checkout.defaultRemote` when needed, then set its cached remote `HEAD` with `git remote set-head`. Orchestrator-created repositories are an exception: Orchestrator records their branch choice when it creates them and backfills the choice for older Orchestrator-created repositories on first resolution.
 
@@ -108,13 +111,13 @@ Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failin
 
 Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
 
-Setup steps run in order in separate shells. Each step has its own 10-minute limit. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a 10-minute total start budget, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
+Setup steps run in order in separate shells. Each step has its own time limit: 30 minutes unless you set one from 1 to 120 minutes for the step in **Project settings > Scripts**. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a total start budget of 10 minutes plus the setup steps' limits, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
 
 The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
 
-Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and Orchestrator removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
+Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit unless you set one for a step (1 to 120 minutes); a step that runs out of time fails like any other. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and Orchestrator removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
 
-Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, Orchestrator combines the inline rules and file contents.
+Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` or `orchestratorRulesFile` for supervision instructions. If both fields for a role are set, Orchestrator combines the inline rules and file contents. Rules files are read when a session starts, so an edit applies to sessions started after it.
 
 For example, these fields link local setup files, install dependencies, and load worker rules. This is a configuration fragment; keep any other existing fields when applying it:
 
@@ -152,7 +155,7 @@ ao review ls <worker-session-id>
 
 ## Update from the CLI
 
-`ao project set-config` replaces the entire project configuration. Focused flags also build a replacement; they do not patch one field. Before using the CLI, inspect the current settings and preserve every field you need:
+Focused `ao project set-config` flags change only the fields they name; the rest of the saved configuration, including settings without a flag such as `effort` and `preRemove`, is kept. A repeatable flag such as `--env` or `--reviewer` replaces that whole map or list. Field flags refuse a degraded project, whose configuration can't be read; use `--config-json` to replace it. `--config-json` replaces the entire project configuration. Before using it, inspect the current settings and preserve every field you need:
 
 ```bash
 ao project get <project-id> --json
@@ -160,7 +163,7 @@ ao project get <project-id> --json
 
 The `--config-json` flag takes a JSON string, not a filename. The CLI silently ignores unknown keys, so a typo can replace the configuration with an empty object. The daemon API rejects unknown fields.
 
-The CLI's project-config mirror also has an `effort` limitation: `ao project get --json` cannot show the configured effort, and `set-config` drops existing effort values. Use Project Settings in the desktop app or the daemon API to view or change effort. For other full-config CLI updates, include every field you want to keep and inspect the result afterward.
+For full-config CLI updates, include every field you want to keep and inspect the result afterward.
 
 For example, this command replaces the entire configuration with one worker choice; it does not keep setup, rules, reviewers, or effort:
 

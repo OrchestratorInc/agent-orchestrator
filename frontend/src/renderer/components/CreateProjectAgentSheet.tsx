@@ -7,7 +7,7 @@ import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, TriangleAlert, X, type AppIcon } from "@/components/app-icons";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -23,7 +23,6 @@ import {
 } from "../lib/agent-select-options";
 import { cn } from "../lib/utils";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
-import { useSettings } from "../hooks/useSettings";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
 import { buildIntake, type IntakeForm, IntakeFields, intakeNeedsRule } from "./IntakeFields";
@@ -38,25 +37,36 @@ import { Button } from "./ui/button";
 
 type TrackerIntakeConfig = components["schemas"]["TrackerIntakeConfig"];
 
-export type CreateProjectAgentSelection = {
-	workerAgent: string;
-	orchestratorAgent: string;
+// What the setup sheet asks for. The agents are chosen here only when the
+// sheet shows its agent pickers; otherwise the project starts on the most
+// preferred ready agent (see defaultProjectAgents).
+export type CreateProjectSetup = {
+	workerAgent?: string;
+	orchestratorAgent?: string;
 	trackerIntake?: TrackerIntakeConfig;
 };
 
 const EMPTY_INTAKE: IntakeForm = { enabled: false, repo: "", assignee: "" };
 const AGENT_MENU_WIDTH = "w-56! min-w-56! max-w-56!";
 type CreateProjectAgentSheetProps = {
+	preparedClonePath?: string;
+	onKeepCheckout?: () => void;
 	error?: string | null;
 	action?: "create" | "clone";
 	connected?: boolean;
+	// Show the Worker and Orchestrator pickers. Off in Developer Mode, where the
+	// project starts on the most preferred ready agent without asking.
+	chooseAgents?: boolean;
 	hostId?: string;
+	intakeVisible?: boolean;
+	// Whether intake applies is still unknown; hold Create until it is.
+	settingsLoading?: boolean;
 	isCreating: boolean;
 	isInitializing?: boolean;
 	kind: ProjectKind;
 	onOpenChange: (open: boolean) => void;
 	onBack?: () => void;
-	onSubmit: (selection: CreateProjectAgentSelection) => Promise<void>;
+	onSubmit: (setup: CreateProjectSetup) => Promise<void>;
 	open: boolean;
 	path: string | null;
 	repositorySetupNeeded?: boolean;
@@ -109,10 +119,15 @@ function projectSheetError(error: string, action: "create" | "clone"): SheetErro
 }
 
 export function CreateProjectAgentSheet({
+	preparedClonePath,
+	onKeepCheckout,
 	action = "create",
+	chooseAgents = true,
 	connected = true,
 	error,
 	hostId,
+	intakeVisible = false,
+	settingsLoading = false,
 	isCreating,
 	isInitializing = false,
 	kind,
@@ -138,8 +153,8 @@ export function CreateProjectAgentSheet({
 		displayedError.current = error;
 		displayedOnBack.current = onBack;
 	}
-	const agentsQuery = useAgentReadinessQuery(contentOpen && connected, hostId);
-	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId });
+	const agentsQuery = useAgentReadinessQuery(chooseAgents && contentOpen && connected, hostId);
+	useEnsureAgentReadiness({ enabled: chooseAgents && contentOpen && connected, hostId });
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
 	const selectableAgents = useMemo(() => hostId ? agentOptions.filter(isLaunchableAgent) : agentOptions, [agentOptions, hostId]);
@@ -156,12 +171,12 @@ export function CreateProjectAgentSheet({
 	);
 	// Local history is an inference signal only for local projects. A remote
 	// project must never infer its agent from this laptop's sessions.
-	const workspacesQuery = useQuery({ ...workspaceQueryOptions, enabled: open && !hostId });
+	const workspacesQuery = useQuery({ ...workspaceQueryOptions, enabled: chooseAgents && open && !hostId });
 	const sessionHistory = useMemo(
 		() => (workspacesQuery.data ?? []).flatMap((workspace) => workspace.sessions),
 		[workspacesQuery.data],
 	);
-	const isLoadingAgents = connected && agents === undefined && agentsQuery.isFetching;
+	const isLoadingAgents = chooseAgents && connected && agents === undefined && agentsQuery.isFetching;
 	const agentsError = !connected ? t("remote.connectBeforeStart") : agentsQuery.isError
 		? agentsQuery.error instanceof Error
 			? agentsQuery.error.message
@@ -174,27 +189,29 @@ export function CreateProjectAgentSheet({
 	const [orchestratorAgentTouched, setOrchestratorAgentTouched] = useState(false);
 	useEnsureAgentReadiness({
 		agentIds: [workerAgent, orchestratorAgent],
-		enabled: contentOpen && connected && (workerAgent !== "" || orchestratorAgent !== ""),
+		enabled: chooseAgents && contentOpen && connected && (workerAgent !== "" || orchestratorAgent !== ""),
 		hostId,
 		purpose: hostId ? "launch" : "display",
 	});
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
-	const { settings } = useSettings(hostId);
-	const intakeVisible = !!settings?.trackerIntakeEnabled;
 	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
+	const agentsChosen = !chooseAgents || (
+		!isLoadingAgents && (!hostId || (
+			agents !== undefined && selectableAgents.some((agent) => agent.id === workerAgent) && selectableAgents.some((agent) => agent.id === orchestratorAgent)
+		))
+	);
 	const canSubmit =
 		canSubmitProjectSetup({
-			workerAgent,
-			orchestratorAgent,
+			...(chooseAgents ? { workerAgent, orchestratorAgent } : {}),
 			intakeEnabled: intakeVisible && intake.enabled,
 			intakeAssignee: intake.assignee,
 		}) &&
 		!intakeIncomplete &&
 		!isBusy &&
-		!isLoadingAgents && connected && (!hostId || (
-			agents !== undefined && selectableAgents.some((agent) => agent.id === workerAgent) && selectableAgents.some((agent) => agent.id === orchestratorAgent)
-		));
+		!settingsLoading &&
+		agentsChosen &&
+		connected;
 	const sheetError = displayedError.current
 		? projectSheetError(displayedError.current, displayedAction.current)
 		: null;
@@ -212,14 +229,14 @@ export function CreateProjectAgentSheet({
 	}, [open]);
 
 	useEffect(() => {
-		if (!open) return;
+		if (!open || !chooseAgents) return;
 		if (!workerAgentTouched) {
 			setWorkerAgent(defaultAuthorizedAgentForRole(authorizedAgents, sessionHistory, "worker"));
 		}
 		if (!orchestratorAgentTouched) {
 			setOrchestratorAgent(defaultAuthorizedAgentForRole(authorizedAgents, sessionHistory, "orchestrator"));
 		}
-	}, [authorizedAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
+	}, [authorizedAgents, chooseAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
 
 	if (isBusy) return null;
 
@@ -234,7 +251,7 @@ export function CreateProjectAgentSheet({
 		>
 			<Dialog.Portal>
 				<Dialog.Content
-					className={cn("fixed left-1/2 top-1/2 z-overlay w-dialog-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
+					className={cn("fixed left-1/2 top-1/2 z-overlay w-dialog-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
 					onAnimationEnd={(event) => {
 						if (!open && event.target === event.currentTarget) setIsExiting(false);
 					}}
@@ -250,7 +267,7 @@ export function CreateProjectAgentSheet({
 							displayedOnBack.current ? (
 								<Button
 									type="button"
-									variant="outline"
+									variant="secondary"
 									size="icon"
 									aria-label={t("createProject.cloneBackToDetails")}
 									disabled={isBusy}
@@ -268,8 +285,9 @@ export function CreateProjectAgentSheet({
 								: t("createProject.setupProject")
 						}
 					/>
+					{preparedClonePath ? <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t("createProject.cloneReady", { path: preparedClonePath })}</p> : null}
 					<ProjectSetupFormView
-						agentControls={{
+						agentControls={chooseAgents ? {
 							worker: (
 								<RequiredAgentField
 									id="newProjectWorkerAgent"
@@ -279,7 +297,6 @@ export function CreateProjectAgentSheet({
 									agents={selectableAgents}
 									disabled={isLoadingAgents}
 									labelClassName="agents-sheet-label"
-									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
 									hostId={hostId}
 									onChange={(value) => {
@@ -297,7 +314,6 @@ export function CreateProjectAgentSheet({
 									agents={selectableAgents}
 									disabled={isLoadingAgents}
 									labelClassName="agents-sheet-label"
-									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
 									hostId={hostId}
 									onChange={(value) => {
@@ -306,15 +322,15 @@ export function CreateProjectAgentSheet({
 									}}
 								/>
 							),
-						}}
-						agents={{
+						} : undefined}
+						agents={chooseAgents ? {
 							error: displayError,
 							loading: isLoadingAgents,
 							loadingMessage: t("createProject.loadingAgents"),
 							onRetry: () => void agentsQuery.refetch(),
 							retrying: agentsQuery.isFetching,
 							retryLabel: t("createProject.retry"),
-						}}
+						} : undefined}
 						alert={
 							sheetError
 								? {
@@ -344,34 +360,44 @@ export function CreateProjectAgentSheet({
 								/>
 							) : null
 						}
-						isBusy={isBusy}
-						onCancel={() => onOpenChange(false)}
 						onSubmit={() =>
-							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: intakeVisible ? buildIntake(intake) : undefined })
+							void onSubmit({
+								...(chooseAgents ? { workerAgent, orchestratorAgent } : {}),
+								trackerIntake: intakeVisible ? buildIntake(intake) : undefined,
+							})
 						}
 						setupNotice={
 							repositorySetupNeeded
 								? { message: t("createProject.gitSetupNotice"), warning: repositorySetupWarning }
 								: null
 						}
-						submitLabel={
-							isInitializing
-								? t("createProject.settingUp")
-								: isCreating
-									? action === "clone"
-										? t("createProject.cloning")
-										: t("createProject.creating")
-									: action === "clone"
-										? t("createProject.clone")
-										: kind === "workspace"
-											? t("createProject.createWorkspaceAndStart")
-											: t("createProject.createAndStart")
+						actions={
+							<Button
+								type="submit"
+								variant="primary"
+								disabled={!canSubmit}
+								className={cn(
+									"gap-2",
+									(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
+								)}
+							>
+								{
+									preparedClonePath && error && !isBusy ? t("createProject.cloneRetrySetup") : isInitializing
+										? t("createProject.settingUp")
+										: isCreating
+											? action === "clone"
+												? t("createProject.cloning")
+												: t("createProject.creating")
+											: action === "clone"
+												? t("createProject.clone")
+												: kind === "workspace"
+													? t("createProject.createWorkspaceAndStart")
+													: t("createProject.createAndStart")
+								}
+							</Button>
 						}
-						submitClassName={cn(
-							"inline-flex h-control-form items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground hover:bg-primary/80",
-							(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
-						)}
 					/>
+					{onKeepCheckout ? <div className="px-4 pb-4"><Button type="button" variant="secondary" disabled={isBusy} onClick={onKeepCheckout}>{t("createProject.cloneKeepCheckout")}</Button></div> : null}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
@@ -389,14 +415,9 @@ function ProjectSheetCloseButton({
 }) {
 	return (
 		<Dialog.Close asChild>
-			<button
-				type="button"
-				className="settings-close-button"
-				aria-label={ariaLabel}
-				disabled={disabled}
-			>
+			<Button type="button" variant="quiet" size="icon" aria-label={ariaLabel} disabled={disabled}>
 				{children}
-			</button>
+			</Button>
 		</Dialog.Close>
 	);
 }
@@ -425,7 +446,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	disabled?: boolean;
 	/** Caption beside the label, e.g. naming where a preselected default came from. */
 	hint?: string;
-	icon?: LucideIcon;
+	icon?: AppIcon;
 	id: string;
 	invalid?: boolean;
 	label: string;

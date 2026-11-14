@@ -10,6 +10,13 @@ import (
 	"path/filepath"
 )
 
+const (
+	// ManifestMaxBytes bounds a cached manifest read.
+	ManifestMaxBytes int64 = 1 << 20
+	// ProviderMaxBytes bounds a cached provider blob read.
+	ProviderMaxBytes int64 = 8 << 20
+)
+
 // ErrNoCachedCatalog indicates that no last-known-good manifest is installed.
 var ErrNoCachedCatalog = errors.New("no cached pricing catalog")
 

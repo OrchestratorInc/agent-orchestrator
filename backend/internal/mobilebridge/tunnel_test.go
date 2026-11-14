@@ -169,6 +169,34 @@ func TestResolveCloudflaredPrefersOurManagedCopyOverSystem(t *testing.T) {
 	}
 }
 
+// A managed copy left by an older pin is downloaded again rather than trusted
+// for existing. One whose version cannot be read is kept, so a slow scan or a
+// noexec mount never loops on the download.
+func TestResolveCloudflaredReplacesAManagedCopyOfAnotherRelease(t *testing.T) {
+	managed := "/home/u/.ao/bin/cloudflared"
+	pinned := CloudflaredVersion{2026, 10, 2}
+	for name, versions := range map[string]map[string]CloudflaredVersion{
+		"older pin": {managed: {2026, 10, 1}},
+		"newer pin": {managed: {2026, 11, 0}},
+	} {
+		l := lookupFor("", managed, "", versions)
+		l.ManagedVersion = pinned
+		if got := ResolveCloudflared(l); !got.NeedsInstall {
+			t.Errorf("%s: got %+v, want a new download", name, got)
+		}
+	}
+	for name, versions := range map[string]map[string]CloudflaredVersion{
+		"pinned":     {managed: pinned},
+		"unreadable": {},
+	} {
+		l := lookupFor("", managed, "", versions)
+		l.ManagedVersion = pinned
+		if got := ResolveCloudflared(l); got.Path != managed || got.NeedsInstall {
+			t.Errorf("%s: got %+v, want the managed copy", name, got)
+		}
+	}
+}
+
 func TestResolveCloudflaredReusesARecentSystemInstall(t *testing.T) {
 	// The whole point: if the user already has cloudflared from brew or apt, use
 	// it. Do not download a second copy, and never upgrade theirs.

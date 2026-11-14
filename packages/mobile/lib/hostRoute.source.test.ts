@@ -14,16 +14,17 @@ describe("retained-stack host routes", () => {
 		const shell = source("../app/shell/[handleId].tsx");
 		const preview = source("../app/preview/[id].tsx");
 		expect(shell).toContain("hostRouteMatches(routeHostId, currentHostId)");
-		expect(shell).toContain("return <TerminalSessionScreen />");
+		expect(shell).toContain("<TerminalSessionScreen /></View>;");
 		expect(preview).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		expect(preview).toContain("previewForConfig(");
 	});
 
-	it("never loads a terminal preview URL with another endpoint's credential", () => {
+	it("routes terminal previews through the owning host without leaking another credential", () => {
 		const terminal = source("./session/TerminalSessionScreen.tsx");
-		expect(terminal).toContain("previewForConfig(loadedPreview, activeConfig, params.hostId)");
-		expect(terminal).toContain("setLoadedPreview({ config: activeConfig, id, value: p })");
-		expect(terminal).toContain("headers: preview.authenticated && activeConfig ? authHeaders(activeConfig) : undefined");
+		const preview = source("../app/preview/[id].tsx");
+		expect(terminal).toContain("hostId: params.hostId");
+		expect(preview).toContain("previewForConfig(loaded, config, routeHostId)");
+		expect(preview).toContain("headers: preview.authenticated && config ? authHeaders(config) : undefined");
 	});
 
 	it("requires the owning host for review detail, reviewer chat, and actions", () => {
@@ -33,6 +34,6 @@ describe("retained-stack host routes", () => {
 			expect(route).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		}
 		expect(source("../app/review/[sessionId].tsx")).toContain("hostId: routeHostId");
-		expect(source("./PRCard.tsx")).toContain("prUrl: pr.url, hostId");
+		expect(source("./PRCard.tsx")).toContain("reviewRouteForPR(session.id, pr, hostId)");
 	});
 });

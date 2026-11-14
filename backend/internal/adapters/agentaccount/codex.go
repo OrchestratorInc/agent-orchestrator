@@ -129,10 +129,16 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 	if err != nil {
 		return domain.AgentAccountLimits{}, err
 	}
-	out := domain.AgentAccountLimits{Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: time.Now().UTC()}
+	out := domain.AgentAccountLimits{
+		Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: time.Now().UTC(),
+		AutoResumeResetsAt: capacity.AutoResumeResetsAt,
+	}
 	addBucket := func(bucket *domain.CodexCapacityBucket, prefix string) {
 		if bucket == nil {
 			return
+		}
+		if bucket.Reached == domain.CodexCapacityReached {
+			out.ReachedScopes = append(out.ReachedScopes, prefix)
 		}
 		for _, w := range []*domain.CodexCapacityWindow{bucket.Primary, bucket.Secondary} {
 			if w == nil {
@@ -142,9 +148,13 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 			if prefix != "" {
 				label = prefix + " · " + label
 			}
-			out.Windows = append(out.Windows, domain.AgentAccountLimitWindow{
-				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt,
-			})
+			window := domain.AgentAccountLimitWindow{
+				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt, Scope: prefix,
+			}
+			if w.WindowDurationMinutes != nil && *w.WindowDurationMinutes > 0 {
+				window.DurationMinutes = int(*w.WindowDurationMinutes)
+			}
+			out.Windows = append(out.Windows, window)
 		}
 	}
 	addBucket(capacity.Overall, "")

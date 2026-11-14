@@ -287,8 +287,7 @@ func listFingerprint(t *testing.T, sess domain.Session) string {
 		ArtifactDir   string
 		ArtifactFiles []domain.SessionArtifactFile
 		PRs           []domain.PRFacts
-		AgentSwitch   *domain.AgentSwitch
-	}{sess, sess.Metadata, sess.Metadata.ArtifactDir, sess.ArtifactFiles, sess.PRs, sess.ActiveAgentSwitch})
+	}{sess, sess.Metadata, sess.Metadata.ArtifactDir, sess.ArtifactFiles, sess.PRs})
 	if err != nil {
 		t.Fatal(err)
 	}

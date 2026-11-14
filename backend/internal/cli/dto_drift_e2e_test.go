@@ -154,12 +154,20 @@ func (f *fakeProjectManager) PrepareClone(_ context.Context, in projectsvc.Clone
 	return projectsvc.ClonePreparationResult{Path: "/tmp/" + in.RemoteURL, RemoteURL: in.RemoteURL}, nil
 }
 
+func (f *fakeProjectManager) PrepareCloneWithProgress(ctx context.Context, in projectsvc.CloneInput, _ func(projectsvc.CloneProgress)) (projectsvc.ClonePreparationResult, error) {
+	return f.PrepareClone(ctx, in)
+}
+
+func (f *fakeProjectManager) CheckCloneDestination(_ context.Context, in projectsvc.CloneInput) (projectsvc.CloneDestination, error) {
+	return projectsvc.CloneDestination{RemoteURL: in.RemoteURL}, nil
+}
+
 func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.ClonePreparationCleanupInput) error {
 	return nil
 }
 
 func (f *fakeProjectManager) InitializeRepository(_ context.Context, in projectsvc.InitializeRepositoryInput) (projectsvc.InitializeRepositoryResult, error) {
-	return projectsvc.InitializeRepositoryResult(in), nil
+	return projectsvc.InitializeRepositoryResult{Path: in.Path}, nil
 }
 
 func (f *fakeProjectManager) UpdateSettings(_ context.Context, id domain.ProjectID, in projectsvc.UpdateSettingsInput) (projectsvc.Project, error) {
@@ -222,6 +230,7 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 			"--issue", "ISS-1",
 			"--name", "my worker",
 			"--model", "gpt-5.6-sol",
+			"--account", "acct-work",
 			"--output", "artifact",
 		})
 		if err := root.Execute(); err != nil {
@@ -249,6 +258,9 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 		}
 		if got.AgentConfig.Model != "gpt-5.6-sol" {
 			t.Errorf("AgentConfig.Model = %q, want %q (CLI json:\"model\" vs SpawnSessionRequest)", got.AgentConfig.Model, "gpt-5.6-sol")
+		}
+		if got.AgentAccountID != "acct-work" {
+			t.Errorf("AgentAccountID = %q, want %q (CLI json:\"accountId\" vs SpawnSessionRequest)", got.AgentAccountID, "acct-work")
 		}
 		if got.RequestedOutput != "artifact" {
 			t.Errorf("RequestedOutput = %q, want %q (CLI json:\"requestedOutput\" vs SpawnSessionRequest)", got.RequestedOutput, "artifact")
@@ -312,4 +324,8 @@ func TestE2E_SpawnAndProjectAddDTORoundTrip(t *testing.T) {
 
 func (f *fakeProjectManager) SetPermissions(_ context.Context, id domain.ProjectID, in projectsvc.SetPermissionsInput) (projectsvc.Project, error) {
 	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: in.Permissions}}}, nil
+}
+
+func (f *fakeProjectManager) ForgetPermissions(_ context.Context, id domain.ProjectID) (projectsvc.Project, error) {
+	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{}}, nil
 }

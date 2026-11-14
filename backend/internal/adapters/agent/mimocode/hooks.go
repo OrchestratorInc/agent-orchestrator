@@ -58,6 +58,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := installUsingAOSkill(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("mimocode.GetAgentHooks: skill: %w", err)
 	}
+	if err := hookutil.InstallBugTriageSkill(mimoSkillsDir(cfg.WorkspacePath)); err != nil {
+		return fmt.Errorf("mimocode.GetAgentHooks: skill: %w", err)
+	}
 	return nil
 }
 
@@ -99,6 +102,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	if err := uninstallUsingAOSkill(workspacePath); err != nil {
 		return fmt.Errorf("mimocode.UninstallHooks: skill: %w", err)
 	}
+	if err := hookutil.UninstallBugTriageSkill(mimoSkillsDir(workspacePath)); err != nil {
+		return fmt.Errorf("mimocode.UninstallHooks: skill: %w", err)
+	}
 	return nil
 }
 
@@ -120,10 +126,8 @@ func mimoAgentSource(cfg ports.WorkspaceHookConfig) ([]byte, error) {
 		prompt = string(data)
 	}
 	var b strings.Builder
-	b.WriteString("---\n# " + mimoAgentSentinel + "\ndescription: AO-managed session instructions\nmode: primary\n")
-	if ports.NormalizePermissionMode(cfg.Config.Permissions) == ports.PermissionModeAcceptEdits {
-		b.WriteString("permission:\n  edit: allow\n")
-	}
+	b.WriteString("---\n# " + mimoAgentSentinel + "\ndescription: Orchestrator-managed session instructions\nmode: primary\n")
+	b.WriteString(mimoAgentPermission(cfg.Config.Permissions))
 	b.WriteString("---\n")
 	b.WriteString(strings.TrimSpace(prompt))
 	b.WriteByte('\n')
@@ -136,7 +140,7 @@ func writeManagedFile(path, sentinel string, body []byte) error {
 		return err
 	}
 	if _, err := os.Stat(path); err == nil && !managed {
-		return fmt.Errorf("refusing to overwrite non-AO file at %s", path)
+		return fmt.Errorf("refusing to overwrite non-Orchestrator file at %s", path)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -182,7 +186,7 @@ func installUsingAOSkill(workspace string) error {
 			return readErr
 		}
 		if !managed {
-			return fmt.Errorf("refusing to overwrite non-AO skill at %s", skillDir)
+			return fmt.Errorf("refusing to overwrite non-Orchestrator skill at %s", skillDir)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err

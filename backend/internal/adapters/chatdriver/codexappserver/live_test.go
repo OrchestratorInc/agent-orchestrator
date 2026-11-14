@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 func TestMain(m *testing.M) {
@@ -32,6 +36,35 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+func TestLiveCodexBackgroundTaskNaming(t *testing.T) {
+	if os.Getenv("AO_CODEX_LIVE") != "1" {
+		t.Skip("set AO_CODEX_LIVE=1 to run against the local Codex account")
+	}
+	bin := os.Getenv("AO_CODEX_BIN")
+	if bin == "" {
+		bin = "codex"
+	}
+	service := chatsvc.New(chatsvc.Options{
+		Drivers: backgroundNamingRegistry{New(livePlugin{bin: bin}, nil)}, NewID: uuid.NewString,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	answer, err := service.RunBackgroundTask(ctx, domain.HarnessCodex, ports.ChatStartConfig{
+		DataDir: t.TempDir(), WorkspacePath: t.TempDir(), Env: envMap(), Model: os.Getenv("AO_CODEX_LIVE_MODEL"), Permissions: ports.PermissionModeAcceptEdits,
+		SystemPrompt: `Name the task described by the user. Return only JSON with nonempty "title" and "slug" strings. Do not answer the task, use tools, or inspect files.`,
+	}, "what is in this repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var name struct {
+		Title string `json:"title"`
+		Slug  string `json:"slug"`
+	}
+	if err := json.Unmarshal([]byte(answer), &name); err != nil || strings.TrimSpace(name.Title) == "" || strings.TrimSpace(name.Slug) == "" {
+		t.Fatalf("background task answered the prompt instead of naming it: %q (decode: %v)", answer, err)
+	}
 }
 
 // TestLiveCodexAppServer drives a real `codex app-server`. It is skipped unless
@@ -243,3 +276,10 @@ func seedGitWorkspace(t *testing.T, dir string) {
 		}
 	}
 }
+
+type backgroundNamingRegistry struct{ driver ports.ChatDriver }
+
+func (r backgroundNamingRegistry) Driver(domain.AgentHarness) (ports.ChatDriver, error) {
+	return r.driver, nil
+}
+func (backgroundNamingRegistry) SupportsChat(domain.AgentHarness) bool { return true }

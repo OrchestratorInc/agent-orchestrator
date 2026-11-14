@@ -7,9 +7,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
-	capture: vi.fn(() => ({})),
+	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>): object | undefined => ({})),
 	captureException: vi.fn(),
 	addExceptionStep: vi.fn(),
+	identify: vi.fn(),
+	alias: vi.fn((_alias?: string, _original?: string): object | number | undefined => ({})),
+	reset: vi.fn(),
+	setPersonProperties: vi.fn(),
+	opt_in_capturing: vi.fn(),
+	opt_out_capturing: vi.fn(),
+	set_config: vi.fn(),
+	reloadFeatureFlags: vi.fn(),
 };
 
 function mockPosthog() {
@@ -23,6 +31,50 @@ describe("initTelemetry recovery", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
+	});
+
+	async function initializedUpdateCapture() {
+		localStorage.clear();
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => ({
+					appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test",
+					disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+				})) },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { captureRendererEvent, initTelemetry } = await import("./telemetry");
+		expect(await initTelemetry()).toBe(true);
+		posthogStub.capture.mockClear();
+		return captureRendererEvent;
+	}
+
+	it("captures every renamed event under its new name and never an old one", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { LEGACY_EVENT_NAMES } = await import("./telemetry");
+		for (const name of Object.keys(LEGACY_EVENT_NAMES)) {
+			posthogStub.capture.mockClear();
+			expect(await captureRendererEvent(name, { phase: "download", error_category: "network", to_version: "9.9.9", surface: "home" }), name).toBe(true);
+			expect(posthogStub.capture.mock.calls.map(([event]) => event), name).toContain(name);
+		}
+		const legacy = new Set(Object.values(LEGACY_EVENT_NAMES).flat());
+		expect(posthogStub.capture.mock.calls.some(([event]) => legacy.has(String(event)))).toBe(false);
+	});
+
+	it("writes log-only events to the console instead of PostHog", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		try {
+			for (const name of ["ao.renderer.agents_available", "ao.renderer.cloud_offering_resolved"]) {
+				expect(await captureRendererEvent(name, { installed_count: 2, org_kind: "b2c" })).toBe(true);
+				expect(info).toHaveBeenCalledWith(`[telemetry] ${name}`, expect.any(Object));
+			}
+			expect(posthogStub.capture).not.toHaveBeenCalled();
+		} finally {
+			info.mockRestore();
+		}
 	});
 
 	it("retries init after a transient thrown failure instead of caching it", async () => {
@@ -87,5 +139,680 @@ describe("initTelemetry recovery", () => {
 		expect(posthogStub.init).toHaveBeenCalledOnce();
 		expect(() => clearRendererTelemetryQueues()).not.toThrow();
 		expect(() => applyRendererTelemetryPolicy(false)).not.toThrow();
+	});
+
+	it("deduplicates updater failures at the real capture boundary", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
+		expect(await captureRendererEvent("ao.updates.downloaded", failure)).toBe(true);
+		expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+		expect(posthogStub.capture.mock.calls.map(([name]) => name)).toEqual([
+			"ao.updates.failed", "ao.updates.downloaded", "ao.updates.failed",
+		]);
+	});
+
+	it("does not deduplicate an update failure rejected by the rate limit", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000);
+		try {
+			for (let index = 0; index < 5; index++) {
+				expect(await captureRendererEvent("ao.updates.failed", {
+					phase: "download", error_category: "network", to_version: `2.0.${index}`,
+				})).toBe(true);
+			}
+			const sixth = { phase: "download", error_category: "network", to_version: "2.0.5" };
+			expect(await captureRendererEvent("ao.updates.failed", sixth)).toBe(false);
+			clock.mockReturnValue(1_000_060_001);
+			expect(await captureRendererEvent("ao.updates.failed", sixth)).toBe(true);
+			expect(posthogStub.capture).toHaveBeenCalledTimes(6);
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
+	it("emits one update failure per streak and one daily count after the UTC day ends", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const failure = { phase: "check", error_category: "network", to_version: "2.0.0" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.at(-1)?.[0]).toBe("ao.usage.update_failures_daily");
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toMatchObject({ day: "2026-10-20", failure_count: 2 });
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not export updater failures counted while opted out", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { applyAnalyticsOptOut } = await import("./telemetry");
+		const failure = { phase: "check", error_category: "network" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			await applyAnalyticsOptOut(true);
+			posthogStub.capture.mockImplementation(() => undefined);
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
+			posthogStub.capture.mockImplementation(() => ({}));
+			await applyAnalyticsOptOut(false);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			posthogStub.capture.mockClear();
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.map(([event]) => event)).toEqual(["ao.updates.failed"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not restore updater counts when an opt-out lands while a daily count is sending", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { applyAnalyticsOptOut } = await import("./telemetry");
+		const failure = { phase: "check", error_category: "network" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(true);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			posthogStub.capture.mockImplementationOnce(() => {
+				void applyAnalyticsOptOut(true);
+				return undefined;
+			});
+			expect(await captureRendererEvent("ao.updates.failed", failure)).toBe(false);
+			expect(localStorage.getItem("ao.telemetry.updateFailures.v1")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows retry after PostHog rejects or throws while capturing an update failure", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const rejected = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		posthogStub.capture.mockImplementationOnce(() => undefined);
+		expect(await captureRendererEvent("ao.updates.failed", rejected)).toBe(false);
+		expect(await captureRendererEvent("ao.updates.failed", rejected)).toBe(true);
+
+		const thrown = { phase: "download", error_category: "network", to_version: "2.0.1" };
+		posthogStub.capture.mockImplementationOnce(() => { throw new Error("capture failed"); });
+		await expect(captureRendererEvent("ao.updates.failed", thrown)).rejects.toThrow("capture failed");
+		expect(await captureRendererEvent("ao.updates.failed", thrown)).toBe(true);
+	});
+});
+
+describe("PostHog identity and opt-out", () => {
+	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", installId: "ins_test", disabledEvents: [], eventsEnabled: true, consentGeneration: "g" };
+
+	function mockBridge(getBootstrap: () => Promise<unknown>, claimFirstOpen: () => Promise<string> = async () => "ineligible") {
+		mockPosthog();
+		const capture = vi.fn(async () => true);
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), getLifetimeSessions: vi.fn(async () => null), claimFirstOpen, capture },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		return capture;
+	}
+
+	beforeEach(() => {
+		vi.resetModules();
+		vi.clearAllMocks();
+	});
+
+	it("claims app open only when about to send it, retrying while the session count is unknown", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			const claim = vi.fn().mockResolvedValueOnce("unknown").mockResolvedValue("claimed");
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt, lifetimeSessions: 0 }), claim);
+			const { initTelemetry } = await import("./telemetry");
+			await initTelemetry();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.app.first_opened")).toBe(false);
+			await vi.advanceTimersByTimeAsync(2_000);
+			const sent = posthogStub.capture.mock.calls.filter(([name]) => name === "ao.app.first_opened");
+			expect(sent).toHaveLength(1);
+			expect(sent[0][1]).toEqual(expect.objectContaining({ days_since_install: 0 }));
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(claim).toHaveBeenCalledTimes(2);
+			// Next-day return is computed in PostHog retention, not sent.
+			expect(posthogStub.capture.mock.calls.some(([name]) => /next_day/.test(String(name)))).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("never spends the first-open claim when the event is on the kill switch, or after install day", async () => {
+		localStorage.clear();
+		const claim = vi.fn(async () => "claimed");
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, disabledEvents: ["ao.app.first_opened"] }), claim);
+		const { initTelemetry } = await import("./telemetry");
+		await initTelemetry();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		vi.resetModules();
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 3 }), claim);
+		const later = await import("./telemetry");
+		await later.initTelemetry();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(claim).not.toHaveBeenCalled();
+	});
+
+	it("refreshes lifetime_sessions after the desktop creates a session", async () => {
+		localStorage.clear();
+		mockPosthog();
+		const getLifetimeSessions = vi.fn(async () => 1);
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => ({ ...bootstrap, lifetimeSessions: 0 })), getGithubLogin: vi.fn(async () => null), getLifetimeSessions, claimFirstOpen: vi.fn(async () => "ineligible") },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { initTelemetry, captureRendererEvent, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 0);
+		await captureRendererEvent("ao.tasks.created", {});
+		await vi.waitFor(() => expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 1));
+	});
+
+	it("refreshes install age on captures from a long-lived renderer", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		const installedAt = new Date("2026-10-20T10:00:00.000Z").getTime();
+		vi.setSystemTime(new Date("2026-10-20T11:00:00.000Z"));
+		try {
+			mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, installTimestampMs: installedAt }));
+			const { captureRendererEvent, initTelemetry } = await import("./telemetry");
+			await initTelemetry();
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toHaveProperty("days_since_install", 0);
+			posthogStub.capture.mockClear();
+			vi.setSystemTime(new Date("2026-10-21T11:00:00.000Z"));
+			expect(await captureRendererEvent("ao.app.loaded")).toBe(true);
+			expect(posthogStub.capture.mock.calls.at(-1)?.[1]).toHaveProperty("days_since_install", 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("boots identified as the bound Cloud user, resets on sign-out and re-identifies on sign-in", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch", cloudUserId: "user_01H" }));
+		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "user_01H", isIdentifiedID: true } }));
+		expect(posthogStub.register).toHaveBeenLastCalledWith(expect.objectContaining({ ao_cloud_user_id: "user_01H" }));
+		// Launch events go out identified, with install_id still attached.
+		const launchEvents = posthogStub.capture.mock.calls.map(([, properties]) => properties);
+		expect(launchEvents.length).toBeGreaterThan(0);
+		for (const properties of launchEvents) {
+			expect(properties).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
+			expect(properties).not.toHaveProperty("$process_person_profile", false);
+		}
+		// The runtime still sets the person properties once, without a reset.
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.reset).not.toHaveBeenCalled();
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		clearCloudUser();
+		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: false, $process_person_profile: false, install_id: "ins_test" });
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.identify).toHaveBeenCalledTimes(2);
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: true, install_id: "ins_test" });
+	});
+
+	it("boots anonymous without a verified Cloud binding", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch" }));
+		const { initTelemetry, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
+		expect(withTelemetryContext({})).toMatchObject({ $process_person_profile: false });
+	});
+
+	it("does not boot identified after this launch already saw a sign-out", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, distinctId: "anon_launch", cloudUserId: "user_01H" }));
+		const { initTelemetry, clearCloudUser } = await import("./telemetry");
+		clearCloudUser();
+		await initTelemetry();
+		expect(posthogStub.init).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ bootstrap: { distinctID: "anon_launch", isIdentifiedID: false } }));
+	});
+
+	it("fills lifetime_sessions in once the daemon answers when the bootstrap had none", async () => {
+		localStorage.clear();
+		vi.useFakeTimers();
+		try {
+			mockPosthog();
+			const getLifetimeSessions = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(7);
+			vi.doMock("./bridge", () => ({
+				aoBridge: {
+					telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null), getLifetimeSessions },
+					updateSettings: { get: vi.fn(async () => ({})) },
+				},
+			}));
+			const { initTelemetry, withTelemetryContext } = await import("./telemetry");
+			await initTelemetry();
+			expect(withTelemetryContext({})).not.toHaveProperty("lifetime_sessions");
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(withTelemetryContext({})).not.toHaveProperty("lifetime_sessions");
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(withTelemetryContext({})).toHaveProperty("lifetime_sessions", 7);
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(getLifetimeSessions).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("pauses feature flag reloads on an in-session analytics opt-out and resumes on opt-in", async () => {
+		localStorage.clear();
+		mockBridge(async () => bootstrap);
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		await initTelemetry();
+		await applyAnalyticsOptOut(true);
+		expect(posthogStub.set_config).toHaveBeenLastCalledWith({ advanced_disable_flags: true });
+		expect(posthogStub.opt_out_capturing).toHaveBeenCalled();
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.set_config).toHaveBeenLastCalledWith({ advanced_disable_flags: false });
+		expect(posthogStub.reloadFeatureFlags).toHaveBeenCalled();
+	});
+
+	it("stamps is_signed_in, days_since_install and lifetime_sessions on every event", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, installTimestampMs: Date.now() - 3 * 86_400_000, lifetimeSessions: 4 }));
+		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(withTelemetryContext({})).toMatchObject({ is_signed_in: false, days_since_install: 3, lifetime_sessions: 4 });
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", true);
+		clearCloudUser();
+		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", false);
+	});
+
+	it("identifies the WorkOS user once with email as a person property, never as a super property", async () => {
+		const captureToMain = mockBridge(async () => bootstrap);
+		const { identifyCloudUser, captureRendererEvent, captureRendererException } = await import("./telemetry");
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		expect(posthogStub.identify).toHaveBeenCalledWith("user_01H", {
+			email: "dev@example.com",
+			ao_cloud_user_id: "user_01H",
+		});
+		// Email must not be stamped on events: not registered, not on a capture.
+		for (const [props] of posthogStub.register.mock.calls as unknown as [Record<string, unknown>][]) {
+			expect(JSON.stringify(props)).not.toContain("dev@example.com");
+			expect(props).not.toHaveProperty("email");
+		}
+		expect(posthogStub.register).toHaveBeenLastCalledWith(expect.objectContaining({ ao_cloud_user_id: "user_01H" }));
+		await captureRendererEvent("ao.support.opened");
+		const captured = posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>];
+		expect(JSON.stringify(captured)).not.toContain("dev@example.com");
+		expect(captured[1]).not.toHaveProperty("$process_person_profile");
+		expect(captured[1].install_id).toBe("ins_test");
+		await captureRendererException(new Error("test"), { install_id: "spoofed" });
+		expect(posthogStub.captureException).not.toHaveBeenCalled();
+		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception" }));
+		const init = posthogStub.init.mock.calls[0] as unknown as [string, { before_send: (event: Record<string, unknown>) => Record<string, unknown> }];
+		const sent = init[1].before_send({ event: "ao.test", properties: { install_id: "spoofed" } });
+		expect((sent.properties as Record<string, unknown>).install_id).toBe("ins_test");
+	});
+
+	it("forwards renderer crashes even when PostHog initialization is unavailable", async () => {
+		const captureToMain = mockBridge(async () => null);
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new Error("resume agent ai-sports-coach-113"), { source: "react-error-boundary" });
+		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception", tags: expect.objectContaining({ category: "render_crash" }) }));
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.captureException).not.toHaveBeenCalled();
+	});
+
+	it("honors the remote exception deny list before forwarding to Electron", async () => {
+		const captureToMain = mockBridge(async () => ({ ...bootstrap, disabledEvents: ["$exception"] }));
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new TypeError("private project"));
+		expect(captureToMain).not.toHaveBeenCalled();
+	});
+
+	it("keeps events anonymous before sign-in and after sign-out", async () => {
+		mockBridge(async () => bootstrap);
+		const { identifyCloudUser, clearCloudUser, captureRendererEvent } = await import("./telemetry");
+		await captureRendererEvent("ao.support.opened");
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
+
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		clearCloudUser();
+		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
+		await captureRendererEvent("ao.mobile.connect_opened", { bridge_enabled: true });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
+	});
+
+	it("does not identify a user who signed out while init was still pending", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		mockBridge(async () => {
+			await gate;
+			return bootstrap;
+		});
+		const { identifyCloudUser, clearCloudUser } = await import("./telemetry");
+		const pending = identifyCloudUser({ id: "user_A", email: "a@example.com" });
+		await Promise.resolve();
+		clearCloudUser(); // init has not finished, so there is nothing to reset yet
+		release();
+		await pending;
+		expect(posthogStub.identify).not.toHaveBeenCalled();
+	});
+
+	it("a pending identify for user A loses to a newer sign-in as user B", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		mockBridge(async () => {
+			await gate;
+			return bootstrap;
+		});
+		const { identifyCloudUser } = await import("./telemetry");
+		const a = identifyCloudUser({ id: "user_A", email: "a@example.com" });
+		const b = identifyCloudUser({ id: "user_B", email: "b@example.com" });
+		release();
+		await Promise.all([a, b]);
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		expect(posthogStub.identify).toHaveBeenCalledWith("user_B", expect.objectContaining({ email: "b@example.com" }));
+	});
+
+	it("A, sign-out, B: each identify starts from a reset, so B never joins A's person", async () => {
+		mockBridge(async () => bootstrap);
+		const { identifyCloudUser, clearCloudUser } = await import("./telemetry");
+		const order: string[] = [];
+		posthogStub.identify.mockImplementation((id: string) => order.push(`identify:${id}`));
+		posthogStub.reset.mockImplementation(() => order.push("reset"));
+
+		await identifyCloudUser({ id: "user_A", email: "a@example.com" });
+		clearCloudUser();
+		await identifyCloudUser({ id: "user_B", email: "b@example.com" });
+		// Direct switch with no sign-out in between also resets first.
+		await identifyCloudUser({ id: "user_C", email: "c@example.com" });
+		expect(order).toEqual(["identify:user_A", "reset", "identify:user_B", "reset", "identify:user_C"]);
+		posthogStub.identify.mockReset();
+		posthogStub.reset.mockReset();
+	});
+
+	it("opt-out stops capture and resets the SDK identity; a later sign-in does not identify", async () => {
+		mockBridge(async () => bootstrap);
+		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut, captureRendererEvent } = await import("./telemetry");
+		await initTelemetry();
+		await applyAnalyticsOptOut(true);
+		expect(posthogStub.opt_out_capturing).toHaveBeenCalledTimes(1);
+		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
+
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(posthogStub.identify).not.toHaveBeenCalled();
+
+		// Opting back in resumes capture and identifies the signed-in user.
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.opt_in_capturing).toHaveBeenLastCalledWith({ captureEventName: false });
+		expect(posthogStub.identify).toHaveBeenCalledWith("user_01H", expect.objectContaining({ email: "dev@example.com" }));
+		await captureRendererEvent("ao.support.opened", { install_id: "spoofed" });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1].install_id).toBe("ins_test");
+	});
+
+	it("a launch that started opted out never builds a client, and opting in initializes one", async () => {
+		let optedOut = true;
+		const getBootstrap = vi.fn(async () => (optedOut ? null : bootstrap));
+		mockBridge(getBootstrap);
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		expect(await initTelemetry()).toBe(false);
+		expect(posthogStub.init).not.toHaveBeenCalled();
+
+		optedOut = false;
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.init).toHaveBeenCalledTimes(1);
+	});
+
+	it("honors an opt-out that arrives while init is still reading update settings", async () => {
+		let releaseSettings!: () => void;
+		const settingsGate = new Promise<void>((resolve) => (releaseSettings = resolve));
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null) },
+				updateSettings: { get: vi.fn(async () => { await settingsGate; return {}; }) },
+			},
+		}));
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		const init = initTelemetry();
+		await Promise.resolve();
+		await applyAnalyticsOptOut(true); // client is not ready yet: only the flag can be set
+		releaseSettings();
+
+		expect(await init).toBe(false);
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.opt_in_capturing).not.toHaveBeenCalled();
+	});
+
+	it("honors an opt-out while the PostHog module is loading", async () => {
+		let releaseModule!: () => void;
+		let moduleStarted!: () => void;
+		const gate = new Promise<void>((resolve) => (releaseModule = resolve));
+		const started = new Promise<void>((resolve) => (moduleStarted = resolve));
+		vi.doMock("posthog-js/dist/module.full.no-external", async () => {
+			moduleStarted();
+			await gate;
+			return { default: posthogStub, PostHog: class {} };
+		});
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null) },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		const init = initTelemetry();
+		await started;
+		await applyAnalyticsOptOut(true);
+		releaseModule();
+		expect(await init).toBe(false);
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.opt_in_capturing).not.toHaveBeenCalled();
+	});
+});
+
+// Signing in through the orchestrator.inc return page can hand over the
+// website visitor's PostHog id; the renderer links it to the account once.
+describe("linking a website visit at sign-in", () => {
+	const VISITOR = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
+	const EVENT = "ao.renderer.cloud_web_visitor_link_requested";
+	const userA = { id: "user_A", email: "a@example.com" };
+	const userB = { id: "user_B", email: "b@example.com" };
+	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", installId: "ins_test", disabledEvents: [] as string[], eventsEnabled: true, consentGeneration: "g" };
+
+	function load(getBootstrap: () => Promise<unknown> = async () => bootstrap) {
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture: vi.fn(async () => true) },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		return import("./telemetry");
+	}
+
+	const linkEvents = () => posthogStub.capture.mock.calls.filter(([name]) => name === EVENT) as unknown as [string, Record<string, unknown>][];
+
+	beforeEach(() => {
+		vi.resetModules();
+		vi.clearAllMocks();
+		localStorage.clear();
+		sessionStorage.clear();
+		posthogStub.alias.mockImplementation(() => ({}));
+	});
+
+	it("aliases the visit into the user right after identify, and reports it once", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		await vi.waitFor(() => expect(linkEvents()).toHaveLength(1));
+
+		expect(posthogStub.identify).toHaveBeenCalledWith(userA.id, expect.objectContaining({ email: userA.email }));
+		// alias(alias, original): merge the website id into the identified user.
+		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
+		expect(posthogStub.alias).toHaveBeenCalledWith(VISITOR, userA.id);
+		const eventOrder = posthogStub.capture.mock.invocationCallOrder[posthogStub.capture.mock.calls.findIndex(([name]) => name === EVENT)];
+		expect(posthogStub.identify.mock.invocationCallOrder[0]).toBeLessThan(posthogStub.alias.mock.invocationCallOrder[0]);
+		expect(posthogStub.alias.mock.invocationCallOrder[0]).toBeLessThan(eventOrder);
+		const [, properties] = linkEvents()[0];
+		expect(properties).toMatchObject({ website_distinct_id: VISITOR, install_id: "ins_test", is_signed_in: true });
+		expect(JSON.stringify(properties)).not.toContain(userA.email);
+	});
+
+	it("does not link again on a later identify of the same user, or after an opt-out and opt-in", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, applyAnalyticsOptOut } = await load();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		await vi.waitFor(() => expect(linkEvents()).toHaveLength(1));
+
+		await identifyCloudUser(userA);
+		await applyAnalyticsOptOut(true);
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.identify).toHaveBeenCalledTimes(2);
+		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
+		expect(linkEvents()).toHaveLength(1);
+	});
+
+	it("links at once when the sign-in is for the account already identified", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load();
+		await identifyCloudUser(userA);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		expect(posthogStub.alias).toHaveBeenCalledWith(VISITOR, userA.id);
+		await vi.waitFor(() => expect(linkEvents()).toHaveLength(1));
+	});
+
+	it("keeps the visit through a token refresh of the same account", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		noteCloudSignInWebVisitor(userA.id);
+		await identifyCloudUser(userA);
+		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		["no id", undefined],
+		["an empty id", ""],
+		["a malformed id", "not a/valid id"],
+		["a non-string id", 42],
+		["a placeholder id", "null"],
+		["the user's own id", "user_A"],
+	])("links nothing for %s", async (_name, webDistinctId) => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, captureRendererEvent } = await load();
+		noteCloudSignInWebVisitor(userA.id, webDistinctId);
+		await identifyCloudUser(userA);
+		await captureRendererEvent("ao.support.opened");
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+		expect(linkEvents()).toHaveLength(0);
+	});
+
+	it("links nothing while analytics are opted out, and does not keep the visit for a later opt-in", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, applyAnalyticsOptOut, initTelemetry } = await load();
+		await initTelemetry();
+		await applyAnalyticsOptOut(true);
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		await applyAnalyticsOptOut(false);
+		expect(posthogStub.identify).toHaveBeenCalledWith(userA.id, expect.anything());
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+		expect(linkEvents()).toHaveLength(0);
+	});
+
+	it("drops a visit when analytics are turned off before the identify", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, applyAnalyticsOptOut, initTelemetry } = await load();
+		await initTelemetry();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await applyAnalyticsOptOut(true);
+		await applyAnalyticsOptOut(false);
+		await identifyCloudUser(userA);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+	});
+
+	it("links nothing when the build sends no telemetry", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load(async () => null);
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+	});
+
+	it("never moves a visit to another account, or keeps it past a sign-out", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, clearCloudUser } = await load();
+		// A's visit, then the session switches to B before A was identified.
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		noteCloudSignInWebVisitor(userB.id);
+		await identifyCloudUser(userB);
+		await identifyCloudUser(userA);
+		// B's visit, then a sign-out notification.
+		noteCloudSignInWebVisitor(userB.id, VISITOR);
+		noteCloudSignInWebVisitor(null);
+		clearCloudUser();
+		await identifyCloudUser(userB);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+		expect(linkEvents()).toHaveLength(0);
+	});
+
+	it("drops a visit not yet linked when the user is cleared at sign-out", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, clearCloudUser } = await load();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		clearCloudUser();
+		await identifyCloudUser(userA);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+	});
+
+	it("links a new account's own visit after switching accounts", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load();
+		await identifyCloudUser(userA);
+		noteCloudSignInWebVisitor(userB.id, VISITOR);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+		await identifyCloudUser(userB);
+		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
+		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
+		expect(posthogStub.alias).toHaveBeenCalledWith(VISITOR, userB.id);
+		expect(posthogStub.reset.mock.invocationCallOrder[0]).toBeLessThan(posthogStub.alias.mock.invocationCallOrder[0]);
+	});
+
+	it("reports no link when PostHog did not send the alias", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser, captureRendererEvent } = await load();
+		posthogStub.alias.mockImplementation(() => undefined);
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		await captureRendererEvent("ao.support.opened");
+		expect(posthogStub.alias).toHaveBeenCalledTimes(1);
+		expect(linkEvents()).toHaveLength(0);
+	});
+
+	it.each([["$create_alias"], [EVENT], ["ao.renderer.*"]])("honors the remote denylist entry %s", async (denied) => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load(async () => ({ ...bootstrap, disabledEvents: [denied] }));
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		expect(posthogStub.identify).toHaveBeenCalledTimes(1);
+		expect(posthogStub.alias).not.toHaveBeenCalled();
+		expect(linkEvents()).toHaveLength(0);
+	});
+
+	it("keeps the visitor id out of browser storage", async () => {
+		const { noteCloudSignInWebVisitor, identifyCloudUser } = await load();
+		noteCloudSignInWebVisitor(userA.id, VISITOR);
+		await identifyCloudUser(userA);
+		await vi.waitFor(() => expect(linkEvents()).toHaveLength(1));
+		const stored = [localStorage, sessionStorage].flatMap((storage) =>
+			Array.from({ length: storage.length }, (_, index) => `${storage.key(index)}=${storage.getItem(storage.key(index) ?? "")}`));
+		expect(stored.join("\n")).not.toContain(VISITOR);
 	});
 });

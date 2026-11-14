@@ -80,7 +80,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, fmt.Errorf("%w: Unreal Agent plugin is unavailable", ports.ErrChatDriverUnavailable)
 	}
 	if _, err := d.executable(); err != nil {
-		return nil, fmt.Errorf("%w: locate AO executable: %w", ports.ErrChatDriverUnavailable, err)
+		return nil, fmt.Errorf("%w: locate Orchestrator executable: %w", ports.ErrChatDriverUnavailable, err)
 	}
 	status, err := d.plugin.AuthStatus(ctx)
 	if err != nil {
@@ -95,7 +95,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 
 // Start opens a fresh persistent Unreal conversation.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories, cfg.MCPServers); err != nil {
+	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories); err != nil {
 		return nil, err
 	}
 	if err := d.validateLaunchAuth(ctx, cfg.Env); err != nil {
@@ -123,7 +123,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	if strings.TrimSpace(cfg.ProviderConversationID) == "" {
 		return nil, fmt.Errorf("%w: Unreal Agent conversation id is empty", ports.ErrChatResumeFailed)
 	}
-	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories, cfg.MCPServers); err != nil {
+	if err := validateStart(cfg.WorkspacePath, cfg.Permissions, cfg.ReadOnly, cfg.AdditionalDirectories); err != nil {
 		return nil, err
 	}
 	if err := d.validateLaunchAuth(ctx, cfg.Env); err != nil {
@@ -141,7 +141,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	return conv, nil
 }
 
-func validateStart(workspace string, permissions ports.PermissionMode, readOnly bool, additional []string, mcp []ports.ChatMCPServerConfig) error {
+func validateStart(workspace string, permissions ports.PermissionMode, readOnly bool, additional []string) error {
 	if !filepath.IsAbs(workspace) {
 		return fmt.Errorf("workspace path must be absolute, got %q", workspace)
 	}
@@ -154,9 +154,8 @@ func validateStart(workspace string, permissions ports.PermissionMode, readOnly 
 	if len(additional) != 0 {
 		return errors.New("unreal agent does not support additional workspace directories")
 	}
-	if len(mcp) != 0 {
-		return errors.New("unreal agent does not support AO-supplied MCP servers")
-	}
+	// AO's own tool server is left out rather than refused: the harness takes no
+	// tool servers, and a chat switched here from another agent still carries it.
 	return nil
 }
 
@@ -208,7 +207,7 @@ func (d *Driver) connect(
 			}
 			executable, err := d.executable()
 			if err != nil {
-				return persistenthost.PreparedProvider{}, fmt.Errorf("locate AO executable: %w", err)
+				return persistenthost.PreparedProvider{}, fmt.Errorf("locate Orchestrator executable: %w", err)
 			}
 			configPath, err := writeProviderConfig(cfg)
 			if err != nil {

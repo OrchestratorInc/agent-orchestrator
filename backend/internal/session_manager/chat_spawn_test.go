@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,10 @@ func (d fixedSessionModeDefaults) DefaultSessionMode(context.Context) domain.Ses
 // chat launcher. Anything else means two writers on one conversation.
 
 type recordingLauncher struct {
+	// Empty preserves the default identity used by ordinary Chat fixtures.
+	providerConversationID string
+
+	permissionModes  []ports.PermissionMode
 	preflightErr     error
 	startErr         error
 	turnErr          error
@@ -146,6 +151,13 @@ func (s *historicalChatRestoreStore) ConversationBranch(
 
 func (l *recordingLauncher) SupportsChat(_ domain.AgentHarness) bool { return true }
 
+func (l *recordingLauncher) PermissionModes(context.Context, domain.AgentHarness) ([]ports.PermissionMode, error) {
+	if l.permissionModes != nil {
+		return l.permissionModes, nil
+	}
+	return ports.PermissionModesStrictestFirst, nil
+}
+
 func (l *recordingLauncher) PreflightChat(
 	_ context.Context,
 	harness domain.AgentHarness,
@@ -153,6 +165,9 @@ func (l *recordingLauncher) PreflightChat(
 ) error {
 	l.preflighted = append(l.preflighted, harness)
 	l.preflightPermissions = append(l.preflightPermissions, permissions)
+	if l.permissionModes != nil && !slices.Contains(l.permissionModes, permissions) {
+		return ports.ErrChatPermissionModeUnsupported
+	}
 	return l.preflightErr
 }
 
@@ -186,6 +201,9 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
 		ProviderBoundary:       l.providerBoundary,
+	}
+	if l.providerConversationID != "" {
+		started.ProviderConversationID = l.providerConversationID
 	}
 	if cfg.ControllerGeneration != "" {
 		started.ControllerGeneration = cfg.ControllerGeneration
@@ -296,12 +314,57 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 	}
 }
 
-func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
-	if got := backgroundTaskPermissions(domain.HarnessKimi); got != ports.PermissionModeDefault {
-		t.Fatalf("Kimi permissions = %q, want default", got)
+func TestBackgroundTaskPermissionsKeepNativeDriversCompatible(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessKimi, domain.HarnessGrok} {
+		if got := backgroundTaskPermissions(harness); got != ports.PermissionModeDefault {
+			t.Fatalf("%s permissions = %q, want default", harness, got)
+		}
 	}
 	if got := backgroundTaskPermissions(domain.HarnessCodex); got != ports.PermissionModeAcceptEdits {
 		t.Fatalf("Codex permissions = %q, want accept-edits", got)
+	}
+}
+
+func TestGrokChatSpawnUsesOnlyExplicitEffort(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		roleEffort string
+		requested  ports.AgentConfig
+		override   bool
+		want       string
+	}{
+		{name: "project effort"},
+		{name: "matching role effort", roleEffort: "xhigh"},
+		{name: "unflagged request effort", requested: ports.AgentConfig{Effort: "max"}},
+		{name: "model change", requested: ports.AgentConfig{Model: "grok-4.5"}},
+		{name: "explicit effort", requested: ports.AgentConfig{Effort: "low"}, override: true, want: "low"},
+		{name: "explicit effort stays subject to ACP validation", requested: ports.AgentConfig{Effort: "max"}, override: true, want: "max"},
+		{name: "explicit provider default", roleEffort: "xhigh", override: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig.Effort = "max"
+			project.Config.Worker = domain.RoleOverride{
+				Harness: domain.HarnessGrok, AgentConfig: domain.AgentConfig{Effort: tt.roleEffort},
+			}
+			st.projects[string(chatTestProject)] = project
+
+			rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+				ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessGrok,
+				RequestedMode: domain.SessionModeChat, AgentConfig: tt.requested, EffortOverride: tt.override,
+			})
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if len(launcher.started) != 1 {
+				t.Fatalf("Chat starts = %d, want 1", len(launcher.started))
+			}
+			if rec.Metadata.Effort != tt.want || launcher.started[0].Effort != tt.want {
+				t.Fatalf("effort metadata/start = %q/%q, want %q", rec.Metadata.Effort, launcher.started[0].Effort, tt.want)
+			}
+		})
 	}
 }
 
@@ -923,6 +986,34 @@ func TestWakeHibernatedChatDoesNotRestoreMarkerAfterNativeResumeFailure(t *testi
 	}
 }
 
+func TestResumeChatRefusedLoginAsksForSignIn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		startErr error
+		moving   bool
+		want     []string
+	}{
+		{"login refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), false, []string{"mer-1: agent requires authentication"}},
+		{"chat login refused", fmt.Errorf("resume thread: %w", ports.ErrChatAuthRequired), false, []string{"mer-1: " + ports.ErrChatAuthRequired.Error()}},
+		{"account move refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), true, nil},
+		{"provider down", fmt.Errorf("%w: persistent ACP host: exit status 1", ports.ErrChatDriverUnavailable), false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, store, _ := newChatManager(&recordingLauncher{startErr: tc.startErr})
+			seedChatResumeSession(store, domain.ActivityExited)
+			if tc.moving {
+				mgr.setAccountOverride("mer-1", "acct-b")
+			}
+			if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); !errors.Is(err, tc.startErr) {
+				t.Fatalf("resume error = %v, want %v", err, tc.startErr)
+			}
+			if !slices.Equal(store.loginDemands, tc.want) {
+				t.Fatalf("login demands = %v, want %v", store.loginDemands, tc.want)
+			}
+		})
+	}
+}
+
 func TestResumeExitedChatSessionDoesNotRequireTerminalRuntimeHandle(t *testing.T) {
 	launcher := &recordingLauncher{}
 	mgr, store, runtime := newChatManager(launcher)
@@ -1480,7 +1571,7 @@ func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
 			t.Fatalf("start %d: MCPServers = %+v, want %+v", i, start.MCPServers, want)
 		}
 	}
-	if got := mgr.aoMCPServers(domain.HarnessUnreal, launcher.started[0].Env); got != nil {
+	if got := mgr.aoMCPServers(context.Background(), domain.HarnessUnreal, launcher.started[0].Env); got != nil {
 		t.Fatalf("unreal agent got tool servers %+v; its driver refuses them", got)
 	}
 }
@@ -1858,7 +1949,7 @@ func TestChatSpawnInstallsAgentHooksBeforeControllerStart(t *testing.T) {
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 			mgr := New(Deps{
 				Runtime:   &fakeRuntime{},
-				Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+				Agents:    testAgentRegistry{domain.HarnessCommandCode: hooks},
 				Workspace: &fakeWorkspace{path: wsDir},
 				Store:     st,
 				Messenger: &fakeMessenger{},
@@ -1915,7 +2006,7 @@ func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	mgr := New(Deps{
 		Runtime:   &fakeRuntime{},
-		Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+		Agents:    testAgentRegistry{domain.HarnessCommandCode: hooks},
 		Workspace: &fakeWorkspace{path: t.TempDir()},
 		Store:     st,
 		Messenger: &fakeMessenger{},
@@ -1955,7 +2046,7 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	mgr := New(Deps{
 		Runtime:   &fakeRuntime{},
-		Agents:    switchTestAgents{domain.HarnessCommandCode: commandcode.New()},
+		Agents:    testAgentRegistry{domain.HarnessCommandCode: commandcode.New()},
 		Workspace: &fakeWorkspace{path: wsDir},
 		Store:     st,
 		Messenger: &fakeMessenger{},
@@ -2015,5 +2106,54 @@ func TestRunPromptSuggestionTaskPassesForkSourceWithScratchPolicy(t *testing.T) 
 	}
 	if _, err := os.Stat(cfg.WorkspacePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("scratch workspace survived suggestion")
+	}
+}
+
+func TestChatSpawnDefaultRespectsProviderModes(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		requested, project ports.PermissionMode
+		modes              []ports.PermissionMode
+		want               ports.PermissionMode
+		standalone         bool
+	}{
+		{name: "standalone Kimi", standalone: true, modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeDefault},
+		{name: "unset Kimi", modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeDefault},
+		{name: "explicit auto", requested: ports.PermissionModeAuto, modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeAuto},
+		{name: "project auto", project: ports.PermissionModeAuto, modes: []ports.PermissionMode{ports.PermissionModeDefault}, want: ports.PermissionModeAuto},
+		{name: "supported auto", modes: ports.PermissionModesStrictestFirst, want: ports.PermissionModeAuto},
+		{name: "no substitution for multiple modes", modes: []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeBypassPermissions}, want: ports.PermissionModeAuto},
+		{name: "no implicit bypass", modes: []ports.PermissionMode{ports.PermissionModeBypassPermissions}, want: ports.PermissionModeAuto},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{permissionModes: tc.modes}
+			mgr, st, _ := newChatManager(launcher)
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig.Permissions = tc.project
+			st.projects[string(chatTestProject)] = project
+			projectID := chatTestProject
+			if tc.standalone {
+				projectID = ""
+			}
+			_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: projectID, Kind: domain.KindWorker, Harness: domain.HarnessKimi, RequestedMode: domain.SessionModeChat, AgentConfig: ports.AgentConfig{Permissions: tc.requested}})
+			if !slices.Contains(tc.modes, tc.want) {
+				if !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+					t.Fatalf("rejection = %v", err)
+				}
+				if len(launcher.started) != 0 || len(st.sessions) != 0 {
+					t.Fatal("unsupported permission created a session or controller")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(launcher.preflightPermissions) != 1 || launcher.preflightPermissions[0] != tc.want {
+				t.Fatalf("preflight = %v; want %s", launcher.preflightPermissions, tc.want)
+			}
+			if len(launcher.started) != 1 || launcher.started[0].Permissions != tc.want {
+				t.Fatalf("launch = %+v; want %s", launcher.started, tc.want)
+			}
+		})
 	}
 }

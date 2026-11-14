@@ -3,9 +3,11 @@ import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
+import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
-import { createLocalHostIdentity } from "./remote-request";
+import { setPasswordCipher } from "./remotes-store";
+import { createLocalHostIdentity, type RemoteHealth } from "./remote-request";
+import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -28,9 +30,22 @@ const signedIn = async () => {};
 
 function registerRemotes(
 	ipcMain: Parameters<typeof registerRemotesIpc>[0],
-	deps: Omit<RemotesIpcDeps, "getAccountId" | "localIdentity"> & Partial<Pick<RemotesIpcDeps, "getAccountId" | "localIdentity">>,
+	deps: Omit<RemotesIpcDeps, "getAccountId" | "localIdentity" | "cloudRequest"> & Partial<Pick<RemotesIpcDeps, "getAccountId" | "localIdentity" | "cloudRequest">>,
 ): void {
-	registerRemotesIpc(ipcMain, { localIdentity: async () => "h_this_mac", ...deps, getAccountId: deps.getAccountId ?? (async () => TEST_ACCOUNT) });
+	registerRemotesIpc(ipcMain, {
+		localIdentity: async () => "h_this_mac",
+		cloudRequest: async () => ({ status: 200, body: '{"hosts":[]}' }),
+		pair: async () => ({ kind: "unsupported" }),
+		authErrorCode: async () => undefined,
+		deviceName: async () => "Test Mac",
+		...deps,
+		getAccountId: deps.getAccountId ?? (async () => TEST_ACCOUNT),
+	});
+}
+
+// AO Cloud's host directory, as the main process reads it.
+function cloudListing(...hosts: Array<{ hostId: string; label: string; url: string }>): RemotesIpcDeps["cloudRequest"] {
+	return async () => ({ status: 200, body: JSON.stringify({ hosts: hosts.map((host) => ({ ...host, token: "a".repeat(64) })) }) });
 }
 
 async function tempFile(): Promise<string> {
@@ -52,23 +67,63 @@ describe("remotesFilePath", () => {
 	});
 });
 
+describe("computerName", () => {
+	it("prefers the macOS Computer Name and falls back to the host name", async () => {
+		await expect(computerName(async () => ({ stdout: "Dhruv’s Mac mini\n" }), "darwin", () => "Dhruvs-Mac-mini.local")).resolves.toBe("Dhruv’s Mac mini");
+		await expect(computerName(async () => { throw new Error("scutil missing"); }, "darwin", () => "Dhruvs-Mac-mini.local")).resolves.toBe("Dhruvs-Mac-mini");
+		await expect(computerName(async () => ({ stdout: "unused" }), "linux", () => "build-box")).resolves.toBe("build-box");
+	});
+});
+
 describe("registerRemotesIpc", () => {
+	it.each(["offline", "unauthorized", "signed-out", "account-gate", "unexpected"])("classifies %s IPC rejection without changing it", async (state) => {
+		resetMainErrorCaptureForTests();
+		try {
+			const ipc = fakeIpc();
+			installIpcErrorCapture(ipc.ipcMain as never);
+			const capture = vi.fn();
+			setMainErrorSink(capture);
+			const unexpected = new TypeError("unexpected probe failure");
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				requireAccount: async () => { if (state === "account-gate") throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts."); },
+				getAccountId: async () => state === "signed-out" ? "" : TEST_ACCOUNT,
+				identity: async () => "h_workbox",
+				probe: async () => {
+					if (state === "unexpected") throw unexpected;
+					return state === "unauthorized" ? "unauthorized" : "offline";
+				},
+			});
+			const result = ipc.invoke("remotes:connect", "http://192.0.2.1:1", "h_workbox");
+			if (state === "unexpected") {
+				await expect(result).rejects.toBe(unexpected);
+				expect(capture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ category: "ipc", reason: "handler", error: unexpected }));
+			} else {
+				await expect(result).rejects.toThrow(state === "signed-out" || state === "account-gate" ? "Sign in to Orchestrator Cloud" : `is ${state}`);
+				expect(capture).not.toHaveBeenCalled();
+			}
+		} finally { resetMainErrorCaptureForTests(); }
+	});
+
 	it("hides this installation without deleting its account record or original password", async () => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
 		const ipc = fakeIpc();
-		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, localIdentity: async () => "h_workbox" });
+		registerRemotes(ipc.ipcMain, {
+			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, localIdentity: async () => "h_workbox",
+			cloudRequest: cloudListing({ hostId: "h_workbox", label: "New name", url: "https://rotated.example" }),
+		});
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
 		expect(await readFile(file, "utf8")).toBe(original);
-		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "New name", url: "https://rotated.example", password: "a".repeat(64) });
-		await ipc.invoke("remotes:pruneAccountHosts", TEST_ACCOUNT, ["h_workbox"]);
+		await ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
 		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
 			{ hostId: "h_workbox", label: "New name", url: "https://rotated.example", password: "old", accountUserId: TEST_ACCOUNT },
 		]);
 	});
 
-	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:issueAccountToken", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
+	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:linkAccountHost", "remotes:previewUrl", "remotes:resolvePreviewUrl", "remotes:externalUrl"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
 		const probe = vi.fn(async () => "online" as const);
@@ -92,7 +147,7 @@ describe("registerRemotesIpc", () => {
 		const ipc = fakeIpc();
 		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: async () => "h_this_mac", probe });
 		await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { url: "https://self.example" })).rejects.toThrow(/itself/);
-		await expect(ipc.invoke("remotes:issueAccountToken", "http://192.0.2.1:1")).rejects.toThrow(/itself/);
+		await expect(ipc.invoke("remotes:linkAccountHost", "http://192.0.2.1:1")).rejects.toThrow(/itself/);
 		expect(probe).not.toHaveBeenCalled();
 	});
 
@@ -118,7 +173,7 @@ describe("registerRemotesIpc", () => {
 		expect(probe).toHaveBeenCalledOnce();
 	});
 
-	it.each(["remotes:add", "remotes:update", "remotes:issueAccountToken"])("defers %s without presenting a credential when local identity is unknown", async (channel) => {
+	it.each(["remotes:add", "remotes:update", "remotes:linkAccountHost"])("defers %s without presenting a credential when local identity is unknown", async (channel) => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
 		const identity = vi.fn(async () => "h_workbox");
@@ -232,12 +287,12 @@ describe("registerRemotesIpc", () => {
 		const file = await tempFile();
 		const registry = new RemoteRegistry(async () => { throw new Error("proxy must not start"); });
 		const ipc = fakeIpc();
-		const requireAccount = vi.fn(async () => { throw new Error("Sign in to AO Cloud to use remote hosts."); });
+		const requireAccount = vi.fn(async () => { throw new Error("Sign in to Orchestrator Cloud to use remote hosts."); });
 		registerRemotes(ipc.ipcMain, { file, registry, requireAccount });
-		await expect(ipc.invoke("remotes:list")).rejects.toThrow(/Sign in to AO Cloud/);
-		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).rejects.toThrow(/Sign in to AO Cloud/);
-		await expect(ipc.invoke("remotes:previewUrl", "h_workbox", "s_1", "http://localhost:3000")).rejects.toThrow(/Sign in to AO Cloud/);
-		await expect(ipc.invoke("remotes:externalUrl", "h_workbox", "https://example.com/")).rejects.toThrow(/Sign in to AO Cloud/);
+		await expect(ipc.invoke("remotes:list")).rejects.toThrow(/Sign in to Orchestrator Cloud/);
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).rejects.toThrow(/Sign in to Orchestrator Cloud/);
+		await expect(ipc.invoke("remotes:previewUrl", "h_workbox", "s_1", "http://localhost:3000")).rejects.toThrow(/Sign in to Orchestrator Cloud/);
+		await expect(ipc.invoke("remotes:externalUrl", "h_workbox", "https://example.com/")).rejects.toThrow(/Sign in to Orchestrator Cloud/);
 		expect(requireAccount).toHaveBeenCalledTimes(4);
 	});
 
@@ -406,22 +461,26 @@ describe("registerRemotesIpc", () => {
 			{ hostId: "h_other", label: "Other", url: "https://other.example", password: "password", accountUserId: "user-b" },
 		] }));
 		let account = "user-a";
+		let listing = cloudListing({ hostId: "h_cloud", label: "Cloud", url: "https://cloud.example" });
 		const ipc = fakeIpc();
 		registerRemotes(ipc.ipcMain, {
 			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }),
 			requireAccount: signedIn, getAccountId: async () => account,
+			cloudRequest: (...args) => listing(...args),
 		});
-		await ipc.invoke("remotes:importAccountHost", "user-a", { hostId: "h_cloud", label: "Cloud", url: "https://cloud.example", password: "a".repeat(64) });
+		await ipc.invoke("remotes:syncAccountHosts", "user-a");
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
 			{ hostId: "h_manual", label: "Manual", url: "https://manual.example" },
 			{ hostId: "h_cloud", label: "Cloud", url: "https://cloud.example" },
 		]);
-		await ipc.invoke("remotes:pruneAccountHosts", "user-a", []);
+		listing = cloudListing();
+		await ipc.invoke("remotes:syncAccountHosts", "user-a");
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
 			{ hostId: "h_manual", label: "Manual", url: "https://manual.example" },
 		]);
 		account = "user-b";
-		await expect(ipc.invoke("remotes:importAccountHost", "user-a", { hostId: "h_leak", label: "Leak", url: "https://leak.example", password: "a".repeat(64) })).rejects.toThrow(/Invalid account/);
+		listing = cloudListing({ hostId: "h_leak", label: "Leak", url: "https://leak.example" });
+		await expect(ipc.invoke("remotes:syncAccountHosts", "user-a")).rejects.toThrow(/Account changed/);
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
 			{ hostId: "h_other", label: "Other", url: "https://other.example" },
 		]);
@@ -436,15 +495,297 @@ describe("registerRemotesIpc", () => {
 		registerRemotes(ipc.ipcMain, {
 			file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }),
 			requireAccount: signedIn, getAccountId: async () => "user-a",
+			cloudRequest: cloudListing({ hostId: "h_legacy", label: "Discovered", url: "https://new.example" }),
 		});
 
-		await ipc.invoke("remotes:importAccountHost", "user-a", {
-			hostId: "h_legacy", label: "Discovered", url: "https://new.example", password: "a".repeat(64),
-		});
+		await ipc.invoke("remotes:syncAccountHosts", "user-a");
 		await expect(ipc.invoke("remotes:list")).resolves.toEqual([
 			{ hostId: "h_legacy", label: "Discovered", url: "https://new.example" },
 		]);
 		const saved = JSON.parse(await readFile(file, "utf8")) as { remotes: Array<{ password: string }> };
 		expect(saved.remotes[0]?.password).toBe("pairing-password");
+	});
+
+	it("links a paired host to the account without returning its token", async () => {
+		const token = "b".repeat(64);
+		const server = createServer((req, res) => {
+			res.setHeader("Content-Type", "application/json");
+			res.end(JSON.stringify(req.url === "/api/v1/remote-host/account-token" && req.headers.authorization === "Bearer old"
+				? { hostId: "h_workbox", token, hostKey: "k".repeat(43) } : {}));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+			const file = await tempFile();
+			await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "workbox", url, password: "old", accountUserId: TEST_ACCOUNT }] }));
+			const requests: Array<{ method: string; path: string; body?: unknown; deadline: boolean }> = [];
+			let finishRegistration = () => {};
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: async () => "h_workbox",
+				cloudRequest: async (method, path, options) => {
+					requests.push({ method, path, body: options?.body, deadline: options?.signal !== undefined });
+					if (method === "PUT") await new Promise<void>((resolve) => { finishRegistration = resolve; });
+					return { status: 200, body: method === "GET" ? '{"hosts":[],"hostKeys":true}' : "" };
+				},
+			});
+			const linked = ipc.invoke("remotes:linkAccountHost", url);
+			await vi.waitFor(() => expect(requests).toHaveLength(2));
+			// AO Cloud may take more than a minute to register; other handlers do not wait for it.
+			await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+			finishRegistration();
+			await expect(linked).resolves.toBeUndefined();
+			expect(requests).toEqual([
+				{ method: "GET", path: "/api/cloud/v1/me/hosts", body: undefined, deadline: true },
+				{ method: "PUT", path: "/api/cloud/v1/me/hosts/h_workbox", body: { label: "workbox", url, token, hostKey: "k".repeat(43) }, deadline: false },
+			]);
+		} finally {
+			server.close();
+		}
+	});
+
+	it("lists saved hosts while AO Cloud is slow to list the account's machines", async () => {
+		let answer: (response: { status: number; body: string }) => void = () => {};
+		const cloudRequest = vi.fn<RemotesIpcDeps["cloudRequest"]>(() => new Promise((resolve) => { answer = resolve; }));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, cloudRequest });
+		const synced = ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+		await vi.waitFor(() => expect(cloudRequest).toHaveBeenCalledOnce());
+		expect(cloudRequest.mock.calls[0][2]?.signal).toBeInstanceOf(AbortSignal);
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+		answer({ status: 200, body: JSON.stringify({ hosts: [{ hostId: "h_cloud", label: "Cloud", url: "https://cloud.example", token: "a".repeat(64) }] }) });
+		await synced;
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(2);
+	});
+
+	it.each(["silent", "unreachable"])("gives up on an AO Cloud that is %s without holding other handlers", async (state) => {
+		let signal: AbortSignal | undefined;
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, {
+			file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+			accountDirectoryTimeoutMs: 20,
+			cloudRequest: (_method, _path, options) => {
+				signal = options?.signal;
+				return state === "silent" ? new Promise(() => {}) : Promise.reject(new TypeError("fetch failed"));
+			},
+		});
+		for (const channel of ["remotes:syncAccountHosts", "remotes:linkAccountHost"]) {
+			await expect(ipc.invoke(channel, channel.endsWith("Hosts") ? TEST_ACCOUNT : "http://192.0.2.1:1")).rejects.toBeInstanceOf(ExpectedIpcError);
+			if (state === "silent") expect(signal?.aborted).toBe(true);
+		}
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+	});
+
+	it("applies only the newest of two overlapping syncs", async () => {
+		const answers: Array<(response: { status: number; body: string }) => void> = [];
+		const listing = (label: string) => ({ status: 200, body: JSON.stringify({ hosts: [{ hostId: "h_cloud", label, url: "https://cloud.example", token: "a".repeat(64) }] }) });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, {
+			file: await tempFile(), registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+			cloudRequest: () => new Promise((resolve) => { answers.push(resolve); }),
+		});
+		const older = ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+		const newer = ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+		await vi.waitFor(() => expect(answers).toHaveLength(2));
+		answers[1](listing("Newer"));
+		await newer;
+		answers[0](listing("Older"));
+		await older;
+		await expect(ipc.invoke("remotes:list")).resolves.toContainEqual({ hostId: "h_cloud", label: "Newer", url: "https://cloud.example" });
+	});
+
+	it.each([
+		["a keychain that cannot decrypt them", { encrypt: (text: string) => `sealed:${text}`, decrypt: (): string => { throw new Error("another keychain"); } }],
+		["no keychain", null],
+	])("syncs over saved passwords it cannot read with %s", async (_name, cipher) => {
+		setPasswordCipher(() => cipher);
+		try {
+			const file = await tempFile();
+			await writeFile(file, JSON.stringify({ remotes: [
+				{ hostId: "h_paired", label: "Paired", url: "https://paired.example", sealedPassword: "sealed-pairing", accountUserId: TEST_ACCOUNT },
+				{ hostId: "h_token", label: "Token", url: "https://token.example", sealedPassword: "sealed-token", accountToken: true, accountUserId: TEST_ACCOUNT },
+				{ hostId: "h_gone", label: "Gone", url: "https://gone.example", sealedPassword: "sealed-gone", accountToken: true, accountUserId: TEST_ACCOUNT },
+			] }));
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn,
+				cloudRequest: cloudListing(
+					{ hostId: "h_paired", label: "Renamed", url: "https://moved.example" },
+					{ hostId: "h_token", label: "Token", url: "https://token.example" },
+				),
+			});
+			await ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
+			// Neither password is replaced by the account token, and the host the account dropped goes.
+			expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
+				{ hostId: "h_paired", label: "Renamed", url: "https://moved.example", sealedPassword: "sealed-pairing", accountUserId: TEST_ACCOUNT },
+				{ hostId: "h_token", label: "Token", url: "https://token.example", sealedPassword: "sealed-token", accountToken: true, accountUserId: TEST_ACCOUNT },
+			]);
+		} finally {
+			setPasswordCipher(() => null);
+		}
+	});
+
+	describe("device tokens", () => {
+		const token = "aod_" + "c".repeat(64);
+		const proxy = () => vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
+		const saved = async (file: string) => (JSON.parse(await readFile(file, "utf8")) as { remotes: Array<Record<string, unknown>> }).remotes;
+		type Pair = NonNullable<RemotesIpcDeps["pair"]>;
+
+		it.each([
+			["a one-time code", "pairing-code" as const, undefined],
+			["the pairing password", "password" as const, "typed-secret"],
+		])("adds a host with %s and saves this device's own token", async (_name, credential, fallbackPassword) => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential }));
+			const probe = vi.fn(async () => "online" as const);
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe, pair });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "typed-secret" })).resolves.toBe("online");
+			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ url: "https://new.example", hostId: "h_new" }), "typed-secret", { name: "Test Mac", platform: process.platform });
+			expect(probe).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toEqual({
+				hostId: "h_new", label: "New", url: "https://new.example", password: token, accountUserId: TEST_ACCOUNT, ...(fallbackPassword ? { fallbackPassword } : {}),
+			});
+		});
+
+		it("adds a host without device tokens with the typed password, and saves nothing for a refused one", async () => {
+			const file = await tempFile();
+			const outcomes: Array<Awaited<ReturnType<Pair>>> = [{ kind: "unsupported" }, { kind: "unauthorized" }];
+			const probe = vi.fn(async () => "online" as const);
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe, pair: async () => outcomes.shift()! });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "typed-secret" })).resolves.toBe("online");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: "typed-secret" });
+			probe.mockClear();
+			await expect(ipc.invoke("remotes:add", { label: "Other", url: "https://other.example", password: "wrong" })).resolves.toBe("unauthorized");
+			expect(probe).not.toHaveBeenCalled();
+			expect(await saved(file)).toHaveLength(2);
+		});
+
+		it("swaps a saved pairing password for this device's own token on connect, keeping the password", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "password" }));
+			const start = proxy();
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
+			await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).resolves.toMatchObject({ hostId: "h_workbox" });
+			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.anything(), "old", expect.anything());
+			expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: token }));
+			expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }]);
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledOnce();
+			expect(start).toHaveBeenCalledOnce();
+		});
+
+		it("asks a host without device tokens once, and never swaps under a live connection", async () => {
+			const file = await tempFile();
+			const outcomes: Array<Awaited<ReturnType<Pair>>> = [{ kind: "offline" }, { kind: "unsupported" }];
+			const pair = vi.fn<Pair>(async () => outcomes.shift() ?? { kind: "paired", token, credential: "password" });
+			const start = proxy();
+			const registry = new RemoteRegistry(start);
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledTimes(1);
+			// Connected: the new credential would restart the proxy, so no swap.
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledTimes(1);
+			await registry.disconnect("http://192.0.2.1:1");
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			await registry.disconnect("http://192.0.2.1:1");
+			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			expect(pair).toHaveBeenCalledTimes(2);
+			expect(await saved(file)).toMatchObject([{ password: "old" }]);
+		});
+
+		it.each([
+			["a host that went back to a release without device tokens", "BAD_PASSWORD", "old"],
+			["a host that removed this device", "DEVICE_REVOKED", token],
+			["a host whose answer could not be read", undefined, token],
+		])("handles a refused token from %s", async (_name, code, expectedPassword) => {
+			const file = await tempFile();
+			await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }] }));
+			const start = proxy();
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox",
+				probe: async (entry) => entry.password === "old" ? "online" : "unauthorized",
+				authErrorCode: async () => code,
+			});
+			const connected = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+			if (code !== "BAD_PASSWORD") {
+				// Removed on purpose: the kept password must not bring the device back.
+				await expect(connected).rejects.toThrow(/is unauthorized$/);
+				expect(start).not.toHaveBeenCalled();
+				expect(await saved(file)).toMatchObject([{ password: token, fallbackPassword: "old" }]);
+			} else {
+				await expect(connected).resolves.toMatchObject({ hostId: "h_workbox" });
+				expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "old" }));
+				expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: expectedPassword, accountUserId: TEST_ACCOUNT }]);
+			}
+		});
+
+		it("reuses an issued token when the probe after pairing failed, and saves only an online host", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const answers: RemoteHealth[] = ["offline", "online", "offline", "online"];
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async (entry) => entry.url === "https://new.example" ? "h_new" : "h_workbox",
+				probe: async () => answers.shift()!, pair,
+			});
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toBeUndefined();
+			// The retry sends the spent code again; the token issued for it is used instead.
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("online");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: token });
+			expect(pair).toHaveBeenCalledOnce();
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code5678" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_workbox")).toMatchObject({ password: "old" });
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code5678" })).resolves.toBe("online");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_workbox")).toMatchObject({ password: token });
+			expect(pair).toHaveBeenCalledTimes(2);
+		});
+
+		it("pairs a newly typed code instead of reusing an earlier attempt's token", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const answers: RemoteHealth[] = ["offline", "online"];
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe: async () => answers.shift()!, pair });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code5678" })).resolves.toBe("online");
+			expect(pair).toHaveBeenLastCalledWith(expect.anything(), "Code5678", expect.anything());
+			expect(pair).toHaveBeenCalledTimes(2);
+		});
+
+		it("never reuses another account's unsaved token", async () => {
+			const file = await tempFile();
+			let account = TEST_ACCOUNT;
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, getAccountId: async () => account,
+				identity: async () => "h_new", probe: async () => "offline", pair,
+			});
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			account = "other-account";
+			pair.mockResolvedValueOnce({ kind: "unauthorized" });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "wrong" })).resolves.toBe("unauthorized");
+			expect(pair).toHaveBeenCalledTimes(2);
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toBeUndefined();
+		});
+
+		it("swaps a newly typed code when a saved host is edited", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code1234" })).resolves.toBe("online");
+			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostId: "h_workbox" }), "Code1234", expect.anything());
+			expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, accountUserId: TEST_ACCOUNT }]);
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { label: "renamed" })).resolves.toBe("online");
+			expect(pair).toHaveBeenCalledOnce();
+		});
 	});
 });

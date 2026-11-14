@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -282,6 +283,221 @@ func TestSuccessfulCompletionFinalizesPlanWhenProviderOmitsTerminalPlan(t *testi
 			t.Errorf("plan activity step %d status = %q, want completed", i, step.Status)
 		}
 	}
+}
+
+// A list the agent keeps across turns (Claude's task list) is not this turn's
+// plan, so the turn ending is no proof its open tasks finished. The stored copy
+// keeps the provider's statuses rather than reading "4/4" with work still open.
+func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
+	h := newHarness(t)
+
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "start on the tasks", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	plan := domain.ConversationPlan{SpansTurns: true, Steps: []domain.ConversationPlanStep{
+		{Text: "one", Status: domain.PlanStepCompleted},
+		{Text: "two", Status: domain.PlanStepInProgress},
+		{Text: "three", Status: domain.PlanStepPending},
+		{Text: "four", Status: domain.PlanStepPending},
+	}}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: "provider-turn-1",
+			Plan: &plan, Summary: "Plan 1/4: two"},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1",
+			ProviderItemID: "message-1", Text: "Started; more next turn."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
+			TurnState: domain.TurnStateCompleted},
+	)
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	turn := snapshot.Turns[0]
+	if turn.Plan == nil || !turn.Plan.SpansTurns {
+		t.Fatalf("turn plan = %#v, want the cross-turn list", turn.Plan)
+	}
+	for i, step := range turn.Plan.Steps {
+		if step.Status != plan.Steps[i].Status {
+			t.Errorf("turn plan step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
+		}
+	}
+
+	activity := firstActivityOfKind(snapshot, domain.ActivityKindPlan)
+	if activity.Summary != "Plan 1/4: two" {
+		t.Errorf("plan activity summary = %q, want the provider's count", activity.Summary)
+	}
+	var detail struct {
+		Steps      []domain.ConversationPlanStep `json:"steps"`
+		SpansTurns bool                          `json:"spansTurns"`
+	}
+	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+		t.Fatalf("decode plan activity detail: %v", err)
+	}
+	for i, step := range detail.Steps {
+		if step.Status != plan.Steps[i].Status {
+			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
+		}
+	}
+	// A plan row no turn holds is the only copy a client gets, so every row of a
+	// cross-turn list must say the list spans turns as the turn's copy does.
+	if !detail.SpansTurns {
+		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
+	}
+}
+
+// Claude can keep working on its own after a turn has ended. Those plan updates
+// carry no turn. One run of them rewrites one row, even when the user sends a turn
+// before the agent picks it up, and work after a later turn gets a row of its own.
+func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
+	h := newHarness(t)
+
+	completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	h.conv.emit(turnlessPlan(0), turnlessPlan(1))
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		plans := turnlessPlanRows(s)
+		return len(plans) == 1 && plans[0].Summary == "Plan 1/3"
+	})
+
+	// The user sends B while the run goes on; the agent has not started B yet.
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "B", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send B: %v", err)
+	}
+	h.conv.emit(turnlessPlan(2))
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		plans := turnlessPlanRows(s)
+		return len(plans) == 1 && plans[0].Summary == "Plan 2/3"
+	})
+
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-2",
+			ProviderItemID: "msg-provider-turn-2", Text: "reply to B"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2",
+			TurnState: domain.TurnStateCompleted},
+	)
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+	h.conv.emit(turnlessPlan(3))
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		rows := turnlessPlanRows(s)
+		return len(rows) == 2 && rows[1].Summary == "Plan 3/3" && planRowDetail(t, rows[0]).Superseded
+	})
+
+	plans := turnlessPlanRows(snapshot)
+	if plans[0].Summary != "Plan 2/3" || plans[1].Summary != "Plan 3/3" {
+		t.Fatalf("turnless plan rows = %q, %q; want each run's newest revision", plans[0].Summary, plans[1].Summary)
+	}
+	if replyB := snapshot.Messages[3]; plans[1].Sequence < replyB.Sequence {
+		t.Errorf("second run's plan sequence = %d, want after turn B's reply (%d)", plans[1].Sequence, replyB.Sequence)
+	}
+	if first, second := planRowDetail(t, plans[0]), planRowDetail(t, plans[1]); !first.Superseded || second.Superseded {
+		t.Errorf("superseded = %v, %v; want only the second run's row current", first.Superseded, second.Superseded)
+	}
+}
+
+// Every turn and run holds a copy of a list that spans turns. The daemon marks the
+// copy written last as the current one, wherever it is, so no client has to date
+// the copies itself.
+func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
+	h := newHarness(t)
+	turnPlan := func(providerTurn string, done int) ports.ChatEvent {
+		event := turnlessPlan(done)
+		event.ProviderTurnID = providerTurn
+		return event
+	}
+
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "A", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send A: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"},
+		turnPlan("provider-turn-1", 1),
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
+			TurnState: domain.TurnStateCompleted},
+		turnlessPlan(2),
+	)
+	// A snapshot reads turns and activities separately, so wait for both halves of
+	// the one projection rather than only the row that appears.
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(turnlessPlanRows(s)) == 1 && len(s.Turns) == 1 && s.Turns[0].Plan != nil && s.Turns[0].Plan.Superseded
+	})
+	if plan := snapshot.Turns[0].Plan; plan == nil || !plan.Superseded {
+		t.Errorf("turn A plan = %#v, want superseded by the later run's copy", plan)
+	}
+	if row := planRowDetail(t, turnlessPlanRows(snapshot)[0]); row.Superseded {
+		t.Errorf("run's plan row superseded, want it current")
+	}
+
+	// A later turn's copy supersedes the run's row in turn.
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "B", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send B: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"},
+		turnPlan("provider-turn-2", 3),
+	)
+	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		rows := turnlessPlanRows(s)
+		return len(s.Turns) == 2 && s.Turns[1].Plan != nil && len(rows) == 1 && planRowDetail(t, rows[0]).Superseded
+	})
+	if plan := snapshot.Turns[1].Plan; plan.Superseded {
+		t.Errorf("turn B plan superseded, want it current")
+	}
+	if plan := snapshot.Turns[0].Plan; plan == nil || !plan.Superseded {
+		t.Errorf("turn A plan = %#v, want still superseded", plan)
+	}
+	if row := planRowDetail(t, turnlessPlanRows(snapshot)[0]); !row.Superseded {
+		t.Errorf("run's plan row current, want superseded by turn B's copy")
+	}
+}
+
+// turnlessPlan is a revision of a three-step list that spans turns, with done
+// steps finished, sent with no turn.
+func turnlessPlan(done int) ports.ChatEvent {
+	plan := domain.ConversationPlan{SpansTurns: true}
+	for i := range 3 {
+		step := domain.ConversationPlanStep{Text: fmt.Sprintf("step %d", i+1), Status: domain.PlanStepPending}
+		if i < done {
+			step.Status = domain.PlanStepCompleted
+		}
+		plan.Steps = append(plan.Steps, step)
+	}
+	return ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, Plan: &plan, Summary: fmt.Sprintf("Plan %d/3", done)}
+}
+
+func turnlessPlanRows(s store.ConversationSnapshot) []domain.ConversationActivity {
+	var plans []domain.ConversationActivity
+	for _, activity := range s.Activities {
+		if activity.Kind == domain.ActivityKindPlan && activity.TurnID == "" {
+			plans = append(plans, activity)
+		}
+	}
+	return plans
+}
+
+type planRowFlags struct {
+	SpansTurns bool `json:"spansTurns"`
+	Superseded bool `json:"superseded"`
+}
+
+func planRowDetail(t *testing.T, activity domain.ConversationActivity) planRowFlags {
+	t.Helper()
+	var detail planRowFlags
+	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+		t.Fatalf("decode plan activity detail: %v", err)
+	}
+	if !detail.SpansTurns {
+		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
+	}
+	return detail
 }
 
 /* ---- model reroute ----------------------------------------------------- */
@@ -595,6 +811,59 @@ func TestClosedThreadDoesNotStopTheController(t *testing.T) {
 	}
 }
 
+/* ---- provider state ---------------------------------------------------- */
+
+func awaitActivityEvent(t *testing.T, activity *recordingActivity, event string, state domain.ActivityState) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, signal := range activity.snapshot() {
+			if signal.Event == event && signal.State == state {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("no %s %q signal: %+v", state, event, activity.snapshot())
+}
+
+// Claude Code runs cycles on its own after a turn, for example to answer a
+// finished background task. AO has no turn for them, so the provider's own
+// running and idle reports are what keep the session from reading idle while
+// the agent works.
+func TestProviderStateReportsWorkOutsideAOTurns(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
+	awaitActivityEvent(t, h.activity, "chat.provider.running", domain.ActivityActive)
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}})
+	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
+}
+
+// While AO's own turn runs, its turn events own the activity. A provider idle
+// can lag behind the next turn's start, so it must not end that turn early.
+func TestProviderStateLeavesAOTurnsToTurnEvents(t *testing.T) {
+	h := newHarness(t)
+
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "turn-1"},
+		ports.ChatEvent{Kind: ports.ChatEventProviderState,
+			ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}},
+		ports.ChatEvent{Kind: ports.ChatEventProviderState,
+			ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "turn-1", TurnState: domain.TurnStateCompleted},
+	)
+	awaitActivityEvent(t, h.activity, "chat.turn.completed", domain.ActivityIdle)
+	for _, signal := range h.activity.snapshot() {
+		if signal.Event == "chat.provider.running" || signal.Event == "chat.provider.idle" {
+			t.Fatalf("provider state overrode a running AO turn: %+v", h.activity.snapshot())
+		}
+	}
+}
+
 /* ---- MCP servers ------------------------------------------------------- */
 
 // Servers are announced one at a time and re-announced every turn, so reports
@@ -893,4 +1162,32 @@ func firstActivityOfKind(s store.ConversationSnapshot, kind domain.ActivityKind)
 		}
 	}
 	return domain.ConversationActivity{}
+}
+
+func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
+	h := newHarness(t)
+	countsAfter := func(changes, rechecks int32) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for h.accountChanges.Load() != changes || h.accountRechecks.Load() != rechecks {
+			if time.Now().After(deadline) {
+				t.Fatalf("account changes, rechecks = %d, %d; want %d, %d",
+					h.accountChanges.Load(), h.accountRechecks.Load(), changes, rechecks)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "first"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 1 })
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "first", TurnState: domain.TurnStateFailed, Err: ports.ErrChatAuthRequired})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.Account != nil && s.Conversation.Account.ReauthRequiredAt != nil
+	})
+	countsAfter(1, 0) // the refusal is an account change; the first turn had no demand
+	// The user signed in again, maybe with the CLI outside AO, and sent a message.
+	// That is a recheck, not another refusal: it must not invalidate readiness.
+	h.advance(time.Second)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "second"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 2 })
+	countsAfter(1, 1)
 }

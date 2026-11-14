@@ -76,7 +76,7 @@ func (e Environment) TUIEnvironment() map[string]string {
 // containment.
 func PrepareHostTrustedEnvironment(dataDir, reviewerID string) (Environment, error) {
 	if strings.TrimSpace(dataDir) == "" || !filepath.IsAbs(dataDir) {
-		return Environment{}, errors.New("review gateway: absolute AO data directory is required")
+		return Environment{}, errors.New("review gateway: absolute Orchestrator data directory is required")
 	}
 	if !safeID.MatchString(reviewerID) {
 		return Environment{}, errors.New("review gateway: invalid reviewer id")
@@ -101,10 +101,10 @@ func PrepareHostTrustedEnvironment(dataDir, reviewerID string) (Environment, err
 // in the project checkout.
 func PrepareEnvironment(dataDir string, manifest Manifest) (Environment, error) {
 	if strings.TrimSpace(dataDir) == "" {
-		return Environment{}, errors.New("review gateway: AO data directory is required")
+		return Environment{}, errors.New("review gateway: Orchestrator data directory is required")
 	}
 	if !filepath.IsAbs(dataDir) {
-		return Environment{}, errors.New("review gateway: AO data directory must be absolute")
+		return Environment{}, errors.New("review gateway: Orchestrator data directory must be absolute")
 	}
 	if err := validateManifest(&manifest); err != nil {
 		return Environment{}, err
@@ -176,7 +176,7 @@ func validateManifest(manifest *Manifest) error {
 		}
 		prompt, err := filepath.Abs(task.TaskPromptFile)
 		if err != nil || !pathWithin(manifest.TaskPromptRoot, prompt) {
-			return errors.New("review gateway: task prompt is outside the AO prompt root")
+			return errors.New("review gateway: task prompt is outside the Orchestrator prompt root")
 		}
 		seen[task.RunID] = true
 	}

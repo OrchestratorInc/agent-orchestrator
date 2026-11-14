@@ -1,11 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, RotateCw, X } from "lucide-react";
+import { AlertTriangle, RotateCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { canBypassOrchestratorApprovals, isChatPreflightCode } from "../lib/spawn-orchestrator";
 import type { OrchestratorReplacementFailure } from "../stores/ui-store";
 import { findProjectOrchestrator, type WorkspaceSummary } from "../types/workspace";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	settingsDialogContentClass,
 	settingsDialogFooterClass,
@@ -15,6 +16,8 @@ import {
 type OrchestratorReplacementDialogProps = {
 	projectId: string | null;
 	pending?: boolean;
+	/** Number of projects with a pending replacement failure (including this one). */
+	pendingCount?: number;
 	error?: OrchestratorReplacementFailure;
 	workspaces: WorkspaceSummary[];
 	onOpenChange: (open: boolean) => void;
@@ -26,6 +29,7 @@ type OrchestratorReplacementDialogProps = {
 export function OrchestratorReplacementDialog({
 	projectId,
 	pending = false,
+	pendingCount = 1,
 	error,
 	workspaces,
 	onOpenChange,
@@ -64,14 +68,7 @@ export function OrchestratorReplacementDialog({
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-orchestrator -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
 					<Dialog.Close asChild>
-						<button
-							type="button"
-							className="settings-dialog-close-button settings-close-button"
-							disabled={pending}
-							aria-label={t("orchestratorReplacement.close")}
-						>
-							<X className="size-5" aria-hidden="true" />
-						</button>
+						<CloseButton floating disabled={pending} aria-label={t("orchestratorReplacement.close")} />
 					</Dialog.Close>
 					<div className={settingsDialogHeaderClass}>
 						<div className="flex items-start gap-3">
@@ -82,6 +79,11 @@ export function OrchestratorReplacementDialog({
 								<Dialog.Title className="settings-dialog-title">{t("orchestratorReplacement.title")}</Dialog.Title>
 								<Dialog.Description className="mt-1 text-control leading-5 text-settings-muted">
 									{error?.message ?? t("orchestratorReplacement.fallback")}
+									{pendingCount > 1 ? (
+										<span className="mt-1 block">
+											{t("orchestratorReplacement.morePending", { count: pendingCount - 1 })}
+										</span>
+									) : null}
 								</Dialog.Description>
 							</div>
 						</div>
@@ -90,7 +92,7 @@ export function OrchestratorReplacementDialog({
 						{canBypassApprovals ? (
 							<Button
 								type="button"
-								variant="footer-primary"
+								variant="primary"
 								aria-disabled={pending}
 								onClick={() => !pending && projectId && onRetryWithoutApprovals(projectId)}
 							>
@@ -100,7 +102,7 @@ export function OrchestratorReplacementDialog({
 						{error && isChatPreflightCode(error.code) ? (
 							<Button
 								type="button"
-								variant="footer"
+								variant="secondary"
 								aria-disabled={pending}
 								onClick={() => !pending && projectId && onRetryAsTui(projectId)}
 							>
@@ -108,13 +110,13 @@ export function OrchestratorReplacementDialog({
 							</Button>
 						) : null}
 						{orchestrator ? (
-							<Button type="button" variant="footer" disabled={pending} onClick={openCurrent}>
+							<Button type="button" variant="secondary" disabled={pending} onClick={openCurrent}>
 								{t("orchestratorReplacement.openCurrent")}
 							</Button>
 						) : null}
 						<Button
 							type="button"
-							variant="footer-primary"
+							variant="primary"
 							aria-disabled={pending}
 							onClick={() => !pending && projectId && onRetry(projectId)}
 						>

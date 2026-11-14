@@ -9,7 +9,46 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+const addDeletedSessionAccountUsage = `-- name: AddDeletedSessionAccountUsage :exec
+INSERT INTO deleted_session_account_usage (
+    account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+) VALUES (
+    ?1, ?2, ?3, ?4,
+    ?5, ?6, ?7
+)
+ON CONFLICT (account_id, day, model_id) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    estimated_cost_nanos = estimated_cost_nanos + excluded.estimated_cost_nanos
+`
+
+type AddDeletedSessionAccountUsageParams struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
+}
+
+func (q *Queries) AddDeletedSessionAccountUsage(ctx context.Context, arg AddDeletedSessionAccountUsageParams) error {
+	_, err := q.db.ExecContext(ctx, addDeletedSessionAccountUsage,
+		arg.AccountID,
+		arg.Day,
+		arg.ModelID,
+		arg.InputTokens,
+		arg.CachedInputTokens,
+		arg.OutputTokens,
+		arg.EstimatedCostNanos,
+	)
+	return err
+}
 
 const agentAccountUsageSince = `-- name: AgentAccountUsageSince :many
 SELECT
@@ -35,9 +74,15 @@ FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
 WHERE e.created_at >= ?1
   AND b.harness IN ('claude-code', 'codex')
+  AND (CAST(?2 AS TEXT) = '' OR b.session_id = CAST(?2 AS TEXT))
 GROUP BY 1, 2, 3
 ORDER BY 2, 1, 3
 `
+
+type AgentAccountUsageSinceParams struct {
+	Since     sql.NullTime
+	SessionID string
+}
 
 type AgentAccountUsageSinceRow struct {
 	AccountID          string
@@ -51,9 +96,11 @@ type AgentAccountUsageSinceRow struct {
 
 // Each usage event counts for the account its session used when the event
 // happened; an event older than the session's first binding counts for that
-// first account. Days are UTC calendar days.
-func (q *Queries) AgentAccountUsageSince(ctx context.Context, since sql.NullTime) ([]AgentAccountUsageSinceRow, error) {
-	rows, err := q.db.QueryContext(ctx, agentAccountUsageSince, since)
+// first account. Days are UTC calendar days. A non-empty session_id limits the
+// sum to that session's events (folded into deleted_session_account_usage
+// before the session is deleted).
+func (q *Queries) AgentAccountUsageSince(ctx context.Context, arg AgentAccountUsageSinceParams) ([]AgentAccountUsageSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, agentAccountUsageSince, arg.Since, arg.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +153,27 @@ func (q *Queries) BindSessionAgentAccount(ctx context.Context, arg BindSessionAg
 	return err
 }
 
+const cancelSessionTurnAutoResume = `-- name: CancelSessionTurnAutoResume :exec
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE handled_by_session_id = ?1 AND usage_limit_auto_resume = 1
+  AND EXISTS (
+      SELECT 1 FROM sessions s WHERE s.id = conversation_turns.handled_by_session_id
+        AND CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END = CAST(?2 AS TEXT)
+  )
+`
+
+type CancelSessionTurnAutoResumeParams struct {
+	SessionID domain.SessionID
+	Provider  string
+}
+
+// Account changes invalidate only this session's active provider's pending work.
+func (q *Queries) CancelSessionTurnAutoResume(ctx context.Context, arg CancelSessionTurnAutoResumeParams) error {
+	_, err := q.db.ExecContext(ctx, cancelSessionTurnAutoResume, arg.SessionID, arg.Provider)
+	return err
+}
+
 const createAgentAccount = `-- name: CreateAgentAccount :exec
 INSERT INTO agent_accounts (id, provider, home, email, plan, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -148,6 +216,44 @@ DELETE FROM agent_account_defaults WHERE account_id = ?
 func (q *Queries) DeleteAgentAccountDefaultFor(ctx context.Context, accountID string) error {
 	_, err := q.db.ExecContext(ctx, deleteAgentAccountDefaultFor, accountID)
 	return err
+}
+
+const deletedSessionAccountUsageSince = `-- name: DeletedSessionAccountUsageSince :many
+SELECT account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+FROM deleted_session_account_usage
+WHERE day >= CAST(?1 AS TEXT)
+ORDER BY day, account_id, model_id
+`
+
+func (q *Queries) DeletedSessionAccountUsageSince(ctx context.Context, sinceDay string) ([]DeletedSessionAccountUsage, error) {
+	rows, err := q.db.QueryContext(ctx, deletedSessionAccountUsageSince, sinceDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletedSessionAccountUsage{}
+	for rows.Next() {
+		var i DeletedSessionAccountUsage
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.Day,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getAgentAccountDefault = `-- name: GetAgentAccountDefault :one
@@ -214,6 +320,38 @@ func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error)
 		return nil, err
 	}
 	return items, nil
+}
+
+const sessionAgentAccountChangedSince = `-- name: SessionAgentAccountChangedSince :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions s
+    JOIN session_agent_accounts source ON source.session_id = s.id
+      AND source.provider = CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END
+    WHERE s.id = ?1
+      AND source.bound_at = (
+          SELECT MAX(a.bound_at) FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+            AND a.bound_at <= ?2
+      )
+      AND source.account_id <> (
+          SELECT a.account_id FROM session_agent_accounts a
+          WHERE a.session_id = s.id AND a.provider = source.provider
+          ORDER BY a.bound_at DESC LIMIT 1
+      )
+)
+`
+
+type SessionAgentAccountChangedSinceParams struct {
+	SessionID   domain.SessionID
+	RequestedAt time.Time
+}
+
+// Only a known source-time binding can prove that a turn used another account.
+func (q *Queries) SessionAgentAccountChangedSince(ctx context.Context, arg SessionAgentAccountChangedSinceParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, sessionAgentAccountChangedSince, arg.SessionID, arg.RequestedAt)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const setAgentAccountDefault = `-- name: SetAgentAccountDefault :exec

@@ -1,12 +1,14 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef } from "react";
+import { ProjectSettingsSection as SettingsSection } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { isLaunchableAgent } from "../lib/agent-select-options";
@@ -15,6 +17,8 @@ import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-repla
 import { OrchestratorSpawnError, spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { captureRendererEvent } from "../lib/telemetry";
+import { importableProject } from "../lib/session-import";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { type OrchestratorReplacementFailure, useUiStore } from "../stores/ui-store";
 import { newestActiveOrchestrator } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
@@ -22,6 +26,8 @@ import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
 import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
 import { CloudProjectSettingsAdapter } from "./CloudProjectSettingsForm";
+import { SettingsRow } from "./settings/SettingsRow";
+import { Button } from "./ui/button";
 
 type Project = components["schemas"]["Project"];
 type ProjectConfig = components["schemas"]["ProjectConfig"];
@@ -87,7 +93,7 @@ function LocalProjectSettingsAdapter({
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 			return data.project as Project;
 		},
@@ -142,6 +148,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const intakeVisible = !isScratchProject && !!settings?.trackerIntakeEnabled;
 	const workspace = hostId ? remoteProjectQuery.data : workspaceQuery.data?.find((item) => item.id === projectId);
 	const activeOrchestrator = newestActiveOrchestrator(workspace?.sessions ?? []);
+	const openProjectImport = useSessionImportStore((state) => state.openProjectImport);
 	const intake: TrackerIntakeConfig = config.trackerIntake ?? {};
 	const initialValues: ProjectSettingsDraft = {
 		displayName: project.name,
@@ -175,9 +182,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	useEnsureAgentReadiness({ hostId });
 	const persist = async (values: ProjectSettingsDraft): Promise<SettingsSaveResult> => {
 		const savedKey = JSON.stringify(values);
-		void captureRendererEvent("ao.renderer.settings_save_requested", {
-			project_id: projectId,
-		});
 		const displayName = values.displayName.trim();
 		const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, ...sharedAgentConfig } = config.agentConfig ?? {};
 		const existingReviewer = config.reviewers?.[0];
@@ -259,7 +263,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 			params: { path: { id: projectId } },
 			body: { displayName, config: next },
 		});
-		if (error) throw new Error(apiErrorMessage(error));
+		if (error) throw apiErrorException(error);
 		const replaceOrchestrator = replacementFailedRef.current || values.orchestratorAgent !== lastOrchestratorRef.current ||
 			(Boolean(activeOrchestrator && activeOrchestrator.provider !== values.orchestratorAgent) && !replacementAttemptedRef.current);
 		lastOrchestratorRef.current = values.orchestratorAgent;
@@ -309,7 +313,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const save = async (values: ProjectSettingsDraft) => {
 		try {
 			const result = await persist(values);
-			void captureRendererEvent("ao.renderer.settings_save_succeeded", { project_id: projectId });
+			void captureRendererEvent("ao.settings.saved", { project_id: projectId });
 			void queryClient.invalidateQueries({ queryKey: projectQueryKey(projectId, hostId) });
 			void queryClient.invalidateQueries({ queryKey: hostId ? ["project-config", hostId, projectId] : ["project-config", projectId] });
 			void onSaved();
@@ -327,9 +331,14 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
-		modelScope={() => projectId} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
+		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
+		generalExtra={workspace && importableProject(workspace) ? <SettingsSection title={t("sessionImport.settingsTitle")} grouped>
+			<SettingsRow label={t("sessionImport.settingsLabel")} description={t("sessionImport.settingsDescription")}>
+				<Button type="button" variant="quiet" size="sm" onClick={() => openProjectImport(projectId)}>{t("sessionImport.menuItem")}</Button>
+			</SettingsRow>
+		</SettingsSection> : undefined}
 		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;
 }
 

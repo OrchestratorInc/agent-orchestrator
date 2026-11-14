@@ -13,12 +13,24 @@ const FALLBACK_ATTR = "data-tab-stop-fallback";
 export function useTabListTabStop<T extends HTMLElement>() {
 	const ref = useRef<T | null>(null);
 	const lastSelected = useRef<Element | null>(null);
+	const scrollFrame = useRef<number | null>(null);
+	useEffect(() => () => {
+		if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+	}, []);
 	useEffect(() => {
 		const list = ref.current;
 		if (!list) return;
 		const selected = list.querySelector('[role="tab"][aria-selected="true"]');
 		if (selected && selected !== lastSelected.current) {
-			(selected as HTMLElement).scrollIntoView?.({ block: "nearest", inline: "nearest" });
+			// scrollIntoView forces a layout. Run synchronously, it laid out the whole
+			// page mid-commit on every new tab; in the next frame it shares the
+			// layout the browser does anyway, and a burst of tabs scrolls once.
+			if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+			scrollFrame.current = requestAnimationFrame(() => {
+				scrollFrame.current = null;
+				const current = list.querySelector('[role="tab"][aria-selected="true"]');
+				(current as HTMLElement | null)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+			});
 		}
 		lastSelected.current = selected;
 		list.querySelectorAll<HTMLElement>(`[${FALLBACK_ATTR}]`).forEach((el) => {

@@ -4,13 +4,17 @@ import {
 	collectPRs,
 	comparePRs,
 	mergeReasonLabel,
-	prBlockerLine,
+	prFilterCounts,
+	prFilterLabel,
+	prInFilter,
+	prListFilters,
 	prListSections,
 	prLifecycle,
 	prStatusAtoms,
-	prSummaryLine,
 	prReviewPromptHeadline,
 	prReviewPromptStatuses,
+	prRowStatus,
+	prRowTitle,
 	prTitle,
 } from "./prView";
 
@@ -98,40 +102,6 @@ describe("mergeReasonLabel", () => {
 
 	it("degrades an unknown reason into readable words", () => {
 		expect(mergeReasonLabel("some_new_reason")).toBe("some new reason");
-	});
-});
-
-describe("prSummaryLine", () => {
-	it("says only the outcome for a decided PR", () => {
-		// "merged · CI failing" would be noise about a PR nobody can act on.
-		expect(prSummaryLine(pr({ state: "merged", ciStatus: "failing" })).text).toBe("Merged");
-		expect(prSummaryLine(pr({ state: "closed" })).text).toBe("Closed without merging");
-	});
-
-	it("leads with the worst problem", () => {
-		const line = prSummaryLine(pr({ ciStatus: "failing", reviewDecision: "changes_requested" }));
-		expect(line.text.startsWith("CI failing")).toBe(true);
-		expect(line.tone).toBe("error");
-	});
-
-	it("never shows more than two problems", () => {
-		const line = prSummaryLine(pr({ ciStatus: "failing", reviewDecision: "changes_requested", unresolvedThreads: 1 }));
-		expect(line.text.split(" · ")).toHaveLength(2);
-	});
-
-	it("calls out a PR that is ready to go", () => {
-		const line = prSummaryLine(pr({ reviewDecision: "approved", mergeability: { mergeable: true } }));
-		expect(line).toMatchObject({ text: "Ready to merge", tone: "success" });
-	});
-
-	it("reports a draft as a draft", () => {
-		expect(prSummaryLine(pr({ isDraft: true })).text).toBe("Draft");
-	});
-
-	it("falls back through CI and review before plain open", () => {
-		expect(prSummaryLine(pr({ ciStatus: "pending" })).text).toBe("CI running");
-		expect(prSummaryLine(pr({ reviewDecision: "pending" })).text).toBe("Awaiting review");
-		expect(prSummaryLine(pr()).text).toBe("Open");
 	});
 });
 
@@ -239,29 +209,6 @@ describe("PR composer prompt statuses", () => {
 	});
 });
 
-describe("prBlockerLine", () => {
-	it("names failing checks and merge reasons together", () => {
-		const line = prBlockerLine({
-			ci: { failingChecks: [{ name: "go test" }] },
-			mergeability: { reasons: ["behind_base"] },
-		});
-		expect(line).toBe("go test · branch behind base");
-	});
-
-	// A PR can fail a dozen checks; the card has one line for them.
-	it("caps the list and counts the remainder rather than truncating silently", () => {
-		const line = prBlockerLine({
-			ci: { failingChecks: [{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }] },
-		});
-		expect(line).toBe("a · b +2 more");
-	});
-
-	it("returns nothing when there is nothing blocking", () => {
-		expect(prBlockerLine({})).toBeNull();
-		expect(prBlockerLine({ ci: { failingChecks: [] }, mergeability: { reasons: [] } })).toBeNull();
-	});
-});
-
 describe("comparePRs", () => {
 	const sorted = (list: DashboardPR[]) => [...list].sort(comparePRs).map((p) => p.number);
 
@@ -323,5 +270,137 @@ describe("prListSections", () => {
 	it("orders newer pull requests first within a section", () => {
 		const sections = prListSections([item({ number: 7 }), item({ number: 12 }), item({ number: 4 })], "open");
 		expect(sections[0]?.data.map(({ pr }) => pr.number)).toEqual([12, 7, 4]);
+	});
+});
+
+describe("PR list filters", () => {
+	const item = (over: Partial<DashboardPR>) => ({ pr: pr(over), session: session("alpha", []) });
+
+	// Drafts are open pull requests; closed ones are history, under All only.
+	it("counts each filter the way its sections list it", () => {
+		const items = [
+			item({ number: 1 }),
+			item({ number: 2, isDraft: true }),
+			item({ number: 3, state: "merged" }),
+			item({ number: 4, state: "closed" }),
+		];
+		expect(prFilterCounts(items)).toEqual({ open: 2, merged: 1, all: 4 });
+		for (const filter of prListFilters) {
+			const listed = prListSections(items, filter).flatMap((section) => section.data).length;
+			expect(listed).toBe(prFilterCounts(items)[filter]);
+		}
+		expect(prInFilter("open", "draft")).toBe(true);
+		expect(prInFilter("merged", "closed")).toBe(false);
+	});
+
+	it("names each segment with its count", () => {
+		expect(prListFilters.map((filter) => prFilterLabel(filter, 3))).toEqual(["Open 3", "Merged 3", "All 3"]);
+	});
+});
+
+describe("prRowTitle", () => {
+	// The kind of change moves to the line under the title, so the title starts
+	// with what the pull request does.
+	it("splits a conventional-commit prefix off and capitalises what is left", () => {
+		expect(prRowTitle("fix(mobile): stop Android crashing when a machine is renamed")).toEqual({
+			title: "Stop Android crashing when a machine is renamed",
+			scope: "mobile",
+		});
+		expect(prRowTitle("feat!: drop the v1 API")).toEqual({ title: "Drop the v1 API", scope: undefined });
+	});
+
+	it("leaves a title that is not a conventional commit as it is", () => {
+		expect(prRowTitle("Note: this is a plain title")).toEqual({ title: "Note: this is a plain title" });
+		expect(prRowTitle("  Upgrade Electron  ")).toEqual({ title: "Upgrade Electron" });
+		expect(prRowTitle("fix: ")).toEqual({ title: "fix:" });
+	});
+});
+
+describe("prRowStatus", () => {
+	const rich = (over: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
+		url: "u", number: 1, title: "t", state: "open", repo: "o/r", author: "a", sourceBranch: "b", targetBranch: "main",
+		additions: 0, deletions: 0, changedFiles: 0,
+		ci: { state: "passing", failingChecks: [] },
+		review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "blocked", reasons: ["review_required"] },
+		...over,
+	});
+
+	// Waiting for review is every open PR's normal state: saying it on each row,
+	// in amber, is what made the old list read as one long alarm.
+	it("says nothing for an open PR that is only waiting for review", () => {
+		expect(prRowStatus(pr(), rich())).toBeNull();
+		expect(prRowStatus(pr({ reviewDecision: "pending", ciStatus: "passing" }))).toBeNull();
+	});
+
+	it("names the failing check, or counts them", () => {
+		expect(prRowStatus(pr(), rich({ ci: { state: "failing", failingChecks: [{ name: "android-build" }] } }))).toEqual({ text: "android-build failed", tone: "error" });
+		expect(prRowStatus(pr(), rich({ ci: { state: "failing", failingChecks: [{ name: "a" }, { name: "b" }] } }))).toEqual({ text: "2 checks failed", tone: "error" });
+		expect(prRowStatus(pr({ ciStatus: "failing" }))).toEqual({ text: "Checks failed", tone: "error" });
+	});
+
+	it("puts conflicts first, then failures, then review feedback", () => {
+		const conflicted = rich({ mergeability: { state: "conflicting", reasons: [] }, ci: { state: "failing", failingChecks: [] } });
+		expect(prRowStatus(pr(), conflicted)).toEqual({ text: "Merge conflicts", tone: "error" });
+		const both = rich({ ci: { state: "failing", failingChecks: [] }, review: { decision: "changes_requested", hasUnresolvedHumanComments: true, unresolvedBy: [] } });
+		expect(prRowStatus(pr(), both)?.tone).toBe("error");
+		expect(prRowStatus(pr(), rich({ review: { decision: "changes_requested", hasUnresolvedHumanComments: false, unresolvedBy: [] } }))).toEqual({ text: "Changes requested", tone: "warning" });
+		expect(prRowStatus(pr({ unresolvedThreads: 2 }))).toEqual({ text: "Unresolved comments", tone: "warning" });
+	});
+
+	it("reports running checks quietly and a mergeable approval in green", () => {
+		expect(prRowStatus(pr(), rich({ ci: { state: "pending", failingChecks: [] } }))).toEqual({ text: "Checks running", tone: "neutral" });
+		expect(prRowStatus(pr({ mergeability: { state: "mergeable", mergeable: true } }), rich({ review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] }, mergeability: { state: "mergeable", reasons: [] } }))).toEqual({ text: "Ready to merge", tone: "success" });
+		expect(prRowStatus(pr({ reviewDecision: "approved" }))).toEqual({ text: "Approved", tone: "success" });
+	});
+
+	// The board re-polls every few seconds and places the row in its section;
+	// the summary is fetched once per visit. A stale summary must not contradict
+	// the section the board just moved the row into.
+	it("follows the board when the summary is stale", () => {
+		const staleRunning = rich({ ci: { state: "pending", failingChecks: [] }, review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] }, mergeability: { state: "blocked", reasons: [] } });
+		const boardReady = pr({ ciStatus: "passing", reviewDecision: "approved", mergeability: { state: "mergeable", mergeable: true } });
+		expect(prRowStatus(boardReady, staleRunning)).toEqual({ text: "Ready to merge", tone: "success" });
+
+		const staleFailing = rich({ ci: { state: "failing", failingChecks: [{ name: "android-build" }] } });
+		expect(prRowStatus(pr({ ciStatus: "passing", reviewDecision: "pending", mergeability: { state: "blocked" } }), staleFailing)).toBeNull();
+		expect(prRowStatus(pr({ state: "merged" }), staleFailing)).toBeNull();
+	});
+
+	// The board carries no check names: they come from the summary, and only
+	// while the board still says the checks fail.
+	it("takes the failing check names from the summary only while the board says failing", () => {
+		const failing = rich({ ci: { state: "failing", failingChecks: [{ name: "android-build" }] } });
+		expect(prRowStatus(pr({ ciStatus: "failing" }), failing)).toEqual({ text: "android-build failed", tone: "error" });
+		expect(prRowStatus(pr({ ciStatus: "failing" }), rich())).toEqual({ text: "Checks failed", tone: "error" });
+	});
+
+	// A repo that requires up-to-date branches: another PR merges, GitHub says
+	// BEHIND, the board turns "unknown" and not mergeable, and the row leaves
+	// Ready to merge. It must not keep saying so from the summary.
+	it("says Approved, not Ready to merge, once the board finds the branch behind", () => {
+		const approved = { decision: "approved" as const, hasUnresolvedHumanComments: false, unresolvedBy: [] };
+		const staleMergeable = rich({ review: approved, mergeability: { state: "mergeable", reasons: [] } });
+		const behind = pr({ ciStatus: "passing", reviewDecision: "approved", mergeability: { state: "unknown", mergeable: false } });
+		expect(prRowStatus(behind, staleMergeable)).toEqual({ text: "Approved", tone: "success" });
+	});
+
+	it("falls back to a summary fact only where the board has none", () => {
+		const conflicted = rich({ mergeability: { state: "conflicting", reasons: [] } });
+		// The board's "unknown" is a fact: the summary derives its state from the
+		// same source, so a different answer there is only older.
+		expect(prRowStatus(pr({ mergeability: { state: "unknown", mergeable: false } }), conflicted)).toBeNull();
+		expect(prRowStatus(pr({ mergeability: { state: "blocked" } }), conflicted)).toBeNull();
+		expect(prRowStatus(pr(), conflicted)).toEqual({ text: "Merge conflicts", tone: "error" });
+		// Cloud's board rows carry no unresolved-thread count.
+		const commented = rich({ review: { decision: "review_required", hasUnresolvedHumanComments: true, unresolvedBy: [] } });
+		expect(prRowStatus(pr(), commented)).toEqual({ text: "Unresolved comments", tone: "warning" });
+		expect(prRowStatus(pr({ unresolvedThreads: 0 }), commented)).toBeNull();
+	});
+
+	// Their section already says merged or closed.
+	it("says nothing for a merged or closed PR", () => {
+		expect(prRowStatus(pr({ state: "merged", ciStatus: "failing" }))).toBeNull();
+		expect(prRowStatus(pr(), rich({ state: "closed" }))).toBeNull();
 	});
 });

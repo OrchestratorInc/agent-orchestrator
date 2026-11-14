@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -35,9 +36,13 @@ type fakeStore struct {
 	workspaceRepos map[string][]domain.WorkspaceRepoRecord
 	prs            map[domain.SessionID][]domain.PullRequest
 	checks         map[string][]domain.PullRequestCheck
-	writeErr       error
+	// detailsUpdatedAt is the provider updatedAt of each PR's stored details,
+	// by PR URL; a PR missing from it has none stored.
+	detailsUpdatedAt map[string]time.Time
+	writeErr         error
 
-	writes []fakeWrite
+	writes  []fakeWrite
+	renames []domain.RepositoryRename
 
 	listEntered chan struct{}
 	listRelease chan struct{}
@@ -107,6 +112,13 @@ func (s *fakeStore) ListChecks(_ context.Context, prURL string) ([]domain.PullRe
 	return append([]domain.PullRequestCheck(nil), s.checks[prURL]...), nil
 }
 
+func (s *fakeStore) PRDetailsUpdatedAt(_ context.Context, prURL string) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updatedAt, ok := s.detailsUpdatedAt[prURL]
+	return updatedAt, ok, nil
+}
+
 func (s *fakeStore) WriteSCMObservation(_ context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,6 +126,13 @@ func (s *fakeStore) WriteSCMObservation(_ context.Context, pr domain.PullRequest
 		return s.writeErr
 	}
 	s.writes = append(s.writes, fakeWrite{pr: pr, checks: append([]domain.PullRequestCheck(nil), checks...), reviews: append([]domain.PullRequestReview(nil), reviews...), threads: append([]domain.PullRequestReviewThread(nil), threads...), comments: append([]domain.PullRequestComment(nil), comments...), reviewMode: reviewMode})
+	return nil
+}
+
+func (s *fakeStore) RecordRepositoryRename(_ context.Context, r domain.RepositoryRename) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renames = append(s.renames, r)
 	return nil
 }
 
@@ -346,6 +365,59 @@ func testObs(num int) ports.SCMObservation {
 	}
 }
 
+func TestDomainFromObservationCarriesPRDetailsWithTheObservationTime(t *testing.T) {
+	observedAt := time.Unix(100, 0).UTC()
+	obs := ports.SCMObservation{
+		Provider:   "github",
+		Repo:       "o/r",
+		ObservedAt: observedAt,
+		PR: ports.SCMPRObservation{
+			URL:    "https://github.com/o/r/pull/7",
+			Number: 7,
+			Details: &domain.PullRequestDetails{
+				Description: "body",
+				Labels:      []domain.PullRequestLabel{{Name: "bug"}},
+				CommitCount: 3,
+			},
+		},
+	}
+
+	pr, _, _, _, _ := domainFromObservation("s-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	if pr.Details == nil || pr.Details.Description != "body" || len(pr.Details.Labels) != 1 || pr.Details.CommitCount != 3 {
+		t.Fatalf("details = %+v", pr.Details)
+	}
+	if !pr.Details.ObservedAt.Equal(observedAt) {
+		t.Fatalf("details observedAt = %v, want the observation's %v", pr.Details.ObservedAt, observedAt)
+	}
+	if !obs.PR.Details.ObservedAt.IsZero() {
+		t.Fatal("the observation's own details were mutated; the hash input must stay stable")
+	}
+
+	obs.PR.Details = nil
+	pr, _, _, _, _ = domainFromObservation("s-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	if pr.Details != nil {
+		t.Fatalf("details = %+v, want nil so the stored ones are kept", pr.Details)
+	}
+}
+
+// Providers read details only when none are stored or the PR's updatedAt
+// moved, so the hash leaves them out: a poll that skipped them must not look
+// like a change, and an edit still changes the hash through updatedAt.
+func TestMetadataHashLeavesOutPRDetails(t *testing.T) {
+	base := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, UpdatedAtProvider: time.Unix(50, 0).UTC()}}
+	withDetails := base
+	withDetails.PR.Details = &domain.PullRequestDetails{Description: "one"}
+	if metadataSemanticHash(base) != metadataSemanticHash(withDetails) {
+		t.Fatal("a poll that skipped the details hashes differently from the one that read them")
+	}
+	edited := withDetails
+	edited.PR.UpdatedAtProvider = time.Unix(60, 0).UTC()
+	edited.PR.Details = &domain.PullRequestDetails{Description: "two"}
+	if metadataSemanticHash(withDetails) == metadataSemanticHash(edited) {
+		t.Fatal("an edit that moved the PR's updatedAt must change the metadata hash")
+	}
+}
+
 func TestDomainFromObservationPreservesStableIdentityAndAliases(t *testing.T) {
 	oldURL := "https://github.com/old-owner/repo/pull/7"
 	currentURL := "https://github.com/new-owner/repo/pull/7"
@@ -498,6 +570,46 @@ func TestPoll_ReconcilesBranchStatesWithoutCredentials(t *testing.T) {
 	}
 	if branchStates.calls != 1 {
 		t.Fatalf("branch state reconciles = %d, want one per tick even without credentials", branchStates.calls)
+	}
+}
+
+func TestPoll_LogsStartAndCompletionTiming(t *testing.T) {
+	store := &fakeStore{
+		sessions: nil,
+		projects: map[string]domain.ProjectRecord{},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	var logs bytes.Buffer
+	obs := New(&fakeProvider{}, store, &fakeLifecycle{}, Config{
+		Tick:   time.Hour,
+		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logged := logs.String()
+	for _, field := range []string{"scm observer: poll started", "scm observer: poll completed", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in poll timing log:\n%s", field, logged)
+		}
+	}
+}
+
+func TestLogProviderRequest_WarnsForRequestLongerThanPollCadence(t *testing.T) {
+	var logs bytes.Buffer
+	obs := &Observer{
+		tick:   30 * time.Second,
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	obs.logProviderRequest("repo_pr_list_guard", "acme/widgets", time.Now().Add(-31*time.Second), nil)
+
+	logged := logs.String()
+	for _, field := range []string{"slow provider request completed", "stage=repo_pr_list_guard", "repository=acme/widgets", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in provider timing log:\n%s", field, logged)
+		}
 	}
 }
 
@@ -853,6 +965,37 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 }
 
+// A worker renamed after launch keeps owning branches under its temporary
+// name, which the agent may have made or remembered before the rename landed.
+func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, branch, temporary, source string
+		workspace                       bool
+	}{
+		{"single-repo sibling", "ao/fix-login/root", "ao/p-1/root", "ao/p-1/fix", false},
+		{"pushed temporary root", "ao/fix-login/root", "ao/p-1/root", "ao/p-1/root", false},
+		{"dev namespace sibling", "ao/dev/fix-login/root", "ao/dev/p-1/root", "ao/dev/p-1/fix", false},
+		{"workspace hyphen sibling", "ao/fix-login/root", "ao/p-1", "ao/p-1-fix", true},
+	} {
+		sr := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: tc.temporary}, branch: tc.branch, workspace: tc.workspace}
+		if got, ok := matchSession([]sessionRepo{sr}, tc.source); !ok || got.session.ID != "p-1" {
+			t.Errorf("%s: %q not attributed after rename", tc.name, tc.source)
+		}
+	}
+	// A later task named after the old temporary branch owns it outright.
+	renamed := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: "ao/p-1/root"}, branch: "ao/login/root"}
+	named := sessionRepo{session: domain.SessionRecord{ID: "p-9"}, branch: "ao/p-1/root"}
+	for _, source := range []string{"ao/p-1/root", "ao/p-1/fix"} {
+		if got, ok := matchSession([]sessionRepo{renamed, named}, source); !ok || got.session.ID != "p-9" {
+			t.Errorf("%q = %q, %v; want the task currently on it", source, got.session.ID, ok)
+		}
+	}
+	never := sessionRepo{session: domain.SessionRecord{ID: "p-1"}, branch: "ao/login/root"}
+	if _, ok := matchSession([]sessionRepo{never}, "ao/p-1/fix"); ok {
+		t.Error("a session that was never renamed claimed its ID namespace")
+	}
+}
+
 func TestMatchSession_PrefersExactBranchOverNamespaceMatch(t *testing.T) {
 	exact := sessionRepo{session: domain.SessionRecord{ID: "exact"}, branch: "ao/p-1"}
 	namespace := sessionRepo{session: domain.SessionRecord{ID: "namespace"}, branch: "ao/p-1/root"}
@@ -1018,6 +1161,13 @@ func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
 		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
 	}
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.RepositoryRename{{Host: "github.com", OldName: "o/r", Name: "neworg/r"}}
+	if !reflect.DeepEqual(store.renames, want) {
+		t.Fatalf("renames after two polls = %#v, want the old name recorded once: %#v", store.renames, want)
+	}
 }
 
 func mustGit(t *testing.T, args ...string) {
@@ -1176,6 +1326,114 @@ func TestPoll_CIETagChangeRefreshesWhenRepoUnchanged(t *testing.T) {
 	}
 }
 
+// stallingLifecycle hangs on one session's reaction until its context ends,
+// like a merge-conflict nudge stuck on a wedged agent pane or chat host.
+type stallingLifecycle struct {
+	mu       sync.Mutex
+	stall    domain.SessionID
+	observed []domain.SessionID
+}
+
+func (l *stallingLifecycle) ApplySCMObservation(ctx context.Context, id domain.SessionID, _ ports.SCMObservation) error {
+	if id == l.stall {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.observed = append(l.observed, id)
+	return nil
+}
+
+func TestPoll_StalledLifecycleDoesNotBlockOtherSessions(t *testing.T) {
+	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
+	for i := 1; i <= 2; i++ {
+		id := domain.SessionID("p-" + fmt.Sprint(i))
+		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
+		pr := knownPR(i)
+		pr.SessionID = id
+		pr.MetadataHash = "" // force candidate
+		store.prs[id] = []domain.PullRequest{pr}
+		provider.observations[prKey(testRepo, i)] = testObs(i)
+	}
+	conflicted := testObs(1)
+	conflicted.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeConflicting), Conflict: true}
+	provider.observations[prKey(testRepo, 1)] = conflicted
+	lc := &stallingLifecycle{stall: "p-1"}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	obs.lifecycleTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- obs.Poll(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll stalled behind one session's lifecycle reaction")
+	}
+	if len(lc.observed) != 1 || lc.observed[0] != "p-2" {
+		t.Fatalf("lifecycle observed %v, want [p-2]", lc.observed)
+	}
+}
+
+type deadlineLifecycle struct {
+	mu          sync.Mutex
+	hasDeadline map[domain.SessionID]bool
+	errs        map[domain.SessionID]error
+	work        time.Duration
+}
+
+func (l *deadlineLifecycle) ApplySCMObservation(ctx context.Context, id domain.SessionID, _ ports.SCMObservation) error {
+	_, bounded := ctx.Deadline()
+	var err error
+	select {
+	case <-time.After(l.work):
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hasDeadline[id], l.errs[id] = bounded, err
+	return err
+}
+
+// A merged or closed PR is not selected again after a failed reaction, so the
+// reaction timeout must not cut its teardown and final notifications short.
+func TestPoll_TerminalPRLifecycleIsNotTimeBounded(t *testing.T) {
+	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
+	for i := 1; i <= 2; i++ {
+		id := domain.SessionID("p-" + fmt.Sprint(i))
+		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
+		pr := knownPR(i)
+		pr.SessionID = id
+		pr.MetadataHash = "" // force candidate
+		store.prs[id] = []domain.PullRequest{pr}
+		provider.observations[prKey(testRepo, i)] = testObs(i)
+	}
+	merged := testObs(1)
+	merged.PR.State, merged.PR.Merged = string(domain.PRStateMerged), true
+	provider.observations[prKey(testRepo, 1)] = merged
+	lc := &deadlineLifecycle{hasDeadline: map[domain.SessionID]bool{}, errs: map[domain.SessionID]error{}, work: 100 * time.Millisecond}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	obs.lifecycleTimeout = 20 * time.Millisecond
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lc.hasDeadline["p-1"] || lc.errs["p-1"] != nil {
+		t.Fatalf("merged PR reaction bounded=%v err=%v, want unbounded and complete", lc.hasDeadline["p-1"], lc.errs["p-1"])
+	}
+	if !lc.hasDeadline["p-2"] || !errors.Is(lc.errs["p-2"], context.DeadlineExceeded) {
+		t.Fatalf("open PR reaction bounded=%v err=%v, want the reaction timeout", lc.hasDeadline["p-2"], lc.errs["p-2"])
+	}
+}
+
 func TestPoll_GraphQLBatchChunksAt25(t *testing.T) {
 	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
 	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
@@ -1309,6 +1567,177 @@ func TestPoll_UnchangedHashesDoNotWriteOrNotify(t *testing.T) {
 	}
 	if len(store.writes) != 0 || len(lc.observed) != 0 {
 		t.Fatalf("unchanged hashes wrote/notified: writes=%d observed=%d", len(store.writes), len(lc.observed))
+	}
+}
+
+// detailsPollFixture is a tracked PR #1 whose stored hashes match obsValue,
+// with a provider that answers obsValue.
+func detailsPollFixture(obsValue ports.SCMObservation) (*fakeStore, *fakeProvider, domain.PullRequest) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	local.MetadataHash = metadataSemanticHash(obsValue)
+	local.CIHash = ciSemanticHash(obsValue.CI)
+	local.ReviewHash = reviewSemanticHash(obsValue.Review)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{prKey(testRepo, 1): obsValue}}
+	return store, provider, local
+}
+
+// The ref carries the updatedAt the stored details were read at, so the
+// provider skips details that cannot have changed; a PR with none stored
+// sends zero and gets them.
+func TestPoll_RefCarriesTheStoredDetailsUpdatedAt(t *testing.T) {
+	stored := time.Unix(50, 0).UTC()
+	for _, tc := range []struct {
+		name   string
+		stored map[string]time.Time
+		want   time.Time
+	}{
+		{name: "details stored", stored: map[string]time.Time{"https://github.com/o/r/pull/1": stored}, want: stored},
+		{name: "none stored", want: time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, provider, _ := detailsPollFixture(testObs(1))
+			store.detailsUpdatedAt = tc.stored
+			obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 {
+				t.Fatalf("batches = %#v, want PR #1 fetched once", provider.fetchBatches)
+			}
+			if got := provider.fetchBatches[0][0].DetailsUpdatedAt; !got.Equal(tc.want) {
+				t.Fatalf("ref DetailsUpdatedAt = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// An unchanged PR whose details the provider skipped is not a change: nothing
+// is written, so the stored details stay, and lifecycle hears nothing.
+func TestPoll_SkippedDetailsAreNotAChange(t *testing.T) {
+	read := testObs(1)
+	read.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	read.PR.Details = &domain.PullRequestDetails{Description: "body"}
+	skipped := read
+	skipped.PR.Details = nil
+	store, provider, local := detailsPollFixture(read)
+	provider.observations[prKey(testRepo, 1)] = skipped
+	store.detailsUpdatedAt = map[string]time.Time{local.URL: read.PR.UpdatedAtProvider}
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) != 0 || len(lc.observed) != 0 {
+		t.Fatalf("skipped details wrote/notified: writes=%d observed=%d", len(store.writes), len(lc.observed))
+	}
+}
+
+// Details read for a PR that has none stored (one stored before details
+// existed, say) are written even though no hash changed, without a lifecycle
+// round or a rewrite of its checks and reviews.
+func TestPoll_StoresDetailsReadForAnOtherwiseUnchangedPR(t *testing.T) {
+	obsValue := testObs(1)
+	obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	store, provider, local := detailsPollFixture(obsValue)
+	read := obsValue
+	read.PR.Details = &domain.PullRequestDetails{Description: "body"}
+	provider.observations[prKey(testRepo, 1)] = read
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want one details write", len(store.writes))
+	}
+	w := store.writes[0]
+	if w.pr.Details == nil || w.pr.Details.Description != "body" || !w.pr.UpdatedAtProvider.Equal(obsValue.PR.UpdatedAtProvider) {
+		t.Fatalf("written PR = %+v details %+v, want the details with the observation's updatedAt", w.pr, w.pr.Details)
+	}
+	if w.pr.MetadataHash != local.MetadataHash || w.pr.CIHash != local.CIHash || w.pr.ReviewHash != local.ReviewHash {
+		t.Fatalf("hashes moved on a details-only write: %q/%q/%q", w.pr.MetadataHash, w.pr.CIHash, w.pr.ReviewHash)
+	}
+	if len(w.checks) != 0 || w.reviewMode != ports.ReviewWritePreserve {
+		t.Fatalf("details write touched checks/reviews: checks=%d mode=%v", len(w.checks), w.reviewMode)
+	}
+	if len(lc.observed) != 0 {
+		t.Fatalf("lifecycle notified %d times for a details-only write", len(lc.observed))
+	}
+}
+
+// Details still owed after a poll, because the read or the write failed, keep
+// the repository's cursor where it was, so the next poll comes back for them.
+func TestPoll_OwedDetailsKeepTheRepoCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pending  bool
+		details  *domain.PullRequestDetails
+		writeErr error
+	}{
+		{name: "read failed", pending: true},
+		{name: "write failed", details: &domain.PullRequestDetails{Description: "body"}, writeErr: errors.New("db down")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obsValue := testObs(1)
+			obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+			store, provider, _ := detailsPollFixture(obsValue)
+			read := obsValue
+			read.PR.Details, read.PR.DetailsPending = tc.details, tc.pending
+			provider.observations[prKey(testRepo, 1)] = read
+			store.writeErr = tc.writeErr
+			obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; ok {
+				t.Fatalf("repo ETag advanced to %q with details still owed", got)
+			}
+		})
+	}
+	// Once they are stored, the cursor moves on.
+	obsValue := testObs(1)
+	obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	store, provider, _ := detailsPollFixture(obsValue)
+	read := obsValue
+	read.PR.Details = &domain.PullRequestDetails{Description: "body"}
+	provider.observations[prKey(testRepo, 1)] = read
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "repo" {
+		t.Fatalf("repo ETag = %q after the details were stored, want repo", got)
+	}
+}
+
+// A PR whose updatedAt moved gets its new details written with the change,
+// so the stored details and their updatedAt move together.
+func TestPoll_MovedUpdatedAtWritesTheNewDetails(t *testing.T) {
+	old := testObs(1)
+	old.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	store, provider, local := detailsPollFixture(old)
+	store.detailsUpdatedAt = map[string]time.Time{local.URL: old.PR.UpdatedAtProvider}
+	moved := old
+	moved.PR.UpdatedAtProvider = time.Unix(60, 0).UTC()
+	moved.PR.Details = &domain.PullRequestDetails{Description: "edited"}
+	provider.observations[prKey(testRepo, 1)] = moved
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.fetchBatches[0][0].DetailsUpdatedAt; !got.Equal(old.PR.UpdatedAtProvider) {
+		t.Fatalf("ref DetailsUpdatedAt = %v, want the stored %v", got, old.PR.UpdatedAtProvider)
+	}
+	if len(store.writes) == 0 || len(lc.observed) != 1 {
+		t.Fatalf("writes=%d observed=%d, want the change persisted and delivered", len(store.writes), len(lc.observed))
+	}
+	for i, w := range store.writes {
+		if w.pr.Details == nil || w.pr.Details.Description != "edited" || !w.pr.UpdatedAtProvider.Equal(moved.PR.UpdatedAtProvider) {
+			t.Fatalf("write %d = %+v details %+v, want the edited details at the new updatedAt", i, w.pr, w.pr.Details)
+		}
 	}
 }
 
@@ -3517,5 +3946,86 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 				t.Fatalf("Blockers = %v, want %v", got.Blockers, tc.wantBlockers)
 			}
 		})
+	}
+}
+
+// A review AO just posted must reach the worker on the next poll, not after the
+// repo guard, review cadence, or max-age backstop happen to notice it.
+func TestPoll_RequestedReviewRefreshFetchesThreadsOnce(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	review := ports.SCMReviewObservation{
+		Decision: string(domain.ReviewNone),
+		Reviews:  []ports.SCMReviewSummaryObservation{{ID: "review-1", Author: "ao-reviewer", State: "COMMENTED", SubmittedAt: time.Unix(199, 0).UTC()}},
+		Threads:  []ports.SCMReviewThreadObservation{{ID: "t1", Path: "f.go", Line: 2, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "ao-reviewer", Body: "fix this"}}}},
+	}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): review},
+	}
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(200, 0).UTC())
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("unrequested poll fetched: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
+	}
+
+	obs.RequestReviewRefresh(local.URL)
+	select {
+	case <-obs.trigger:
+	default:
+		t.Fatal("review refresh request did not wake the poll loop")
+	}
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 || len(provider.fetchBatches) != 1 {
+		t.Fatalf("requested refresh: reviews=%d batches=%d, want 1 each", provider.reviewCalls, len(provider.fetchBatches))
+	}
+	if len(store.writes) == 0 || len(store.writes[0].comments) != 1 || store.writes[0].reviewMode != ports.ReviewWriteReplace {
+		t.Fatalf("requested review not persisted: %#v", store.writes)
+	}
+	if len(lc.observed) != 1 || !lc.observed[0].Changed.Review {
+		t.Fatalf("requested review not delivered to lifecycle: %#v", lc.observed)
+	}
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 {
+		t.Fatalf("one request refreshed more than once: reviews=%d", provider.reviewCalls)
+	}
+}
+
+// A forced review refresh is still a provider call: during a rate-limit
+// cooldown it must not fetch threads (or the PR) before Retry-After elapses.
+func TestPoll_RequestedReviewRefreshRespectsRateLimitCooldown(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): {Decision: string(domain.ReviewNone)}},
+	}
+	now := time.Unix(200, 0).UTC()
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, now)
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+	obs.setRateLimitCooldown(now, "github", 2*time.Minute)
+
+	obs.RequestReviewRefresh(local.URL)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("forced refresh called a cooled-down provider: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
 	}
 }

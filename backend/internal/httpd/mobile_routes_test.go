@@ -50,6 +50,10 @@ func (fakeMobileBridge) SetKeepAwake(on bool) (controllers.MobileStatusResponse,
 	return controllers.MobileStatusResponse{}, nil
 }
 
+func (fakeMobileBridge) SetBrowserRemoteAccess(on bool) (controllers.MobileStatusResponse, error) {
+	return controllers.MobileStatusResponse{}, nil
+}
+
 func (fakeMobileBridge) SetKeepAwakeLid(bool, bool) (controllers.MobileStatusResponse, error) {
 	return controllers.MobileStatusResponse{}, nil
 }

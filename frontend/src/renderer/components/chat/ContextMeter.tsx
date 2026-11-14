@@ -13,7 +13,8 @@
  * required, which matters for something glanced at rather than studied.
  */
 
-import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { AlertTriangle } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
@@ -80,6 +81,8 @@ function formatResetIn(seconds: number): string {
 	return `${Math.floor(hours / 24)}d`;
 }
 
+type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
+
 /**
  * The tighter of the provider's two windows, or undefined when it reported
  * neither. Negative is the daemon's "not reported" signal and must not be drawn:
@@ -87,11 +90,13 @@ function formatResetIn(seconds: number): string {
  */
 function worstWindow(
 	limits: ConversationRateLimits,
-): { percent: number; resetsIn?: number } | undefined {
-	const windows = [
-		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds },
-		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds },
-	].filter((w) => typeof w.percent === "number" && w.percent >= 0);
+): QuotaWindow | undefined {
+	// Primary is the short (session) window, secondary the weekly one. Both are
+	// already consumed percentages, so they are drawn as-is (never inverted).
+	const windows: QuotaWindow[] = [
+		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds, kind: "session" as const },
+		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds, kind: "weekly" as const },
+	].filter((w) => typeof w.percent === "number" && Number.isFinite(w.percent) && w.percent >= 0);
 	if (windows.length === 0) return undefined;
 	return windows.reduce((worst, w) => (w.percent > worst.percent ? w : worst));
 }
@@ -101,10 +106,13 @@ function worstWindow(
 export function ContextMeter({
 	usage,
 	rateLimits,
+	compactsAt,
 	className,
 }: {
 	usage?: ConversationUsage;
 	rateLimits?: ConversationRateLimits;
+	/** The size at which the agent compacts on its own, such as Claude Code's "200k". */
+	compactsAt?: string;
 	className?: string;
 }) {
 	const quota = rateLimits ? worstWindow(rateLimits) : undefined;
@@ -121,31 +129,30 @@ export function ContextMeter({
 		// throws rather than degrading.
 		<TooltipProvider>
 			<div className={cn("flex shrink-0 items-center gap-2", className)}>
-				{usage && hasContext ? <ContextReadout usage={usage} /> : null}
+				{usage && hasContext ? <ContextReadout usage={usage} compactsAt={compactsAt} /> : null}
 				{showQuota && quota ? <QuotaWarning quota={quota} limits={rateLimits} /> : null}
 			</div>
 		</TooltipProvider>
 	);
 }
 
-function ContextReadout({ usage }: { usage: ConversationUsage }) {
+function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compactsAt?: string }) {
+	const compactsLine = compactsAt ? <p>Compacts on its own at {compactsAt.toUpperCase()}</p> : null;
 	const { contextUsed, contextWindow } = usage;
 	// A border separates the tooltip without the layered shadow's hover halos.
-	const tooltipSurface = "border border-border shadow-none";
+	const tooltipSurface = "border border-(--color-border-overlay) shadow-none";
 
-	// Failed turns can report 0 used with a valid model limit. Until there is a
-	// positive reading, drawing 0% would claim headroom we have not measured.
-	if (contextUsed <= 0 || contextWindow <= 0) {
-		const used = contextUsed > 0 ? contextUsed.toLocaleString() : "unknown";
-		const total = contextWindow > 0 ? contextWindow.toLocaleString() : "unknown";
-		const compactUsed = contextUsed > 0 ? formatTokenCount(contextUsed).replace(/ tok$/, "") : "unknown";
-		const compactTotal = contextWindow > 0 ? formatTokenCount(contextWindow).replace(/ tok$/, "") : "unknown";
+	// Failed turns can report 0 used with a valid model limit. That draws as an
+	// empty 0% ring until the next turn reports a real reading. Without a window
+	// there is no fraction to draw, so only the used count is shown.
+	if (contextWindow <= 0) {
+		const compactUsed = formatTokenCount(contextUsed).replace(/ tok$/, "");
 		return (
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<span
 						role="img"
-						aria-label={`Context ${used} / ${total}`}
+						aria-label={`Context ${contextUsed.toLocaleString()} / unknown`}
 						className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
 						data-context-meter=""
 						tabIndex={0}
@@ -157,8 +164,9 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 					</span>
 				</TooltipTrigger>
 				<TooltipContent className={tooltipSurface}>
-					<p className="font-medium">Context {compactUsed} / {compactTotal}</p>
-					<p>{contextUsed <= 0 ? "The provider has not reported current context used." : "The provider has not reported a context window."} Conversation fullness is unknown.</p>
+					<p className="font-medium">Context {compactUsed} / unknown</p>
+					<p>The provider has not reported a context window. Conversation fullness is unknown.</p>
+					{compactsLine}
 				</TooltipContent>
 			</Tooltip>
 		);
@@ -194,7 +202,9 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 						<circle
 							cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3"
 							strokeLinecap="round" pathLength="100"
-							strokeDasharray={`${Math.max(fraction * 100, 8)} 100`}
+							// A nearly-empty conversation keeps a visible sliver; a zero reading
+							// stays an empty track so it does not look like measured usage.
+							strokeDasharray={`${fraction > 0 ? Math.max(fraction * 100, 8) : 0} 100`}
 							className="transition-[stroke-dasharray] duration-300"
 						/>
 					</svg>
@@ -203,6 +213,7 @@ function ContextReadout({ usage }: { usage: ConversationUsage }) {
 			<TooltipContent className={tooltipSurface}>
 				<p className="font-medium">Context window</p>
 				<p className="tabular-nums">{compactUsage} tokens ({percent}%)</p>
+				{compactsLine}
 				{severity !== "normal" ? (
 					<p className="mt-1">
 						{severity === "critical"
@@ -219,12 +230,14 @@ function QuotaWarning({
 	quota,
 	limits,
 }: {
-	quota: { percent: number; resetsIn?: number };
+	quota: QuotaWindow;
 	limits?: ConversationRateLimits;
 }) {
+	const { t } = useTranslation();
 	const severity = quotaSeverity(quota.percent);
-	const percent = Math.round(quota.percent);
+	const percent = Math.min(100, Math.round(quota.percent));
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatResetIn(quota.resetsIn) : undefined;
+	const session = quota.kind === "session";
 
 	return (
 		<Tooltip>
@@ -238,21 +251,19 @@ function QuotaWarning({
 					)}
 				>
 					<AlertTriangle aria-hidden="true" className="size-3" />
-					{percent}% quota
+					{t(session ? "chat.quota.badgeSession" : "chat.quota.badgeWeekly", { percent })}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent>
 				<p>
-					This account has used {percent}% of its
-					{limits?.planLabel ? ` ${limits.planLabel}` : ""} rate limit
-					{resets ? `, which resets in ${resets}` : ""}.
+					{t(session ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent })}
+					{limits?.planLabel ? ` ${t("chat.quota.plan", { plan: limits.planLabel })}` : ""}
+					{resets ? ` ${t("chat.quota.resetsIn", { time: resets })}` : ""}
 				</p>
 				{/* Named explicitly because this is the failure a user cannot otherwise
 				    explain: the turn was fine, the account was not. */}
 				<p className="mt-1">
-					{severity === "critical"
-						? "Turns may start failing for reasons unrelated to what you asked."
-						: "If this reaches the limit, turns will fail until the window resets."}
+					{t(severity === "critical" ? "chat.quota.critical" : "chat.quota.warn")}
 				</p>
 			</TooltipContent>
 		</Tooltip>

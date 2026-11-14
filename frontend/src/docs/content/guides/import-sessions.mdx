@@ -1,0 +1,40 @@
+---
+title: Import existing sessions
+description: Import existing Claude Code, Codex, and other supported agent sessions from your terminal and continue them in Orchestrator.
+---
+
+You can import a Claude Code or Codex session you started in a terminal and continue the conversation in Orchestrator. The saved history must be available on the computer running Orchestrator.
+
+## Import a Claude Code session
+
+1. Update the [desktop app](/installation) if the Import tab is missing.
+2. Open **Settings → Harness → Claude Code → Import**.
+3. Import the selected conversations with the **Import** button.
+4. Close the conversation in your original terminal before continuing it in Orchestrator.
+5. Open the imported session in Orchestrator to continue the conversation.
+
+For Codex or another supported agent, select that agent under **Settings → Harness** and use its **Import** tab.
+
+For one project, open **Project settings → General → Earlier chats**. Choose **Import chats**.
+
+## Import from the command palette
+
+Open **Cmd+K** on macOS or **Ctrl+K** on Windows/Linux. Search for **Import**. Choose **Import projects and their chats**, or **Import chats** for the current local project.
+
+## What import does
+
+Import saves the conversation history and leaves the session idle. Opening it prepares its workspace and resumes the saved agent conversation. Git folders that are not yet projects become projects during import.
+
+For Git projects, the first open copies the source folder's uncommitted changes into the new session worktree. Keep the source folder available until that first open.
+
+The agent must be installed and signed in to continue. Claude Code supports both Chat and Terminal UI in Orchestrator.
+
+## If a conversation is missing
+
+The scan lists readable conversations active in the last 30 days, with up to 100 per project.
+
+Clear the search and project filters. Choose **Scan again**. Check that the history exists on this computer. Claude Code history normally lives under `~/.claude/projects`. Orchestrator uses `CLAUDE_CONFIG_DIR` instead when configured in its environment.
+
+## CLI import is a separate feature
+
+`ao import` imports projects and settings from the legacy Orchestrator store at `~/.agent-orchestrator`. Use the desktop steps above to import existing agent conversations.

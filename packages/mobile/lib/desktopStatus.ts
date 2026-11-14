@@ -1,4 +1,5 @@
 import type { ConnectionFailure } from "./connectionError";
+import type { LinkHealth } from "./linkHealth";
 
 // The Settings "Connected desktop" row. It used to say "Paired" whenever an
 // address was saved, so a desktop that had gone away still read as fine right
@@ -12,14 +13,21 @@ export type DesktopStatus = { label: string; tone: DesktopStatusTone };
 /**
  * `failure` is what the last failed poll was classified as; null when no poll
  * has failed, which while not yet connected means one is still on its way.
+ * `link` softens an unanswered poll: the phone may be offline, or the link
+ * still recovering from a blip. Neither is the machine being unreachable.
  */
 export function describeDesktopStatus(input: {
 	configured: boolean;
 	connection: "closed" | "connecting" | "open";
 	failure: ConnectionFailure | null;
+	link?: LinkHealth;
 }): DesktopStatus {
 	if (!input.configured) return { label: "Set up", tone: "neutral" };
+	if (input.link === "phone-offline") return { label: "Phone offline", tone: "neutral" };
 	if (input.connection === "open") return { label: "Connected", tone: "ok" };
+	if (input.link === "reconnecting" && (input.failure === "unreachable" || input.failure === "tunnel-rotated")) {
+		return { label: "Reconnecting…", tone: "neutral" };
+	}
 	// "closed" with no failure is the gap between pairing and the first poll
 	// starting — not an offline desktop.
 	if (input.connection === "connecting" || input.failure === null) return { label: "Connecting…", tone: "neutral" };

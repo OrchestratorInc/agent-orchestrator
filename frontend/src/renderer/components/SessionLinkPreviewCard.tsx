@@ -1,16 +1,20 @@
+import { BrowserIcon } from "./icons";
+import { mediaCrossOrigin } from "../lib/file-media";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
+import { FileText, LoaderCircle, Play, Sheet } from "@/components/app-icons";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
+import { formatTimeCompact } from "../lib/format-time";
 import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-frontmatter";
 import { IMAGE_CHECKERBOARD, isRasterImagePath, isSvgPath } from "../lib/image-files";
 import { cn } from "../lib/utils";
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
 import { prCanMerge, prCardPresentation, sessionPRDisplaySummaries, type PRDisplayTone } from "../lib/pr-display";
@@ -33,26 +37,22 @@ const prToneClasses = {
 	error: { dot: "bg-destructive", text: "text-destructive" },
 } as const;
 
-function relativeTime(timestamp: string | undefined, format: (key: "time.justNow" | "shell.updatedAt", values?: Record<string, unknown>) => string): string {
+// Time phrase comes from formatTimeCompact (appI18n catalogs), not Intl locale
+// resolution, so the card never leaks the OS language into the app UI.
+function relativeTime(timestamp: string | undefined, format: (key: "shell.updatedAt", values?: Record<string, unknown>) => string): string {
 	if (!timestamp) return "";
-	const elapsedMinutes = Math.floor((Date.now() - Date.parse(timestamp)) / 60_000);
-	if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return format("shell.updatedAt", { time: format("time.justNow") });
-	const unit: Intl.RelativeTimeFormatUnit = elapsedMinutes < 60 ? "minute" : elapsedMinutes < 1_440 ? "hour" : "day";
-	const amount = unit === "minute" ? elapsedMinutes : unit === "hour" ? Math.floor(elapsedMinutes / 60) : Math.floor(elapsedMinutes / 1_440);
-	return format("shell.updatedAt", { time: new Intl.RelativeTimeFormat(undefined, { numeric: "always" }).format(-amount, unit) });
+	return format("shell.updatedAt", { time: formatTimeCompact(timestamp) });
 }
+
+const SESSION_CARD_CLASS = "w-64 max-h-48 overflow-y-auto p-2";
 
 function LoadingCard() {
 	const { t } = useTranslation();
 	return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			<div role="status" aria-label={t("session.statusChecking")} className="space-y-3">
-				<div className="flex items-center gap-2.5">
-					<Skeleton className="size-7 shrink-0 rounded-md" />
-					<div className="min-w-0 flex-1 space-y-1.5"><Skeleton className="h-3 w-32" /><Skeleton className="h-2.5 w-24" /></div>
-				</div>
-				<Skeleton className="h-3 w-44" />
-				<Skeleton className="h-2.5 w-36" />
+		<HoverCardContent collisionPadding={8} sideOffset={6} className={SESSION_CARD_CLASS}>
+			<div role="status" aria-label={t("session.statusChecking")} className="flex items-center gap-2">
+				<Skeleton className="size-6 shrink-0 rounded-md" />
+				<div className="min-w-0 flex-1 space-y-1.5"><Skeleton className="h-3 w-32" /><Skeleton className="h-2.5 w-24" /></div>
 			</div>
 		</HoverCardContent>
 	);
@@ -61,8 +61,8 @@ function LoadingCard() {
 function UnavailableCard() {
 	const { t } = useTranslation();
 	return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			<p role="status" className="text-sm font-medium text-foreground">{t("session.statusUnavailable")}</p>
+		<HoverCardContent collisionPadding={8} sideOffset={6} className={SESSION_CARD_CLASS}>
+			<p role="status" className="text-xs font-medium text-foreground">{t("session.statusUnavailable")}</p>
 		</HoverCardContent>
 	);
 }
@@ -70,10 +70,10 @@ function UnavailableCard() {
 function ErrorCard() {
 	const { t } = useTranslation();
 	return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			<div role="alert" className="space-y-1">
-				<p className="text-sm font-medium text-foreground">{t("session.statusUnavailable")}</p>
-				<p className="text-xs leading-4 text-muted-foreground">{t("shell.couldNotLoadSessions")}</p>
+		<HoverCardContent collisionPadding={8} sideOffset={6} className={SESSION_CARD_CLASS}>
+			<div role="alert" className="space-y-0.5">
+				<p className="text-xs font-medium text-foreground">{t("session.statusUnavailable")}</p>
+				<p className="text-caption leading-4 text-muted-foreground">{t("shell.couldNotLoadSessions")}</p>
 			</div>
 		</HoverCardContent>
 	);
@@ -108,17 +108,19 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 	const prs = useMemo(() => sessionPRDisplaySummaries(session), [session]);
 	const status = session.statusReadiness === "unavailable"
 		? t("session.statusUnavailable")
-		: session.displayStatus || getSessionStatusView(session.status, t).label;
+		: session.needsResume && !session.isTerminated
+			? t("session.importedNotOpened")
+			: session.displayStatus || getSessionStatusView(session.status, t).label;
 	return (
-		<div className="space-y-3" role="status" aria-label={`${session.title}, ${status}`}>
-			<div className="flex min-w-0 items-start gap-2.5">
-				<AgentAvatar provider={session.provider} className="size-7 shrink-0" />
+		<div className="space-y-1.5" role="status" aria-label={`${session.title}, ${status}`}>
+			<div className="flex min-w-0 items-start gap-2">
+				<AgentAvatar provider={session.provider} className="size-6 shrink-0" />
 				<div className="min-w-0 flex-1">
 					<div className="flex min-w-0 items-baseline gap-1.5">
-						<p className="min-w-0 truncate text-sm font-semibold text-foreground">{session.title}</p>
-						<span className="shrink-0 font-mono text-xs text-muted-foreground">#{session.id.slice(-3)}</span>
+						<p className="min-w-0 truncate text-xs font-semibold text-foreground">{session.title}</p>
+						<span className="shrink-0 font-mono text-caption text-muted-foreground">#{session.id.slice(-3)}</span>
 					</div>
-					<p className="mt-0.5 truncate text-xs text-muted-foreground">{session.workspaceName}</p>
+					<p className="truncate text-caption text-muted-foreground">{session.workspaceName}</p>
 				</div>
 			</div>
 			<div className="flex items-center gap-1.5 text-xs">
@@ -127,9 +129,9 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 				<span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(session.updatedAt, t)}</span>
 			</div>
 			{prs.length > 0 && (
-				<div className="border-t border-border pt-2">
-					<p className="text-xs font-semibold text-muted-foreground">{t("pr.count", { count: prs.length })}</p>
-					<div className="mt-1.5 space-y-1.5">
+				<div className="border-t border-border pt-1.5">
+					<p className="sr-only">{t("pr.count", { count: prs.length })}</p>
+					<div className="space-y-1">
 						{prs.map((pr) => {
 							const status = compactPRStatus(pr, t);
 							const tone = prToneClasses[status.tone];
@@ -167,8 +169,8 @@ function TerminatedCard({ session, hostId }: { session: WorkspaceSession; hostId
 		}
 	};
 	return (
-		<div className="space-y-3" role="status" aria-label={t("session.agentTerminated")}>
-			<p className="text-sm font-semibold text-popover-foreground">{t("session.agentTerminated")}</p>
+		<div className="space-y-2" role="status" aria-label={t("session.agentTerminated")}>
+			<p className="text-xs font-semibold text-popover-foreground">{t("session.agentTerminated")}</p>
 			<Button
 				className="w-full"
 				disabled={restoring}
@@ -194,23 +196,35 @@ export function SessionLinkPreviewCard({
 	href,
 	sourceHostId,
 	sourceKind,
+	onOpen,
 }: {
 	href: string;
 	sourceHostId?: string;
 	sourceKind?: "cloud";
+	/** Opens the session through the same path as clicking the link itself. */
+	onOpen?: () => void;
 }) {
 	const target = parseSessionLink(href);
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
-	if (session) return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			{session.isTerminated === true || session.status === "terminated"
-				? <TerminatedCard session={session} hostId={restoreHostId} />
-				: <SessionCardBody session={session} />}
-		</HoverCardContent>
-	);
+	if (session) {
+		const terminated = session.isTerminated === true || session.status === "terminated";
+		// A terminated card already holds its own Resume button, so only a live one opens on click.
+		// Pointer only: the card is portaled and closes when the link blurs, so the link is the keyboard path.
+		const openable = onOpen && !terminated;
+		return (
+			<HoverCardContent
+				collisionPadding={8}
+				sideOffset={6}
+				className={cn(SESSION_CARD_CLASS, openable && "cursor-pointer transition-colors hover:bg-accent")}
+				onClick={openable ? onOpen : undefined}
+			>
+				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
+			</HoverCardContent>
+		);
+	}
 	if (source.isLoading) return <LoadingCard />;
 	if (source.isError) return <ErrorCard />;
 	return <UnavailableCard />;
@@ -292,7 +306,6 @@ function ArtifactPagePreview({ url, title }: { url: string; title: string }) {
 				src={url}
 				title={title}
 				sandbox="allow-scripts allow-same-origin"
-				loading="lazy"
 				tabIndex={-1}
 				aria-hidden="true"
 				className="pointer-events-none absolute left-0 top-0 origin-top-left border-0"
@@ -318,7 +331,7 @@ function ArtifactImagePreview({ rawUrl, name, updatedAt }: { rawUrl: string; nam
 	if (failedSrc === src) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
 	return (
 		<div className="grid max-h-40 place-items-center overflow-hidden rounded-sm text-passive" style={{ background: IMAGE_CHECKERBOARD }}>
-			<img alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
+			<img crossOrigin={mediaCrossOrigin(src)} alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
 		</div>
 	);
 }
@@ -383,20 +396,18 @@ function ArtifactContentPreview({ artifact, session, remote }: { artifact: Sessi
 
 function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
-	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
+	const Icon = artifact.kind === "html" ? BrowserIcon : tabularDelimiter(artifact.path) ? Sheet : FileText;
 	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>
-			<div className="flex min-w-0 items-start gap-2">
-				<Icon aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0 text-muted-foreground" />
-				<div className="min-w-0 flex-1">
-					<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
-					<p className="mt-0.5 truncate text-xs text-muted-foreground">
-						{author}
-						{author !== session.id ? <span className="font-mono"> · {session.id}</span> : null}
-					</p>
-				</div>
+			<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5">
+				<Icon aria-hidden="true" className="size-icon-sm text-muted-foreground" />
+				<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
 				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>
+				<p className="col-start-2 col-end-4 truncate text-xs text-muted-foreground">
+					{author}
+					{author !== session.id ? <span> · {session.id}</span> : null}
+				</p>
 			</div>
 			<div className="border-t border-border pt-2">
 				<ArtifactContentPreview artifact={artifact} session={session} remote={remote} />
@@ -430,7 +441,7 @@ export function ArtifactLinkPreviewCard({
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
-	const artifact = session?.artifactFiles?.find((candidate) => candidate.path === target?.path);
+	const artifact = target ? artifactAtPath(session?.artifactFiles, target.path) : undefined;
 	if (session && artifact) return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3">
 			<ArtifactCardBody artifact={artifact} session={session} remote={sourceKind === "cloud" || Boolean(sourceHostId && sourceHostId !== LOCAL_HOST)} />

@@ -2,6 +2,7 @@ package registry_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -58,6 +59,13 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 				label = "OpenHands CLI"
 			}
 			script := "#!/bin/sh\ncase \"$1\" in --version|-v|-V) echo '" + label + " " + version + "';; --help|help) printf 'Usage: goose [OPTIONS] COMMAND\\nsession Start sessions\\nrecipe Recipes\\n';; *) if [ \"$2\" = list ]; then printf '%s' '[{\"id\":\"" + nativeID + "\"}]'; else printf '%s' '{\"info\":{\"id\":\"" + nativeID + "\"}}'; fi;; esac\n"
+			if string(harness.Harness) == "cline" {
+				history, err := json.Marshal([]map[string]string{{"sessionId": nativeID, "cwd": workspace}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				script = "#!/bin/sh\nprintf '%s' '" + string(history) + "'\n"
+			}
 			if err := os.WriteFile(binary, []byte(script), 0755); err != nil {
 				t.Fatal(err)
 			}
@@ -99,6 +107,13 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 				exists, err = probe.NativeConversationExists(context.Background(), cfg.Session, nativeID, nil)
 				if exists {
 					t.Fatalf("history preflight accepted missing native session: %v", err)
+				}
+			}
+			if string(harness.Harness) == "cline" {
+				// Without hook metadata Cline can still recover from history;
+				// the missing-identity case must also have no matching history.
+				if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '[]'\n"), 0755); err != nil {
+					t.Fatal(err)
 				}
 			}
 			cfg.Session.Metadata = nil

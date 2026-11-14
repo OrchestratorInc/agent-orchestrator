@@ -25,6 +25,14 @@
 //
 // The rule behind all four: never let a fingerprint input differ between machines
 // or between the build state and the publish state.
+//
+// package.json `scripts` are a fingerprint input too (packageJson:scripts), so a
+// dev-tooling edit moves the runtime: #7047 changed only `typecheck` (tsc -> tsgo),
+// and from then on nothing published from main could reach the 2.1.0 store builds.
+// Scripts never end up in the binary. postinstall's patches are hashed on their own
+// (the `patches` source), and native dependencies are hashed through their
+// autolinked module directories. So skip the whole section. Setting sourceSkips replaces the
+// default (PackageJsonAndroidAndIosScriptsIfNotContainRun), which this covers.
 /** @type {import('@expo/fingerprint').Config} */
 module.exports = {
 	ignorePaths: [
@@ -33,4 +41,5 @@ module.exports = {
 		"eas.json",
 		".gitignore",
 	],
+	sourceSkips: ["PackageJsonScriptsAll"],
 };

@@ -27,6 +27,24 @@ func TestModelCommandUsesProjectWorkingDirectory(t *testing.T) {
 	}
 }
 
+// OpenCode 2.0.14 exits 0 with no output the first time `models` runs in a
+// folder, so every new project started with a failed, empty catalog.
+func TestOpenCodeV2RetriesEmptyFirstRunInNewFolder(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "opencode2")
+	script := "#!/bin/sh\nif [ ! -f seen ]; then : > seen; exit 0; fi\nprintf 'anthropic/claude-opus-5-5\\n'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"HOME": t.TempDir(), "XDG_CACHE_HOME": t.TempDir(), "XDG_CONFIG_HOME": t.TempDir()}
+	catalog, err := discoverCommandCatalog(context.Background(), "opencode-v2", binary, t.TempDir(), env, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].ID != "anthropic/claude-opus-5-5" {
+		t.Fatalf("models = %#v, want the second run's list", catalog.Models)
+	}
+}
+
 func TestNormalizeShowsConcreteNameForDefaultCatalogModel(t *testing.T) {
 	got := normalize([]ports.AgentModelInfo{
 		{ID: "opus", Label: "Opus (default)"},
@@ -644,6 +662,7 @@ func TestCustomModelEntryPolicy(t *testing.T) {
 		{agent: "prime-agent", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "autohand", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "fx", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
+		{agent: "hermes", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 	}
 
 	for _, tc := range tests {
@@ -1360,5 +1379,15 @@ func TestMemcodeCatalogFingerprintInvalidatesFormerEmptyCatalog(t *testing.T) {
 	got := CatalogFingerprint(context.Background(), "memcode", "", "", nil)
 	if got == BinaryVersion(context.Background(), "") {
 		t.Fatal("Memcode catalog fingerprint matches the old executable-only cache key")
+	}
+}
+
+func TestModelDiscoveryErrorNamesACrashedCLIsError(t *testing.T) {
+	// As cursor-agent prints a missing module.
+	output := "node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\n\nError: Cannot find module 'tree-sitter'\n" +
+		"Require stack:\n- /opt/cursor-agent/index.js\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)\n" +
+		"    at Module.require (node:internal/modules/cjs/loader:1311:19)\n"
+	if detail := discoveryErrorDetail([]byte(output)); detail != "Error: Cannot find module 'tree-sitter'" {
+		t.Fatalf("detail = %q, want the error line", detail)
 	}
 }

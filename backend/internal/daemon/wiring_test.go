@@ -954,57 +954,6 @@ type fakeSessionLifecycle struct {
 	restoreErr                error
 }
 
-type recordingAgentSwitchDaemonFaultStore struct {
-	inputs []ports.AgentSwitchDaemonFault
-}
-
-func (s *recordingAgentSwitchDaemonFaultStore) EnqueueAgentSwitchDaemonFault(_ context.Context, input ports.AgentSwitchDaemonFault) (ports.AgentSwitchMutationResult, error) {
-	s.inputs = append(s.inputs, input)
-	return ports.AgentSwitchMutationResult{Enrollment: domain.AgentSwitchEnrollmentEnrolled}, nil
-}
-
-type fixedAgentSwitchReportingPolicy struct {
-	authorization domain.AgentSwitchReportingAuthorization
-}
-
-func (p fixedAgentSwitchReportingPolicy) Authorization() domain.AgentSwitchReportingAuthorization {
-	return p.authorization
-}
-
-func TestEnqueueAgentSwitchWorkerShutdownTimeoutCreatesOneDaemonAggregate(t *testing.T) {
-	store := &recordingAgentSwitchDaemonFaultStore{}
-	authorization := domain.AgentSwitchReportingAuthorization{
-		Enabled: true, ConsentGeneration: "consent-generation", DestinationFingerprint: "destination-fingerprint",
-	}
-	at := time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC)
-	if err := enqueueAgentSwitchWorkerShutdownTimeout(context.Background(), store, fixedAgentSwitchReportingPolicy{authorization}, "daemon-run-1", at); err != nil {
-		t.Fatalf("enqueue shutdown timeout: %v", err)
-	}
-	if len(store.inputs) != 1 {
-		t.Fatalf("daemon fault inputs = %d, want 1", len(store.inputs))
-	}
-	got := store.inputs[0]
-	if got.DaemonRunID != "daemon-run-1" || got.Authorization != authorization {
-		t.Fatalf("daemon fault scope = %+v", got)
-	}
-	if got.Fault.ReportKind != domain.AgentSwitchReportDaemonLifecycleFailure ||
-		got.Fault.FailurePoint != domain.AgentSwitchFailureShutdownWorkerTimeout ||
-		got.Fault.FaultCode != domain.AgentSwitchFaultShutdownWorkersTimedOut ||
-		got.Fault.Execution != domain.AgentSwitchExecutionDaemonShutdown ||
-		got.Fault.CallOutcome != domain.AgentSwitchCallTimedOut {
-		t.Fatalf("daemon fault = %+v", got.Fault)
-	}
-}
-
-func TestAgentSwitchWorkerWaitCancellationIsNotReportable(t *testing.T) {
-	if agentSwitchWorkerWaitTimedOut(context.Canceled) {
-		t.Fatal("ordinary shutdown cancellation was classified as a timeout")
-	}
-	if !agentSwitchWorkerWaitTimedOut(context.DeadlineExceeded) {
-		t.Fatal("worker deadline was not classified as a timeout")
-	}
-}
-
 func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *ports.SpawnAttachment) error {
 	return nil
 }
@@ -1032,7 +981,8 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	return f.reconcileErr
 }
 
-func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error        { return nil }
+func (*fakeSessionLifecycle) ReconcileWorkspaceCleanup(context.Context) error { return nil }
 func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration) error {
 	return nil
 }
@@ -1050,6 +1000,7 @@ func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.Ses
 }
 func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
 func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}
+func (*fakeSessionLifecycle) SetComputerUseEnabled(func(context.Context) bool)                   {}
 func (*fakeSessionLifecycle) RetryVersionMoves(context.Context) error                            { return nil }
 func (*fakeSessionLifecycle) ObserveChatVersionSwitch(domain.SessionID, string, string)          {}
 func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
@@ -1066,6 +1017,7 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 
 func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
 func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
+func (*fakeSessionLifecycle) StopAgentsForQuit(context.Context) error      { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
@@ -1073,10 +1025,11 @@ func (f *fakeSessionLifecycle) AcquireSessionInput(domain.SessionID) (func(), bo
 	return func() {}, true
 }
 
-func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool         { return false }
-func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator) {}
-func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)         {}
-func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                      { return false }
+func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool                 { return false }
+func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator)         {}
+func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)                 {}
+func (f *fakeSessionLifecycle) SetImportArchiveRefresher(sessionmanager.ImportArchiveRefresher) {}
+func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                              { return false }
 func (f *fakeSessionLifecycle) StartCodexAccountSwitch(context.Context, ports.CodexAccountSwitchConfig) (domain.CodexAccountSwitch, error) {
 	return domain.CodexAccountSwitch{}, nil
 }

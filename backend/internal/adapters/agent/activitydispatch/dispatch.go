@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/auggie"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
@@ -72,12 +73,22 @@ var Derivers = map[string]DeriveFunc{
 	"gemini":       gemini.DeriveActivityState,
 	"copilot":      activitystate.StandardDeriveActivityState,
 	"kimi":         activitystate.StandardDeriveActivityState,
-	"cline":        activitystate.StandardDeriveActivityState,
+	"cline":        cline.DeriveActivityState,
 	"kiro":         kiro.DeriveActivityState,
 	"kilocode":     activitystate.StandardDeriveActivityState,
 	"autohand":     activitystate.StandardDeriveActivityState,
 	"vibe":         vibe.DeriveActivityState,
 	"fake":         fake.DeriveActivityState,
+}
+
+// AgentSessionID extracts a native resumable-session identifier from an
+// adapter's hook payload. Most adapters obtain this metadata through other
+// mechanisms; Cline exposes its root session id in lifecycle hook payloads.
+func AgentSessionID(agent string, payload []byte) (string, bool) {
+	if agent != "cline" {
+		return "", false
+	}
+	return cline.SessionIDFromHook(payload)
 }
 
 // SignalCoverage describes how much of a harness lifecycle AO can observe.
