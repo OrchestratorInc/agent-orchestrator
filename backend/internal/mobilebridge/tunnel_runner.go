@@ -108,7 +108,7 @@ var (
 	// be served now.
 	errFixedTunnelReady = errors.New("fixed address ready")
 	// errFixedTunnelChanged stops a fixed tunnel AO Cloud no longer hands out.
-	errFixedTunnelChanged = errors.New("AO Cloud no longer hands out this fixed address")
+	errFixedTunnelChanged = errors.New("this fixed address is no longer handed out by Orchestrator Cloud")
 )
 
 func (t *TunnelRunner) runOnce(ctx context.Context) error {

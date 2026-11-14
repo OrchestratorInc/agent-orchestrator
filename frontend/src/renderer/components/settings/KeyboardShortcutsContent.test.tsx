@@ -27,9 +27,9 @@ describe("KeyboardShortcutsContent", () => {
 		useKeybindingsStore.setState({ resetAll: originalResetAll });
 	});
 
-	// Reset all wipes every custom shortcut, so a stray Enter must not confirm
-	// it, and a failed reset keeps the dialog open with the reason.
-	it("opens the Reset all confirm on Cancel and reports a failed reset", async () => {
+	// Enter confirms a confirm dialog, and a failed reset keeps the dialog open
+	// with the reason.
+	it("opens the Reset all confirm on its confirm button and reports a failed reset", async () => {
 		const user = userEvent.setup();
 		const resetAll = vi.fn(async () => {
 			throw new Error("disk full");
@@ -39,7 +39,7 @@ describe("KeyboardShortcutsContent", () => {
 
 		await user.click(screen.getByRole("button", { name: "Reset all" }));
 		const dialog = await screen.findByRole("dialog", { name: "Reset all" });
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Reset all" })).toHaveFocus());
 
 		await user.click(within(dialog).getByRole("button", { name: "Reset all" }));
 		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Could not reset shortcuts");

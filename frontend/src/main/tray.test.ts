@@ -75,7 +75,7 @@ const sessionItems = (tray: { template: MenuItem[] }) =>
 		(item) =>
 			typeof item.click === "function" &&
 			item.label !== "Show Orchestrator" &&
-			item.label !== "Quit AO Completely",
+			item.label !== "Quit Orchestrator Completely",
 	);
 
 afterEach(() => {
@@ -111,12 +111,12 @@ describe("createTrayController", () => {
 		const { tray } = setup();
 		expect(tray.title).toBe("");
 		expect(tray.template.some((i) => i.label === "No sessions need attention" && i.enabled === false)).toBe(true);
-		expect(tray.template.some((i) => i.label === "Quit AO Completely")).toBe(true);
+		expect(tray.template.some((i) => i.label === "Quit Orchestrator Completely")).toBe(true);
 	});
 
 	it("hands the explicit quit action to the quitCompletely delegate", () => {
 		const { tray, quitCompletely } = setup();
-		const quit = tray.template.find((item) => item.label === "Quit AO Completely");
+		const quit = tray.template.find((item) => item.label === "Quit Orchestrator Completely");
 		expect(quit?.role).toBeUndefined();
 		quit?.click?.();
 		expect(quitCompletely).toHaveBeenCalledTimes(1);
@@ -196,7 +196,7 @@ describe("createTrayController", () => {
 		expect(tray.tooltip).toBe("1 个会话需要关注");
 		expect(tray.template.some((i) => i.label === "需要你处理")).toBe(true);
 		expect(tray.template.some((i) => i.label === "显示 Orchestrator")).toBe(true);
-		expect(tray.template.some((i) => i.label === "完全退出 AO")).toBe(true);
+		expect(tray.template.some((i) => i.label === "完全退出 Orchestrator")).toBe(true);
 	});
 
 	it("uses the Russian few and many plural forms in the tooltip", () => {

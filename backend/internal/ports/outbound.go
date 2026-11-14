@@ -578,10 +578,16 @@ type WorkspaceConfig struct {
 	// BaseRef is the exact canonical ref selected before any best-effort fetch.
 	// Restore carries it forward without re-resolving repository defaults.
 	BaseRef string
+	// StartRef starts a FreshBranch at exactly this commit instead of the
+	// repository default. Only session import sets it.
+	StartRef string
 	// RepoPath optionally overrides ProjectID-based repo resolution.
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
 	Path string
+	// StartPoint creates a fresh branch at this commit instead of the base
+	// branch. Session forks use it to start at the source's HEAD.
+	StartPoint string
 }
 
 // WorkspaceInfo describes a created workspace — where it lives and its branch.
@@ -617,8 +623,11 @@ type WorkspaceProjectConfig struct {
 	// to resolve that repository's default independently from every child.
 	BaseBranch string
 	BaseRef    string
-	Repos      []WorkspaceProjectRepoConfig
-	Assets     []WorkspaceProjectAssetConfig
+	// StartRef starts the root worktree at exactly this commit. Only session
+	// import sets it; child repositories already start from their BaseRef.
+	StartRef string
+	Repos    []WorkspaceProjectRepoConfig
+	Assets   []WorkspaceProjectAssetConfig
 }
 
 // WorkspaceProjectAssetConfig describes a non-repository child directory that

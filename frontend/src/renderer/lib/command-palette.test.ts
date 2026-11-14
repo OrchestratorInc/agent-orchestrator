@@ -18,6 +18,7 @@ import {
 } from "./command-palette";
 import type { PRReviewState } from "./session-reviews";
 import {
+	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 	type PullRequestFacts,
@@ -26,6 +27,7 @@ import {
 } from "../types/workspace";
 import { appI18n } from "../i18n";
 import { sessionBranchPresentation } from "./session-branch";
+import { buildSettingsCommands, buildShortcutCommands } from "./palette-registry";
 
 function session(overrides: Partial<WorkspaceSession> & { id: string }): WorkspaceSession {
 	return {
@@ -73,6 +75,37 @@ function workspaces(): WorkspaceSummary[] {
 }
 
 const byId = (items: CommandItem[]) => new Map(items.map((item) => [item.id, item]));
+
+describe("session import commands", () => {
+	it("offers folder import on home and finds it by agent or session history", () => {
+		const items = buildCommands({ workspaces: workspaces() });
+		const command = byId(items).get("global-import-sessions");
+		expect(command?.action).toEqual({ kind: "open-session-import" });
+		expect(filterCommands(items, "")).toContain(command);
+		for (const query of ["import", "resume claude code", "import codex sessions", "existing terminal chats"]) {
+			expect(filterCommands(items, query)).toContain(command);
+		}
+	});
+
+	it("offers import for the current local project", () => {
+		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" });
+		const command = byId(items).get("current-import-sessions");
+		expect(command).toMatchObject({ group: "current", emphasis: "app", action: { kind: "open-session-import", projectId: "proj-1" } });
+		expect(filterCommands(items, "import app")).toContain(command);
+	});
+
+	it.each([
+		["Scratch", { id: STANDALONE_WORKSPACE_ID, kind: STANDALONE_PROJECT_KIND }],
+		["Cloud", { kind: CLOUD_PROJECT_KIND }],
+		["shared", { shared: {} }],
+		["connected host", { hostId: "host-a" }],
+	] satisfies [string, Partial<WorkspaceSummary>][])("omits project import for %s", (_name, overrides) => {
+		const workspace = { ...workspaces()[0]!, ...overrides };
+		const items = byId(buildCommands({ workspaces: [workspace], currentProjectId: workspace.id, currentHostId: workspace.hostId }));
+		expect(items.has("current-import-sessions")).toBe(false);
+		expect(items.get("global-import-sessions")?.action).toEqual({ kind: "open-session-import" });
+	});
+});
 
 describe("findSession", () => {
 	it("returns the workspace and session together", () => {
@@ -144,6 +177,27 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
+	it("offers Open usage only in Developer Mode", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(false);
+		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
+	});
+
+	it("offers Archived sessions for the current project only when it has archived sessions", () => {
+		expect(byId(buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" })).has("current-open-archive")).toBe(false);
+
+		const withArchive = workspaces();
+		withArchive[0]!.sessions.push(
+			session({ id: "w-ended", status: "terminated" }),
+			session({ id: "w-merged-ended", status: "merged", isTerminated: true }),
+			session({ id: "orch-ended", kind: "orchestrator", status: "terminated" }),
+		);
+		const archive = byId(buildCommands({ workspaces: withArchive, currentProjectId: "proj-1" })).get("current-open-archive");
+		expect(archive?.group).toBe("current");
+		expect(archive?.title).toBe("Archived sessions");
+		expect(archive?.subtitle).toBe("2 archived sessions");
+		expect(archive?.action).toEqual({ kind: "open-archive", projectId: "proj-1" });
+	});
+
 	it("disables New task with a reason when the route project is absent from workspaces", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "missing", currentSessionId: undefined });
 		const newTask = byId(items).get("current-new-task");
@@ -162,9 +216,9 @@ describe("buildCommands grouping", () => {
 		});
 		const map = byId(items);
 		expect(map.get("current-new-task")?.disabled).toBe(true);
-		expect(map.get("current-new-task")?.disabledReason).toBe("Orchestrator restarting");
+		expect(map.get("current-new-task")?.disabledReason).toBe("The orchestrator agent is restarting.");
 		expect(map.get("current-open-orchestrator")?.disabled).toBe(true);
-		expect(map.get("current-open-orchestrator")?.disabledReason).toBe("Orchestrator restarting");
+		expect(map.get("current-open-orchestrator")?.disabledReason).toBe("The orchestrator agent is restarting.");
 		expect(map.get("current-project-settings")?.disabled).toBeFalsy();
 	});
 
@@ -761,6 +815,60 @@ describe("pending branch presentation", () => {
 		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
 		// A start that failed after launch has its worktree.
 		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
+	});
+});
+
+describe("Report a problem", () => {
+	it.each(["bug", "report"])("is found by typing %s", (query) => {
+		const ids = filterCommands(buildCommands({ workspaces: workspaces() }), query).map((item) => item.id);
+		expect(ids).toContain("global-report-problem");
+	});
+
+	const paletteRows = () => [
+		...buildCommands({ workspaces: workspaces() }),
+		...buildShortcutCommands(appI18n.t),
+		...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false }),
+	];
+
+	it.each(["bug", "report", "report a problem", "issue", "feedback"])("is the Enter target for %s", (query) => {
+		expect(displayGroups(paletteRows(), query)[0]?.items[0]?.id).toBe("global-report-problem");
+	});
+
+	it("has one row, so Enter and a click can't do different things", () => {
+		const title = appI18n.t("report.action");
+		expect(paletteRows().filter((item) => item.title === title).map((item) => item.id)).toEqual(["global-report-problem"]);
+	});
+});
+
+describe("whole keyword matches", () => {
+	const row = (id: string, keywords: string[]): CommandItem => ({ id, group: "global", title: "Unrelated", keywords, action: { kind: "toggle-theme" } });
+
+	it("rank above the same letters inside a longer word", () => {
+		const whole = row("whole", ["bug"]);
+		const inside = row("inside", ["debug"]);
+		expect(matchScore("bug", whole)).toBeGreaterThan(matchScore("bug", inside));
+		expect(filterCommands([inside, whole], "bug").map((item) => item.id)).toEqual(["whole", "inside"]);
+	});
+
+	it("still rank below a title match", () => {
+		const titled: CommandItem = { ...row("titled", []), title: "Fix the bug" };
+		expect(matchScore("bug", titled)).toBeGreaterThan(matchScore("bug", row("whole", ["bug"])));
+	});
+
+	it.each([
+		["keys", "shortcut:keyboard-shortcuts"],
+		["review", "shortcut:toggle-diff"],
+	])("send Enter on %s to the row that names it", (query, id) => {
+		const rows = [...buildShortcutCommands(appI18n.t), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
+		expect(displayGroups(rows, query)[0]?.items[0]?.id).toBe(id);
+	});
+
+	it("rank the code keyword above qr code, below a title that says code", () => {
+		const rows = [...buildShortcutCommands(appI18n.t), ...buildSettingsCommands(appI18n.t, { developerMode: false, diagnostics: false })];
+		const byId = (id: string) => rows.find((item) => item.id === id)!;
+		// "Pairing code or password" names it in its title, and a title beats a keyword.
+		expect(displayGroups(rows, "code")[0]?.items[0]?.id).toBe("setting:connection-password");
+		expect(matchScore("code", byId("shortcut:open-in-editor"))).toBeGreaterThan(matchScore("code", byId("setting:mobile-devices")));
 	});
 });
 

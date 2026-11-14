@@ -95,7 +95,7 @@ func (s *installJobStoreFake) InterruptActiveAgentInstallJobs(_ context.Context,
 			continue
 		}
 		record.Status = string(StatusInterrupted)
-		record.Error = "AO restarted before this job completed."
+		record.Error = "Orchestrator restarted before this job completed."
 		record.FinishedAt = &interruptedAt
 		record.UpdatedAt = interruptedAt
 		s.records[target] = record

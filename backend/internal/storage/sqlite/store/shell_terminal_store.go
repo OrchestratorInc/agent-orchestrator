@@ -23,8 +23,10 @@ func (s *Store) InsertShellTerminal(ctx context.Context, rec shelltermsvc.ShellT
 		SessionID:                 optionalSessionID(rec.SessionID),
 		WorkingDir:                rec.WorkingDir,
 		Title:                     rec.Title,
+		TitleExplicit:             rec.TitleExplicit,
 		AppRunID:                  rec.AppRunID,
 		Transient:                 rec.Transient,
+		CommandOwner:              rec.CommandOwner,
 		CreatedAt:                 rec.CreatedAt,
 		PreviewCapabilityVerifier: rec.PreviewCapabilityVerifier,
 	})
@@ -152,8 +154,11 @@ func shellTerminalFromGen(row gen.ShellTerminal) shelltermsvc.ShellTerminalRecor
 		HandleID:                  row.HandleID,
 		WorkingDir:                row.WorkingDir,
 		Title:                     row.Title,
+		TitleExplicit:             row.TitleExplicit,
+		AppTitle:                  row.AppTitle,
 		AppRunID:                  row.AppRunID,
 		Transient:                 row.Transient,
+		CommandOwner:              row.CommandOwner,
 		CreatedAt:                 row.CreatedAt,
 		PreviewCapabilityVerifier: row.PreviewCapabilityVerifier,
 	}

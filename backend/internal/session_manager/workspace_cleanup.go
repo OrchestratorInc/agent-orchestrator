@@ -495,12 +495,24 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 	} else if len(rows) > 0 && !m.workspaceCleanupSettled(ctx, rec) {
 		return fmt.Errorf("delete %s: %w", id, ErrWorkspaceNotReleased)
 	}
+	if m.usageFlusher != nil {
+		m.usageFlusher.Flush(ctx)
+	}
+	isFork := m.isSessionFork(ctx, id)
+	var forkNative string
+	if isFork {
+		// Resolve while the session still has its account binding.
+		forkNative = m.forkNativeSessionFile(ctx, rec)
+	}
 	deleted, err := deleter.DeleteTerminatedSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", id, err)
 	}
 	if !deleted {
 		return fmt.Errorf("delete %s: %w", id, ErrNotFound)
+	}
+	if isFork {
+		m.cleanupForkLeftovers(rec, forkNative)
 	}
 	m.cleanupSystemPromptDir(id)
 	m.cleanupAttachments(ctx, id)

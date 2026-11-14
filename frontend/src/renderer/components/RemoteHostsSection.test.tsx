@@ -22,7 +22,27 @@ it("keeps host-specific offline controls around shared project rows", () => {
 	expect(screen.getByTestId("project-box-a")).toHaveTextContent("Project A");
 	expect(screen.queryByTestId("project-box-b")).toBeNull();
 	expect(screen.queryByRole("button", { name: "New project on Box A" })).toBeNull();
-	expect(screen.getByText("Password rejected")).toBeVisible();
+	expect(screen.getByText("Access rejected")).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Retry Box B" }));
 	expect(onRetry).toHaveBeenCalledOnce();
+});
+
+it("shows the last saved projects of a host that is offline or connecting", () => {
+	const renderProject = vi.fn((host: { hostId: string }, workspace: { name: string }) =>
+		<SidebarMenuItem data-testid={`project-${host.hostId}`}>{workspace.name}</SidebarMenuItem>);
+	render(<SidebarProvider><SidebarMenu><RemoteHostsSection
+		hosts={[
+			{ hostId: "box-a", label: "Box A", url: "https://a.test", status: "offline" },
+			{ hostId: "box-b", label: "Box B", url: "https://b.test", status: "connecting" },
+		]}
+		workspaces={[
+			{ hostId: "box-a", id: "shared", name: "Project A", path: "/a", sessions: [] },
+			{ hostId: "box-b", id: "shared", name: "Project B", path: "/b", sessions: [] },
+		]}
+		renderProject={renderProject}
+		onRetry={vi.fn()}
+	/></SidebarMenu></SidebarProvider>);
+	expect(screen.getByRole("button", { name: "Retry Box A" })).toBeVisible();
+	expect(screen.getByTestId("project-box-a")).toHaveTextContent("Project A");
+	expect(screen.getByTestId("project-box-b")).toHaveTextContent("Project B");
 });

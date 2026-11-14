@@ -1,10 +1,11 @@
 import { useContext } from "react";
-import { Check, ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { composeMenuCloseAutoFocus, ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter, useMenuReturnTarget } from "./menu-focus";
 import {
 	actionMenuContentClass,
+	actionMenuDestructiveItemClass,
 	actionMenuItemClass,
 	actionMenuLabelClass,
 	actionMenuSeparatorClass,
@@ -72,12 +73,14 @@ export function DropdownMenuItem({
 	className,
 	inset,
 	onPointerLeave,
+	variant = "default",
 	...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean }) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean; variant?: "default" | "destructive" }) {
 	return (
 		<DropdownMenuPrimitive.Item
 			className={cn(
 				actionMenuItemClass,
+				variant === "destructive" && actionMenuDestructiveItemClass,
 				inset && "pl-8",
 				className,
 			)}
@@ -136,6 +139,48 @@ export function DropdownMenuCheckboxItem({
 				<DropdownMenuPrimitive.ItemIndicator className="flex">
 					<Check />
 				</DropdownMenuPrimitive.ItemIndicator>
+			</span>
+		</DropdownMenuPrimitive.CheckboxItem>
+	);
+}
+
+/**
+ * An on/off setting as a menu row with a trailing switch, drawn with the same
+ * `switch-inset` styling as {@link Switch} but not a nested control, so the row
+ * keeps `menuitemcheckbox` semantics. The menu stays open on toggle so the new
+ * state is visible.
+ */
+export function DropdownMenuSwitchItem({
+	checked,
+	className,
+	children,
+	onSelect,
+	...props
+}: Omit<React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>, "checked"> & { checked: boolean }) {
+	return (
+		<DropdownMenuPrimitive.CheckboxItem
+			checked={checked}
+			className={cn(actionMenuItemClass, className)}
+			onSelect={(event) => {
+				event.preventDefault();
+				onSelect?.(event);
+			}}
+			{...props}
+		>
+			{children}
+			<span
+				aria-hidden="true"
+				data-slot="switch"
+				data-state={checked ? "checked" : "unchecked"}
+				className="switch-inset relative ml-auto inline-flex h-4 w-8 shrink-0 items-center rounded-full border border-transparent transition-[background-color,border-color] duration-fast ease-out motion-reduce:transition-none"
+			>
+				<span
+					data-slot="switch-thumb"
+					className={cn(
+						"block size-3.5 rounded-full transition-transform duration-fast ease-out motion-reduce:transition-none",
+						checked ? "translate-x-4" : "translate-x-0",
+					)}
+				/>
 			</span>
 		</DropdownMenuPrimitive.CheckboxItem>
 	);

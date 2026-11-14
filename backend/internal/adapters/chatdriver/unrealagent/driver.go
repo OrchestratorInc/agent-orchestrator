@@ -80,7 +80,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, fmt.Errorf("%w: Unreal Agent plugin is unavailable", ports.ErrChatDriverUnavailable)
 	}
 	if _, err := d.executable(); err != nil {
-		return nil, fmt.Errorf("%w: locate AO executable: %w", ports.ErrChatDriverUnavailable, err)
+		return nil, fmt.Errorf("%w: locate Orchestrator executable: %w", ports.ErrChatDriverUnavailable, err)
 	}
 	status, err := d.plugin.AuthStatus(ctx)
 	if err != nil {
@@ -207,7 +207,7 @@ func (d *Driver) connect(
 			}
 			executable, err := d.executable()
 			if err != nil {
-				return persistenthost.PreparedProvider{}, fmt.Errorf("locate AO executable: %w", err)
+				return persistenthost.PreparedProvider{}, fmt.Errorf("locate Orchestrator executable: %w", err)
 			}
 			configPath, err := writeProviderConfig(cfg)
 			if err != nil {

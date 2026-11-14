@@ -356,7 +356,7 @@ mv "$tmp" "$dest"
 func droidDownloadCommand(dir, pin, goos, goarch string) ([]string, error) {
 	version := strings.TrimPrefix(pin, "v")
 	if version == "" {
-		return nil, errors.New("AO needs the release to install, but no newer Droid release is known")
+		return nil, errors.New("no newer Droid release is known, so Orchestrator has no release to install")
 	}
 	var arch string
 	switch goarch {

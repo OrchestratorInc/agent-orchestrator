@@ -15,7 +15,10 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const (
@@ -67,12 +70,18 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 }
 
 func newHost(cfg ServeConfig) *host {
+	var fg *foregroundTracker
+	if reader, ok := cfg.PTY.(foregroundReader); ok {
+		fg = newForegroundTracker(reader)
+	}
 	return &host{
+		fg:      fg,
 		cfg:     cfg,
 		clients: make(map[net.Conn]*clientState),
 		surface: newAsyncSurface(initialConPTYColumns, initialConPTYRows,
 			func(cols, rows int) surfaceSink { return newRenderedSurface(cols, rows) }, cfg.Ring.Replay, cfg.LazySurface),
 		modes:     newModeTracker(),
+		da1C:      make(chan struct{}, 4),
 		shutdownC: make(chan struct{}),
 	}
 }
@@ -85,6 +94,9 @@ func newHost(cfg ServeConfig) *host {
 type clientState struct {
 	cols, rows int
 	sized      bool
+	watcher    bool // sent MsgWatchForegroundReq; gets no terminal output
+	// titleWatcher sent MsgWatchTitleReq; it also gets no terminal output.
+	titleWatcher bool
 
 	out       chan []byte
 	drained   chan struct{} // signalled when the writer frees queue space
@@ -137,7 +149,16 @@ type host struct {
 	// attaching after they scrolled out of the ring still receives them (see
 	// modeTracker). record updates it together with the ring under mu, so when
 	// handleConn snapshots the ring, the tracker is up to the same chunk.
-	modes *modeTracker
+	modes      *modeTracker
+	fg         *foregroundTracker // nil where the PTY cannot name its foreground
+	fgOnce     sync.Once
+	fgWatchers atomic.Int32
+	// da1C queues DA1 replies for writeDA1Replies (see deviceattrs.go).
+	da1C chan struct{}
+	// title is the normalized title the program last set. It is kept with no
+	// client attached, so a watcher that connects later still learns it.
+	// Guarded by mu.
+	title string
 
 	// curCols/curRows are the grid the host last applied to the shared PTY (0,0
 	// = none applied yet). Guarded by mu; used to skip redundant resizes.
@@ -192,6 +213,9 @@ func (h *host) applyLargestLocked() {
 func (h *host) run(ctx context.Context) error {
 	// Pump PTY output to ring + broadcast.
 	go h.pumpPTY()
+	if answersDeviceAttributes {
+		go h.writeDA1Replies()
+	}
 
 	// Watch for ctx cancellation and trigger shutdown.
 	go func() {
@@ -255,8 +279,18 @@ func (h *host) shutdown() {
 // update but does NOT close the listener (keep-alive).
 func (h *host) pumpPTY() {
 	buf := make([]byte, 32*1024)
+	var da1 da1Scanner
+	var titles oscTitleScanner
 	for {
 		n, err := h.cfg.PTY.Read(buf)
+		if n > 0 && answersDeviceAttributes {
+			h.queueDA1Replies(da1.scan(buf[:n]))
+		}
+		if n > 0 {
+			if raw, ok := titles.scan(buf[:n]); ok {
+				h.setTitle(domain.NormalizeTerminalTitle(raw))
+			}
+		}
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
@@ -308,6 +342,53 @@ func (h *host) record(chunk []byte) {
 		h.enqueueAllLocked(frame)
 	}
 	h.mu.Unlock()
+	if h.fgWatchers.Load() > 0 {
+		h.fg.noteOutput(time.Now())
+	}
+}
+
+// setTitle records a title and tells the title watchers, only when it changed.
+// A watcher whose queue is full is dropped: it re-subscribes and reads the
+// current title, so it cannot be left holding a stale one.
+func (h *host) setTitle(title string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.title == title {
+		return
+	}
+	h.title = title
+	frame := titleFrame(title)
+	for conn, client := range h.clients {
+		if client.titleWatcher && !client.enqueue(frame) {
+			delete(h.clients, conn)
+			client.close(conn)
+		}
+	}
+}
+
+// titleFrame cannot fail: the payload is small and the title is bounded.
+func titleFrame(title string) []byte {
+	b, _ := json.Marshal(TitlePayload{Title: title})
+	frame, _ := EncodeMessage(MsgTitleState, b)
+	return frame
+}
+
+func (h *host) publishForeground(state ForegroundPayload) {
+	frame := foregroundFrame(state)
+	h.mu.Lock()
+	for _, client := range h.clients {
+		if client.watcher {
+			client.enqueue(frame)
+		}
+	}
+	h.mu.Unlock()
+}
+
+// foregroundFrame cannot fail: the payload is small and its argv is capped.
+func foregroundFrame(state ForegroundPayload) []byte {
+	b, _ := json.Marshal(state)
+	frame, _ := EncodeMessage(MsgForegroundState, b)
+	return frame
 }
 
 // broadcast queues msg to all connected clients. Socket writes happen only in
@@ -374,6 +455,9 @@ func (h *host) lockWithRoom() bool {
 // touch the queues while h.mu is held, so these cannot fail.
 func (h *host) enqueueAllLocked(msg []byte) {
 	for _, client := range h.clients {
+		if (client.watcher || client.titleWatcher) && msg[0] == MsgTerminalData {
+			continue
+		}
 		client.enqueue(msg)
 	}
 }
@@ -439,6 +523,9 @@ func (h *host) removeClient(conn net.Conn, client *clientState) {
 	h.mu.Lock()
 	if h.clients[conn] == client {
 		delete(h.clients, conn)
+		if client.watcher {
+			h.fgWatchers.Add(-1)
+		}
 		h.applyLargestLocked()
 	}
 	h.mu.Unlock()
@@ -510,6 +597,12 @@ func (h *host) handleConn(conn net.Conn) {
 func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 	switch msgType {
 	case MsgTerminalInput:
+		if answersDeviceAttributes && da1Replies.Match(payload) {
+			return // the host already answered (see deviceattrs.go)
+		}
+		if h.fgWatchers.Load() > 0 {
+			h.fg.noteInput(time.Now())
+		}
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			if n, err := h.cfg.PTY.Write(payload); err != nil {
 				fmt.Fprintf(os.Stderr, "pty-host [%s]: input: wrote %d of %d bytes: %v\n", h.cfg.SessionID, n, len(payload), err)
@@ -520,6 +613,9 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 		if _, alive := h.cfg.PTY.ExitCode(); !alive {
 			var rp ResizePayload
 			if err := json.Unmarshal(payload, &rp); err == nil && rp.Cols > 0 && rp.Rows > 0 {
+				if h.fgWatchers.Load() > 0 {
+					h.fg.noteResize(time.Now())
+				}
 				// Record this client's requested grid, then size the shared PTY to
 				// the largest client (see applyLargestLocked) rather than blindly
 				// applying this one — otherwise a small viewer shrinks every viewer.
@@ -564,6 +660,31 @@ func (h *host) handleClientMsg(conn net.Conn, msgType byte, payload []byte) {
 			codePtr = &code
 		}
 		h.sendTo(conn, statusFrame(alive, pid, codePtr))
+
+	case MsgWatchForegroundReq:
+		// The watcher gets the current state at once, then each change.
+		h.mu.Lock()
+		if cs := h.clients[conn]; cs != nil && !cs.watcher {
+			cs.watcher = true
+			h.fgWatchers.Add(1)
+		}
+		h.mu.Unlock()
+		h.fgOnce.Do(func() { go h.fg.run(h.shutdownC, h.publishForeground) })
+		if state, ok := h.fg.current(); ok {
+			h.sendTo(conn, foregroundFrame(state))
+		}
+		h.fg.wake()
+
+	case MsgWatchTitleReq:
+		// The watcher gets the current title at once, then each change, under
+		// one lock so a title set in between cannot be missed.
+		h.mu.Lock()
+		cs := h.clients[conn]
+		if cs != nil {
+			cs.titleWatcher = true
+			cs.enqueue(titleFrame(h.title))
+		}
+		h.mu.Unlock()
 
 	case MsgKillReq:
 		// Trigger graceful shutdown; returns immediately (idempotent).

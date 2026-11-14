@@ -1,6 +1,6 @@
 ---
 title: Claude Code
-description: Built-in Terminal UI and structured Chat support for the user's Claude Code installation.
+description: Run Claude Code in Chat or Terminal UI, or import and continue an existing terminal session.
 ---
 
 Orchestrator resolves the `claude` executable from your machine and reuses its existing authentication. Install and sign in with Claude Code before refreshing the Orchestrator catalog.
@@ -9,6 +9,12 @@ Orchestrator resolves the `claude` executable from your machine and reuses its e
 ao agent ls --refresh
 ao spawn --project my-app --name claude-task --agent claude-code --mode chat
 ```
+
+## Import an existing session
+
+You can continue an existing Claude Code terminal conversation in Orchestrator. Import is available under **Settings → Harness → Claude Code → Import**. Close the conversation in the original terminal before opening the imported session.
+
+See [Import existing sessions](/guides/import-sessions) for the import steps, history limits, and troubleshooting.
 
 ## Interfaces
 

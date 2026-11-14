@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { WorkspaceSession } from "../types/workspace";
 import { useCloudCp } from "./useCloudCp";
 
@@ -38,7 +38,9 @@ function accessRefreshIn(access: CloudArtifactAccess | undefined): number {
  * before it expires, and on window focus once it is about to.
  */
 export function useCloudArtifactAccess(session: Pick<WorkspaceSession, "id" | "cloud">, enabled = true) {
-	const { client, ready, baseUrl } = useCloudCp();
+	// Every artifact card calls this, local ones included; a disabled card
+	// keeps no settings poll of its own.
+	const { client, ready, baseUrl } = useCloudCp(enabled);
 	const orgId = session.cloud?.orgId ?? "";
 	return useQuery<CloudArtifactAccess, Error, string, ReturnType<typeof cloudArtifactAccessQueryKey>>({
 		queryKey: cloudArtifactAccessQueryKey(baseUrl, orgId, session.id),
@@ -82,10 +84,9 @@ export function usePinnedArtifactUrl(root: string | undefined, path: string | un
 			setPinned(current);
 		}
 	}
-	return {
-		url: current.url,
-		root: current.root,
-		repin: () => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)),
-		refresh: () => setPinned(undefined),
-	};
+	// Stable, since a viewer that takes repin as its file's onAccessRefused
+	// starts over (leaving an edit) when the callback changes.
+	const repin = useCallback(() => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)), []);
+	const refresh = useCallback(() => setPinned(undefined), []);
+	return { url: current.url, root: current.root, repin, refresh };
 }

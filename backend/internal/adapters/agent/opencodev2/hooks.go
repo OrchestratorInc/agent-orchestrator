@@ -40,7 +40,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return fmt.Errorf("opencodev2.GetAgentHooks: inspect plugin: %w", err)
 	}
 	if exists && !managed {
-		return fmt.Errorf("opencodev2.GetAgentHooks: refusing to overwrite non-AO file at %s", path)
+		return fmt.Errorf("opencodev2.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", path)
 	}
 	if err := removeV2ManagedPlugin(filepath.Join(filepath.Dir(path), v1PluginFileName), v1PluginSentinel); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: remove managed OpenCode 1 plugin: %w", err)
@@ -55,6 +55,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return fmt.Errorf("opencodev2.GetAgentHooks: gitignore: %w", err)
 	}
 	if err := opencode.InstallUsingAOSkill(cfg.WorkspacePath); err != nil {
+		return fmt.Errorf("opencodev2.GetAgentHooks: %w", err)
+	}
+	if err := hookutil.InstallBugTriageSkill(opencode.SkillsDir(cfg.WorkspacePath)); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: %w", err)
 	}
 	return nil
@@ -73,6 +76,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 		return fmt.Errorf("opencodev2.UninstallHooks: remove plugin: %w", err)
 	}
 	if err := opencode.UninstallUsingAOSkill(workspacePath); err != nil {
+		return fmt.Errorf("opencodev2.UninstallHooks: %w", err)
+	}
+	if err := hookutil.UninstallBugTriageSkill(opencode.SkillsDir(workspacePath)); err != nil {
 		return fmt.Errorf("opencodev2.UninstallHooks: %w", err)
 	}
 	return nil

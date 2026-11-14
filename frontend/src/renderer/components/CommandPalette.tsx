@@ -1,14 +1,15 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -17,6 +18,8 @@ import {
 	buildContentSearchCommands,
 	buildFileSessionCommands,
 	buildSessionActions,
+	buildSessionSearchCommands,
+	withoutChatHitsCoveredBySessionSearch,
 	buildWorkspaceFileCommands,
 	displayGroups,
 	filterCommands,
@@ -38,14 +41,19 @@ import {
 	commandPaletteFileSearchQueryOptions,
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
+import { startProblemReport } from "../lib/report-problem";
 import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
+import { LOCAL_HOST } from "../lib/hosts";
+import { isMacPlatform } from "../lib/platform";
+import { revealSessionSearchMatch } from "../lib/session-search-reveal";
+import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
 import { sessionUiKey } from "../lib/hosts";
 import { beginModalHandoff } from "../lib/modal-handoff";
-import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
@@ -57,6 +65,7 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
@@ -70,6 +79,11 @@ const PALETTE_FILE_SEARCH_DEBOUNCE_MS = 150;
 const PALETTE_FILE_VIEW_ROWS = 50;
 const isMac = isMacPlatform();
 const PALETTE_FILE_SEARCH_MIN_CHARS = 2;
+// Session-text search starts at two characters: one character matches nearly
+// every past session and would make the palette flash a useless list.
+const PALETTE_SESSION_SEARCH_MIN_CHARS = 2;
+// How many recent sessions the palette lists before a query is typed.
+const PALETTE_RECENTS_LIMIT = 5;
 const EMPTY_REVIEW_STATES: Readonly<Record<string, PRReviewState[]>> = {};
 type PaletteView =
 	| { mode: "root" }
@@ -93,7 +107,9 @@ function isRowNavigationKey(event: { key: string; ctrlKey: boolean }): boolean {
 		|| (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key));
 }
 
-export function CommandPalette() {
+// Memoized: it takes no props, so the shell's re-renders (several per route
+// change) skip the closed palette.
+export const CommandPalette = memo(function CommandPalette() {
 	const { i18n, t } = useTranslation();
 	const enabled = useCommandPaletteEnabled();
 	const navigate = useNavigate();
@@ -102,7 +118,7 @@ export function CommandPalette() {
 	const cloudReady = cloud.ready;
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	const { cloneProject, createProject, initializeProjectRepository } = useShell();
+	const { cloneProject, createProject, daemonStatus, initializeProjectRepository } = useShell();
 	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
 	const setThemePreference = useUiStore((s) => s.setThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
@@ -110,6 +126,7 @@ export function CommandPalette() {
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
 	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
+	const splitPanes = useSplitPanesEnabled();
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -186,6 +203,7 @@ export function CommandPalette() {
 			? currentFileTarget
 			: undefined;
 	const normalizedFileQuery = debouncedQuery.trim();
+	const normalizedSessionQuery = debouncedQuery.trim();
 	const fileSearchEnabled = isOpen
 		&& normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS
 		&& commandPaletteFileSearchAvailable(activeFileTarget, cloud.ready);
@@ -234,6 +252,19 @@ export function CommandPalette() {
 		enabled: chatSearchEnabled && cloudReady && cloudChatOrgIds.length > 0,
 		placeholderData: keepPreviousData,
 	});
+
+	// Session-text search shares the debounced query with file search: one timer
+	// per keystroke, two endpoints. Its rows show only in the root view, so it is
+	// off while another view (session actions, a file picker) owns the input.
+	// Recents before a query, matches after: opening the palette to get back to
+	// a recent session should not require remembering a word from it.
+	const sessionSearchEnabled = isOpen
+		&& view.mode === "root"
+		&& (normalizedSessionQuery.length === 0
+			|| normalizedSessionQuery.length >= PALETTE_SESSION_SEARCH_MIN_CHARS);
+	const sessionSearchQuery = usePaletteSessionSearch(normalizedSessionQuery, LOCAL_HOST, sessionSearchEnabled);
+	const sessionSearchIndexStatus = useSessionSearchIndexStatus(LOCAL_HOST, isOpen && sessionSearchEnabled);
+	const sessionSearchHits = sessionSearchQuery.data?.results ?? [];
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -307,11 +338,12 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
+				developerMode,
 			}, t),
-			...buildShortcutCommands(t),
+			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -373,6 +405,13 @@ export function CommandPalette() {
 		},
 		[chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
 	);
+	// Session-text rows are only shown once the query has settled, so a row the
+	// person is about to press cannot be replaced by a later response.
+	const sessionSearchSettled = normalizedSessionQuery === query.trim();
+	const sessionSearchItems = useMemo(
+		() => (sessionSearchSettled ? buildSessionSearchCommands(sessionSearchHits, query.trim(), t) : []),
+		[sessionSearchHits, query, sessionSearchSettled, t],
+	);
 
 	const groups = useMemo(() => {
 		if (view.mode === "session-actions") {
@@ -384,8 +423,26 @@ export function CommandPalette() {
 		if (view.mode === "file-search") {
 			return displayGroups([...fileItems, ...contentItems], query, t, PALETTE_FILE_VIEW_ROWS);
 		}
-		return displayGroups([...rootItems, ...fileItems, ...contentItems, ...chatItems], query, t);
-	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+		// A message the session-text group already lists is not repeated as a chat row.
+		const settledChatItems = withoutChatHitsCoveredBySessionSearch(chatItems, sessionSearchItems);
+		// Session-text matches come first: typing into the palette is a search, and
+		// a command whose label happens to match should not outrank the transcript
+		// text the person is actually looking for.
+		// Recents are a jumping-off point, not the answer to a query: they sit
+		// below the commands and are capped, so opening the palette to run
+		// something is not buried under eight sessions. Once a query is typed the
+		// matches lead, because then the person is searching.
+		const recents = normalizedSessionQuery === "";
+		const searchGroup = sessionSearchItems.length > 0
+			? [{
+				id: "search" as const,
+				label: recents ? t("command.recentSessions") : t("command.sessionText"),
+				items: recents ? sessionSearchItems.slice(0, PALETTE_RECENTS_LIMIT) : sessionSearchItems,
+			}]
+			: [];
+		const commandGroups = displayGroups([...rootItems, ...fileItems, ...contentItems, ...settledChatItems], query, t);
+		return recents ? [...commandGroups, ...searchGroup] : [...searchGroup, ...commandGroups];
+	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, contentItems, chatItems, sessionSearchItems, normalizedSessionQuery, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	// Rows a search found for an earlier query stay visible while the next one
@@ -529,6 +586,7 @@ export function CommandPalette() {
 		(target: NavigateTarget) => {
 			switch (target.to) {
 				case "/":
+				case "/usage":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -556,7 +614,8 @@ export function CommandPalette() {
 
 	const sessionRoute = useCallback(
 		(projectId: string, sessionId: string): Extract<NavigateTarget, { to: "/sessions/$sessionId" | "/projects/$projectId/sessions/$sessionId" }> => {
-			return projectId === STANDALONE_WORKSPACE_ID
+			// A search hit for a standalone session carries no project id at all.
+			return !projectId || projectId === STANDALONE_WORKSPACE_ID
 				? { to: "/sessions/$sessionId", params: { sessionId } }
 				: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId } };
 		},
@@ -666,6 +725,13 @@ export function CommandPalette() {
 						closePalette();
 						requestOpenShareLink();
 						break;
+					case "report-problem": {
+						const failure = await startProblemReport(daemonStatus.state);
+						if (failure) throw new Error(failure);
+						if (!isCurrentRun()) break;
+						closePalette();
+						break;
+					}
 				case "open-pr":
 					await aoBridge.app.openExternal(action.url);
 					if (!isCurrentRun()) break;
@@ -680,7 +746,7 @@ export function CommandPalette() {
 					const { error: triggerError } = await apiClient.POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 						params: { path: { sessionId: action.sessionId } },
 					});
-					if (triggerError) throw new Error(apiErrorMessage(triggerError, "Unable to start review"));
+					if (triggerError) throw apiErrorException(triggerError, "Unable to start review");
 					await queryClient.invalidateQueries({ queryKey: ["session-reviews", action.sessionId] });
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					if (!isCurrentRun()) break;
@@ -730,6 +796,11 @@ export function CommandPalette() {
 					closePalette();
 					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
 					break;
+				case "open-session-import":
+					closePalette();
+					if (action.projectId) useSessionImportStore.getState().openProjectImport(action.projectId);
+					else useSessionImportStore.getState().openFolderImport();
+					break;
 				case "run-shortcut": {
 					closePalette();
 					// After the palette has closed, so the action sees the screen
@@ -749,6 +820,19 @@ export function CommandPalette() {
 						closePalette();
 						break;
 					}
+					case "open-search-result": {
+						// Hand the match to the session before navigating: the Chat
+						// timeline is mounted by the shell, so it picks the target up
+						// when it renders rather than from route state.
+						revealSessionSearchMatch(action);
+						navigateToTarget(sessionRoute(action.projectId, action.sessionId));
+						closePalette();
+						break;
+					}
+					case "copy-resume-command":
+						await aoBridge.clipboard.writeText(action.command);
+						closePalette();
+						break;
 					case "open-new-task":
 						if (blockedByRestart(action.projectId)) break;
 						// New task opens the new chat page (a cloud project, the New task
@@ -762,6 +846,19 @@ export function CommandPalette() {
 					case "open-orchestrator":
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
+					case "open-archive": {
+						// Over the current page, with no navigation. The palette's own
+						// focus goes with it, so the modal returns to where the palette
+						// was opened from (a composer, a terminal) when it closes.
+						const returnFocus = returnFocusRef.current;
+						useUiStore.getState().openArchive({
+							projectId: action.projectId,
+							hostId: params.hostId,
+							returnFocus: returnFocus instanceof HTMLElement ? returnFocus : null,
+						});
+						closePalette();
+						break;
+					}
 				}
 			} catch (err) {
 				if (isCurrentRun()) setError(err instanceof Error ? err.message : t("command.failed"));
@@ -772,7 +869,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[daemonStatus.state, findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -874,7 +971,10 @@ export function CommandPalette() {
 		: null;
 	// One notice for everything that went wrong, so a daemon that is down reads
 	// as one problem rather than three red boxes.
-	const notices = [...new Set([error, fileSearchError, contentSearchError, chatSearchError].filter((message): message is string => Boolean(message)))];
+	const sessionSearchError = sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.error
+		? (sessionSearchQuery.error instanceof Error ? sessionSearchQuery.error.message : t("command.searchSessionsError"))
+		: null;
+	const notices = [...new Set([error, fileSearchError, contentSearchError, chatSearchError, sessionSearchError].filter((message): message is string => Boolean(message)))];
 	const selectedItem = visibleItems.find((item) => item.id === value);
 	const scopeSessionTitle = view.mode === "file-search"
 		? (fileSearchSession?.title ?? t("command.sessionFallback"))
@@ -1024,6 +1124,23 @@ export function CommandPalette() {
 									))}
 								</CommandGroup>
 							))}
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.isFetching && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
+							)}
+							{/* An empty session-text result over an incomplete index is not the
+							    same answer as one over a complete index. */}
+							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchQuery.isFetching && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">
+									{sessionSearchIndexStatus.data?.state === "backfilling"
+										? t("command.searchSessionsBackfilling", { count: sessionSearchIndexStatus.data.pendingSources })
+										: sessionSearchIndexStatus.data?.state === "unavailable"
+											? t("command.searchSessionsUnavailable")
+											: t("command.noSessionMatches")}
+									{sessionSearchIndexStatus.data?.unindexedHarnesses?.length
+										? ` ${t("command.searchSessionsUnindexed", { harnesses: sessionSearchIndexStatus.data.unindexedHarnesses.join(", ") })}`
+										: ""}
+								</div>
+							)}
 						</CommandList>
 						{view.mode === "file-search" && fileSearchEnabled && !searchCatchingUp && fileSearchQuery.data?.truncated && (
 							<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchFilesTruncated")}</div>
@@ -1031,7 +1148,12 @@ export function CommandPalette() {
 						<CommandFooter aria-hidden="true">
 							<FooterHint keys={["↑", "↓"]} label={t("command.navigate")} />
 							{selectedItem && <FooterHint keys={["Enter"]} label={t("command.open")} />}
-							{selectedItem?.secondaryAction && <FooterHint keys={[isMac ? "⌘" : "Ctrl", "Enter"]} label={t("command.actions")} />}
+							{selectedItem?.secondaryAction && (
+								<FooterHint
+									keys={[isMac ? "⌘" : "Ctrl", "Enter"]}
+									label={selectedItem.secondaryAction.kind === "copy-resume-command" ? t("command.copyResumeCommand") : t("command.actions")}
+								/>
+							)}
 							<FooterHint keys={["Esc"]} label={view.mode === "root" ? t("command.close") : t("command.back")} />
 							<span className="ml-auto min-w-0 truncate">{scope}</span>
 						</CommandFooter>
@@ -1053,7 +1175,7 @@ export function CommandPalette() {
 			) : null}
 		</>
 	);
-}
+});
 
 /** Whether a palette action closes the palette into another modal. */
 function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensModal: boolean): boolean {
@@ -1061,6 +1183,8 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-session-import":
+		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":
 			return true;
@@ -1120,7 +1244,7 @@ function PaletteRow({
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
 				) : Icon ? (
-					<Icon strokeWidth={1.75} />
+					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">

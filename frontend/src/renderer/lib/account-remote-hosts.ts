@@ -1,6 +1,7 @@
 import { cloudCpFetch } from "./cloud-cp/renderer-client";
 
-export type AccountRemoteHost = { hostId: string; label: string; url: string; token: string };
+// The desktop proxy strips host tokens from these responses; they stay in the main process.
+export type AccountRemoteHost = { hostId: string; label: string; url: string };
 
 /** AO Cloud refused a host sync, with the HTTP status it answered. */
 export class AccountHostSyncError extends Error {
@@ -18,7 +19,7 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 		cache: "no-store",
 		signal: timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs),
 	});
-	if (!response.ok) throw new AccountHostSyncError(`AO Cloud host sync failed (${response.status}).`, response.status);
+	if (!response.ok) throw new AccountHostSyncError(`Orchestrator Cloud host sync failed (${response.status}).`, response.status);
 	return response;
 }
 
@@ -35,7 +36,8 @@ export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRe
 }
 
 /** A host saved without a url is listed at its fixed address: AO Cloud knows it from the host id. */
-export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string; hostKey?: string }): Promise<void> {
+/** Lists this computer under the account; its own token, which the renderer may hold. */
+export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string; token: string; hostKey?: string }): Promise<void> {
 	// AO Cloud may first make the machine's tunnel and DNS record, or delete a
 	// standing tunnel a new token retires, with or without a url; either can
 	// take more than a minute. No limit: the main process finishes the request

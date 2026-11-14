@@ -124,3 +124,41 @@ it("aborts a clone when its owning host changes", async () => {
 	await rejection;
 	expect(requestSignal?.aborted).toBe(true);
 });
+
+it("reports each streamed git step and resolves with the streamed checkout", async () => {
+	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "streamed" };
+	// Frames split mid-event, as a network read can deliver them.
+	const body = `data: {"progress":{"phase":"receiving_objects","attempt":1}}\n\ndata: {"progress":{"phase":"resol`
+		+ `ving_deltas","attempt":1}}\n\ndata: ${JSON.stringify({ result: prepared })}\n\n`;
+	const chunks = [body.slice(0, 40), body.slice(40)];
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+			controller.close();
+		},
+	});
+	api.POST.mockResolvedValueOnce({ data: stream, response: { status: 200 } });
+	const onProgress = vi.fn();
+	const { result } = renderHook(() => usePreparedClone());
+	await expect(result.current.prepare(prepared.remoteUrl, "/projects", onProgress)).resolves.toEqual(prepared);
+	expect(onProgress.mock.calls.map(([progress]) => progress.phase)).toEqual(["receiving_objects", "resolving_deltas"]);
+	expect(api.POST).toHaveBeenCalledOnce();
+	expect(api.POST).toHaveBeenCalledWith("/api/v1/projects/clone/prepare/stream", expect.objectContaining({ parseAs: "stream" }));
+	expect(result.current.current()).toEqual(prepared);
+});
+
+it("rejects with the daemon's error envelope from the stream", async () => {
+	const failure = { error: "bad_request", code: "GIT_CLONE_FAILED", message: "Could not clone this repository." };
+	api.POST.mockResolvedValueOnce({ data: new Response(`data: ${JSON.stringify({ error: failure })}\n\n`).body, response: { status: 200 } });
+	const { result } = renderHook(() => usePreparedClone());
+	await expect(result.current.prepare("file:///source", "/projects", vi.fn())).rejects.toEqual(failure);
+	expect(result.current.current()).toBeNull();
+});
+
+it.each([404, 405])("clones through the JSON route on a daemon without the stream (%s)", async (status) => {
+	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "json" };
+	api.POST.mockResolvedValueOnce({ error: "404 page not found", response: { status } }).mockResolvedValueOnce({ data: prepared });
+	const { result } = renderHook(() => usePreparedClone("older-host"));
+	await expect(result.current.prepare(prepared.remoteUrl, "/projects", vi.fn())).resolves.toEqual(prepared);
+	expect(api.POST.mock.calls.map(([path]) => path)).toEqual(["/api/v1/projects/clone/prepare/stream", "/api/v1/projects/clone/prepare"]);
+});

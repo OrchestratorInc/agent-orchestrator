@@ -20,7 +20,7 @@ import (
 func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	created, _, err := s.createSessionLocked(ctx, rec)
+	created, _, err := s.createSessionLocked(ctx, s.qw, rec)
 	return created, err
 }
 
@@ -32,7 +32,7 @@ func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.Sessi
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.createSessionLocked(ctx, rec)
+	return s.createSessionLocked(ctx, s.qw, rec)
 }
 
 // GetSessionByClientRequestID finds the session created for a retryable request.
@@ -82,18 +82,18 @@ func (s *Store) CreateAutomationSession(ctx context.Context, rec domain.SessionR
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.createSessionLocked(ctx, rec)
+	return s.createSessionLocked(ctx, s.qw, rec)
 }
 
-func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+func (s *Store) createSessionLocked(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
 	if rec.ClientRequestID != "" {
-		existing, found, err := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+		existing, found, err := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 		if err != nil || found {
 			return existing, false, err
 		}
 	}
 	if rec.AutomationRunID != nil {
-		existing, err := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
+		existing, err := q.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 		if err == nil {
 			return rowToRecord(gen.GetSessionRow(existing)), false, nil
 		}
@@ -106,17 +106,17 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	var err error
 	prefix := string(rec.ProjectID)
 	if rec.ProjectID == "" {
-		num, err = s.qw.NextStandaloneSessionNum(ctx)
+		num, err = q.NextStandaloneSessionNum(ctx)
 		prefix = standaloneSessionIDPrefix
 	} else {
-		num, err = s.qw.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
+		num, err = q.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
 	}
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
 	}
 	// A deleted session's number is never handed out again.
-	floor, err := s.sessionNumFloor(ctx, prefix)
-	if err != nil {
+	floor, err := q.GetSessionNumFloor(ctx, prefix)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return domain.SessionRecord{}, false, fmt.Errorf("session num floor for %s: %w", rec.ProjectID, err)
 	}
 	if num <= floor {
@@ -124,7 +124,7 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	}
 	for {
 		rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, num))
-		exists, err := s.qw.SessionIDExists(ctx, rec.ID)
+		exists, err := q.SessionIDExists(ctx, rec.ID)
 		if err != nil {
 			return domain.SessionRecord{}, false, fmt.Errorf("check session id %s: %w", rec.ID, err)
 		}
@@ -133,15 +133,15 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 		}
 		num++
 	}
-	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+	if err := q.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
 		if rec.ClientRequestID != "" {
-			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, q, rec.ClientRequestID)
 			if reloadErr == nil && found {
 				return existing, false, nil
 			}
 		}
 		if rec.AutomationRunID != nil {
-			existing, reloadErr := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
+			existing, reloadErr := q.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 			if reloadErr == nil {
 				return rowToRecord(gen.GetSessionRow(existing)), false, nil
 			}
@@ -307,26 +307,27 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 	defer s.writeMu.Unlock()
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	rows, err := s.qw.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
-		IssueID:            rec.IssueID,
-		Kind:               rec.Kind,
-		Harness:            rec.Harness,
-		AutoReviewEnabled:  rec.AutoReviewEnabled,
-		DisplayName:        rec.DisplayName,
-		ActivityState:      activity.State,
-		ActivityLastAt:     activity.LastActivityAt,
-		SessionMode:        domain.NormalizeSessionMode(rec.Mode),
-		Model:              rec.Metadata.Model,
-		Effort:             rec.Metadata.Effort,
-		SessionPermissions: string(rec.Metadata.Permissions),
-		RequestedOutput:    string(rec.RequestedOutput),
-		CreatedAt:          rec.CreatedAt,
-		UpdatedAt:          rec.UpdatedAt,
-		AutoInjectReview:   rec.AutoInjectReview,
-		AutoInjectCI:       rec.AutoInjectCI,
-		ProvisionState:     rec.ProvisionState.WithDefault(),
-		ClientRequestID:    rec.ClientRequestID,
-		ClientRequestHash:  rec.ClientRequestHash,
-		ID:                 id,
+		IssueID:             rec.IssueID,
+		Kind:                rec.Kind,
+		Harness:             rec.Harness,
+		AutoReviewEnabled:   rec.AutoReviewEnabled,
+		DisplayName:         rec.DisplayName,
+		DisplayNameExplicit: rec.DisplayNameExplicit,
+		ActivityState:       activity.State,
+		ActivityLastAt:      activity.LastActivityAt,
+		SessionMode:         domain.NormalizeSessionMode(rec.Mode),
+		Model:               rec.Metadata.Model,
+		Effort:              rec.Metadata.Effort,
+		SessionPermissions:  string(rec.Metadata.Permissions),
+		RequestedOutput:     string(rec.RequestedOutput),
+		CreatedAt:           rec.CreatedAt,
+		UpdatedAt:           rec.UpdatedAt,
+		AutoInjectReview:    rec.AutoInjectReview,
+		AutoInjectCI:        rec.AutoInjectCI,
+		ProvisionState:      rec.ProvisionState.WithDefault(),
+		ClientRequestID:     rec.ClientRequestID,
+		ClientRequestHash:   rec.ClientRequestHash,
+		ID:                  id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("promote task preparation %s: %w", id, err)
@@ -369,7 +370,22 @@ WHERE session_id = ?
 func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.qw.UpdateSession(ctx, recordToUpdate(rec))
+	if source := rec.Metadata.ImportSource; source == nil || !source.Adopted {
+		return s.qw.UpdateSession(ctx, recordToUpdate(rec))
+	}
+	return s.inTx(ctx, "update session", func(q *gen.Queries) error { return updateSessionRow(ctx, q, rec) })
+}
+
+// updateSessionRow writes the general session state plus, once, an import's
+// adoption. Other import facts change only through SetSessionImportWorkspace.
+func updateSessionRow(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) error {
+	if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+		return err
+	}
+	if source := rec.Metadata.ImportSource; source != nil && source.Adopted {
+		return q.AdoptSessionImport(ctx, gen.AdoptSessionImportParams{ID: rec.ID, ImportSource: marshalImportSource(source)})
+	}
+	return nil
 }
 
 // SetSessionHibernated changes only the durable sleep marker if the caller's
@@ -873,12 +889,25 @@ WHERE id = ?
 // standaloneSessionIDPrefix is the id prefix of sessions with no project.
 const standaloneSessionIDPrefix = "standalone"
 
+const sessionDeleteBatch = 1000
+
+var sessionDeleteDrains = []string{
+	`DELETE FROM conversation_provider_events WHERE id IN (
+    SELECT id FROM conversation_provider_events WHERE session_id = ?1 LIMIT ?2
+) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
+	`DELETE FROM conversation_activities WHERE id IN (
+    SELECT a.id FROM conversation_activities a
+    JOIN conversations c ON c.id = a.conversation_id
+    WHERE c.session_id = ?1 LIMIT ?2
+) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
+}
+
 // DeleteTerminatedSession removes a terminated session's row; its own
 // conversations, cleanup facts, PR facts and the other per-session rows go with
 // it through ON DELETE CASCADE. Callers decide whether the session's workspace
 // is released first; this only refuses live sessions and, with
-// domain.ErrSessionHistoryShared, shared conversation history, all in one
-// transaction so a concurrent restore cannot slip between
+// domain.ErrSessionHistoryShared, shared conversation history. The final
+// transaction checks both again, so a concurrent restore cannot slip between
 // the checks and the delete.
 //
 // The session's number is recorded in session_num_floors so the next spawn
@@ -892,6 +921,15 @@ const standaloneSessionIDPrefix = "standalone"
 //
 // Returns deleted=false when id does not name a terminated session.
 func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	if _, _, ok, err := deletableTerminatedSession(ctx, s.readDB, id); err != nil || !ok {
+		return false, err
+	}
+	for _, query := range sessionDeleteDrains {
+		if err := s.drainSessionRows(ctx, query, id); err != nil {
+			return false, fmt.Errorf("delete session %s: clear history: %w", id, err)
+		}
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -900,31 +938,9 @@ func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var projectID sql.NullString
-	var num int64
-	err = tx.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("delete session %s: read: %w", id, err)
-	}
-	var shared bool
-	if err := tx.QueryRowContext(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM conversation_turns t
-    JOIN conversations c ON c.id = t.conversation_id
-    WHERE t.handled_by_session_id = ?1
-      AND (c.session_id IS NULL OR c.session_id <> ?1)
-) OR EXISTS (
-    SELECT 1 FROM conversations
-    WHERE current_session_id = ?1
-      AND (session_id IS NULL OR session_id <> ?1)
-)`, id).Scan(&shared); err != nil {
-		return false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
-	}
-	if shared {
-		return false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	projectID, num, ok, err := deletableTerminatedSession(ctx, tx, id)
+	if err != nil || !ok {
+		return false, err
 	}
 	prefix := standaloneSessionIDPrefix
 	if projectID.Valid && projectID.String != "" {
@@ -937,6 +953,19 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	}
 	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE conversation_branches
+SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
+WHERE conversation_id IN (SELECT id FROM conversations WHERE session_id = ?1)
+  AND (parent_branch_id IS NOT NULL OR fork_after_turn_id IS NOT NULL OR replaced_turn_id IS NOT NULL)`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: unlink branches: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE conversation_turns SET retry_of_turn_id = NULL
+WHERE conversation_id IN (SELECT id FROM conversations WHERE session_id = ?1)
+  AND retry_of_turn_id IS NOT NULL`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: unlink retries: %w", id, err)
 	}
 	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
@@ -957,14 +986,55 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	return true, nil
 }
 
-// sessionNumFloor is the highest number a deleted session under prefix held.
-func (s *Store) sessionNumFloor(ctx context.Context, prefix string) (int64, error) {
-	var floor int64
-	err := s.writeDB.QueryRowContext(ctx, `SELECT max_num FROM session_num_floors WHERE id_prefix = ?`, prefix).Scan(&floor)
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func deletableTerminatedSession(ctx context.Context, q rowQueryer, id domain.SessionID) (sql.NullString, int64, bool, error) {
+	var projectID sql.NullString
+	var num int64
+	err := q.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
+		return projectID, 0, false, nil
 	}
-	return floor, err
+	if err != nil {
+		return projectID, 0, false, fmt.Errorf("delete session %s: read: %w", id, err)
+	}
+	var shared bool
+	if err := q.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns t
+    JOIN conversations c ON c.id = t.conversation_id
+    WHERE t.handled_by_session_id = ?1
+      AND (c.session_id IS NULL OR c.session_id <> ?1)
+) OR EXISTS (
+    SELECT 1 FROM conversations
+    WHERE current_session_id = ?1
+      AND (session_id IS NULL OR session_id <> ?1)
+)`, id).Scan(&shared); err != nil {
+		return projectID, 0, false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
+	}
+	if shared {
+		return projectID, 0, false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	}
+	return projectID, num, true, nil
+}
+
+func (s *Store) drainSessionRows(ctx context.Context, query string, id domain.SessionID) error {
+	for {
+		if err := s.writeMu.LockContext(ctx); err != nil {
+			return err
+		}
+		res, err := s.writeDB.ExecContext(ctx, query, id, sessionDeleteBatch)
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n < sessionDeleteBatch {
+			return err
+		}
+	}
 }
 
 // GetSession returns the full record for a session, or ok=false if absent.
@@ -1093,6 +1163,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ReviewerConfig:            unmarshalAgentConfig(row.ReviewerAgentConfig),
 		AutoReviewEnabled:         row.AutoReviewEnabled,
 		DisplayName:               row.DisplayName,
+		DisplayNameExplicit:       row.DisplayNameExplicit,
 		Mode:                      domain.NormalizeSessionMode(row.SessionMode),
 		Activity: domain.Activity{
 			State:          row.ActivityState,
@@ -1109,6 +1180,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		AutoInjectCI:       row.AutoInjectCI,
 		OutputType:         normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
 		Metadata: domain.SessionMetadata{
+			ImportSource:                     unmarshalImportSource(row.ImportSource),
 			Branch:                           row.Branch,
 			WorkspacePath:                    row.WorkspacePath,
 			WorkspaceRepoPath:                row.WorkspaceRepoPath,
@@ -1221,6 +1293,7 @@ func listAllSessionsRowToRecord(row gen.ListAllSessionsRow) domain.SessionRecord
 func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams {
 	activity := normalActivity(rec.Activity, rec.CreatedAt)
 	return gen.InsertSessionParams{
+		ImportSource:                     marshalImportSource(rec.Metadata.ImportSource),
 		ID:                               rec.ID,
 		ProjectID:                        optionalProjectID(rec.ProjectID),
 		Num:                              num,
@@ -1231,6 +1304,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),
 		AutoReviewEnabled:                rec.AutoReviewEnabled,
 		DisplayName:                      rec.DisplayName,
+		DisplayNameExplicit:              rec.DisplayNameExplicit,
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
@@ -1440,4 +1514,23 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a
+}
+
+func marshalImportSource(source *domain.SessionImportSource) string {
+	if source == nil {
+		return ""
+	}
+	b, _ := json.Marshal(source)
+	return string(b)
+}
+
+func unmarshalImportSource(raw string) *domain.SessionImportSource {
+	if raw == "" {
+		return nil
+	}
+	var source domain.SessionImportSource
+	if json.Unmarshal([]byte(raw), &source) != nil {
+		return nil
+	}
+	return &source
 }
