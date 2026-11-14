@@ -173,11 +173,6 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 	if (!tasks.length) return null;
 
 	const name = (task: BackgroundTask) => backgroundTaskName(task, t);
-	// Background work is meant to keep running (a dev server never finishes), so a
-	// live task shows no spinner; only a failure needs a mark.
-	const status = (task: BackgroundTask) => isLive(task) ? null : (
-		<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
-	);
 	const time = (task: BackgroundTask) => {
 		if (failed === task.id) {
 			return <span role="status" className="shrink-0 text-[11px] text-destructive">{t("backgroundTasks.stopFailed")}</span>;
@@ -185,20 +180,32 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 		const text = elapsed(task, now);
 		return text ? <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{text}</span> : null;
 	};
-	// Only a live task its provider can stop gets the square; the rest end flush.
-	const stopButton = (task: BackgroundTask) => isLive(task) && task.stoppable ? (
-		<Button
-			type="button"
-			variant="quiet"
-			size="icon-xs"
-			className="-mr-1 shrink-0"
-			aria-label={t("backgroundTasks.stop", { name: name(task) })}
-			disabled={stopping.has(task.id)}
-			onClick={() => stop(task.id)}
-		>
-			<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
-		</Button>
-	) : null;
+	// The end of a row: a failure's red dot sits where the stop square would, so
+	// times line up. Background work is meant to keep running (a dev server never
+	// finishes), so a live task shows no mark; one its provider can't stop ends flush.
+	const trailing = (task: BackgroundTask) => {
+		if (!isLive(task)) {
+			return (
+				<span className="-mr-1 grid size-control-sm shrink-0 place-items-center">
+					<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 rounded-full bg-destructive" />
+				</span>
+			);
+		}
+		if (!task.stoppable) return null;
+		return (
+			<Button
+				type="button"
+				variant="quiet"
+				size="icon-xs"
+				className="-mr-1 shrink-0"
+				aria-label={t("backgroundTasks.stop", { name: name(task) })}
+				disabled={stopping.has(task.id)}
+				onClick={() => stop(task.id)}
+			>
+				<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
+			</Button>
+		);
+	};
 
 	if (!several) {
 		const [task] = tasks;
@@ -207,11 +214,8 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				<div className="flex h-8 min-w-0 items-center gap-2">
 					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
 					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-					<span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-						{status(task)}
-						{time(task)}
-					</span>
-					{stopButton(task)}
+					<span className="ml-auto flex shrink-0 items-center pl-2">{time(task)}</span>
+					{trailing(task)}
 				</div>
 			</section>
 		);
@@ -235,10 +239,9 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 				<ul id={listId} className="chat-composer-tasks-list">
 					{tasks.map((task) => (
 						<li key={`${task.id}:${task.runId ?? ""}`} className="flex h-8 min-w-0 items-center gap-2">
-							<span className="grid size-4 shrink-0 place-items-center">{status(task)}</span>
 							<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
 							{time(task)}
-							{stopButton(task)}
+							{trailing(task)}
 						</li>
 					))}
 				</ul>
