@@ -129,6 +129,9 @@ func (c *commandContext) sendAfterSwitch(ctx context.Context, id, message string
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if !time.Now().Before(deadline) {
+			return err
+		}
 	}
 }
 
