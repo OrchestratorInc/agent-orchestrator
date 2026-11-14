@@ -414,3 +414,26 @@ func TestBrowserBatchSkipsFailureSnapshotWhenNoMatchAlreadyHasOne(t *testing.T) 
 		t.Fatalf("output:\n%s", out)
 	}
 }
+
+// An approval gate in the browser service refuses a step with
+// BROWSER_ACTION_DENIED; the batch must stop there and name the step.
+func TestBrowserBatchStopsAtDeniedStep(t *testing.T) {
+	server := &batchBrowserServer{respond: func(b browserCommandRequestDTO) (int, string) {
+		if b.Action == "click" {
+			return http.StatusForbidden, `{"error":"forbidden","code":"BROWSER_ACTION_DENIED","message":"The user denied this browser action"}`
+		}
+		return 0, ""
+	}}
+	deps := startBatchBrowserServer(t, server)
+	out, _, err := executeCLI(t, deps, "browser", "batch", "--snapshot", "never", "--steps", "fill e2 ada\nclick e3\nget text body")
+	if err == nil || !strings.Contains(err.Error(), "step 2 of 3") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if got := server.actions(); !reflect.DeepEqual(got, []string{"fill", "click"}) {
+		t.Fatalf("actions = %v", got)
+	}
+	if !strings.Contains(out, "[2] FAILED: click e3\n    error: The user denied this browser action (BROWSER_ACTION_DENIED)") ||
+		!strings.Contains(out, "[3] not run: get text body") {
+		t.Fatalf("output:\n%s", out)
+	}
+}
