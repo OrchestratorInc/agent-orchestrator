@@ -127,7 +127,7 @@ func TestWatchSkippingHoldsNoDescriptorsForASkippedTree(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := WatchSkipping(ctx, root, skipsNodeModules); err != nil {
+	if _, _, err := WatchSkipping(ctx, root, skipsNodeModules); err != nil {
 		t.Fatalf("watch: %v", err)
 	}
 	assertFewDescriptors(t, baseline)
@@ -143,7 +143,7 @@ func TestWatchSkippingLeavesOutATreeCreatedWhileWatching(t *testing.T) {
 	root := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changes, err := WatchSkipping(ctx, root, skipsNodeModules)
+	changes, _, err := WatchSkipping(ctx, root, skipsNodeModules)
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
@@ -176,9 +176,7 @@ func TestWatchStaysWithinTheDescriptorBudget(t *testing.T) {
 	if directoryWatchCost(root, false) == 0 {
 		t.Skip("this platform's watcher holds no descriptor per entry")
 	}
-	previous := watchDescriptors
-	watchDescriptors = &descriptorPool{free: 200}
-	t.Cleanup(func() { watchDescriptors = previous })
+	swapDescriptorPool(t, 200)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	changes, partial, err := Watch(ctx, root)
@@ -197,5 +195,78 @@ func TestWatchStaysWithinTheDescriptorBudget(t *testing.T) {
 	}
 	if watchDescriptors.free != 200 {
 		t.Fatalf("budget after cancel = %d, want all 200 returned", watchDescriptors.free)
+	}
+}
+
+func swapDescriptorPool(t *testing.T, free int) *descriptorPool {
+	t.Helper()
+	previous := watchDescriptors
+	watchDescriptors = &descriptorPool{free: free}
+	t.Cleanup(func() { watchDescriptors = previous })
+	return watchDescriptors
+}
+
+func (p *descriptorPool) available() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.free
+}
+
+func TestWatchSkippingReportsAnExhaustedPool(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "plan.md"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if directoryWatchCost(root, false) == 0 {
+		t.Skip("this platform's watcher holds no descriptor per entry")
+	}
+	swapDescriptorPool(t, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, partial, err := WatchSkipping(ctx, root, skipsNodeModules)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	if !partial() {
+		t.Fatal("an artifact watch with no descriptor budget reported full coverage")
+	}
+}
+
+func TestWatchKeepsARenamedDirectoryChargedUntilClose(t *testing.T) {
+	root := t.TempDir()
+	moved := filepath.Join(root, "moved")
+	if err := os.Mkdir(moved, 0o750); err != nil {
+		t.Fatalf("create dir: %v", err)
+	}
+	for f := range 30 {
+		if err := os.WriteFile(filepath.Join(moved, fmt.Sprintf("file-%02d.txt", f)), []byte("x"), 0o600); err != nil {
+			t.Fatalf("create file: %v", err)
+		}
+	}
+	if directoryWatchCost(root, false) == 0 {
+		t.Skip("this platform's watcher holds no descriptor per entry")
+	}
+	pool := swapDescriptorPool(t, 1000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	changes, _, err := Watch(ctx, root)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	charged := 1000 - pool.available()
+	if err := os.Rename(moved, filepath.Join(t.TempDir(), "moved")); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	waitForChange(t, changes)
+	if got := 1000 - pool.available(); got != charged {
+		t.Fatalf("charged descriptors after a rename = %d, want %d until the watch closes", got, charged)
+	}
+
+	cancel()
+	for range changes { //nolint:revive // drain until the watcher closes the channel
+	}
+	if got := pool.available(); got != 1000 {
+		t.Fatalf("budget after cancel = %d, want all 1000 returned", got)
 	}
 }

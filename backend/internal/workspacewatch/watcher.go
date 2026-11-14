@@ -72,6 +72,7 @@ type dirWatchLimiter struct {
 	limit     int
 	mu        sync.Mutex
 	watched   map[string]int
+	retained  int
 	used      int
 	skipped   int
 	lastError error
@@ -104,6 +105,7 @@ func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 		return nil
 	}
 	if err := l.watcher.Add(dir); err != nil {
+		_ = l.watcher.Remove(dir)
 		l.pool.give(cost)
 		l.skipped++
 		l.lastError = err
@@ -122,7 +124,7 @@ func (l *dirWatchLimiter) add(ctx context.Context, dir string) error {
 // directories, already-released paths) and safe to call on a nil limiter.
 // Best-effort: fsnotify may have already dropped the watch implicitly (for
 // example on Rename); reclaiming the accounting slot is what matters.
-func (l *dirWatchLimiter) release(dir string) {
+func (l *dirWatchLimiter) release(dir string, renamed bool) {
 	if l == nil {
 		return
 	}
@@ -134,7 +136,11 @@ func (l *dirWatchLimiter) release(dir string) {
 	}
 	delete(l.watched, dir)
 	_ = l.watcher.Remove(dir)
-	l.pool.give(cost)
+	if renamed {
+		l.retained += cost
+	} else {
+		l.pool.give(cost)
+	}
 	l.used--
 }
 
@@ -145,6 +151,8 @@ func (l *dirWatchLimiter) releaseAll() {
 		l.pool.give(cost)
 		delete(l.watched, dir)
 	}
+	l.pool.give(l.retained)
+	l.retained = 0
 	l.used = 0
 }
 
@@ -239,9 +247,8 @@ func Watch(ctx context.Context, roots ...string) (<-chan struct{}, func() bool, 
 // below a skipped directory. The kqueue backend keeps a descriptor for every
 // file in a watched directory and maxWatchedDirectories counts directories, so
 // a directory of generated files must be skipped, not merely ignored.
-func WatchSkipping(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, error) {
-	changes, _, err := watchRoot(ctx, root, skip)
-	return changes, err
+func WatchSkipping(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, func() bool, error) {
+	return watchRoot(ctx, root, skip)
 }
 
 func watchRoot(ctx context.Context, root string, skip func(rel string) bool) (<-chan struct{}, func() bool, error) {
@@ -493,7 +500,7 @@ func handleEvent(ctx context.Context, limiter *dirWatchLimiter, root string, git
 		// budget slot, so later directory creation can still be watched even
 		// in workspaces with heavy directory churn. Paths the limiter never
 		// watched (regular files, ignored directories) are no-ops.
-		limiter.release(name)
+		limiter.release(name, event.Has(fsnotify.Rename))
 	}
 	if event.Has(fsnotify.Create) {
 		if info, statErr := os.Stat(name); statErr == nil && info.IsDir() {

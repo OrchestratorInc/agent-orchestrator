@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 )
 
 // openArtifactEvents opens session ao-1's artifact change stream and returns
@@ -127,4 +129,12 @@ func TestArtifactEventsRefuseAMissingArtifactDirectory(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "ARTIFACT_DIR_NOT_FOUND") {
 		t.Fatalf("status = %d body = %s, want 404 ARTIFACT_DIR_NOT_FOUND", resp.StatusCode, body)
 	}
+}
+
+func TestArtifactEventsRecheckAPartialWatch(t *testing.T) {
+	controllers.ForcePartialWatches(t, 50*time.Millisecond)
+	srv, _ := artifactFileServer(t, map[string]string{"plan.md": "# plan"})
+	events := openArtifactEvents(t, srv.URL)
+	awaitArtifactEvent(t, events, "ready")
+	awaitArtifactEvent(t, events, "artifacts_changed")
 }

@@ -489,9 +489,9 @@ func TestReleaseIgnoresPathsTheLimiterNeverWatched(t *testing.T) {
 
 	limiter := newDirWatchLimiter(watcher, 2)
 	// A nil limiter and paths outside the watched set must both be no-ops.
-	limiter.release(filepath.Join(t.TempDir(), "untracked"))
+	limiter.release(filepath.Join(t.TempDir(), "untracked"), false)
 	var nilLimiter *dirWatchLimiter
-	nilLimiter.release(filepath.Join(t.TempDir(), "untracked"))
+	nilLimiter.release(filepath.Join(t.TempDir(), "untracked"), false)
 	if limiter.used != 0 {
 		t.Fatalf("limiter budget after releasing unwatched paths = %d, want 0", limiter.used)
 	}

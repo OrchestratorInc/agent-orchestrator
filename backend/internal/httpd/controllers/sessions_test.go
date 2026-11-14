@@ -4611,6 +4611,53 @@ func TestSessionsAPI_StreamWorkspaceChanges(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_PartialWorkspaceStreamRefreshesContentWithoutAVersionChange(t *testing.T) {
+	controllers.ForcePartialWatches(t, 50*time.Millisecond)
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.WorkspacePath = t.TempDir()
+	svc.sessions["ao-1"] = session
+	srv := newSessionTestServer(t, svc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/workspace/events", nil)
+	if err != nil {
+		t.Fatalf("new workspace stream request: %v", err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET workspace stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET workspace stream = %d body=%s", resp.StatusCode, body)
+	}
+	data := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		changed := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "event: workspace_changed" {
+				changed = true
+			} else if payload, ok := strings.CutPrefix(line, "data: "); ok && changed {
+				data <- payload
+				return
+			}
+		}
+	}()
+	select {
+	case got := <-data:
+		if !strings.Contains(got, `"kind":"dirty"`) {
+			t.Fatalf("recheck payload = %s, want a content refresh", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a partial watch sent no refresh while the workspace version stayed the same")
+	}
+}
+
 func TestSessionsAPI_SetPreviewEmptyURLNoEntry(t *testing.T) {
 	svc := newFakeSessionService()
 	s := svc.sessions["ao-1"]

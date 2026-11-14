@@ -1509,7 +1509,11 @@ type branchStateReconciler interface {
 	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
 }
 
-const workspacePartialWatchRecheck = 30 * time.Second
+var (
+	partialWatchRecheck = 30 * time.Second
+	watchWorkspace      = workspacewatch.Watch
+	watchArtifacts      = workspacewatch.WatchSkipping
+)
 
 func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
@@ -1526,7 +1530,7 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
-	changes, partial, err := workspacewatch.Watch(r.Context(), paths...)
+	changes, partial, err := watchWorkspace(r.Context(), paths...)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1560,7 +1564,7 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	}
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
-	recheck := time.NewTicker(workspacePartialWatchRecheck)
+	recheck := time.NewTicker(partialWatchRecheck)
 	defer recheck.Stop()
 	for {
 		select {
@@ -1598,12 +1602,12 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 			if !partial() {
 				continue
 			}
-			manifest, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r))
-			if err != nil || manifest.WorkspaceVersion == version {
-				continue
+			payload := workspaceChange{Kind: "dirty", Overflow: true}
+			if manifest, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err == nil && manifest.WorkspaceVersion != version {
+				version = manifest.WorkspaceVersion
+				payload = workspaceChange{Kind: "version", WorkspaceVersion: version, Overflow: true}
 			}
-			version = manifest.WorkspaceVersion
-			data, _ := json.Marshal(workspaceChange{Kind: "version", WorkspaceVersion: version, Overflow: true})
+			data, _ := json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
 			}
