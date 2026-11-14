@@ -544,6 +544,8 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		// --disallowedTools; deny rules hold in every permission mode.
 		options["allowedTools"] = claudecode.ReviewerAllowedTools
 		options["disallowedTools"] = claudecode.ReviewerDisallowedTools
+	} else if rules := claudecode.OrchestratorToolRules(cfg.Orchestrator, cfg.Permissions); len(rules) > 0 {
+		options["allowedTools"] = rules
 	}
 	if len(options) > 0 {
 		claudeCode["options"] = options

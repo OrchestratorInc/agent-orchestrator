@@ -1080,6 +1080,42 @@ func readJSON(t *testing.T, path string) map[string]any {
 	return m
 }
 
+// A terminal orchestrator in auto mode gets the same coordination allow rules as
+// a Chat one; a worker, and an orchestrator in another mode, get none (#8398).
+func TestOrchestratorInAutoModeAllowsCoordinationCommands(t *testing.T) {
+	p := &Plugin{resolvedBinary: "claude"}
+	want := strings.Join(OrchestratorAllowedTools, ",")
+	for _, tc := range []struct {
+		name  string
+		cfg   ports.LaunchConfig
+		allow bool
+	}{
+		{"orchestrator in auto", ports.LaunchConfig{Kind: domain.KindOrchestrator, Permissions: ports.PermissionModeAuto}, true},
+		{"orchestrator in default", ports.LaunchConfig{Kind: domain.KindOrchestrator, Permissions: ports.PermissionModeDefault}, false},
+		{"worker in auto", ports.LaunchConfig{Kind: domain.KindWorker, Permissions: ports.PermissionModeAuto}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := p.GetLaunchCommand(context.Background(), tc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := containsSubsequence(cmd, []string{"--allowedTools", want}); got != tc.allow {
+				t.Fatalf("orchestrator allow rules present = %v, want %v; got %#v", got, tc.allow, cmd)
+			}
+		})
+	}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{ID: "mer-orchestrator", Metadata: map[string]string{"agentSessionId": "native-1"}},
+		Kind:    domain.KindOrchestrator, Permissions: ports.PermissionModeAuto,
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore: ok=%v err=%v", ok, err)
+	}
+	if !containsSubsequence(cmd, []string{"--allowedTools", want}) {
+		t.Fatalf("restored orchestrator lost its allow rules: %#v", cmd)
+	}
+}
+
 func TestGetLaunchCommandEmitsToolAllowlist(t *testing.T) {
 	p := &Plugin{resolvedBinary: "claude"}
 

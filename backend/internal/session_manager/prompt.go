@@ -263,6 +263,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - If a worker is stuck, clarify the task with `+"`ao send`"+`, or spawn another worker when appropriate.
 - Never claim a PR into the orchestrator session. If a PR needs continuation, assign or spawn a worker.
 - Use `+"`ao send`"+` for session communication. Do not bypass Orchestrator by writing directly to tmux, PTY, pipes, or runtime internals.
+- Run `+"`ao spawn`"+` and `+"`ao send`"+` as commands of their own. Do not chain them with other commands or pipe their output into anything but `+"`tail`"+` or `+"`head`"+`: in auto mode a combined command goes to the approval classifier, which can refuse a task relayed from another orchestrator.
 
 ## Core Commands
 

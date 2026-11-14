@@ -344,6 +344,10 @@ type ChatStartConfig struct {
 	DisableTools bool
 	// SystemPrompt carries AO's standing instructions for the session.
 	SystemPrompt string
+	// Orchestrator marks a project orchestrator. A driver may pre-approve the AO
+	// commands it coordinates workers with, so its provider's approval
+	// classifier cannot strand a task relayed from another session (#8398).
+	Orchestrator bool
 	// ProviderScopeID identifies the AO ownership boundary for opaque provider
 	// identifiers. Fresh approximate branches receive a new value.
 	ProviderScopeID string
@@ -385,6 +389,8 @@ type ChatResumeConfig struct {
 	Effort      string
 	Permissions PermissionMode
 	ReadOnly    bool
+	// See ChatStartConfig.Orchestrator.
+	Orchestrator bool
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string

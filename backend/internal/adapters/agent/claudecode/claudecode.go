@@ -200,7 +200,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
 		Permission:       agentruntime.PermissionPolicy(permissions),
-		AllowedTools:     cfg.AllowedTools,
+		AllowedTools:     withOrchestratorTools(cfg.Kind, permissions, cfg.AllowedTools),
 		DisallowedTools:  cfg.DisallowedTools,
 	})
 }
@@ -417,7 +417,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
-		AllowedTools:     cfg.AllowedTools,
+		AllowedTools:     withOrchestratorTools(cfg.Kind, cfg.Permissions, cfg.AllowedTools),
 		DisallowedTools:  cfg.DisallowedTools,
 	})
 }

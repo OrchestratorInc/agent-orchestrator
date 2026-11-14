@@ -6429,6 +6429,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
 		"Give each new task to a new worker",
+		"Run `ao spawn` and `ao send` as commands of their own",
 		"only for follow-up on that worker's own task",
 	} {
 		if !strings.Contains(systemPrompt, want) {

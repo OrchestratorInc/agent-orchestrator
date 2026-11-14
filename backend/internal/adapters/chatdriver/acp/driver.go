@@ -48,6 +48,7 @@ type LaunchConfig struct {
 	SystemPrompt    string
 	DisableTools    bool
 	ReadOnly        bool // a review-owned session; see Config.ReadOnly
+	Orchestrator    bool // a project orchestrator; see ports.ChatStartConfig.Orchestrator
 	ProviderScopeID string
 	// ProviderConversationID carries the stored native conversation on resume so
 	// a binding can migrate provider-side history into a fresh process home.
@@ -453,6 +454,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		DisableTools:    cfg.DisableTools,
 		ReadOnly:        cfg.ReadOnly,
+		Orchestrator:    cfg.Orchestrator,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
 	if err := d.checkReadOnly(launchCfg); err != nil {
@@ -623,6 +625,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ReadOnly:        cfg.ReadOnly,
+		Orchestrator:    cfg.Orchestrator,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
 		// The connect below spawns a fresh process, so a resumed conversation's

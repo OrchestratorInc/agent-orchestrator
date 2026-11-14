@@ -383,6 +383,34 @@ func TestClaudeSessionMetaAsksForSDKSessionState(t *testing.T) {
 	}
 }
 
+// An orchestrator in auto mode starts with AO's coordination commands allowed,
+// so the auto-mode classifier cannot refuse a spawn relayed from another
+// session (#8398). Other sessions and modes get no extra allow rules.
+func TestClaudeSessionMetaAllowsOrchestratorCommandsInAutoMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  acpdriver.LaunchConfig
+		want []string
+	}{
+		{"orchestrator in auto", acpdriver.LaunchConfig{Orchestrator: true, Permissions: ports.PermissionModeAuto}, claudecode.OrchestratorAllowedTools},
+		{"orchestrator in default", acpdriver.LaunchConfig{Orchestrator: true, Permissions: ports.PermissionModeDefault}, nil},
+		{"orchestrator bypassing", acpdriver.LaunchConfig{Orchestrator: true, Permissions: ports.PermissionModeBypassPermissions}, nil},
+		{"worker in auto", acpdriver.LaunchConfig{Permissions: ports.PermissionModeAuto}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			options, _ := claudeNestedMap(claudeSessionMeta(tc.cfg), "claudeCode")["options"].(map[string]any)
+			got, _ := options["allowedTools"].([]string)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("allowedTools = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+	reviewer := claudeSessionMeta(acpdriver.LaunchConfig{Orchestrator: true, Permissions: ports.PermissionModeAuto, ReadOnly: true})
+	if got := claudeNestedMap(claudeNestedMap(reviewer, "claudeCode"), "options")["allowedTools"]; !reflect.DeepEqual(got, claudecode.ReviewerAllowedTools) {
+		t.Fatalf("read-only session allowedTools = %#v, want only the reviewer list", got)
+	}
+}
+
 func TestClaudeSessionMetaSendsReviewerToolListsWhenReadOnly(t *testing.T) {
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "Review the PR.", ReadOnly: true})
 	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
