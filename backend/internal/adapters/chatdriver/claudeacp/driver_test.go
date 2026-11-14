@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -611,24 +613,108 @@ func TestClaudePromptResponseFailureRecordsVersionTooOld(t *testing.T) {
 	}
 }
 
-func TestClaudeServedModelOnlyReportsAliases(t *testing.T) {
+// writeClaudeTranscript records model as the answer to sessionID's last turn
+// and returns a launch config whose Claude home holds that transcript.
+func writeClaudeTranscript(t *testing.T, aoSession domain.SessionID, sessionID, model string) acpdriver.LaunchConfig {
+	t.Helper()
 	configDir := t.TempDir()
-	sessionID := "8320947f-5806-4579-943f-b23a943bac1f"
 	projectDir := filepath.Join(configDir, "projects", "-work")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	transcript := `{"type":"assistant","message":{"model":"claude-opus-4-8"}}` + "\n"
+	transcript := `{"type":"assistant","message":{"model":"` + model + `"}}` + "\n"
 	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := acpdriver.LaunchConfig{Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir}}
+	return acpdriver.LaunchConfig{SessionID: aoSession, Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir}}
+}
 
-	served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus")
-	if served != "claude-opus-4-8" || !strings.Contains(reason, "opus") {
-		t.Fatalf("served = %q, reason = %q", served, reason)
+var claudeTestCatalog = []ports.AgentModelInfo{
+	{ID: "opus"},
+	{ID: "claude-opus-4-8"},
+	{ID: "claude-opus-5-5"},
+	{ID: "claude-sonnet-5-5"},
+	{ID: "claude-haiku-4-5-20251001"},
+}
+
+func TestClaudeServedModelAliasResolvingToNewestIsNotAReroute(t *testing.T) {
+	const sessionID = "8320947f-5806-4579-943f-b23a943bac1f"
+	cfg := writeClaudeTranscript(t, "ao-1", sessionID, "claude-opus-5-5")
+	aliases := newClaudeAliasCatalog()
+	aliases.record(cfg.SessionID, claudeTestCatalog)
+
+	for _, alias := range []string{"opus", "opus[1m]", "Opus"} {
+		if served, reason := aliases.servedModel(context.Background(), cfg, sessionID, alias); served != "" || reason != "" {
+			t.Fatalf("%s resolving to the newest Opus reported a reroute: served = %q, reason = %q", alias, served, reason)
+		}
 	}
-	if served, _ := claudeServedModel(context.Background(), cfg, sessionID, "claude-opus-4-8"); served != "" {
+}
+
+func TestClaudeServedModelAliasResolvingToOlderIsAReroute(t *testing.T) {
+	const sessionID = "8320947f-5806-4579-943f-b23a943bac1f"
+	cfg := writeClaudeTranscript(t, "ao-1", sessionID, "claude-opus-4-8")
+	aliases := newClaudeAliasCatalog()
+	aliases.record(cfg.SessionID, claudeTestCatalog)
+
+	served, reason := aliases.servedModel(context.Background(), cfg, sessionID, "opus")
+	if served != "claude-opus-4-8" {
+		t.Fatalf("served = %q, want claude-opus-4-8", served)
+	}
+	for _, want := range []string{`"opus"`, "claude-opus-4-8", "claude-opus-5-5", "claude update"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("reason = %q, want it to mention %s", reason, want)
+		}
+	}
+}
+
+func TestClaudeServedModelReportsNothingItCannotCompare(t *testing.T) {
+	const sessionID = "8320947f-5806-4579-943f-b23a943bac1f"
+	cfg := writeClaudeTranscript(t, "ao-1", sessionID, "claude-opus-4-8")
+	aliases := newClaudeAliasCatalog()
+
+	// No catalog recorded for this session: a guessed comparison is worse than none.
+	if served, _ := aliases.servedModel(context.Background(), cfg, sessionID, "opus"); served != "" {
+		t.Fatalf("reported %q without a catalog", served)
+	}
+
+	aliases.record(cfg.SessionID, claudeTestCatalog)
+	// A concrete selection is never rerouted by alias resolution.
+	if served, _ := aliases.servedModel(context.Background(), cfg, sessionID, "claude-opus-4-8"); served != "" {
 		t.Fatalf("concrete model reported as rerouted to %q", served)
+	}
+	// "default" names no family, so there is nothing to compare against.
+	if served, _ := aliases.servedModel(context.Background(), cfg, sessionID, "default"); served != "" {
+		t.Fatalf("default reported as rerouted to %q", served)
+	}
+	// Another session's catalog does not apply.
+	other := cfg
+	other.SessionID = "ao-2"
+	if served, _ := aliases.servedModel(context.Background(), other, sessionID, "opus"); served != "" {
+		t.Fatalf("used another session's catalog, reported %q", served)
+	}
+	// A relaunch without a catalog forgets the old one.
+	aliases.record(cfg.SessionID, nil)
+	if served, _ := aliases.servedModel(context.Background(), cfg, sessionID, "opus"); served != "" {
+		t.Fatalf("kept a stale catalog, reported %q", served)
+	}
+}
+
+func TestClaudeFamilyVersion(t *testing.T) {
+	cases := map[string]string{
+		"claude-opus-5-5":           "opus 5.5",
+		"claude-haiku-4-5-20251001": "haiku 4.5",
+		"claude-opus-4-20250514":    "opus 4",
+		"us.anthropic.claude-opus":  " ",
+		"opus":                      " ",
+	}
+	for id, want := range cases {
+		family, version := claudeFamilyVersion(id)
+		parts := make([]string, len(version))
+		for i, n := range version {
+			parts[i] = strconv.Itoa(n)
+		}
+		if got := family + " " + strings.Join(parts, "."); got != want {
+			t.Errorf("claudeFamilyVersion(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
