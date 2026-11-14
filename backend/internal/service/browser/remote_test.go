@@ -213,3 +213,19 @@ func TestRemoteModeOffSkipsDescribe(t *testing.T) {
 
 var _ = time.Second
 var _ domain.SessionID
+
+func TestRemoteBareAndAtRefsAreDescribedAlike(t *testing.T) {
+	// Agents use refs as the snapshot prints them ("e2"); "@e2" is the same.
+	for _, ref := range []string{"e2", "@e2"} {
+		remote := &fakeRemote{refs: checkoutRefs}
+		svc, gate, token := remoteService(t, remote)
+		asked := answer(t, gate, approval.DecisionDeny)
+		_, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", ref}, nil)
+		if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%s: err = %v", ref, err)
+		}
+		if p := <-asked; p.Category != approval.CategoryPayment || p.Action != `Click "Place order" on shop.example` {
+			t.Fatalf("%s: prompt = %+v", ref, p)
+		}
+	}
+}
