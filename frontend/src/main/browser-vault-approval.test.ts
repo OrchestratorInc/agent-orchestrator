@@ -10,12 +10,12 @@ describe("dialog approver", () => {
     [2, "deny"],
     [7, "deny"],
   ] as const)("maps button %i to %s", async (response, decision) => {
-    const show = vi.fn(async () => ({ response }));
+    const show = vi.fn(async (_window: unknown, _options: unknown) => ({ response }));
     await expect(createDialogApprover(show, () => undefined)(request)).resolves.toBe(decision);
   });
 
   it("names the session and site, defaults to deny, and never shows a secret", async () => {
-    const show = vi.fn(async () => ({ response: 2 }));
+    const show = vi.fn(async (_window: unknown, _options: unknown) => ({ response: 2 }));
     await createDialogApprover(show, () => undefined)(request);
     const options = show.mock.calls[0][1] as { message: string; defaultId: number; cancelId: number };
     expect(options.message).toContain("s1");
