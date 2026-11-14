@@ -201,6 +201,12 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao spawn":                {},
 	"ao stop":                 {},
 	"ao version":              {},
+	"ao webhook":              {},
+	"ao webhook add":          {},
+	"ao webhook list":         {},
+	"ao webhook remove":       {},
+	"ao webhook set":          {},
+	"ao webhook test":         {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},
