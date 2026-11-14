@@ -83,5 +83,13 @@ export function canOpenInUserBrowser(rawUrl: string, options: { agentTab?: boole
 
 function isLoopbackHost(hostname: string): boolean {
 	const host = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
-	return host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "::1" || host === "0.0.0.0" || host === "::";
+	if (host === "localhost" || host.endsWith(".localhost") || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+	if (host === "::1" || host === "0.0.0.0" || host === "::") return true;
+	// IPv4-mapped IPv6, which the URL parser writes in hex (::ffff:7f00:1 is
+	// 127.0.0.1): loopback when the embedded address is 127/8 or 0.0.0.0.
+	const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+	if (!mapped) return false;
+	const high = Number.parseInt(mapped[1]!, 16);
+	const low = Number.parseInt(mapped[2]!, 16);
+	return high >> 8 === 0x7f || (high === 0 && low === 0);
 }
