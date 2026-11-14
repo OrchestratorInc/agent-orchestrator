@@ -1,5 +1,7 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { createWebSideCloseBridge } from "./web-side-close";
+import { SIDE_CLOSE_PROTOCOL_VERSION } from "../../shared/side-close";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
@@ -182,7 +184,14 @@ export const aoBridge: AoBridge =
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+		sideChats: import.meta.env.VITE_NO_ELECTRON === "1" ? createWebSideCloseBridge() : {
+			protocolVersion: SIDE_CLOSE_PROTOCOL_VERSION,
+			mode: "desktop",
+			capture: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			requestClose: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			getCloseState: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			onCloseStateChanged: () => () => {},
+		},
 		editorHandoff: {
 			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({

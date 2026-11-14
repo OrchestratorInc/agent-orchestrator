@@ -2,18 +2,23 @@ import { act, render, renderHook, screen, waitFor } from "@testing-library/react
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
+import type { SideCloseRequest } from "../../../shared/side-close";
 import { TooltipProvider } from "../ui/tooltip";
 
-const { get, post, put, remove, capture, pendingCloses } = vi.hoisted(() => ({
-	get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), capture: vi.fn(), pendingCloses: vi.fn(),
+const { get, post, put, remove, capture, closeState } = vi.hoisted(() => ({
+	get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), capture: vi.fn(), closeState: vi.fn(),
 }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: get, POST: post, PUT: put, DELETE: remove, PATCH: vi.fn() },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "Request failed",
 	getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
-vi.mock("../../lib/bridge", () => ({ aoBridge: { sideChats: {
-	capture, getPendingCloses: pendingCloses, confirmClose: async () => {}, onPendingClosesChanged: () => () => {},
+vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
+	protocolVersion: 1, mode: "desktop", capture, getCloseState: closeState,
+	requestClose: async (request: SideCloseRequest) => ({
+		protocolVersion: 1, epoch: "test-daemon", revision: 1, recovery: "ready", sessionId: request.sessionId,
+		sides: [{ id: request.sideId, sessionId: request.sessionId, label: request.sideId, operationId: request.requestId, version: request.expectedVersion + 2, status: "closed" }],
+	}), onCloseStateChanged: () => () => {},
 } } }));
 
 const excerpt: ChatDraftExcerptReference = {
@@ -32,7 +37,9 @@ beforeEach(() => {
 	});
 	post.mockResolvedValue({ data: { side: side("created") } });
 	put.mockResolvedValue({}); remove.mockResolvedValue({});
-	capture.mockResolvedValue(undefined); pendingCloses.mockResolvedValue([]);
+	capture.mockResolvedValue(undefined); closeState.mockImplementation(async (sessionId: string) => ({
+		protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [],
+	}));
 });
 
 async function mount() {
