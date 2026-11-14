@@ -33,13 +33,90 @@ func TestSessionModeMapsApprovalTiersOntoAntigravityModes(t *testing.T) {
 	}
 }
 
-func TestBindingLeavesEveryPermissionRequestToTheUser(t *testing.T) {
+func TestPermissionPolicyApprovesOnceOnlyInAOsAutoModes(t *testing.T) {
 	cfg := buildConfig(nil, testResolver(t, nil), nil)
-	if cfg.PermissionPolicy != nil {
-		t.Fatal("a PermissionPolicy could answer allow_always and outlive a stricter mode")
-	}
 	if cfg.ValidateTurnSettings != nil {
 		t.Fatal("approval modes switch live; no restart validator is needed")
+	}
+	request := acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+		{OptionId: "always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+		{OptionId: "once", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		{OptionId: "no", Kind: acpsdk.PermissionOptionKindRejectOnce},
+	}}
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		if got, ok := cfg.PermissionPolicy(mode, request); !ok || got != "once" {
+			t.Errorf("policy(%q) = %q, %v; want allow_once, never allow_always", mode, got, ok)
+		}
+	}
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeAcceptEdits} {
+		if got, ok := cfg.PermissionPolicy(mode, request); ok {
+			t.Errorf("policy(%q) answered %q; the user decides", mode, got)
+		}
+	}
+	noOnce := acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+		{OptionId: "always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+	}}
+	if got, ok := cfg.PermissionPolicy(ports.PermissionModeAuto, noOnce); ok {
+		t.Errorf("policy chose %q without an allow_once option", got)
+	}
+}
+
+func TestSessionModeForAgentMapsOntoAgyACPModes(t *testing.T) {
+	legacy := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "antigravity-acp", Version: "1.3.0"}}
+	if sessionModeForAgent(legacy) != nil {
+		t.Fatal("the separate server must keep its own mode ids")
+	}
+	cli := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "Antigravity ACP Server", Version: "1.5.6"}}
+	modeFor := sessionModeForAgent(cli)
+	if modeFor == nil {
+		t.Fatal("no mode mapping for agy acp")
+	}
+	for mode, want := range map[ports.PermissionMode]string{
+		ports.PermissionModeDefault:           "default",
+		ports.PermissionModeAcceptEdits:       "accept-edits",
+		ports.PermissionModeAuto:              "accept-edits", // commands are approved by permissionPolicy
+		ports.PermissionModeBypassPermissions: "accept-edits",
+	} {
+		if got := modeFor(mode); got != want {
+			t.Errorf("agy acp mode(%q) = %q, want %q", mode, got, want)
+		}
+	}
+}
+
+func TestSteeringIsOfferedOnlyForAgyACP(t *testing.T) {
+	cfg := buildConfig(nil, testResolver(t, nil), nil)
+	if cfg.SteerPrompt == nil || cfg.SteerPrompt.Supported == nil {
+		t.Fatal("no prompt steering binding")
+	}
+	for _, tc := range []struct {
+		name, version string
+		want          bool
+	}{
+		{"Antigravity ACP Server", "1.5.4", true},
+		{"Antigravity ACP Server", "1.5.6", true},
+		{"Antigravity ACP Server", "1.5.3", false},
+		{"Antigravity ACP Server", "1.4.9", false},
+		{"antigravity-acp", "1.4.5", false},
+	} {
+		init := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: tc.name, Version: tc.version}}
+		if got := cfg.SteerPrompt.Supported(init); got != tc.want {
+			t.Errorf("steering for %s %s = %v, want %v", tc.name, tc.version, got, tc.want)
+		}
+	}
+}
+
+func TestAgyACPSkipsTheSeparateServersSignInBootstrap(t *testing.T) {
+	called := false
+	bootstrap := authBootstrap{geminiHome: func(map[string]string) (string, error) {
+		called = true
+		return "", errors.New("unexpected")
+	}}
+	cli := acpsdk.InitializeResponse{
+		AgentInfo:   &acpsdk.Implementation{Name: "Antigravity ACP Server", Version: "1.5.6"},
+		AuthMethods: []acpsdk.AuthMethod{{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Google"}}},
+	}
+	if err := afterInitialize(bootstrap)(context.Background(), nil, cli, acpdriver.LaunchConfig{}); err != nil || called {
+		t.Fatalf("agy acp ran the sign-in bootstrap: err=%v called=%v", err, called)
 	}
 }
 
@@ -85,6 +162,8 @@ func TestValidateInitializeAdmitsOnlyTestedAntigravityServers(t *testing.T) {
 		info("antigravity-acp", "1.3.0"),
 		info("antigravity-acp", "1.10.2"),
 		info("antigravity-acp", "2.0.0-beta"),
+		info("Antigravity ACP Server", "1.5.4"),
+		info("Antigravity ACP Server", "1.5.6"),
 	} {
 		if err := validateInitialize(ok); err != nil {
 			t.Errorf("validateInitialize(%s %s) = %v", ok.AgentInfo.Name, ok.AgentInfo.Version, err)
@@ -95,6 +174,9 @@ func TestValidateInitializeAdmitsOnlyTestedAntigravityServers(t *testing.T) {
 		info("cline", "3.0.0"),
 		info("antigravity-acp", "1.2.1"),
 		info("antigravity-acp", "dev"),
+		info("Antigravity ACP Server", "1.4.0"),
+		info("Antigravity ACP Server", "1.5.3"),
+		info("Antigravity ACP Server", "dev"),
 	} {
 		if err := validateInitialize(bad); err == nil {
 			t.Errorf("validateInitialize(%+v) admitted an untested server", bad.AgentInfo)
@@ -192,6 +274,86 @@ func TestLaunchPointsTheServerAtItsHarness(t *testing.T) {
 	}})
 	if err != nil || launch.Env[harnessPathEnvVar] != "/custom" || launch.Env[disableWorkspaceTrustEnvVar] != "0" {
 		t.Fatalf("an explicit %s or %s was overridden: %+v, %v", harnessPathEnvVar, disableWorkspaceTrustEnvVar, launch.Env, err)
+	}
+}
+
+func TestResolverLaunchesAgyACPFromANewEnoughCLI(t *testing.T) {
+	bin := t.TempDir()
+	cli := writeExecutable(t, filepath.Join(bin, "agy"))
+	server := writeExecutable(t, filepath.Join(bin, "agy_acp_server"))
+	for _, tc := range []struct {
+		version string
+		err     error
+		wantCLI bool
+	}{
+		{version: "1.5.4", wantCLI: true},
+		{version: "1.5.6\n", wantCLI: true},
+		{version: "2.0.0", wantCLI: true},
+		{version: "1.5.3"},
+		{version: "1.4.9"},
+		{version: "unknown"},
+		{err: errors.New("agy --version failed")},
+	} {
+		r := testResolver(t, nil)
+		r.agyCLI = func(context.Context) (string, error) { return cli, nil }
+		r.cliVersion = func(context.Context, string) (string, error) { return tc.version, tc.err }
+		got, err := r.target(context.Background())
+		if err != nil {
+			t.Fatalf("target(%q, %v): %v", tc.version, tc.err, err)
+		}
+		want := launchTarget{path: server}
+		if tc.wantCLI {
+			want = launchTarget{path: cli, cli: true}
+		}
+		if got != want {
+			t.Errorf("target(%q, %v) = %+v, want %+v", tc.version, tc.err, got, want)
+		}
+	}
+
+	// An explicit server path keeps the separate server even on a new CLI.
+	r := testResolver(t, map[string]string{serverPathEnvVar: server})
+	r.agyCLI = func(context.Context) (string, error) { return cli, nil }
+	r.cliVersion = func(context.Context, string) (string, error) {
+		t.Fatal("version probed despite an explicit server path")
+		return "", nil
+	}
+	if got, err := r.target(context.Background()); err != nil || got != (launchTarget{path: server}) {
+		t.Fatalf("target with override = %+v, %v", got, err)
+	}
+}
+
+func TestLaunchStartsAgyACPWithTheChatDataFolder(t *testing.T) {
+	cli := writeExecutable(t, filepath.Join(t.TempDir(), "agy"))
+	r := testResolver(t, nil)
+	r.agyCLI = func(context.Context) (string, error) { return cli, nil }
+	r.cliVersion = func(context.Context, string) (string, error) { return "1.5.6", nil }
+	cfg := buildConfig(nil, r, nil)
+
+	launch, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{Env: map[string]string{"PATH": "/usr/bin"}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if launch.Command != cli || !reflect.DeepEqual(launch.Args, []string{"acp", "--app-data-dir", "antigravity-acp"}) {
+		t.Fatalf("launch = %q %v", launch.Command, launch.Args)
+	}
+	if _, set := launch.Env[harnessPathEnvVar]; set || launch.Env[disableWorkspaceTrustEnvVar] != "1" || launch.Env["PATH"] != "/usr/bin" {
+		t.Fatalf("launch env = %v", launch.Env)
+	}
+
+	launch, err = cfg.Launch(context.Background(), acpdriver.LaunchConfig{Env: map[string]string{"GEMINI_HOME": "/srv/gemini"}})
+	want := []string{"acp", "--app-data-dir", "antigravity-acp", "--gemini-dir", "/srv/gemini"}
+	if err != nil || !reflect.DeepEqual(launch.Args, want) {
+		t.Fatalf("launch with GEMINI_HOME = %v, %v; want %v", launch.Args, err, want)
+	}
+
+	// The daemon's own GEMINI_HOME reaches agy as the flag too: `agy acp`
+	// ignores the variable, so without it Chat would write ~/.gemini.
+	inherited := testResolver(t, map[string]string{"GEMINI_HOME": "/srv/daemon-gemini"})
+	inherited.agyCLI, inherited.cliVersion = r.agyCLI, r.cliVersion
+	launch, err = buildConfig(nil, inherited, nil).Launch(context.Background(), acpdriver.LaunchConfig{})
+	want = []string{"acp", "--app-data-dir", "antigravity-acp", "--gemini-dir", "/srv/daemon-gemini"}
+	if err != nil || !reflect.DeepEqual(launch.Args, want) {
+		t.Fatalf("launch with an inherited GEMINI_HOME = %v, %v; want %v", launch.Args, err, want)
 	}
 }
 

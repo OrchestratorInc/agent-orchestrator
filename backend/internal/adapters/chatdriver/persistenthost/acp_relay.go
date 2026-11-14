@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -283,8 +285,21 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 		return acpClientFrames{provider: frame}, nil
 	}
 
-	if method == "session/prompt" && (r.state.ActivePrompt || r.state.PendingResultEventID != "") {
-		return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged", nil)}, nil
+	steer := false
+	if method == "session/prompt" {
+		steer = isSteerPrompt(envelope["params"])
+		// A turn being cancelled, by Stop or by the stall watchdog, takes no more
+		// steers: the agent would run one as fresh work once the cancel lands.
+		live := r.state.ActivePrompt && r.state.PendingResultEventID == "" &&
+			!r.cancelRequested && r.stallCancelledAt.IsZero()
+		switch {
+		case steer && !live:
+			// The turn this steer was meant for has ended or is ending. Forwarded,
+			// the agent would start a turn of its own that AO has no row for.
+			return acpClientFrames{client: steerTurnEndedFrame(id)}, nil
+		case !steer && (r.state.ActivePrompt || r.state.PendingResultEventID != ""):
+			return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged", nil)}, nil
+		}
 	}
 	r.nextRequestID++
 	providerID, _ := json.Marshal(r.nextRequestID)
@@ -294,6 +309,9 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	}
 	envelope["id"] = providerID
 	if method == "session/prompt" {
+		r.lastActivityAt = time.Now()
+	}
+	if method == "session/prompt" && !steer {
 		r.state.ActivePrompt = true
 		r.state.ActiveCompaction = isCompactionPrompt(envelope["params"])
 		r.state.PendingResultEventID = ""
@@ -432,10 +450,26 @@ func (r *acpRelay) providerFrame(
 	delete(r.pending, string(id))
 	r.captureResponse(request, envelope)
 
+	if request.method == "session/prompt" && r.newestPendingPrompt() != "" {
+		// Another prompt of the turn still runs, so this answer is a handoff or a
+		// refused steer prompt: the turn goes on, and its result is the answer of
+		// the last prompt to return.
+		if !attached {
+			return nil, false, nil
+		}
+		if request.generation != generation {
+			// A prompt the previous attachment sent. The reattached controller
+			// adopted its turn and learns of the handoff this way.
+			return promptAnswerNotification(ACPPromptHandoffMethod, envelope, ""), false, nil
+		}
+		return rewriteResponseID(envelope, request.clientID, frame), false, nil
+	}
 	if request.method == "session/prompt" {
 		if !r.stallCancelledAt.IsZero() {
-			// The adapter has answered the prompt the watchdog cancelled. Whatever
-			// it says, the turn ended because the adapter went silent.
+			// The adapter has answered the last prompt of the turn the watchdog
+			// cancelled. Whatever it says, the turn ended because the adapter went
+			// silent. An earlier prompt's answer passes through unchanged above:
+			// the marker says the adapter is quiet, which holds only now.
 			r.stallCancelledAt = time.Time{}
 			failure := map[string]json.RawMessage{}
 			_ = json.Unmarshal(stalledPromptFailure(id), &failure)
@@ -472,12 +506,12 @@ func (r *acpRelay) providerFrame(
 // It works in two steps. The first sends the adapter a session/cancel and keeps
 // the prompt active: the adapter still owns the turn, and anything it emits
 // until it answers belongs to that turn, not to the prompt the controller sends
-// next. When the adapter answers, providerFrame turns its answer into the stall
-// failure, which marks the adapter quiet and lets the controller release its
-// queue. If it has not answered after promptStallCancelGrace it is wedged, and
-// the second step settles the prompt without it and without the marker, so the
-// queue stays held: the adapter may still emit from the old turn. Its late
-// answer is dropped.
+// next. When the adapter answers the turn's last prompt, providerFrame turns
+// that answer into the stall failure, which marks the adapter quiet and lets
+// the controller release its queue. If it has not answered every prompt after
+// promptStallCancelGrace it is wedged, and the second step settles each prompt
+// still waiting without it and without the marker, so the queue stays held: the
+// adapter may still emit from the old turn. Its late answers are dropped.
 //
 // The prompt may belong to an earlier controller generation: providerFrame then
 // turns the failure into the private prompt result, which the reattached
@@ -500,26 +534,26 @@ func (r *acpRelay) failStalledPrompt(
 	if cancelling && now.Sub(r.stallCancelledAt) < promptStallCancelGrace {
 		return acpClientFrames{}, nil
 	}
-	for providerID, request := range r.pending {
-		if request.method != "session/prompt" {
-			continue
-		}
-		if !cancelling {
-			r.stallCancelledAt = now
-			var prompt struct {
-				SessionID string `json:"sessionId"`
-			}
-			_ = json.Unmarshal(request.params, &prompt)
-			params, _ := json.Marshal(prompt)
-			cancel := marshalFrame(map[string]json.RawMessage{
-				"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": params,
-			}, nil)
-			return acpClientFrames{provider: cancel}, nil
-		}
-		// The adapter ignored the cancel. Settle without the stall marker: the
-		// adapter may still emit from the old turn, so the controller must hold
-		// its queue like any other failure rather than start a prompt on it.
-		r.stallCancelledAt = time.Time{}
+	stalled, sessionParams := r.pendingPrompts()
+	if len(stalled) == 0 {
+		return acpClientFrames{}, nil
+	}
+	if !cancelling {
+		r.stallCancelledAt = now
+		cancel := marshalFrame(map[string]json.RawMessage{
+			"jsonrpc": json.RawMessage(`"2.0"`), "method": json.RawMessage(`"session/cancel"`), "params": sessionParams,
+		}, nil)
+		return acpClientFrames{provider: cancel}, nil
+	}
+	// The adapter ignored the cancel. Settle without the stall marker: the
+	// adapter may still emit from the old turn, so the controller must hold its
+	// queue like any other failure rather than start a prompt on it. A steered
+	// turn has several prompts in flight; every one still waiting fails, oldest
+	// first, so the newest failure is the turn's result and no prompt the
+	// controller is waiting on is left unanswered.
+	r.stallCancelledAt = time.Time{}
+	var client []byte
+	for _, providerID := range stalled {
 		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
 			"provider stopped responding: no ACP output for %s and no answer to the cancel; failing the stalled prompt",
 			promptStallTimeout), nil)
@@ -528,9 +562,38 @@ func (r *acpRelay) failStalledPrompt(
 			return acpClientFrames{}, err
 		}
 		r.abandonedPrompts[providerID] = struct{}{}
-		return acpClientFrames{client: completion}, nil
+		client = append(client, completion...)
 	}
-	return acpClientFrames{}, nil
+	return acpClientFrames{client: client}, nil
+}
+
+// pendingPrompts returns the provider ids of the session/prompt requests still
+// waiting for an answer, oldest first, and the session params a session/cancel
+// for them takes.
+func (r *acpRelay) pendingPrompts() ([]string, json.RawMessage) {
+	var ids []int64
+	var sessionParams json.RawMessage
+	for providerID, request := range r.pending {
+		if request.method != "session/prompt" {
+			continue
+		}
+		if n, err := strconv.ParseInt(providerID, 10, 64); err == nil {
+			ids = append(ids, n)
+		}
+		if sessionParams == nil {
+			var prompt struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(request.params, &prompt)
+			sessionParams, _ = json.Marshal(prompt)
+		}
+	}
+	slices.Sort(ids)
+	stalled := make([]string, 0, len(ids))
+	for _, n := range ids {
+		stalled = append(stalled, strconv.FormatInt(n, 10))
+	}
+	return stalled, sessionParams
 }
 
 // stalledPromptFailure is the error a prompt ends with when the watchdog
@@ -658,6 +721,33 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 	}
 }
 
+// newestPendingPrompt returns the provider id of the newest session/prompt
+// still waiting for an answer, or "".
+func (r *acpRelay) newestPendingPrompt() string {
+	newest, newestID := "", int64(-1)
+	for providerID, request := range r.pending {
+		if request.method != "session/prompt" {
+			continue
+		}
+		if n, err := strconv.ParseInt(providerID, 10, 64); err == nil && n > newestID {
+			newest, newestID = providerID, n
+		}
+	}
+	return newest
+}
+
+// isSteerPrompt reports whether session/prompt params carry ACPSteerPromptMetaKey.
+func isSteerPrompt(params json.RawMessage) bool {
+	var prompt struct {
+		Meta map[string]any `json:"_meta"`
+	}
+	if json.Unmarshal(params, &prompt) != nil {
+		return false
+	}
+	steer, _ := prompt.Meta[ACPSteerPromptMetaKey].(bool)
+	return steer
+}
+
 func (r *acpRelay) newEventID() string {
 	r.nextEventID++
 	return fmt.Sprintf("acp-host:%s:%d", r.identity, r.nextEventID)
@@ -669,6 +759,13 @@ func rewriteResponseID(envelope map[string]json.RawMessage, id json.RawMessage, 
 }
 
 func promptResultNotification(response map[string]json.RawMessage, eventID string) []byte {
+	return promptAnswerNotification(ACPPromptResultMethod, response, eventID)
+}
+
+// promptAnswerNotification carries a session/prompt answer to a controller
+// that has no request of its own to match it to. eventID is "" for an answer
+// that is not the turn's result.
+func promptAnswerNotification(method string, response map[string]json.RawMessage, eventID string) []byte {
 	params := map[string]json.RawMessage{}
 	if result := response["result"]; len(result) > 0 {
 		params["result"] = result
@@ -676,12 +773,24 @@ func promptResultNotification(response map[string]json.RawMessage, eventID strin
 	if rpcErr := response["error"]; len(rpcErr) > 0 {
 		params["error"] = rpcErr
 	}
-	eventJSON, _ := json.Marshal(eventID)
-	params["eventId"] = eventJSON
+	if eventID != "" {
+		params["eventId"], _ = json.Marshal(eventID)
+	}
 	encodedParams, _ := json.Marshal(params)
-	method, _ := json.Marshal(ACPPromptResultMethod)
+	encodedMethod, _ := json.Marshal(method)
 	return marshalFrame(map[string]json.RawMessage{
-		"jsonrpc": json.RawMessage(`"2.0"`), "method": method, "params": encodedParams,
+		"jsonrpc": json.RawMessage(`"2.0"`), "method": encodedMethod, "params": encodedParams,
+	}, nil)
+}
+
+// steerTurnEndedFrame refuses a steer prompt that arrived after its turn ended.
+func steerTurnEndedFrame(id json.RawMessage) []byte {
+	encoded, _ := json.Marshal(map[string]any{
+		"code": -32602, "message": "the turn ended before the steer prompt arrived",
+		"data": map[string]any{ACPSteerTurnEndedDataKey: true},
+	})
+	return marshalFrame(map[string]json.RawMessage{
+		"jsonrpc": json.RawMessage(`"2.0"`), "id": id, "error": encoded,
 	}, nil)
 }
 
