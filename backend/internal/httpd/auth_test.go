@@ -559,3 +559,47 @@ func TestRetiredHashesAreCapped(t *testing.T) {
 		t.Fatal("the oldest retired password is still recognized")
 	}
 }
+
+// A tunnel client rotating through its /64 is still one client to the lockout.
+func TestTunnelClientCannotDodgeTheLockoutAcrossItsIPv6Prefix(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for i := range 5 {
+		r := reqFrom("127.0.0.1:5555", "Bearer wrong")
+		r.Header.Set("CF-Connecting-IP", fmt.Sprintf("2001:db8:1:2::%x", i+1))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
+		}
+	}
+	r := reqFrom("127.0.0.1:5555", "Bearer wrong")
+	r.Header.Set("CF-Connecting-IP", "2001:db8:1:2:dead:beef:0:1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("new address in the same /64: got %d want 429", w.Code)
+	}
+	// Another /64 is another client.
+	r = reqFrom("127.0.0.1:5555", "Bearer secret12")
+	r.Header.Set("CF-Connecting-IP", "2001:db8:1:3::1")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("other /64: got %d want 200", w.Code)
+	}
+}
+
+func TestLockoutKeyGroupsOnlyGlobalIPv6(t *testing.T) {
+	for in, want := range map[string]string{
+		"198.51.100.7":         "198.51.100.7",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
+		"fe80::1":              "fe80::1",
+		"fd12:3456:789a:1::5":  "fd12:3456:789a:1::5",
+		"::1":                  "::1",
+		"not-an-ip":            "not-an-ip",
+	} {
+		if got := lockoutKey(in); got != want {
+			t.Errorf("lockoutKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
