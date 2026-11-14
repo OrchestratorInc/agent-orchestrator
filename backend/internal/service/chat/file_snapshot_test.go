@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -197,7 +198,12 @@ func TestTurnsAreNotSnapshottedForAnAgentThatCannotRollBack(t *testing.T) {
 // where the preview reads it.
 func newGitHarness(t *testing.T, conv ports.ChatConversation, workspace string) *harness {
 	t.Helper()
-	h := newHarnessInWorkspace(t, conv, func(st *sqlite.Store) chatsvc.Store { return st }, domain.HarnessCodex, workspace)
+	return newGitHarnessFor(t, conv, workspace, domain.HarnessCodex)
+}
+
+func newGitHarnessFor(t *testing.T, conv ports.ChatConversation, workspace string, agent domain.AgentHarness) *harness {
+	t.Helper()
+	h := newHarnessInWorkspace(t, conv, func(st *sqlite.Store) chatsvc.Store { return st }, agent, workspace)
 	record, found, err := h.st.GetSession(context.Background(), testSession)
 	if err != nil || !found {
 		t.Fatalf("read seeded session: found=%v, err=%v", found, err)
@@ -244,4 +250,83 @@ func gitOutputIn(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// With session forks on, a turn of an agent that can fork older turns is
+// snapshotted so such a fork can start from that turn's files, even where
+// rollback can't use them.
+func TestForksSnapshotTurnsForAnAgentThatCannotRollBack(t *testing.T) {
+	chatsvc.EnableForkSnapshots(true)
+	t.Cleanup(func() { chatsvc.EnableForkSnapshots(false) })
+	workspace := gitWorkspace(t)
+	h := newGitHarnessFor(t, nil, workspace, domain.HarnessClaudeCode)
+
+	completeTurn(t, h, "only", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+
+	if refs := gitOutputIn(t, workspace, "for-each-ref", "refs/ao/snapshots/"); refs == "" {
+		t.Fatal("no snapshot was saved for the turn")
+	}
+}
+
+// With session forks on, a turn start also keeps the session's artifacts as
+// they are, so a fork of an older turn can copy them as they were.
+func TestForksKeepArtifactsAtEachTurnStart(t *testing.T) {
+	chatsvc.EnableForkSnapshots(true)
+	var mu sync.Mutex
+	var kept []domain.SessionID
+	var keptFor [][]string
+	chatsvc.SetTurnArtifactSnapshot(func(_ context.Context, id domain.SessionID, turnIDs []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		kept = append(kept, id)
+		keptFor = append(keptFor, turnIDs)
+	})
+	t.Cleanup(func() {
+		chatsvc.EnableForkSnapshots(false)
+		chatsvc.SetTurnArtifactSnapshot(nil)
+	})
+	workspace := gitWorkspace(t)
+	h := newGitHarnessFor(t, nil, workspace, domain.HarnessClaudeCode)
+	completeTurn(t, h, "only", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	mu.Lock()
+	defer mu.Unlock()
+	if len(kept) == 0 || kept[0] != testSession {
+		t.Fatalf("artifacts kept for %v", kept)
+	}
+	// Kept under the turn being started, which a fork of the turn before it reads.
+	if len(keptFor[0]) == 0 || keptFor[0][0] == "" {
+		t.Fatalf("artifacts kept under turns %v, want the turn being started", keptFor[0])
+	}
+}
+
+// An agent that can fork only its latest turn never forks from an older
+// turn's snapshot, so its turns don't wait for one, even with forks on.
+func TestForksDontSnapshotAnAgentThatOnlyForksItsLatestTurn(t *testing.T) {
+	chatsvc.EnableForkSnapshots(true)
+	var mu sync.Mutex
+	artifactSnapshots := 0
+	chatsvc.SetTurnArtifactSnapshot(func(context.Context, domain.SessionID, []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		artifactSnapshots++
+	})
+	t.Cleanup(func() {
+		chatsvc.EnableForkSnapshots(false)
+		chatsvc.SetTurnArtifactSnapshot(nil)
+	})
+	workspace := gitWorkspace(t)
+	h := newGitHarnessFor(t, nil, workspace, domain.HarnessCopilot)
+	completeTurn(t, h, "only", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+
+	if refs := gitOutputIn(t, workspace, "for-each-ref", "refs/ao/"); refs != "" {
+		t.Fatalf("snapshot refs = %q, want none", refs)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if artifactSnapshots != 0 {
+		t.Fatalf("artifacts were kept %d times, want none", artifactSnapshots)
+	}
 }

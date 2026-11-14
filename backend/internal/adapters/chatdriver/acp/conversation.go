@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -96,7 +97,10 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
-	unadoptedForkID      string
+	// handshake is the agent's initialize answer, for steering details that
+	// vary by agent version.
+	handshake       acpsdk.InitializeResponse
+	unadoptedForkID string
 
 	mu                sync.Mutex
 	sessionID         string
@@ -135,7 +139,61 @@ type conversation struct {
 	validateSettings  TurnSettingsValidator
 	extensionFor      ClientExtensionHandler
 	extensionMethods  map[string]string
-	legacyModel       bool
+	// steering is how this agent takes mid-turn guidance. pendingSteers holds
+	// guidance a drain agent has not collected yet; see SteerDrain.
+	steering      steering
+	pendingSteers []*pendingSteer
+	// stoppingTurn is the turn Stop has begun to stop. Steers for it are
+	// refused, so one that arrives while Stop waits for the dispatch lock
+	// cannot join, or hold up, a turn the user is stopping.
+	stoppingTurn string
+	// stopAttempts counts the Stops of stoppingTurn that have withdrawn its
+	// steers and not given them back. Steering returns only when the last
+	// one that fails gives it back; see WithdrawPendingSteers.
+	stopAttempts int
+	// nudging is set while a drain nudge is in flight; see steerByDrain.
+	nudging atomic.Bool
+	// steerSegment counts steers the running turn has taken. Text the agent
+	// streams without a message id after one goes to a new message, so it
+	// renders after the steer instead of growing the reply above it.
+	steerSegment int
+	// turnCtx is the running turn's context. A SteerPrompt steer runs its prompt
+	// under it, so cancelling the turn reaches every prompt in it.
+	turnCtx context.Context
+	// promptSeq numbers the running turn's prompts: 0 started it and each
+	// SteerPrompt steer adds one. outstanding holds those still running; the
+	// turn settles once every one of them has returned.
+	promptSeq   int
+	outstanding map[int]bool
+	// adoptedPrompt means the running turn's prompt was sent by an earlier
+	// daemon attachment (live reconnect). The host passes its answers on as
+	// private notifications, and only the host's result ends the turn.
+	adoptedPrompt bool
+	// turnResult is the host's result for the running turn, the answer that
+	// carries its receipt, once one of the turn's prompts has returned it.
+	turnResult *promptAnswer
+	// lastAnswer is the latest answer any of the running turn's prompts gave.
+	// Without a host receipt the turn ends with it.
+	lastAnswer *promptAnswer
+	// promptSteers are SteerPrompt steers waiting to learn whether they took.
+	promptSteers []*promptSteer
+	// steerSettledTurn is the last turn a steer prompt settled. An earlier
+	// prompt of that turn answering late is dropped, not a second completion.
+	steerSettledTurn string
+	// stragglers counts, per turn that finishAfterStragglers ended, the
+	// prompts whose answers have not arrived. Each is dropped when it does,
+	// however many turns have settled since.
+	stragglers map[string]int
+	// stragglerWait, when set by a test, replaces promptStragglerWait.
+	stragglerWait time.Duration
+	// promptReturned, when set by a test, runs as each of the turn's prompts
+	// returns and before its answer is routed, to fix the order in which
+	// overlapping answers are handled.
+	promptReturned func(seq int)
+	// promptSending, when set by a test, runs before a steer prompt checks
+	// whether it may still be written, to let Stop overtake it.
+	promptSending func(seq int)
+	legacyModel   bool
 	// The agent lists model among its own config options, as well as the older model list.
 	modelConfigOption  bool
 	legacyMode         bool
@@ -476,11 +534,23 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 	c.mu.Lock()
 	if durableBusy {
 		c.activeTurn = providerTurnID
+		if c.liveState.ActivePrompt && c.liveState.PendingResultEventID == "" && !c.liveState.ActiveCompaction {
+			// The host still runs the turn's prompt, so a steer prompt can join
+			// it. Its answers reach this attachment as the host's notifications.
+			// A compaction takes no steers, as a local Compact does not.
+			turnCtx, cancel := context.WithCancel(context.Background())
+			c.turnCtx, c.turnCancel = turnCtx, cancel
+			c.settlingTurn = ""
+			c.resetPromptSteeringLocked()
+			c.outstanding = map[int]bool{}
+			c.adoptedPrompt = true
+		}
 		if c.liveState.ActiveCompaction {
 			c.compactingTurnID = providerTurnID
 			c.compactionBefore = c.contextTokens
 		}
 		c.messages = make(map[string]string)
+		c.steerSegment = 0
 		c.thoughts = make(map[string]string)
 		c.nestedMessages = make(map[string]nestedMessageState)
 		c.tools = make(map[string]*toolState)
@@ -777,8 +847,12 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
+	c.turnCtx = turnCtx
+	c.resetPromptSteeringLocked()
+	c.outstanding = map[int]bool{0: true}
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -809,7 +883,10 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 		Prompt:    turn.prompt,
 	})
 
-	c.finishPrompt(turn.id, resp, err)
+	if c.promptReturned != nil {
+		c.promptReturned(0)
+	}
+	c.finishTurnPrompt(turn.id, 0, resp, err)
 }
 
 // reportServedModel tells the client which model actually answered when the
@@ -852,13 +929,7 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
-	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
-	var requestErr *acpsdk.RequestError
-	if eventID == "" && errors.As(err, &requestErr) {
-		if data, ok := requestErr.Data.(map[string]any); ok {
-			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
-		}
-	}
+	eventID := hostResultEventID(resp, err)
 	// A transport error may win the race with watchConnection. The host still
 	// owns this prompt; its journal, not an SDK disconnect, supplies the outcome.
 	if err != nil && eventID == "" && c.providerDetaching() {
@@ -1024,10 +1095,13 @@ func (c *conversation) finishPrompt(
 		c.activeTurn = ""
 		c.settlingTurn = ""
 		c.turnCancel = nil
+		c.turnCtx = nil
+		c.resetPromptSteeringLocked()
 		c.providerFailure = nil
 		if c.interrupt == interrupt {
 			c.interrupt = nil
 		}
+		c.releasePendingSteersLocked()
 	}
 	c.mu.Unlock()
 	if sessionLost {
@@ -1079,6 +1153,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	c.messages = make(map[string]string)
+	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
 	c.tools = make(map[string]*toolState)
@@ -1374,6 +1449,7 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.mu.Lock()
 		c.closed = true
 		close(c.closing)
+		c.releasePendingSteersLocked()
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel

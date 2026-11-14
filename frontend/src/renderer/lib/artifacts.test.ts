@@ -237,6 +237,19 @@ describe("filterArtifactGroups", () => {
 	});
 });
 
+describe("groupArtifactsByProject share access", () => {
+	it("keeps the access recorded with a published file's link", () => {
+		const [group] = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [
+				{ ...artifact("a.html", "2026-10-11T10:00:00Z", "html"), shareUrl: "https://viewer.test/artifact/a", shareAccess: "restricted" },
+				{ ...artifact("b.html", "2026-10-10T10:00:00Z", "html"), shareAccess: "anyone" },
+			])]),
+		]);
+		expect(group.rows.map((row) => [row.name, row.shareAccess])).toEqual([["a.html", "restricted"], ["b.html", undefined]]);
+		expect(artifactSharing(group.rows[0])).toBe("shared");
+	});
+});
+
 describe("artifactType", () => {
 	it("sorts images and videos by extension, and everything else into documents", () => {
 		expect(artifactType({ path: "a.png" })).toBe("image");

@@ -91,6 +91,10 @@ export type SessionArtifact = {
 	previousPaths?: string[];
 	/** The file's public link while it is published from this computer. */
 	shareUrl?: string;
+	/** A cloud file's SHA-256, from its listing: the Publish button compares it with the published one. */
+	sha256?: string;
+	/** Who shareUrl opens for, as this computer last recorded it; the link list has the final say. */
+	shareAccess?: "restricted" | "anyone";
 };
 
 /** The daemon-committed controller currently responsible for the session. */

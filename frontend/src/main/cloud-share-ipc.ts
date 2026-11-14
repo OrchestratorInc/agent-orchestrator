@@ -12,6 +12,7 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import {
 	artifactShareUrl,
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	sameShareFingerprint,
 	type CloudShareAccess,
 	type CloudShareFile,
 	type CloudShareGrant,
@@ -24,7 +25,7 @@ import {
 import {
 	CloudShareError,
 	type CloudShareApi,
-	inspectCloudSessionArtifact,
+	cloudSessionArtifactVersion,
 	inviteShareGrants,
 	listShareGrants,
 	listShareLinks,
@@ -32,14 +33,15 @@ import {
 	setShareLinkAccess,
 	resolveShareFile,
 	shareLinksAvailable,
-	scanShareFile,
 	shareCloudSessionArtifact,
 	type ShareSnapshot,
+	shareFileFingerprint,
 	snapshotShareFile,
+	statShareFile,
 	unpublishShareLink,
 	uploadShare,
 } from "./cloud-share";
-import { type ShareLinkRecordStore, artifactRecordKey, shareRecordKey } from "./cloud-share-links";
+import { type ShareLinkRecordStore, artifactRecordKey, shareAccess, shareRecordKey } from "./cloud-share-links";
 
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
@@ -165,54 +167,50 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	const inFlight = new Map<number, AbortController>();
 
 	// A cloud session's file is named by its committed version: the
-	// fingerprint is its SHA-256, and the control plane refuses to share
-	// another version.
-	// What each cloud file version inspected this run looked like it held, by
-	// its record key and SHA-256: publishing names a version inspected before.
-	const scannedCloudVersions = new Map<string, string[]>();
-	const inspectCloudFile = async (file: CloudSessionShareFile): Promise<CloudShareInspection> => {
-		const found = await inspectCloudSessionArtifact(deps, file.baseUrl, file);
+	// fingerprint is its SHA-256, which the renderer already has from the
+	// session's artifact list, and the control plane refuses to share another
+	// version. Only when the renderer did not name it is the list read here.
+	const inspectCloudFile = async (file: CloudSessionShareFile, refresh = false): Promise<CloudShareInspection> => {
 		const key = await cloudRecordKey(deps.records, file.baseUrl, file);
-		if (scannedCloudVersions.size >= 200) scannedCloudVersions.clear();
-		scannedCloudVersions.set(JSON.stringify([key, found.sha256]), found.secretFindings);
+		const listed = refresh || !file.fingerprint ? await cloudSessionArtifactVersion(deps, file.baseUrl, file) : undefined;
+		const name = listed?.name ?? (file.path.split("/").pop() || file.path);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
-		const publishedSecretFindings = shareId ? await deps.records.publishedSecretFindings(key) : undefined;
 		return {
-			name: found.name,
-			size: found.size,
-			secretFindings: found.secretFindings,
-			unsupported: isVideo(found.name),
-			fingerprint: found.sha256,
+			name,
+			...(listed ? { size: listed.size } : {}),
+			unsupported: isVideo(name),
+			fingerprint: listed?.sha256 ?? file.fingerprint ?? "",
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
-			...(publishedSecretFindings?.length ? { publishedSecretFindings } : {}),
 		};
 	};
 
 	const publishCloudFile = async (file: CloudSessionShareFile): Promise<CloudSharePublishResult> => {
 		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
 		if (!(await deps.getToken())) return { status: "signed_out" };
-		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file) };
+		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file, true) };
 		try {
 			// The control plane copies the file inside its bucket in one quick
 			// request, so there is nothing to cancel: stopping the wait could
 			// leave a public link the person was told was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
-			// What the published version looked like it held when it was inspected,
-			// for the link's warning once the file changes.
 			const key = await cloudRecordKey(deps.records, file.baseUrl, file);
-			const findings = scannedCloudVersions.get(JSON.stringify([key, file.fingerprint]));
-			await deps.records.set(key, result.share.id, file.fingerprint, artifactShareUrl(result.share), findings);
+			await deps.records.set(key, result.share.id, file.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
+			// Another version was committed since: offer the newest.
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
-				return { status: "changed", inspection: await inspectCloudFile(file) };
+				return { status: "changed", inspection: await inspectCloudFile(file, true) };
 			}
 			throw error;
 		}
 	};
 
+	// What the panel and the Publish button show: the file's link, whether the
+	// file changed since it was published there, and the fingerprint a publish
+	// names. Read from this computer's record and the file's metadata (a cloud
+	// file's listed SHA-256): the file itself is never read.
 	deps.ipcMain.handle("cloudShare:inspect", async (event, value: unknown): Promise<CloudShareInspection> => {
 		requireMainFrame(event);
 		const file = shareFileArgument(value);
@@ -221,17 +219,13 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
-		const publishedSecretFindings = shareId ? await deps.records.publishedSecretFindings(key) : undefined;
-		const { secretFindings, fingerprint } = await scanShareFile(resolved);
 		return {
 			name: resolved.name,
 			size: resolved.size,
-			secretFindings,
 			unsupported: isVideo(resolved.name),
-			fingerprint,
+			fingerprint: await statShareFile(resolved),
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
-			...(publishedSecretFindings?.length ? { publishedSecretFindings } : {}),
 		};
 	});
 
@@ -240,8 +234,11 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 
 	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> => {
 		const baseUrl = baseUrlArgument(value);
+		// A link published, changed or unpublished here while the list was in
+		// flight keeps what that write recorded: the list predates it.
+		const since = deps.records.generation();
 		const links = await listShareLinks(deps, baseUrl);
-		await deps.records.syncLinks(baseUrl, links.shares);
+		await deps.records.syncLinks(baseUrl, links.shares, since);
 		return links;
 	});
 
@@ -258,7 +255,10 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		requireMainFrame(event);
 		const access = accessArgument((value as { access?: unknown } | null)?.access);
 		if (!access) throw new CloudShareError("invalid_request", "Not who a link opens for.");
-		return setShareLinkAccess(deps, baseUrlArgument(value), shareIdArgument(value), access);
+		const share = await setShareLinkAccess(deps, baseUrlArgument(value), shareIdArgument(value), access);
+		// The daemon serves the artifact's access from the record, so every list marks it at once.
+		await deps.records.setAccess(share.id, shareAccess(share));
+		return share;
 	});
 
 	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrant[]> =>
@@ -308,29 +308,36 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			const progress = (sentBytes: number, totalBytes: number) => {
 				if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });
 			};
-			// Preparing the snapshot is the first half of the progress, uploading it the second.
-			snapshot = await snapshotShareFile(resolved, deps.snapshotDir(), {
-				signal: controller.signal,
-				onProgress: (copied) => progress(copied, resolved.size * 2),
-			});
-			const taken = snapshot;
-			// Publish only what the person was shown: the file as inspected,
-			// with no credential the inspection did not report.
 			const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 			const shareId = await deps.records.get(key);
-			if (taken.fingerprint !== file.fingerprint) {
+			// The file as it is now, for the panel to show and publish again.
+			const changed = async (): Promise<CloudSharePublishResult> => {
+				const now = await fs.stat(resolved.realPath);
 				return {
 					status: "changed",
 					inspection: {
 						name: resolved.name,
-						size: taken.size,
-						secretFindings: taken.secretFindings,
+						size: now.size,
 						unsupported: false,
-						fingerprint: taken.fingerprint,
+						fingerprint: shareFileFingerprint(now),
 						...(shareId ? { shareId } : {}),
 					},
 				};
+			};
+			// Preparing the snapshot is the first half of the progress, uploading it the second.
+			try {
+				snapshot = await snapshotShareFile(resolved, deps.snapshotDir(), {
+					signal: controller.signal,
+					onProgress: (copied) => progress(copied, resolved.size * 2),
+				});
+			} catch (error) {
+				// Written to while it was copied: nothing is published, and the newest version is offered.
+				if (error instanceof CloudShareError && error.code === "source_changed") return await changed();
+				throw error;
 			}
+			const taken = snapshot;
+			// Publish only the file as the panel showed it: one rewritten since is offered again.
+			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
 			// The document is the file's path in its session's artifacts, in its project.
 			const folder = path.posix.dirname(resolved.relativePath);
@@ -344,7 +351,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				access: file.access,
 				emails: file.emails,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
-			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), taken.secretFindings);
+			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

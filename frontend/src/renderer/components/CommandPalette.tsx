@@ -19,6 +19,8 @@ import {
 	buildFileSessionCommands,
 	buildProjectActions,
 	buildSessionActions,
+	buildSessionSearchCommands,
+	withoutChatHitsCoveredBySessionSearch,
 	buildWorkspaceFileCommands,
 	bestMatch,
 	goToCommands,
@@ -65,12 +67,15 @@ import { useCopyToClipboard, useSessionMenuEntries } from "./SessionContextMenuI
 import type { MenuEntry } from "./menu-model";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
+import { LOCAL_HOST } from "../lib/hosts";
+import { isMacPlatform } from "../lib/platform";
+import { revealSessionSearchMatch } from "../lib/session-search-reveal";
+import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
 import { sessionUiKey } from "../lib/hosts";
 import { beginModalHandoff } from "../lib/modal-handoff";
-import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { getSessionRowIndicator } from "../lib/session-presentation";
 import { SessionStatusDot } from "./Sidebar";
@@ -102,6 +107,11 @@ const PALETTE_FILE_SEARCH_DEBOUNCE_MS = 150;
 const PALETTE_FILE_VIEW_ROWS = 50;
 const isMac = isMacPlatform();
 const PALETTE_FILE_SEARCH_MIN_CHARS = 2;
+// Session-text search starts at two characters: one character matches nearly
+// every past session and would make the palette flash a useless list.
+const PALETTE_SESSION_SEARCH_MIN_CHARS = 2;
+// How many recent sessions the palette lists before a query is typed.
+const PALETTE_RECENTS_LIMIT = 5;
 const EMPTY_REVIEW_STATES: Readonly<Record<string, PRReviewState[]>> = {};
 type PaletteView =
 	| { mode: "root" }
@@ -255,6 +265,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			? currentFileTarget
 			: undefined;
 	const normalizedFileQuery = debouncedQuery.trim();
+	const normalizedSessionQuery = debouncedQuery.trim();
 	const fileSearchEnabled = isOpen
 		&& normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS
 		&& commandPaletteFileSearchAvailable(activeFileTarget, cloud.ready);
@@ -304,6 +315,19 @@ export const CommandPalette = memo(function CommandPalette() {
 		enabled: chatSearchEnabled && cloudReady && cloudChatOrgIds.length > 0,
 		placeholderData: keepPreviousData,
 	});
+
+	// Session-text search shares the debounced query with file search: one timer
+	// per keystroke, two endpoints. Its rows show only in the root view, so it is
+	// off while another view (session actions, a file picker) owns the input.
+	// Recents before a query, matches after: opening the palette to get back to
+	// a recent session should not require remembering a word from it.
+	const sessionSearchEnabled = isOpen
+		&& view.mode === "root"
+		&& (normalizedSessionQuery.length === 0
+			|| normalizedSessionQuery.length >= PALETTE_SESSION_SEARCH_MIN_CHARS);
+	const sessionSearchQuery = usePaletteSessionSearch(normalizedSessionQuery, LOCAL_HOST, sessionSearchEnabled);
+	const sessionSearchIndexStatus = useSessionSearchIndexStatus(LOCAL_HOST, isOpen && sessionSearchEnabled);
+	const sessionSearchHits = sessionSearchQuery.data?.results ?? [];
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -603,6 +627,13 @@ export const CommandPalette = memo(function CommandPalette() {
 		},
 		[currentProjectId, chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
 	);
+	// Session-text rows are only shown once the query has settled, so a row the
+	// person is about to press cannot be replaced by a later response.
+	const sessionSearchSettled = normalizedSessionQuery === query.trim();
+	const sessionSearchItems = useMemo(
+		() => (sessionSearchSettled ? buildSessionSearchCommands(sessionSearchHits, query.trim(), t) : []),
+		[sessionSearchHits, query, sessionSearchSettled, t],
+	);
 
 	const groups = useMemo(() => {
 		if (view.mode === "session-actions") {
@@ -622,8 +653,23 @@ export const CommandPalette = memo(function CommandPalette() {
 		const shownRootItems = currentSession
 			? rootItems.map((item) => (item.group === "current" || item.id === "current-copy-branch" ? { ...item, searchOnly: true } : item))
 			: rootItems;
-		return displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...chatItems], query, t);
-	}, [view.mode, rootItems, rootContextItems, currentSession, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+		// A message the session-text group already lists is not repeated as a chat row.
+		const settledChatItems = withoutChatHitsCoveredBySessionSearch(chatItems, sessionSearchItems);
+		const commandGroups = displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...settledChatItems], query, t);
+		// Recents are a jumping-off point, so they sit last, capped, and skip
+		// sessions Needs attention already lists. Once a query is typed, transcript
+		// matches follow the commands and sessions, ahead of files and chats.
+		const recents = normalizedSessionQuery === "";
+		const listed = new Set(commandGroups.flatMap((group) => group.items.flatMap((item) => (item.action?.kind === "resume-session" ? [item.action.sessionId] : []))));
+		const searchRows = recents
+			? sessionSearchItems.filter((item) => item.action?.kind !== "open-search-result" || !listed.has(item.action.sessionId)).slice(0, PALETTE_RECENTS_LIMIT)
+			: sessionSearchItems;
+		if (searchRows.length === 0) return commandGroups;
+		const searchGroup = { id: "search" as const, label: recents ? t("command.recentSessions") : t("command.sessionText"), items: searchRows };
+		if (recents) return [...commandGroups, searchGroup];
+		const at = commandGroups.findIndex((group) => isSearchGroup(group.id as CommandItemModel["group"]));
+		return at === -1 ? [...commandGroups, searchGroup] : [...commandGroups.slice(0, at), searchGroup, ...commandGroups.slice(at)];
+	}, [view.mode, rootItems, rootContextItems, currentSession, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, sessionSearchItems, normalizedSessionQuery, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	// Rows a search found for an earlier query stay visible while the next one
@@ -809,7 +855,8 @@ export const CommandPalette = memo(function CommandPalette() {
 
 	const sessionRoute = useCallback(
 		(projectId: string, sessionId: string): Extract<NavigateTarget, { to: "/sessions/$sessionId" | "/projects/$projectId/sessions/$sessionId" }> => {
-			return projectId === STANDALONE_WORKSPACE_ID
+			// A search hit for a standalone session carries no project id at all.
+			return !projectId || projectId === STANDALONE_WORKSPACE_ID
 				? { to: "/sessions/$sessionId", params: { sessionId } }
 				: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId } };
 		},
@@ -1023,6 +1070,19 @@ export const CommandPalette = memo(function CommandPalette() {
 						closePalette();
 						break;
 					}
+					case "open-search-result": {
+						// Hand the match to the session before navigating: the Chat
+						// timeline is mounted by the shell, so it picks the target up
+						// when it renders rather than from route state.
+						revealSessionSearchMatch(action);
+						navigateToTarget(sessionRoute(action.projectId, action.sessionId));
+						closePalette();
+						break;
+					}
+					case "copy-resume-command":
+						await aoBridge.clipboard.writeText(action.command);
+						closePalette();
+						break;
 					case "open-new-task":
 						if (blockedByRestart(action.projectId)) break;
 						// New task opens the new chat page (a cloud project, the New task
@@ -1165,7 +1225,10 @@ export const CommandPalette = memo(function CommandPalette() {
 		: null;
 	// One notice for everything that went wrong, so a daemon that is down reads
 	// as one problem rather than three red boxes.
-	const notices = [...new Set([error, fileSearchError, contentSearchError, chatSearchError].filter((message): message is string => Boolean(message)))];
+	const sessionSearchError = sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.error
+		? (sessionSearchQuery.error instanceof Error ? sessionSearchQuery.error.message : t("command.searchSessionsError"))
+		: null;
+	const notices = [...new Set([error, fileSearchError, contentSearchError, chatSearchError, sessionSearchError].filter((message): message is string => Boolean(message)))];
 	const selectedItem = visibleItems.find((item) => item.id === value);
 	const scopeSessionTitle = view.mode === "file-search"
 		? (fileSearchSession?.title ?? t("command.sessionFallback"))
@@ -1335,6 +1398,23 @@ export const CommandPalette = memo(function CommandPalette() {
 									))}
 								</CommandGroup>
 							))}
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.isFetching && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
+							)}
+							{/* An empty session-text result over an incomplete index is not the
+							    same answer as one over a complete index. */}
+							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchQuery.isFetching && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">
+									{sessionSearchIndexStatus.data?.state === "backfilling"
+										? t("command.searchSessionsBackfilling", { count: sessionSearchIndexStatus.data.pendingSources })
+										: sessionSearchIndexStatus.data?.state === "unavailable"
+											? t("command.searchSessionsUnavailable")
+											: t("command.noSessionMatches")}
+									{sessionSearchIndexStatus.data?.unindexedHarnesses?.length
+										? ` ${t("command.searchSessionsUnindexed", { harnesses: sessionSearchIndexStatus.data.unindexedHarnesses.join(", ") })}`
+										: ""}
+								</div>
+							)}
 						</CommandList>
 						{view.mode === "file-search" && fileSearchEnabled && !searchCatchingUp && fileSearchQuery.data?.truncated && (
 							<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchFilesTruncated")}</div>
@@ -1342,7 +1422,12 @@ export const CommandPalette = memo(function CommandPalette() {
 						<CommandFooter aria-hidden="true">
 							<FooterHint keys={["↑", "↓"]} label={t("command.navigate")} />
 							{selectedItem && <FooterHint keys={["Enter"]} label={t("command.open")} />}
-							{selectedItem?.secondaryAction && <FooterHint keys={[isMac ? "⌘" : "Ctrl", "Enter"]} label={t("command.actions")} />}
+							{selectedItem?.secondaryAction && (
+								<FooterHint
+									keys={[isMac ? "⌘" : "Ctrl", "Enter"]}
+									label={selectedItem.secondaryAction.kind === "copy-resume-command" ? t("command.copyResumeCommand") : t("command.actions")}
+								/>
+							)}
 							<FooterHint keys={["Esc"]} label={view.mode === "root" ? t("command.close") : t("command.back")} />
 							<span className="ml-auto min-w-0 truncate">{scope}</span>
 						</CommandFooter>

@@ -57,6 +57,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			getTeamShareAccess: async (_org: string, _project: string, _session: string | undefined, teamId: string) => ({ members: mocks.teamMembers[teamId] ?? [] }),
 			listShareCandidates: async () => ({ candidates: mocks.candidates }),
 			listShareLinks: async () => ({ links: [] }),
+			listOrgMembers: async () => ({ members: [{ userId: "u-asha" }, { userId: "u-farah" }, { userId: "u-ben" }, { userId: "u-dana" }] }),
 			createShareGrants: async (...args: unknown[]) => {
 				mocks.calls.push(["createShareGrants", ...args]);
 				await held("createShareGrants");
@@ -169,7 +170,8 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(within(list).getByText(/Asha Rao/).textContent).toContain("(you)");
 		expect(within(list).getByText("Owner")).toBeInTheDocument();
 		const workspace = list.querySelector("[data-share-workspace-row]")!;
-		expect(workspace.textContent).toContain("People in Northwind");
+		expect(workspace.textContent).toContain("Everyone in your workspace");
+		expect(workspace.textContent).toContain("Northwind · 4 members");
 		expect(workspace.textContent).toContain("Full access");
 		const rows = [...list.querySelectorAll("[data-share-entry]")];
 		expect(rows.map((element) => element.getAttribute("data-share-row"))).toEqual([
@@ -202,7 +204,7 @@ describe("ShareSessionDialog people and teams", () => {
 		renderDialog();
 		await screen.findByText("Platform");
 		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
-		const workspace = await screen.findByText("People in Northwind");
+		const workspace = await screen.findByText("Everyone in your workspace");
 		const first = workspace.closest("li")!;
 		expect(first.hasAttribute("data-share-workspace-row")).toBe(true);
 		expect(first.textContent).toContain("Full access");

@@ -234,15 +234,17 @@ describe("useWorkspaceQuery", () => {
 			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", statusReadiness: "ready",
 				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01T00:00:00Z", prs: [],
 				artifactFiles: [
-					{ path: "poem.html", name: "poem.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", shareUrl },
+					{ path: "poem.html", name: "poem.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", shareUrl, shareAccess: "anyone" },
 					{ path: "notes.md", name: "notes.md", kind: "markdown", size: 3, updatedAt: "2026-01-01T00:00:00Z" },
 				] }] } },
 		});
 		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		const [published, unshared] = result.current.data?.[0].sessions[0].artifactFiles ?? [];
-		expect(published).toMatchObject({ path: "poem.html", shareUrl });
+		// With who it opens for, as recorded, so its mark is right before the link list is read.
+		expect(published).toMatchObject({ path: "poem.html", shareUrl, shareAccess: "anyone" });
 		expect(unshared).not.toHaveProperty("shareUrl");
+		expect(unshared).not.toHaveProperty("shareAccess");
 	});
 
 	it("rejects workspace reads while the daemon base URL is untrusted", async () => {

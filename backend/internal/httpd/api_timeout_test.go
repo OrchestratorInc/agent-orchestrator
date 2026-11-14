@@ -450,12 +450,13 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router.Post("/api/v1/orchestrators", record)
 	router.Post("/api/v1/sessions/{sessionId}/restore", record)
 	router.Post("/api/v1/sessions/{sessionId}/resume-agent", record)
+	router.Post("/api/v1/sessions/{sessionId}/fork", record)
 	router.Post("/api/v1/sessions/{sessionId}/send", record)
 	router.Get("/api/v1/sessions", record)
-	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
+	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/fork"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
 		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(call[0], call[1], nil))
 	}
-	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
+	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/fork": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
 	for call, setup := range want {
 		if seen[call] != setup {
 			t.Errorf("setupRoute(%s) = %v, want %v", call, seen[call], setup)

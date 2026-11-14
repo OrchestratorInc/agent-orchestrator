@@ -1,7 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderNames, describeAccountProblem, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
 import { formatCountdown, groupAccounts, limitWindowPace, PROVIDER_HARNESS, usedPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
@@ -10,6 +10,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { formatPlanName } from "../settings/AgentAccountsSection";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 function usedTone(used: number): string | null {
 	return used >= 100 ? "bg-error" : used >= 75 ? "bg-warning" : null;
@@ -66,7 +67,10 @@ function AccountLimitRows({ account, peers, harness, first, now }: { account: Ag
 		account.default ? t("settings.agentAccounts.default") : null,
 		resetCredits > 0 ? t("usage.limits.resetCredits", { value: resetCredits }) : null,
 	].filter(Boolean).join(" · ");
-	const issue = account.problem || (account.signedIn ? null : t("usage.limits.signedOut"));
+	const problem = describeAccountProblem(account, t);
+	const issue = problem?.text ?? (account.signedIn ? null : t("usage.limits.signedOut"));
+	// A check that failed on its own clears by itself: no warning for it.
+	const needsUser = problem ? problem.actionable : Boolean(issue);
 	const fetchedAt = account.limits?.fetchedAt;
 	const staleFrom = issue && windows.length > 0 && fetchedAt ? t("usage.limits.staleFrom", { value: formatRelativeTime(fetchedAt, now, i18n.language) }) : null;
 	return (
@@ -75,9 +79,10 @@ function AccountLimitRows({ account, peers, harness, first, now }: { account: Ag
 				<span className="truncate text-control font-medium text-foreground">{agentAccountLabel(account, peers, t)}</span>
 				{meta ? <span className="text-xs text-muted-foreground">{meta}</span> : null}
 				{issue ? (
-					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-						<TriangleAlert aria-hidden="true" className="size-icon-sm self-center text-warning" />
+					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground" data-account-problem={problem ? account.problemKind ?? "unavailable" : undefined}>
+						{needsUser ? <TriangleAlert aria-hidden="true" className="size-icon-sm self-center text-warning" /> : null}
 						{staleFrom ? `${issue} · ${staleFrom}` : issue}
+						{problem?.detail ? <Tooltip><TooltipTrigger asChild><button type="button" className="underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:text-foreground">{t("settings.agentAccounts.problemDetails")}</button></TooltipTrigger><TooltipContent className="max-w-sm break-words font-mono">{problem.detail}</TooltipContent></Tooltip> : null}
 					</span>
 				) : null}
 			</div>

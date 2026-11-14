@@ -102,6 +102,12 @@ vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	useCloudArtifactAccess: cloudAccessMock,
 }));
 
+const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
+vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./ShareArtifactPopover")>()),
+	useReconciledShareLinks: () => shareAccessMock.current,
+}));
+
 const artifacts: SessionArtifact[] = [
 	{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z", registered: true },
 	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", inlineUrl: "http://ao-inline-artifact.sess-1.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
@@ -374,6 +380,30 @@ describe("SessionArtifactsView", () => {
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
 		artifactFileChangesMock.mockReset();
+	});
+
+	it("marks each published card by who its link opens for, as on the Artifacts page", () => {
+		shareAccessMock.current = new Map([["https://viewer.test/artifact/notes", "restricted"], ["https://viewer.test/artifact/report", "anyone"]]);
+		const files = artifacts.map((file, index) => index === 0 ? { ...file, shareUrl: "https://viewer.test/artifact/notes" }
+			: index === 1 ? { ...file, shareUrl: "https://viewer.test/artifact/report" } : file);
+		renderView(<SessionArtifactsView session={session(files)} />);
+		const card = (name: RegExp) => screen.getByRole("button", { name }).closest("li")!;
+		const privateMark = within(card(/^notes\.md/)).getByRole("img", { name: "Shared privately" });
+		expect(privateMark).toHaveClass("text-status-in-review");
+		expect(privateMark.querySelector("svg")).toHaveClass("icon-link");
+		const publicMark = within(card(/^report\.html/)).getByRole("img", { name: "Published" });
+		expect(publicMark).toHaveClass("text-success");
+		expect(publicMark.querySelector("svg")).toHaveClass("icon-globe");
+		expect(within(card(/^plan\.md/)).queryByRole("img")).toBeNull();
+		shareAccessMock.current = new Map();
+	});
+
+	it("marks a card by the access recorded with its link before the link list is read", () => {
+		const files = artifacts.map((file, index) => index === 0 ? { ...file, shareUrl: "https://viewer.test/artifact/notes", shareAccess: "anyone" as const } : file);
+		renderView(<SessionArtifactsView session={session(files)} />);
+		const mark = within(screen.getByRole("button", { name: /^notes\.md/ }).closest("li")!).getByRole("img", { name: "Published" });
+		expect(mark).toHaveClass("text-success");
+		expect(mark.querySelector("svg")).toHaveClass("icon-globe");
 	});
 
 	it("follows an open local file's changes on disk only while it is open", async () => {
