@@ -96,7 +96,8 @@ export type PaletteMenuView =
 	| { mode: "project-actions"; projectId: string }
 	| { mode: "menu-submenu"; sessionId: string; entryId: string; title: string }
 	| { mode: "choices"; menu: string; title: string }
-	| { mode: "rename-session"; sessionId: string };
+	| { mode: "rename-session"; sessionId: string }
+	| { mode: "go-to"; target: "projects" | "sessions"; title: string };
 
 export type CommandItem = {
 	id: string;
@@ -485,6 +486,11 @@ export function buildProjectActions(workspace: WorkspaceSummary, ctx: ProjectAct
 	return items;
 }
 
+/** The project or session rows a Go to list shows, out of the palette's root rows. */
+export function goToCommands(items: readonly CommandItem[], target: "projects" | "sessions"): CommandItem[] {
+	return items.filter((item) => (target === "projects" ? item.group === "projects" : item.group === "attention" || item.group === "sessions"));
+}
+
 export function findSession(workspaces: WorkspaceSummary[], sessionId: string): WorkspaceSessionContext | undefined {
 	for (const workspace of workspaces) {
 		const match = workspace.sessions.find((session) => session.id === sessionId);
@@ -714,6 +720,21 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("shell.goHome"),
 		keywords: ["home", "start", "get started", "clone"],
 		action: { kind: "navigate", target: { to: "/" } },
+	});
+	// Projects and most sessions wait for a search; these list them all.
+	items.push({
+		id: "global-go-to-project",
+		group: "global",
+		title: t("command.goToProject"),
+		keywords: ["projects", "repos", "open project", "switch project"],
+		action: { kind: "open-view", view: { mode: "go-to", target: "projects", title: t("command.goToProject") } },
+	});
+	items.push({
+		id: "global-go-to-session",
+		group: "global",
+		title: t("command.goToSession"),
+		keywords: ["sessions", "chats", "agents", "open session", "switch session"],
+		action: { kind: "open-view", view: { mode: "go-to", target: "sessions", title: t("command.goToSession") } },
 	});
 	items.push({
 		id: "global-automations",

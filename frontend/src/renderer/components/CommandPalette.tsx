@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Bell, Check, ChevronRight, CircleAlert, Folder, Loader2, Smartphone } from "@/components/app-icons";
+import { ArrowLeft, Bell, Check, ChevronRight, CircleAlert, Coffee, Folder, Loader2, Smartphone } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -20,6 +20,7 @@ import {
 	buildProjectActions,
 	buildSessionActions,
 	buildWorkspaceFileCommands,
+	goToCommands,
 	findSubmenuEntries,
 	menuEntryCommands,
 	type PaletteMenuView,
@@ -49,6 +50,9 @@ import { previewDocumentThemeStyle } from "../lib/theme";
 import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { runAppMenuAction } from "../hooks/useAppMenuCommand";
 import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useStayAwake } from "../hooks/useStayAwake";
+import { useSessionSwitchStore } from "../stores/session-switch-store";
+import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
 import { useLocaleStore } from "../stores/locale-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
@@ -347,6 +351,28 @@ export const CommandPalette = memo(function CommandPalette() {
 	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
 	const sideChats = useUiStore((s) => s.sideChats);
 	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
+	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
+	const stayAwake = useStayAwake(isOpen && isMac);
+	const stayToggleRef = useRef(stayAwake.toggle);
+	stayToggleRef.current = stayAwake.toggle;
+	// The chat ↔ terminal switch the session's own view offers.
+	const switchMenus = useSessionSwitchStore((state) => state.menus);
+	const switchItemFor = useCallback((sessionId: string | undefined): CommandItemModel[] => {
+		const menu = sessionId ? switchMenus[sessionId] : undefined;
+		const action = menu?.switchAction;
+		if (!menu || !action) return [];
+		return [{
+			id: "session-switch-interface",
+			group: "current",
+			title: menu.switchTarget === "chat" ? t("agentSwitch.switchToChat") : t("agentSwitch.switchToTerminal"),
+			icon: <RoundedInterfaceIcon className="size-icon-base" target={menu.switchTarget} />,
+			keywords: ["tui", "terminal", "chat", "interface", "ui", "mode"],
+			disabled: action.disabled,
+			...(action.reason ? { disabledReason: action.reason } : {}),
+			action: { kind: "run", run: action.run },
+		}];
+	}, [switchMenus, t]);
+
 	const prefs = useMemo((): PalettePreferences => ({
 		themePreference,
 		themeStyle,
@@ -390,9 +416,13 @@ export const CommandPalette = memo(function CommandPalette() {
 			...buildChoiceSearchCommands(t, prefs),
 			// The bell's panel and the footer's Connect mobile, which have no route.
 			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
+			...(isMac && stayAwake.supported
+				? [{ id: "global-stay-awake", group: "global" as const, title: t("awake.title"), icon: <Coffee aria-hidden="true" />, keywords: ["awake", "sleep", "caffeinate", "lid closed", "keep awake"], searchOnly: true, state: stayAwake.on ? t("command.on") : t("command.off"), keepOpen: true, action: { kind: "run" as const, run: () => stayToggleRef.current() } }]
+				: []),
+			...switchItemFor(params.sessionId),
 			{ id: "global-connect-mobile", group: "global" as const, title: t("settings.connectMobile"), icon: <Smartphone aria-hidden="true" />, keywords: ["phone", "pair", "ios", "android", "qr code"], searchOnly: true, action: { kind: "run" as const, run: () => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }) } },
 		],
-		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, prefs, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, prefs, stayAwake.on, stayAwake.supported, switchItemFor, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -426,12 +456,14 @@ export const CommandPalette = memo(function CommandPalette() {
 		const own = buildSessionActions(scoped.workspace, scoped.session, t);
 		// The palette's own rows already cover these.
 		const skip = new Set(["menu:session-copy-branch", ...(own.some((item) => item.action?.kind === "resume-session") ? ["menu:session-resume"] : [])]);
-		return [...own, ...menuEntryCommands(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
-	}, [scoped, sessionMenuEntries, t]);
+		return [...own, ...switchItemFor(scoped.session.id), ...menuEntryCommands(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
+	}, [scoped, sessionMenuEntries, switchItemFor, t]);
 	const menuViewItems = useMemo((): CommandItemModel[] => {
 		switch (view.mode) {
 			case "menu-submenu":
 				return menuSession ? menuEntryCommands(findSubmenuEntries(sessionMenuEntries, view.entryId) ?? [], menuSession.id) : [];
+			case "go-to":
+				return goToCommands(rootItems, view.target);
 			case "choices":
 				return buildChoiceCommands(view.menu, t, prefs);
 			case "rename-session": {
@@ -469,7 +501,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			default:
 				return [];
 		}
-	}, [view, menuSession, sessionMenuEntries, prefs, query, workspaces, pinnedProjectIds, restartingProjectIds, copyToClipboard, removeProject, queryClient, t]);
+	}, [view, rootItems, menuSession, sessionMenuEntries, prefs, query, workspaces, pinnedProjectIds, restartingProjectIds, copyToClipboard, removeProject, queryClient, t]);
 	const filePickerWorkspace = view.mode === "file-session-picker"
 		? workspaces.find((workspace) => workspace.id === view.projectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
 		: undefined;
@@ -1049,7 +1081,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const contextLabel =
 		view.mode === "session-actions" || view.mode === "rename-session"
 			? (scoped?.session.title ?? menuSession?.title ?? t("command.sessionFallback"))
-			: view.mode === "menu-submenu" || view.mode === "choices"
+			: view.mode === "menu-submenu" || view.mode === "choices" || view.mode === "go-to"
 				? view.title
 				: view.mode === "project-actions"
 					? (workspaces.find((workspace) => workspace.id === view.projectId)?.name ?? "")
@@ -1155,7 +1187,7 @@ export const CommandPalette = memo(function CommandPalette() {
 								? <Loader2 className="size-icon-md shrink-0 animate-spin text-muted-foreground" role="status" aria-label={t("command.searching")} />
 								: null}
 							placeholder={
-								view.mode === "session-actions" || view.mode === "project-actions" || view.mode === "menu-submenu" || view.mode === "choices"
+								view.mode === "session-actions" || view.mode === "project-actions" || view.mode === "menu-submenu" || view.mode === "choices" || view.mode === "go-to"
 									? `${contextLabel} · ${t("command.searchActionsPlaceholder")}`
 									: view.mode === "file-session-picker"
 										? t("command.chooseFileSession")

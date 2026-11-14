@@ -5,6 +5,7 @@ import {
 	buildProjectActions,
 	buildSessionActions,
 	findSubmenuEntries,
+	goToCommands,
 	menuEntryCommands,
 	buildWorkspaceFileCommands,
 	filterCommands,
@@ -956,6 +957,17 @@ describe("the blank palette", () => {
 		const items = buildCommands({ workspaces: workspaces() });
 		expect(filterCommands(items, "").some((item) => item.id === "pr:w-pr:42")).toBe(false);
 		expect(filterCommands(items, "42").some((item) => item.id === "pr:w-pr:42")).toBe(true);
+	});
+
+	it("lists every project and session from Go to project and Go to session", () => {
+		const items = buildCommands({ workspaces: workspaces() });
+		expect(byId(items).get("global-go-to-project")?.action).toMatchObject({ kind: "open-view", view: { mode: "go-to", target: "projects" } });
+		expect(goToCommands(items, "projects").map((item) => item.id)).toEqual(["project:proj-1"]);
+		const sessions = goToCommands(items, "sessions");
+		// Sessions that need attention are listed too, each once.
+		expect(sessions.some((item) => item.id === "attention:w-action")).toBe(true);
+		expect(sessions.some((item) => item.id === "session:w-working")).toBe(true);
+		expect(new Set(sessions.map((item) => item.id.split(":")[1])).size).toBe(sessions.length);
 	});
 
 	it("reaches the sidebar's Automations and Artifacts pages", () => {
