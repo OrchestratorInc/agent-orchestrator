@@ -1357,6 +1357,20 @@ describe("terminal restore", () => {
 		}
 	});
 
+	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
+		// Only the sharer's organization restores a session; a guest's restore
+		// would not even reach the control plane (the session is not in their
+		// own Cloud listing), it would go to this machine's daemon instead.
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", shared: true }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+		}
+	});
+
 	it.each([
 		["exited", undefined],
 		["error", "terminal handle missing"],
