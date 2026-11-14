@@ -63,7 +63,7 @@ import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
-import { agentAccountName, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
@@ -586,7 +586,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Reread the binding once a move settles: it commits at the end of the move.
 	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
-	const menuAccountName = currentAccount ? agentAccountName(currentAccount) : undefined;
+	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
@@ -656,7 +656,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					haptics.warning();
 					Alert.alert(
 						"Stop the turn and move?",
-						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountName(target) : "that account"}.`,
+						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountLabel(target, accounts) : "that account"}.`,
 						[
 							{ text: "Cancel", style: "cancel" },
 							{ text: "Stop and move", style: "destructive", onPress: () => move(accountId, true) },
