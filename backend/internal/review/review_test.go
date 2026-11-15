@@ -2612,6 +2612,38 @@ func TestAutoTriggerWaitsForNewCommitAfterCancelledRun(t *testing.T) {
 	}
 }
 
+func TestAutoTriggerSkipsDraftPR(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	prs := prAt("sha1")
+	prs.prs[0].Draft = true
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	if err != nil {
+		t.Fatalf("TriggerWithSource: %v", err)
+	}
+	if res.Created || len(store.runs) != 0 || launcher.spawned {
+		t.Fatalf("auto-review started on a draft PR: result=%+v launcher=%+v runs=%+v", res, launcher, store.runs)
+	}
+}
+
+func TestManualTriggerStillReviewsDraftPR(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	prs := prAt("sha1")
+	prs.prs[0].Draft = true
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerManual)
+	if err != nil {
+		t.Fatalf("TriggerWithSource: %v", err)
+	}
+	if !res.Created || len(store.runs) != 1 {
+		t.Fatalf("manual review of a draft PR did not start: result=%+v runs=%+v", res, store.runs)
+	}
+}
+
 func TestAutoTriggerStopsRetryingAfterThreeFailedRunsOnSameHead(t *testing.T) {
 	store := &fakeStore{
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1", AgentSessionID: "native-reviewer-1"},

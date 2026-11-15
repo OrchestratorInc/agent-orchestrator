@@ -470,6 +470,12 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 	var pendingSupersedes []staleSupersede
 	var restarted []domain.ReviewRun
+	draftPRURLs := make(map[string]bool, len(prs))
+	for _, pr := range prs {
+		if pr.Draft {
+			draftPRURLs[pr.URL] = true
+		}
+	}
 	batchID := ""
 	for _, reviewState := range reviews {
 		// A PR that is already up to date has nothing due — unless the caller asked
@@ -483,6 +489,10 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		switch {
 		case reviewState.Status == ReviewStateIneligible:
+			continue
+		case source == domain.ReviewTriggerAuto && draftPRURLs[reviewState.PRURL]:
+			// Automatic review waits for a draft to be marked ready; a person or
+			// agent can still ask for a review of a draft explicitly.
 			continue
 		case opts.Rerun:
 			// An explicit rerun reviews the head again, except that one reviewer
