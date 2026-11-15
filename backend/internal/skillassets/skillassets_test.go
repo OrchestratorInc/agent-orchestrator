@@ -133,6 +133,7 @@ func TestEmbeddedSetupGuidanceStartsOrchestratorAndHandsOffInApp(t *testing.T) {
 	text := strings.Join(strings.Fields(string(body)), " ")
 	for _, required := range []string{
 		"PATH_ALREADY_REGISTERED",
+		"ao project set-config <id> --worker-agent <agent> --orchestrator-agent <agent>",
 		"ao spawn --project <project-id> --kind orchestrator",
 		"Resume one marked `[exited]`",
 		"ao project set-config <project-id> --default-branch <branch>",

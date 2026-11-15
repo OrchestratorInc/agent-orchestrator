@@ -7,7 +7,7 @@ Use this when the user asks you to set up Orchestrator, add their first project,
 1. **Check the install.** `ao status` must report the daemon ready. In `ao doctor`, fix `FAIL` lines; a `WARN` for an agent the user does not use needs no action.
 2. **Check the agent.** `ao agent ls --refresh` must show the agent the user wants as `installed` and `authorized`. You cannot install an agent or sign in for the user. If it is not ready, send them to **Settings → Harness** in the app, which installs and signs in each agent, then run the check again.
 3. **Choose the repository.** Run `ao project ls` first: the project may already exist. If the user named no repository, find a few recent Git repositories on disk and ask which one to use. For a repository that is not on disk yet, run `git clone`, then register the clone.
-4. **Register it**, unless it is already a project. `ao project add` on a registered path fails with `PATH_ALREADY_REGISTERED`: use the existing project, whose path `ao project get <id>` shows.
+4. **Register it**, unless it is already a project. `ao project add` on a registered path fails with `PATH_ALREADY_REGISTERED`: use the existing project, whose path `ao project get <id>` shows. It keeps its saved agents, so if the user wants different ones, set them with `ao project set-config <id> --worker-agent <agent> --orchestrator-agent <agent>`. An orchestrator that is already running keeps the agent it started with.
 
    ```bash
    ao project add --path <absolute-path> --name <name> --worker-agent <agent> --orchestrator-agent <agent>
