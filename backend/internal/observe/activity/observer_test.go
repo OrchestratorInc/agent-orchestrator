@@ -634,3 +634,67 @@ func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
 		t.Fatal("raw output fallback did not detect current chrome", rawSink.signals)
 	}
 }
+
+// The daemon starts the observer before the session manager exists. Polling
+// waits for StartAfter, which the daemon closes only after installing the
+// session environment: a state change read earlier would resolve its native
+// identity without it, and a steady session is not looked up again.
+func TestStartWaitsForTheSessionEnvironment(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	applied := make(chan struct{}, 1)
+	sink := &fakeSink{applied: func() {
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
+	}}
+	start := make(chan struct{})
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent},
+		Config{DataDir: t.TempDir(), Tick: time.Hour, Clock: func() time.Time { return now }, Logger: testLogger(), StartAfter: start})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := observer.Start(ctx)
+	defer func() { cancel(); <-done }()
+
+	select {
+	case <-applied:
+		t.Fatal("the observer polled before it was started")
+	case <-time.After(50 * time.Millisecond):
+	}
+	observer.SetSessionEnv(func(context.Context, domain.SessionRecord) (map[string]string, error) {
+		return map[string]string{"STAKPAK_API_KEY": "project-only"}, nil
+	})
+	close(start)
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the observer never polled after it was started")
+	}
+	if got := agent.lastResolve.Env["STAKPAK_API_KEY"]; got != "project-only" {
+		t.Fatalf("first lookup environment STAKPAK_API_KEY = %q, want the session's", got)
+	}
+}
+
+func TestStartWithoutStartAfterPollsAtOnce(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	applied := make(chan struct{}, 1)
+	sink := &fakeSink{applied: func() {
+		select {
+		case applied <- struct{}{}:
+		default:
+		}
+	}}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent},
+		Config{DataDir: t.TempDir(), Tick: time.Hour, Clock: func() time.Time { return now }, Logger: testLogger()})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := observer.Start(ctx)
+	defer func() { cancel(); <-done }()
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("an observer without StartAfter never polled")
+	}
+}

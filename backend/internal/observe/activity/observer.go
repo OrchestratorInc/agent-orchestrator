@@ -26,6 +26,11 @@ type Config struct {
 	OutputLines int
 	Clock       func() time.Time
 	Logger      *slog.Logger
+	// StartAfter holds the poll loop until it closes; nil starts at once. The
+	// daemon closes it once SetSessionEnv is installed, so no state change is
+	// read, and its native identity resolved, without the session's
+	// environment.
+	StartAfter <-chan struct{}
 }
 
 type sessionSource interface {
@@ -52,6 +57,7 @@ type Observer struct {
 	outputLines int
 	clock       func() time.Time
 	logger      *slog.Logger
+	startAfter  <-chan struct{}
 	sessionEnv  atomic.Pointer[SessionEnvFunc]
 }
 
@@ -80,6 +86,7 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 		outputLines: cfg.OutputLines,
 		clock:       cfg.Clock,
 		logger:      cfg.Logger,
+		startAfter:  cfg.StartAfter,
 	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
@@ -106,7 +113,20 @@ func New(sessions sessionSource, sink activitySink, runtime outputReader, agents
 
 // Start runs polling until the context is canceled.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	if o.startAfter == nil {
+		return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-ctx.Done():
+			return
+		case <-o.startAfter:
+		}
+		<-observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "activity observer")
+	}()
+	return done
 }
 
 // Poll performs one activity reconciliation pass.
