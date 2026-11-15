@@ -369,7 +369,6 @@
 	"firstRun.toolsTitle": "Ваши инструменты",
 	"firstRun.toolsChecking": "Проверяем инструменты…",
 	"firstRun.githubTitle": "GitHub CLI",
-	"firstRun.ghSignInHint": "Вход не выполнен.",
 	"firstRun.install": "Установить",
 	"firstRun.agentsBodyNone": "Чтобы продолжить, установите хотя бы одного агента и войдите в него.",
 	"firstRun.toolsGithubHeading": "Инструменты",

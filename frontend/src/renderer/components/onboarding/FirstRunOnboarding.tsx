@@ -1073,7 +1073,6 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 							<CheckRow
 								icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
 								label={t("firstRun.githubTitle")}
-								detail={ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined}
 								trailing={ghView.busy ? <RowSpinner />
 									: !ghInstalled && ghView.job?.status === "unsupported" ? null
 									: !ghInstalled ? (
@@ -1083,8 +1082,8 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 									)
 									: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
 									: <GitHubLoginActions login={ghLogin} />}
-								below={ghView.busy && !ghInstalled ? <InstallProgress job={ghView.job} label={t("firstRun.githubTitle")} />
-									: ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
+								// Installing shows as the spinner alone; a failed install says why.
+								below={ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
 									// Installed but signed out: the `gh auth login` terminal Sign in
 									// with GitHub opens, in the card.
 									: ghInstalled && !ghSignedIn && (ghLogin.terminal || ghLogin.startError) ? <GitHubLoginTerminal login={ghLogin} />

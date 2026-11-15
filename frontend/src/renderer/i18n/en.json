@@ -367,7 +367,6 @@
 	"firstRun.toolsTitle": "Your tools",
 	"firstRun.toolsChecking": "Checking your tools…",
 	"firstRun.githubTitle": "GitHub CLI",
-	"firstRun.ghSignInHint": "Not signed in.",
 	"firstRun.install": "Install",
 	"firstRun.agentsBodyNone": "Install and sign in to at least one harness to continue.",
 	"firstRun.toolsGithubHeading": "Tools",

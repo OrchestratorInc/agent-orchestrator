@@ -405,7 +405,6 @@
 	"firstRun.toolsTitle": "ツール",
 	"firstRun.toolsChecking": "ツールを確認しています…",
 	"firstRun.githubTitle": "GitHub CLI",
-	"firstRun.ghSignInHint": "未サインイン",
 	"firstRun.install": "インストール",
 	"firstRun.agentsBodyNone": "続けるには、少なくとも1つの Harness をインストールしてサインインしてください。",
 	"firstRun.toolsGithubHeading": "ツール",
