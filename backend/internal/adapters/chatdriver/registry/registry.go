@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/grok"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
@@ -35,6 +36,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/copilotacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/deepseekharnessacp"
+	dockeragentacp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/dockeragentacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/droidacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/grokacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/hermesacp"
@@ -129,6 +131,8 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	add(copilotacp.New(copilotPlugin, log), copilotPlugin)
 	agyPlugin := agy.New()
 	add(agyacp.New(agyPlugin, log), agyPlugin)
+	dockerAgentPlugin := dockeragent.New()
+	add(dockeragentacp.New(dockerAgentPlugin, log), dockerAgentPlugin)
 	hermesPlugin := hermes.New()
 	add(hermesacp.New(hermesPlugin, log), hermesPlugin)
 	return r

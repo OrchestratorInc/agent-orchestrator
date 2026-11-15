@@ -2492,6 +2492,49 @@ func TestPRObservation_HumanReplyInBotThreadStillNudgesAgent(t *testing.T) {
 	}
 }
 
+func TestPRObservation_PRAuthorRepliesAreNotInjected(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prs["mer-1"] = []domain.PullRequest{{URL: "pr1", Author: "worker-account"}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "r1", ThreadID: "T1", Author: "coderabbitai[bot]", IsBot: true, File: "a.go", Line: 3, Body: "merge the buckets", AutoInjectReview: true},
+		// The worker answering, with the PR author's account.
+		{ID: "r2", ThreadID: "T1", Author: "@Worker-Account", File: "a.go", Line: 3, Body: "Fixed in abc123.", AutoInjectReview: true},
+		{ID: "r3", ThreadID: "T1", Author: "alice", File: "a.go", Line: 3, Body: "not quite, keep both links", AutoInjectReview: true},
+		// The author reviewing their own PR still reaches the worker.
+		{ID: "a1", ThreadID: "T2", Author: "worker-account", File: "b.go", Line: 9, Body: "rename this helper", AutoInjectReview: true},
+		// An app named after the author is someone else.
+		{ID: "b1", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot feedback", AutoInjectReview: true},
+		{ID: "b2", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot follow-up", AutoInjectReview: true},
+	}
+
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1"}); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(msg.msgs, "\n---\n")
+	if strings.Contains(all, "Fixed in abc123.") {
+		t.Fatalf("the PR author's reply was injected:\n%s", all)
+	}
+	for _, want := range []string{"merge the buckets", "not quite, keep both links", "rename this helper", "bot feedback", "bot follow-up"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("missing %q from nudges:\n%s", want, all)
+		}
+	}
+	if len(msg.msgs) != 5 {
+		t.Fatalf("want 5 per-comment nudges, got %d:\n%s", len(msg.msgs), all)
+	}
+}
+
+func TestWithoutPRAuthorRepliesKeepsEverythingWhenAuthorUnknown(t *testing.T) {
+	comments := []domain.PullRequestComment{
+		{ID: "1", ThreadID: "T1", Author: "alice"},
+		{ID: "2", ThreadID: "T1", Author: "worker-account"},
+	}
+	if got := withoutPRAuthorReplies(comments, " "); len(got) != 2 {
+		t.Fatalf("withoutPRAuthorReplies with no author = %v, want both comments", got)
+	}
+}
+
 func TestPRObservation_ReviewFeedbackNotInjectedWhenDisabled(t *testing.T) {
 	m, st, msg := newManager()
 	rec := working("mer-1")

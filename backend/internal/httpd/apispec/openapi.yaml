@@ -20286,6 +20286,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
           - stakpak
@@ -21070,6 +21071,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
           - stakpak
@@ -25316,6 +25318,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
           - stakpak

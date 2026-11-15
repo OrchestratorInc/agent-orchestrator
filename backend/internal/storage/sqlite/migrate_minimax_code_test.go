@@ -9,7 +9,7 @@ const miniMaxCodeMigrationVersion int64 = 20261115072651599
 
 // miniMaxCodePreviousVersion is the newest migration before MiniMax Code's.
 // Rolling back to it undoes only the MiniMax step, not unrelated later schema.
-const miniMaxCodePreviousVersion int64 = 20261115050423095
+const miniMaxCodePreviousVersion int64 = 20261115071147951
 
 // TestMigrationAllowsMiniMaxCodeAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
