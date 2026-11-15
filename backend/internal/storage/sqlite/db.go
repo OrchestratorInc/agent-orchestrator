@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -147,6 +149,17 @@ func Open(dataDir string) (*Store, error) {
 	if err := migrate(writeDB); err != nil {
 		_ = writeDB.Close()
 		return nil, err
+	}
+	if !newDatabase {
+		started := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := repairTimestampTables(ctx, writeDB, true)
+		cancel()
+		if err != nil {
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("timestamp startup fence (retry open to resume): %w", err)
+		}
+		slog.Info("timestamp startup fence completed", "duration", time.Since(started))
 	}
 	store, err := withSearchIndex(dataDir, dsn, writeDB)
 	if err != nil {

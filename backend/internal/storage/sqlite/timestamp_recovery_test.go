@@ -41,7 +41,7 @@ func TestRepairNormalizesReadableLocalComparisons(t *testing.T) {
 func TestOpenServesWhenTimestampRepairCannotWrite(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
-	_, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES ('bad','/tmp/bad','2026-10-21 18:15:40 +0200 +0200'); CREATE TABLE aaa_repair(at TIMESTAMP); INSERT INTO aaa_repair VALUES ('2026-10-21 18:15:40 +0200 +0200'); CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'repair blocked'); END; PRAGMA user_version=0;`)
+	_, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES ('bad','/tmp/bad','2026-10-21 18:15:40 +0200 +0200'); CREATE TABLE aaa_repair(at TIMESTAMP); INSERT INTO aaa_repair VALUES ('2026-10-21 18:15:40 +0200 +0200'); CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'repair blocked'); END; CREATE TRIGGER block_project BEFORE UPDATE ON projects BEGIN SELECT RAISE(ABORT,'repair blocked'); END; PRAGMA user_version=0;`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := Open(dir)
+	s, err := OpenPreMigrated(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
