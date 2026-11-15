@@ -90,3 +90,12 @@ describe("prHasReviewActivity, for the PR author", () => {
 		expect(prHasReviewActivity(pr)).toBe(true);
 	});
 });
+
+describe("the PR author, against a bot of the same name", () => {
+	it("keeps release-helper[bot]'s comments on release-helper's PR", () => {
+		const conversation = [{ id: "1", author: "release-helper[bot]", isBot: true, body: "Release notes drafted." }];
+		const pr = { ...base, author: "release-helper", conversation } as unknown as SessionPRSummary;
+		expect(prConversationComments(pr)).toHaveLength(1);
+		expect(prHasReviewActivity(pr)).toBe(true);
+	});
+});

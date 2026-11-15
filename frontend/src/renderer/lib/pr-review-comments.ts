@@ -3,7 +3,13 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 type CommentReviewer = SessionPRSummary["review"]["unresolvedBy"][number];
 
 /** A login as GitHub's two APIs write it: REST adds "[bot]" to an app's login, GraphQL does not. */
-const loginKey = (login: string) => login.trim().replace(/^@+/, "").replace(/\[bot\]$/i, "").toLowerCase();
+const loginKey = (login: string) => authorKey(login).replace(/\[bot\]$/i, "");
+
+/**
+ * A login for telling the PR's author apart: "[bot]" stays, so a
+ * \`release-helper[bot]\` app is not taken for a \`release-helper\` person.
+ */
+const authorKey = (login: string) => login.trim().replace(/^@+/, "").toLowerCase();
 
 /**
  * A bot's inline review comments, grouped by bot as the Reviews tab groups a
@@ -53,8 +59,8 @@ export function botThreadReviewers(pr: SessionPRSummary): { unresolved: CommentR
  * notes are not feedback to send back to it.
  */
 export function prConversationComments(pr: SessionPRSummary): NonNullable<SessionPRSummary["conversation"]> {
-	const author = pr.author ? loginKey(pr.author) : "";
-	return (pr.conversation ?? []).filter((comment) => comment.body.trim() && !(author && loginKey(comment.author) === author));
+	const author = pr.author ? authorKey(pr.author) : "";
+	return (pr.conversation ?? []).filter((comment) => comment.body.trim() && !(author && authorKey(comment.author) === author));
 }
 
 /**
@@ -85,8 +91,8 @@ export function mergeReviewers(...lists: CommentReviewer[][]): CommentReviewer[]
  * which is what the tab lists (the author's own notes and replies are left out).
  */
 export function prHasReviewActivity(pr: SessionPRSummary): boolean {
-	const author = pr.author ? loginKey(pr.author) : "";
-	const external = (login: string) => !author || loginKey(login) !== author;
+	const author = pr.author ? authorKey(pr.author) : "";
+	const external = (login: string) => !author || authorKey(login) !== author;
 	const bots = botThreadReviewers(pr);
 	return (pr.review?.reviews ?? []).some((review) => external(review.reviewerId))
 		|| [...(pr.review?.unresolvedBy ?? []), ...(pr.review?.resolvedBy ?? []), ...bots.unresolved, ...bots.resolved]
