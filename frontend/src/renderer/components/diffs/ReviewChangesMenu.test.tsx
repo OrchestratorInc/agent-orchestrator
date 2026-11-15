@@ -308,6 +308,21 @@ describe("ReviewChangesMenu", () => {
 		expect(screen.getByRole("menuitem", { name: /^Commits/ })).toBeInTheDocument();
 	});
 
+	it("offers a workspace project's commits only as All commits, with no list", async () => {
+		const { commits } = renderMenu(
+			{ scopes: [{ scope: "uncommitted", stats: { additions: 3, deletions: 1 } }] },
+			{ rows: [], rangeOnly: true, allStats: { additions: 5, deletions: 2 } },
+		);
+		await openMenu();
+		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
+		const all = await screen.findByRole("menuitemcheckbox", { name: /^All commits/ });
+		expect(all).toHaveTextContent("All commits+5−2");
+		expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(1);
+		expect(screen.queryByText("No commits")).not.toBeInTheDocument();
+		await userEvent.click(all);
+		expect(commits.onToggleAll).toHaveBeenCalledTimes(1);
+	});
+
 	it("labels a default branch's range as its latest commits", async () => {
 		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rangeMode: "recent" });
 		expect(screen.getByRole("button", { name: "Changes to review: Latest 3 commits" })).toBeInTheDocument();

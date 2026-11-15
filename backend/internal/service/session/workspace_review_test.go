@@ -667,7 +667,7 @@ func TestWorkspaceProjectManifestListsUncommittedPerRepository(t *testing.T) {
 		t.Fatalf("uncommitted = %v, want each repository's changes under its prefix", got)
 	}
 	if len(manifest.Sections.Staged) != 0 || len(manifest.Sections.Unstaged) != 0 || len(manifest.Sections.Committed) != 0 {
-		t.Fatalf("sections = %+v, want only uncommitted for a workspace project", manifest.Sections)
+		t.Fatalf("sections = %+v, want only uncommitted for a workspace project with no commits", manifest.Sections)
 	}
 	files, err := svc.ListWorkspaceFiles(context.Background(), "ws-1")
 	if err != nil {
@@ -690,6 +690,86 @@ func TestWorkspaceProjectManifestListsUncommittedPerRepository(t *testing.T) {
 	}
 	if !strings.Contains(patches["alpha"], "+alpha workspace test") || !strings.Contains(patches["beta"], "+func Added() {}") {
 		t.Fatalf("uncommitted workspace project patches = %#v", patches)
+	}
+}
+
+// #8172: a child repository's commits count toward files and summary, so the
+// Committed section must list them, under the repository's prefix, beside each
+// repository's uncommitted changes.
+func TestWorkspaceProjectManifestListsCommittedChildRepoChanges(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	rootBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
+	alpha := workspaceChildRepo(t, root, "alpha", "package alpha\n")
+	alphaBase := strings.TrimSpace(runGit(t, alpha, "rev-parse", "HEAD"))
+	beta := workspaceChildRepo(t, root, "beta", "package beta\n")
+	betaBase := strings.TrimSpace(runGit(t, beta, "rev-parse", "HEAD"))
+	writeWorkspaceFile(t, alpha, "service.go", "package alpha\n\nfunc Added() {}\n")
+	runGit(t, alpha, "add", ".")
+	runGit(t, alpha, "commit", "-m", "worker change")
+	writeWorkspaceFile(t, beta, "notes.txt", "beta draft\n")
+
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Kind: domain.ProjectKindWorkspace}
+	st.sessions["ws-1"] = domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Metadata: domain.SessionMetadata{WorkspacePath: root}}
+	st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "ws-1", RepoName: domain.RootWorkspaceRepoName, WorktreePath: root, BaseSHA: rootBase},
+		{SessionID: "ws-1", RepoName: "alpha", WorktreePath: alpha, BaseSHA: alphaBase},
+		{SessionID: "ws-1", RepoName: "beta", WorktreePath: beta, BaseSHA: betaBase},
+	}
+	svc := NewWithDeps(Deps{Store: st})
+	ctx := context.Background()
+
+	manifest, err := svc.GetWorkspaceManifest(ctx, "ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Degraded {
+		t.Fatalf("manifest degraded: %s", manifest.DegradedCode)
+	}
+	if got := strings.Join(workspaceSummaryPaths(manifest.Files), ","); got != "alpha/service.go,beta/notes.txt" {
+		t.Fatalf("files = %s", got)
+	}
+	if got := strings.Join(workspaceSummaryPaths(manifest.Sections.Committed), ","); got != "alpha/service.go" {
+		t.Fatalf("committed = %s, want the child repository's commit under its prefix", got)
+	}
+	if got := strings.Join(workspaceSummaryPaths(manifest.Sections.Uncommitted), ","); got != "beta/notes.txt" {
+		t.Fatalf("uncommitted = %s", got)
+	}
+	if committed := manifest.Sections.Committed[0]; committed.Status != WorkspaceFileModified || committed.Additions != 2 || committed.Deletions != 0 {
+		t.Fatalf("committed file = %+v, want a modified file with 2 additions", committed)
+	}
+
+	files, err := svc.ListWorkspaceFiles(ctx, "ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(workspaceSummaryPaths(files.Sections.Committed), ","); got != "alpha/service.go" {
+		t.Fatalf("/files committed = %s", got)
+	}
+	if manifest.WorkspaceVersion != files.WorkspaceVersion {
+		t.Fatalf("manifest version = %q, files version = %q", manifest.WorkspaceVersion, files.WorkspaceVersion)
+	}
+
+	diffs, err := svc.GetWorkspaceDiffs(ctx, "ws-1", WorkspaceDiffInput{
+		Scope: WorkspaceDiffCommitted, Paths: []string{"alpha/service.go"}, ContextLines: 3,
+		WorkspaceVersion: manifest.WorkspaceVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diffs.Groups) != 1 || diffs.Groups[0].Repository != "alpha" || !strings.Contains(diffs.Groups[0].Patch, "+func Added() {}") {
+		t.Fatalf("committed workspace project diffs = %#v", diffs.Groups)
+	}
+	before, err := svc.GetWorkspaceFileRevision(ctx, "ws-1", "alpha/service.go", WorkspaceDiffCommitted, WorkspaceBlobBefore, manifest.WorkspaceVersion, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := svc.GetWorkspaceFileRevision(ctx, "ws-1", "alpha/service.go", WorkspaceDiffCommitted, WorkspaceBlobAfter, manifest.WorkspaceVersion, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.Exists || strings.Contains(before.Content, "func Added() {}") || !after.Exists || !strings.Contains(after.Content, "func Added() {}") {
+		t.Fatalf("committed revisions = before %+v, after %+v", before, after)
 	}
 }
 

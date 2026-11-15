@@ -86,8 +86,8 @@ func (s *Service) gitWorkspaceManifest(
 		Truncated:      truncated,
 	}
 	if !includeSections {
-		// A workspace project reviews only its uncommitted changes.
-		uncommitted, err := workspaceUncommittedFiles(ctx, root, prefix, excludePrefixes)
+		// A workspace project reviews its uncommitted changes and its committed range.
+		uncommitted, committed, err := workspaceProjectRepoSections(ctx, root, prefix, excludePrefixes, compare.gitBase())
 		if err != nil {
 			if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 				return WorkspaceManifest{}, err
@@ -97,6 +97,7 @@ func (s *Service) gitWorkspaceManifest(
 			return finalizeWorkspaceManifest(manifest), nil
 		}
 		manifest.Sections.Uncommitted = uncommitted
+		manifest.Sections.Committed = committed
 		return finalizeWorkspaceManifest(manifest), nil
 	}
 	sections, err := workspaceGitSections(ctx, root, compare.gitBase())
@@ -131,8 +132,8 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
 	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
 	defaultBranch := defaultBranchForProject(project, true)
-	var files, uncommitted []WorkspaceFileSummary
-	var uncommittedErr error
+	var files, uncommitted, committed []WorkspaceFileSummary
+	var sectionsErr error
 	truncated := false
 	compares := make([]workspaceCompareTarget, 0, len(rows))
 	for _, row := range rows {
@@ -163,10 +164,11 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
-		if uncommittedErr == nil {
-			var repoUncommitted []WorkspaceFileSummary
-			repoUncommitted, uncommittedErr = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+		if sectionsErr == nil {
+			var repoUncommitted, repoCommitted []WorkspaceFileSummary
+			repoUncommitted, repoCommitted, sectionsErr = workspaceProjectRepoSections(ctx, row.WorktreePath, prefix, exclude, compare.gitBase())
 			uncommitted = append(uncommitted, repoUncommitted...)
+			committed = append(committed, repoCommitted...)
 		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
@@ -180,18 +182,20 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		Summary:        workspaceSummaryFromFiles(files),
 		Truncated:      truncated,
 	}
-	// listWorkspaceProjectFiles computes the same section, so the manifest and
+	// listWorkspaceProjectFiles computes the same sections, so the manifest and
 	// /files keep one workspaceVersion.
-	if uncommittedErr != nil {
-		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
-			return WorkspaceManifest{}, uncommittedErr
+	if sectionsErr != nil {
+		if errors.Is(sectionsErr, ports.ErrWorkspaceRepoUnavailable) {
+			return WorkspaceManifest{}, sectionsErr
 		}
 		manifest.Degraded = true
-		manifest.DegradedCode = workspaceDegradedCode(uncommittedErr)
+		manifest.DegradedCode = workspaceDegradedCode(sectionsErr)
 		return finalizeWorkspaceManifest(manifest), nil
 	}
 	sort.Slice(uncommitted, func(i, j int) bool { return uncommitted[i].Path < uncommitted[j].Path })
+	sort.Slice(committed, func(i, j int) bool { return committed[i].Path < committed[j].Path })
 	manifest.Sections.Uncommitted = uncommitted
+	manifest.Sections.Committed = committed
 	return finalizeWorkspaceManifest(manifest), nil
 }
 
