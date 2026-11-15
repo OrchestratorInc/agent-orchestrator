@@ -43,6 +43,45 @@ func TestProbeChecksPlatformWithoutRequiringDaemonConfig(t *testing.T) {
 	}
 }
 
+// The daemon-wide auth status must not decide admission for a session that
+// brings its own credentials: Chat probing is global and cached, while the
+// project environment can add a key or override a rejected global one.
+func TestProjectCredentialsAdmitDespiteUnauthorizedDaemonStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
+	dir := t.TempDir()
+	config := filepath.Join(dir, "native.yaml")
+	if err := os.WriteFile(config, []byte("agents: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		globalKey string
+		env       map[string]string
+		wantError bool
+	}{
+		{name: "project-only key", env: map[string]string{"OPENAI_API_KEY": "project-key"}},
+		{name: "project key overrides rejected global key", globalKey: "revoked-key", env: map[string]string{"OPENAI_API_KEY": "project-key"}},
+		{name: "project config overrides rejected global key", globalKey: "revoked-key", env: map[string]string{dockeragent.ConfigEnv: config}},
+		{name: "no session credentials still refused", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearProviderKeys(t)
+			t.Setenv(dockeragent.ConfigEnv, "")
+			t.Setenv("ANTHROPIC_API_KEY", tc.globalKey)
+			driver := New(installedPlugin{status: ports.AgentAuthStatusUnauthorized}, nil)
+			if _, err := driver.Probe(context.Background()); err != nil {
+				t.Fatalf("global probe used the daemon's auth status: %v", err)
+			}
+			err := driver.(ports.ChatEnvironmentValidator).ValidateEnvironment(context.Background(), tc.env)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("ValidateEnvironment error=%v, wantError=%v", err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestContextualConfigValidation(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, "native.yaml")

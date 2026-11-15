@@ -25,7 +25,7 @@ import (
 // New uses AO's detached ACP host, without granting client filesystem/terminal
 // execution or substituting the provider's configured native tools.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
-	return nativeacp.New(plugin, nativeacp.Config{
+	return nativeacp.New(chatProbePlugin{plugin}, nativeacp.Config{
 		Harness:              domain.HarnessDockerAgent,
 		Preflight:            preflight,
 		ValidateEnvironment:  validateEnvironment,
@@ -35,6 +35,27 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		SessionOptions:       sessionOptions,
 		ValidateTurnSettings: validateTurnSettings,
 	}, log)
+}
+
+// chatProbePlugin keeps the global, cached Chat probe off credentials. The
+// plugin's AuthStatus only sees the daemon's environment, but a session may
+// bring its own provider key or config in the project environment, which
+// ValidateEnvironment checks per task. Settings and readiness keep the real
+// AuthStatus through the unwrapped plugin.
+type chatProbePlugin struct{ nativeacp.Plugin }
+
+func (chatProbePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+// AugmentRuntimeEnv forwards nativeacp's optional launch hook, which the
+// embedded interface would otherwise hide.
+func (p chatProbePlugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
+	if augmenter, ok := p.Plugin.(interface {
+		AugmentRuntimeEnv(map[string]string, string)
+	}); ok {
+		augmenter.AugmentRuntimeEnv(env, dataDir)
+	}
 }
 
 // minimumVersion is the first release qualified with this binding. Newer
