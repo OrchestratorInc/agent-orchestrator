@@ -89,3 +89,15 @@ func TestSuppressNoInjectAOReviewsIdentityErrorRetries(t *testing.T) {
 		t.Fatalf("err = %v calls = %d, want no identity lookup without an open pass", err, identity.calls)
 	}
 }
+
+// An account without a login cannot attribute rows either; the poll fails for
+// this PR and retries rather than store rows that might be delivered.
+func TestSuppressNoInjectAOReviewsEmptyLoginRetries(t *testing.T) {
+	start := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	store := fakeNoInjectStore{windows: []domain.NoInjectReviewWindow{{Start: start}}}
+	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: "  ", Human: true}}
+	reviews, comments := noInjectObservedRows(start)
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", reviews, comments); err == nil {
+		t.Fatal("want an error when the posting account has no login")
+	}
+}

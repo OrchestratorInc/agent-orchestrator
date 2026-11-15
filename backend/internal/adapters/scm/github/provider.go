@@ -121,10 +121,16 @@ func (p *Provider) AuthenticatedIdentity(ctx context.Context) (ports.SCMIdentity
 	if err := json.Unmarshal(resp.Body, &user); err != nil {
 		return ports.SCMIdentity{}, fmt.Errorf("github scm: decode authenticated user: %w", err)
 	}
-	p.identity = ports.SCMIdentity{
+	identity := ports.SCMIdentity{
 		Login: strings.TrimSpace(user.Login),
 		Human: strings.EqualFold(strings.TrimSpace(user.Type), "User"),
 	}
+	// A response without a login identifies no one; leave it uncached so the
+	// next caller asks again instead of keeping it for the provider's lifetime.
+	if identity.Login == "" {
+		return identity, nil
+	}
+	p.identity = identity
 	p.identityResolved = true
 	return p.identity, nil
 }

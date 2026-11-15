@@ -2,6 +2,7 @@ package scm
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -59,6 +60,10 @@ func suppressNoInjectAOReviews(ctx context.Context, store any, identity ports.Sc
 	if err != nil {
 		return err
 	}
-	domain.SuppressNoInjectWindowRows(windows, strings.TrimSpace(id.Login), reviews, comments)
+	login := strings.TrimSpace(id.Login)
+	if login == "" {
+		return fmt.Errorf("resolve the %s account AO reviews post with: no login", repo.Provider)
+	}
+	domain.SuppressNoInjectWindowRows(windows, login, reviews, comments)
 	return nil
 }
