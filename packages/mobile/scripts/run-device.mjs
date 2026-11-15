@@ -40,6 +40,9 @@ const TMUX = ["-L", "ao-mobile-device"];
 // Bump when the build steps below change, so older cached apps are not reused.
 const RECIPE = 1;
 const KEEP = 4;
+// Personal-team profiles last seven days. Rebuild a cached app this close to
+// expiry, so it doesn't stop launching mid-session.
+const PROFILE_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 const args = process.argv.slice(2);
 const command = args.find((a) => !a.startsWith("--")) ?? "run";
@@ -186,12 +189,25 @@ function fingerprint(team, bundleId, keepPush) {
 	return { hash, key: sha(hash, RECIPE, bundleId, team, keepPush).slice(0, 16) };
 }
 
+// When the provisioning profile signed into the app expires (0 when unreadable).
+function profileExpiry(app) {
+	const profile = path.join(app, "embedded.mobileprovision");
+	if (!existsSync(profile)) return 0;
+	const plist = run("security", ["cms", "-D", "-i", profile], { capture: true, allowFail: true }).stdout ?? "";
+	const date = plist.match(/<key>ExpirationDate<\/key>\s*<date>([^<]+)<\/date>/)?.[1];
+	return date ? Date.parse(date) || 0 : 0;
+}
+
 function build({ key, hash, team, bundleId, keepPush }) {
 	const dir = path.join(STORE, "builds", key);
 	const app = path.join(dir, "Orchestrator.app");
 	if (existsSync(app) && !flag("rebuild")) {
-		log(`native build reused (fingerprint ${hash.slice(0, 10)})`);
-		return { app, built: false };
+		const expires = profileExpiry(app);
+		if (expires - Date.now() > PROFILE_MARGIN_MS) {
+			log(`native build reused (fingerprint ${hash.slice(0, 10)}, profile valid until ${new Date(expires).toISOString()})`);
+			return { app, dir, built: false };
+		}
+		log(`cached app's provisioning profile ${expires ? `expires ${new Date(expires).toISOString()}` : "is unreadable"}; rebuilding to renew it`);
 	}
 	log(`native build needed (fingerprint ${hash.slice(0, 10)}); this takes several minutes the first time`);
 	const before = out("git", ["-C", repo, "status", "--porcelain"]);
@@ -232,7 +248,7 @@ function build({ key, hash, team, bundleId, keepPush }) {
 	clone(product, app);
 	writeJSON(path.join(dir, "meta.json"), { fingerprint: hash, branch, sha: out("git", ["-C", repo, "rev-parse", "HEAD"]), builtAt: new Date().toISOString() });
 	prune(path.join(STORE, "builds"));
-	return { app, built: true };
+	return { app, dir, built: true };
 }
 
 // 3. Install ------------------------------------------------------------------
@@ -262,11 +278,14 @@ function withIP(app, ip) {
 	return copy;
 }
 
-function install(app, key, udid) {
+// A rebuild for the same fingerprint (a renewed profile) has a new builtAt, so
+// the phone gets it even though the key and IP are unchanged.
+function install(app, dir, key, udid) {
 	const ip = lanIP();
+	const builtAt = readJSON(path.join(dir, "meta.json"), {}).builtAt ?? null;
 	const state = readJSON(statePath, {});
 	const prev = state[udid];
-	if (prev?.key === key && prev?.ip === ip && !flag("reinstall")) {
+	if (prev?.key === key && prev?.ip === ip && prev?.builtAt === builtAt && !flag("reinstall")) {
 		log("app on the phone already matches; no install");
 		return ip;
 	}
@@ -279,7 +298,7 @@ function install(app, key, udid) {
 		}
 		fail(`install failed\n${output}`);
 	}
-	state[udid] = { key, ip, branch, installedAt: new Date().toISOString() };
+	state[udid] = { key, ip, builtAt, branch, installedAt: new Date().toISOString() };
 	writeJSON(statePath, state);
 	return ip;
 }
@@ -314,8 +333,8 @@ const bundleId = process.env.AO_MOBILE_BUNDLE_ID ?? `aoagents.ao.dev.${team.toLo
 const keepPush = process.env.AO_MOBILE_KEEP_PUSH === "1";
 deps();
 const { hash, key } = fingerprint(team, bundleId, keepPush);
-const { app, built } = build({ key, hash, team, bundleId, keepPush });
-const ip = install(app, key, device.udid);
+const { app, dir, built } = build({ key, hash, team, bundleId, keepPush });
+const ip = install(app, dir, key, device.udid);
 const logFile = await metro();
 if (!flag("no-launch")) {
 	run("xcrun", ["devicectl", "device", "process", "launch", "--device", device.udid, "--terminate-existing", bundleId], { capture: true });
