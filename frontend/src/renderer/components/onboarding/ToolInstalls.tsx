@@ -285,25 +285,40 @@ export function useGhInstall(onInstalled: () => void) {
 export function InstallProgress({ job, label, compact = false }: {
 	job?: InstallJob;
 	label: string;
-	/** Just a short bar, for a row's trailing spot (no installer output). */
+	/** Just a short bar, for a row's trailing spot; the command and the
+	 * installer's latest line show on hover. */
 	compact?: boolean;
 }) {
 	const { t } = useTranslation();
 	const percent = installPercent(job);
-	const line = job?.progress?.detail
-		|| (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"));
+	const command = job?.command ? t("startup.installingCommand", { command: job.command }) : undefined;
+	const line = job?.progress?.detail || command || t("startup.installingEllipsis");
+	const bar = percent !== undefined ? (
+		<div className="ao-install-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+			<div className="ao-install-progress__bar ao-install-progress__bar--determinate" style={{ width: `${percent}%` }} />
+		</div>
+	) : (
+		<div className="ao-install-progress" role="progressbar" aria-label={label}>
+			<div className="ao-install-progress__bar" />
+		</div>
+	);
+	if (compact) {
+		// The row keeps to a short bar, but what is running on this machine
+		// (brew, sudo, npm…) stays a hover away, in full, and is read out to
+		// screen readers. A native title, since the row re-renders as progress
+		// comes in.
+		const shown = [command, job?.progress?.detail].filter((text): text is string => Boolean(text)).join("\n") || t("startup.installingEllipsis");
+		return (
+			<div className="w-24 py-1.5" role="status" title={shown}>
+				{bar}
+				<span className="sr-only">{shown}</span>
+			</div>
+		);
+	}
 	return (
-		<div className={compact ? "w-24" : "flex flex-col gap-1.5"} role="status">
-			{percent !== undefined ? (
-				<div className="ao-install-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-					<div className="ao-install-progress__bar ao-install-progress__bar--determinate" style={{ width: `${percent}%` }} />
-				</div>
-			) : (
-				<div className="ao-install-progress" role="progressbar" aria-label={label}>
-					<div className="ao-install-progress__bar" />
-				</div>
-			)}
-			{compact ? null : <p className="truncate font-mono text-xs text-muted-foreground" title={line}>{line}</p>}
+		<div className="flex flex-col gap-1.5" role="status">
+			{bar}
+			<p className="truncate font-mono text-xs text-muted-foreground" title={line}>{line}</p>
 		</div>
 	);
 }

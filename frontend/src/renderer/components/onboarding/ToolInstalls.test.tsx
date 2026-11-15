@@ -215,6 +215,18 @@ describe("useAgentInstalls", () => {
 	});
 });
 
+describe("InstallProgress (compact)", () => {
+	it("keeps what is running readable: on hover and for screen readers", () => {
+		const job = { target: "gh", status: "installing", command: "sudo apt-get install -y gh", progress: { phase: "downloading", percent: 40, detail: "Get:1 http://archive.ubuntu.com gh" } } as never;
+		render(wrap(<InstallProgress compact job={job} label="GitHub CLI" />));
+		expect(screen.getByRole("progressbar", { name: "GitHub CLI" })).toHaveAttribute("aria-valuenow", "40");
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("sudo apt-get install -y gh");
+		expect(status.getAttribute("title")).toContain("sudo apt-get install -y gh");
+		expect(status.getAttribute("title")).toContain("Get:1 http://archive.ubuntu.com gh");
+	});
+});
+
 describe("InstallProblem", () => {
 	it("opens the installer's output when the error alone doesn't say why", async () => {
 		const view = { busy: false, ended: true, problem: "exit status 1", job: { target: "gh", status: "failed", error: "exit status 1", output: "Error: Failed to download resource \"gh\"\nTry again with --verbose", command: "brew install gh" } } as never;
