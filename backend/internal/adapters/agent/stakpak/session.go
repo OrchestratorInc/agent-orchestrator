@@ -63,8 +63,9 @@ func restoreEnv(env map[string]string, previous launchRecord) map[string]string 
 }
 
 // rememberLaunchEnv keeps, in memory only, the environment a session was
-// launched or resumed with. Never written to disk: it can hold API keys, such
-// as a remote profile's STAKPAK_API_KEY set only in the project environment.
+// launched or resumed with; PreLaunch is its only caller. Never written to
+// disk: it can hold API keys, such as a remote profile's STAKPAK_API_KEY set
+// only in the project environment.
 func (p *Plugin) rememberLaunchEnv(sessionID string, env map[string]string) {
 	if strings.TrimSpace(sessionID) == "" || env == nil {
 		return

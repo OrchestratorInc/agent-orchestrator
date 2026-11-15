@@ -56,8 +56,8 @@ type Plugin struct {
 	// dataDir is the AO data dir from the latest launch or restore, for
 	// callers that ask about a conversation with a SessionRef that has none.
 	dataDir string
-	// launchEnvs holds each session's launch or resume environment, in memory
-	// only (rememberLaunchEnv).
+	// launchEnvs holds the environment of each session's running process, in
+	// memory only, kept by PreLaunch (rememberLaunchEnv).
 	launchEnvs map[string]map[string]string
 }
 
@@ -177,7 +177,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	p.rememberDataDir(cfg.DataDir)
-	p.rememberLaunchEnv(cfg.SessionID, cfg.Env)
 	if err := p.saveLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt), Profile: launchProfile(cfg.Env)}); err != nil {
 		return nil, err
 	}
@@ -250,11 +249,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if recorded == "" && sameConversation {
 		recorded = previous.PromptDigest
 	}
-	// Keep the restore's environment, the one the resumed process runs with
-	// (AO's update-when-idle probe passes the same session environment).
-	// Conversation checks never update it: a preflight may run them with
-	// another account's credentials.
-	p.rememberLaunchEnv(cfg.Session.ID, cfg.Env)
+	// The kept environment is not updated here: PreLaunch keeps it for a
+	// process AO actually starts (see there).
 	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded, Profile: launchProfile(env)}); err != nil {
 		return nil, false, err
 	}

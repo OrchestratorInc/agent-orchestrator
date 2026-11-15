@@ -546,7 +546,7 @@ func TestRestoreProbeUsesTheRecordedProfile(t *testing.T) {
 	data, ws := t.TempDir(), t.TempDir()
 	p := New()
 	ctx := context.Background()
-	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: map[string]string{"STAKPAK_PROFILE": "other"}}); err != nil {
+	if _, err := launchLikeAO(ctx, p, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: map[string]string{"STAKPAK_PROFILE": "other"}}); err != nil {
 		t.Fatal(err)
 	}
 	probe := ports.RestoreConfig{
@@ -580,7 +580,7 @@ func TestRestoreKeepsTheLaunchProfileWhenTheRestoreEnvironmentDropsIt(t *testing
 	data, ws := t.TempDir(), t.TempDir()
 	p := New()
 	ctx := context.Background()
-	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: map[string]string{"STAKPAK_PROFILE": "other"}}); err != nil {
+	if _, err := launchLikeAO(ctx, p, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: map[string]string{"STAKPAK_PROFILE": "other"}}); err != nil {
 		t.Fatal(err)
 	}
 	restoreEnvironment := map[string]string{"AO_SESSION_ID": "ao-1"}
@@ -620,7 +620,7 @@ func TestProjectOnlyRemoteCredentialsReachEveryLookup(t *testing.T) {
 	ctx := context.Background()
 	sessions := []string{"ao-1", "ao-2", "ao-3", "ao-4"}
 	for _, id := range sessions {
-		if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: id, WorkspacePath: ws, Env: launchEnv}); err != nil {
+		if _, err := launchLikeAO(ctx, p, ports.LaunchConfig{DataDir: data, SessionID: id, WorkspacePath: ws, Env: launchEnv}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -688,7 +688,7 @@ func TestConversationChecksNeverReplaceTheSessionEnvironment(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	own := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "own-key"}
-	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: own}); err != nil {
+	if _, err := launchLikeAO(ctx, p, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: own}); err != nil {
 		t.Fatal(err)
 	}
 	target := map[string]string{"STAKPAK_PROFILE": "elsewhere", "STAKPAK_API_KEY": "target-account-key"}
@@ -718,7 +718,7 @@ func TestResolveNativeSessionIDPrefersTheRunningLaunchEnvironment(t *testing.T) 
 	p := New()
 	ctx := context.Background()
 	launched := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "launch-key"}
-	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: launched}); err != nil {
+	if _, err := launchLikeAO(ctx, p, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: launched}); err != nil {
 		t.Fatal(err)
 	}
 	list, err := json.Marshal(map[string]any{"sessions": []map[string]any{{"id": nativeA, "cwd": ws, "created_at": time.Now().UTC().Add(time.Second)}}})
@@ -731,5 +731,52 @@ func TestResolveNativeSessionIDPrefersTheRunningLaunchEnvironment(t *testing.T) 
 	rebuilt := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "revoked"}
 	if id, ok, err := p.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1", Env: rebuilt}); err != nil || !ok || id != nativeA {
 		t.Fatalf("discovery with a rebuilt environment = %q, %t, %v; want %s via the running launch's credentials", id, ok, err, nativeA)
+	}
+}
+
+// launchLikeAO starts a session the way the session manager does: the launch
+// command, then PreLaunch with the environment the process runs with.
+func launchLikeAO(ctx context.Context, p *Plugin, cfg ports.LaunchConfig) ([]string, error) {
+	argv, err := p.GetLaunchCommand(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return argv, p.PreLaunch(ctx, cfg)
+}
+
+// AO's update-when-idle probe builds a restore command with an environment
+// rebuilt from the current project and account, and starts nothing. Only
+// PreLaunch, which runs for a process AO actually starts, keeps the session's
+// environment, so the probe leaves the running launch's own in place.
+func TestRestoreProbeLeavesTheKeptLaunchEnvironment(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	t.Setenv("STAKPAK_API_KEY", "")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "known-session-remote"), []byte(nativeA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	ctx := context.Background()
+	launched := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "launch-key"}
+	if _, err := launchLikeAO(ctx, p, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: launched}); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "rotated-key"}
+	probe := ports.RestoreConfig{
+		DataDir: data, Env: rebuilt,
+		Session: ports.SessionRef{ID: "ao-1", WorkspacePath: ws, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}},
+	}
+	if _, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || !ok {
+		t.Fatalf("probe = %t, %v; want the conversation found", ok, err)
+	}
+	if kept := p.keptEnv("ao-1"); kept["STAKPAK_API_KEY"] != "launch-key" {
+		t.Fatalf("kept environment after a probe = %v; want the running launch's", kept)
+	}
+	// A real restore starts a process: its PreLaunch keeps that environment.
+	if err := p.PreLaunch(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: rebuilt}); err != nil {
+		t.Fatal(err)
+	}
+	if kept := p.keptEnv("ao-1"); kept["STAKPAK_API_KEY"] != "rotated-key" {
+		t.Fatalf("kept environment after a restore = %v; want the resumed process's", kept)
 	}
 }

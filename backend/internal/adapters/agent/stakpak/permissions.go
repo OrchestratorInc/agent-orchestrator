@@ -80,10 +80,17 @@ func policyFor(mode ports.PermissionMode) (autoApproveConfig, bool) {
 
 // PreLaunch applies AO's permission mode before every fresh launch and
 // restore. A policy file the user wrote themselves is left alone.
-func (*Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
+//
+// AO runs it only for a process it is about to start, with that process's
+// environment, so it is where the session's environment is kept. Building a
+// command does not keep it: AO's update-when-idle probe builds a restore
+// command with a rebuilt environment and starts nothing.
+func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	p.rememberDataDir(cfg.DataDir)
+	p.rememberLaunchEnv(cfg.SessionID, cfg.Env)
 	if strings.TrimSpace(cfg.WorkspacePath) == "" {
 		return nil
 	}
