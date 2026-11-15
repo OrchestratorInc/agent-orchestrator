@@ -370,3 +370,51 @@ func TestConfigureWritesDefaultConfigFromProviderKey(t *testing.T) {
 		t.Fatal("default config must not embed credentials")
 	}
 }
+
+// The generated default launches with its first model, so a session's own
+// provider key must win over a daemon-wide one (which may be revoked), while a
+// daemon-only key still works when the session brings none.
+func TestDefaultConfigPrefersSessionProviderKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
+	for _, tc := range []struct {
+		name      string
+		daemonKey string
+		env       map[string]string
+		wantRoot  string
+		wantEnv   map[string]string
+	}{
+		{name: "project OpenAI key over daemon Anthropic key", daemonKey: "revoked", env: map[string]string{"OPENAI_API_KEY": "project-openai"}, wantRoot: "gpt-5.6", wantEnv: map[string]string{}},
+		{name: "project Gemini key over daemon Anthropic key", daemonKey: "revoked", env: map[string]string{"GEMINI_API_KEY": "project-gemini"}, wantRoot: "gemini-flash-lite-latest", wantEnv: map[string]string{"GOOGLE_API_KEY": "project-gemini"}},
+		{name: "daemon-only key still launches", daemonKey: "daemon-anthropic", env: map[string]string{}, wantRoot: "claude-sonnet-4-6", wantEnv: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearProviderKeys(t)
+			t.Setenv(dockeragent.ConfigEnv, "")
+			t.Setenv("ANTHROPIC_API_KEY", tc.daemonKey)
+			cfg := acpdriver.LaunchConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: t.TempDir(), Env: tc.env}
+			args, env, err := configure(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config string
+			for i, arg := range args {
+				if arg == "acp" && i+1 < len(args) {
+					config = args[i+1]
+				}
+			}
+			b, err := os.ReadFile(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "agents:\n  root:\n    model: " + tc.wantRoot + "\n"; !strings.Contains(string(b), want) {
+				t.Fatalf("root agent does not use %s:\n%s", tc.wantRoot, b)
+			}
+			delete(env, "TELEMETRY_ENABLED")
+			if !reflect.DeepEqual(env, tc.wantEnv) {
+				t.Fatalf("launch env overlay = %v, want %v", env, tc.wantEnv)
+			}
+		})
+	}
+}

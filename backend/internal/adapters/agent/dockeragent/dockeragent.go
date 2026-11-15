@@ -220,21 +220,30 @@ func ProviderEnv(env map[string]string) map[string]string {
 
 // DefaultModels lists the models AO's default configuration can use with the
 // provider keys present in env (falling back to the process environment).
+// Providers whose key env itself supplies (the session's project or
+// Orchestrator-saved keys) come first, so the first model, which the default
+// config launches with, uses the session's key instead of a daemon-wide one.
 func DefaultModels(env map[string]string) []DefaultModel {
-	var out []DefaultModel
+	var session, inherited []DefaultModel
 	for _, entry := range providerModels {
-		available := false
+		available, fromSession := false, false
 		for _, key := range entry.keys {
 			available = available || lookupKey(env, key) != ""
+			fromSession = fromSession || strings.TrimSpace(env[key]) != ""
 		}
 		if !available {
 			continue
 		}
 		for _, model := range entry.models {
-			out = append(out, DefaultModel{Name: model, Provider: entry.provider, Model: model})
+			m := DefaultModel{Name: model, Provider: entry.provider, Model: model}
+			if fromSession {
+				session = append(session, m)
+			} else {
+				inherited = append(inherited, m)
+			}
 		}
 	}
-	return out
+	return append(session, inherited...)
 }
 
 // DefaultConfig renders AO's Docker Agent configuration for users who have
