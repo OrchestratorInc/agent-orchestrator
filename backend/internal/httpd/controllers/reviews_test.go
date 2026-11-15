@@ -547,3 +547,27 @@ func TestReviewsListIncludesEveryActiveReviewer(t *testing.T) {
 		t.Fatalf("body = %s, want an empty activeReviewers array, never null", body)
 	}
 }
+
+func TestReviewsTriggerPartialReviewerFailureReturnsStartedReviewers(t *testing.T) {
+	run := domain.ReviewRun{ID: "run-cc", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Harness: domain.ReviewerClaudeCode}
+	srv := newReviewTestServer(t, &fakeReviewService{trigger: reviewcore.TriggerResult{
+		Run:              run,
+		ReviewerHandleID: "review-claude-code",
+		Created:          true,
+		CreatedRuns:      []domain.ReviewRun{run},
+		Runs:             []domain.ReviewRun{run},
+		Reviews:          []reviewcore.PRReviewState{{PRURL: run.PRURL, PRNumber: 1, TargetSHA: "sha1", Status: reviewcore.ReviewStateRunning, LatestRun: &run}},
+		ReviewerFailures: []reviewcore.ReviewerFailure{{Harness: domain.ReviewerCodex, Error: "reviewer preflight: codex not installed"}},
+	}})
+
+	body, status, headers := doRequest(t, srv, "POST", "/api/v1/sessions/mer-1/reviews/trigger", "")
+	assertJSON(t, headers)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d body=%s, want 201 because claude-code started", status, body)
+	}
+	for _, want := range []string{`"reviewerFailures"`, `"harness":"codex"`, `codex not installed`, `"run-cc"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
+	}
+}

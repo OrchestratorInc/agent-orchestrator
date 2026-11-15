@@ -7642,6 +7642,7 @@ export interface components {
             prNumber: number;
             prUrl: string;
             previousRun?: components["schemas"]["ReviewRun"];
+            reviewers?: components["schemas"]["ReviewReviewerState"][];
             /** @enum {string} */
             status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
             targetSha: string;
@@ -8031,6 +8032,16 @@ export interface components {
             /** @enum {string} */
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
+        };
+        ReviewReviewerFailure: {
+            error: string;
+            harness: string;
+        };
+        ReviewReviewerState: {
+            harness: string;
+            latestRun?: components["schemas"]["ReviewRun"];
+            /** @enum {string} */
+            status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
         };
         ReviewRun: {
             autoInjectReview: boolean;
@@ -9180,6 +9191,8 @@ export interface components {
             autoInjectEnabled: boolean;
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
             created: boolean;
+            /** @description Configured reviewers that failed to start while at least one other reviewer started. */
+            reviewerFailures?: components["schemas"]["ReviewReviewerFailure"][];
             reviewerHandleId: string;
             reviewerSurface?: components["schemas"]["DomainReviewerSurface"];
             reviews: components["schemas"]["PRReviewState"][];

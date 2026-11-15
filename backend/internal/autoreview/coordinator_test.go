@@ -295,3 +295,80 @@ func TestCoordinatorPeriodicallyEvaluatesPersistedFacts(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestEvaluateSessionMultipleReviewers(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	approved := func(h domain.ReviewerHarness, sha string) domain.ReviewRun {
+		return domain.ReviewRun{PRURL: "pr1", TargetSHA: sha, Harness: h, Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now}
+	}
+	tests := []struct {
+		name       string
+		runs       []domain.ReviewRun
+		session    domain.ReviewerHarness
+		want       bool
+		wantReason string
+		wantHarnes domain.ReviewerHarness
+	}{
+		{name: "nobody reviewed triggers every reviewer", want: true},
+		{name: "one approval still owes the other reviewer", want: true,
+			runs: []domain.ReviewRun{approved(domain.ReviewerClaudeCode, "sha1")}},
+		{name: "every reviewer approved", wantReason: "already_approved",
+			runs: []domain.ReviewRun{approved(domain.ReviewerClaudeCode, "sha1"), approved(domain.ReviewerCodex, "sha1")}},
+		{name: "new head re-reviews", want: true,
+			runs: []domain.ReviewRun{approved(domain.ReviewerClaudeCode, "old"), approved(domain.ReviewerCodex, "old")}},
+		{name: "session preference keeps one reviewer", session: domain.ReviewerCodex, wantReason: "already_approved",
+			runs: []domain.ReviewRun{approved(domain.ReviewerCodex, "sha1")}},
+		{name: "session preference passes its harness", session: domain.ReviewerCodex, want: true, wantHarnes: domain.ReviewerCodex,
+			runs: []domain.ReviewRun{approved(domain.ReviewerClaudeCode, "sha1")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{
+				session: domain.SessionRecord{ID: "s1", ProjectID: "p1", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, ReviewerHarness: tt.session, AutoReviewEnabled: true, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}},
+				project: domain.ProjectRecord{ID: "p1", Config: domain.ProjectConfig{Reviewers: []domain.ReviewerConfig{{Harness: domain.ReviewerClaudeCode}, {Harness: domain.ReviewerCodex}}}},
+				prs:     []domain.PullRequest{{URL: "pr1", Number: 1, HeadSHA: "sha1"}},
+				runs:    tt.runs,
+			}
+			trigger := &fakeTrigger{}
+			result, err := New(store, trigger, Config{Clock: func() time.Time { return now }}).EvaluateSession(context.Background(), "s1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Triggered != tt.want {
+				t.Fatalf("triggered=%v reason=%s, want %v", result.Triggered, result.Reason, tt.want)
+			}
+			if tt.wantReason != "" && result.Reason != tt.wantReason {
+				t.Fatalf("reason=%q, want %q", result.Reason, tt.wantReason)
+			}
+			if tt.want && trigger.harness != tt.wantHarnes {
+				t.Fatalf("harness=%q, want %q (empty means every configured reviewer)", trigger.harness, tt.wantHarnes)
+			}
+		})
+	}
+}
+
+func TestEvaluateSessionPartialReviewerFailure(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	newStore := func() *fakeStore {
+		return &fakeStore{
+			session: domain.SessionRecord{ID: "s1", ProjectID: "p1", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, AutoReviewEnabled: true, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}},
+			project: domain.ProjectRecord{ID: "p1", Config: domain.ProjectConfig{Reviewers: []domain.ReviewerConfig{{Harness: domain.ReviewerClaudeCode}, {Harness: domain.ReviewerCodex}}}},
+			prs:     []domain.PullRequest{{URL: "pr1", Number: 1, HeadSHA: "sha1"}},
+		}
+	}
+	failure := []reviewcore.ReviewerFailure{{Harness: domain.ReviewerCodex, Error: "codex not installed"}}
+
+	// One reviewer started, the other failed: the sweep succeeds.
+	trigger := &fakeTrigger{result: reviewcore.TriggerResult{Created: true, ReviewerFailures: failure, Reviews: []reviewcore.PRReviewState{}}}
+	result, err := New(newStore(), trigger, Config{Clock: func() time.Time { return now }}).EvaluateSession(context.Background(), "s1")
+	if err != nil || !result.Triggered {
+		t.Fatalf("result=%+v err=%v, want triggered without error", result, err)
+	}
+
+	// Nothing new started and the only owed reviewer failed: a clear reason, no error.
+	trigger = &fakeTrigger{result: reviewcore.TriggerResult{ReviewerFailures: failure, Reviews: []reviewcore.PRReviewState{}}}
+	result, err = New(newStore(), trigger, Config{Clock: func() time.Time { return now }}).EvaluateSession(context.Background(), "s1")
+	if err != nil || result.Triggered || result.Reason != "reviewer_failed" {
+		t.Fatalf("result=%+v err=%v, want reviewer_failed without error", result, err)
+	}
+}
