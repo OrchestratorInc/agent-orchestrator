@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 
@@ -24,13 +25,8 @@ var timestampFenceTables = map[string]bool{
 	"reports": true, "notifications": true, "automations": true, "automation_runs": true,
 	"sessions": true, "conversation_turns": true, "session_agent_accounts": true,
 	"session_cleanup_facts": true, "usage_sources": true, "usage_bindings": true,
-	"model_usage_events": true, "change_log": true, "telemetry_event": true,
-	"conversation_messages": true, "conversation_activities": true, "conversations": true,
-	"conversation_branches": true, "session_interface_transitions": true,
-	"pr": true, "pr_checks": true, "pr_comment": true, "pr_reviews": true,
-	"pr_review_threads": true, "review": true, "review_run": true,
-	"agent_accounts": true, "shell_terminals": true, "session_artifacts": true,
-	"agent_switches": true, "session_forks": true, "codex_account_switches": true,
+	"model_usage_events": true, "session_interface_transitions": true,
+	"agent_switches": true, "codex_account_switches": true,
 }
 
 // Scan forward by row identity, with bounded memory and write transactions.
@@ -41,14 +37,25 @@ func repairTimestamps(ctx context.Context, db *sql.DB) error {
 }
 
 func repairTimestampTables(ctx context.Context, db *sql.DB, fence bool) error {
+	result, err := runTimestampRepair(ctx, db, fence)
+	slog.Info("timestamp repair pass", "repaired", result.Repaired, "skipped", result.Skipped, "foreground", fence)
+	return err
+}
+
+func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result timestampRepairResult, err error) {
+	state, err := loadTimestampSkips(ctx, db)
+	if err != nil {
+		return result, err
+	}
+	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.save()) }()
 	columns, err := timestampColumns(ctx, db)
 	if err != nil {
-		return err
+		return result, err
 	}
 	var failures []error
 	for i := 0; i < len(columns); {
 		if err := ctx.Err(); err != nil {
-			return errors.Join(append(failures, err)...)
+			return result, errors.Join(append(failures, err)...)
 		}
 		end := i + 1
 		for end < len(columns) && columns[end].table == columns[i].table {
@@ -72,7 +79,7 @@ func repairTimestampTables(ctx context.Context, db *sql.DB, fence bool) error {
 			}
 		}
 		for {
-			next, done, err := repairTimestampBatchMode(ctx, db, group, cursor, fence, lastRow)
+			next, done, err := repairTimestampBatchMode(ctx, db, group, cursor, fence, lastRow, state)
 			if err != nil {
 				failures = append(failures, fmt.Errorf("repair %s: %w", group[0].table, err))
 				break
@@ -84,23 +91,30 @@ func repairTimestampTables(ctx context.Context, db *sql.DB, fence bool) error {
 		}
 	}
 	if len(failures) > 0 {
-		return errors.Join(failures...)
+		return result, errors.Join(failures...)
 	}
 	var version int
 	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
-		return err
+		return result, err
 	}
 	if version < offsetOnlyTimestampRepairVersion {
 		_, err = db.ExecContext(ctx, `PRAGMA user_version=1`)
 	}
-	return err
+	return result, err
 }
 
 func repairTimestampBatch(ctx context.Context, db *sql.DB, columns []timestampColumn, cursor int64) (int64, bool, error) {
-	return repairTimestampBatchMode(ctx, db, columns, cursor, false, math.MaxInt64)
+	return repairTimestampBatchMode(ctx, db, columns, cursor, false, math.MaxInt64, nil)
 }
 
-func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timestampColumn, cursor int64, candidatesOnly bool, lastRow int64) (int64, bool, error) {
+func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timestampColumn, cursor int64, candidatesOnly bool, lastRow int64, state *timestampRepairState) (next int64, done bool, err error) {
+	if state == nil {
+		state, err = loadTimestampSkips(ctx, db)
+		if err != nil {
+			return 0, false, err
+		}
+		defer func() { err = errors.Join(err, state.save()) }()
+	}
 	table := quoteIdentifier(columns[0].table)
 	fields, sets, checks := make([]string, len(columns)), make([]string, len(columns)), make([]string, len(columns))
 	for i, c := range columns {
@@ -121,7 +135,8 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		}
 		filter = " AND (" + strings.Join(predicates, " OR ") + ")"
 	}
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT rowid,%s FROM %s WHERE rowid>=? AND rowid<=?%s ORDER BY rowid LIMIT ?`, strings.Join(fields, ","), table, filter), cursor, lastRow, timestampRepairBatch)
+	queryRows := strings.Join([]string{"SELECT rowid,", strings.Join(fields, ","), " FROM ", table, " WHERE rowid>=? AND rowid<=?", filter, " ORDER BY rowid LIMIT ?"}, "")
+	rows, err := db.QueryContext(ctx, queryRows, cursor, lastRow, timestampRepairBatch)
 	if err != nil {
 		return 0, false, err
 	}
@@ -157,83 +172,120 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 			for _, value := range before {
 				args = append(args, value, value)
 			}
-			changes = append(changes, args)
+			key, hash := timestampSkipKey(columns[0].table, args, len(columns))
+			if state.rows[key] != hash {
+				changes = append(changes, args)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, false, err
 	}
 	if len(changes) > 0 {
-		tx, err := db.BeginTx(ctx, nil)
+		tx, err := db.Conn(ctx)
 		if err != nil {
 			return 0, false, err
 		}
-		defer func() { _ = tx.Rollback() }()
-		var hasChangeLog bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='change_log')`).Scan(&hasChangeLog); err != nil {
+		defer func() { _ = tx.Close() }()
+		if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 			return 0, false, err
 		}
-		var sequence sql.NullInt64
-		var logHighWater int64
-		if hasChangeLog {
-			if err := tx.QueryRowContext(ctx, `SELECT (SELECT seq FROM sqlite_sequence WHERE name='change_log'), COALESCE((SELECT max(seq) FROM change_log),0)`).Scan(&sequence, &logHighWater); err != nil {
-				return 0, false, err
-			}
-		}
-		query := fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s`, table, strings.Join(sets, ","), strings.Join(checks, " AND "))
+		defer func() { _, _ = tx.ExecContext(context.Background(), "ROLLBACK") }()
+		query := strings.Join([]string{"UPDATE", table, "SET", strings.Join(sets, ","), "WHERE rowid=? AND", strings.Join(checks, " AND ")}, " ")
 		if columns[0].table == "sessions" {
-			// RETURNING sees the revision before the AFTER UPDATE trigger runs.
-			query += ` RETURNING revision`
+			query += " RETURNING revision"
 		}
 		stmt, err := tx.PrepareContext(ctx, query)
 		if err != nil {
 			return 0, false, err
 		}
 		defer func() { _ = stmt.Close() }()
-		for _, v := range changes {
-			// A concurrent writer may have replaced this value since detection.
-			if columns[0].table == "sessions" {
-				var revision int64
-				if err := stmt.QueryRowContext(ctx, v...).Scan(&revision); errors.Is(err, sql.ErrNoRows) {
-					continue
-				} else if err != nil {
-					return 0, false, err
+		var repaired int
+		err = timestamps.PreserveRepresentation(ctx, tx, func() (int64, error) {
+			var expected int64
+			for _, v := range changes {
+				if _, err := tx.ExecContext(ctx, "SAVEPOINT timestamp_row"); err != nil {
+					return 0, err
 				}
-				if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revision=? WHERE rowid=? AND revision<>?`, revision, v[len(columns)], revision); err != nil {
-					return 0, false, err
+				var before int64
+				if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
+					return 0, err
 				}
-			} else if _, err = stmt.ExecContext(ctx, v...); err != nil {
-				var constraint *modernsqlite.Error
-				if !errors.As(err, &constraint) || (constraint.Code() != 2067 && constraint.Code() != 1555) {
-					return 0, false, err
+				var writes int64
+				apply := func() error {
+					if columns[0].table == "sessions" {
+						var revision int64
+						err := stmt.QueryRowContext(ctx, v...).Scan(&revision)
+						if errors.Is(err, sql.ErrNoRows) {
+							return nil
+						}
+						if err != nil {
+							return err
+						}
+						writes++
+						result, err := tx.ExecContext(ctx, `UPDATE sessions SET revision=? WHERE rowid=? AND revision<>?`, revision, v[len(columns)], revision)
+						if err != nil {
+							return err
+						}
+						n, err := result.RowsAffected()
+						writes += 2 * n
+						return err
+					}
+					result, err := stmt.ExecContext(ctx, v...)
+					if err != nil {
+						var constraint *modernsqlite.Error
+						if !errors.As(err, &constraint) || (constraint.Code() != 2067 && constraint.Code() != 1555) {
+							return err
+						}
+						if resolved := resolveTimestampCollision(ctx, tx, columns, v); resolved != nil {
+							return errors.Join(err, resolved)
+						}
+						// One redundant key row was deleted.
+						writes++
+						result, err = stmt.ExecContext(ctx, v...)
+					}
+					if err != nil {
+						return err
+					}
+					n, err := result.RowsAffected()
+					writes += n
+					return err
 				}
-				if err := resolveTimestampCollision(ctx, tx, columns, v); err != nil {
-					return 0, false, err
+				rowErr := apply()
+				if rowErr != nil {
+					var constraint *modernsqlite.Error
+					if !errors.As(rowErr, &constraint) || constraint.Code()&255 != 19 {
+						return 0, rowErr
+					}
+					if _, err := tx.ExecContext(ctx, "ROLLBACK TO timestamp_row"); err != nil {
+						return 0, err
+					}
+					var after int64
+					if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
+						return 0, err
+					}
+					expected += after - before
+					state.skip(columns[0].table, v, len(columns), rowErr)
+				} else {
+					expected += writes
+					if writes > 0 {
+						repaired++
+					}
 				}
-				if _, err := stmt.ExecContext(ctx, v...); err != nil {
-					return 0, false, err
+				if _, err := tx.ExecContext(ctx, "RELEASE timestamp_row"); err != nil {
+					return 0, err
 				}
 			}
-		}
-		// These are representation changes, so publish no logical write events.
-		// The writer transaction hides its generated events until they are removed;
-		// pre-existing events and all validation triggers remain intact.
-		if hasChangeLog {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE seq>?`, logHighWater); err != nil {
-				return 0, false, err
-			}
-			if sequence.Valid {
-				_, err = tx.ExecContext(ctx, `UPDATE sqlite_sequence SET seq=? WHERE name='change_log' AND seq<>?`, sequence.Int64, sequence.Int64)
-			} else {
-				_, err = tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='change_log'`)
-			}
-			if err != nil {
-				return 0, false, err
-			}
-		}
-		if err := tx.Commit(); err != nil {
+			return expected, nil
+		})
+		if err != nil {
 			return 0, false, err
 		}
+		if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
+			return 0, false, err
+		}
+		state.Repaired += repaired
+
 	}
 	return last + 1, n < timestampRepairBatch || last == math.MaxInt64, nil
 }
@@ -248,7 +300,8 @@ OR %[1]s GLOB '????-??-??T*')`, quoteIdentifier(column))
 // that their timestamps are already UTC. Bounds keep repair linear even when
 // an entire old database needs rewriting; only two row IDs stay in memory.
 func timestampRepairBounds(ctx context.Context, db *sql.DB, columns []timestampColumn) (int64, int64, bool, error) {
-	args := []any{columns[0].table}
+	args := make([]any, 0, len(columns)+2)
+	args = append(args, columns[0].table)
 	predicates := make([]string, len(columns))
 	for i, column := range columns {
 		args = append(args, column.column)
@@ -267,15 +320,19 @@ func timestampRepairBounds(ctx context.Context, db *sql.DB, columns []timestampC
 		return 0, 0, false, err
 	}
 	var first, last sql.NullInt64
-	err = db.QueryRowContext(ctx, `SELECT min(rowid),max(rowid) FROM `+quoteIdentifier(columns[0].table)+` INDEXED BY `+quoteIdentifier(index)+` WHERE `+strings.Join(predicates, " OR ")).Scan(&first, &last)
+	query := strings.Join([]string{"SELECT min(rowid),max(rowid) FROM ", quoteIdentifier(columns[0].table), " INDEXED BY ", quoteIdentifier(index), " WHERE ", strings.Join(predicates, " OR ")}, "")
+	err = db.QueryRowContext(ctx, query).Scan(&first, &last)
 	return first.Int64, last.Int64, !first.Valid, err
 }
 
 // Resolve only collisions whose logical winner is known. Never replace a run
 // carrying execution history with a freshly materialized pending occurrence.
-func resolveTimestampCollision(ctx context.Context, tx *sql.Tx, columns []timestampColumn, values []any) error {
+func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []timestampColumn, values []any) error {
 	table := columns[0].table
-	id := values[len(columns)]
+	id, ok := values[len(columns)].(int64)
+	if !ok {
+		return errors.New("timestamp collision has an invalid row identity")
+	}
 	key := "bound_at"
 	if table == "automation_runs" {
 		key = "scheduled_for"
@@ -294,9 +351,16 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Tx, columns []timest
  WHERE original.rowid=? AND twin.rowid<>original.rowid`, at, id).Scan(&twin); err != nil {
 			return err
 		}
+		var same bool
+		if err := tx.QueryRowContext(ctx, `SELECT a.account_id=b.account_id FROM session_agent_accounts a JOIN session_agent_accounts b ON b.rowid=? WHERE a.rowid=?`, twin, id).Scan(&same); err != nil {
+			return err
+		}
+		if !same {
+			return errors.New("same-instant bindings name different accounts")
+		}
 		// BindSessionAgentAccount overwrites an existing same-instant binding.
 		// Rowid records which of the differently spelled bindings was written last.
-		if id.(int64) > twin {
+		if id > twin {
 			id = twin
 		}
 	case "automation_runs":
@@ -322,7 +386,11 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Tx, columns []timest
 			return err
 		}
 		if !originalEmpty && !twinEmpty {
-			return fmt.Errorf("automation occurrence collision at rowids %v and %d has two execution histories", id, twin)
+			var automation string
+			if err := tx.QueryRowContext(ctx, `SELECT automation_id FROM automation_runs WHERE rowid=?`, id).Scan(&automation); err != nil {
+				return err
+			}
+			return fmt.Errorf("automation %s instant %v has two execution histories (rowids %v and %d)", automation, at, id, twin)
 		}
 		if !originalEmpty {
 			id = twin
@@ -330,7 +398,11 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Tx, columns []timest
 	default:
 		return fmt.Errorf("unhandled timestamp key collision in %s", table)
 	}
-	_, err := tx.ExecContext(ctx, "DELETE FROM "+quoteIdentifier(table)+" WHERE rowid=?", id)
+	var deletion strings.Builder
+	deletion.WriteString("DELETE FROM ")
+	deletion.WriteString(quoteIdentifier(table))
+	deletion.WriteString(" WHERE rowid=?")
+	_, err := tx.ExecContext(ctx, deletion.String(), id)
 	return err
 }
 

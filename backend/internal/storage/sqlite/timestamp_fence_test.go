@@ -52,7 +52,7 @@ func TestTimestampFenceInterruptedAndRetried(t *testing.T) {
 	}
 }
 
-func TestTimestampFenceFailureDoesNotPublishStoreOrStallLaterTables(t *testing.T) {
+func TestTimestampFenceFailureKeepsStoreAvailable(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('fence','/tmp/fence','2026-10-21 03:30:00 +0000 UTC'); INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
@@ -61,8 +61,12 @@ func TestTimestampFenceFailureDoesNotPublishStoreOrStallLaterTables(t *testing.T
  CREATE TRIGGER block_fence BEFORE UPDATE ON reports BEGIN SELECT RAISE(ABORT,'fence blocked'); END;`); err != nil {
 		t.Fatal(err)
 	}
-	if s, err := Open(dir); s != nil || err == nil || !strings.Contains(err.Error(), "fence blocked") {
-		t.Fatalf("published mixed store: %v %v", s, err)
+	first, err := Open(dir)
+	if err != nil {
+		t.Fatalf("failed row blocked startup: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
 	}
 	var raw string
 	if err := db.QueryRow(`SELECT CAST(created_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || !strings.HasSuffix(raw, "+0000 UTC") {
@@ -134,7 +138,7 @@ func TestTimestampRepairIndexedBounds(t *testing.T) {
 	}
 	batches := 0
 	for !done {
-		first, done, err = repairTimestampBatchMode(ctx, db, columns, first, true, last)
+		first, done, err = repairTimestampBatchMode(ctx, db, columns, first, true, last, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

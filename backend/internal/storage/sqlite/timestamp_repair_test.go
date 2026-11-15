@@ -264,31 +264,27 @@ func TestRepairKeepsAHigherUserVersion(t *testing.T) {
 }
 
 // A failed batch rolls back and leaves detection enabled for the next open.
-func TestRepairFailureLeavesTheDatabaseUnmarked(t *testing.T) {
+func TestRepairFailureIsRecordedWithoutStopping(t *testing.T) {
 	db := openRepairDB(t)
-	if _, err := db.Exec(`INSERT INTO repair_times (id, at) VALUES (1, '2026-10-21 18:15:40 +0200 +0200')`); err != nil {
-		t.Fatal(err)
-	}
-	// A trigger that rejects the rewrite makes the UPDATE fail.
-	if _, err := db.Exec(`CREATE TRIGGER block_rewrite BEFORE UPDATE ON repair_times BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if err := repairTimestamps(context.Background(), db); err == nil {
-		t.Fatal("repair succeeded although the rewrite was blocked")
-	}
-	var version int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 0 {
-		t.Fatalf("a failed repair marked the database done: user_version = %d (err %v)", version, err)
-	}
-	// Unblocked, the next start repairs it.
-	if _, err := db.Exec(`DROP TRIGGER block_rewrite`); err != nil {
+	if _, err := db.Exec(`INSERT INTO repair_times(id,at) VALUES(1,'2026-10-21 18:15:40 +0200 +0200'),(2,'2026-10-21 18:15:40 +0200 +0200');
+ CREATE TRIGGER block_rewrite BEFORE UPDATE ON repair_times WHEN NEW.id=1 BEGIN SELECT RAISE(ABORT,'blocked'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repairTimestamps(context.Background(), db); err != nil {
-		t.Fatalf("retry: %v", err)
+		t.Fatal(err)
 	}
-	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id = 1`); err != nil {
-		t.Fatalf("retry did not repair: %v", err)
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=2`); err != nil {
+		t.Fatalf("later row stalled: %v", err)
+	}
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err == nil {
+		t.Fatal("blocked row changed")
+	}
+	if _, err := db.Exec(`DROP TRIGGER block_rewrite`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runTimestampRepair(context.Background(), db, false)
+	if err != nil || result.Skipped != 0 || result.Repaired != 0 {
+		t.Fatalf("handled row retried: %+v %v", result, err)
 	}
 }
 

@@ -45,13 +45,17 @@ func normalizeSessionGuardTimes(ctx context.Context, db gen.DBTX, id domain.Sess
 		return nil
 	}
 	args = append(append(args, id), before...)
-	result, err := db.ExecContext(ctx, "UPDATE sessions SET "+strings.Join(sets, ",")+" WHERE id=? AND "+strings.Join(checks, " AND "), args...)
-	if err != nil {
-		return fmt.Errorf("normalize session timestamp guards: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err == nil && affected != 1 {
-		return errors.New("session timestamp guards changed during normalization")
-	}
-	return err
+	return timestamps.PreserveRepresentation(ctx, db, func() (int64, error) {
+		var revision int64
+		query := strings.Join([]string{"UPDATE sessions SET", strings.Join(sets, ","), "WHERE id=? AND", strings.Join(checks, " AND "), "RETURNING revision"}, " ")
+		if err := db.QueryRowContext(ctx, query, args...).Scan(&revision); err != nil {
+			return 0, fmt.Errorf("normalize session timestamp guards: %w", err)
+		}
+		result, err := db.ExecContext(ctx, `UPDATE sessions SET revision=? WHERE id=? AND revision<>?`, revision, id, revision)
+		if err != nil {
+			return 0, err
+		}
+		restored, err := result.RowsAffected()
+		return 1 + 2*restored, err
+	})
 }

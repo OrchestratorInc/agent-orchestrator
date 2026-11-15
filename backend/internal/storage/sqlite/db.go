@@ -156,8 +156,11 @@ func Open(dataDir string) (*Store, error) {
 		err := repairTimestampTables(ctx, writeDB, true)
 		cancel()
 		if err != nil {
-			_ = writeDB.Close()
-			return nil, fmt.Errorf("timestamp startup fence (retry open to resume): %w", err)
+			if errors.Is(err, context.Canceled) {
+				_ = writeDB.Close()
+				return nil, err
+			}
+			slog.Error("timestamp startup repair incomplete; retrying on next open", "error", err)
 		}
 		slog.Info("timestamp startup fence completed", "duration", time.Since(started))
 	}

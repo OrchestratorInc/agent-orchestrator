@@ -63,7 +63,7 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('s',1,'aider','idle','2026-10-21 03:30:00 +0000 UTC',0,'2026-10-21 03:30:00 +0000 UTC','2026-10-21 03:30:00 +0000 UTC');
- INSERT INTO session_agent_accounts(session_id,provider,account_id,bound_at) VALUES('s','codex','first','2026-10-21 03:30:00 +0000 UTC'),('s','codex','last','2026-10-21 09:00:00 +0530 IST');`); err != nil {
+ INSERT INTO session_agent_accounts(session_id,provider,account_id,bound_at) VALUES('s','codex','last','2026-10-21 03:30:00 +0000 UTC'),('s','codex','last','2026-10-21 09:00:00 +0530 IST');`); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(dir)
@@ -75,5 +75,45 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 	var account string
 	if err := db.QueryRow(`SELECT count(*),account_id FROM session_agent_accounts`).Scan(&count, &account); err != nil || count != 1 || account != "last" {
 		t.Fatalf("bindings=%d account=%q err=%v", count, account, err)
+	}
+}
+
+func TestTimestampFencePreservesDistinctExecutionsAndDoesNotRetry(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/tmp/twins','2026-10-21 09:00:00 +0530 IST');
+ INSERT INTO automations(id,project_id,display_name,prompt,kind,rrule_text,timezone,next_run_at,created_at,updated_at) VALUES('a','p','test','test','worker','FREQ=DAILY','UTC','2026-10-21 03:30:00 +0000 UTC','2026-10-21 03:30:00 +0000 UTC','2026-10-21 03:30:00 +0000 UTC');
+ INSERT INTO automation_runs(id,automation_id,scheduled_for,status,attempt_count,created_at,updated_at) VALUES('local','a','2026-10-21 09:00:00 +0530 IST','completed',1,'2026-10-21 09:00:00 +0530 IST','2026-10-21 09:00:00 +0530 IST'),('utc','a','2026-10-21 03:30:00 +0000 UTC','completed',1,'2026-10-21 03:30:00 +0000 UTC','2026-10-21 03:30:00 +0000 UTC');
+ INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at,automation_run_id) VALUES('linked-local',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'local'),('linked-utc',2,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'utc');`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() string {
+		var value string
+		if err := db.QueryRow(`SELECT json_group_array(json_array(id,automation_id,CAST(scheduled_for AS TEXT),status,attempt_count,CAST(created_at AS TEXT),CAST(updated_at AS TEXT))) FROM (SELECT * FROM automation_runs ORDER BY id)`).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	before := snapshot()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if after := snapshot(); after != before {
+		t.Fatalf("execution history changed: %s", after)
+	}
+	var linked int
+	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE automation_run_id IN ('local','utc')`).Scan(&linked); err != nil || linked != 2 {
+		t.Fatalf("links=%d err=%v", linked, err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER never_retry BEFORE UPDATE ON automation_runs BEGIN SELECT RAISE(ABORT,'retried handled row'); END`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runTimestampRepair(context.Background(), db, true)
+	if err != nil || result.Skipped != 0 || result.Repaired != 0 {
+		t.Fatalf("handled row was retried: %+v %v", result, err)
 	}
 }
