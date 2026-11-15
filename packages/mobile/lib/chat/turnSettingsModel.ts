@@ -344,13 +344,19 @@ export function turnSettingsParts(snapshot: ConversationSnapshot, models: ChatMo
 	const effort = rows.find(isEffortRow);
 	const permissions = rows.find(isPermissionRow);
 	return {
-		model: modelLabel(rows, snapshot),
+		model: modelLabel(rows, snapshot, models),
 		effort: named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
 		approval: named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
 	};
 }
 
-function modelLabel(rows: TurnSettingRow[], snapshot: ConversationSnapshot): string {
+function modelLabel(rows: TurnSettingRow[], snapshot: ConversationSnapshot, models: ChatModel[]): string {
+	// Names the model that answered when the provider swapped in another, as the
+	// desktop's picker does. A reroute recorded against an earlier pick no longer applies.
+	const reroute = snapshot.modelReroute;
+	if (reroute?.toModel && (!reroute.fromModel || reroute.fromModel === snapshot.settings.model)) {
+		return models.find((model) => model.id === reroute.toModel)?.displayName ?? readableModelId(reroute.toModel);
+	}
 	const model = rows.find(isModelRow);
 	return named(model ? model.value : readableModelId(snapshot.settings.model ?? ""));
 }

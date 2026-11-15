@@ -107,6 +107,14 @@ export interface AgentSwitchProps {
 	agents?: Array<{ id: string; label: string }>;
 	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
 	harnessView?: "local" | "cloud";
+	account?: AccountChoice;
+}
+
+export interface AccountChoice {
+	options: Array<{ id: string; label: string; disabled?: boolean }>;
+	value?: string;
+	onPick: (id: string) => void;
+	disabled?: boolean;
 }
 
 export interface PickerModel {
@@ -151,6 +159,8 @@ const TRIGGER_CLASS = cn(
 );
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 const DIVIDER = "mt-1 border-t border-border pt-1";
+// Shared with the review controls' reviewer picker, which is laid out like this menu.
+export { TRIGGER_CLASS as CHAT_PICKER_TRIGGER_CLASS, SUB_CLASS as CHAT_PICKER_SUB_CLASS, DIVIDER as CHAT_PICKER_DIVIDER };
 
 /** A variant-per-setting catalog as one model per family, with effort, thinking and speed as controls. */
 function variantSource(
@@ -552,6 +562,7 @@ export function AgentModelPicker({
 										<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
 									</OptionMenuSub>
 								) : null}
+								{agentSwitch.account && !pending && agentSwitch.account.options.length > 0 ? <AccountRows account={agentSwitch.account} /> : null}
 							</div>
 							{settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 								<div className={DIVIDER}>
@@ -575,6 +586,32 @@ export function AgentModelPicker({
 				{pending ? pendingFooter : null}
 			</OptionMenuContent>
 		</OptionMenu>
+	);
+}
+
+function AccountRows({ account }: { account: AccountChoice }) {
+	const { t } = useTranslation();
+	const chosen = account.options.find((option) => option.id === account.value);
+	return (
+		<OptionMenuSub closeOnSelect>
+			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
+			<OptionMenuSubContent scrollable className={SUB_CLASS}>
+				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+					{account.options.map((option) => (
+						<OptionMenuItem
+							key={option.id}
+							active={option.id === account.value}
+							radio
+							disabled={option.disabled}
+							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
+							className="text-xs text-foreground"
+						>
+							<span className="min-w-0 truncate">{option.label}</span>
+						</OptionMenuItem>
+					))}
+				</div>
+			</OptionMenuSubContent>
+		</OptionMenuSub>
 	);
 }
 

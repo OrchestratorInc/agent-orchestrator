@@ -68,7 +68,9 @@ func (rr *recordingReaper) reap(_ context.Context, pids []int, grace time.Durati
 
 func newTestRuntime(chunkSize int) (*Runtime, *fakeRunner) {
 	fr := &fakeRunner{}
-	r := New(Options{Binary: "tmux-test", Timeout: time.Second, Shell: "/bin/sh", ChunkSize: chunkSize})
+	// Launch environment files go to a scratch directory, never ~/.ao: the
+	// fake runner starts no shell to read and delete them.
+	r := New(Options{Binary: "tmux-test", Timeout: time.Second, Shell: "/bin/sh", ChunkSize: chunkSize, EnvDir: filepath.Join(os.TempDir(), "ao-tmux-test-env")})
 	r.runner = fr
 	r.enterDelay = 0                           // tests must not pay the real 300ms pre-Enter pause
 	r.reapSessions = (&recordingReaper{}).reap // never signal real processes from unit tests
@@ -502,34 +504,139 @@ func TestCreateLaunchCommandExportsEnvVars(t *testing.T) {
 	}
 	args := fr.calls[0].args
 	launchCmd := args[len(args)-1]
+	if !strings.Contains(launchCmd, "unset NO_COLOR;") {
+		t.Fatalf("launch command missing NO_COLOR reset: %q", launchCmd)
+	}
+	script := readLaunchEnv(t, launchCmd)
 	for _, want := range []string{
-		"unset NO_COLOR;",
-		"export AO_SESSION_ID='sess-1';",
-		"export COLORTERM='truecolor';",
-		"export ODD='can'\\''t';",
-		"export PATH='/custom/bin:/usr/bin';",
+		"export AO_SESSION_ID='sess-1'\n",
+		"export COLORTERM='truecolor'\n",
+		"export ODD='can'\\''t'\n",
+		"export PATH='/custom/bin:/usr/bin'\n",
 	} {
-		if !strings.Contains(launchCmd, want) {
-			t.Fatalf("launch command missing %q in: %q", want, launchCmd)
+		if !strings.Contains(script, want) {
+			t.Fatalf("launch environment missing %q in: %q", want, script)
 		}
+	}
+	// PATH is exported last so an explicit override takes effect.
+	if !strings.HasSuffix(script, "export PATH='/custom/bin:/usr/bin'\n") {
+		t.Fatalf("PATH is not exported last: %q", script)
 	}
 }
 
+// launchEnvPath returns the environment file a launch command sources.
+func launchEnvPath(t *testing.T, launchCmd string) string {
+	t.Helper()
+	_, rest, ok := strings.Cut(launchCmd, "; . '")
+	if !ok {
+		t.Fatalf("launch command sources no environment file: %q", launchCmd)
+	}
+	path, _, ok := strings.Cut(rest, "'")
+	if !ok {
+		t.Fatalf("unterminated environment file path: %q", launchCmd)
+	}
+	return path
+}
+
+// readLaunchEnv reads the environment file a launch command sources, checks
+// only its owner can read it, and removes it as the pane's shell would.
+func readLaunchEnv(t *testing.T, launchCmd string) string {
+	t.Helper()
+	path := launchEnvPath(t, launchCmd)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("launch environment file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("launch environment file mode = %v, want 0600", info.Mode().Perm())
+	}
+	if dir, err := os.Stat(filepath.Dir(path)); err != nil || dir.Mode().Perm() != 0o700 {
+		t.Fatalf("launch environment directory mode = %v, err = %v; want 0700", dir.Mode().Perm(), err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(path)
+	return string(data)
+}
+
+func TestLaunchKeepsEnvironmentValuesOutOfTmuxArgv(t *testing.T) {
+	const secret = "sk-proj-saved-provider-key"
+	cfg := ports.RuntimeConfig{
+		SessionID:     "sess-1",
+		WorkspacePath: "/tmp/ws",
+		Argv:          []string{"myagent"},
+		Env:           map[string]string{"AO_SESSION_ID": "sess-1", "OPENAI_API_KEY": secret},
+	}
+	assertNoSecret := func(t *testing.T, fr *fakeRunner) string {
+		t.Helper()
+		var launchCmd string
+		for _, call := range fr.calls {
+			if joined := strings.Join(call.args, " "); strings.Contains(joined, secret) {
+				t.Fatalf("saved key appears in tmux argv: %q", joined)
+			}
+			if len(call.args) > 0 && (call.args[0] == "new-session" || call.args[0] == "respawn-pane") {
+				launchCmd = call.args[len(call.args)-1]
+			}
+		}
+		if strings.Contains(launchCmd, "export ") {
+			t.Fatalf("launch command still inlines exports: %q", launchCmd)
+		}
+		if script := readLaunchEnv(t, launchCmd); !strings.Contains(script, "export OPENAI_API_KEY='"+secret+"'\n") {
+			t.Fatalf("launch environment lost the key: %q", script)
+		}
+		return launchCmd
+	}
+
+	t.Run("create", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
+		if _, err := r.Create(context.Background(), cfg); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		assertNoSecret(t, fr)
+	})
+	t.Run("restart", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		if _, err := r.Restart(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, cfg); err != nil {
+			t.Fatalf("Restart: %v", err)
+		}
+		assertNoSecret(t, fr)
+	})
+	t.Run("failed create removes the file", func(t *testing.T) {
+		r, fr := newTestRuntime(0)
+		fr.err = errors.New("tmux unavailable")
+		if _, err := r.Create(context.Background(), cfg); err == nil {
+			t.Fatal("Create succeeded although tmux failed")
+		}
+		path := launchEnvPath(t, fr.calls[0].args[len(fr.calls[0].args)-1])
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("launch environment left behind after a failed create: %v", err)
+		}
+	})
+}
+
 func TestBuildLaunchCommandPreservesExplicitNoColor(t *testing.T) {
-	launchCmd := buildLaunchCommand(ports.RuntimeConfig{
+	cfg := ports.RuntimeConfig{
 		WorkspacePath: "/tmp/ws",
 		Argv:          []string{"myagent"},
 		Env:           map[string]string{"NO_COLOR": "1"},
-	})
+	}
+	launchCmd := buildLaunchCommand(cfg, "/tmp/env")
+	script := launchEnvScript(cfg)
 
-	if !strings.Contains(launchCmd, "export NO_COLOR='1';") {
-		t.Fatalf("launch command does not preserve configured NO_COLOR: %q", launchCmd)
+	if !strings.Contains(script, "export NO_COLOR='1'\n") {
+		t.Fatalf("launch environment does not preserve configured NO_COLOR: %q", script)
 	}
 	if strings.Contains(launchCmd, "unset NO_COLOR;") {
 		t.Fatalf("launch command unsets configured NO_COLOR: %q", launchCmd)
 	}
-	if !strings.Contains(launchCmd, "export COLORTERM='truecolor';") {
-		t.Fatalf("launch command does not advertise true color: %q", launchCmd)
+	if !strings.Contains(script, "export COLORTERM='truecolor'\n") {
+		t.Fatalf("launch environment does not advertise true color: %q", script)
+	}
+	if !strings.Contains(launchCmd, ". '/tmp/env' || { rm -f '/tmp/env'; exit 1; }; rm -f '/tmp/env'; 'myagent'") {
+		t.Fatalf("launch command does not source and delete its environment before argv: %q", launchCmd)
 	}
 }
 

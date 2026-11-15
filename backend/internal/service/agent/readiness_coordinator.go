@@ -14,6 +14,7 @@ import (
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 const (
@@ -587,6 +588,11 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (observation domain.AgentAuthenticationObservation, failed bool) {
 	var diagnostics []domain.AgentAuthDiagnostic
 	evidenceCtx, evidence := ports.WithAuthEvidence(c.ctx)
+	if c.dataDir != "" {
+		// AO exports every saved provider key to itself; the probe sees only
+		// what this harness's sessions receive, so status and sessions agree.
+		evidenceCtx = ports.WithAuthEnvironment(evidenceCtx, providerkeys.Withheld(c.dataDir, string(item.Harness)))
+	}
 	defer func() {
 		observation.Diagnostics = append(observation.Diagnostics, diagnostics...)
 		observation.Diagnostics = append(observation.Diagnostics, evidence.Diagnostics()...)

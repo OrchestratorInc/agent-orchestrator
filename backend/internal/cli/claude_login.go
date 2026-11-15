@@ -9,9 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
@@ -58,18 +55,23 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	case "3":
 		args = append(args, "--sso")
 	case "4":
-		return c.saveClaudeSetupToken(in, out, style)
+		return c.saveClaudeSetupToken(ctx, in, out, style)
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
-	if err := c.deps.RunInteractiveCommand(ctx, claude, args, in, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, claude, "", args, in, out, stderr); err != nil {
 		return fmt.Errorf("claude login failed: %w", err)
 	}
-	// The newest sign-in wins: a setup token saved earlier would otherwise keep
-	// signing sessions in over the login the user just completed. The sign-in
-	// itself already succeeded, so failing to clear the token is only a warning.
-	if err := clearClaudeSetupToken(); err != nil {
-		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; Orchestrator-managed sessions may keep using the earlier setup token.\n", err); writeErr != nil {
+	// The newest sign-in wins: the daemon stops passing Claude Code an API key
+	// saved from its AO panel and removes an earlier setup token, either of
+	// which would otherwise keep signing sessions in over this login. The key
+	// stays saved for other harnesses. The sign-in itself already succeeded,
+	// so a failure here is only a warning.
+	var recorded struct {
+		ReleasedKey string `json:"releasedKey"`
+	}
+	if err := c.postJSON(ctx, "agents/claude-code/auth/signed-in", nil, &recorded); err != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the earlier setup token or saved Anthropic API key.\n", err); writeErr != nil {
 			return writeErr
 		}
 	}
@@ -77,15 +79,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	return err
 }
 
-func clearClaudeSetupToken() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("resolve Orchestrator data directory to clear the saved setup token: %w", err)
-	}
-	return claudecode.RemoveLocalOAuthToken(cfg.DataDir)
-}
-
-func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style codexLoginStyle) error {
+func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader, out io.Writer, style codexLoginStyle) error {
 	if _, err := fmt.Fprintf(out, "\nRun claude setup-token in another terminal, then paste its token here.\n%s: ", style.bold("Setup token")); err != nil {
 		return err
 	}
@@ -101,18 +95,20 @@ func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style
 	if !claudeSetupTokenPattern.Match(secret) {
 		return usageError{fmt.Errorf("setup token must start with sk-ant-oat and contain no spaces")}
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("resolve Orchestrator data directory: %w", err)
+	// The daemon saves the token as the Account panel's setup-token sign-in
+	// does: it stops passing Claude Code its saved ANTHROPIC_API_KEY, which
+	// would keep winning over the token, and gives it back if the token cannot
+	// be written, so a failure leaves the previous sign-in in place.
+	var login struct {
+		Status string `json:"status"`
 	}
-	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
-		return err
+	if err := c.postJSON(ctx, "agents/claude-code/auth/operations", map[string]string{"method": "setup_token", "secret": string(secret)}, &login); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
 	}
-	if _, err := fmt.Fprintln(out, style.success("Claude Code will sign in to local sessions with this setup token.")); err != nil {
-		return err
+	if login.Status != "succeeded" {
+		return fmt.Errorf("save setup token: sign-in ended %s", login.Status)
 	}
-	// Name the file so a data directory other than the daemon's is visible.
-	_, err = fmt.Fprintln(out, style.dim("Saved to "+claudecode.LocalOAuthTokenPath(cfg.DataDir)))
+	_, err = fmt.Fprintln(out, style.success("Claude Code will sign in to local sessions with this setup token."))
 	return err
 }
 

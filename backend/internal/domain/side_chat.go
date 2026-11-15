@@ -75,6 +75,7 @@ type SideReference struct {
 	MessageID      string               `json:"messageId"`
 	Revision       int64                `json:"revision"`
 	Selection      string               `json:"selection"`
+	Comment        string               `json:"comment,omitempty"`
 	SourceRole     string               `json:"sourceRole"`
 	Context        string               `json:"-"`
 }

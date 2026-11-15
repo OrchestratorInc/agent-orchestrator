@@ -1,5 +1,6 @@
 import { Check, Link2 } from "@/components/app-icons";
 import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
@@ -25,7 +26,7 @@ export function canCopy(access: LinkAccess): boolean {
  * how to get one. It stays focusable while it can't copy, so focus never
  * drops out of the dialog and the reason can be read.
  */
-export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef }: {
+export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef, size, fallbackHost }: {
 	access: LinkAccess;
 	/** Whether people can be added in this dialog, for the hint when link access is off. */
 	people: boolean;
@@ -37,6 +38,9 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef }: {
 	 */
 	onAsk: () => Promise<string | undefined>;
 	buttonRef?: React.Ref<HTMLButtonElement>;
+	size?: "sm";
+	/** Where the link to select by hand shows when the clipboard refuses it; under the button by default. */
+	fallbackHost?: HTMLElement | null;
 }) {
 	const { t } = useTranslation();
 	const hintId = useId();
@@ -77,11 +81,18 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef }: {
 	const hint = mode === "off"
 		? people ? t("share.copyNeedsLinkAccess") : t("share.copyNeedsLinkAccessNoPeople")
 		: mode === "new" ? t("share.copyNewLinkHint") : mode === "replace" ? t("share.copyReplaceHint") : undefined;
+	const copyFallback = (
+		<div className="flex w-80 max-w-full flex-col gap-1" data-share-copy-fallback="">
+			<Input readOnly value={fallback} aria-label={t("share.link")} className="font-mono text-xs" autoFocus onFocus={(event) => event.currentTarget.select()} />
+			<p role="alert" className="text-caption leading-4 text-error">{t("share.copyFailed")}</p>
+		</div>
+	);
 	const button = (
 		<Button
 			ref={buttonRef}
 			type="button"
 			variant="secondary"
+			size={size}
 			// Wide enough for every label, so the footer doesn't move as it changes.
 			className="min-w-34 gap-1.5 aria-disabled:cursor-default aria-disabled:opacity-50"
 			aria-disabled={!available || undefined}
@@ -106,12 +117,7 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef }: {
 					<span id={hintId} className="sr-only">{hint}</span>
 				</>
 			) : button}
-			{fallback ? (
-				<div className="flex w-80 max-w-full flex-col gap-1" data-share-copy-fallback="">
-					<Input readOnly value={fallback} aria-label={t("share.link")} className="font-mono text-xs" autoFocus onFocus={(event) => event.currentTarget.select()} />
-					<p role="alert" className="text-caption leading-4 text-error">{t("share.copyFailed")}</p>
-				</div>
-			) : null}
+			{fallback ? (fallbackHost ? createPortal(copyFallback, fallbackHost) : copyFallback) : null}
 		</div>
 	);
 }

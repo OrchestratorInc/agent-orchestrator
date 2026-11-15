@@ -17,7 +17,7 @@ func quickIdentity(info fs.FileInfo) domain.FileIdentity {
 		return domain.FileIdentity{}
 	}
 	return domain.FileIdentity{
-		Dev:   uint64(uint32(st.Dev)),
+		Dev:   uint64(uint32(st.Dev)), //nolint:gosec // G115: the device id is opaque; keep its bits.
 		Ino:   st.Ino,
 		Birth: st.Birthtimespec.Sec*1_000_000_000 + st.Birthtimespec.Nsec,
 	}

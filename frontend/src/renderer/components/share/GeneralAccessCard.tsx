@@ -20,12 +20,14 @@ const TRUSTED_LINK_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "tr
  * lets people do, when it ends, and how many other links are live. The icon
  * stays neutral: the sentence carries the risk, and color is for state.
  */
-export function GeneralAccessCard({ scope, access, restricted, locale, onTurnOn, onTurnOff, onChangeRole, onOpenSettings }: {
+export function GeneralAccessCard({ scope, access, restricted, locale, label = true, onTurnOn, onTurnOff, onChangeRole, onOpenSettings }: {
 	scope: ShareScope;
 	access: LinkAccess;
 	/** The sentence for "Only people with access" in this workspace. */
 	restricted: string;
 	locale: string;
+	/** "General access" over the card; off where a section heading says it. */
+	label?: boolean;
 	onTurnOn: () => void;
 	onTurnOff: () => void;
 	onChangeRole: (next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => void;
@@ -42,7 +44,7 @@ export function GeneralAccessCard({ scope, access, restricted, locale, onTurnOn,
 	const viaProject = !link && access.projectLinks.length > 0;
 	return (
 		<section className="flex flex-col gap-1.5" aria-label={t("share.generalAccess")} data-share-general-access={link ? "anyone" : "restricted"}>
-			<p className="text-xs text-muted-foreground">{t("share.generalAccess")}</p>
+			{label ? <p className="text-xs text-muted-foreground">{t("share.generalAccess")}</p> : null}
 			<div className={cn("flex items-start gap-2.5 rounded-md bg-muted/40 py-2 pr-1.5 pl-2.5", busy && "opacity-70")} aria-busy={busy || undefined}>
 				<span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
 					<Icon className="size-3.5" />

@@ -42,6 +42,51 @@ describe("AppLink", () => {
 		expect(screen.getByRole("menuitem", { name: "Open in Orchestrator Browser" })).toHaveAttribute("aria-disabled", "true");
 	});
 
+	it("sends system-browser links to the OS on every click and never to ao", async () => {
+		const user = userEvent.setup();
+		const open = vi.fn();
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<AppBrowserLinkContext.Provider value={open}>
+			<AppLink href={url} systemBrowser target="_blank">PR</AppLink>
+		</AppBrowserLinkContext.Provider>);
+		const link = screen.getByRole("link", { name: "PR" });
+
+		// Enter on a focused link dispatches this same click event.
+		expect(fireEvent.click(link)).toBe(false);
+		expect(fireEvent.click(link, { metaKey: true })).toBe(false);
+		expect(fireEvent.click(link, { ctrlKey: true })).toBe(false);
+		const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+		fireEvent(link, middle);
+		expect(middle.defaultPrevented).toBe(true);
+		expect(external).toHaveBeenCalledTimes(4);
+		expect(external.mock.calls.every(([target]) => target === url)).toBe(true);
+		expect(open).not.toHaveBeenCalled();
+
+		fireEvent.contextMenu(link);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Open in external browser", "Copy link",
+		]);
+		await user.click(screen.getByRole("menuitem", { name: "Open in external browser" }));
+		expect(external).toHaveBeenCalledTimes(5);
+		expect(open).not.toHaveBeenCalled();
+	});
+
+	it("opens nothing for system-browser links outside http(s) and mailto", () => {
+		const open = vi.fn();
+		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		render(<AppBrowserLinkContext.Provider value={open}>
+			<AppLink href="file:///etc/hosts" systemBrowser>File</AppLink>
+			<AppLink href="app://settings" systemBrowser>App</AppLink>
+			<AppLink href="mailto:team@example.com" systemBrowser>Mail</AppLink>
+		</AppBrowserLinkContext.Provider>);
+
+		expect(fireEvent.click(screen.getByRole("link", { name: "File" }))).toBe(false);
+		expect(fireEvent.click(screen.getByRole("link", { name: "App" }))).toBe(false);
+		fireEvent.click(screen.getByRole("link", { name: "Mail" }));
+		expect(external).toHaveBeenCalledExactlyOnceWith("mailto:team@example.com");
+		expect(open).not.toHaveBeenCalled();
+	});
+
 	it("preserves handlers that cancel navigation and fragment links", () => {
 		const open = vi.fn();
 		const handled = vi.fn((event) => event.preventDefault());

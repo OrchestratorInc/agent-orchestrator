@@ -13,6 +13,7 @@ import (
 	codexreview "github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -122,6 +123,35 @@ func TestLauncherSpawnEnvCannotOverrideWorkerContext(t *testing.T) {
 	}
 	if rt.createCfg.Env[EnvRunFile] != runFile {
 		t.Fatalf("%s = %q, want %q", EnvRunFile, rt.createCfg.Env[EnvRunFile], runFile)
+	}
+}
+
+func TestLauncherSpawnWithholdsKeysTheReviewerHarnessNeverReceives(t *testing.T) {
+	dataDir := t.TempDir()
+	// The daemon exports AO's stored keys to itself; reviewers inherit that.
+	t.Setenv("ANTHROPIC_API_KEY", "ao-key")
+	if err := providerkeys.Save(context.Background(), dataDir, "ANTHROPIC_API_KEY", "ao-key"); err != nil {
+		t.Fatal(err)
+	}
+	spawn := func() map[string]string {
+		t.Helper()
+		rt := &fakeRuntime{}
+		l := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, rt, dataDir)
+		if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+			t.Fatalf("Spawn: %v", err)
+		}
+		return rt.createCfg.Env
+	}
+	// Saved from another harness's panel: a Claude Code reviewer must not
+	// bill the API account instead of the subscription.
+	if value, ok := spawn()["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("reviewer ANTHROPIC_API_KEY = %q (set %v), want blanked", value, ok)
+	}
+	if err := providerkeys.ClaimForHarness(context.Background(), dataDir, "ANTHROPIC_API_KEY", string(domain.ReviewerClaudeCode)); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := spawn()["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("Claude Code's own key was withheld from its reviewer: %q", value)
 	}
 }
 

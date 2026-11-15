@@ -29,8 +29,14 @@ type ShareLinks struct {
 // sessionShareLinks are one session's links, by artifact ID and, for records
 // written before artifacts had one, by path.
 type sessionShareLinks struct {
-	byID   map[string]string
-	byPath map[string]string
+	byID   map[string]shareLink
+	byPath map[string]shareLink
+}
+
+// shareLink is one recorded link: its URL and, when recorded, who it opens for.
+type shareLink struct {
+	url    string
+	access string
 }
 
 // NewShareLinks reads dataDir's share links for one control plane.
@@ -38,18 +44,18 @@ func NewShareLinks(dataDir, controlPlaneURL string) *ShareLinks {
 	return &ShareLinks{path: filepath.Join(dataDir, ShareLinksFile), baseURL: controlPlaneURL}
 }
 
-// Apply sets ShareURL on each file that has a public link.
+// Apply sets ShareURL, and ShareAccess where recorded, on each file that has a link.
 func (l *ShareLinks) Apply(id domain.SessionID, files []domain.SessionArtifactFile) {
 	if l == nil || l.baseURL == "" || len(files) == 0 {
 		return
 	}
 	urls := l.load()[id]
 	for i := range files {
-		if link, ok := urls.byID[files[i].ID]; ok && files[i].ID != "" {
-			files[i].ShareURL = link
-			continue
+		link, ok := urls.byID[files[i].ID]
+		if !ok || files[i].ID == "" {
+			link = urls.byPath[files[i].Path]
 		}
-		files[i].ShareURL = urls.byPath[files[i].Path]
+		files[i].ShareURL, files[i].ShareAccess = link.url, link.access
 	}
 }
 
@@ -87,7 +93,8 @@ func parseShareLinks(data []byte, baseURL string) map[domain.SessionID]sessionSh
 			continue
 		}
 		var record struct {
-			URL string `json:"url"`
+			URL    string `json:"url"`
+			Access string `json:"access"`
 		}
 		if json.Unmarshal(raw, &record) != nil || !isWebURL(record.URL) {
 			continue
@@ -95,14 +102,18 @@ func parseShareLinks(data []byte, baseURL string) map[domain.SessionID]sessionSh
 		id := domain.SessionID(parts[1])
 		links, ok := urls[id]
 		if !ok {
-			links = sessionShareLinks{byID: map[string]string{}, byPath: map[string]string{}}
+			links = sessionShareLinks{byID: map[string]shareLink{}, byPath: map[string]shareLink{}}
 			urls[id] = links
+		}
+		link := shareLink{url: record.URL}
+		if record.Access == "restricted" || record.Access == "anyone" {
+			link.access = record.Access
 		}
 		switch {
 		case len(parts) == 4 && parts[2] == "" && parts[3] != "":
-			links.byID[parts[3]] = record.URL
+			links.byID[parts[3]] = link
 		case len(parts) == 3:
-			links.byPath[parts[2]] = record.URL
+			links.byPath[parts[2]] = link
 		}
 	}
 	return urls

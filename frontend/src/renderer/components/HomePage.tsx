@@ -21,7 +21,6 @@ import {
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { SessionImportOffer } from "./SessionImportOffer";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
@@ -165,7 +164,7 @@ function HomePageContent() {
 	const projects = workspaceQuery.data ?? [];
 	const recentProjects = useMemo(
 		() =>
-			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
+			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND && !project.standaloneAgent)).slice(
 				0,
 				RECENT_PROJECT_LIMIT,
 			),
@@ -280,8 +279,6 @@ function HomePageContent() {
 							</div>
 						)}
 					</section>
-
-					{workspaceQuery.isSuccess && recentProjects.length === 0 ? <SessionImportOffer /> : null}
 				</div>
 
 				<CreateProjectFlow

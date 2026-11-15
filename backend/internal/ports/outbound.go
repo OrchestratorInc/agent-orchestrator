@@ -567,6 +567,7 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
+	LastBranch    string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
 	FreshBranch      bool
@@ -585,6 +586,9 @@ type WorkspaceConfig struct {
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
 	Path string
+	// StartPoint creates a fresh branch at this commit instead of the base
+	// branch. Session forks use it to start at the source's HEAD.
+	StartPoint string
 }
 
 // WorkspaceInfo describes a created workspace — where it lives and its branch.

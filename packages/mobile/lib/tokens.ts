@@ -137,6 +137,16 @@ export const onCamera = {
 	reticle: "rgba(255,255,255,0.92)",
 } as const;
 
+/**
+ * A control drawn over a picture the user picked. The picture can be any
+ * colour whatever the theme, so these stay fixed: a dark translucent disc
+ * with a white mark reads on light and dark photos alike.
+ */
+export const onImage = {
+	disc: "rgba(0,0,0,0.6)",
+	mark: "#ffffff",
+} as const;
+
 /** Icon ladder. Match the stroke to the weight of the text beside it. */
 export const iconSize = {
 	xs: 12,
@@ -168,6 +178,9 @@ export const rowIconWidth = 28;
  * so a sheet keeps the platform's shape.
  */
 export { sheetCornerRadius } from "./platformTokens";
+
+/** The corners and gap of an inset-grouped list section, per platform. See `groupedRow`. */
+export { groupedCorner } from "./platformTokens";
 
 /**
  * The inset every sheet body shares. The native sheet draws its own top

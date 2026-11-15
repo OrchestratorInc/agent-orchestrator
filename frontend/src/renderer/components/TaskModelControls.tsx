@@ -41,6 +41,7 @@ export function TaskEffortPicker({
 }
 
 export function TaskModelPicker({
+	hostId,
 	agentId,
 	agentLabel,
 	catalog,
@@ -57,6 +58,7 @@ export function TaskModelPicker({
 }: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
+	hostId?: string;
 	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
 	allowNativeSelection?: boolean;
 	/** Where the listed models come from. */
@@ -103,6 +105,7 @@ export function TaskModelPicker({
 
 	return (
 		<AgentModelCombobox
+			hostId={hostId}
 			key={agentId}
 			aria-label={t("newTask.model")}
 			value={value}

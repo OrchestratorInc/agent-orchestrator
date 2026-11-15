@@ -10,6 +10,7 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -78,7 +79,9 @@ vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
 }));
 
+const cloudRestoreMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("../hooks/useCloudCp", () => ({
+	createRendererCloudCpClient: () => ({ restoreSession: cloudRestoreMock }),
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
 		client: { createTerminalTicket: cloudTicketMock },
@@ -1331,6 +1334,38 @@ describe("terminal restore", () => {
 		try {
 			expect(screen.queryByText("This terminal process ended, but the session is not marked terminated yet.")).not.toBeInTheDocument();
 			expect(screen.queryByText("TERMINAL ENDED")).not.toBeInTheDocument();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("restores an archived Cloud session from the strip through the control plane", async () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		// Restore finds a Cloud session in the Cloud listing, which keeps archived rows.
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			await waitFor(() => expect(cloudRestoreMock).toHaveBeenCalledWith("org-1", worker.id));
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+			// The restore leaves the session waiting for its new box; later tests reuse its id.
+			useTerminalResetStore.getState().markConnected(worker.id);
+		}
+	});
+
+	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
+		// Only the sharer's organization restores a session; a guest's restore
+		// would not even reach the control plane (the session is not in their
+		// own Cloud listing), it would go to this machine's daemon instead.
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", shared: true }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
 		} finally {
 			view.restore();
 		}

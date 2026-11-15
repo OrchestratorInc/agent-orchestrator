@@ -146,7 +146,7 @@ function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; 
 			</div>
 			<div className={settingsDialogBodyClass}>
 				<PreviewState pending={preview.isPending} error={preview.error} empty={!chats.length} emptyText={t("sessionImport.projectEmpty")}>
-					<div className="overflow-hidden rounded-md border border-border">
+					<div className="shrink-0 overflow-hidden rounded-md border border-border">
 						{chats.map((chat) => (
 							<ChatRow
 								key={chat.id}
@@ -166,8 +166,8 @@ function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; 
 						))}
 					</div>
 				</PreviewState>
-				<ImportError error={error} failures={failures} />
 			</div>
+			<ImportError error={error} failures={failures} />
 			<div className={settingsDialogFooterClass}>
 				<Button variant="secondary" disabled={importing} onClick={onClose}>
 					{t("sessionImport.cancel")}
@@ -182,10 +182,50 @@ function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; 
 
 function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (importing: boolean) => void }) {
 	const { t } = useTranslation();
+	return (
+		<FolderImport
+			header={
+				<div className={settingsDialogHeaderClass}>
+					<DialogTitle>{t("sessionImport.foldersTitle")}</DialogTitle>
+					<DialogDescription>{t("sessionImport.foldersDescription")}</DialogDescription>
+				</div>
+			}
+			source="home_folders"
+			cancelLabel={t("sessionImport.cancel")}
+			onCancel={onClose}
+			onImported={onClose}
+			onImporting={onImporting}
+		/>
+	);
+}
+
+/**
+ * The folder picker: every folder with chats that can be imported, the suggested
+ * ones checked. `onImported` runs once an import finished without failures.
+ */
+export function FolderImport({
+	header,
+	source,
+	cancelLabel,
+	onCancel,
+	onImported,
+	onImporting,
+	bodyClassName = settingsDialogBodyClass,
+	footerClassName = settingsDialogFooterClass,
+}: {
+	header?: ReactNode;
+	source: ImportSource;
+	cancelLabel: string;
+	onCancel: () => void;
+	onImported: () => void;
+	onImporting?: (importing: boolean) => void;
+	bodyClassName?: string;
+	footerClassName?: string;
+}) {
+	const { t } = useTranslation();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	const blockOf = useAgentBlocks();
-	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const recordImport = useSessionImportStore((state) => state.recordImport);
 	const showImported = useImportedToast();
 	const [picked, setPicked] = useState<Set<string>>();
@@ -228,11 +268,10 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 			}
 			return next;
 		});
-	const { importing, error, failures, run } = useImportRun("home_folders", (results) => {
+	const { importing, error, failures, run } = useImportRun(source, (results) => {
 		const imported = showImported(results);
-		if (results.some((result) => result.status === "created")) closeSessionImportOffer();
 		for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
-		if (!results.some((result) => result.status === "failed")) onClose();
+		if (!results.some((result) => result.status === "failed")) onImported();
 	}, onImporting);
 	const otherOpen = showOther || !suggested.length;
 	const row = (folder: Folder) => (
@@ -240,11 +279,8 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 	);
 	return (
 		<>
-			<div className={settingsDialogHeaderClass}>
-				<DialogTitle>{t("sessionImport.foldersTitle")}</DialogTitle>
-				<DialogDescription>{t("sessionImport.foldersDescription")}</DialogDescription>
-			</div>
-			<div className={settingsDialogBodyClass}>
+			{header}
+			<div className={bodyClassName}>
 				<PreviewState pending={preview.isPending} error={preview.error} empty={!folders.length} emptyText={t("sessionImport.foldersEmpty")}>
 					<div className="flex flex-col gap-3">
 						{suggested.length ? <div className="overflow-hidden rounded-md border border-border">{suggested.map(row)}</div> : null}
@@ -265,11 +301,11 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 						) : null}
 					</div>
 				</PreviewState>
-				<ImportError error={error} failures={failures} />
 			</div>
-			<div className={settingsDialogFooterClass}>
-				<Button variant="secondary" disabled={importing} onClick={onClose}>
-					{t("sessionImport.cancel")}
+			<ImportError error={error} failures={failures} />
+			<div className={footerClassName}>
+				<Button variant="secondary" disabled={importing} onClick={onCancel}>
+					{cancelLabel}
 				</Button>
 				<Button
 					variant="primary"
@@ -293,7 +329,7 @@ function ImportError({ error, failures }: { error?: string; failures: { id: stri
 	const { t } = useTranslation();
 	if (!error) return null;
 	return (
-		<div role="alert" className="flex flex-col gap-1 text-sm text-destructive">
+		<div role="alert" className="max-h-[30svh] shrink-0 space-y-1 overflow-y-auto px-(--size-modal-padding) pb-(--size-modal-padding) text-sm text-destructive settings-thin-scrollbar">
 			<p>{error}</p>
 			{failures.slice(0, MAX_LISTED_FAILURES).map((failure) => (
 				<p key={failure.id} className="truncate text-xs">

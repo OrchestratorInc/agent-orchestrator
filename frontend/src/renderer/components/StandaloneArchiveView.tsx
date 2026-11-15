@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Archive, Plus } from "@/components/app-icons";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
+import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import {
 	useWorkspaceQuery,
@@ -68,10 +69,8 @@ export function StandaloneArchiveView() {
 			const result = await restoreSessionById(session.id);
 			if (!isStillMounted()) return;
 			if (result.status === "success") {
-				void navigate({
-					to: "/sessions/$sessionId",
-					params: { sessionId: session.id },
-				});
+				// A Cloud standalone agent opens on its own project's route.
+				void navigate(sessionNavigateTarget(session.cloud ? session.workspaceId : undefined, session.id));
 				return;
 			}
 			if (result.status === "not_resumable") {

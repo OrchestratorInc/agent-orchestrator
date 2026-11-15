@@ -29,6 +29,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"After every PR has its own GitHub review from step 1",
 		"printf '%s'",
 		"do not use a heredoc",
+		"as its own shell call, in exactly the shape shown",
 		"ao review submit --session mer-1 --reviews -",
 		`"reviews": [`,
 	} {

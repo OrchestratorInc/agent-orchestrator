@@ -222,6 +222,88 @@ describe("SessionsBoardView", () => {
 		},
 	);
 
+	it("gives a compact card branch and time on one line, PRs below, and no status strip", () => {
+		const onOpen = vi.fn();
+		render(
+			<SessionCardView
+				branchAction={<button type="button">Copy branch</button>}
+				compact
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "5m ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: progressLabels,
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				onOpen={onOpen}
+				prs={[{ number: 7, state: "merged", url: "https://example.test/pull/7" }]}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				selected={false}
+				session={{ ...baseSession, branch: "ao/compact-branch", status: "terminated", isTerminated: true }}
+			/>,
+		);
+
+		const card = screen.getByTestId("board-session-card");
+		const meta = within(card).getByTestId("session-card-meta");
+		expect(meta).toHaveTextContent("ao/compact-branch");
+		expect(within(meta).getByRole("link", { name: "PR #7 merged" })).toBeInTheDocument();
+		expect(within(meta).getByText("5m ago")).toBeInTheDocument();
+		expect(card.querySelector(".border-t")).toBeNull();
+		// A list that owns the selection: no hover fill, no whole-card button.
+		expect(card).not.toHaveClass("hover:bg-interactive-hover", "focus-within:bg-interactive-hover");
+		expect(within(card).getAllByRole("button").map((button) => button.textContent)).toEqual(["Copy branch"]);
+		expect(card).not.toHaveAttribute("data-selected");
+		fireEvent.click(within(meta).getByText("ao/compact-branch"));
+		expect(onOpen).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows a session branch as its topic and hides it when it only repeats the title", () => {
+		const renderCard = (branch: string, title: string) =>
+			render(
+				<SessionCardView
+					externalLink={ExternalLink}
+					labels={{
+						formatTime: () => "5m ago",
+						intakeIssue: (id) => `Issue ${id}`,
+						pr: progressLabels,
+						updatedAt: (timestamp) => `Updated ${timestamp}`,
+					}}
+					onOpen={vi.fn()}
+					renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+					selected={false}
+					session={{ ...baseSession, branch, title }}
+				/>,
+			);
+
+		const first = renderCard("ao/agent-orchestrator-132/archived-sessions-label", "Rename the archive");
+		const topic = screen.getByText("archived-sessions-label");
+		expect(topic).toHaveAttribute("title", "ao/agent-orchestrator-132/archived-sessions-label");
+		first.unmount();
+
+		renderCard("ao/fix-login/root", "Fix login");
+		expect(screen.queryByText("fix-login")).not.toBeInTheDocument();
+	});
+
+	it("fills a selected list card and keeps the board card's own hover otherwise", () => {
+		const labels = {
+			formatTime: () => "5m ago",
+			intakeIssue: (id: string) => `Issue ${id}`,
+			pr: progressLabels,
+			updatedAt: (timestamp: string) => `Updated ${timestamp}`,
+		};
+		const { rerender } = render(
+			<SessionCardView compact externalLink={ExternalLink} labels={labels} onOpen={() => undefined} renderAvatar={() => null} selected session={baseSession} />,
+		);
+		const card = screen.getByTestId("board-session-card");
+		expect(card).toHaveAttribute("data-selected", "true");
+		expect(card).toHaveClass("bg-interactive-hover", "border-border-strong");
+		expect(card).not.toHaveClass("bg-surface");
+
+		rerender(<SessionCardView externalLink={ExternalLink} labels={labels} onOpen={() => undefined} renderAvatar={() => null} session={baseSession} />);
+		expect(screen.getByTestId("board-session-card")).toHaveClass("hover:bg-interactive-hover");
+		expect(within(screen.getByTestId("board-session-card")).getByRole("button", { name: "portable task" })).toBeInTheDocument();
+	});
+
 	it("leaves ordinary cards on the neutral surface", () => {
 		render(
 			<SessionCardView
@@ -702,5 +784,33 @@ describe("SessionsBoardView", () => {
 		expect(status).not.toHaveClass("rounded-sm", "border");
 		expect(status?.style.getPropertyValue("--session-status-tone")).toBe("");
 		expect(status?.querySelector(".rounded-full")).toBeNull();
+	});
+
+	it("paints a merged PR purple inside the Ready lane", () => {
+		const { container } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "1h ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						short: "PR",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{
+					...baseSession,
+					displayStatus: "Merged",
+					kanbanColumn: "ready",
+					status: "merged",
+				}}
+			/>,
+		);
+
+		const status = container.querySelector('[data-kanban-column="ready"]');
+		expect(status).toHaveClass("text-status-merged");
+		expect(status).not.toHaveClass("text-status-ready");
 	});
 });

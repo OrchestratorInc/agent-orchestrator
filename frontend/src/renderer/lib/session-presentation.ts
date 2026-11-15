@@ -23,7 +23,6 @@ import {
 } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
-import { isNewSidebarDesignActive } from "./new-sidebar-design";
 import { toKanbanColumn, type SessionActivity, type SessionStatus } from "../types/workspace";
 
 function translator(t: TFunction): ProductUITranslator {
@@ -86,7 +85,6 @@ export function getSessionStatusDotView(
 	},
 	t: TFunction = appI18n.t,
 ): SessionStatusDotView {
-	if (!isNewSidebarDesignActive()) return getLegacySessionStatusDotView(session, t);
 	const breathe = isAgentActivityWorking(session.activity);
 	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
 	const dot = (className: string): SessionStatusDotView => ({ className, breathe });
@@ -105,60 +103,6 @@ export function getSessionStatusDotView(
 		return { className: getSessionStatusView("merged", t).dotClassName, breathe: false };
 	}
 	return dot(getKanbanColumnView(column, t).dotClassName);
-}
-
-// The legacy dot's colour comes from the pull request the card's `displayStatus`
-// describes, so the dot and the phrase always talk about the same PR. A phrase
-// about the worker rather than the PR ("Working", "Blocked", …) has no entry and
-// falls back to the SCM state.
-const pullRequestToneByDisplayStatus: Partial<Record<string, SessionStatus>> = {
-	"Fixing CI failures": "ci_failed",
-	"CI failing": "ci_failed",
-	"Merge conflicts": "ci_failed",
-	"Addressing comments": "changes_requested",
-	"Changes requested": "changes_requested",
-	Commented: "commented",
-	Draft: "draft",
-	"Review scheduled": "pr_open",
-	Reviewing: "pr_open",
-	"Retrying review": "pr_open",
-	"Awaiting review": "review_pending",
-	"Review failed": "review_pending",
-	"Review cancelled": "review_pending",
-	Approved: "approved",
-	Mergeable: "mergeable",
-	Merged: "merged",
-	"Closed without merge": "exited",
-};
-
-// The dot before the new sidebar design: colour from the card's PR phrase or
-// else the SCM section (merged keeps its own tone), and a no-PR idle session
-// blinks blue while it works.
-function getLegacySessionStatusDotView(
-	session: {
-		activity?: SessionActivity | null;
-		displayStatus?: string;
-		scmStatus?: SessionStatus;
-		status: SessionStatus;
-	},
-	t: TFunction,
-): SessionStatusDotView {
-	const working = isAgentActivityWorking(session.activity);
-	const closedWithoutMerge = session.displayStatus === "Closed without merge";
-	const sectionStatus: SessionStatus =
-		pullRequestToneByDisplayStatus[session.displayStatus ?? ""] ??
-		session.scmStatus ??
-		session.status;
-	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
-	const className =
-		closedWithoutMerge
-			? getSessionStatusView("exited", t).dotClassName
-			: toneStatus === "exited"
-				? "bg-passive"
-				: toneStatus === "idle" || toneStatus === "merged"
-					? getSessionStatusView(toneStatus, t).dotClassName
-					: getAttentionZoneView(toneStatus, t).dotClassName;
-	return { className, breathe: working };
 }
 
 /**

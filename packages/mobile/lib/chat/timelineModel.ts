@@ -60,6 +60,8 @@ export function readableConversationItems(snapshot: ConversationSnapshot, openin
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
+		// The model picker already names the model that answered.
+		item.detail?.event !== "model.rerouted" &&
 		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
 		// An older copy of a list that spans turns; a later turn or run carries it.
 		!(item.activityKind === "plan" && item.detail?.superseded)
@@ -91,7 +93,8 @@ export function groupConversationByTurn(
 			// The first loaded item can move backward when an older page arrives. The
 			// durable turn identity cannot, so use it as the React/FlatList key and
 			// preserve expanded rows and scroll measurements across pagination.
-			const group = { key: `turn-${item.turnId}`, turnId: item.turnId, anchor: item.sequence, items: [item], turn: turns.get(item.turnId) } satisfies ConversationGroup;
+			const turn = turns.get(item.turnId);
+			const group = { key: `turn-${item.turnId}`, turnId: item.turnId, anchor: turn?.anchorSequence ?? item.sequence, items: [item], turn } satisfies ConversationGroup;
 			byTurn.set(item.turnId, group);
 			groups.push(group);
 		}

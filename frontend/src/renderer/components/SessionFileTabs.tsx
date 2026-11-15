@@ -92,6 +92,7 @@ export function SessionFileTab({
 		<TerminalTabFrame
 			action={closeAction}
 			actionPinned={dirty}
+			onClose={onClose}
 			active={active}
 			buttonProps={{
 				"aria-label": name,

@@ -64,7 +64,7 @@ surface (`npm run sqlc`, `npm run api`).
   archive/projection, controller-generation fencing, turns, messages,
   activities, approvals, structured input, usage, compaction, and rollback.
 - Chat drivers for the user's installed Codex (native app-server), Claude Code
-  (claude-agent-acp), Cursor, OpenCode 1 and 2, Droid, Kimchi, Kimi, Pi, OMP, Qwen, DeepSeek Harness, GitHub Copilot, and
+  (claude-agent-acp), Cursor, OpenCode 1 and 2, Droid, Grok, Kimchi, Kimi, Pi, OMP, Qwen, DeepSeek Harness, GitHub Copilot, and
   the built-in Unreal Agent library. Unreal Agent Chat runs on macOS and Linux
   behind AO's detached provider host, persists its native session plus an
   acknowledged AO event journal, and currently requires an explicit

@@ -36,6 +36,7 @@ export const materialDrawableNames = [
 	"compress",
 	"content_copy",
 	"contrast",
+	"create_new_folder",
 	"data_usage",
 	"delete",
 	"description",

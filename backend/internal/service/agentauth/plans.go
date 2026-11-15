@@ -47,6 +47,7 @@ var plans = []Plan{
 	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
 	ompLoginPlan(),
+	plan("codewhale", ActionSetup, "Set up Codewhale", []string{"codewhale", "auth", "set", "--provider", "deepseek"}, "Save a provider key in Codewhale's native credential store", "https://codewhale.net/en/docs/auth"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
 	documentationPlan("unreal-agent", "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for Orchestrator's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
@@ -59,6 +60,7 @@ var plans = []Plan{
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; Orchestrator forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
+	plan("stakpak", ActionLogin, "Log in to Stakpak", []string{"stakpak", "auth", "login"}, "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
