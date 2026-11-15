@@ -51,8 +51,8 @@ export type ConnectDeps = {
 	refreshEndpoints: (config: ServerConfig) => Promise<Endpoint[]>;
 	/** With `unchangedSince`, saves only if no other save landed after that revision. */
 	saveEndpoints: (hostId: string, endpoints: Endpoint[], unchangedSince?: number) => Promise<void>;
-	/** The stored endpoint list's revision, read alongside findHost. */
-	endpointRevision?: (hostId: string) => number;
+	/** The revision of the stored endpoint list a host from findHost was read at. */
+	endpointRevision?: (host: Host) => number | undefined;
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
@@ -92,7 +92,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	if (!host) return { ok: false, reason: "unknown-host" };
 	// The revision host.endpoints was read at: the refresh below merges into
 	// that list, so it must not save over a list a later connection stored.
-	const endpointsRevision = host.id ? deps.endpointRevision?.(host.id) : undefined;
+	const endpointsRevision = host.id ? deps.endpointRevision?.(host) : undefined;
 
 	const outcome = await deps.race(host);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };

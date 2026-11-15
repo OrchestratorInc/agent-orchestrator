@@ -564,11 +564,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const hosts = await loadHosts().catch(() => null);
 			if (resolution !== configResolution.current) return null;
 			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
-			let c = await resolveActiveConfig(runtimeResolveDeps(options), () => {
+			let c = await resolveActiveConfig(runtimeResolveDeps(options), (stale) => {
 				// The machine refused the token this config carries and the kept
-				// password now stands in for it; connect again with it, unless a
-				// newer resolution already did.
-				if (mountedRef.current && resolution === configResolution.current) void reloadConfig(options);
+				// password now stands in for it: connect again while the refused
+				// token is still in use, whichever resolution kept it (one that
+				// found nothing keeps the working config, see endpointStillAnswers),
+				// or while this resolution's config was dropped for it.
+				if (!mountedRef.current) return;
+				const live = cfgRef.current;
+				const refusedInUse = live !== null && live.hostId === stale.hostId && live.password === stale.password;
+				if (refusedInUse || (live === null && resolution === configResolution.current)) void reloadConfig(options);
 			});
 			if (resolution !== configResolution.current) return null;
 			// A re-check (a network change, the look for a better address) that

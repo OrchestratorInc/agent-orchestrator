@@ -360,3 +360,19 @@ it("drops a superseded reload whose probe of the old connection failed", async (
 	await act(async () => { answer(false); });
 	expect(current.config?.hostId).toBe("b");
 });
+
+// #8369: a late fallback to the kept password reported to a superseded
+// resolution still reconnects while the refused token is the one in use.
+it("reconnects after a late credential repair even once a newer reload kept the refused config", async () => {
+	await mount();
+	const [, onRepaired] = state.resolve.mock.calls[0] as unknown as [unknown, (stale: unknown) => void];
+	const inUse = current.config!;
+	state.resolve.mockResolvedValueOnce(null);
+	state.stillAnswers.mockResolvedValueOnce(true);
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(current.config).toBe(inUse);
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { onRepaired({ ...inUse }); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+});

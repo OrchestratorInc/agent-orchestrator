@@ -147,9 +147,11 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 	// A late fallback to the kept password left `result.config` with the token
 	// the machine refused: its first poll gets 401 and the runner stops. Connect
 	// again, with the stored password, unless another connection replaced it.
-	const reconnectAfterRepair = (result: { config: ServerConfig; credentialRepair?: Promise<boolean> }) => {
+	// `inUse` is the config the runner holds for this result: the result's own,
+	// or the one it kept because the result named the same connection.
+	const reconnectAfterRepair = (result: { config: ServerConfig; credentialRepair?: Promise<boolean> }, inUse: ServerConfig = result.config) => {
 		void result.credentialRepair?.then(async (repaired) => {
-			const ours = () => !stopped && (runner.config === result.config || runner.config === null);
+			const ours = () => !stopped && (runner.config === inUse || runner.config === null);
 			if (!repaired || !ours()) return;
 			if (busy) await busy.catch(() => {});
 			if (!ours()) return;
@@ -173,7 +175,11 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			lastRaceAt = Date.now();
 			const result = await connectToHost(host.id);
 			if (stopped || !connected || runner.config !== current || !result.ok || result.hostId !== host.id) return;
-			if (sameServerConfig(current, result.config)) return;
+			if (sameServerConfig(current, result.config)) {
+				// Same connection, same refused token: a late repair still applies to it.
+				reconnectAfterRepair(result, current);
+				return;
+			}
 			runner.config = result.config;
 			reconnectAfterRepair(result);
 			connected = false;

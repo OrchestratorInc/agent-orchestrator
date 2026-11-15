@@ -88,8 +88,11 @@ async function writeStored(hosts: StoredHost[]): Promise<void> {
 // Several hosts can reconnect together. Serialize read-modify-write so one
 // host's endpoint refresh cannot overwrite another's update.
 let pendingWrite: Promise<void> = Promise.resolve();
-function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<StoredHost[]>): Promise<void> {
-	const write = pendingWrite.then(async () => writeStored(await change(await readStored())));
+function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<StoredHost[]>, afterWrite?: () => void): Promise<void> {
+	const write = pendingWrite.then(async () => {
+		await writeStored(await change(await readStored()));
+		afterWrite?.();
+	});
 	pendingWrite = write.then(() => {}, () => {});
 	return write;
 }
@@ -97,14 +100,19 @@ function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<St
 /** Every paired machine, most recently connected first. */
 export async function loadHosts(): Promise<Host[]> {
 	const stored = sortHosts(await readStored());
+	// Taken with the list it describes, before the keystore reads below can
+	// let another save land.
+	const revisions = new Map(stored.map((h) => [h.id, hostEndpointRevision(h.id)]));
 	return Promise.all(
 		stored.map(async (h) => {
 			const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(h.id));
-			return {
+			const host: Host = {
 				...h,
 				token: (await SecureStore.getItemAsync(tokenKey(h.id))) ?? "",
 				...(fallbackToken ? { fallbackToken } : {}),
 			};
+			snapshotRevisions.set(host, revisions.get(h.id) ?? 0);
+			return host;
 		}),
 	);
 }
@@ -148,16 +156,25 @@ export async function updateHostAppearance(id: string, appearance: MachineAppear
  * up without the user doing anything.
  */
 export async function updateHostEndpoints(id: string, endpoints: Endpoint[], unchangedSince?: number): Promise<void> {
+	let saved = false;
+	// The revision is counted once the list is on the phone, so a read in
+	// between still pairs the old list with the old revision.
 	await mutateStored((stored) => {
 		// Checked inside the serialized write, so no other save can land between
 		// the check and this one.
 		if (unchangedSince !== undefined && hostEndpointRevision(id) !== unchangedSince) return stored;
-		endpointRevisions.set(id, hostEndpointRevision(id) + 1);
+		saved = true;
 		return stored.map((h) => (h.id === id ? { ...h, endpoints } : h));
-	});
+	}, () => { if (saved) endpointRevisions.set(id, hostEndpointRevision(id) + 1); });
 }
 
 const endpointRevisions = new Map<string, number>();
+const snapshotRevisions = new WeakMap<Host, number>();
+
+/** The endpoint revision a host from loadHosts/findHost was read at. */
+export function endpointRevisionOf(host: Host): number | undefined {
+	return snapshotRevisions.get(host);
+}
 
 /**
  * Counts the endpoint saves for a machine in this process. A refresh that read
