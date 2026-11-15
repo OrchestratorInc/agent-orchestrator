@@ -1,6 +1,7 @@
 package review
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -106,6 +107,46 @@ func TestPlanPreviousRunChoosesNewestQualifyingDifferentHead(t *testing.T) {
 	}
 	if got[0].LatestRun == nil || got[0].LatestRun.ID != "current" || got[0].Status != ReviewStateUpToDate {
 		t.Fatalf("current-head state = %+v, want current approved run", got[0])
+	}
+}
+
+func TestPlanAutoDraftPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		run  domain.ReviewRun
+		want StateStatus
+	}{
+		{name: "unreviewed", want: ReviewStateIneligible},
+		{name: "failed", run: domain.ReviewRun{Status: domain.ReviewRunFailed}, want: ReviewStateIneligible},
+		{name: "cancelled", run: domain.ReviewRun{Status: domain.ReviewRunCancelled}, want: ReviewStateIneligible},
+		{name: "approved", run: domain.ReviewRun{Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved}, want: ReviewStateIneligible},
+		{name: "changes requested", run: domain.ReviewRun{Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested}, want: ReviewStateIneligible},
+		{name: "running", run: domain.ReviewRun{Status: domain.ReviewRunRunning}, want: ReviewStateRunning},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prs := []domain.PullRequest{withDraft(planPR("draft", 2, "head")), planPR("ready", 1, "head")}
+			runs := []domain.ReviewRun{{ID: "previous", PRURL: "draft", TargetSHA: "old", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved}}
+			if tt.run.Status != "" {
+				tt.run.ID, tt.run.PRURL, tt.run.TargetSHA = "current", "draft", "head"
+				runs = append(runs, tt.run)
+			}
+			originalPRs := append([]domain.PullRequest(nil), prs...)
+			originalRuns := append([]domain.ReviewRun(nil), runs...)
+			got := PlanAuto(prs, runs)
+			if len(got) != 2 || got[0].PRURL != "ready" || got[0].Status != ReviewStateNeedsReview || got[1].PRURL != "draft" || got[1].Status != tt.want {
+				t.Fatalf("automatic plan = %+v, want ready needs_review then draft %s", got, tt.want)
+			}
+			if got[1].TargetSHA != "head" || got[1].PreviousRun == nil || got[1].PreviousRun.ID != "previous" {
+				t.Fatalf("draft lost target or previous run: %+v", got[1])
+			}
+			if tt.run.Status != "" && (got[1].LatestRun == nil || got[1].LatestRun.ID != "current") {
+				t.Fatalf("draft lost latest run: %+v", got[1])
+			}
+			if !reflect.DeepEqual(prs, originalPRs) || !reflect.DeepEqual(runs, originalRuns) {
+				t.Fatal("automatic planning mutated PR facts or run history")
+			}
+		})
 	}
 }
 

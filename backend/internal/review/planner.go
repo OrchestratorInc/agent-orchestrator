@@ -85,6 +85,21 @@ func Plan(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
 	return reviews
 }
 
+// PlanAuto excludes draft PRs from new automatic work while retaining running passes.
+func PlanAuto(prs []domain.PullRequest, runs []domain.ReviewRun) []PRReviewState {
+	reviews := Plan(prs, runs)
+	drafts := make(map[string]bool, len(prs))
+	for _, pr := range prs {
+		drafts[pr.URL] = pr.Draft
+	}
+	for i := range reviews {
+		if drafts[reviews[i].PRURL] && reviews[i].Status != ReviewStateRunning {
+			reviews[i].Status = ReviewStateIneligible
+		}
+	}
+	return reviews
+}
+
 func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA string) (domain.ReviewRun, bool) {
 	if prURL == "" || targetSHA == "" {
 		return domain.ReviewRun{}, false

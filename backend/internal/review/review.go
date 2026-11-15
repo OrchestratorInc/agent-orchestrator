@@ -435,7 +435,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	hadRunningReviewer := reviewRunsContainRunningForHarness(runs, harness)
 	reviews := Plan(prs, runs)
 	if source == domain.ReviewTriggerAuto || opts.Rerun {
-		reviews = Plan(prs, reviewRunsForHarness(runs, harness))
+		if source == domain.ReviewTriggerAuto {
+			reviews = PlanAuto(prs, reviewRunsForHarness(runs, harness))
+		} else {
+			reviews = Plan(prs, reviewRunsForHarness(runs, harness))
+		}
 		// Automatic sweeps may discover another eligible PR while this harness is
 		// already reviewing one. Reconciliation above has proved the reviewer
 		// terminal is still alive, so do not append work to its active batch. A
