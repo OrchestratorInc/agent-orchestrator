@@ -1272,9 +1272,12 @@ func turnState(reason acpsdk.StopReason) domain.TurnState {
 }
 
 // loginRefusalRepeatsAnswer reports a refused login whose text ends an answer the
-// agent streamed this turn. claude-agent-acp fails any successful turn whose
-// result contains "Please run /login" and makes that result the failure's title,
-// so an answer that only quotes the CLI's advice comes back as a refused login.
+// agent streamed this turn. claude-agent-acp before 0.81.1 fails any successful
+// turn whose result contains "Please run /login" and makes that result the
+// failure's title, so an answer that only quotes the CLI's advice comes back as a
+// refused login. The runtime AO packages is patched against that
+// (patchClaudeLoginResultError); this check covers an adapter AO does not package
+// (AO_CLAUDE_ACP_COMMAND) and a chat host still running the previous build.
 // The result is the answer's last text block, so it ends the message it came
 // from. A real refusal is never streamed: the adapter withholds the CLI's own
 // login message and sends it only as the failure. Only the title is compared, so

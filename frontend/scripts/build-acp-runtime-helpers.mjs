@@ -559,6 +559,42 @@ export function patchClaudeSteerSettlement(adapterPath) {
 	return true;
 }
 
+/**
+ * Read a result as a refused login only when the result is an error.
+ *
+ * claude-agent-acp 0.70 fails any `success` result whose text contains "Please
+ * run /login" as a refused login. That includes a normal answer that only quotes
+ * the CLI's login advice: the chat then marks the finished answer as stopped and
+ * asks for a login (#8427). A real refusal is an error result, so require
+ * is_error before reading the text. The same check also stops such an answer
+ * from rolling back an active goal. Port of upstream
+ * agentclientprotocol/claude-agent-acp#1103, shipped in 0.81.1. Drop this patch
+ * when AO moves to claude-agent-acp 0.81.1 or later.
+ */
+export function patchClaudeLoginResultError(adapterPath) {
+	let source = readFileSync(adapterPath, "utf8");
+	const patches = [
+		[
+			'("result" in message && message.result.includes("Please run /login"))',
+			'("result" in message && message.is_error && message.result.includes("Please run /login"))',
+		],
+		[
+			'if (message.result.includes("Please run /login")) {',
+			'if (message.is_error && message.result.includes("Please run /login")) {',
+		],
+	];
+	if (patches.every(([, replacement]) => source.includes(replacement))) return false;
+	for (const [original, replacement] of patches) {
+		const at = source.indexOf(original);
+		if (at < 0 || source.indexOf(original, at + 1) >= 0) {
+			throw new Error("claude-agent-acp no longer matches AO's login result patch");
+		}
+		source = source.slice(0, at) + replacement + source.slice(at + original.length);
+	}
+	writeFileSync(adapterPath, source);
+	return true;
+}
+
 export function pruneNodeDistribution(nodeRoot) {
 	// The Unix archives expose npm/corepack as bin/ symlinks into lib/. Remove
 	// the entry points before their targets so packagers never see dangling

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,17 +31,18 @@ const (
 	fakeClaudeNotLoggedIn  = "not-logged-in"
 
 	// An answer that quotes Claude Code's login advice, like one explaining a
-	// login bug. claude-agent-acp reports any result containing "Please run
-	// /login" as a refused login.
+	// login bug. Unpatched, claude-agent-acp 0.70 reports any result containing
+	// "Please run /login" as a refused login.
 	quotedLoginAnswer = "Those turns were not real logouts. Each answer quoted the CLI's advice, " +
 		"\"Not logged in · Please run /login\", while explaining the bug."
 	notLoggedInText = "Not logged in · Please run /login"
 )
 
 // The packaged claude-agent-acp, driven by a fake Claude Code that replays what
-// the real CLI prints. It fails when an adapter upgrade changes how a refused
-// login reaches AO: an answer that quotes the login advice must still complete,
-// and a real refusal must still fail the turn and ask for a login.
+// the real CLI prints. It fails when an adapter upgrade or a packaging change
+// alters how a refused login reaches AO: an answer that quotes the login advice
+// must complete without the adapter reporting a refusal, and a real refusal must
+// still fail the turn and ask for a login.
 func TestPackagedAdapterTellsQuotedLoginAdviceFromARefusal(t *testing.T) {
 	packagedACPRuntime(t)
 	executable, err := os.Executable()
@@ -72,7 +75,8 @@ func TestPackagedAdapterTellsQuotedLoginAdviceFromARefusal(t *testing.T) {
 			})
 
 			var authRejected atomic.Int32
-			driver := New(quotaFixtureClaudePlugin{binary: executable}, nil, func() { authRejected.Add(1) })
+			warned := &warnings{}
+			driver := New(quotaFixtureClaudePlugin{binary: executable}, slog.New(warned), func() { authRejected.Add(1) })
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			dataDir := t.TempDir()
@@ -135,8 +139,43 @@ func TestPackagedAdapterTellsQuotedLoginAdviceFromARefusal(t *testing.T) {
 			if got := authRejected.Load(); got != wantRejected {
 				t.Fatalf("login invalidated %d times, want %d", got, wantRejected)
 			}
+			// The chat driver's own check (acp/conversation.go) logs this when it has to
+			// overrule the adapter. The packaged adapter carries AO's login result patch,
+			// so it must not report the quoted answer as a refusal in the first place.
+			if warned.logged("ignored a refused login") {
+				t.Fatal("the packaged adapter reported the quoted answer as a refused login; is patchClaudeLoginResultError applied?")
+			}
 		})
 	}
+}
+
+// warnings records the driver's warnings.
+type warnings struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (w *warnings) Enabled(_ context.Context, level slog.Level) bool { return level >= slog.LevelWarn }
+
+func (w *warnings) Handle(_ context.Context, record slog.Record) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.messages = append(w.messages, record.Message)
+	return nil
+}
+
+func (w *warnings) WithAttrs([]slog.Attr) slog.Handler { return w }
+func (w *warnings) WithGroup(string) slog.Handler      { return w }
+
+func (w *warnings) logged(text string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, message := range w.messages {
+		if strings.Contains(message, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // packagedACPRuntime points the driver at the runtime `npm run build:acp-runtime`
