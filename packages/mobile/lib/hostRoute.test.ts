@@ -9,6 +9,7 @@ import {
 	promotableHostConfig,
 	selectSpawnHost,
 	spawnHostRequestIsCurrent,
+	spawnHostSelectionReady,
 	type SpawnHostState,
 } from "./hostRoute";
 
@@ -76,6 +77,23 @@ describe("host-qualified mobile routes", () => {
 		expect(initialSpawnHostId({ routeHostId: "host-a", currentHostId: "host-b", hosts })).toBe("host-a");
 		expect(initialSpawnHostId({ routeHostId: "missing", currentHostId: "host-b", hosts })).toBeNull();
 		expect(initialSpawnHostId({ routeHostId: undefined, currentHostId: "missing", hosts })).toBe("host-a");
+	});
+
+	// Reopened after the phone closed the app, the page can open before the
+	// store has read the pairings: picked then, it lands on no machine (or
+	// Cloud) and never moves to the paired one once they load.
+	it("waits for the pairings before picking a machine, routed or not", () => {
+		const loaded = [{ hostId: "host-a", loading: false }];
+		expect(spawnHostSelectionReady({ configResolved: false, hosts: [], connectedMachineCount: 0 })).toBe(false);
+		expect(spawnHostSelectionReady({ configResolved: true, hosts: [], connectedMachineCount: 0 })).toBe(true);
+		expect(spawnHostSelectionReady({ configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
+		// A machine still connecting, with none connected, is waited for before Cloud becomes the default.
+		expect(spawnHostSelectionReady({ configResolved: true, hosts: [{ hostId: "host-a", loading: true }], connectedMachineCount: 0 })).toBe(false);
+		// Routed: the machine named is waited for until it is known and has connected.
+		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: false, hosts: [], connectedMachineCount: 0 })).toBe(false);
+		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: false, hosts: [{ hostId: "host-a", loading: true }], connectedMachineCount: 0 })).toBe(false);
+		expect(spawnHostSelectionReady({ routeHostId: "host-a", configResolved: false, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
+		expect(spawnHostSelectionReady({ routeHostId: "gone", configResolved: true, hosts: loaded, connectedMachineCount: 1 })).toBe(true);
 	});
 
 	it("rejects catalog results requested for a previously selected machine", () => {

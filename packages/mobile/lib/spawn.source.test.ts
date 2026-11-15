@@ -225,7 +225,7 @@ describe("spawn draft", () => {
 		expect(spawn).toContain("if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);");
 		expect(spawn).toContain("if (picked.effort) setEffort(picked.effort);");
 		// The machine waits for the draft, and goes back to the draft's own.
-		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst routed");
+		expect(spawn).toContain("if (!draftRestored) return;\n\t\tif (!spawnHostSelectionReady({ routeHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;");
 		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
 	});
 

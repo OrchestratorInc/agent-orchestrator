@@ -47,6 +47,33 @@ export function initialSpawnHostId({
 	return hosts[0]?.id ?? null;
 }
 
+/**
+ * Whether the New task page knows enough to pick its machine. A machine
+ * still connecting is waited for before Cloud can become the default, and so
+ * are the pairings the store has not read from the phone yet: the page can
+ * open before they load (reopened after the app was closed, a link), routed
+ * to a machine or not, and the machine picked first is not picked again.
+ */
+export function spawnHostSelectionReady({
+	routeHostId,
+	configResolved,
+	hosts,
+	connectedMachineCount,
+}: {
+	routeHostId?: string;
+	configResolved: boolean;
+	hosts: ReadonlyArray<{ hostId: string; loading?: boolean }>;
+	connectedMachineCount: number;
+}): boolean {
+	if (routeHostId) {
+		const routed = hosts.find((host) => host.hostId === routeHostId);
+		if (!routed) return configResolved;
+		return !routed.loading;
+	}
+	if (!configResolved) return false;
+	return !(connectedMachineCount === 0 && hosts.some((host) => host.loading));
+}
+
 export function spawnHostRequestIsCurrent(
 	generation: number,
 	currentGeneration: number,

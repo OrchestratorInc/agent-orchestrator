@@ -14,7 +14,7 @@ import { ApiError, getAgentModels, getAgents, getProject, getSettings, type Agen
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
-import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
+import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent, spawnHostSelectionReady } from "../lib/hostRoute";
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
@@ -112,12 +112,7 @@ export default function SpawnScreen() {
 		if (hostSelectionInitialized.current) return;
 		// The saved draft is read first: restored, it goes back to its own machine.
 		if (!draftRestored) return;
-		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
-		// A machine still connecting is waited for before Cloud can become the default.
-		// So is one the store has not read from the phone yet: the page can open
-		// before the pairings load (reopened after the app was closed, a link).
-		if (routeHostId && !routed && !configResolved) return;
-		if ((routeHostId && routed?.loading) || (!routeHostId && machineHosts.length === 0 && hostStates.some((host) => host.loading))) return;
+		if (!spawnHostSelectionReady({ routeHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;
 		hostSelectionInitialized.current = true;
 		const draftHostId = restoredHostId.current;
 		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
