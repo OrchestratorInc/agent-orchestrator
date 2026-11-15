@@ -7642,6 +7642,7 @@ export interface components {
             prNumber: number;
             prUrl: string;
             previousRun?: components["schemas"]["ReviewRun"];
+            reviewers?: components["schemas"]["ReviewReviewerState"][];
             /** @enum {string} */
             status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
             targetSha: string;
@@ -8031,6 +8032,12 @@ export interface components {
             /** @enum {string} */
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
+        };
+        ReviewReviewerState: {
+            harness: string;
+            latestRun?: components["schemas"]["ReviewRun"];
+            /** @enum {string} */
+            status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
         };
         ReviewRun: {
             autoInjectReview: boolean;

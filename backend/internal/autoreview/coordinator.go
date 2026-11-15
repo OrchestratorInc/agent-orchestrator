@@ -101,52 +101,64 @@ func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) 
 		}
 		return Result{}, err
 	}
-	harness := effectiveReviewerHarness(session, project.Config)
-	if harness == "" {
+	harnesses := autoReviewerHarnesses(session, project.Config)
+	if len(harnesses) == 0 {
 		return Result{Reason: "missing_reviewer_harness"}, nil
 	}
 	prs, err := c.store.ListPRsBySession(ctx, id)
 	if err != nil {
 		return Result{}, err
 	}
+	if len(prs) == 0 {
+		return Result{Reason: "no_pr"}, nil
+	}
 	runs, err := c.store.ListReviewRunsBySession(ctx, id)
 	if err != nil {
 		return Result{}, err
 	}
-	harnessRuns := make([]domain.ReviewRun, 0, len(runs))
-	for _, run := range runs {
-		if run.Harness == harness || run.Harness == "" {
-			harnessRuns = append(harnessRuns, run)
-		}
-	}
-	states := reviewcore.Plan(prs, harnessRuns)
-	if len(states) == 0 {
-		return Result{Reason: "no_pr"}, nil
-	}
+	// Every configured reviewer is gated on its own runs: one reviewer's
+	// approval or running pass never hides work another reviewer still owes.
 	eligible := false
 	hasRunning := false
 	reason := "planner_ineligible"
-	for _, state := range states {
-		switch state.Status {
-		case reviewcore.ReviewStateRunning:
-			hasRunning = true
-			reason = "review_running"
-		case reviewcore.ReviewStateUpToDate:
-			reason = "already_approved"
-		case reviewcore.ReviewStateChangesRequested:
-			reason = "changes_requested_same_sha"
-		case reviewcore.ReviewStateIneligible:
-			reason = ineligibleReason(prs, state.PRURL)
-		case reviewcore.ReviewStateNeedsReview:
-			if blocked := existingHeadReason(harnessRuns, state.PRURL, state.TargetSHA); blocked != "" {
-				reason = blocked
-				continue
+	for _, harness := range harnesses {
+		harnessRuns := runsForHarness(runs, harness, len(harnesses) == 1)
+		for _, state := range reviewcore.Plan(prs, harnessRuns) {
+			switch state.Status {
+			case reviewcore.ReviewStateRunning:
+				hasRunning = true
+				reason = "review_running"
+			case reviewcore.ReviewStateUpToDate:
+				if !hasRunning {
+					reason = "already_approved"
+				}
+			case reviewcore.ReviewStateChangesRequested:
+				if !hasRunning {
+					reason = "changes_requested_same_sha"
+				}
+			case reviewcore.ReviewStateIneligible:
+				if !hasRunning {
+					reason = ineligibleReason(prs, state.PRURL)
+				}
+			case reviewcore.ReviewStateNeedsReview:
+				if blocked := existingHeadReason(harnessRuns, state.PRURL, state.TargetSHA); blocked != "" {
+					if !hasRunning {
+						reason = blocked
+					}
+					continue
+				}
+				eligible = true
 			}
-			eligible = true
 		}
 	}
 	if !eligible && !hasRunning {
 		return Result{Reason: reason}, nil
+	}
+	// A single reviewer is passed explicitly (unchanged behaviour). Several
+	// configured reviewers pass no override so the engine runs all of them.
+	var harness domain.ReviewerHarness
+	if len(harnesses) == 1 {
+		harness = harnesses[0]
 	}
 	result, err := c.reviews.TriggerAuto(ctx, id, harness)
 	if err != nil {
@@ -167,11 +179,9 @@ func triggerResultReason(prs []domain.PullRequest, result reviewcore.TriggerResu
 			return "review_running"
 		}
 	}
-	runs := make([]domain.ReviewRun, 0, len(result.Runs))
-	for _, run := range result.Runs {
-		if run.Harness == harness || run.Harness == "" {
-			runs = append(runs, run)
-		}
+	runs := result.Runs
+	if harness != "" {
+		runs = runsForHarness(result.Runs, harness, true)
 	}
 	for _, pr := range prs {
 		if blocked := existingHeadReason(runs, pr.URL, pr.HeadSHA); blocked != "" {
@@ -179,6 +189,40 @@ func triggerResultReason(prs []domain.PullRequest, result reviewcore.TriggerResu
 		}
 	}
 	return "planner_up_to_date"
+}
+
+// runsForHarness keeps one reviewer's runs. Legacy runs with no recorded
+// harness belong to the single reviewer only; with several reviewers their
+// owner is unknown, so they count for none.
+func runsForHarness(runs []domain.ReviewRun, harness domain.ReviewerHarness, includeLegacy bool) []domain.ReviewRun {
+	out := make([]domain.ReviewRun, 0, len(runs))
+	for _, run := range runs {
+		if run.Harness == harness || (includeLegacy && run.Harness == "") {
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
+// autoReviewerHarnesses lists the reviewers an automatic pass must satisfy:
+// a session preference, else every distinct configured project reviewer,
+// else the inherited default.
+func autoReviewerHarnesses(session domain.SessionRecord, config domain.ProjectConfig) []domain.ReviewerHarness {
+	if session.ReviewerHarness != "" || !session.ReviewerConfig.IsZero() || len(config.Reviewers) < 2 {
+		if h := effectiveReviewerHarness(session, config); h != "" {
+			return []domain.ReviewerHarness{h}
+		}
+		return nil
+	}
+	seen := map[domain.ReviewerHarness]bool{}
+	var out []domain.ReviewerHarness
+	for _, rv := range config.Reviewers {
+		if !seen[rv.Harness] {
+			seen[rv.Harness] = true
+			out = append(out, rv.Harness)
+		}
+	}
+	return out
 }
 
 func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string {

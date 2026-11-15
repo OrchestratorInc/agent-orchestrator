@@ -32,6 +32,17 @@ type PRReviewState struct {
 	Status      StateStatus       `json:"status" enum:"needs_review,running,up_to_date,changes_requested,ineligible"`
 	LatestRun   *domain.ReviewRun `json:"latestRun,omitempty"`
 	PreviousRun *domain.ReviewRun `json:"previousRun,omitempty"`
+	// Reviewers is set only when several reviewers are configured. Each entry
+	// is one reviewer's own state for TargetSHA; Status above is then the
+	// combined verdict across all of them.
+	Reviewers []ReviewerState `json:"reviewers,omitempty"`
+}
+
+// ReviewerState is one configured reviewer's state for a PR's current head.
+type ReviewerState struct {
+	Harness   domain.ReviewerHarness `json:"harness"`
+	Status    StateStatus            `json:"status" enum:"needs_review,running,up_to_date,changes_requested,ineligible"`
+	LatestRun *domain.ReviewRun      `json:"latestRun,omitempty"`
 }
 
 // Plan computes per-PR review work from the currently observed PRs and existing
@@ -138,4 +149,76 @@ func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 		}
 	}
 	return latest
+}
+
+// PlanReviewers plans review state when several reviewers must each judge
+// every PR head. Each reviewer is planned only from its own runs, and the
+// PR's Status is the combined verdict for its current head:
+//
+//   - ineligible when the PR itself cannot be reviewed;
+//   - changes_requested when any reviewer requested changes;
+//   - running when any reviewer is still reviewing;
+//   - needs_review when any reviewer has not completed an approval (no run,
+//     failed, cancelled, or a verdict on an older head);
+//   - up_to_date only when every reviewer approved this exact head.
+//
+// A failed or timed-out reviewer therefore never counts as approval, and a new
+// head commit resets every reviewer to needs_review. With fewer than two
+// harnesses it is exactly Plan.
+func PlanReviewers(prs []domain.PullRequest, runs []domain.ReviewRun, harnesses []domain.ReviewerHarness) []PRReviewState {
+	reviews := Plan(prs, runs)
+	if len(harnesses) < 2 {
+		return reviews
+	}
+	perHarness := make([][]PRReviewState, len(harnesses))
+	for i, h := range harnesses {
+		own := make([]domain.ReviewRun, 0, len(runs))
+		for _, run := range runs {
+			if run.Harness == h {
+				own = append(own, run)
+			}
+		}
+		perHarness[i] = Plan(prs, own)
+	}
+	for i := range reviews {
+		reviewers := make([]ReviewerState, 0, len(harnesses))
+		for j, h := range harnesses {
+			state := findReviewState(perHarness[j], reviews[i].PRURL, reviews[i].TargetSHA)
+			reviewers = append(reviewers, ReviewerState{Harness: h, Status: state.Status, LatestRun: state.LatestRun})
+		}
+		reviews[i].Reviewers = reviewers
+		reviews[i].Status = combinedReviewStatus(reviews[i].Status, reviewers)
+	}
+	return reviews
+}
+
+func findReviewState(states []PRReviewState, prURL, targetSHA string) PRReviewState {
+	for _, s := range states {
+		if s.PRURL == prURL && s.TargetSHA == targetSHA {
+			return s
+		}
+	}
+	return PRReviewState{Status: ReviewStateNeedsReview}
+}
+
+func combinedReviewStatus(prStatus StateStatus, reviewers []ReviewerState) StateStatus {
+	if prStatus == ReviewStateIneligible {
+		return ReviewStateIneligible
+	}
+	has := map[StateStatus]bool{}
+	for _, r := range reviewers {
+		has[r.Status] = true
+	}
+	switch {
+	case has[ReviewStateChangesRequested]:
+		return ReviewStateChangesRequested
+	case has[ReviewStateRunning]:
+		return ReviewStateRunning
+	case has[ReviewStateNeedsReview]:
+		return ReviewStateNeedsReview
+	case len(reviewers) > 0 && len(has) == 1 && has[ReviewStateUpToDate]:
+		return ReviewStateUpToDate
+	default:
+		return ReviewStateNeedsReview
+	}
 }

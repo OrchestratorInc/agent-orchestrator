@@ -22043,6 +22043,10 @@ components:
           type: string
         previousRun:
           $ref: '#/components/schemas/ReviewRun'
+        reviewers:
+          items:
+            $ref: '#/components/schemas/ReviewReviewerState'
+          type: array
         status:
           enum:
           - needs_review
@@ -23012,6 +23016,24 @@ components:
           type: string
         turnId:
           type: string
+      type: object
+    ReviewReviewerState:
+      properties:
+        harness:
+          type: string
+        latestRun:
+          $ref: '#/components/schemas/ReviewRun'
+        status:
+          enum:
+          - needs_review
+          - running
+          - up_to_date
+          - changes_requested
+          - ineligible
+          type: string
+      required:
+      - harness
+      - status
       type: object
     ReviewRun:
       properties:
