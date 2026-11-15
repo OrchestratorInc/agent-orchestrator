@@ -1405,6 +1405,39 @@ export interface CloudCpHarnessVersionsResponse {
 	editable: boolean;
 	agents: CloudCpHarnessVersion[];
 }
+
+// ---------------------------------------------------------------------------
+// Data retention (GET/PUT /me/data-retention)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the signed-in user's Cloud sessions and their conversation content
+ * are kept: every session they started, in any organization, team sessions
+ * included. A session older than `retentionDays`, counted from its creation,
+ * is ended and its content deleted. Each user sets their own.
+ */
+export interface CloudCpDataRetention {
+	retentionDays: number;
+	/** The deployment's default period; always one of `options`. */
+	defaultDays: number;
+	/** The periods the user may choose, in days, ascending. */
+	options: number[];
+	/** When the user last chose the period; null while it is the default. */
+	updatedAt: string | null;
+}
+
+/** PUT /me/data-retention. */
+export interface CloudCpPutDataRetentionRequest {
+	retentionDays: number;
+	/** Only count the sessions the period would delete; change nothing. */
+	dryRun?: boolean;
+}
+
+/** The retention as stored (unchanged by a dry run) and what the requested period deletes. */
+export interface CloudCpDataRetentionChange extends CloudCpDataRetention {
+	/** The user's sessions older than the requested period whose content is not deleted yet. */
+	sessionsToDelete: number;
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;

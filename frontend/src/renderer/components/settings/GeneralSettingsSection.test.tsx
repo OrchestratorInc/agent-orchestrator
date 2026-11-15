@@ -24,6 +24,7 @@ vi.mock("../../hooks/useEditorHandoff", () => ({
 
 // The real rows read the cloud gate and the CLI link; this file covers retention.
 vi.mock("./DefaultCloudSandboxRow", () => ({ DefaultCloudSandboxSection: () => null }));
+vi.mock("./DataRetentionSection", () => ({ DataRetentionSection: () => null }));
 vi.mock("./CliLinkSettingsRow", () => ({ CliLinkSettings: () => null }));
 
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
