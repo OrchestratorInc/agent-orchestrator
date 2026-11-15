@@ -1868,7 +1868,7 @@
 	"settings.browserImport.skippedCookies": "Пропущено cookies: {{count}}.",
 	"settings.browserImport.importDetails": "Подробности импорта",
 	"settings.browserImport.signInAgain": "На некоторых сайтах может потребоваться повторный вход.",
-	"settings.browserImport.resultNoSignIns": "Ни один вход не удалось импортировать: Orchestrator не может прочитать новейшее шифрование cookie в Chrome. Входите на сайты в браузере Orchestrator.",
+	"settings.browserImport.resultNoSignIns": "Новейшее шифрование cookie в Chrome не удалось прочитать, поэтому сохранённые входы не были импортированы. Входите на сайты в браузере Orchestrator.",
 	"settings.browserImport.useProfile": "Выберите новый профиль на панели браузера, чтобы использовать импортированные данные.",
 	"settings.browserImport.warning.cookie-database-missing": "Для исходного профиля не найдена база данных cookies.",
 	"settings.browserImport.warning.history-database-missing": "Для исходного профиля не найдена база данных истории.",

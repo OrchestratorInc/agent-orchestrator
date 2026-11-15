@@ -124,6 +124,7 @@ describe("BrowserImportDialog", () => {
 		expect(status).not.toContainElement(screen.getByText("Cookies and site sign-ins"));
 		expect(status).not.toContainElement(screen.getByText("Select a new profile from the browser toolbar to use the imported data."));
 		expect(screen.getAllByText("Import complete")).toHaveLength(1);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByText(/^Import details/));
 		expect(details).toHaveAttribute("open");
 		expect(status).toHaveTextContent(/^12 cookies · 34 history entries$/);
@@ -167,7 +168,39 @@ describe("BrowserImportDialog", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
-		expect(screen.getByRole("alert")).toHaveTextContent(/No sign-ins could be imported/);
+		expect(screen.getByRole("alert")).toHaveTextContent(/saved sign-ins were not imported/);
+	});
+
+	it("keeps the app-bound warning visible when some other cookies still import", async () => {
+		const bridge: AoBridge["browserProfiles"] = {
+			list: vi.fn(async () => ({ profiles: [], defaultProfileId: null })),
+			create: vi.fn(),
+			rename: vi.fn(),
+			clear: vi.fn(),
+			usage: vi.fn(async () => ({ sessions: [] })),
+			delete: vi.fn(),
+			setDefault: vi.fn(),
+			discoverImportSources: vi.fn(async () => ({ sources: [appBoundSource] })),
+			import: vi.fn(async () => ({
+				sourceName: appBoundSource.name,
+				entries: [{
+					sourceProfileNames: ["Default"],
+					destinationProfile: importedProfile,
+					importedCookies: 5,
+					skippedCookies: 4,
+					importedHistoryEntries: 21,
+					warnings: [{ code: "cookie-encryption-unsupported" as BrowserImportWarning["code"], count: 4 }],
+				}],
+			})),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		aoBridge.browserProfiles = bridge;
+
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		await userEvent.click(await screen.findByRole("button", { name: "Start import" }));
+		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent(/saved sign-ins were not imported/);
+		expect(screen.getByRole("status")).toHaveTextContent(/^5 cookies · 21 history entries$/);
 	});
 
 	it("only probes and warns about Safari after Safari is selected", async () => {

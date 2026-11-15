@@ -584,7 +584,7 @@ function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: 
 								: <CircleMinus aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
 						</div>
 					))}
-					{includeCookies && entry.importedCookies === 0 && entry.warnings.some((warning) => warning.code === "cookie-encryption-unsupported") ? (
+					{includeCookies && entry.warnings.some((warning) => warning.code === "cookie-encryption-unsupported") ? (
 						<p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
 							{t("settings.browserImport.resultNoSignIns")}
 						</p>

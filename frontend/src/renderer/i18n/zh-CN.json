@@ -2886,7 +2886,7 @@
 	"settings.browserImport.skippedCookies": "已跳过 {{count}} 个 Cookie。",
 	"settings.browserImport.importDetails": "导入详情",
 	"settings.browserImport.signInAgain": "某些网站可能需要您重新登录。",
-	"settings.browserImport.resultNoSignIns": "Orchestrator 无法读取 Chrome 的最新 Cookie 加密，未能导入任何登录状态。请在 Orchestrator 浏览器中登录各网站。",
+	"settings.browserImport.resultNoSignIns": "无法读取 Chrome 的最新 Cookie 加密，因此未导入已保存的登录状态。请在 Orchestrator 浏览器中登录各网站。",
 	"settings.browserImport.useProfile": "请从浏览器工具栏选择新配置文件以使用导入的数据。",
 	"settings.browserImport.warning.cookie-database-missing": "此源配置文件没有可用的 Cookie 数据库。",
 	"settings.browserImport.warning.history-database-missing": "此源配置文件没有可用的历史记录数据库。",

@@ -2816,7 +2816,7 @@
 	"settings.browserImport.skippedCookies": "{{count}} Cookies wurden übersprungen.",
 	"settings.browserImport.importDetails": "Importdetails",
 	"settings.browserImport.signInAgain": "Einige Websites bitten dich möglicherweise, dich erneut anzumelden.",
-	"settings.browserImport.resultNoSignIns": "Es konnten keine Anmeldungen importiert werden, weil Orchestrator Chromes neueste Cookie-Verschlüsselung nicht lesen kann. Melden Sie sich bei Websites stattdessen im Orchestrator-Browser an.",
+	"settings.browserImport.resultNoSignIns": "Chromes neueste Cookie-Verschlüsselung konnte nicht gelesen werden, daher wurden gespeicherte Anmeldungen nicht importiert. Melden Sie sich bei Websites stattdessen im Orchestrator-Browser an.",
 	"settings.browserImport.useProfile": "Wähle ein neues Profil in der Browser-Symbolleiste aus, um die importierten Daten zu verwenden.",
 	"settings.browserImport.warning.cookie-database-missing": "Für dieses Quellprofil war keine Cookie-Datenbank verfügbar.",
 	"settings.browserImport.warning.history-database-missing": "Für dieses Quellprofil war keine Verlaufsdatenbank verfügbar.",

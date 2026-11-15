@@ -2863,7 +2863,7 @@
 	"settings.browserImport.skippedCookies": "Se omitieron {{count}} cookies.",
 	"settings.browserImport.importDetails": "Detalles de la importación",
 	"settings.browserImport.signInAgain": "Es posible que algunos sitios te pidan que vuelvas a iniciar sesión.",
-	"settings.browserImport.resultNoSignIns": "No se pudo importar ningún inicio de sesión porque Orchestrator no puede leer el cifrado de cookies más reciente de Chrome. Inicia sesión en los sitios dentro del navegador de Orchestrator.",
+	"settings.browserImport.resultNoSignIns": "No se pudo leer el cifrado de cookies más reciente de Chrome, por lo que no se importaron los inicios de sesión guardados. Inicia sesión en los sitios dentro del navegador de Orchestrator.",
 	"settings.browserImport.useProfile": "Selecciona un perfil nuevo en la barra del navegador para usar los datos importados.",
 	"settings.browserImport.warning.cookie-database-missing": "No había una base de datos de cookies disponible para este perfil de origen.",
 	"settings.browserImport.warning.history-database-missing": "No había una base de datos de historial disponible para este perfil de origen.",
