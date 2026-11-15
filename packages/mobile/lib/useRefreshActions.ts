@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 /**
  * A page's refresh, run two ways: from the list's pull-to-refresh, and from
@@ -15,9 +15,14 @@ export function useRefreshActions(refresh: () => Promise<unknown>) {
 	const [refreshing, setRefreshing] = useState(false);
 	const [retrying, setRetrying] = useState(false);
 	// The latest refresh behind stable handlers, so a memoised list or banner
-	// is not rebuilt each time the page's refresh closes over new state.
+	// is not rebuilt each time the page's refresh closes over new state. Taken
+	// at commit, not during render: a machine chosen inside a transition renders
+	// before it commits, and a Retry on the board still shown must refresh the
+	// machine that board is for.
 	const latest = useRef(refresh);
-	latest.current = refresh;
+	useLayoutEffect(() => {
+		latest.current = refresh;
+	});
 	const onRefresh = useCallback(async () => {
 		setRefreshing(true);
 		try {
