@@ -518,9 +518,14 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
  */
 export async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<boolean> {
 	const key = conversationQueryKey(sessionId);
-	const prior = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages?.[0];
+	const loaded = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages;
+	const prior = loaded?.[0];
 	const floor = prior ? remoteConversationFloor(prior) : 0;
 	if (!prior || floor < 1) return false;
+	// The tail holds only rows above the live page's floor. A turn long enough to
+	// span pages, or an unsettled row on an older loaded page, can still change
+	// below it, so such a chat reads every page as before.
+	if (loaded.length > 1 && remoteConversationFloor(mergeConversationPages(loaded) ?? prior) < prior.oldestSequence - 1) return false;
 	let wire: WireSnapshot;
 	try {
 		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: CONVERSATION_PAGE_SIZE });

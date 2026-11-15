@@ -1296,6 +1296,63 @@ describe("local chat tail refresh", () => {
 	const emit = () => cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "local-chat", payload: { conversationId: "c1" } }));
 	const queries = () => remoteGetMock.mock.calls.map((call) => call[1].params.query);
 
+	it("catches up after an older-page read that overlapped a merged tail lands", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// t0 is on the older page at 1-2; the live page holds t1 (settled, 3-4) and t2 (running, 5-6), so its floor is 4.
+		let liveText = "partial";
+		const livePage = () => wire({
+			latestSequence: 6, oldestSequence: 3, hasMoreBefore: true,
+			turns: [wireTurn("t1", "completed"), wireTurn("t2", "running")],
+			messages: [wireMessage("m1", "t1", 3), wireMessage("r1", "t1", 4), wireMessage("m2", "t2", 5), wireMessage("r2", "t2", 6, liveText)],
+		});
+		const olderPage = wire({ latestSequence: 2, oldestSequence: 1, turns: [wireTurn("t0", "completed")], messages: [wireMessage("m0", "t0", 1), wireMessage("r0", "t0", 2)] });
+		let finishTail: ((value: unknown) => void) | undefined;
+		let finishOlder: ((value: unknown) => void) | undefined;
+		let olderReads = 0;
+		let fullReads = 0;
+		remoteGetMock.mockReset().mockImplementation((_path: string, init: { params: { query: { afterSequence?: number; beforeSequence?: number } } }) => {
+			const { afterSequence, beforeSequence } = init.params.query;
+			if (afterSequence) return new Promise((resolve) => { finishTail = resolve; });
+			if (beforeSequence) {
+				// The first older read is the user's scroll, held open past the tail.
+				olderReads++;
+				return olderReads === 1 ? new Promise((resolve) => { finishOlder = resolve; }) : Promise.resolve(olderPage);
+			}
+			fullReads++;
+			return Promise.resolve(livePage());
+		});
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("local-chat"));
+		const unsubscribe = observer.subscribe(() => undefined);
+		const disconnect = createEventTransport(client).connect();
+		const data = () => client.getQueryData<{ pages: Array<{ items: Array<{ id: string; text?: string }> }> }>(["conversation", "local-chat"]);
+		const text = (id: string) => data()?.pages[0].items.find((item) => item.id === id)?.text;
+		try {
+			await vi.waitFor(() => expect(text("r2")).toBe("partial"));
+			emit();
+			await vi.waitFor(() => expect(finishTail).toBeDefined());
+			void observer.fetchNextPage();
+			await vi.waitFor(() => expect(finishOlder).toBeDefined());
+
+			// The tail lands first and merges.
+			liveText = "partial and more";
+			finishTail!(wire({ afterSequence: 4, latestSequence: 6, oldestSequence: 5, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 5), wireMessage("r2", "t2", 6, "partial and more")] }));
+			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
+			const readsBeforeOlder = fullReads;
+
+			// The older page lands last and writes back the live page it captured; a catch-up reads the chat again.
+			finishOlder!(olderPage);
+			await vi.waitFor(() => {
+				expect(data()?.pages).toHaveLength(2);
+				expect(text("r2")).toBe("partial and more");
+				expect(fullReads).toBeGreaterThan(readsBeforeOlder);
+			});
+		} finally {
+			disconnect();
+			unsubscribe();
+			client.clear();
+		}
+	});
+
 	it("reads only an open chat's tail and refetches the whole chat only when the tail cannot be merged", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		remoteGetMock.mockReset().mockResolvedValueOnce(wholePage);

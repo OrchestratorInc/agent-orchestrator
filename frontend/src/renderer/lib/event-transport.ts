@@ -177,9 +177,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				};
 				void refreshLocalConversationTail(queryClient, sessionId)
 					.then((merged) => {
-						if (merged || disposed) return undefined;
-						// A fetch that started during the tail read may predate this event.
-						if (queryClient.isFetching({ queryKey, type: "active" }) > 0) state.dirty = true;
+						if (disposed) return undefined;
+						// A query fetch that started during the tail read (an older page, a
+						// mount) may predate this event, or write back the live page it
+						// captured before the merge. Catch up once it has finished.
+						if (queryClient.isFetching({ queryKey }) > 0) state.dirty = true;
+						if (merged) return undefined;
 						return queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
 					})
 					.then(settled, settled);

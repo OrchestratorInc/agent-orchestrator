@@ -77,6 +77,21 @@ describe("refreshLocalConversationTail", () => {
 		expect(cached()!.pages[0].items.map((item) => item.id)).toEqual(live.items.map((item) => item.id));
 	});
 
+	it("reads the whole chat when a running turn or an unsettled row reaches an older loaded page", async () => {
+		// t2 is long enough to span pages: its streaming command sits on the older page, below the live page's floor.
+		const liveSplit = page([turn("t2", "running")], [message("r2", "t2", 5, "partial"), tool("a3", "t2", 6, "running")], { hasMoreBefore: true, oldestSequence: 5 });
+		const olderSplit = page([turn("t1", "completed"), turn("t2", "running")], [message("m1", "t1", 1), message("r1", "t1", 2), message("m2", "t2", 3), tool("a2", "t2", 4, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [liveSplit, olderSplit], pageParams: [undefined, 5] });
+		await expect(refreshLocalConversationTail(client, "s1")).resolves.toBe(false);
+
+		// An older page holding an unsettled row of a finished turn is not covered by the tail either.
+		const liveDone = page([turn("t2", "running")], [message("m2", "t2", 4), message("r2", "t2", 5)], { hasMoreBefore: true, oldestSequence: 4 });
+		const olderUnsettled = page([turn("t1", "completed")], [message("m1", "t1", 1), tool("a1", "t1", 2, "running"), message("r1", "t1", 3)]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [liveDone, olderUnsettled], pageParams: [undefined, 4] });
+		await expect(refreshLocalConversationTail(client, "s1")).resolves.toBe(false);
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
 	it("asks nothing when no page is cached or no row is settled yet", async () => {
 		client.clear();
 		await expect(refreshLocalConversationTail(client, "s1")).resolves.toBe(false);
