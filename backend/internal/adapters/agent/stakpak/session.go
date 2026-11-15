@@ -210,6 +210,40 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 	return id, true, nil
 }
 
+// rememberDataDir keeps the AO data dir for withRecordedProfile.
+func (p *Plugin) rememberDataDir(dataDir string) {
+	if strings.TrimSpace(dataDir) == "" {
+		return
+	}
+	p.recordMu.Lock()
+	p.dataDir = dataDir
+	p.recordMu.Unlock()
+}
+
+// withRecordedProfile applies the session's recorded launch profile to env
+// when env names none. AO's restore asks again whether the conversation
+// exists, with a SessionRef that carries no data dir and the restore
+// environment, which may no longer set the launch's profile.
+func (p *Plugin) withRecordedProfile(ref ports.SessionRef, env map[string]string) (map[string]string, error) {
+	if _, set := env["STAKPAK_PROFILE"]; set || strings.TrimSpace(ref.ID) == "" {
+		return env, nil
+	}
+	dataDir := ref.DataDir
+	if strings.TrimSpace(dataDir) == "" {
+		p.recordMu.Lock()
+		dataDir = p.dataDir
+		p.recordMu.Unlock()
+	}
+	if strings.TrimSpace(dataDir) == "" {
+		return env, nil
+	}
+	record, _, err := readLaunchRecord(dataDir, ref.ID)
+	if err != nil {
+		return nil, err
+	}
+	return restoreEnv(env, record), nil
+}
+
 // saveLaunchRecord writes a launch's record under recordMu.
 func (p *Plugin) saveLaunchRecord(dataDir, sessionID string, record launchRecord) error {
 	p.recordMu.Lock()
@@ -269,10 +303,14 @@ func canonicalPath(path string) string {
 // NativeConversationExists reports whether Stakpak still has the
 // conversation, so a restore never resumes an id Stakpak would reject:
 // `stakpak --session <missing>` exits instead of starting the TUI.
-func (p *Plugin) NativeConversationExists(ctx context.Context, _ ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
+func (p *Plugin) NativeConversationExists(ctx context.Context, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
 	nativeID = strings.TrimSpace(nativeID)
 	if !validSessionID(nativeID) {
 		return false, nil
+	}
+	env, err := p.withRecordedProfile(ref, env)
+	if err != nil {
+		return false, err
 	}
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {

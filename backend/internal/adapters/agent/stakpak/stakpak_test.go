@@ -548,8 +548,8 @@ func TestRestoreProbeUsesTheRecordedProfile(t *testing.T) {
 		DataDir: data,
 		Session: ports.SessionRef{ID: "ao-1", WorkspacePath: ws, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}},
 	}
-	if argv, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || !ok || !slices.Equal(argv, []string{bin, "--session", nativeA}) {
-		t.Fatalf("probe = %q, %t, %v; want the other profile's conversation found", argv, ok, err)
+	if argv, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || !ok || !slices.Equal(argv, []string{bin, "--profile", "other", "--session", nativeA}) {
+		t.Fatalf("probe = %q, %t, %v; want the other profile's conversation resumed in that profile", argv, ok, err)
 	}
 	record, _, err := readLaunchRecord(data, "ao-1")
 	if err != nil || record.Profile == nil || *record.Profile != "other" {
@@ -559,5 +559,41 @@ func TestRestoreProbeUsesTheRecordedProfile(t *testing.T) {
 	probe.Env = map[string]string{"STAKPAK_PROFILE": ""}
 	if _, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || ok {
 		t.Fatalf("restore in the default profile = %t, %v; want the conversation missing there", ok, err)
+	}
+}
+
+// AO's restore (session_manager restoreArgv) calls GetRestoreCommand with the
+// restore environment, then asks NativeConversationExists again with a
+// SessionRef that has no data dir and that same environment. When the project
+// no longer sets the launch's STAKPAK_PROFILE, both must still find the
+// conversation in the launch's store, and the resumed process must open it.
+func TestRestoreKeepsTheLaunchProfileWhenTheRestoreEnvironmentDropsIt(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "known-session-other"), []byte(nativeA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	ctx := context.Background()
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: map[string]string{"STAKPAK_PROFILE": "other"}}); err != nil {
+		t.Fatal(err)
+	}
+	restoreEnvironment := map[string]string{"AO_SESSION_ID": "ao-1"}
+	ref := ports.SessionRef{ID: "ao-1", WorkspacePath: ws, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}}
+	argv, ok, err := p.GetRestoreCommand(ctx, ports.RestoreConfig{DataDir: data, Session: ref, Env: restoreEnvironment})
+	if err != nil || !ok || !slices.Equal(argv, []string{bin, "--profile", "other", "--session", nativeA}) {
+		t.Fatalf("restore = %q, %t, %v; want a resume pinned to the launch profile", argv, ok, err)
+	}
+	// restoreArgv's second check: no data dir on the ref, the same environment.
+	if exists, err := p.NativeConversationExists(ctx, ports.SessionRef{ID: "ao-1", WorkspacePath: ws}, nativeA, restoreEnvironment); err != nil || !exists {
+		t.Fatalf("restoreArgv conversation check = %t, %v; want it found in the launch profile", exists, err)
+	}
+	// A ref that carries the data dir works on a fresh plugin too.
+	if exists, err := New().NativeConversationExists(ctx, ports.SessionRef{ID: "ao-1", DataDir: data}, nativeA, restoreEnvironment); err != nil || !exists {
+		t.Fatalf("conversation check with the ref's data dir = %t, %v; want it found", exists, err)
+	}
+	// An environment that names a profile is used as is.
+	if exists, err := p.NativeConversationExists(ctx, ports.SessionRef{ID: "ao-1"}, nativeA, map[string]string{"STAKPAK_PROFILE": ""}); err != nil || exists {
+		t.Fatalf("explicit default profile = %t, %v; want the conversation missing there", exists, err)
 	}
 }

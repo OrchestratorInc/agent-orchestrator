@@ -51,7 +51,11 @@ type Plugin struct {
 	resolvedBinary string
 	// recordMu serializes launch-record writes, so a resolver that read the
 	// session list while a relaunch replaced the record cannot overwrite it.
+	// It also guards dataDir.
 	recordMu sync.Mutex
+	// dataDir is the AO data dir from the latest launch or restore, for
+	// callers that ask about a conversation with a SessionRef that has none.
+	dataDir string
 }
 
 // New returns a ready-to-register Stakpak adapter.
@@ -169,6 +173,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
+	p.rememberDataDir(cfg.DataDir)
 	if err := p.saveLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt), Profile: launchProfile(cfg.Env)}); err != nil {
 		return nil, err
 	}
@@ -196,6 +201,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if !validSessionID(nativeID) {
 		return nil, false, fmt.Errorf("%s: native session id %q is not a Stakpak session UUID", adapterID, nativeID)
 	}
+	p.rememberDataDir(cfg.DataDir)
 	previous, _, err := readLaunchRecord(cfg.DataDir, cfg.Session.ID)
 	if err != nil {
 		return nil, false, err
@@ -226,6 +232,13 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	argv, err := p.baseArgv(ctx, cfg.DataDir, cfg.Session.ID, launchPrompt, launchFile, cfg.Config)
 	if err != nil {
 		return nil, false, err
+	}
+	// The conversation lives in the launch's profile. When the restore
+	// environment no longer names one (the project's STAKPAK_PROFILE changed
+	// since), --profile, which Stakpak ranks above the variable, keeps the
+	// resumed process on that store.
+	if _, set := cfg.Env["STAKPAK_PROFILE"]; !set && previous.Profile != nil && *previous.Profile != "" {
+		argv = append(argv, "--profile", *previous.Profile)
 	}
 	// A call without instructions adds none to the conversation, which still
 	// holds the ones it had. AO's update-when-idle check probes this way.
