@@ -27,7 +27,7 @@ import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
 import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
-import { cloudPlanBlock, cloudSessionBilled } from "../lib/cloud/plan";
+import { cloudPlanBlock, cloudSessionBilled, planBlocksCloudSetup } from "../lib/cloud/plan";
 import { useCloudPlan } from "../lib/cloud/planStore";
 import { agentModelCatalog } from "../lib/cloud/modelCatalog";
 import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
@@ -258,11 +258,14 @@ export default function SpawnScreen() {
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
 		: [];
+	// On Free the plan is the only thing to say: the project and agent hints
+	// point at entries Free hides, so they would send the person nowhere.
+	const setupBlocked = planBlocksCloudSetup(planBlock);
 	const cloudNotices = [
 		...(planBlock ? [planBlock.message] : []),
-		...(cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+		...(!setupBlocked && cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
 	];
-	const notices = [...hostNotices, ...cloudNotices, ...spawnNotices({
+	const notices = [...hostNotices, ...cloudNotices, ...(setupBlocked ? [] : spawnNotices({
 		// Only when a reconnect can fix it: a rejected password stops the poll for
 		// good, and its catalog error already says to re-scan the pairing code.
 		offline: unreachable,
@@ -272,7 +275,7 @@ export default function SpawnScreen() {
 		catalogError,
 		agentCount: agents.length,
 		modelError,
-	})];
+	}))];
 	const hasComposerMessage = Boolean(
 		notices.length > 0
 		|| attachmentError

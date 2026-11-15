@@ -8,7 +8,7 @@ import { CloudSignIn } from "../../../lib/cloud/components";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CloudError, cloudErrorMessage } from "../../../lib/cloud/errors";
 import { installGitHubApp } from "../../../lib/cloud/githubInstall";
-import { cloudAgentsOffered, cloudPlanView, freePlanSummary } from "../../../lib/cloud/plan";
+import { cloudAgentsOffered, cloudPlanView, freePlanSummary, PLAN_DESKTOP_NOTE } from "../../../lib/cloud/plan";
 import { useCloudPlan, type CloudPlanState } from "../../../lib/cloud/planStore";
 import type { CloudGitHubInstallation, CloudOffering, CloudProviderConnection } from "../../../lib/cloud/types";
 import { haptics } from "../../../lib/haptics";
@@ -266,13 +266,14 @@ function planSection(plan: CloudPlanState | undefined, offering: CloudOffering |
 	if (view.kind === "none") return null;
 	if (view.kind === "free") {
 		return (
-			<SettingsSection title="Plan">
+			<SettingsSection title="Plan" footer={PLAN_DESKTOP_NOTE}>
 				<SettingsValueRow icon="plan" label="Free" value={freePlanSummary(offering)} testID="cloud-settings-plan" />
 			</SettingsSection>
 		);
 	}
 	return (
-		<SettingsSection title="Plan">
+		// A failed payment is fixed where plans are managed.
+		<SettingsSection title="Plan" footer={view.tone === "bad" ? PLAN_DESKTOP_NOTE : undefined}>
 			{/* A meter row without a bar, so every row of the card shares one layout. */}
 			<SettingsMeterRow icon="plan" label={view.name} value={view.status ?? ""} tone={view.tone === "bad" ? "bad" : undefined} testID="cloud-settings-plan" />
 			{view.meters.map((meter) => (

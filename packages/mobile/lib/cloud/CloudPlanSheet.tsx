@@ -8,7 +8,7 @@ import { space, type } from "../tokens";
 import { SheetScreen } from "../ui";
 import { useCloud } from "./CloudProvider";
 import { planResetCopy } from "./errors";
-import { cloudPlanView, freePlanSummary, planRefusalTitle } from "./plan";
+import { cloudPlanView, freePlanSummary, PLAN_DESKTOP_NOTE, planRefusalTitle } from "./plan";
 import type { PlanSheetParams } from "./planRefusal";
 import { useCloudPlan } from "./planStore";
 
@@ -16,8 +16,8 @@ import { useCloudPlan } from "./planStore";
  * Why the organization's plan refused a request, in Cloud's own words and
  * with when it lifts, over the plan's usage: the same rows the conversation's
  * usage sheet draws. Opened by any refusal, and from New task without one.
- * It sells nothing: plans are chosen on the desktop. No explainers: the
- * reason and the numbers carry it.
+ * It sells nothing: plans are chosen on the desktop, and it says only that,
+ * with no link. No other explainers: the reason and the numbers carry it.
  */
 export function CloudPlanSheet({ code, message, resetsAt }: PlanSheetParams) {
 	const styles = useThemedStyles(makeStyles);
@@ -54,6 +54,7 @@ export function CloudPlanSheet({ code, message, resetsAt }: PlanSheetParams) {
 					{view.total ? <UsageRow label="Total sessions" value={view.total.value} /> : null}
 				</View>
 			) : null}
+			{view?.kind === "free" || view?.kind === "paid" ? <Text style={styles.note} testID="cloud-plan-desktop-note">{PLAN_DESKTOP_NOTE}</Text> : null}
 		</SheetScreen>
 	);
 }
