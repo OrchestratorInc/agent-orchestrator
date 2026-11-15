@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -113,14 +114,56 @@ OR %[1]s GLOB '????-??-??T*') THEN CAST(%[1]s AS TEXT) END`, column)
 			return 0, false, err
 		}
 		defer func() { _ = tx.Rollback() }()
-		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s`, table, strings.Join(sets, ","), strings.Join(checks, " AND ")))
+		var hasChangeLog bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='change_log')`).Scan(&hasChangeLog); err != nil {
+			return 0, false, err
+		}
+		var sequence sql.NullInt64
+		var logHighWater int64
+		if hasChangeLog {
+			if err := tx.QueryRowContext(ctx, `SELECT (SELECT seq FROM sqlite_sequence WHERE name='change_log'), COALESCE((SELECT max(seq) FROM change_log),0)`).Scan(&sequence, &logHighWater); err != nil {
+				return 0, false, err
+			}
+		}
+		query := fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s`, table, strings.Join(sets, ","), strings.Join(checks, " AND "))
+		if columns[0].table == "sessions" {
+			// RETURNING sees the revision before the AFTER UPDATE trigger runs.
+			query += ` RETURNING revision`
+		}
+		stmt, err := tx.PrepareContext(ctx, query)
 		if err != nil {
 			return 0, false, err
 		}
 		defer func() { _ = stmt.Close() }()
 		for _, v := range changes {
 			// A concurrent writer may have replaced this value since detection.
-			if _, err = stmt.ExecContext(ctx, v...); err != nil {
+			if columns[0].table == "sessions" {
+				var revision int64
+				if err := stmt.QueryRowContext(ctx, v...).Scan(&revision); errors.Is(err, sql.ErrNoRows) {
+					continue
+				} else if err != nil {
+					return 0, false, err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revision=? WHERE rowid=? AND revision<>?`, revision, v[len(columns)], revision); err != nil {
+					return 0, false, err
+				}
+			} else if _, err = stmt.ExecContext(ctx, v...); err != nil {
+				return 0, false, err
+			}
+		}
+		// These are representation changes, so publish no logical write events.
+		// The writer transaction hides its generated events until they are removed;
+		// pre-existing events and all validation triggers remain intact.
+		if hasChangeLog {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE seq>?`, logHighWater); err != nil {
+				return 0, false, err
+			}
+			if sequence.Valid {
+				_, err = tx.ExecContext(ctx, `UPDATE sqlite_sequence SET seq=? WHERE name='change_log' AND seq<>?`, sequence.Int64, sequence.Int64)
+			} else {
+				_, err = tx.ExecContext(ctx, `DELETE FROM sqlite_sequence WHERE name='change_log'`)
+			}
+			if err != nil {
 				return 0, false, err
 			}
 		}
