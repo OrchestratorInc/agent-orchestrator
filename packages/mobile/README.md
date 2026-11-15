@@ -279,6 +279,31 @@ Rebuild with `npx expo run:ios|run:android` only when **native** config changes:
 plugins or permissions, native dependencies, `expo-build-properties`. After dependency
 surgery, regenerate the native projects from scratch with `npx expo prebuild --clean`.
 
+### One command per branch (iOS)
+
+`npm run device` does the whole loop for the current checkout: it installs `node_modules`
+(cloned from a cache when the lockfile matches), builds a Debug app only when the iOS
+[fingerprint](#over-the-air-updates) changed, installs it if needed, starts Metro on `:8081`
+and opens the app. A branch that only changes JavaScript reuses the app another branch built,
+so it is on the phone in seconds; a new fingerprint costs one native build.
+
+```bash
+npm run device              # build if needed, install if needed, Metro, launch
+npm run device -- --rebuild # force a native build
+npm run device -- stop      # stop Metro
+npm run device -- status    # what is installed, whether Metro is running
+```
+
+- The app installs as **AO Dev** under its own bundle id (`aoagents.ao.dev.<team>`), next to a
+  store build, and pairs with the desktop on its own. Push is left out unless
+  `AO_MOBILE_KEEP_PUSH=1`, since personal teams cannot sign it.
+- It picks the one reachable iPhone and the team of your Apple Development certificate. Set
+  `AO_MOBILE_UDID`, `AO_MOBILE_TEAM` or `AO_MOBILE_BUNDLE_ID` to choose.
+- The phone loads JavaScript from `http://<Mac LAN IP>:8081`, so keep it on the same Wi-Fi. If the
+  Mac's address changes, the script re-signs the cached app with the new one.
+- A free developer profile allows three of its apps on a phone; delete one if the install says so.
+- Builds and the `node_modules` store live in `~/.ao/dev/mobile-device`; it needs tmux.
+
 ## Over-the-air updates
 
 Preview and production builds pull JS-only changes from
