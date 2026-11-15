@@ -9,18 +9,21 @@ import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useHostServesMediaVersions, useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
 import { useArtifactFileChanges } from "../hooks/useArtifactFileChanges";
+import { useArtifactListTelemetry } from "../hooks/useArtifactListTelemetry";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
+import { artifactFileType, artifactOwner, artifactSource } from "../lib/artifact-telemetry";
 import { ArtifactZoomContext, ArtifactZoomController, MAX_ARTIFACT_ZOOM, MIN_ARTIFACT_ZOOM, ZOOM_CONTROLS_REVEAL_PX, applyZoomShortcut, useArtifactZoomState, useArtifactZoomTarget, wheelZoomFactor, zoomShortcut } from "../lib/artifact-zoom";
 import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, type ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
+import { captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
@@ -523,7 +526,12 @@ function ArtifactViewerBody({
 						hostId={hostId}
 						onBack={() => onPreviewVersion(null)}
 						onRestore={readOnly ? undefined : () => {
-							if (previewVersion !== null) restore.mutate({ version: previewVersion }, { onSuccess: () => onPreviewVersion(null) });
+							if (previewVersion !== null) restore.mutate({ version: previewVersion }, {
+								onSuccess: () => {
+									void captureRendererEvent("ao.artifacts.version_restored", { file_type: artifactFileType(artifact.path), source: artifactSource({ cloud, hostId }) });
+									onPreviewVersion(null);
+								},
+							});
 						}}
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
@@ -567,7 +575,17 @@ function ArtifactPageFeedback({
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
-	const annotation = useFileAnnotation(sessionId, { hostId, source: name, sendMessage });
+	const annotation = useFileAnnotation(sessionId, {
+		hostId,
+		source: name,
+		sendMessage,
+		// Only a cloud session's page passes sendMessage; others send through the daemon.
+		onSent: (commentCount) => void captureRendererEvent("ao.artifacts.feedback_sent", {
+			comment_count: commentCount,
+			file_type: artifactFileType(path),
+			source: artifactSource({ cloud: Boolean(sendMessage), hostId }),
+		}),
+	});
 	const begin = annotation.begin;
 	useEffect(() => {
 		if (feedbackRequestKey === undefined) return;
@@ -640,11 +658,14 @@ export function SessionArtifactsView({
 	onRequestConsumed,
 	request,
 	session,
+	visible = true,
 }: {
 	hostId?: string;
 	onRequestConsumed?: (key: number) => void;
 	request?: ArtifactOpenRequest | null;
 	session: WorkspaceSession;
+	/** Whether the inspector is showing this tab; a collapsed inspector keeps it mounted. */
+	visible?: boolean;
 }) {
 	const { t } = useTranslation();
 	const openInBrowser = useContext(AppBrowserLinkContext);
@@ -783,7 +804,13 @@ export function SessionArtifactsView({
 		hostId,
 		...(artifact.shareUrl && shareAccess.has(artifact.shareUrl) ? { shareAccess: shareAccess.get(artifact.shareUrl) } : {}),
 	});
-	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
+	const openArtifact = (artifact: Pick<SessionArtifact, "path" | "bundle">) => {
+		void captureRendererEvent("ao.artifacts.opened", {
+			surface: "tab",
+			file_type: artifactFileType(artifact.path, Boolean(artifact.bundle)),
+			source: artifactSource({ cloud: session.cloud, hostId }),
+			owner: artifactOwner(session.cloud, cloudUserId),
+		});
 		setEditingPath(null);
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
@@ -840,6 +867,15 @@ export function SessionArtifactsView({
 	}, [hasSelection, zoomController]);
 	// Only the cards in view and near it are built; the list itself scrolls.
 	const grid = useVirtualGridRows(listedArtifacts.length);
+	// The open counts the session's listed deliverables; the cards show once a
+	// cloud session's list has loaded.
+	useArtifactListTelemetry({
+		surface: "tab",
+		visible,
+		settled: !session.artifactFilesPending,
+		count: listedArtifacts.length,
+		hasCards: listedArtifacts.length > 0,
+	});
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
@@ -861,7 +897,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session} telemetrySurface="viewer">
 						<ArtifactViewMenuItems
 							fileActions={fileMenuActions}
 							history={(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (
@@ -997,6 +1033,7 @@ export function SessionArtifactsView({
 									session={session}
 									iconOnly
 									variant="sidebar"
+									telemetrySurface="tab"
 									onEdit={() => { setEditingPath(artifact.path); setHtmlSourcePath(artifact.path); setSelectedPath(artifact.path); }}
 									className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
 								/>}

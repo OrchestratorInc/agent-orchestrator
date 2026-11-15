@@ -67,6 +67,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 								iconOnly
 								verticalDots
 								share={share}
+								telemetrySurface="viewer"
 								pinInMenu
 								pinned={pinned}
 								onTogglePin={() => togglePinnedArtifact(id)}

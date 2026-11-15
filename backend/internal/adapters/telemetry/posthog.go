@@ -22,6 +22,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const postHogBufferSize = 128
@@ -106,6 +107,10 @@ var remoteCommandTokens = map[string]struct{}{
 var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.automation.created":     {"use_case": {}, "template_id": {}},
 	"ao.daemon.write_lock_held": {"caller": {}, "duration_ms": {}},
+
+	// One per artifact registration and file type: the type bucket and how many
+	// new files, never a name, path or session.
+	"ao.artifacts.registered": {"file_type": {}, "count": {}},
 
 	// count is direct human Chat messages; steer_count and send_count are the
 	// other human sends; the surface counts split all three by client.
@@ -819,6 +824,11 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		value, ok := payload[key]
 		if !ok {
 			continue
+		}
+		if name == "ao.artifacts.registered" && key == "file_type" {
+			if text, ok := value.(string); !ok || !telemetrymeta.ValidArtifactFileType(text) {
+				continue
+			}
 		}
 		if name == "ao.automation.created" {
 			text, ok := value.(string)

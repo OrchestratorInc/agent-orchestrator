@@ -583,6 +583,66 @@ also records these events when you start an artifact session from that page:
 `scope` is `standalone` for the Scratchpad and `project` otherwise. No project
 identifier, file name, or artifact content is sent.
 
+## Artifact usage
+
+When product telemetry is enabled, Orchestrator.inc records how artifacts are
+registered, viewed, shared, and removed. These events carry only the closed
+values listed below, counts, and durations. They never include a file name,
+path, URL, artifact content, title, session or project name, or an invitee's
+email address.
+
+| Event | When it is sent | Artifact-specific properties |
+| --- | --- | --- |
+| `ao.artifacts.registered` | The daemon registers new artifact files for a session (`ao artifact add`). One event per registration and file type; registering a path again sends nothing | `file_type`, `count` |
+| `ao.artifacts.list_opened` | The Artifacts page opens, or a session's Artifacts tab opens while the inspector is showing. Once per open | `surface` (`page`, `tab`), `outcome`, `artifact_count_bucket`, `time_to_first_card_ms` |
+| `ao.artifacts.opened` | You open an artifact | `surface` (`page`, `tab`, `chat_card`, `link`, `board`), `file_type`, `source`, `owner` |
+| `ao.artifacts.opened_externally` | You choose Show in Finder (or File Explorer or the file manager), Show in Terminal, Open in browser, or Download | `target` (`file_manager`, `terminal`, `browser`, `download`), `surface`, `file_type`, `source` |
+| `ao.artifacts.deleted` | Deleting one artifact, or several from the Artifacts page, succeeds | `surface`, `count`, `source` |
+| `ao.artifacts.feedback_sent` | Feedback you wrote on an open artifact reaches its agent | `comment_count`, `file_type`, `source` |
+| `ao.artifacts.edited` | Saving an edit to an artifact succeeds | `file_type`, `source` |
+| `ao.artifacts.version_restored` | Restoring an earlier version of an artifact succeeds | `file_type`, `source` |
+| `ao.artifacts.share_opened` | The publish panel opens | `source`, `file_type` |
+| `ao.artifacts.published` | A publish or republish succeeds | `access`, `invite_count`, `republish`, `source`, `file_type` |
+| `ao.artifacts.publish_failed` | A publish does not go through, or the publish panel opens on a refusal (once per panel) | `reason`, `source`, `file_type` |
+| `ao.artifacts.share_access_changed` | Changing who a published link opens for succeeds | `access` |
+| `ao.artifacts.share_invited` | Inviting people to a published link succeeds | `invite_count` |
+| `ao.artifacts.share_link_copied` | You copy a published link | `surface` (`panel`, `menu`) |
+| `ao.artifacts.unpublished` | Unpublishing succeeds | `source` |
+
+- `file_type` is a bucket worked out from the file's extension: `html`,
+  `markdown`, `pdf`, `image`, `video`, `audio`, `data`, `text`, `office`,
+  `code`, `archive`, `bundle` (a bundle directory), or `other`. The extension
+  itself is not sent.
+- `source` is where the artifact's session runs: `local`, `remote_host`, or
+  `cloud`. It is omitted where the app does not know it (chat cards and links).
+  On share events it is `local` for a file on this computer and `cloud` for a
+  cloud session's file.
+- `surface` on `opened_externally` and `deleted` is `page` (the Artifacts
+  page), `tab` (a session's Artifacts tab), or `viewer` (the open artifact).
+- `outcome` is `loaded` (the first card appeared), `empty` (no artifacts),
+  `failed` (the list could not be read), or `left` (closed before the list
+  loaded). `time_to_first_card_ms` is sent only with `loaded`.
+- `artifact_count_bucket` is `0`, `1`, `2-5`, `6-20`, `21-50`, `51-200`, or
+  `200+`.
+- `access` is `restricted` (only the owner and the people invited) or
+  `anyone` (anyone with the link). `invite_count` is the number of people
+  added in that action, never who they are. `republish` is true when an
+  existing link was updated with a newer version.
+- `owner` is sent only for a cloud session's artifact, when both accounts are
+  known: `self` when you started the session, `teammate` when another member
+  of your organization did. No account identifier is sent.
+- `reason` is `limit` (the plan's link limit is reached), `unsupported` (the
+  file cannot be published), `not_owner` (someone else's cloud session),
+  `signed_out`, or `error`.
+- `comment_count` is how many feedback comments one send delivered, never
+  their text.
+
+`ao.artifacts.registered` is sent by the daemon that registered the file, so it
+follows that daemon's telemetry setting; cloud sessions register artifacts in
+AO Cloud and do not send it. The other events are sent by the desktop app at
+most once per action or per open, never on re-renders, and stop when Share
+usage analytics is off.
+
 The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
 Editing an existing automation does not emit these creation events. Closing the
@@ -1015,6 +1075,7 @@ renamed event. Events not listed keep their names.
 | `ao.usage.daily_summary` | not shipped; nothing to rename |
 | `ao.http.5xx` | unchanged |
 | (new) | `ao.setup.checked` |
+| (new) | `ao.artifacts.*` (see "Artifact usage") |
 
 
 ## Questions or corrections

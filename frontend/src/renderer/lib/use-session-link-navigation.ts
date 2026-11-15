@@ -1,3 +1,5 @@
+import { artifactFileType } from "./artifact-telemetry";
+import { captureRendererEvent } from "./telemetry";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -106,7 +108,10 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			});
 			return false;
 		}
-		if (artifact) requestWorkspaceFileOpen(resolved.sessionId, artifact.path, remoteHostId, "artifact");
+		if (artifact) {
+			void captureRendererEvent("ao.artifacts.opened", { surface: "link", file_type: artifactFileType(artifact.path) });
+			requestWorkspaceFileOpen(resolved.sessionId, artifact.path, remoteHostId, "artifact");
+		}
 		if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
 		else navigateToSession(resolved.projectId, resolved.sessionId);
 		return true;

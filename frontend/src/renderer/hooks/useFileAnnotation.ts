@@ -12,10 +12,12 @@ type UseFileAnnotationOptions = {
 	hostId?: string;
 	source?: string;
 	sendMessage?: (message: string) => Promise<void>;
+	/** Told after every comment in a send reached the agent, with how many there were. */
+	onSent?: (commentCount: number) => void;
 };
 
 export function useFileAnnotation(sessionId: string, options: UseFileAnnotationOptions = {}): FileAnnotationModel {
-	const { hostId, source, sendMessage } = options;
+	const { hostId, source, sendMessage, onSent } = options;
 	const { t } = useTranslation();
 	// The ref is the source of truth so a draft handed over on blur is already
 	// there when the click that caused the blur opens or sends a comment.
@@ -131,6 +133,7 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 				await send(message);
 				delivered += count;
 			}
+			onSent?.(delivered);
 			if (generation !== generationRef.current) return;
 			commitStatus("sent");
 			sentTimerRef.current = window.setTimeout(() => {

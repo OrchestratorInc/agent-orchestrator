@@ -1,5 +1,19 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
+import {
+	ARTIFACT_ACTION_SURFACES,
+	ARTIFACT_COUNT_BUCKETS,
+	ARTIFACT_EXTERNAL_TARGETS,
+	ARTIFACT_FILE_TYPES,
+	ARTIFACT_LINK_COPY_SURFACES,
+	ARTIFACT_LIST_OUTCOMES,
+	ARTIFACT_LIST_SURFACES,
+	ARTIFACT_OPEN_SURFACES,
+	ARTIFACT_OWNERS,
+	ARTIFACT_PUBLISH_FAILURES,
+	ARTIFACT_SHARE_ACCESSES,
+	ARTIFACT_SOURCES,
+} from "./artifact-telemetry";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
@@ -1018,6 +1032,43 @@ const SESSION_IMPORT_SURFACE_SET = new Set(["onboarding", "project_board"]);
 const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "onboarding", "project_offer", "project_dialog", "settings"]);
 const SESSION_IMPORT_OPEN_OUTCOME_SET = new Set(["succeeded", "failed", "open_elsewhere"]);
 
+function oneOf(value: unknown, allowed: readonly string[]): string | undefined {
+	return typeof value === "string" && allowed.includes(value) ? value : undefined;
+}
+
+function boundedCount(value: unknown, max: number): number | undefined {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= max ? value : undefined;
+}
+
+function sanitizeArtifactProperties(event: string, properties?: TelemetryProperties): TelemetryProperties {
+	const surfaces: Record<string, readonly string[]> = {
+		"ao.artifacts.list_opened": ARTIFACT_LIST_SURFACES,
+		"ao.artifacts.opened": ARTIFACT_OPEN_SURFACES,
+		"ao.artifacts.opened_externally": ARTIFACT_ACTION_SURFACES,
+		"ao.artifacts.deleted": ARTIFACT_ACTION_SURFACES,
+		"ao.artifacts.share_link_copied": ARTIFACT_LINK_COPY_SURFACES,
+	};
+	const candidates: TelemetryProperties = {
+		surface: surfaces[event] ? oneOf(properties?.surface, surfaces[event]) : undefined,
+		file_type: oneOf(properties?.file_type, ARTIFACT_FILE_TYPES),
+		source: oneOf(properties?.source, ARTIFACT_SOURCES),
+		outcome: event === "ao.artifacts.list_opened" ? oneOf(properties?.outcome, ARTIFACT_LIST_OUTCOMES) : undefined,
+		artifact_count_bucket: event === "ao.artifacts.list_opened" ? oneOf(properties?.artifact_count_bucket, ARTIFACT_COUNT_BUCKETS) : undefined,
+		time_to_first_card_ms: event === "ao.artifacts.list_opened" ? boundedCount(properties?.time_to_first_card_ms, 10 * 60_000) : undefined,
+		target: event === "ao.artifacts.opened_externally" ? oneOf(properties?.target, ARTIFACT_EXTERNAL_TARGETS) : undefined,
+		count: event === "ao.artifacts.deleted" ? boundedCount(properties?.count, 10_000) : undefined,
+		access: oneOf(properties?.access, ARTIFACT_SHARE_ACCESSES),
+		invite_count: boundedCount(properties?.invite_count, 1_000),
+		republish: event === "ao.artifacts.published" && typeof properties?.republish === "boolean" ? properties.republish : undefined,
+		owner: oneOf(properties?.owner, ARTIFACT_OWNERS),
+		reason: event === "ao.artifacts.publish_failed" ? oneOf(properties?.reason, ARTIFACT_PUBLISH_FAILURES) : undefined,
+		comment_count: event === "ao.artifacts.feedback_sent" ? boundedCount(properties?.comment_count, 1_000) : undefined,
+	};
+	const safe: TelemetryProperties = {};
+	for (const [key, value] of Object.entries(candidates)) if (value !== undefined) safe[key] = value;
+	return safe;
+}
+
 function agentList(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
@@ -1135,6 +1186,24 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.artifact_create_failed":
 			// Where the session lives, never which project.
 			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
+			break;
+		case "ao.artifacts.list_opened":
+		case "ao.artifacts.opened":
+		case "ao.artifacts.opened_externally":
+		case "ao.artifacts.deleted":
+		case "ao.artifacts.share_opened":
+		case "ao.artifacts.published":
+		case "ao.artifacts.unpublished":
+		case "ao.artifacts.share_access_changed":
+		case "ao.artifacts.share_invited":
+		case "ao.artifacts.share_link_copied":
+		case "ao.artifacts.publish_failed":
+		case "ao.artifacts.feedback_sent":
+		case "ao.artifacts.edited":
+		case "ao.artifacts.version_restored":
+			// Enums, counts and durations only: never a file name, path, URL,
+			// title, session name, content or invitee address.
+			Object.assign(safe, sanitizeArtifactProperties(event, properties));
 			break;
 		case "ao.session_imports.offer_shown":
 			if (typeof properties?.surface === "string" && SESSION_IMPORT_SURFACE_SET.has(properties.surface)) safe.surface = properties.surface;

@@ -1,3 +1,5 @@
+import { artifactFileType, artifactSource } from "../lib/artifact-telemetry";
+import { captureRendererEvent } from "../lib/telemetry";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import type { ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
@@ -79,7 +81,16 @@ export function ArtifactFileView({
 	/** The host's file menu, which takes the mode and action buttons instead of the header. */
 	menuActions?: ArtifactMenuActions;
 }) {
-	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
+	const annotation = useFileAnnotation(sessionId, {
+		hostId,
+		source: artifactName,
+		sendMessage,
+		onSent: (commentCount) => void captureRendererEvent("ao.artifacts.feedback_sent", {
+			comment_count: commentCount,
+			file_type: artifactFileType(path),
+			source: artifactSource({ cloud, hostId }),
+		}),
+	});
 	const source = useMemo(
 		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save }),
 		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save],

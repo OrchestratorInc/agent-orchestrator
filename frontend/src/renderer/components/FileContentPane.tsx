@@ -1,3 +1,5 @@
+import { artifactFileType, artifactSource } from "../lib/artifact-telemetry";
+import { captureRendererEvent } from "../lib/telemetry";
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -286,6 +288,7 @@ export function FileContentPane({
 					fileFingerprint: saved.fileFingerprint,
 					size: saved.size,
 				});
+				void captureRendererEvent("ao.artifacts.edited", { file_type: artifactFileType(path), source: artifactSource({ cloud: source.cloud, hostId }) });
 				// The session's artifact list carries each file's modified time.
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				setEditing(false);

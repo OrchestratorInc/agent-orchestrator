@@ -1,3 +1,5 @@
+import { artifactFileType } from "../../lib/artifact-telemetry";
+import { captureRendererEvent } from "../../lib/telemetry";
 import type { Element as HastElement } from "hast";
 import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
 import { pageHidden } from "../../lib/page-hidden";
@@ -546,6 +548,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 				}
 				if (openInFiles && onFileOpen) {
 					event.preventDefault();
+					if (ownArtifact) void captureRendererEvent("ao.artifacts.opened", { surface: "link", file_type: artifactFileType(ownArtifact) });
 					const line = workspaceFileReferenceLine(href ?? "");
 					if (line == null) onFileOpen(openInFiles);
 					else onFileOpen(openInFiles, line);

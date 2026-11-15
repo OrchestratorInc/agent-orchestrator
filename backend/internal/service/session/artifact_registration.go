@@ -5,11 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	pathpkg "path"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // ArtifactRegistration is the outcome of RegisterArtifacts. OtherFiles counts
@@ -42,12 +47,16 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 		paths = append(paths, registration.Path)
 		registrations = append(registrations, registration)
 	}
+	known, knownOK := s.registeredArtifactPaths(ctx, id)
 	registered, found, err := s.store.AddSessionArtifacts(ctx, id, registrations, s.clock())
 	if err != nil {
 		return ArtifactRegistration{}, err
 	}
 	if !found {
 		return ArtifactRegistration{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	if knownOK {
+		s.emitArtifactsRegistered(paths, known)
 	}
 	files, err := sessionartifacts.ListRegistered(ctx, dir, registered)
 	if err != nil {
@@ -64,6 +73,49 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 		}
 	}
 	return result, nil
+}
+
+// registeredArtifactPaths is the session's registered paths before this
+// registration, so registering a path again is not counted as a new artifact.
+// It reports false when telemetry is off or the read fails.
+func (s *Service) registeredArtifactPaths(ctx context.Context, id domain.SessionID) (map[string]bool, bool) {
+	if s.telemetry == nil {
+		return nil, false
+	}
+	rows, err := s.store.ListSessionArtifactsForSessions(ctx, []domain.SessionID{id})
+	if err != nil {
+		return nil, false
+	}
+	known := map[string]bool{}
+	for _, row := range rows[id] {
+		if row.RegisteredAt != nil {
+			known[row.Path] = true
+		}
+	}
+	return known, true
+}
+
+// emitArtifactsRegistered sends one ao.artifacts.registered per file type
+// among the newly registered paths, with how many there were. Only the type
+// bucket and the count are sent, never a path, name or session.
+func (s *Service) emitArtifactsRegistered(paths []string, known map[string]bool) {
+	counts := map[string]int{}
+	for _, path := range paths {
+		if known[path] {
+			continue
+		}
+		known[path] = true
+		counts[telemetrymeta.ArtifactFileType(path, sessionartifacts.IsBundleDir(pathpkg.Base(path)))]++
+	}
+	for _, fileType := range slices.Sorted(maps.Keys(counts)) {
+		s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.artifacts.registered",
+			Source:     "session_service",
+			OccurredAt: s.now(),
+			Level:      ports.TelemetryLevelInfo,
+			Payload:    map[string]any{"file_type": fileType, "count": counts[fileType]},
+		})
+	}
 }
 
 // UnregisterArtifact forgets one registered path, after the user deleted it.

@@ -9,6 +9,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useTranslation } from "react-i18next";
 import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useArtifactListTelemetry } from "../hooks/useArtifactListTelemetry";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
 import { deleteSessionArtifactFile } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -29,7 +30,9 @@ import {
 	type ArtifactSharing,
 	type ArtifactType,
 } from "../lib/artifacts";
+import { artifactFileType, artifactOwner, artifactSource } from "../lib/artifact-telemetry";
 import { formatTimeCompact } from "../lib/format-time";
+import { captureRendererEvent } from "../lib/telemetry";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
@@ -139,6 +142,14 @@ export function ArtifactsView() {
 	}, [visibleGroups, pinnedArtifactIds, t]);
 	// Only the cards on screen and near it are built; a long list would otherwise build every card at once.
 	const grid = useVirtualGridRows(cards.length, scrollElement);
+	useArtifactListTelemetry({
+		surface: "page",
+		visible: true,
+		settled: !workspaceQuery.isLoading,
+		failed: Boolean(workspaceQuery.error) && !workspaces,
+		count: artifactCount(groups),
+		hasCards: cards.length > 0,
+	});
 	// Only the first few pages and PDFs render live; the rest show their thumbnail.
 	const livePreviews = useMemo(() => {
 		const live = new Set<string>();
@@ -222,6 +233,7 @@ export function ArtifactsView() {
 				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId })));
 			const deleted = rows.filter((_, index) => results[index]?.status === "fulfilled").map(artifactKey);
 			const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+			if (deleted.length > 0) void captureRendererEvent("ao.artifacts.deleted", { surface: "page", count: deleted.length });
 			const { unpinArtifact } = useArtifactsViewStore.getState();
 			for (const id of deleted) unpinArtifact(id);
 			setSelectedIds((current) => new Set([...current].filter((id) => !deleted.includes(id))));
@@ -497,10 +509,19 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 	const selectionDescriptionId = useId();
 	const context = `${projectName} · ${row.sessionTitle}`;
 
+	const cloudUserId = useCloudMeUserId(Boolean(row.cloud));
+	const captureOpened = () => void captureRendererEvent("ao.artifacts.opened", {
+		surface: "page",
+		file_type: artifactFileType(row.path, Boolean(row.bundle)),
+		source: artifactSource(row),
+		owner: artifactOwner(row.cloud, cloudUserId),
+	});
 	const open = () => {
+		captureOpened();
 		onPreview(row, projectName);
 	};
 	const openInSession = () => {
+		captureOpened();
 		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");
 		navigateToSession(row.projectId, row.sessionId);
 	};
@@ -572,6 +593,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
+							telemetrySurface="page"
 							share={share}
 							onOpenInSession={openInSession}
 							pinned={pinned}
@@ -596,6 +618,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
+					telemetrySurface="page"
 					share={share}
 					onOpenInSession={openInSession}
 					pinned={pinned}

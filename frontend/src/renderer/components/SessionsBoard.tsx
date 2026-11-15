@@ -1,3 +1,5 @@
+import { artifactFileType, artifactSource } from "../lib/artifact-telemetry";
+import { captureRendererEvent } from "../lib/telemetry";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -231,6 +233,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
 	}, [navigate, hostId]);
 	const openSessionArtifact = useCallback((session: WorkspaceSession, path: string) => {
+		void captureRendererEvent("ao.artifacts.opened", { surface: "board", file_type: artifactFileType(path), source: artifactSource({ cloud: session.cloud, hostId }) });
 		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, hostId, "artifact");
 		openSession(session);
 	}, [openSession, hostId]);
