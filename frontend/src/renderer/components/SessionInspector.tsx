@@ -72,7 +72,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { PRActionButton } from "./PRActions";
+import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -181,10 +181,13 @@ export const SessionInspector = memo(function SessionInspector({
 	sideChatView,
 	view: viewProp,
 	onViewChange,
+	standaloneAgent = false,
 }: {
 	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
 	orchestrator?: boolean;
 	session?: WorkspaceSession;
+	/** The session is a Cloud standalone agent's, alone in its own project. */
+	standaloneAgent?: boolean;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
 	browserPoppedOut?: boolean;
@@ -363,6 +366,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenReviewFile={onOpenReviewFile}
 							orchestrator={orchestrator}
 							session={session}
+							standaloneAgent={standaloneAgent}
 						/>
 					) : undefined
 				}
@@ -400,6 +404,7 @@ const SummaryView = memo(function SummaryView({
 	onOpenReviews,
 	orchestrator,
 	session,
+	standaloneAgent = false,
 }: {
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
@@ -412,6 +417,7 @@ const SummaryView = memo(function SummaryView({
 	onOpenReviews: () => void;
 	orchestrator: boolean;
 	session: WorkspaceSession;
+	standaloneAgent?: boolean;
 }) {
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
@@ -467,9 +473,14 @@ const SummaryView = memo(function SummaryView({
 	};
 	const focusedIsBranchPR = Boolean(branchPR && focusedPR && prFocusKey(focusedPR) === prFocusKey(branchPR));
 	// Another PR of the session that conflicts: its card hands that to the agent.
-	const otherPRConflict = useOtherPRConflictStep(session, hostId, focusedIsBranchPR ? undefined : focusedPR);
-	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
-	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
+	// A Cloud session has no local branch rows to plan from, so its focused PR,
+	// the branch's own included, takes the same step; a guest leaves it to the owner.
+	const conflictStepPR = session.cloud ? (session.cloud.shared ? undefined : focusedPR) : focusedIsBranchPR ? undefined : focusedPR;
+	const otherPRConflict = useOtherPRConflictStep(session, hostId, conflictStepPR);
+	// CI, review, and merge policies act on a PR. Standalone sessions, local or
+	// a Cloud standalone agent, keep the row for Archive.
+	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
+	const showSessionControls = hasPRs || scratchpadSession;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -538,7 +549,7 @@ const SummaryView = memo(function SummaryView({
 										projectId={session.workspaceId}
 										sessionId={session.id}
 										showRepository={prsSpanRepositories(prSummaries)}
-										work={focusedIsBranchPR ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
+										work={focusedIsBranchPR && !session.cloud ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
 									/>
 								</div>
 							) : null}
@@ -577,7 +588,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			)}
-			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} scratchpad={scratchpadSession} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
@@ -862,7 +873,7 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function SessionControls({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
+function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSession; hostId?: string; scratchpad: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -900,7 +911,8 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	});
 	const policyError = policy.error instanceof Error ? policy.error.message : null;
 	const canTerminateNow = session.status === "merged";
-	const isStandaloneSession = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	// Its project has no board to return to, and no policies apart from Archive.
+	const isStandaloneSession = scratchpad;
 
 	const confirmTermination = ({ deleteArtifacts }: SessionArchiveChoice) => {
 		const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceKey) ?? [];
@@ -1220,6 +1232,10 @@ function PRViewSummaryCard({
 			{!cloudOrgId && !guest && pr.state !== "merged" ? (
 				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
 					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+				</div>
+			) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
+				<div className={cn("pt-2 pb-2", !work.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<CloudPRGitStepButton git={work.git} />
 				</div>
 			) : null}
 		</section>

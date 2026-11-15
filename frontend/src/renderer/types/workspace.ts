@@ -478,6 +478,16 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
 }
 
 /**
+ * Whether a live worker can be archived from its own tab, topbar shortcut, or
+ * inspector: local, remote, or Cloud alike. The orchestrator goes with its
+ * project, and a Cloud session shared from another organization is the
+ * sharer's to archive.
+ */
+export function canArchiveWorkerSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && session.cloud?.shared !== true && sessionIsActive(session);
+}
+
+/**
  * Whether the agent PROCESS is gone while the session ROW is still alive —
  * Ctrl+C, `/exit`, a usage limit. Recovered with `resume-agent`, not `restore`.
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.

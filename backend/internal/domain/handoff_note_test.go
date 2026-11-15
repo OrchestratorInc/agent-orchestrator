@@ -212,10 +212,37 @@ func TestHandoffNoteKeepsArtifactsWithinTheByteCap(t *testing.T) {
 	}
 }
 
+// The clipper itself lives in handoffnote now; this drives it through the
+// builder, with a note whose parts that are never dropped (an agent's history
+// file hint) are over both caps on their own.
 func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
-	note := clipHandoffNote(strings.Repeat("📄", handoffNoteMaxChars*2))
+	note := BuildHandoffNote(HandoffNoteInput{
+		HistoryFiles: []HandoffHistoryFile{{Harness: HarnessKimi, Path: "/h/kimi.jsonl", Read: strings.Repeat("📄", handoffNoteMaxChars*2)}},
+		Turns:        []HandoffTurn{{UserRequest: "request", AgentResponse: "response"}},
+	})
 	if len(note) > handoffNoteMaxBytes || utf8.RuneCountInString(note) > handoffNoteMaxChars {
 		t.Fatalf("clipped note is %d bytes / %d characters, want at most %d / %d",
 			len(note), utf8.RuneCountInString(note), handoffNoteMaxBytes, handoffNoteMaxChars)
+	}
+}
+
+// The desktop's note names the agents, keeps every field, and points at
+// ao session history for the whole conversation.
+func TestBuildHandoffNoteCarriesTheSessionAndPointsAtItsHistory(t *testing.T) {
+	note := BuildHandoffNote(HandoffNoteInput{
+		SwitchID: "switch-1", SourceHarness: HarnessClaudeCode, TargetHarness: HarnessCodex,
+		SessionTitle: "Importer", Branch: "feature/importer",
+		Artifacts: []SessionArtifactFile{{Path: "plan.md", Size: 3}}, ArtifactDir: "/data/a",
+		HistoryFiles: []HandoffHistoryFile{{Harness: HarnessKimi, Path: "/h/kimi.jsonl", Read: "Read the last lines."}},
+		Turns:        []HandoffTurn{{UserRequest: "ship it", AgentResponse: "shipped", Harness: HarnessClaudeCode}},
+	})
+	for _, want := range []string{
+		HandoffNotePrefix + ` switch-id="switch-1">`, "You are codex, taking over this Orchestrator-managed session from claude-code.",
+		"Title: Importer", "Git branch: feature/importer", "- plan.md (3 bytes", "- kimi: `/h/kimi.jsonl`. Read the last lines.",
+		"Assistant (claude-code):\nshipped", "## Earlier history\nRun `ao session history` to read the conversation in full",
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note is missing %q:\n%s", want, note)
+		}
 	}
 }

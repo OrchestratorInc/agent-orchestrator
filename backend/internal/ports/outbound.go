@@ -567,6 +567,7 @@ type WorkspaceConfig struct {
 	// orchestrator worktree. Defaults to a truncation of ProjectID when empty.
 	SessionPrefix string
 	Branch        string
+	LastBranch    string
 	// FreshBranch never checks out a leftover local branch for a new
 	// speculative task; a collision gets a new suffixed branch instead.
 	FreshBranch      bool

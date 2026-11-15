@@ -39,7 +39,7 @@ export type SessionTabAgentMenu = {
 	hostId?: string;
 	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
-	/** A local terminal picks its agent here; a chat does so from its composer, and Cloud cannot. */
+	/** A terminal picks its agent here (a Cloud one where its control plane can switch it); a chat does so from its composer. */
 	picksAgent: boolean;
 	/** The interface a switch goes to. */
 	switchTarget: SessionInterfaceMode;

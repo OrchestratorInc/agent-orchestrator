@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
 import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
-import type { PendingSideClose } from "./shared/side-close";
+import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseRequest, type SideCloseState } from "./shared/side-close";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -427,6 +427,8 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		// Tells main the first frame that shows the workspace is on screen.
+		reportSessionsShown: () => ipcRenderer.send("app:sessionsShown"),
 		setMenuAvailability: (availability: AppMenuAvailability) => {
 			ipcRenderer.send(SET_APP_MENU_AVAILABILITY_CHANNEL, availability);
 		},
@@ -595,12 +597,15 @@ const api = {
 		request: (input: AgentLoginRequest) => ipcRenderer.invoke("agentLogin:request", input) as Promise<AgentLoginResponse | null>,
 	},
 	sideChats: {
-		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
-		confirmClose: (sideId: string, alreadyClosed = false) => ipcRenderer.invoke("sideChats:confirmClose", sideId, alreadyClosed) as Promise<void>,
-		getPendingCloses: (sessionId: string) => ipcRenderer.invoke("sideChats:pendingCloses", sessionId) as Promise<PendingSideClose[]>,
-		onPendingClosesChanged: (listener: () => void) => {
-			ipcRenderer.on("sideChats:pendingClosesChanged", listener);
-			return () => { ipcRenderer.removeListener("sideChats:pendingClosesChanged", listener); };
+		protocolVersion: SIDE_CLOSE_PROTOCOL_VERSION,
+		mode: "desktop" as "desktop" | "web",
+		capture: () => ipcRenderer.invoke("sideChats:capture") as Promise<void>,
+		requestClose: (input: SideCloseRequest) => ipcRenderer.invoke("sideChats:requestClose", input) as Promise<SideCloseState>,
+		getCloseState: (sessionId: string) => ipcRenderer.invoke("sideChats:closeState", sessionId) as Promise<SideCloseState>,
+		onCloseStateChanged: (listener: (state: SideCloseState) => void) => {
+			const wrapped = (_event: unknown, state: SideCloseState) => listener(state);
+			ipcRenderer.on("sideChats:closeStateChanged", wrapped);
+			return () => { ipcRenderer.removeListener("sideChats:closeStateChanged", wrapped); };
 		},
 	},
 	editorHandoff: {
@@ -1001,7 +1006,7 @@ const api = {
 		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
 		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
-		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean }) =>
+		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean; account?: "new" | string }) =>
 			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
 				| string
 				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }

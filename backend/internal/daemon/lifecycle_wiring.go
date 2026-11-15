@@ -393,6 +393,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		deps.ArtifactTracker = artifactVersions
 	}
 	sessionSvc := sessionsvc.NewWithDeps(deps)
+	mgr.SetBranchStateRecorder(sessionSvc)
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
 	// reviewer posts its review to the PR itself, so the service needs no SCM
