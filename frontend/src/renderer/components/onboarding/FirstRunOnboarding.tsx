@@ -50,6 +50,7 @@ import { STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
 import { GitHubIcon } from "../GitHubIcon";
+import { FocusScope } from "@radix-ui/react-focus-scope";
 import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
@@ -333,6 +334,9 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 	return (
 		// Back on every page but the welcome, which has nothing before it.
 		<BackContext.Provider value={step === "welcome" ? undefined : goBack}>
+		{/* A modal: Tab and Shift+Tab stay inside it (the shell behind is inert,
+		    see _shell.tsx), except while Settings has it step aside. */}
+		<FocusScope asChild loop trapped={!settingsAside}>
 		<div
 			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS, settingsAside && "hidden")}
 			data-testid="first-run-onboarding"
@@ -383,6 +387,7 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 				<Progress index={index} />
 			</div>
 		</div>
+		</FocusScope>
 		</BackContext.Provider>
 	);
 }
