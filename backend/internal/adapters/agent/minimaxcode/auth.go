@@ -229,28 +229,49 @@ func oauthAuthStatus(dataDir string) ports.AgentAuthStatus {
 // scopedAuthStatePaths lists <authHome>/<buildEnv>/<region>/mcode-public/
 // auth-state.json files that exist. It reads directories rather than globbing,
 // so a profile path containing pattern characters such as [1] stays literal.
+// Missing and non-directory entries are skipped; any other inspection error is
+// returned, since an unreadable directory may hold a signed-in account.
 func scopedAuthStatePaths(authHome string) ([]string, error) {
-	buildEnvs, err := os.ReadDir(authHome)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	buildEnvs, err := readDirIfPresent(authHome)
 	if err != nil {
 		return nil, err
 	}
 	var paths []string
 	for _, buildEnv := range buildEnvs {
-		regions, err := os.ReadDir(filepath.Join(authHome, buildEnv.Name()))
+		buildEnvDir := filepath.Join(authHome, buildEnv.Name())
+		regions, err := readDirIfPresent(buildEnvDir)
 		if err != nil {
-			continue // not a directory, as a glob would skip it
+			return nil, err
 		}
 		for _, region := range regions {
-			path := filepath.Join(authHome, buildEnv.Name(), region.Name(), "mcode-public", "auth-state.json")
+			regionDir := filepath.Join(buildEnvDir, region.Name())
+			if info, err := os.Stat(regionDir); errors.Is(err, os.ErrNotExist) || err == nil && !info.IsDir() {
+				continue
+			} else if err != nil {
+				return nil, err
+			}
+			path := filepath.Join(regionDir, "mcode-public", "auth-state.json")
 			if _, err := os.Lstat(path); err == nil {
 				paths = append(paths, path)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return nil, err
 			}
 		}
 	}
 	return paths, nil
+}
+
+// readDirIfPresent reads dir, treating a missing path or a non-directory as
+// empty, as a glob would.
+func readDirIfPresent(dir string) ([]os.DirEntry, error) {
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) || err == nil && !info.IsDir() {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadDir(dir)
 }
 
 // readOAuthState returns the state file's status, "" when it is absent, and

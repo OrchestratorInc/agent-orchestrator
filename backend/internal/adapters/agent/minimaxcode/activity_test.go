@@ -3,6 +3,7 @@ package minimaxcode
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -98,6 +99,7 @@ func TestOAuthLoginStatusComesFromStateFile(t *testing.T) {
 		{"logged out", "auth/prod/en/mcode-public/auth-state.json", `{"status":"anonymous"}`, "unauthorized"},
 		{"login in flight", "auth/prod/en/mcode-public/auth-state.json", `{"status":"authorizing"}`, "unknown"},
 		{"corrupt", "auth/prod/en/mcode-public/auth-state.json", `{`, "unknown"},
+		{"stray files are not accounts", "auth/prod/README", "notes", "unauthorized"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -117,6 +119,19 @@ func TestOAuthLoginStatusComesFromStateFile(t *testing.T) {
 	write(t, patterned, "auth/prod/en/mcode-public/auth-state.json", `{"status":"authenticated"}`)
 	if got := providerAuthStatus([]byte(oauthActive), patterned); got != "configured" {
 		t.Fatalf("patterned data dir status=%q want configured", got)
+	}
+	// An unreadable account directory may hold a signed-in account.
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		locked := t.TempDir()
+		write(t, locked, "auth/prod/en/mcode-public/auth-state.json", `{"status":"authenticated"}`)
+		buildEnv := filepath.Join(locked, "auth", "prod")
+		if err := os.Chmod(buildEnv, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(buildEnv, 0o700) })
+		if got := providerAuthStatus([]byte(oauthActive), locked); got != "unknown" {
+			t.Fatalf("unreadable account directory status=%q want unknown", got)
+		}
 	}
 }
 
