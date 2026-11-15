@@ -613,7 +613,8 @@ func TestProjectOnlyRemoteCredentialsReachEveryLookup(t *testing.T) {
 	launchEnv := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": key}
 	p := New()
 	ctx := context.Background()
-	for _, id := range []string{"ao-1", "ao-2"} {
+	sessions := []string{"ao-1", "ao-2", "ao-3", "ao-4"}
+	for _, id := range sessions {
 		if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: id, WorkspacePath: ws, Env: launchEnv}); err != nil {
 			t.Fatal(err)
 		}
@@ -646,7 +647,22 @@ func TestProjectOnlyRemoteCredentialsReachEveryLookup(t *testing.T) {
 	if err != nil || !ok || !slices.Equal(argv, []string{bin, "--session", nativeA}) {
 		t.Fatalf("restore after a restart = %q, %t, %v; want a resume of %s", argv, ok, err, nativeA)
 	}
-	for _, id := range []string{"ao-1", "ao-2"} {
+	// AO's update-when-idle probe passes the session environment too, so after
+	// a restart it can still discover an id the observer never captured.
+	afterRestartProbe := ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-3", WorkspacePath: ws, Metadata: map[string]string{}}, Env: launchEnv}
+	if _, ok, err := restarted.GetRestoreCommand(ctx, afterRestartProbe); err != nil || !ok {
+		t.Fatalf("update-when-idle probe after a restart = %t, %v; want the conversation found", ok, err)
+	}
+	// The observer passes no environment. Once any call has brought the
+	// session's own (here the restore's conversation check), its discovery
+	// works again after the restart.
+	if exists, err := restarted.NativeConversationExists(ctx, ports.SessionRef{ID: "ao-4"}, nativeA, launchEnv); err != nil || !exists {
+		t.Fatalf("conversation check after a restart = %t, %v", exists, err)
+	}
+	if id, ok, err := restarted.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-4"}); err != nil || !ok || id != nativeA {
+		t.Fatalf("observer discovery after a restart = %q, %t, %v; want %s", id, ok, err, nativeA)
+	}
+	for _, id := range sessions {
 		raw, err := os.ReadFile(launchRecordPath(data, id)) //nolint:gosec // test path
 		if err != nil {
 			t.Fatal(err)

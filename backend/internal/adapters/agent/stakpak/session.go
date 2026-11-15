@@ -259,6 +259,9 @@ func (p *Plugin) conversationEnv(ref ports.SessionRef, env map[string]string) (m
 	if strings.TrimSpace(ref.ID) == "" {
 		return env, nil
 	}
+	// A caller that brings the session's environment refreshes the in-memory
+	// copy, which a daemon restart empties.
+	p.rememberLaunchEnv(ref.ID, env)
 	dataDir := ref.DataDir
 	if strings.TrimSpace(dataDir) == "" {
 		p.recordMu.Lock()

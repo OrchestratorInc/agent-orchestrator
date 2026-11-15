@@ -250,8 +250,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if recorded == "" && sameConversation {
 		recorded = previous.PromptDigest
 	}
-	// A probe passes no environment and launches nothing; a real restore's
-	// environment is the one the resumed process runs with.
+	// Keep the session's environment from any call that brings one: a
+	// restore's, or AO's update-when-idle probe's. After a daemon restart that
+	// is what lets the activity observer, which passes none, reach a store
+	// that needs project-level credentials.
 	p.rememberLaunchEnv(cfg.Session.ID, cfg.Env)
 	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded, Profile: launchProfile(env)}); err != nil {
 		return nil, false, err
