@@ -154,10 +154,17 @@ describe("spawn draft", () => {
 	// meanwhile is saved once it is, and the old draft never replaces it.
 	it("saves text typed before the saved draft was read, and does not restore over it", () => {
 		expect(spawn).toContain("const [draftRestored, setDraftRestored] = useState(false);");
-		expect(spawn).toContain("}).finally(() => { if (active) setDraftRestored(true); });");
-		expect(spawn).toContain("}, [attachments, draftOwner, draftRestored, draftSaver, prompt]);");
+		expect(spawn).toContain("}).finally(() => { if (generation === restoreGeneration.current) setDraftRestored(true); });");
+		expect(spawn).toContain("}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt]);");
 		expect(spawn).toContain("if (promptRef.current || attachmentsRef.current.length) return;");
 		expect(spawn).not.toContain("draftRestored.current");
+	});
+
+	// Made once: a saver per render would each stay registered for forgetting.
+	it("makes one draft saver for the page and lets it go when the page closes", () => {
+		expect(spawn).toContain("const [draftSaver] = useState(() => createSpawnDraftSaver());");
+		expect(spawn).not.toContain("useRef(createSpawnDraftSaver())");
+		expect(spawn).toContain("void draftSaver.flush();\n\t\t\tdraftSaver.release();");
 	});
 
 	// On a page kept open after its task started, a new draft saves again.
@@ -170,14 +177,52 @@ describe("spawn draft", () => {
 	// Closed after the daemon took the task but before the draft was cleared,
 	// the restored draft's Start reuses the id and the daemon answers with that task.
 	it("keeps the request id with the draft before the request leaves, and reuses it once restored", () => {
-		const send = spawn.slice(spawn.indexOf("const sent = requestRef.current;"), spawn.indexOf("startedDraft.current = { prompt"));
-		expect(send.indexOf("await draftSaver.flush();")).toBeGreaterThan(0);
-		expect(send.indexOf("await draftSaver.flush();")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
-		expect(send).toContain("request: { id: sent.id, payload: sent.payload }");
-		expect(spawn).toContain("if (draft.request) requestRef.current = { ...draft.request, attachments: draft.attachments };");
+		const send = spawn.slice(spawn.indexOf("const payload = JSON.stringify(requestFields);"), spawn.indexOf("startedDraft.current = { prompt"));
+		expect(send).toContain("requestMatches(requestRef.current, payload, attachmentsRef.current)");
+		expect(send).toContain("attachments: attachmentsKey(attachmentsRef.current)");
+		expect(send.indexOf("await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });")).toBeGreaterThan(0);
+		expect(send.indexOf("await saveBeforeStart(")).toBeLessThan(send.indexOf("await spawn({ ...request, clientRequestId: sent.id });"));
+		expect(spawn).toContain("if (draft.request) requestRef.current = draft.request;");
+		// Compared by content: never by the attachments array object.
+		expect(spawn).not.toContain("requestRef.current?.attachments !== attachmentsRef.current");
+	});
+
+	// After a Start that did not land, changed attachments must not be saved
+	// under its id: restored, the next Start would send them with it.
+	it("saves the last Start's id only while the draft has the attachments it sent", () => {
+		expect(spawn).toContain("const current = request && request.attachments === attachmentsKey(attachments) ? request : undefined;");
+		expect(spawn).toContain("...(current ? { request: current } : {})");
+	});
+
+	// A model picked for the Start comes back with the draft, so the next Start
+	// sends the same request and reuses its id instead of starting another task.
+	it("saves and restores what was picked, a model override included", () => {
+		expect(spawn).toContain("...(modelTouched && model ? { model } : {}),");
+		expect(spawn).toContain("...(agentTouched && harness ? { harness } : {}),");
+		expect(spawn).toContain("if (picked.model) { setModel(picked.model); setModelTouched(true); }");
+		expect(spawn).toContain("if (picked.harness) { setHarness(picked.harness); setAgentTouched(true); }");
+		expect(spawn).toContain("if (picked.projectId) setProjectId(picked.projectId);");
+		expect(spawn).toContain("if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);");
+		expect(spawn).toContain("if (picked.effort) setEffort(picked.effort);");
+		// The machine waits for the draft, and goes back to the draft's own.
+		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst routed");
+		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
 	});
 
 	it("saves the draft for the machine picked and the account signed in", () => {
 		expect(spawn).toContain("const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);");
+		// Not before Cloud read who is signed in: saved as no account's, any account would find it.
+		expect(spawn).toContain("if (!draftRestored || !accountKnown) return;");
+	});
+
+	// The page stays mounted through an account change: the last account's
+	// words must not carry over to, or be saved for, the next one.
+	it("empties the composer when the account changes, and loads only the new account's draft", () => {
+		const change = spawn.slice(spawn.indexOf("const draftAccountSeen = useRef"), spawn.indexOf("}, [accountKnown, draftAccountId]);"));
+		expect(change).toContain("if (previous === undefined || previous === draftAccountId) return;");
+		for (const reset of ["void draftSaver.cancel();", "setPrompt(\"\");", "attachmentsRef.current = [];", "setAttachments([]);", "startedDraft.current = null;", "requestRef.current = undefined;"]) {
+			expect(change.indexOf(reset)).toBeGreaterThan(0);
+			expect(change.indexOf(reset)).toBeLessThan(change.indexOf("restoreDraft();"));
+		}
 	});
 });

@@ -2,7 +2,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
-import { clearSpawnDraft, createSpawnDraftSaver, loadSpawnDraft } from "../lib/spawnDraft";
+import { attachmentsKey, clearSpawnDraft, createSpawnDraftSaver, loadSpawnDraft, requestMatches, saveBeforeStart, type SpawnDraft, type SpawnDraftRequest, type SpawnDraftSelections } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
@@ -38,7 +38,7 @@ import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
-import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
+import { approvalOptions, isApprovalMode, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
@@ -60,6 +60,11 @@ export default function SpawnScreen() {
 	const connectedHosts = useMemo(() => cloud ? [...machineHosts, { id: CLOUD_HOST_ID, label: CLOUD_HOST_NAME, icon: "cloud" as const }] : machineHosts, [cloud, machineHosts]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const hostSelectionInitialized = useRef(false);
+	// State, not a ref: what was typed while the saved New task draft was being
+	// read is saved as soon as the read is done (see the draft below).
+	const [draftRestored, setDraftRestored] = useState(false);
+	// The machine the restored draft was written for, picked again if it is connected.
+	const restoredHostId = useRef<string | null>(null);
 	const catalogGeneration = useRef(0);
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
 	const cloudSelected = isCloudHost(selectedHostId);
@@ -103,6 +108,8 @@ export default function SpawnScreen() {
 
 	useEffect(() => {
 		if (hostSelectionInitialized.current) return;
+		// The saved draft is read first: restored, it goes back to its own machine.
+		if (!draftRestored) return;
 		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
 		// A machine still connecting is waited for before Cloud can become the default.
 		// So is one the store has not read from the phone yet: the page can open
@@ -110,8 +117,10 @@ export default function SpawnScreen() {
 		if (routeHostId && !routed && !configResolved) return;
 		if ((routeHostId && routed?.loading) || (!routeHostId && machineHosts.length === 0 && hostStates.some((host) => host.loading))) return;
 		hostSelectionInitialized.current = true;
-		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: currentHostId ?? undefined, hosts: connectedHosts }));
-	}, [configResolved, connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
+		const draftHostId = restoredHostId.current;
+		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
+		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: preferredHostId, hosts: connectedHosts }));
+	}, [configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	// Only a session the plan pays for is the plan's to stop: Coder the
@@ -130,46 +139,19 @@ export default function SpawnScreen() {
 	// before comes back when the page opens empty; starting the task clears it.
 	// It is saved for the machine picked and the account signed in, so another
 	// account, or the same phone after that machine is forgotten, never finds it.
-	const draftSaver = useRef(createSpawnDraftSaver()).current;
-	// State, not a ref: what was typed while the saved draft was being read is
-	// saved as soon as the read is done.
-	const [draftRestored, setDraftRestored] = useState(false);
+	const [draftSaver] = useState(() => createSpawnDraftSaver());
+	// Bumped by each read of the saved draft, and on leaving the page: only the latest one lands.
+	const restoreGeneration = useRef(0);
 	// The draft a Start began a task with: cleared rather than saved again, until
 	// the prompt or attachments change (on a page kept open after it started).
 	const startedDraft = useRef<{ prompt: string; attachments: readonly SpawnAttachment[] } | null>(null);
 	const promptRef = useRef(prompt);
 	promptRef.current = prompt;
+	// Until Cloud has read who is signed in, a draft is neither saved (it would
+	// be saved as no account's, which any account then finds) nor cleared.
+	const accountKnown = cloudState.status !== "loading";
 	const draftAccountId = cloudState.account?.id ?? null;
 	const draftOwner = useMemo(() => ({ hostId: selectedHostId, accountId: draftAccountId }), [draftAccountId, selectedHostId]);
-	useEffect(() => {
-		if (!draftRestored) return;
-		const started = startedDraft.current;
-		if (started && started.prompt === prompt && started.attachments === attachments) return;
-		startedDraft.current = null;
-		const request = requestRef.current;
-		draftSaver.schedule({ prompt, attachments, owner: draftOwner, ...(request ? { request: { id: request.id, payload: request.payload } } : {}) });
-	}, [attachments, draftOwner, draftRestored, draftSaver, prompt]);
-	useEffect(() => {
-		let active = true;
-		void loadSpawnDraft().then((draft) => {
-			if (!active || !draft) return;
-			// Text typed or files added before the draft was read are the page's
-			// now: the old draft neither replaces nor joins them.
-			if (promptRef.current || attachmentsRef.current.length) return;
-			setPrompt(draft.prompt);
-			attachmentsRef.current = draft.attachments;
-			setAttachments(draft.attachments);
-			// The Start it last sent: sent again unchanged, it reuses the request id,
-			// so a task started before the app was closed is not started twice.
-			if (draft.request) requestRef.current = { ...draft.request, attachments: draft.attachments };
-		}).finally(() => { if (active) setDraftRestored(true); });
-		const subscription = AppState.addEventListener("change", (state) => { if (state !== "active") void draftSaver.flush(); });
-		return () => {
-			active = false;
-			subscription.remove();
-			void draftSaver.flush();
-		};
-	}, [draftSaver]);
 	const pickingAttachments = useRef(false);
 	// A paste that came in while a pick was loading, said again when it ends.
 	const missedPaste = useRef(false);
@@ -192,7 +174,89 @@ export default function SpawnScreen() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
+	const requestRef = useRef<SpawnDraftRequest | undefined>(undefined);
+	// What goes into a Start besides the prompt, saved with the draft so a
+	// restored one sends what it sent before (and so reuses its request id).
+	const draftSelections = useMemo((): SpawnDraftSelections => ({
+		...(projectId ? { projectId } : {}),
+		...(agentTouched && harness ? { harness } : {}),
+		...(modelTouched && model ? { model } : {}),
+		...(effort ? { effort } : {}),
+		...(approvalChoice ? { approvalMode: approvalChoice } : {}),
+		mode,
+	}), [agentTouched, approvalChoice, effort, harness, mode, model, modelTouched, projectId]);
+	useEffect(() => {
+		if (!draftRestored || !accountKnown) return;
+		const started = startedDraft.current;
+		if (started && started.prompt === prompt && started.attachments === attachments) return;
+		startedDraft.current = null;
+		// The last Start goes with the draft only while it sent these attachments:
+		// restored with others, its id must not be sent with them.
+		const request = requestRef.current;
+		const current = request && request.attachments === attachmentsKey(attachments) ? request : undefined;
+		draftSaver.schedule({ prompt, attachments, owner: draftOwner, selections: draftSelections, ...(current ? { request: current } : {}) });
+	}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt]);
+	// Puts back what a restored draft had picked. The machine is picked once the
+	// list of machines is known (above); a model or agent picked stays picked.
+	const restoreSelections = (draft: SpawnDraft) => {
+		restoredHostId.current = draft.owner?.hostId ?? null;
+		const picked = draft.selections;
+		if (!picked) return;
+		if (picked.mode === "chat" || picked.mode === "tui") setMode(picked.mode);
+		if (picked.projectId) setProjectId(picked.projectId);
+		if (picked.harness) { setHarness(picked.harness); setAgentTouched(true); }
+		if (picked.model) { setModel(picked.model); setModelTouched(true); }
+		if (picked.effort) setEffort(picked.effort);
+		if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);
+	};
+	const restoreDraft = () => {
+		const generation = ++restoreGeneration.current;
+		setDraftRestored(false);
+		void loadSpawnDraft().then((draft) => {
+			if (generation !== restoreGeneration.current || !draft) return;
+			// Text typed or files added before the draft was read are the page's
+			// now: the old draft neither replaces nor joins them.
+			if (promptRef.current || attachmentsRef.current.length) return;
+			setPrompt(draft.prompt);
+			attachmentsRef.current = draft.attachments;
+			setAttachments(draft.attachments);
+			restoreSelections(draft);
+			// The Start it last sent: sent again unchanged, it reuses the request id,
+			// so a task started before the app was closed is not started twice.
+			if (draft.request) requestRef.current = draft.request;
+		}).finally(() => { if (generation === restoreGeneration.current) setDraftRestored(true); });
+	};
+	useEffect(() => {
+		restoreDraft();
+		const subscription = AppState.addEventListener("change", (state) => { if (state !== "active") void draftSaver.flush(); });
+		return () => {
+			restoreGeneration.current += 1;
+			subscription.remove();
+			void draftSaver.flush();
+			draftSaver.release();
+		};
+		// Once, when the page opens.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [draftSaver]);
+	// Another account signed in, or this one signed out, with the page open:
+	// what the last account wrote leaves the composer, unsaved, and only the new
+	// account's own draft can come back.
+	const draftAccountSeen = useRef<string | null | undefined>(undefined);
+	useEffect(() => {
+		if (!accountKnown) return;
+		const previous = draftAccountSeen.current;
+		draftAccountSeen.current = draftAccountId;
+		if (previous === undefined || previous === draftAccountId) return;
+		void draftSaver.cancel();
+		promptRef.current = "";
+		setPrompt("");
+		attachmentsRef.current = [];
+		setAttachments([]);
+		startedDraft.current = null;
+		requestRef.current = undefined;
+		restoreDraft();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [accountKnown, draftAccountId]);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
 	const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -699,15 +763,18 @@ export default function SpawnScreen() {
 			};
 			const { attachments: _, ...requestFields } = request;
 			const payload = JSON.stringify(requestFields);
-			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
-				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
-			}
+			// Compared by content, not by object: attachments read back from a
+			// restored draft are the same files the last Start sent.
+			const sent: SpawnDraftRequest = requestMatches(requestRef.current, payload, attachmentsRef.current)
+				? requestRef.current
+				: { payload, attachments: attachmentsKey(attachmentsRef.current), id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
+			requestRef.current = sent;
 			// The request id is on the phone before the request leaves: closed
 			// after the daemon took the task but before the draft is cleared, the
-			// restored draft's Start reuses it, and the daemon answers with that task.
-			const sent = requestRef.current;
-			draftSaver.schedule({ prompt, attachments: attachmentsRef.current, owner: draftOwner, request: { id: sent.id, payload: sent.payload } });
-			await draftSaver.flush();
+			// restored draft's Start reuses it, and the daemon answers with that
+			// task. A save that fails does not hold the task back; the draft is
+			// deleted instead, so none without this id can be restored and sent again.
+			await saveBeforeStart(draftSaver, { prompt, attachments: attachmentsRef.current, owner: draftOwner, selections: draftSelections, request: sent });
 			const session = await spawn({ ...request, clientRequestId: sent.id });
 			// Started: the draft goes, so the next New task opens empty.
 			startedDraft.current = { prompt, attachments: attachmentsRef.current };

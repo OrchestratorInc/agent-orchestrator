@@ -22,16 +22,32 @@ export const SPAWN_DRAFT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 /** Who a draft was written for: the machine (or Orchestrator Cloud) picked, and the account signed in. */
 export type SpawnDraftOwner = { hostId: string | null; accountId: string | null };
 /**
- * The last Start sent from the draft: its request id and what it asked for.
- * Sent again unchanged, with the same id, the daemon answers with the task it
- * already started instead of starting a second one.
+ * The last Start sent from the draft: its request id, what it asked for, and
+ * which attachments it sent (by content, see `attachmentsKey`). Sent again
+ * unchanged, with the same id, the daemon answers with the task it already
+ * started instead of starting a second one.
  */
-export type SpawnDraftRequest = { id: string; payload: string };
+export type SpawnDraftRequest = { id: string; payload: string; attachments: string };
+/**
+ * What was picked on the page besides the prompt: the project, an agent, a
+ * model, a level, an approval mode, the session mode. Each goes into a Start,
+ * so a restored draft sends what the one before it sent.
+ */
+export type SpawnDraftSelections = {
+	projectId?: string;
+	/** Present only when an agent was picked, not resolved from the project. */
+	harness?: string;
+	/** Present only when a model was picked. */
+	model?: string;
+	effort?: string;
+	approvalMode?: string;
+	mode?: string;
+};
 
 type StoredAttachment = Omit<SpawnAttachment, "data" | "previewUri"> & { file: string; image: boolean };
-type StoredDraft = { v: 1; savedAt: number; prompt: string; attachments: StoredAttachment[]; owner?: SpawnDraftOwner; request?: SpawnDraftRequest };
+type StoredDraft = { v: 1; savedAt: number; prompt: string; attachments: StoredAttachment[]; owner?: SpawnDraftOwner; request?: SpawnDraftRequest; selections?: SpawnDraftSelections };
 
-export type SpawnDraft = { prompt: string; attachments: SpawnAttachment[]; owner?: SpawnDraftOwner; request?: SpawnDraftRequest };
+export type SpawnDraft = { prompt: string; attachments: SpawnAttachment[]; owner?: SpawnDraftOwner; request?: SpawnDraftRequest; selections?: SpawnDraftSelections };
 
 /** What a restored draft is checked against: the account signed in now, and the machines still paired. */
 export type SpawnDraftContext = () => Promise<{ accountId: string | null; hostIds: readonly string[] }>;
@@ -55,20 +71,63 @@ function contentHash(data: string): string {
 	return (hash >>> 0).toString(36);
 }
 
+// An attachment's bytes never change once picked, so each is hashed once: the
+// draft is saved on every pause in typing, and hashing a few photos' worth of
+// base64 each time is seconds of work on a slow phone.
+const fileNames = new WeakMap<SpawnAttachment, string>();
+
 /**
  * A file name that stays with its attachment: from its contents, not its place
  * in the list, so removing one never leaves another's restored preview
  * pointing at a file that was deleted or rewritten under it.
  */
 function fileName(attachment: SpawnAttachment): string {
-	return `${contentHash(attachment.data)}-${attachment.data.length.toString(36)}-${attachment.name.replace(/[^\w.-]+/g, "_").slice(-80) || "file"}`;
+	const known = fileNames.get(attachment);
+	if (known !== undefined) return known;
+	const name = `${contentHash(attachment.data)}-${attachment.data.length.toString(36)}-${attachment.name.replace(/[^\w.-]+/g, "_").slice(-80) || "file"}`;
+	fileNames.set(attachment, name);
+	return name;
+}
+
+/**
+ * The attachments by what is in them, in order: the same files picked again,
+ * or read back from a restored draft, give the same key.
+ */
+export function attachmentsKey(attachments: readonly SpawnAttachment[]): string {
+	return attachments.map(fileName).join("/");
+}
+
+/** Whether a Start would send exactly what `request` sent: then it reuses its id. */
+export function requestMatches(request: SpawnDraftRequest | undefined, payload: string, attachments: readonly SpawnAttachment[]): request is SpawnDraftRequest {
+	return Boolean(request && request.payload === payload && request.attachments === attachmentsKey(attachments));
+}
+
+function readRequest(value: unknown): SpawnDraftRequest | undefined {
+	const request = value as Partial<SpawnDraftRequest> | null | undefined;
+	return request && typeof request.id === "string" && typeof request.payload === "string" && typeof request.attachments === "string"
+		? { id: request.id, payload: request.payload, attachments: request.attachments }
+		: undefined;
+}
+
+function readSelections(value: unknown): SpawnDraftSelections | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const selections: SpawnDraftSelections = {};
+	for (const key of ["projectId", "harness", "model", "effort", "approvalMode", "mode"] as const) {
+		const field = (value as Record<string, unknown>)[key];
+		if (typeof field === "string") selections[key] = field;
+	}
+	return selections;
 }
 
 function readStored(raw: string | null): StoredDraft | null {
 	if (!raw) return null;
 	const stored = JSON.parse(raw) as Partial<StoredDraft>;
 	if (stored.v !== 1 || typeof stored.prompt !== "string" || typeof stored.savedAt !== "number") return null;
-	return stored as StoredDraft;
+	// A request or selections not shaped as this version writes them are left out.
+	const { request: rawRequest, selections: rawSelections, ...rest } = stored as StoredDraft;
+	const request = readRequest(rawRequest);
+	const selections = readSelections(rawSelections);
+	return { ...rest, ...(request ? { request } : {}), ...(selections ? { selections } : {}) };
 }
 
 /**
@@ -104,7 +163,7 @@ export async function loadSpawnDraft(now = Date.now(), context: SpawnDraftContex
 				...(saved.image ? { previewUri: file.uri } : {}),
 			});
 		}
-		return { prompt: stored.prompt, attachments, owner, ...(stored.request ? { request: stored.request } : {}) };
+		return { prompt: stored.prompt, attachments, owner, ...(stored.request ? { request: stored.request } : {}), ...(stored.selections ? { selections: stored.selections } : {}) };
 	} catch {
 		return null;
 	}
@@ -138,6 +197,7 @@ export async function saveSpawnDraft(draft: SpawnDraft, now = Date.now()): Promi
 		attachments,
 		owner: draft.owner ?? { hostId: null, accountId: null },
 		...(draft.request ? { request: draft.request } : {}),
+		...(draft.selections ? { selections: draft.selections } : {}),
 	};
 	await AsyncStorage.setItem(SPAWN_DRAFT_KEY, JSON.stringify(stored));
 	try {
@@ -158,8 +218,21 @@ export async function clearSpawnDraft(): Promise<void> {
 	await AsyncStorage.removeItem(SPAWN_DRAFT_KEY);
 }
 
-/** Deletes the draft if it was written for `hostId` (a forgotten machine) or while `accountId` (signed out) was signed in. */
-export async function forgetSpawnDraftFor(owner: { hostId?: string; accountId?: string }): Promise<void> {
+type ForgetOwner = { hostId?: string; accountId?: string };
+
+function ownedBy(written: SpawnDraftOwner | undefined, owner: ForgetOwner): boolean {
+	const by = written ?? { hostId: null, accountId: null };
+	return (owner.hostId !== undefined && by.hostId === owner.hostId) || (owner.accountId !== undefined && by.accountId === owner.accountId);
+}
+
+/**
+ * Deletes the draft if it was written for `hostId` (a forgotten machine) or
+ * while `accountId` (signed out) was signed in. Saves of such a draft still
+ * waiting on an open page are dropped first, and one already writing finishes
+ * before the draft is deleted: none can write it back afterwards.
+ */
+export async function forgetSpawnDraftFor(owner: ForgetOwner): Promise<void> {
+	await Promise.all([...draftSavers].map((saver) => saver.forget(owner)));
 	let stored: StoredDraft | null = null;
 	try {
 		stored = readStored(await AsyncStorage.getItem(SPAWN_DRAFT_KEY));
@@ -167,40 +240,95 @@ export async function forgetSpawnDraftFor(owner: { hostId?: string; accountId?: 
 		// Unreadable: nothing anyone can restore either.
 	}
 	if (!stored) return;
-	const written = stored.owner ?? { hostId: null, accountId: null };
-	if ((owner.hostId !== undefined && written.hostId === owner.hostId) || (owner.accountId !== undefined && written.accountId === owner.accountId)) await clearSpawnDraft();
+	if (ownedBy(stored.owner, owner)) await clearSpawnDraft();
 }
+
+type SpawnDraftSaverHandle = { forget(owner: ForgetOwner): Promise<void> };
+/** The savers of the pages open now, so forgetting reaches the saves they hold. */
+const draftSavers = new Set<SpawnDraftSaverHandle>();
 
 /**
  * Saves after the draft stops changing for a moment, writes at once when asked
- * (leaving the app), and runs one save at a time so an older draft never lands last.
+ * (leaving the app), and runs one save at a time so an older draft never lands
+ * last. `flush` resolves to whether the save it ran (or the last one) reached
+ * the phone; it never rejects.
  */
 export function createSpawnDraftSaver(save: (draft: SpawnDraft) => Promise<void> = saveSpawnDraft, delayMs = 500) {
 	let pending: SpawnDraft | null = null;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let chain = Promise.resolve();
-	const flush = () => {
+	let last: Promise<boolean> = Promise.resolve(true);
+	// Saves waiting behind the one running: a cancel or a forget drops them too.
+	const queued = new Set<{ draft: SpawnDraft; dropped: boolean }>();
+	const flush = (): Promise<boolean> => {
 		clearTimeout(timer);
 		timer = undefined;
-		if (!pending) return chain;
-		const draft = pending;
+		if (!pending) return last;
+		const item = { draft: pending, dropped: false };
 		pending = null;
-		chain = chain.then(() => save(draft)).catch(() => {});
-		return chain;
+		queued.add(item);
+		const result = chain.then(async () => {
+			queued.delete(item);
+			if (item.dropped) return true;
+			await save(item.draft);
+			return true;
+		}).catch(() => false);
+		last = result;
+		chain = result.then(() => {});
+		return result;
 	};
-	return {
+	const saver = {
 		schedule(draft: SpawnDraft) {
+			// Registered again if it was let go: whatever it holds, forgetting reaches.
+			draftSavers.add(saver);
 			pending = draft;
 			clearTimeout(timer);
 			timer = setTimeout(() => void flush(), delayMs);
 		},
 		flush,
-		/** Forgets a save still waiting: the task started, and the draft is cleared instead. */
+		/** Forgets the saves still waiting: the task started, and the draft is cleared instead. Resolves once one already running is done. */
 		cancel() {
 			clearTimeout(timer);
 			timer = undefined;
 			pending = null;
+			for (const item of queued) item.dropped = true;
 			return chain;
 		},
+		/** Drops the saves waiting for a draft `owner` wrote; resolves once one already running is done. */
+		forget(owner: ForgetOwner) {
+			if (pending && ownedBy(pending.owner, owner)) {
+				clearTimeout(timer);
+				timer = undefined;
+				pending = null;
+			}
+			for (const item of queued) if (ownedBy(item.draft.owner, owner)) item.dropped = true;
+			return chain;
+		},
+		/** The page closed: once its last save is done, forgetting no longer waits on it. */
+		release() {
+			void chain.then(() => { draftSavers.delete(saver); });
+		},
 	};
+	draftSavers.add(saver);
+	return saver;
+}
+
+/**
+ * Saves the draft a Start is about to send, with its request id, before it
+ * leaves: closed after the daemon took the task, the restored draft's Start
+ * reuses the id and the daemon answers with that task instead of a second one.
+ *
+ * A save that fails (twice) does not hold the task back. The draft on the
+ * phone is deleted instead: one saved earlier has no id for this Start, and
+ * restored after the app closed mid-request, its Start would start the task
+ * again. The page keeps the id in memory, so a Start sent again from it still
+ * reuses the id. Resolves to whether the draft was saved.
+ */
+export async function saveBeforeStart(saver: Pick<ReturnType<typeof createSpawnDraftSaver>, "schedule" | "flush">, draft: SpawnDraft): Promise<boolean> {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		saver.schedule(draft);
+		if (await saver.flush()) return true;
+	}
+	await clearSpawnDraft().catch(() => {});
+	return false;
 }
