@@ -890,8 +890,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					inputPending={conversation.pendingActions.includes("input")}
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
-					onRollback={conversation.rollback}
-					onFork={forkOptions?.allowed ? forkTurn : undefined}
+					// A page saved on the phone is a record until the live read lands: its
+					// turns may have moved on, so none can be rolled back or forked from it.
+					onRollback={conversation.saved ? undefined : conversation.rollback}
+					onFork={forkOptions?.allowed && !conversation.saved ? forkTurn : undefined}
 					forkAnyTurn={forkOptions?.anyTurn === true}
 					onEditMessage={conversation.editMessage}
 					onEditingChange={setEditingMessage}
