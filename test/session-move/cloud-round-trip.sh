@@ -369,7 +369,15 @@ PY
 cloud_to_local() {
 	local cid=$1 move="m-$2" out tip sid aid project_dir
 	cloud_exec "$SNAPSHOT" "$CLOUD_REPO" > "$W/want.snap"
+	cloud GET "/orgs/$ORG/sessions/$cid/move/preview" > "$W/preview.json"
+	[[ "$(json "d['branch']" < "$W/preview.json")" == "$BRANCH" ]] || { cat "$W/preview.json"; fail "Cloud preview"; }
+	json "' '.join(sorted(c['path'] for c in d['changes']))" < "$W/preview.json" | grep -q "cloud-$2.txt" || { cat "$W/preview.json"; fail "Cloud preview lists no cloud-$2.txt"; }
+	[[ "$(json "d['transcript']['bytes'] > 0" < "$W/preview.json")" == "True" ]] || { cat "$W/preview.json"; fail "Cloud preview has no conversation"; }
+	api GET "/sessions/move/targets?repoKey=github.com/acme/app&branch=$BRANCH" > "$W/targets.json"
+	[[ "$(json "[t['projectId'] for t in d['targets'] if not t.get('refusal')]" < "$W/targets.json")" == "['$LOCAL_PROJECT']" ]] || { cat "$W/targets.json"; fail "move targets"; }
 	cloud POST "/orgs/$ORG/sessions/$cid/move/export" > "$W/export.json"
+	# An exited agent can stay a zombie, since ao-worker runs as PID 1.
+	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +claude$"' && fail "Cloud's agent still runs after the export"
 	tip=$(json "d['manifest']['tip']" < "$W/export.json") || { cat "$W/export.json"; fail "Cloud export"; }
 	[[ "$(json "d['manifest']['wip']" < "$W/export.json")" == "True" ]] || fail "Cloud export made no WIP commit"
 	[[ "$(remote_tip)" == "$tip" ]] || fail "origin $BRANCH is $(remote_tip), want the exported $tip"
