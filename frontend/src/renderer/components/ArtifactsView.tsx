@@ -146,8 +146,9 @@ export function ArtifactsView() {
 		surface: "page",
 		// Cloud cards join the local ones, so the open waits for both lists.
 		settled: !workspaceQuery.isLoading && !workspaceQuery.cloudLoading,
-		// The same condition that shows the error in place of any cached cards.
-		failed: Boolean(workspaceQuery.error),
+		// The same condition that shows the error in place of any cached cards,
+		// or no cards because a cloud list could not be read (not an empty list).
+		failed: Boolean(workspaceQuery.error) || (cards.length === 0 && workspaceQuery.cloudFailed),
 		count: artifactCount(groups),
 		hasCards: cards.length > 0,
 	});

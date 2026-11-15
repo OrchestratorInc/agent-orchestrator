@@ -621,7 +621,7 @@ email address.
 - `surface` on `opened_externally` and `deleted` is `page` (the Artifacts
   page), `tab` (a session's Artifacts tab), or `viewer` (the open artifact).
 - `outcome` is `loaded` (the first card appeared), `empty` (no artifacts),
-  `failed` (the list could not be read), or `left` (closed before the list
+  `failed` (the list could not be read, or no cards showed because a cloud session's list or files could not be read), or `left` (closed before the list
   loaded). `time_to_first_card_ms` is sent only with `loaded`.
 - `artifact_count_bucket` is `0`, `1`, `2-5`, `6-20`, `21-50`, `51-200`, or
   `200+`.

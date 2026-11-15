@@ -721,9 +721,16 @@ function queryResultsData<T>(results: { data?: T }[]): (T | undefined)[] {
 	return results.map((result) => result.data);
 }
 
-/** Each query's data, and whether any is still on its first fetch. Structurally shared, so `data` keeps its identity. */
-function queryResultsDataAndLoading<T>(results: { data?: T; isLoading: boolean }[]): { data: (T | undefined)[]; loading: boolean } {
-	return { data: queryResultsData(results), loading: results.some((result) => result.isLoading) };
+/**
+ * Each query's data, whether any is still on its first fetch, and which gave
+ * up with no data. Structurally shared, so `data` keeps its identity.
+ */
+function queryResultsDataAndLoading<T>(results: { data?: T; isLoading: boolean; isError: boolean }[]): { data: (T | undefined)[]; loading: boolean; failed: boolean[] } {
+	return {
+		data: queryResultsData(results),
+		loading: results.some((result) => result.isLoading),
+		failed: results.map((result) => result.isError && result.data === undefined),
+	};
 }
 
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
@@ -750,7 +757,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	// read in their own query, once per artifact version, without holding up
 	// the list.
 	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
-	const { data: fileData, loading: filesLoading } = useQueries({
+	const { data: fileData, loading: filesLoading, failed: fileFailures } = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
 			enabled: orgId !== undefined && options.enabled !== false,
@@ -775,8 +782,16 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [list.data, fileData]);
-	// The list has loaded but a live session's first file read has not: its cards are still on the way.
-	return { ...list, data, filesLoading };
+	// A read that gave up leaves a session with no cards only when it has no
+	// earlier list to keep showing.
+	const filesFailed = useMemo(
+		() => withFiles.some((session, index) => fileFailures[index] && !lastFiles.current.has(session.id)),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[fileFailures, data],
+	);
+	// The list has loaded but a live session's first file read has not: its
+	// cards are still on the way.
+	return { ...list, data, filesLoading, filesFailed };
 }
 
 /** Who shared a project and its sessions, how, and through which team. */
@@ -1109,7 +1124,9 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	// True while a cloud list, or a cloud session's artifact files, is still on
 	// its first fetch: the merged data may still grow. Disabled cloud queries (signed out, offering off) never count.
 	const cloudLoading = includeCloud && (cloud.isLoading || cloudSessions.isLoading || cloudSessions.filesLoading || sharedWorkspaces.isLoading);
-	return { ...local, data, cloudLoading };
+	// A cloud list that could not be read, so its cards are missing rather than absent.
+	const cloudFailed = includeCloud && ((cloudSessions.isError && cloudSessions.data === undefined) || cloudSessions.filesFailed);
+	return { ...local, data, cloudLoading, cloudFailed };
 }
 
 /**
