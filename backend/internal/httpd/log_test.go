@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -82,10 +83,63 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 			if got := payload["error_kind"]; got != "internal" {
 				t.Fatalf("payload.error_kind = %#v, want internal", got)
 			}
+			if got := payload["error_type"]; got != "unknown" {
+				t.Fatalf("payload.error_type = %#v, want fixed unknown", got)
+			}
 			if got := payload["fingerprint"]; got == "" {
 				t.Fatalf("payload.fingerprint = %#v, want non-empty", got)
 			}
+			if got, want := payload["fingerprint"], telemetrymeta.Fingerprint("httpd", "http_request", http.MethodPost, "unmatched", "500", "internal", ""); got != want {
+				t.Fatalf("PostHog fingerprint = %v, want %s", got, want)
+			}
 		})
+	}
+}
+
+func TestRequestLoggerSeparatesStatusWithoutCapturedError(t *testing.T) {
+	var fingerprints []string
+	handler := requestLoggerWithCapture(slog.Default(), nil, func(_ context.Context, _ error, _ map[string]string, fingerprint string, _ telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		fingerprints = append(fingerprints, fingerprint)
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("gateway") == "1" {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	for _, path := range []string{"/failure?gateway=1", "/failure", "/failure?gateway=1"} {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(fingerprints) != 3 || fingerprints[0] == fingerprints[1] || fingerprints[0] != fingerprints[2] {
+		t.Fatalf("status fingerprints = %v", fingerprints)
+	}
+}
+
+func TestRequestLoggerGroupsByRouteAndCodeWithoutProjectName(t *testing.T) {
+	var fingerprints []string
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(slog.Default(), nil, func(_ context.Context, _ error, _ map[string]string, fingerprint string, route telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		if route.String() != "/api/v1/projects/{projectID}/workspace/git" {
+			t.Fatalf("unsafe route = %q", route.String())
+		}
+		fingerprints = append(fingerprints, fingerprint)
+	}))
+	router.Get("/api/v1/projects/{projectID}/workspace/git", func(w http.ResponseWriter, r *http.Request) {
+		code := "WORKSPACE_GIT_READ_FAILED"
+		if r.URL.Query().Get("other") == "1" {
+			code = "PROJECT_LOAD_FAILED"
+		}
+		envelope.WriteError(w, r, apierr.Internal(code, "Unable to read workspace Git state"))
+	})
+	for _, path := range []string{
+		"/api/v1/projects/ai-sports-coach-113/workspace/git",
+		"/api/v1/projects/private-repo/workspace/git",
+		"/api/v1/projects/private-repo/workspace/git?other=1",
+	} {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(fingerprints) != 3 || fingerprints[0] != fingerprints[1] || fingerprints[0] == fingerprints[2] {
+		t.Fatalf("route and code fingerprints = %v", fingerprints)
 	}
 }
 
@@ -202,3 +256,70 @@ func (s *captureSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 }
 
 func (s *captureSink) Close(context.Context) error { return nil }
+
+// TestRequestLoggerCapturesRegisteredFaultCodes: a registered daemon fault is
+// captured even though it answers with a 4xx, while an ordinary 4xx, the
+// user's own setup script failing, and lock contention stay out of Sentry.
+func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
+	type captured struct{ category, status, code string }
+	var got []captured
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), nil, func(_ context.Context, _ error, tags map[string]string, fingerprint string, _ telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		if len(fingerprint) != 16 {
+			t.Fatalf("fingerprint = %q, want a 16-char digest", fingerprint)
+		}
+		got = append(got, captured{tags["category"], tags["status"], tags["error_code"]})
+	}))
+	router.Post("/fault", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out", nil))
+	})
+	router.Post("/git", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Invalid("GIT_INIT_FAILED", "Could not initialize", nil))
+	})
+	router.Post("/provision", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Conflict("WORKSPACE_PROVISION_FAILED", "setup script exited 1", nil))
+	})
+	router.Get("/missing", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session"))
+	})
+	router.Get("/hang", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, fmt.Errorf("git status: %w", context.DeadlineExceeded))
+	})
+	router.Get("/busy", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Unavailable("SERVICE_UNAVAILABLE", "busy"))
+	})
+	// An unfinished Codex sign-in is user setup state, even after a deadline.
+	router.Post("/codex-setup", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Unavailable("CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete"))
+	})
+	router.Post("/codex-setup-hang", func(w http.ResponseWriter, r *http.Request) {
+		setup := apierr.Unavailable("CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete")
+		setup.Cause = context.DeadlineExceeded
+		envelope.WriteError(w, r, setup)
+	})
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/fault", nil),
+		httptest.NewRequest(http.MethodPost, "/git", nil),
+		httptest.NewRequest(http.MethodPost, "/provision", nil),
+		httptest.NewRequest(http.MethodGet, "/missing", nil),
+		httptest.NewRequest(http.MethodGet, "/hang", nil),
+		httptest.NewRequest(http.MethodGet, "/busy", nil),
+		httptest.NewRequest(http.MethodPost, "/codex-setup", nil),
+		httptest.NewRequest(http.MethodPost, "/codex-setup-hang", nil),
+	} {
+		router.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	want := []captured{
+		{"http_fault", "409", "SPAWN_TIMEOUT"},
+		{"http_fault", "400", "GIT_INIT_FAILED"},
+		{"http_timeout", "503", ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("captures = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("capture %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}

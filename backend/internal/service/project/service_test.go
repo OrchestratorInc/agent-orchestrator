@@ -618,7 +618,7 @@ func TestManager_AddEmitsProjectAndFirstProjectTelemetry(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want projects.created + first_project_added", sink.events)
 	}
-	if sink.events[0].Name != "ao.projects.created" || sink.events[1].Name != "ao.onboarding.first_project_added" {
+	if sink.events[0].Name != "ao.projects.created" || sink.events[1].Name != "ao.projects.first_added" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	// The emit path detaches from the request context on purpose; the request id
@@ -649,7 +649,7 @@ func TestManager_AddDoesNotRepeatFirstProjectTelemetry(t *testing.T) {
 	}
 	var firstProjectCount int
 	for _, ev := range sink.events {
-		if ev.Name == "ao.onboarding.first_project_added" {
+		if ev.Name == "ao.projects.first_added" {
 			firstProjectCount++
 		}
 	}
@@ -2468,4 +2468,218 @@ func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
 	if data, err := os.ReadFile(keep); err != nil || string(data) != "keep my work" {
 		t.Fatalf("released checkout was modified: %q, %v", data, err)
 	}
+}
+
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func TestManager_AddFirstForInstallIsDurable(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	sink := &captureSink{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: memMilestones{}})
+
+	firstForInstall := func() any {
+		t.Helper()
+		for i := len(sink.events) - 1; i >= 0; i-- {
+			if sink.events[i].Name == "ao.projects.created" {
+				return sink.events[i].Payload["first_for_install"]
+			}
+		}
+		t.Fatalf("no ao.projects.created in %#v", sink.events)
+		return nil
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add first: %v", err)
+	}
+	if got := firstForInstall(); got != true {
+		t.Fatalf("first add first_for_install = %#v, want true", got)
+	}
+	if _, err := m.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	// The table is empty again: the legacy event re-fires, the durable flag must not.
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after remove: %v", err)
+	}
+	if got := firstForInstall(); got != false {
+		t.Fatalf("re-add first_for_install = %#v, want false", got)
+	}
+}
+
+func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	// A build without markers added and then removed (archived) a project.
+	old := project.NewWithDeps(project.Deps{Store: store})
+	if _, err := old.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add on old build: %v", err)
+	}
+	if _, err := old.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	sink := &captureSink{}
+	milestones := memMilestones{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: milestones})
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after upgrade: %v", err)
+	}
+	var created, legacy int
+	for _, ev := range sink.events {
+		switch ev.Name {
+		case "ao.projects.created":
+			created++
+			if got := ev.Payload["first_for_install"]; got != false {
+				t.Fatalf("first_for_install = %#v, want false with an archived prior project", got)
+			}
+		case "ao.projects.first_added":
+			legacy++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("ao.projects.created count = %d, want 1", created)
+	}
+	// The deprecated event keeps its active-projects behavior.
+	if legacy != 1 {
+		t.Fatalf("first_project_added count = %d, want 1 (no active projects)", legacy)
+	}
+	if !milestones["project_added"] {
+		t.Fatal("marker not claimed")
+	}
+}
+
+func TestManager_InitializeRepositoryCreatesNewProjectFolder(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+
+	newFolder := func(t *testing.T) string {
+		t.Helper()
+		base := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", base)
+		return filepath.Join(base, "ao", "projects", "fresh")
+	}
+
+	t.Run("makes the folder and its parents, then it can be added", func(t *testing.T) {
+		dir := newFolder(t)
+		result, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		if err != nil {
+			t.Fatalf("InitializeRepository: %v", err)
+		}
+		if result.Path != dir {
+			t.Fatalf("Path = %q, want %q", result.Path, dir)
+		}
+		if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("expected initial commit: %v (%s)", err, out)
+		}
+		if _, err := m.Add(ctx, project.AddInput{Path: dir, ProjectID: ptr("fresh")}); err != nil {
+			t.Fatalf("Add after create: %v", err)
+		}
+	})
+
+	t.Run("refuses a folder that already exists and leaves it alone", func(t *testing.T) {
+		dir := isolatedPlainFolder(t)
+		keep := filepath.Join(dir, "keep.txt")
+		if err := os.WriteFile(keep, []byte("mine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		wantCode(t, err, "PATH_EXISTS")
+		if _, err := os.Stat(keep); err != nil {
+			t.Fatalf("existing file touched: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+			t.Fatalf("existing folder was initialized: %v", err)
+		}
+	})
+
+	t.Run("refuses a path in Orchestrator's state and makes no folders", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("GIT_CEILING_DIRECTORIES", home)
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: filepath.Join(home, ".ao", "x", "y"), Create: true})
+		wantCode(t, err, "PROJECT_SETUP_PATH_UNSAFE")
+		if _, statErr := os.Stat(filepath.Join(home, ".ao", "x")); !os.IsNotExist(statErr) {
+			t.Fatalf("parent folder made inside Orchestrator's state: %v", statErr)
+		}
+	})
+
+	t.Run("removes the new folder when setup fails", func(t *testing.T) {
+		dir := newFolder(t)
+		// No git on PATH: git init fails after the folder was made.
+		t.Setenv("PATH", t.TempDir())
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		if err == nil {
+			t.Fatal("expected failure without git")
+		}
+		if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+			t.Fatalf("new folder left behind after failure: %v", statErr)
+		}
+	})
+}
+
+func TestManager_InitializeRepositoryCreateResumesItsOwnFolder(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	newFolder := func(t *testing.T) string {
+		t.Helper()
+		base := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", base)
+		return filepath.Join(base, "fresh")
+	}
+
+	t.Run("a retry with the same id succeeds on the folder it made", func(t *testing.T) {
+		dir := newFolder(t)
+		in := project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-1"}
+		if _, err := m.InitializeRepository(ctx, in); err != nil {
+			t.Fatalf("first create: %v", err)
+		}
+		// The response was lost; the phone asks again.
+		result, err := m.InitializeRepository(ctx, in)
+		if err != nil {
+			t.Fatalf("retry: %v", err)
+		}
+		if result.Path != dir {
+			t.Fatalf("Path = %q, want %q", result.Path, dir)
+		}
+		out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "HEAD").CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "1" {
+			t.Fatalf("commits = %q (%v), want 1", out, err)
+		}
+	})
+
+	t.Run("another request's folder is not taken over", func(t *testing.T) {
+		dir := newFolder(t)
+		if _, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-a"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-b"})
+		wantCode(t, err, "PATH_EXISTS")
+	})
+
+	t.Run("an existing folder with no id is not taken over", func(t *testing.T) {
+		dir := gitRepo(t)
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-c"})
+		wantCode(t, err, "PATH_EXISTS")
+	})
+
+	t.Run("refuses an id that could reach git as anything but a value", func(t *testing.T) {
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: newFolder(t), Create: true, CreateID: "--global"})
+		wantCode(t, err, "INVALID_CREATE_ID")
+	})
 }

@@ -1,5 +1,5 @@
 import { parseDaemonProbe } from "../shared/daemon-attach";
-import type { RemoteEntry } from "./remotes-store";
+import { DEVICE_TOKEN_PREFIX, type RemoteEntry } from "./remotes-store";
 
 // Remote HTTP lives in the main process for two reasons: the renderer's origin
 // is app://renderer and a remote daemon has no reason to allow it through CORS,
@@ -12,7 +12,7 @@ export type RemoteHealth = "online" | "unauthorized" | "offline" | "not-a-daemon
 
 export class IncompatibleRemoteVersionError extends Error {
 	constructor() {
-		super("AO versions are incompatible. Update AO on this computer and the remote host.");
+		super("Orchestrator versions are incompatible. Update Orchestrator on this computer and the remote host.");
 		this.name = "IncompatibleRemoteVersionError";
 	}
 }
@@ -95,5 +95,69 @@ export async function probeRemote(
 		// A transport failure is indistinguishable from a wrong port here, and
 		// both mean the same thing to the user: it is not reachable.
 		return "offline";
+	}
+}
+
+function remoteUrl(entry: Pick<RemoteEntry, "url">, path: string): URL {
+	const base = (entry.url.includes("://") ? entry.url : `http://${entry.url}`).replace(/\/+$/, "");
+	const url = new URL(`${base}${path}`);
+	if (!["http:", "https:"].includes(url.protocol) || url.username || url.password)
+		throw new Error("remote host must use an HTTP(S) URL without embedded credentials");
+	return url;
+}
+
+export type PairDeviceResult =
+	| { kind: "paired"; token: string; credential: "pairing-code" | "password" }
+	| { kind: "unsupported" }
+	| { kind: "unauthorized" }
+	| { kind: "offline" };
+
+/** Exchanges a pairing code or password for this device's own token. Confirm the
+ * host's identity first: this sends the secret. */
+export async function pairDevice(
+	entry: Pick<RemoteEntry, "url" | "hostId">,
+	secret: string,
+	device: { name: string; platform: string },
+	fetchImpl: FetchImpl = fetch,
+	timeoutMs = 8_000,
+): Promise<PairDeviceResult> {
+	try {
+		const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/devices").href, {
+			method: "POST",
+			redirect: "error",
+			headers: {
+				Authorization: `Bearer ${secret}`,
+				"Content-Type": "application/json",
+				...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}),
+			},
+			body: JSON.stringify(device),
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (response.status === 401) return { kind: "unauthorized" };
+		// 404 and 405: a release without device tokens. 403 and 409: this
+		// credential cannot pair, or the host's device list is full.
+		if ([403, 404, 405, 409, 501].includes(response.status)) return { kind: "unsupported" };
+		if (!response.ok) return { kind: "offline" };
+		const body = (await response.json()) as { hostId?: unknown; token?: unknown; credential?: unknown };
+		if (typeof body.token !== "string" || !body.token.startsWith(DEVICE_TOKEN_PREFIX) || (entry.hostId && body.hostId !== entry.hostId)) return { kind: "offline" };
+		return { kind: "paired", token: body.token, credential: body.credential === "pairing-code" ? "pairing-code" : "password" };
+	} catch {
+		return { kind: "offline" };
+	}
+}
+
+export async function readAuthErrorCode(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 5_000): Promise<string | undefined> {
+	try {
+		const response = await fetchImpl(remoteUrl(entry, "/healthz").href, {
+			method: "GET",
+			redirect: "error",
+			headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
+			signal: AbortSignal.timeout(timeoutMs),
+		});
+		if (response.status !== 401) return undefined;
+		const body = (await response.json()) as { code?: unknown };
+		return typeof body.code === "string" ? body.code : undefined;
+	} catch {
+		return undefined;
 	}
 }

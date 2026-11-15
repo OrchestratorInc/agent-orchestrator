@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -67,6 +68,43 @@ func TestMobileLANRejectsReassignedAddressWithSamePassword(t *testing.T) {
 	}
 	if got := request("h_A", "wrong"); got.Code != http.StatusUnauthorized || calls != 2 {
 		t.Fatalf("unauthenticated request: status=%d calls=%d", got.Code, calls)
+	}
+}
+
+func TestLANManagerGzipsJSONButNotEventStreams(t *testing.T) {
+	body := strings.Repeat(`{"id":"s-1","displayName":"fix the flaky retry"},`, 200)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/events" {
+			w.Header().Set("Content-Type", "text/event-stream")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		io.WriteString(w, body)
+	})
+	m := NewMobileLAN(inner, "h_A", 0, nil, nil)
+	m.SetPasswordHash(mobilebridge.HashPassword("secret12"))
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer secret12")
+		req.Header.Set("Accept-Encoding", "gzip")
+		recorder := httptest.NewRecorder()
+		m.handler.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	board := get("/api/v1/sessions")
+	if board.Header().Get("Content-Encoding") != "gzip" || board.Body.Len() >= len(body)/4 {
+		t.Fatalf("json: encoding=%q size=%d of %d", board.Header().Get("Content-Encoding"), board.Body.Len(), len(body))
+	}
+	zr, err := gzip.NewReader(board.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := io.ReadAll(zr); string(got) != body {
+		t.Fatalf("json body did not round-trip")
+	}
+	if events := get("/events"); events.Header().Get("Content-Encoding") != "" || events.Body.String() != body {
+		t.Fatalf("event stream was encoded: %q", events.Header().Get("Content-Encoding"))
 	}
 }
 
@@ -352,14 +390,19 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		t.Fatalf("preview app: got %d want 200", previewResp.StatusCode)
 	}
 
-	// The read-only Codex model routes are not credential surfaces and must
-	// stay reachable so mobile can list and refresh models.
+	// The read-only Codex model routes and the subscription account routes
+	// must stay reachable for mobile and remote desktops.
 	for _, tc := range []struct {
 		method string
 		path   string
 	}{
 		{http.MethodGet, "/api/v1/agents/codex/models"},
 		{http.MethodPost, "/api/v1/agents/codex/models/refresh"},
+		{http.MethodGet, "/api/v1/agents/accounts"},
+		{http.MethodPost, "/api/v1/agents/accounts/login"},
+		{http.MethodPut, "/api/v1/agents/accounts/sessions/ao-1"},
+		{http.MethodPost, "/api/v1/agents/accounts/acct-1/default"},
+		{http.MethodDelete, "/api/v1/agents/accounts/acct-1"},
 	} {
 		req, _ := http.NewRequest(tc.method, fmt.Sprintf("http://127.0.0.1:%d%s", port, tc.path), nil)
 		req.Header.Set("Authorization", "Bearer secret12")

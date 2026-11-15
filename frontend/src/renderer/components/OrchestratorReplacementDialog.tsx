@@ -1,11 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, RotateCw, X } from "lucide-react";
+import { AlertTriangle, RotateCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { canBypassOrchestratorApprovals, isChatPreflightCode } from "../lib/spawn-orchestrator";
 import type { OrchestratorReplacementFailure } from "../stores/ui-store";
 import { findProjectOrchestrator, type WorkspaceSummary } from "../types/workspace";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import {
 	settingsDialogContentClass,
 	settingsDialogFooterClass,
@@ -67,14 +68,7 @@ export function OrchestratorReplacementDialog({
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-orchestrator -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
 					<Dialog.Close asChild>
-						<button
-							type="button"
-							className="settings-dialog-close-button settings-close-button"
-							disabled={pending}
-							aria-label={t("orchestratorReplacement.close")}
-						>
-							<X className="size-5" aria-hidden="true" />
-						</button>
+						<CloseButton floating disabled={pending} aria-label={t("orchestratorReplacement.close")} />
 					</Dialog.Close>
 					<div className={settingsDialogHeaderClass}>
 						<div className="flex items-start gap-3">
@@ -98,7 +92,7 @@ export function OrchestratorReplacementDialog({
 						{canBypassApprovals ? (
 							<Button
 								type="button"
-								variant="footer-primary"
+								variant="primary"
 								aria-disabled={pending}
 								onClick={() => !pending && projectId && onRetryWithoutApprovals(projectId)}
 							>
@@ -108,7 +102,7 @@ export function OrchestratorReplacementDialog({
 						{error && isChatPreflightCode(error.code) ? (
 							<Button
 								type="button"
-								variant="footer"
+								variant="secondary"
 								aria-disabled={pending}
 								onClick={() => !pending && projectId && onRetryAsTui(projectId)}
 							>
@@ -116,13 +110,13 @@ export function OrchestratorReplacementDialog({
 							</Button>
 						) : null}
 						{orchestrator ? (
-							<Button type="button" variant="footer" disabled={pending} onClick={openCurrent}>
+							<Button type="button" variant="secondary" disabled={pending} onClick={openCurrent}>
 								{t("orchestratorReplacement.openCurrent")}
 							</Button>
 						) : null}
 						<Button
 							type="button"
-							variant="footer-primary"
+							variant="primary"
 							aria-disabled={pending}
 							onClick={() => !pending && projectId && onRetry(projectId)}
 						>

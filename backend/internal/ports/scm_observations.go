@@ -7,7 +7,10 @@ package ports
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // ErrSCMNotFound is the provider-neutral sentinel for successful SCM lookups
@@ -38,6 +41,11 @@ type SCMPRRef struct {
 	Number int
 	// URL is the canonical browser URL when already known locally.
 	URL string
+	// DetailsUpdatedAt is the provider updatedAt of the PR state the caller's
+	// stored details were read from. While the PR's updatedAt still equals it,
+	// a provider may leave the observation's PR.Details nil instead of reading
+	// them again. Zero asks for the details unconditionally.
+	DetailsUpdatedAt time.Time
 }
 
 // SCMGuardResult is an ETag-style cache guard result. NotModified maps to HTTP
@@ -102,6 +110,15 @@ type SCMIdentity struct {
 	Login string
 	// Human is true when the provider identifies the account as a human user.
 	Human bool
+}
+
+// Authored reports whether author is this account: a human account whose
+// login matches, ignoring case and surrounding space. AO attaches a PR to a
+// session automatically only when the account authored it, so another
+// developer's PR on a matching branch is never attached.
+func (id SCMIdentity) Authored(author string) bool {
+	login := strings.TrimSpace(id.Login)
+	return id.Human && login != "" && strings.EqualFold(strings.TrimSpace(author), login)
 }
 
 // ScopedIdentityResolver resolves the authenticated identity for a specific
@@ -179,6 +196,20 @@ type SCMPRObservation struct {
 	MergedAtProvider time.Time
 	// ClosedAtProvider is the provider's close timestamp when closed.
 	ClosedAtProvider time.Time
+
+	// Details is the PR's description, labels, requested reviewers, commits and
+	// conversation comments.
+	// Nil when the provider did not read them, so the stored ones are kept.
+	// It is left out of the observer's metadata hash (json:"-"): a provider
+	// reads details only when they are missing or the PR's updatedAt moved,
+	// which the hash already covers, so a pass that skipped them must not look
+	// like a change.
+	Details *domain.PullRequestDetails `json:"-"`
+	// DetailsPending is set when the provider needed the details (none were
+	// stored, or the PR's updatedAt moved) but could not read them. The
+	// observer then keeps the PR's refresh incomplete, so the repository's
+	// cursor doesn't advance past it and the next poll reads them again.
+	DetailsPending bool `json:"-"`
 }
 
 // SCMCIObservation carries aggregate CI state plus failing-check details.
@@ -201,6 +232,44 @@ type SCMCIObservation struct {
 	// complete CI state — the observer must not overwrite durable checks as
 	// Fetched=true complete (review Item 13). Mirrors SCMReviewObservation.Partial.
 	Partial bool
+}
+
+// ApplyStoredLogTails fills the failed checks' log tails from stored checks of
+// the same head commit, so a re-read of an unchanged failure carries the same
+// tails as the observation that fetched them (the CI nudge's dedup signature
+// includes them). It reports false, changing nothing it cannot complete, when a
+// failed check has no stored tail.
+func (ci *SCMCIObservation) ApplyStoredLogTails(checks []domain.PullRequestCheck) bool {
+	tailsByName := map[string]string{}
+	for _, ch := range checks {
+		if ci.HeadSHA != "" && ch.CommitHash != "" && ch.CommitHash != ci.HeadSHA {
+			continue
+		}
+		if ch.LogTail != "" && ch.Status == domain.PRCheckFailed {
+			tailsByName[ch.Name] = ch.LogTail
+		}
+	}
+	if len(tailsByName) == 0 {
+		return false
+	}
+	tails := make([]string, 0, len(ci.FailedChecks))
+	for i := range ci.FailedChecks {
+		tail := tailsByName[ci.FailedChecks[i].Name]
+		if tail == "" {
+			return false
+		}
+		tails = append(tails, tail)
+	}
+	for i := range ci.FailedChecks {
+		ci.FailedChecks[i].LogTail = tailsByName[ci.FailedChecks[i].Name]
+	}
+	for i := range ci.Checks {
+		if tail := tailsByName[ci.Checks[i].Name]; tail != "" {
+			ci.Checks[i].LogTail = tail
+		}
+	}
+	ci.FailureLogTail = strings.Join(tails, "\n---\n")
+	return true
 }
 
 // SCMCheckObservation is one normalized check/status context. ProviderID is an
@@ -287,6 +356,8 @@ type SCMReviewCommentObservation struct {
 	URL string
 	// IsBot is true when the provider identifies the author as a bot.
 	IsBot bool
+	// CreatedAt is the provider's comment creation time; zero when unknown.
+	CreatedAt time.Time
 }
 
 // SCMMergeabilityObservation is the normalized mergeability verdict.
@@ -301,4 +372,19 @@ type SCMMergeabilityObservation struct {
 	BehindBase bool
 	// Blockers lists normalized reasons preventing merge.
 	Blockers []string
+}
+
+// GitHubRepository is GitHub's current identity for a repository. ID survives
+// renames and transfers; FullName is the current owner/name. OwnerAvatarURL
+// is the owner's id-based avatar on avatars.githubusercontent.com, or "".
+type GitHubRepository struct {
+	ID             int64
+	FullName       string
+	OwnerAvatarURL string
+}
+
+// GitHubRepositoryResolver looks up a github.com repository by owner/name,
+// following renames and transfers to its current identity.
+type GitHubRepositoryResolver interface {
+	ResolveGitHubRepository(ctx context.Context, owner, name string) (GitHubRepository, error)
 }

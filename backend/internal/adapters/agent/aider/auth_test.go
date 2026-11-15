@@ -9,7 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestAiderLocalAuthStatusAuthorizedWithProviderEnv(t *testing.T) {
+func TestAiderLocalAuthStatusConfiguredWithProviderEnv(t *testing.T) {
 	clearAiderAuthEnv(t)
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 
@@ -17,12 +17,12 @@ func TestAiderLocalAuthStatusAuthorizedWithProviderEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestAiderLocalAuthStatusAuthorizedWithConfigFile(t *testing.T) {
+func TestAiderLocalAuthStatusConfiguredWithConfigFile(t *testing.T) {
 	clearAiderAuthEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -35,15 +35,16 @@ func TestAiderLocalAuthStatusAuthorizedWithConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestAiderLocalAuthStatusAuthorizedWithDocumentedAPIKeyList(t *testing.T) {
+func TestAiderLocalAuthStatusConfiguredWithDocumentedAPIKeyList(t *testing.T) {
 	clearAiderAuthEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	if err := os.WriteFile(filepath.Join(home, ".aider.conf.yml"), []byte("api-key:\n  - openrouter=sk-test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +52,12 @@ func TestAiderLocalAuthStatusAuthorizedWithDocumentedAPIKeyList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestAiderLocalAuthStatusAuthorizedWithDotEnv(t *testing.T) {
+func TestAiderLocalAuthStatusConfiguredWithDotEnv(t *testing.T) {
 	clearAiderAuthEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -69,12 +70,12 @@ func TestAiderLocalAuthStatusAuthorizedWithDotEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 
-func TestAiderLocalAuthStatusAuthorizedWithOAuthKeysFile(t *testing.T) {
+func TestAiderLocalAuthStatusConfiguredWithOAuthKeysFile(t *testing.T) {
 	clearAiderAuthEnv(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -90,8 +91,8 @@ func TestAiderLocalAuthStatusAuthorizedWithOAuthKeysFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if !ok || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusConfigured)
 	}
 }
 

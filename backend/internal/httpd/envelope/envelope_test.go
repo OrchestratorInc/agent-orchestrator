@@ -77,6 +77,41 @@ func TestWriteAPIErrorRemainsUnowned(t *testing.T) {
 	}
 }
 
+func TestWriteErrorWithCodePreservesCauseAndClassifiedFailures(t *testing.T) {
+	cause := errors.New("private database path")
+	req, captured := WithErrorCapture(httptest.NewRequest(http.MethodPost, "/api/v1/reports", nil))
+	rec := httptest.NewRecorder()
+	WriteErrorWithCode(rec, req, cause, "REPORT_CREATE_FAILED", "Unable to create report")
+	var body APIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusInternalServerError || body.Code != "REPORT_CREATE_FAILED" || body.Message != "Unable to create report" || errors.Is(captured().Err, cause) == false {
+		t.Fatalf("response = %+v, capture = %+v", body, captured())
+	}
+	if body.Message == cause.Error() {
+		t.Fatal("private cause reached the client")
+	}
+	for _, classified := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{apierr.Conflict("REPORT_BUSY", "Try later", nil), http.StatusConflict, "REPORT_BUSY"},
+		{context.DeadlineExceeded, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE"},
+	} {
+		rec := httptest.NewRecorder()
+		WriteErrorWithCode(rec, httptest.NewRequest(http.MethodPost, "/api/v1/reports", nil), classified.err, "REPORT_CREATE_FAILED", "Unable to create report")
+		var got APIError
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != classified.status || got.Code != classified.code {
+			t.Fatalf("classified response = %d %+v", rec.Code, got)
+		}
+	}
+}
+
 type invalidOwnedError struct{ err error }
 
 func (e invalidOwnedError) Error() string { return e.err.Error() }

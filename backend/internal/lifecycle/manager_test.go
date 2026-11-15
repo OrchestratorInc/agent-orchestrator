@@ -16,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 var ctx = context.Background()
@@ -139,6 +140,19 @@ type activityRevisionConflictStore struct {
 	conflictNext bool
 }
 
+type fakeSemanticDeliveryActivityStore struct {
+	*fakeStore
+}
+
+func (f *fakeSemanticDeliveryActivityStore) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	expectedRevision int64,
+	_ string,
+) (bool, error) {
+	return f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
+}
+
 func (f *activityRevisionConflictStore) UpdateSessionFromActivitySignal(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -169,6 +183,16 @@ func (f *fakeStore) CommitChatSpawn(
 }
 
 func (f *fakeStore) CommitSessionControllerEpoch(
+	_ context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	now time.Time,
+) (bool, error) {
+	return f.changeSessionControllerEpoch(id, source, target, nativeConversationID, now, false)
+}
+
+func (f *fakeStore) CommitSessionControllerEpochArchivedChat(
 	_ context.Context,
 	id domain.SessionID,
 	source, target domain.SessionMode,
@@ -756,6 +780,100 @@ func TestActivity_UserPromptStoresItsSignalTimestamp(t *testing.T) {
 	}
 }
 
+func TestActivity_MixedHumanPromptKeepsSemanticReceiptAfterCheckpointOverwrite(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close sqlite store: %v", err)
+		}
+	})
+	now := time.Now().UTC()
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		Metadata:  domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	const deliveryID = "report-batch:mixedhuman1"
+	manager := New(store, nil)
+	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		LatestUserPrompt: "human text containing an internal report", Timestamp: now.Add(time.Second),
+		ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman, CoordinationID: deliveryID,
+	}); err != nil {
+		t.Fatalf("apply mixed human prompt: %v", err)
+	}
+	afterMixed, found, err := store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		t.Fatalf("load mixed prompt session: found=%v err=%v", found, err)
+	}
+	if afterMixed.Metadata.LatestUserPrompt != "human text containing an internal report" ||
+		afterMixed.Metadata.ConversationCheckpointState == domain.ConversationCheckpointCoordination {
+		t.Fatalf("mixed prompt was not retained as human checkpoint: %+v", afterMixed.Metadata)
+	}
+	if accepted, err := store.SemanticDeliveryAccepted(ctx, rec.ID, "launch-1", deliveryID); err != nil || !accepted {
+		t.Fatalf("mixed human prompt receipt: accepted=%v err=%v", accepted, err)
+	}
+
+	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		LatestUserPrompt: "a later human prompt replaced the checkpoint", Timestamp: now.Add(2 * time.Second),
+		ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman,
+	}); err != nil {
+		t.Fatalf("apply later human prompt: %v", err)
+	}
+	afterOverwrite, found, err := store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		t.Fatalf("load overwritten session: found=%v err=%v", found, err)
+	}
+	if afterOverwrite.Metadata.LatestUserPrompt != "a later human prompt replaced the checkpoint" {
+		t.Fatalf("latest user prompt = %q", afterOverwrite.Metadata.LatestUserPrompt)
+	}
+	if accepted, err := store.SemanticDeliveryAccepted(ctx, rec.ID, "launch-1", deliveryID); err != nil || !accepted {
+		t.Fatalf("receipt lost after checkpoint overwrite: accepted=%v err=%v", accepted, err)
+	}
+}
+
+// Acceptance needs a runtime launch and a store that can record it. Without
+// either, the prompt's activity projection still applies, as before acceptance
+// was recorded at all.
+func TestActivity_CoordinationIDWithoutAcceptanceStillProjectsActivity(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		launchID   string
+		acceptance bool
+	}{
+		{name: "no runtime launch", launchID: "", acceptance: true},
+		{name: "store cannot record acceptance", launchID: "launch-1", acceptance: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m, store, _ := newManager()
+			if tt.acceptance {
+				m.store = &fakeSemanticDeliveryActivityStore{fakeStore: store}
+			}
+			rec := working("mer-1")
+			rec.Activity.State = domain.ActivityIdle
+			rec.Metadata.RuntimeLaunchID = tt.launchID
+			store.sessions[rec.ID] = rec
+			if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+				Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: tt.launchID,
+				CoordinationID: "report-batch:no-acceptance",
+			}); err != nil {
+				t.Fatalf("ApplyActivitySignal: %v", err)
+			}
+			if got := store.sessions[rec.ID].Activity.State; got != domain.ActivityActive {
+				t.Fatalf("activity = %q, want active", got)
+			}
+		})
+	}
+}
+
 func TestActivity_ReorderedPromptPreservesLatestHumanCheckpoint(t *testing.T) {
 	promptAt := time.Unix(456, 0).UTC()
 	for _, tt := range []struct {
@@ -1328,6 +1446,7 @@ func TestActivity_MainPromptWithoutTextInvalidatesPriorConversationCheckpoint(t 
 
 func TestActivity_CoordinationPromptFollowedByPromptlessStopDoesNotAdvanceCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
+	m.store = &fakeSemanticDeliveryActivityStore{fakeStore: store}
 	previousPromptAt := time.Unix(122, 0).UTC()
 	coordinationPromptAt := previousPromptAt.Add(time.Minute)
 	rec := working("mer-1")
@@ -1493,6 +1612,46 @@ func TestActivity_NewNativeConversationClearsPriorConversationCheckpoint(t *test
 	}
 	if got.ConversationCheckpointState != domain.ConversationCheckpointEmpty {
 		t.Fatalf("new conversation checkpoint state = %q, want empty", got.ConversationCheckpointState)
+	}
+}
+
+// TestActivity_OpenCodeParentOnlyTrafficPreservesNativeIdentity pins the
+// plugin-side child filter from the lifecycle side: the OpenCode plugins forward
+// only parent-session events, so folded subagent activity must never move the
+// persisted native id (the restore handle) or reset the parent conversation
+// checkpoint. A child id arriving here would be a plugin regression.
+func TestActivity_OpenCodeParentOnlyTrafficPreservesNativeIdentity(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessOpenCodeV2} {
+		t.Run(string(harness), func(t *testing.T) {
+			m, store, _ := newManager()
+			rec := working("mer-1")
+			rec.Harness = harness
+			rec.Metadata.RuntimeLaunchID = "launch-current"
+			rec.Metadata.AgentSessionID = "native-parent"
+			rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+			rec.Metadata.LatestUserPrompt = "parent prompt"
+			rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointPrompt
+			store.sessions[rec.ID] = rec
+
+			for _, s := range []ports.ActivitySignal{
+				{Valid: true, State: domain.ActivityActive, Event: "active", LaunchID: "launch-current", AgentSessionID: "native-parent"},
+				{Valid: true, State: domain.ActivityBlocked, Event: "permission-blocked", LaunchID: "launch-current", AgentSessionID: "native-parent"},
+				{Valid: true, State: domain.ActivityActive, Event: "permission-resolved", LaunchID: "launch-current", AgentSessionID: "native-parent"},
+				{Valid: true, State: domain.ActivityActive, Event: "active", LaunchID: "launch-current", AgentSessionID: "native-parent", ToolName: "read", ToolUseID: "folded-child-tool"},
+			} {
+				if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+					t.Fatalf("%s: %v", s.Event, err)
+				}
+				got := store.sessions[rec.ID].Metadata
+				if got.AgentSessionID != "native-parent" {
+					t.Fatalf("after %s: AgentSessionID = %q, want native-parent", s.Event, got.AgentSessionID)
+				}
+				if got.ConversationCheckpointState != domain.ConversationCheckpointPrompt || got.LatestUserPrompt != "parent prompt" {
+					t.Fatalf("after %s: checkpoint = %q prompt = %q, want the parent turn intact",
+						s.Event, got.ConversationCheckpointState, got.LatestUserPrompt)
+				}
+			}
+		})
 	}
 }
 
@@ -1852,6 +2011,31 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 	}
 }
 
+func TestApplyActivitySignalNativeSessionIDReactivatesUsageDiscovery(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	st.sessions[rec.ID] = rec
+	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
+	m.SetUsageFinalizer(usage)
+
+	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		AgentSessionID: "pi-native-1",
+		TranscriptPath: "/ao/data/pi/sessions/pi-native-1.jsonl",
+		LaunchID:       "launch-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if usage.reactivateCalls != 1 || usage.reactivateID != rec.ID ||
+		usage.reactivateLaunch != "launch-1" || !usage.sawLive {
+		t.Fatalf("usage discovery = calls:%d id:%q launch:%q live:%v",
+			usage.reactivateCalls, usage.reactivateID, usage.reactivateLaunch, usage.sawLive)
+	}
+	if got := st.sessions[rec.ID].Metadata.NativeTranscriptPath; got != "/ao/data/pi/sessions/pi-native-1.jsonl" {
+		t.Fatalf("native transcript path = %q", got)
+	}
+}
+
 func TestMarkTerminatedFinalizesUsageBeforeLifecycleTransition(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
@@ -2132,7 +2316,7 @@ func TestActivity_WaitingInputEntryAndExitEmitTelemetry(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want waiting_input entered/exited", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.waiting_input_entered" || sink.events[1].Name != "ao.session.waiting_input_exited" {
+	if sink.events[0].Name != "ao.sessions.input_wait_started" || sink.events[1].Name != "ao.sessions.input_wait_ended" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[1].Payload["dwell_ms"]; got != int64(3000) {
@@ -2305,6 +2489,49 @@ func TestPRObservation_HumanReplyInBotThreadStillNudgesAgent(t *testing.T) {
 	}
 	if strings.Contains(msg.msgs[0], "automated summary") {
 		t.Fatalf("unanchored bot comment was injected with human reply: %q", msg.msgs[0])
+	}
+}
+
+func TestPRObservation_PRAuthorRepliesAreNotInjected(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prs["mer-1"] = []domain.PullRequest{{URL: "pr1", Author: "worker-account"}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "r1", ThreadID: "T1", Author: "coderabbitai[bot]", IsBot: true, File: "a.go", Line: 3, Body: "merge the buckets", AutoInjectReview: true},
+		// The worker answering, with the PR author's account.
+		{ID: "r2", ThreadID: "T1", Author: "@Worker-Account", File: "a.go", Line: 3, Body: "Fixed in abc123.", AutoInjectReview: true},
+		{ID: "r3", ThreadID: "T1", Author: "alice", File: "a.go", Line: 3, Body: "not quite, keep both links", AutoInjectReview: true},
+		// The author reviewing their own PR still reaches the worker.
+		{ID: "a1", ThreadID: "T2", Author: "worker-account", File: "b.go", Line: 9, Body: "rename this helper", AutoInjectReview: true},
+		// An app named after the author is someone else.
+		{ID: "b1", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot feedback", AutoInjectReview: true},
+		{ID: "b2", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot follow-up", AutoInjectReview: true},
+	}
+
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1"}); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(msg.msgs, "\n---\n")
+	if strings.Contains(all, "Fixed in abc123.") {
+		t.Fatalf("the PR author's reply was injected:\n%s", all)
+	}
+	for _, want := range []string{"merge the buckets", "not quite, keep both links", "rename this helper", "bot feedback", "bot follow-up"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("missing %q from nudges:\n%s", want, all)
+		}
+	}
+	if len(msg.msgs) != 5 {
+		t.Fatalf("want 5 per-comment nudges, got %d:\n%s", len(msg.msgs), all)
+	}
+}
+
+func TestWithoutPRAuthorRepliesKeepsEverythingWhenAuthorUnknown(t *testing.T) {
+	comments := []domain.PullRequestComment{
+		{ID: "1", ThreadID: "T1", Author: "alice"},
+		{ID: "2", ThreadID: "T1", Author: "worker-account"},
+	}
+	if got := withoutPRAuthorReplies(comments, " "); len(got) != 2 {
+		t.Fatalf("withoutPRAuthorReplies with no author = %v, want both comments", got)
 	}
 }
 
@@ -2571,6 +2798,31 @@ func TestPRObservation_MergeConflictNudgesAgent(t *testing.T) {
 	}
 	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "merge conflicts") {
 		t.Fatalf("want merge-conflict nudge, got %v", msg.msgs)
+	}
+}
+
+// TestPRObservation_CISwitchOffSilencesMergeConflict: the "Automatically fix
+// CI failures" switch also covers merge conflicts, so a session reviewing
+// someone else's PR with it off is never told to rebase that PR.
+func TestPRObservation_CISwitchOffSilencesMergeConflict(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prPolicies["pr1"] = false
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("CI switch is off; want no merge-conflict nudge, got %v", msg.msgs)
+	}
+
+	// Turning the switch back on (taking the PR over) brings the nudge back.
+	st.prPolicies["pr1"] = true
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "merge conflicts") {
+		t.Fatalf("want merge-conflict nudge after the switch is back on, got %v", msg.msgs)
 	}
 }
 
@@ -3631,6 +3883,34 @@ func TestActivity_SameStateRepeatAfterReceiptIsNoOp(t *testing.T) {
 	}
 }
 
+func TestActivity_SameStatePersistsNewAgentSessionID(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.FirstSignalAt = time.Now()
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, AgentSessionID: "cline-task-123",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.AgentSessionID; got != "cline-task-123" {
+		t.Fatalf("AgentSessionID = %q, want cline-task-123", got)
+	}
+}
+
+func TestActivity_MissingAgentSessionIDDoesNotEraseExistingID(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Metadata.AgentSessionID = "existing-task"
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.AgentSessionID; got != "existing-task" {
+		t.Fatalf("AgentSessionID = %q, want existing-task", got)
+	}
+}
+
 func TestMarkSpawnedClearsFirstSignalAndLeavesResumeIdentityUnverified(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
@@ -3848,7 +4128,7 @@ func TestActivity_BlockedEntryAndExitEmitTelemetry(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want entered/exited", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.waiting_input_entered" || sink.events[1].Name != "ao.session.waiting_input_exited" {
+	if sink.events[0].Name != "ao.sessions.input_wait_started" || sink.events[1].Name != "ao.sessions.input_wait_ended" {
 		t.Fatalf("event names = %#v (family events keep the waiting_input_* names)", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[0].Payload["state"]; got != "blocked" {
@@ -4675,8 +4955,10 @@ func TestMarkChatSpawnedKeepsPreviousOwnerWhenAtomicBoundaryCommitFails(t *testi
 func TestMarkChatSpawnedCommitsReservedBoundaryWithLifecycleOwner(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeStore()
+	source := domain.SessionImportSource{NativeID: "thread-fresh", ConfigDir: "/provider", Prepared: true}
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ImportSource: &source},
 	}
 	m := New(st, nil)
 	boundary := domain.ConversationBranch{
@@ -4685,9 +4967,12 @@ func TestMarkChatSpawnedCommitsReservedBoundaryWithLifecycleOwner(t *testing.T) 
 		ProviderScopeID: "fresh-provider-boundary", CreatedAt: time.Unix(2, 0),
 	}
 
+	adopted := source
+	adopted.Adopted = true
 	if err := m.MarkChatSpawned(ctx, "mer-1", domain.SessionMetadata{
 		ProviderConversationID: "thread-fresh",
 		ControllerGeneration:   "generation-fresh",
+		ImportSource:           &adopted,
 	}, boundary); err != nil {
 		t.Fatalf("MarkChatSpawned: %v", err)
 	}
@@ -4697,8 +4982,15 @@ func TestMarkChatSpawnedCommitsReservedBoundaryWithLifecycleOwner(t *testing.T) 
 	got := st.sessions["mer-1"]
 	if got.IsTerminated || got.Activity.State != domain.ActivityIdle ||
 		got.Metadata.ProviderConversationID != "thread-fresh" ||
-		got.Metadata.ControllerGeneration != "generation-fresh" {
+		got.Metadata.ControllerGeneration != "generation-fresh" ||
+		got.NeedsImportResume() || source.Adopted {
 		t.Fatalf("committed Chat owner = %+v", got)
+	}
+	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{WorkspacePath: "/workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"]; got.Metadata.ImportSource == nil || got.NeedsImportResume() {
+		t.Fatal("ordinary relaunch lost imported session adoption")
 	}
 }
 

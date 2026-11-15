@@ -23,6 +23,8 @@ const examples = [
 	"  A\r\n\r\n  B\r\n\r\n  C\r\n\r\n  D",
 	"😀 A\n\n**B**\n\n[docs][ref]\n\n[ref]: https://example.com",
 	"[^first]\n\nOther[^second]\n\n[^first]: one\n\n[^second]: two",
+	"[docs][ref]\n\nB\n\n- > [ref]: https://example.com\n\nlast",
+	"A\n\nB\n\n```py\ndef f(rows: list[int]) -> dict[str, int]:\n```\n\nlast",
 ];
 
 // A display formula's lines can look like a list item or end at a blank line.
@@ -52,6 +54,11 @@ describe("splitStreamingMarkdown", () => {
 
 	it.each(mathExamples)("matches a full math parse at every character: %s", (source) => {
 		expectSplitMatchesParse(source, mathParser, true);
+	});
+
+	it("keeps splitting when only code looks like a definition", () => {
+		const text = "A\n\n```py\nif rows[0]:\n```\n\n```ts\nconst o = {\n  [key]: 1,\n};\n```\n\nB";
+		expect(splitStreamingMarkdown(text).blocks).toHaveLength(4);
 	});
 
 	it("leaves formulas out of prose repair and re-cuts when the dialect changes", () => {

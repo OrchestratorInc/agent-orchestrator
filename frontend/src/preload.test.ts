@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_MENU_ACTION_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { AoBridge } from "./preload";
 
 const electronMocks = vi.hoisted(() => {
@@ -9,6 +10,7 @@ const electronMocks = vi.hoisted(() => {
 		exposeInMainWorld: vi.fn(),
 		getPathForFile: vi.fn(),
 		invoke: vi.fn(),
+		executeInMainWorld: vi.fn(),
 		listeners,
 		off: vi.fn(),
 		on: vi.fn((channel: string, listener: (...args: unknown[]) => void) => {
@@ -19,9 +21,9 @@ const electronMocks = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-	contextBridge: { exposeInMainWorld: electronMocks.exposeInMainWorld },
+	contextBridge: { exposeInMainWorld: electronMocks.exposeInMainWorld, executeInMainWorld: electronMocks.executeInMainWorld },
 	ipcRenderer: {
-		invoke: electronMocks.invoke,
+		invoke: (...args: unknown[]) => Promise.resolve(electronMocks.invoke(...args)),
 		off: electronMocks.off,
 		on: electronMocks.on,
 		send: electronMocks.send,
@@ -35,6 +37,8 @@ await import("./preload");
 // is the always-on buffering listener preload.ts registers at module load,
 // not the per-call listener onOpenFolderPath registers when invoked.
 const openFolderPathBufferListener = electronMocks.listeners.get("app:openFolderPath");
+const sessionDeepLinkBufferListener = electronMocks.listeners.get(OPEN_SESSION_DEEP_LINK_CHANNEL);
+const openSettingsBufferListener = electronMocks.listeners.get(OPEN_SETTINGS_SHORTCUT_CHANNEL);
 const telemetryPolicyBroadcastListener = electronMocks.listeners.get("telemetry:policyChanged");
 const rendererQueuePurgeRequestListener = electronMocks.listeners.get("telemetry:clearRendererQueues");
 
@@ -76,6 +80,65 @@ describe("preload repository branch bridge", () => {
 	});
 });
 
+describe("preload session deep link bridge", () => {
+	it("delivers a deep link sent after subscription", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+
+		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
+
+		expect(listener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
+		dispose();
+	});
+
+	it("buffers a deep link that arrives before ShellLayout subscribes", () => {
+		// Mirrors the cold-start race: main flushes on renderer ready (a child
+		// effect) before ShellLayout's parent effect has subscribed.
+		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
+
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+
+		expect(listener).toHaveBeenCalledTimes(1);
+		expect(listener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
+
+		// The buffer is drained, not replayed on later resubscription.
+		const lateListener = vi.fn();
+		const lateDispose = exposedBridge().app.onOpenSessionDeepLink(lateListener);
+		expect(lateListener).not.toHaveBeenCalled();
+		lateDispose();
+		dispose();
+	});
+
+	it("ignores malformed deep-link payloads", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+
+		sessionDeepLinkBufferListener?.({}, { url: "ao-app://sessions/proj-1/sess-9" });
+		sessionDeepLinkBufferListener?.({}, 42);
+		sessionDeepLinkBufferListener?.({}, "");
+
+		expect(listener).not.toHaveBeenCalled();
+		dispose();
+	});
+
+	it("buffers a deep link that arrives between disposal and resubscription", () => {
+		// Same semantics as onOpenFolderPath: disposal is a temporary
+		// unsubscribe (effect cleanup/re-subscribe), so nothing is lost.
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
+		dispose();
+
+		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
+		expect(listener).not.toHaveBeenCalled();
+
+		const reListener = vi.fn();
+		const reDispose = exposedBridge().app.onOpenSessionDeepLink(reListener);
+		expect(reListener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
+		reDispose();
+	});
+});
+
 describe("preload Developer Mode updater bridge", () => {
 	it("sends only the updater eligibility boolean to the main process", async () => {
 		await exposedBridge().updateSettings.setMacDifferentialUpdates(true);
@@ -88,6 +151,29 @@ describe("preload Developer Mode updater bridge", () => {
 });
 
 describe("preload telemetry generation bridge", () => {
+	it("purges early captures before applying the first policy", async () => {
+		electronMocks.invoke.mockResolvedValue(false);
+		for (let i = 0; i < 25; i++) await exposedBridge().telemetry.capture({ kind: "message", message: "early" });
+		expect(electronMocks.invoke).not.toHaveBeenCalled();
+		rendererQueuePurgeRequestListener?.({}, { requestId: "early-purge" });
+		await exposedBridge().telemetry.capture({ kind: "message", message: "after-purge" });
+		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-first", acknowledged: true, state: "applied" });
+		expect(electronMocks.invoke).toHaveBeenCalledExactlyOnceWith("telemetry:capture", { kind: "message", message: "after-purge", consentGeneration: "generation-first" });
+	});
+
+	it("forwards at most twenty early captures using the first known generation", async () => {
+		vi.resetModules();
+		await import("./preload");
+		const bridge = electronMocks.exposeInMainWorld.mock.calls.at(-1)?.[1] as AoBridge;
+		electronMocks.invoke.mockClear();
+		electronMocks.invoke.mockResolvedValue(false);
+		for (let i = 0; i < 25; i++) await bridge.telemetry.capture({ kind: "message", message: "early" });
+		expect(electronMocks.invoke).not.toHaveBeenCalled();
+		electronMocks.listeners.get("telemetry:policyChanged")?.({}, { eventsEnabled: true, consentGeneration: "generation-first", acknowledged: true, state: "applied" });
+		expect(electronMocks.invoke).toHaveBeenCalledTimes(20);
+		expect(electronMocks.invoke).toHaveBeenLastCalledWith("telemetry:capture", { kind: "message", message: "early", consentGeneration: "generation-first" });
+	});
+
 	it("tags captures with the latest broadcast generation without a renderer reload", async () => {
 		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
 		await exposedBridge().telemetry.capture({ kind: "message", message: "first" });
@@ -189,6 +275,31 @@ describe("preload openFolderPath bridge", () => {
 	});
 });
 
+describe("preload cloud sign-in bridge", () => {
+	it("delivers each session notification's account and removes the exact wrapped listener", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().cloud.onSessionChanged(listener);
+		const wrapped = electronMocks.listeners.get("cloud:sessionChanged");
+		const account = { authProvider: "workos", user: { id: "user_1", email: "a@example.com", displayName: "A" }, storedAt: "2026-11-04T00:00:00Z" };
+
+		wrapped?.({}, account);
+		wrapped?.({}, null);
+		expect(listener.mock.calls).toEqual([[account], [null]]);
+
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("cloud:sessionChanged", wrapped);
+	});
+
+	it("takes the pending sign-in's context from main and hands back what main returns", async () => {
+		const pending = { account: { authProvider: "workos", user: { id: "user_1", email: "a@example.com", displayName: "A" }, storedAt: "2026-11-04T00:00:00Z" }, signIn: { webDistinctId: "019a3f5e-8c2b" } };
+		electronMocks.invoke.mockResolvedValueOnce(pending).mockResolvedValueOnce(null);
+
+		await expect(exposedBridge().cloud.takePendingSignIn()).resolves.toEqual(pending);
+		await expect(exposedBridge().cloud.takePendingSignIn()).resolves.toBeNull();
+		expect(electronMocks.invoke.mock.calls).toEqual([["cloud:takePendingSignIn"], ["cloud:takePendingSignIn"]]);
+	});
+});
+
 describe("preload new-session shortcut bridge", () => {
 	it("delivers the IPC event and removes the exact wrapped listener", () => {
 		const listener = vi.fn();
@@ -239,7 +350,6 @@ describe("preload application shortcut bridges", () => {
 	it.each([
 		[NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNewShellTerminalShortcut(listener)],
 		[CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onCloseShellTerminalShortcut(listener)],
-		[OPEN_SETTINGS_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onOpenSettingsShortcut(listener)],
 		[
 			PREVIOUS_SESSION_SHORTCUT_CHANNEL,
 			(listener: () => void) => exposedBridge().app.onPreviousSessionShortcut(listener),
@@ -248,6 +358,7 @@ describe("preload application shortcut bridges", () => {
 		[PREVIOUS_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onPreviousTabShortcut(listener)],
 		[NEXT_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextTabShortcut(listener)],
 		[APP_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onShortcut(listener)],
+		[APP_MENU_ACTION_CHANNEL, (listener: () => void) => exposedBridge().app.onMenuAction(listener)],
 	] as const)("delivers and disposes %s", (channel, subscribe) => {
 		const listener = vi.fn();
 		const dispose = subscribe(listener);
@@ -258,6 +369,51 @@ describe("preload application shortcut bridges", () => {
 
 		dispose();
 		expect(electronMocks.off).toHaveBeenCalledWith(channel, wrapped);
+	});
+
+	// The settings channel uses the module-load dispatcher-and-buffer instead
+	// of a per-subscription listener: a billing return flushed on the shell's
+	// readiness ping races ShellLayout's subscription (CodeRabbit round 5).
+	it("delivers an open-settings event sent after subscription", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
+
+		openSettingsBufferListener?.({}, "billing");
+		expect(listener).toHaveBeenCalledWith("billing");
+		dispose();
+	});
+
+	it("buffers an open-settings event that arrives before subscription", () => {
+		openSettingsBufferListener?.({}, "billing");
+
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
+		expect(listener).toHaveBeenCalledTimes(1);
+		expect(listener).toHaveBeenCalledWith("billing");
+
+		// The buffer drains: a later subscription gets nothing replayed.
+		const lateListener = vi.fn();
+		const lateDispose = exposedBridge().app.onOpenSettingsShortcut(lateListener);
+		expect(lateListener).not.toHaveBeenCalled();
+		lateDispose();
+		dispose();
+	});
+
+	it("replays an open-settings event that arrives after disposal, on resubscription", () => {
+		// Disposal is a temporary unsubscribe (effect cleanup/re-subscribe), so
+		// an event in that window waits for the next listener, like the folder
+		// and deep-link channels.
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
+		dispose();
+
+		openSettingsBufferListener?.({}, "billing");
+		expect(listener).not.toHaveBeenCalled();
+
+		const reListener = vi.fn();
+		const reDispose = exposedBridge().app.onOpenSettingsShortcut(reListener);
+		expect(reListener).toHaveBeenCalledWith("billing");
+		reDispose();
 	});
 });
 
@@ -419,5 +575,30 @@ describe("preload browser downloads bridge", () => {
 		expect(listener).toHaveBeenCalledWith({ downloads: [] });
 		dispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:downloadsChanged", wrapped);
+	});
+});
+
+describe("preload cloud binary requests", () => {
+	const init = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/orgs/o/sessions/s/attachments", method: "POST" };
+
+	it("cancels a request by its id, and every one still running when the page goes away", async () => {
+		let finish!: (value: unknown) => void;
+		electronMocks.invoke.mockReturnValueOnce(new Promise(() => undefined)).mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+		const bridge = exposedBridge().cloudCp;
+		void bridge.requestBinary({ ...init, requestId: "running" });
+		const done = bridge.requestBinary({ ...init, requestId: "done" });
+		expect(electronMocks.invoke).toHaveBeenCalledWith("cloudCp:requestBinary", expect.objectContaining({ requestId: "running" }));
+		finish({ status: 201, headers: {}, body: new Uint8Array() });
+		await done;
+
+		bridge.cancelBinary("other");
+		expect(electronMocks.send).toHaveBeenCalledWith("cloudCp:cancelBinary", "other");
+		electronMocks.send.mockClear();
+		// A reload: what still runs is cancelled, not what already finished.
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send.mock.calls).toEqual([["cloudCp:cancelBinary", "running"]]);
+		electronMocks.send.mockClear();
+		window.dispatchEvent(new Event("pagehide"));
+		expect(electronMocks.send).not.toHaveBeenCalled();
 	});
 });

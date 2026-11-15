@@ -64,6 +64,30 @@ func provisioningServiceOver(t *testing.T, store chatsvc.Store, st *sqlite.Store
 	})
 }
 
+func TestQueueUserMessageExcludesSpawnOpeningPromptFromUsage(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	st.SetUsageTelemetryAllowed(func() bool { return true })
+	svc := provisioningService(t, st)
+	ctx := context.Background()
+	if _, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: "spawn task brief", Origin: domain.MessageOriginHuman, SpawnOpeningPrompt: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if batches, err := st.DrainUsageMessages(ctx, 10, false, "install-one"); err != nil || len(batches) != 0 {
+		t.Fatalf("opening prompt batches = %+v, err=%v", batches, err)
+	}
+	if _, err := svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
+		Text: "direct follow-up", Origin: domain.MessageOriginHuman, ClientMessageID: "direct-follow-up",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	batches, err := st.DrainUsageMessages(ctx, 10, false, "install-one")
+	if err != nil || len(batches) != 1 || batches[0].Count != 1 {
+		t.Fatalf("direct message batches = %+v, err=%v", batches, err)
+	}
+}
+
 type staleProvisioningReader struct{ record domain.SessionRecord }
 
 func (r staleProvisioningReader) GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error) {
@@ -209,6 +233,67 @@ func TestSendWithoutControllerStillRefusedWhenNotProvisioning(t *testing.T) {
 	})
 	if !errors.Is(err, chatsvc.ErrNoController) {
 		t.Fatalf("err = %v, want ErrNoController", err)
+	}
+}
+
+func startAccountMove(t *testing.T, st *sqlite.Store, id domain.SessionID, phase domain.SessionInterfaceTransitionPhase) {
+	t.Helper()
+	now := time.Now().UTC()
+	if _, created, err := st.CreateSessionInterfaceTransition(context.Background(), domain.SessionInterfaceTransition{
+		ID: "move-1", SessionID: id, SourceMode: domain.SessionModeChat, TargetMode: domain.SessionModeChat,
+		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
+		Phase: phase, SourceAccountID: "old-account", TargetAccountID: "new-account", CreatedAt: now, UpdatedAt: now,
+	}); err != nil || !created {
+		t.Fatalf("create account move: created=%v err=%v", created, err)
+	}
+}
+
+func TestSendWhileAccountMoveDrainsIsRefusedWithoutQueueing(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionReady)
+	svc := provisioningService(t, st)
+	startAccountMove(t, st, id, domain.SessionInterfaceTransitionDraining)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "sent while the turn drains", Origin: domain.MessageOriginHuman})
+	if !errors.Is(err, chatsvc.ErrNoController) {
+		t.Fatalf("send while the old agent drains = %v, want an immediate ErrNoController", err)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Turns) != 0 {
+		t.Fatalf("turns = %+v, want nothing queued for the old agent", snapshot.Turns)
+	}
+}
+
+func TestSendDuringAccountMoveQueuesForTheNewAgent(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionReady)
+	svc := provisioningService(t, st)
+	ctx := context.Background()
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
+	startAccountMove(t, st, id, domain.SessionInterfaceTransitionSourceStopped)
+
+	turn, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "sent during the move", Origin: domain.MessageOriginHuman})
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send during account move = %+v, err = %v; want queued", turn, err)
+	}
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			return chatsvc.ControllerCommit{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("start the new agent: %v", err)
+	}
+	snapshot, err := svc.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State == domain.TurnStateFailed {
+		t.Fatalf("turns after the new agent started = %+v, want the queued message kept", snapshot.Turns)
 	}
 }
 
