@@ -129,8 +129,9 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? details.canRelogin ? "settings.harness.openSetup" : "settings.harness.setup" : details.canRelogin ? "settings.harness.loginAgain" : "settings.harness.login")}
 		</Button> : null;
 	return <div ref={rootRef} className="flex flex-col gap-6">
-		{/* Always mounted, so the change is announced. */}
-		<p role="status" className="sr-only">{showSignedIn ? t("settings.harness.loginUi.connected") : ""}</p>
+		{/* Always mounted, so the change is announced. A bare live region, not
+		    role="status": the tab's own progress statuses stay the only ones. */}
+		<p aria-live="polite" data-signed-in-announcer="" className="sr-only">{showSignedIn ? t("settings.harness.loginUi.connected") : ""}</p>
 		<HarnessDetailGroup title={t("settings.harness.installation")}>
 			<HarnessDetailRow
 				label={isInstalled ? t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")

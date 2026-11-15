@@ -39,11 +39,14 @@ describe("HarnessAccountTab sign-in row", () => {
 
 	it("announces a verified sign-in and hands focus to the login action", () => {
 		const view = renderTab({ loginPanel: <button type="button">Save and verify</button> });
-		expect(screen.getByRole("status")).toHaveTextContent("");
+		const announcer = view.container.querySelector("[data-signed-in-announcer]");
+		expect(announcer).toHaveTextContent("");
+		// It is not a status role, so the tab's own progress statuses stay unique.
+		expect(screen.queryByRole("status")).toBeNull();
 		view.rerender(<HarnessAccountTab details={details()} authWorkflowActive={false} signedIn copied={false} diagnosticsExpanded={false}
 			onToggleDiagnostics={vi.fn()} onCopyDiagnostics={vi.fn()} onInstall={vi.fn()} onSelectMethod={vi.fn()} onCopyCommand={vi.fn()} onUpdate={vi.fn()}
 			onLogin={vi.fn()} onLogout={vi.fn()} onVerify={vi.fn()} onCloseAuth={vi.fn()} onRetryAuth={vi.fn()} onTerminalState={vi.fn()} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Connected");
+		expect(announcer).toHaveTextContent("Connected");
 		expect(screen.getByRole("button", { name: "Log in again" })).toHaveFocus();
 	});
 });
