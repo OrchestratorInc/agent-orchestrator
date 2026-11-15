@@ -2858,7 +2858,7 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
-  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/key:
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/key:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
@@ -2880,7 +2880,7 @@ paths:
                 $ref: "#/components/schemas/BrowserVaultKey"
         default:
           $ref: "#/components/responses/Error"
-  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/requests:
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
@@ -2900,7 +2900,7 @@ paths:
                 $ref: "#/components/schemas/BrowserVaultRequestList"
         default:
           $ref: "#/components/responses/Error"
-  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/requests/{requestId}/grant:
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests/{requestId}/grant:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
@@ -2934,7 +2934,7 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
-  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/cookie-grants:
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/cookie-grants:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
@@ -2962,7 +2962,7 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
-  /api/cloud/v1/orgs/{orgId}/browser/vault/audit:
+  /api/cloud/v1/orgs/{orgId}/browser-vault/audit:
     parameters:
       - $ref: "#/components/parameters/OrgId"
     get:

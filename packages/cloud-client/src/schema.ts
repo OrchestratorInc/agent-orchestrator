@@ -1788,7 +1788,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/key": {
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/key": {
         parameters: {
             query?: never;
             header?: never;
@@ -1808,7 +1808,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/requests": {
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests": {
         parameters: {
             query?: never;
             header?: never;
@@ -1828,7 +1828,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/requests/{requestId}/grant": {
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/requests/{requestId}/grant": {
         parameters: {
             query?: never;
             header?: never;
@@ -1849,7 +1849,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser/vault/cookie-grants": {
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-vault/cookie-grants": {
         parameters: {
             query?: never;
             header?: never;
@@ -1869,7 +1869,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/cloud/v1/orgs/{orgId}/browser/vault/audit": {
+    "/api/cloud/v1/orgs/{orgId}/browser-vault/audit": {
         parameters: {
             query?: never;
             header?: never;
