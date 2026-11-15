@@ -309,6 +309,30 @@ describe("ArtifactFileView", () => {
 		expect(screen.queryByRole("textbox", { name: /Feedback for plan\.md/ })).not.toBeInTheDocument();
 	});
 
+	it("closes feedback already open when the artifact's session is archived, and sends nothing", async () => {
+		fetchMock.mockImplementation(async () => new Response("content", { status: 200 }));
+		postMock.mockResolvedValue({ data: { status: "ok" } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = (noFeedback: boolean) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ArtifactFileView artifactName="notes.txt" feedbackRequestKey={1} noFeedback={noFeedback} path="notes.txt" rawUrl={RAW_URL} sessionId="sess-1" />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+
+		const { rerender } = render(view(false));
+		await userEvent.type(await screen.findByRole("textbox", { name: /Feedback for notes\.txt/ }), "Please tighten this.");
+		rerender(view(true));
+
+		await waitFor(() => expect(screen.queryByRole("textbox", { name: /Feedback for notes\.txt/ })).not.toBeInTheDocument());
+		expect(screen.queryByRole("button", { name: "Send feedback" })).not.toBeInTheDocument();
+		rerender(view(false));
+		await screen.findByText("content");
+		expect(screen.queryByRole("textbox", { name: /Feedback for notes\.txt/ })).not.toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
 	it("does not offer editing for a truncated artifact", async () => {
 		fetchMock.mockResolvedValue(new Response("a".repeat(256 * 1024 + 1), { status: 200 }));
 

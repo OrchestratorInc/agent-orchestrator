@@ -1997,7 +1997,7 @@
 	"settings.versionRefresh.label": "Автоматически переводить открытые сессии на новые версии",
 	"settings.versionRefresh.description": "После обновления агента свободные сессии перезапускаются на новой версии автоматически, без ручного перезапуска.",
 	"settings.sessionRetention.label": "Удалять архивные сессии",
-	"settings.sessionRetention.description": "Архивные сессии с очищенным worktree удаляются безвозвратно по истечении этого срока. Ветки, pull request и итоги использования сохраняются. Сессии с артефактами хранятся, пока вы их не удалите.",
+	"settings.sessionRetention.description": "Архивные сессии с очищенным worktree удаляются безвозвратно по истечении этого срока. Ветки, pull request и итоги использования сохраняются. Сессии, в которых ещё есть артефакты, сохраняются.",
 	"settings.sessionRetention.never": "Никогда",
 	"settings.sessionRetention.afterDays": "Через {{days}} дней",
 	"chat.versionSwitch.pending": "Переход на {{version}}…",

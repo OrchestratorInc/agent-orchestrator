@@ -155,10 +155,16 @@ export function FileContentPane({
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
-	// An archived session's artifact takes no feedback: nothing starts a comment,
-	// and the buttons that would are not offered.
+	// An archived session's artifact takes no feedback: nothing starts or sends
+	// a comment, none shows, and the buttons that would are not offered.
 	const feedbackOff = source.kind === "artifact" && source.noFeedback === true;
-	const annotation = useMemo(() => feedbackOff ? { ...annotationProp, begin: () => {} } : annotationProp, [annotationProp, feedbackOff]);
+	const annotation = useMemo<FileAnnotationModel>(() => feedbackOff
+		? { ...annotationProp, targets: [], begin: () => {}, submit: async () => {} }
+		: annotationProp, [annotationProp, feedbackOff]);
+	// A comment already open on the file when its session is archived is closed.
+	useEffect(() => {
+		if (feedbackOff && path) cancelFileAnnotations(annotationProp, (target) => target.path === path);
+	}, [annotationProp, feedbackOff, path]);
 	// The menu actions this render offers; published once it commits, and
 	// withdrawn while loading, on an error, or when the pane goes away.
 	const menuPublish = useRef<ArtifactMenuAction[]>([]);

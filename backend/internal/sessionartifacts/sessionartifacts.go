@@ -52,12 +52,81 @@ func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error)
 	return list(ctx, dir, nil, MaxFiles)
 }
 
+// errFound stops HasFiles' walk at the first file.
+var errFound = errors.New("found")
+
 // HasFiles reports whether a session's artifact directory holds any file List
 // would return. It stops at the first one, so a sweep over many sessions does
 // not walk whole trees. A missing directory has none.
+//
+// Unlike List it is strict, since a false answer lets the caller delete the
+// directory: an entry it cannot read or stat is an error, and a walk that
+// reaches MaxVisited without an answer counts as having files.
 func HasFiles(ctx context.Context, dir string) (bool, error) {
-	files, err := list(ctx, dir, nil, 1)
-	return len(files) > 0, err
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false, nil
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return false, err
+	}
+	visited := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		visited++
+		if visited > MaxVisited {
+			return errFound
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path != root && ignored(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == VersionsDir && filepath.Dir(path) == root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			return errFound
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errFound):
+		return true, nil
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist) && !rootExists(root):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// rootExists reports whether root is still there, so a missing artifact
+// directory reads as empty while a file vanishing mid-walk stays an error.
+func rootExists(root string) bool {
+	_, err := os.Lstat(root)
+	return err == nil
 }
 
 // list is List, stopping after maxFiles files, that also records each file's
