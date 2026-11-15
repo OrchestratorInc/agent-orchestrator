@@ -8033,6 +8033,10 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        ReviewReviewerFailure: {
+            error: string;
+            harness: string;
+        };
         ReviewReviewerState: {
             harness: string;
             latestRun?: components["schemas"]["ReviewRun"];
@@ -9187,6 +9191,8 @@ export interface components {
             autoInjectEnabled: boolean;
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */
             created: boolean;
+            /** @description Configured reviewers that failed to start while at least one other reviewer started. */
+            reviewerFailures?: components["schemas"]["ReviewReviewerFailure"][];
             reviewerHandleId: string;
             reviewerSurface?: components["schemas"]["DomainReviewerSurface"];
             reviews: components["schemas"]["PRReviewState"][];

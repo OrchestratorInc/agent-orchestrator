@@ -23017,6 +23017,16 @@ components:
         turnId:
           type: string
       type: object
+    ReviewReviewerFailure:
+      properties:
+        error:
+          type: string
+        harness:
+          type: string
+      required:
+      - harness
+      - error
+      type: object
     ReviewReviewerState:
       properties:
         harness:
@@ -25951,6 +25961,12 @@ components:
           description: True when a new review pass was started; false when an existing
             run for the same commit was reused.
           type: boolean
+        reviewerFailures:
+          description: Configured reviewers that failed to start while at least one
+            other reviewer started.
+          items:
+            $ref: '#/components/schemas/ReviewReviewerFailure'
+          type: array
         reviewerHandleId:
           type: string
         reviewerSurface:

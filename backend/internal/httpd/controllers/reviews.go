@@ -56,6 +56,9 @@ type TriggerReviewResponse struct {
 	// AutoInjectEnabled is true when this request turned the worker session's
 	// review auto-inject on.
 	AutoInjectEnabled bool `json:"autoInjectEnabled" description:"True when this request turned the worker session's review auto-inject on."`
+	// ReviewerFailures lists configured reviewers that failed to start while
+	// others did; their runs are recorded as failed, never approved.
+	ReviewerFailures []reviewcore.ReviewerFailure `json:"reviewerFailures,omitempty" description:"Configured reviewers that failed to start while at least one other reviewer started."`
 }
 
 // CancelReviewResponse is the body of cancel (200). reviews carries the
@@ -231,6 +234,7 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		Created:           res.Created,
 		AutoInjectEnabled: res.AutoInjectEnabled,
 		ReviewerSurface:   reviewerSurfacePayload(res.ReviewerSurface),
+		ReviewerFailures:  res.ReviewerFailures,
 	})
 }
 

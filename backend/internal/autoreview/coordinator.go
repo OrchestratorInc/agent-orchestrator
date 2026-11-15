@@ -168,6 +168,9 @@ func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) 
 		return Result{Reason: result.SkipReason}, nil
 	}
 	if !result.Created {
+		if len(result.ReviewerFailures) > 0 {
+			return Result{Reason: "reviewer_failed"}, nil
+		}
 		return Result{Reason: triggerResultReason(prs, result, harness)}, nil
 	}
 	return Result{Triggered: true, Reason: "triggered"}, nil

@@ -346,3 +346,29 @@ func TestEvaluateSessionMultipleReviewers(t *testing.T) {
 		})
 	}
 }
+
+func TestEvaluateSessionPartialReviewerFailure(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	newStore := func() *fakeStore {
+		return &fakeStore{
+			session: domain.SessionRecord{ID: "s1", ProjectID: "p1", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, AutoReviewEnabled: true, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}},
+			project: domain.ProjectRecord{ID: "p1", Config: domain.ProjectConfig{Reviewers: []domain.ReviewerConfig{{Harness: domain.ReviewerClaudeCode}, {Harness: domain.ReviewerCodex}}}},
+			prs:     []domain.PullRequest{{URL: "pr1", Number: 1, HeadSHA: "sha1"}},
+		}
+	}
+	failure := []reviewcore.ReviewerFailure{{Harness: domain.ReviewerCodex, Error: "codex not installed"}}
+
+	// One reviewer started, the other failed: the sweep succeeds.
+	trigger := &fakeTrigger{result: reviewcore.TriggerResult{Created: true, ReviewerFailures: failure, Reviews: []reviewcore.PRReviewState{}}}
+	result, err := New(newStore(), trigger, Config{Clock: func() time.Time { return now }}).EvaluateSession(context.Background(), "s1")
+	if err != nil || !result.Triggered {
+		t.Fatalf("result=%+v err=%v, want triggered without error", result, err)
+	}
+
+	// Nothing new started and the only owed reviewer failed: a clear reason, no error.
+	trigger = &fakeTrigger{result: reviewcore.TriggerResult{ReviewerFailures: failure, Reviews: []reviewcore.PRReviewState{}}}
+	result, err = New(newStore(), trigger, Config{Clock: func() time.Time { return now }}).EvaluateSession(context.Background(), "s1")
+	if err != nil || result.Triggered || result.Reason != "reviewer_failed" {
+		t.Fatalf("result=%+v err=%v, want reviewer_failed without error", result, err)
+	}
+}
