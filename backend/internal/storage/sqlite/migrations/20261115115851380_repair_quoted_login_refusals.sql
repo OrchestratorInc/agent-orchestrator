@@ -1,0 +1,50 @@
+-- +goose Up
+
+-- claude-agent-acp 0.70 failed any successful Claude turn whose answer contained
+-- "Please run /login" as a refused login, with the answer's last text block as
+-- the error (#8427). Those turns kept their answer but also showed it again as an
+-- error, a "Stopped" line and the login band, and asked for a login. Mark them
+-- completed, as the fixed chat records them, and drop the sign-in demand they
+-- left on the conversation if nothing has replaced it since.
+--
+-- A turn is one of these when its error contains the login advice and ends an
+-- answer the agent gave in that turn. A real refusal never shows its text as an
+-- answer: the adapter sends it only as the turn's failure. The raw provider event
+-- archive keeps what the adapter reported.
+CREATE TEMP TABLE quoted_login_refusals AS
+SELECT t.id, t.conversation_id, t.error_message
+FROM conversation_turns t
+WHERE t.state = 'failed'
+  AND t.failure_code IN ('', 'auth_required')
+  AND instr(t.error_message, 'Please run /login') > 0
+  AND EXISTS (
+    SELECT 1
+    FROM conversation_messages m
+    WHERE m.turn_id = t.id
+      AND m.role = 'assistant'
+      AND substr(rtrim(m.text, ' ' || char(9, 10, 13)), -length(t.error_message)) = t.error_message
+  );
+
+-- The demand's reason is the error it was recorded from. A later demand, real or
+-- not, carries its own reason and stays. The failure evidence is kept, as a
+-- recovered login keeps it.
+UPDATE conversations
+SET account_json = json_remove(account_json, '$.authenticationState', '$.reauthRequiredAt', '$.reauthReason')
+WHERE account_json IS NOT NULL
+  AND json_valid(account_json)
+  AND json_extract(account_json, '$.reauthRequiredAt') IS NOT NULL
+  AND json_extract(account_json, '$.reauthReason') IN (
+    SELECT r.error_message FROM quoted_login_refusals r WHERE r.conversation_id = conversations.id
+  );
+
+UPDATE conversation_turns
+SET state = 'completed',
+    error_message = '',
+    failure_code = ''
+WHERE id IN (SELECT id FROM quoted_login_refusals);
+
+DROP TABLE quoted_login_refusals;
+
+-- +goose Down
+-- A data repair: the fixed chat records these turns the same way, so there is
+-- nothing to undo.
