@@ -276,8 +276,28 @@ func TestSnapshotPreservesSubagentsAndExecutableResources(t *testing.T) {
 	if err := p.CleanupWorkspace(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Fatalf("cleanup after workspace deletion retained profile: %v", err)
+	if _, err := os.Stat(filepath.Join(target, ".ao-managed")); err != nil {
+		t.Fatalf("cleanup after workspace deletion removed the restorable profile: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "subagents", "custom.md")); err != nil {
+		t.Fatalf("cleanup after workspace deletion removed profile resources: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "launches")); !os.IsNotExist(err) {
+		t.Fatalf("cleanup after workspace deletion kept launch routing: %v", err)
+	}
+	// MiniMax writes read-only plugin caches; a later restore must still adopt
+	// the profile.
+	cache := filepath.Join(target, "v2", "plugin-hook-cache", "entry")
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cache, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cache, 0o700) })
+	cfg.WorkspacePath = t.TempDir()
+	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("restore after kill cleanup: %v", err)
 	}
 }
 

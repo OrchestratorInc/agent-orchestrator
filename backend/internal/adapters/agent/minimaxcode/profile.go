@@ -477,8 +477,11 @@ func (s *profileSnapshot) copyTree(ctx context.Context, source, target string, d
 	})
 }
 
-// CleanupWorkspace removes only a profile bearing AO's ownership marker after
-// AO has removed its workspace. Kill/restore deliberately retain native history.
+// CleanupWorkspace retires a profile's launch routing after AO has removed its
+// workspace. The profile itself, with its native history, stays: kill removes
+// the workspace, and restore resumes the native conversation from this profile.
+// Only state bound to an ended runtime generation is removed, so a cached hook
+// fails closed instead of routing to a dead session.
 func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	// The manager also calls this during failed preparation. Existing native
 	// history must survive those retries and harness switches.
@@ -503,9 +506,17 @@ func (p *Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookCo
 		return err
 	}
 	if string(b) != profileMarker {
-		return errors.New("refusing to remove non-AO MiniMax profile")
+		return errors.New("refusing to clean a non-AO MiniMax profile")
 	}
-	return os.RemoveAll(path)
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.RemoveAll("launches"); err != nil {
+		return fmt.Errorf("retire MiniMax launch routing: %w", err)
+	}
+	return nil
 }
 
 // PrepareRuntimeLaunch captures only AO's hook routing fields after the runtime

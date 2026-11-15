@@ -628,6 +628,10 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		case domain.HarnessMiMoCode:
 			// Allow separate 20-second credential detection and verification budgets.
 			timeout = 40 * time.Second
+		case domain.HarnessMiniMaxCode:
+			// `mcode provider list` has its own 20-second budget after the
+			// binary is resolved and its version probed.
+			timeout = 40 * time.Second
 		}
 	}
 	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)
