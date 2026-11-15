@@ -78,3 +78,47 @@ func TestVerifyDefaultProviderUsesOpenAIBaseURL(t *testing.T) {
 		t.Fatalf("checked %q, want the gateway's /models", gotPath)
 	}
 }
+
+// A redirect must not carry the key: Go keeps x-api-key across origins.
+func TestVerifyDefaultProviderDoesNotFollowRedirects(t *testing.T) {
+	isolateProviderKeys(t)
+	var leaked string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("x-api-key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/v1/models", http.StatusFound)
+	}))
+	defer redirect.Close()
+	previous := providerVerifyURLs["anthropic"]
+	providerVerifyURLs["anthropic"] = redirect.URL
+	defer func() { providerVerifyURLs["anthropic"] = previous }()
+
+	if got := verifyDefaultProvider(context.Background(), map[string]string{"ANTHROPIC_API_KEY": "sk-ant-test"}); got != ports.AgentAuthStatusConfigured {
+		t.Fatalf("redirected verify = %q, want configured", got)
+	}
+	if leaked != "" {
+		t.Fatalf("redirect target received the key %q", leaked)
+	}
+}
+
+// OPENAI_BASE_URL is user-controlled: a key goes only to HTTPS or loopback HTTP.
+func TestVerifyDefaultProviderRefusesPlainHTTPGateway(t *testing.T) {
+	isolateProviderKeys(t)
+	for _, base := range []string{"http://gateway.example.test/v1", "ftp://gateway.example.test", "https://user:pass@gateway.example.test/v1", "not a url"} {
+		env := map[string]string{"OPENAI_API_KEY": "gateway-key", "OPENAI_BASE_URL": base}
+		if got := verifyDefaultProvider(context.Background(), env); got != ports.AgentAuthStatusConfigured {
+			t.Fatalf("%q: verify = %q, want configured without sending the key", base, got)
+		}
+	}
+	for endpoint, allowed := range map[string]bool{
+		"https://api.openai.com/v1/models": true, "http://127.0.0.1:8080/v1": true, "http://localhost/v1": true, "http://[::1]:9/v1": true,
+		"http://gateway.example.test/v1": false, "https://user@gateway.example.test": false, "": false,
+	} {
+		if got := credentialEndpointAllowed(endpoint); got != allowed {
+			t.Fatalf("credentialEndpointAllowed(%q) = %v, want %v", endpoint, got, allowed)
+		}
+	}
+}

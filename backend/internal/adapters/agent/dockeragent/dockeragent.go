@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // ConfigEnv selects an existing native YAML configuration. AO never rewrites it.
@@ -108,7 +108,7 @@ func doctorAuthStatus(ctx context.Context, binary, config string) (ports.AgentAu
 	if config != "" {
 		args = []string{"doctor", config, "--json"}
 	}
-	out, runErr := exec.CommandContext(ctx, binary, args...).Output()
+	out, runErr := process.CommandContext(ctx, binary, args...).Output()
 	var report doctorReport
 	if err := json.Unmarshal(out, &report); err != nil || report.Providers == nil {
 		return ports.AgentAuthStatusUnknown, false

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -46,12 +47,12 @@ func verifyDefaultProvider(ctx context.Context, env map[string]string) ports.Age
 		endpoint = strings.TrimRight(base, "/") + "/models"
 	}
 	key := providerKey(env, provider)
-	if key == "" {
+	if key == "" || !credentialEndpointAllowed(endpoint) {
 		return ports.AgentAuthStatusConfigured
 	}
 	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
 		return ports.AgentAuthStatusConfigured
 	}
@@ -64,7 +65,12 @@ func verifyDefaultProvider(ctx context.Context, env map[string]string) ports.Age
 	case "google":
 		req.Header.Set("x-goog-api-key", key)
 	}
-	resp, err := verifyClient.Do(req)
+	// Never follow a redirect with a key: Go strips Authorization on a
+	// cross-origin redirect but not x-api-key or x-goog-api-key. A redirect
+	// stays unverified.
+	client := *verifyClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
 		return ports.AgentAuthStatusConfigured
 	}
@@ -78,6 +84,26 @@ func verifyDefaultProvider(ctx context.Context, env map[string]string) ports.Age
 	default:
 		return ports.AgentAuthStatusConfigured
 	}
+}
+
+// credentialEndpointAllowed reports whether a key may be sent to endpoint:
+// HTTPS, or plain HTTP to a loopback host only. OPENAI_BASE_URL is
+// user-controlled, so a plain-HTTP gateway keeps the key unverified.
+func credentialEndpointAllowed(endpoint string) bool {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		switch u.Hostname() {
+		case "127.0.0.1", "localhost", "::1":
+			return true
+		}
+	}
+	return false
 }
 
 // providerKey returns the first key providerModels accepts for provider.
