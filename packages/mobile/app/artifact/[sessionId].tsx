@@ -27,7 +27,7 @@ import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
 import { useReviewSender } from "../../lib/files/useReviewSender";
 import { useFilesBackend } from "../../lib/files/useFilesBackend";
 import { haptics } from "../../lib/haptics";
-import { afterVerified, useVerifiedOnMount } from "../../lib/heldBackend";
+import { afterVerified, sourceKey, useVerifiedFor, useVerifiedOnMount } from "../../lib/heldBackend";
 import { findHost } from "../../lib/hosts";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
@@ -243,7 +243,7 @@ function ArtifactViewerContent() {
 		if (UNLISTED_VIEWERS.has(unlistedKind)) return <ArtifactBody backend={backend} sessionId={sessionId} artifact={unlisted} active versionOf={versionOf} onAsk={() => {}} />;
 		if (UNLISTED_SIZED_VIEWERS.has(unlistedKind)) return <UnlistedSized backend={backend} sessionId={sessionId} artifact={unlisted} versionOf={versionOf} />;
 		const source = backend.webSource(sessionId, currentPath);
-		return source ? <ArtifactWeb backend={backend} source={source} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+		return source ? <ArtifactWeb backend={backend} file={{ sessionId, path: currentPath }} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	// The strip shows the session's artifacts when there is more than one. It leaves while a comment is open.
 	const filmstrip = !ask && pages.length > 1;
@@ -383,9 +383,6 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50, minimumViewTime: 120 }).current;
 	// A picture or preview that cannot load falls back to the kind's glyph, until the file changes.
 	const [previewFailed, setPreviewFailed] = useState<Readonly<Record<string, string>>>({});
-	// A strip shown again while the app reconnects draws its glyphs until the
-	// machine has answered as itself (see heldBackend).
-	const verified = useVerifiedOnMount(backend);
 	// Returns the same object when nothing changed, so a preview reporting failure again does not re-render.
 	const markPreviewFailed = useCallback((path: string, updatedAt: string) => {
 		setPreviewFailed((previous) => previous[path] === updatedAt ? previous : { ...previous, [path]: updatedAt });
@@ -418,10 +415,6 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 					const selected = position === index;
 					const visual = artifactVisual(item, t);
 					const failed = previewFailed[item.path] === item.updatedAt;
-					// An image that cannot load (a format the phone can't decode, a 404) shows the glyph instead.
-					const picture = verified && artifactViewKind(item) === "image" && !failed ? backend.imageSource(sessionId, item.path, item.updatedAt) : undefined;
-					// A text, markdown or HTML file shows a peek at its contents, as its gallery card does.
-					const previewing = verified && !picture && hasContentThumbnail(item) && !failed;
 					return (
 						<View style={{ marginLeft: position > 0 ? STRIP_GAP : 0 }}>
 							<Pressable
@@ -431,13 +424,7 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 								onPress={() => { haptics.tap(); onSelect(position); }}
 								style={[styles.tile, { backgroundColor: visual.tint }, selected ? styles.tileSelected : { opacity: 0.6 }]}
 							>
-								{picture ? (
-									<Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" onError={() => markPreviewFailed(item.path, item.updatedAt)} style={StyleSheet.absoluteFill} />
-								) : previewing ? (
-									<ArtifactThumbnail backend={backend} sessionId={sessionId} artifact={item} visible={visiblePaths.has(item.path)} versionOf={versionOf} onFailed={() => markPreviewFailed(item.path, item.updatedAt)} />
-								) : (
-									<Feather name={visual.icon} size={18} color={visual.color} />
-								)}
+								<StripPreview backend={backend} sessionId={sessionId} artifact={item} failed={failed} visible={visiblePaths.has(item.path)} versionOf={versionOf} onFailed={markPreviewFailed} />
 							</Pressable>
 						</View>
 					);
@@ -445,6 +432,33 @@ function ArtifactFilmstrip({ backend, sessionId, artifacts, index, versionOf, on
 			/>
 		</View>
 	);
+}
+
+/**
+ * What a strip tile draws: an image's own picture, a peek at a text, markdown or
+ * HTML file's contents (as its gallery card does), or the kind's glyph. The
+ * strip mounts tiles as it scrolls, so each checks for a verified connection
+ * when its picture would first load (see heldBackend), not when the strip did.
+ */
+function StripPreview({ backend, sessionId, artifact, failed, visible, versionOf, onFailed }: {
+	backend: ArtifactsBackend;
+	sessionId: string;
+	artifact: SessionArtifact;
+	failed: boolean;
+	visible: boolean;
+	versionOf(path: string): string | undefined;
+	onFailed(path: string, updatedAt: string): void;
+}) {
+	const t = useTheme();
+	const visual = artifactVisual(artifact, t);
+	// An image that cannot load (a format the phone can't decode, a 404) shows the glyph instead.
+	const wanted = artifactViewKind(artifact) === "image" && !failed ? backend.imageSource(sessionId, artifact.path, artifact.updatedAt) : undefined;
+	const picture = useVerifiedFor(backend, sourceKey(wanted)) ? wanted : undefined;
+	const verified = useVerifiedOnMount(backend);
+	const previewing = verified && !wanted && hasContentThumbnail(artifact) && !failed;
+	if (picture) return <Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" onError={() => onFailed(artifact.path, artifact.updatedAt)} style={StyleSheet.absoluteFill} />;
+	if (previewing) return <ArtifactThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={() => onFailed(artifact.path, artifact.updatedAt)} />;
+	return <Feather name={visual.icon} size={18} color={visual.color} />;
 }
 
 /** The header of a gallery page: the file's name over where it sits in the list. */
@@ -468,23 +482,28 @@ function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }
 	// A page swiped back to while the app reconnects waits for the machine to
 	// answer as itself before it loads with the credential (see heldBackend).
 	const verified = useVerifiedOnMount(backend);
-	if (!verified) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	const kind = artifactViewKind(artifact);
+	// A neighbouring page's player gets its file only once swiped to, so that is
+	// when it checks for a verified connection, not when the page mounted; this
+	// page then builds the stream again from the verified connection.
+	const playable = useVerifiedFor(backend, active && (kind === "video" || kind === "audio") ? "play" : null);
+	if (!verified) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	const source = backend.webSource(sessionId, artifact.path);
 	if (!source) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+	const file = { sessionId, path: artifact.path };
 	switch (kind) {
 		case "html":
-			return <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
+			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} page={file} />;
 		case "svg":
-			return <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} />;
+			return <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} />;
 		case "video":
 		case "audio": {
 			const stream = backend.streamSource(sessionId, artifact.path, artifact.updatedAt);
-			return stream ? <ArtifactMedia source={stream} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} renew={backend.renew} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
+			return stream ? <ArtifactMedia source={stream} kind={kind} active={active && playable} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} renew={backend.renew} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
 		}
 		case "pdf":
 			// Android's WebView has no PDF viewer: the platform's renderer draws it instead.
-			return Platform.OS === "android" ? <ArtifactPdf backend={backend} sessionId={sessionId} artifact={artifact} active={active} label={artifactFormatLabel(artifact)} hint={hint} /> : <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} />;
+			return Platform.OS === "android" ? <ArtifactPdf backend={backend} sessionId={sessionId} artifact={artifact} active={active} label={artifactFormatLabel(artifact)} hint={hint} /> : <ArtifactWeb backend={backend} file={file} version={artifact.updatedAt} />;
 		case "binary":
 			return <NoPreview artifact={artifact} cloud={backend.cloud} />;
 		case "image": {
@@ -497,7 +516,7 @@ function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }
 		case "diagram":
 			// A text file too large to load into the app still shows, as the page the
 			// daemon serves, unless its start shows it is not text.
-			if (artifact.size > MAX_ARTIFACT_TEXT_BYTES) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} source={source} />;
+			if (artifact.size > MAX_ARTIFACT_TEXT_BYTES) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} />;
 			return <ArtifactText backend={backend} sessionId={sessionId} artifact={artifact} kind={kind} versionOf={versionOf} onAsk={onAsk} />;
 	}
 }
@@ -555,7 +574,7 @@ function UnlistedSized({ backend, sessionId, artifact, versionOf }: { backend: A
 	if (size?.key !== key) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (size.bytes === undefined) {
 		const source = backend.webSource(sessionId, artifact.path);
-		return source ? <ArtifactWeb backend={backend} source={source} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+		return source ? <ArtifactWeb backend={backend} file={{ sessionId, path: artifact.path }} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	return <ArtifactBody backend={backend} sessionId={sessionId} artifact={{ ...artifact, size: size.bytes }} active versionOf={versionOf} onAsk={() => {}} />;
 }
@@ -566,7 +585,7 @@ function UnlistedSized({ backend, sessionId, artifact, versionOf }: { backend: A
  * show nothing (or start a download); text opens as a page. A backend that
  * cannot read a file's start (Cloud) opens it as a page.
  */
-function LargeArtifact({ backend, sessionId, artifact, source }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact; source: ArtifactSource }) {
+function LargeArtifact({ backend, sessionId, artifact }: { backend: ArtifactsBackend; sessionId: string; artifact: SessionArtifact }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
@@ -585,13 +604,13 @@ function LargeArtifact({ backend, sessionId, artifact, source }: { backend: Arti
 	}, [artifact.path, backend, key, sessionId]);
 	if (probe?.key !== key) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (probe.binary) return <NoPreview artifact={artifact} cloud={backend.cloud} />;
-	return <ArtifactWeb backend={backend} source={source} version={artifact.updatedAt} />;
+	return <ArtifactWeb backend={backend} file={{ sessionId, path: artifact.path }} version={artifact.updatedAt} />;
 }
 
-function ArtifactWeb({ backend, source, version, page }: {
+function ArtifactWeb({ backend, file, version, page }: {
 	backend: ArtifactsBackend;
-	/** Where the web view loads the file by itself. */
-	source: ArtifactSource;
+	/** The file the web view loads by itself, from its source on the live connection. */
+	file: { sessionId: string; path: string };
 	version: string;
 	/** An HTML page, loaded with the files it links inlined. */
 	page?: { sessionId: string; path: string };
@@ -600,9 +619,16 @@ function ArtifactWeb({ backend, source, version, page }: {
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
-	// Mounted fresh, and reloaded, only with a verified connection: the page
-	// loads with the machine's credential (see heldBackend).
-	const verified = useVerifiedOnMount(backend);
+	// Built here, not handed down: a page that waited for a verified connection
+	// then loads from the address the machine answered on, never one a parent
+	// built from the last connection.
+	const source = backend.webSource(file.sessionId, file.path);
+	// Loaded only with a verified connection, when it mounts and when its file
+	// changes: the page loads with the machine's credential (see heldBackend).
+	// The page already showing stays through a reconnect.
+	const verified = useVerifiedFor(backend, source ? sourceKey(source) : "unresolved");
+	// Retry loads the page again as a fresh view, from the source built then.
+	const [attempt, setAttempt] = useState(0);
 	const retrying = useRef<AbortController | null>(null);
 	useEffect(() => () => retrying.current?.abort(), []);
 	// A machine's page is drawn with the files it links inlined. Cloud's loads
@@ -625,12 +651,12 @@ function ArtifactWeb({ backend, source, version, page }: {
 	const renewed = useRef(false);
 	useEffect(() => { renewed.current = false; }, [version]);
 	// Inlining failed: the page still opens from its URL.
-	if (!verified || (inline && !inlined.html && !inlined.failed)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (!source || !verified || (inline && !inlined.html && !inlined.failed)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<View style={styles.screen}>
 			<WebView
-				// A new version of the file reloads the page.
-				key={`${version}|${inlined.html ? "inline" : "url"}`}
+				// A new version of the file reloads the page, and so does Retry.
+				key={`${version}|${inlined.html ? "inline" : "url"}|${attempt}`}
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
@@ -672,7 +698,9 @@ function ArtifactWeb({ backend, source, version, page }: {
 						setError(undefined);
 						retrying.current?.abort();
 						retrying.current = new AbortController();
-						afterVerified(backend, () => web.current?.reload(), retrying.current.signal);
+						// Not a reload of the address on screen: once verified, the page is
+						// built again from the address the machine answered on.
+						afterVerified(backend, () => setAttempt((n) => n + 1), retrying.current.signal);
 					}}><Text style={styles.retryText}>Retry</Text></Pressable>
 				</View>
 			) : null}
@@ -737,8 +765,7 @@ function ArtifactText({ backend, sessionId, artifact, kind, versionOf, onAsk }: 
 	// The previous version stays up while the next one loads.
 	const text = state?.text;
 	if (state?.key === key && state.tooLarge) {
-		const source = backend.webSource(sessionId, artifact.path);
-		if (source) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} source={source} />;
+		if (backend.webSource(sessionId, artifact.path)) return <LargeArtifact backend={backend} sessionId={sessionId} artifact={artifact} />;
 	}
 	if (text === undefined) {
 		if (state?.key === key && state.error) return <Unavailable title="Couldn't load the artifact" message={state.error} action={<Button title="Try again" icon="refresh-cw" onPress={() => setAttempt((n) => n + 1)} />} />;

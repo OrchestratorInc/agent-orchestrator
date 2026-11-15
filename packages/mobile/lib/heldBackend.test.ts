@@ -75,6 +75,58 @@ describe("a held Files backend", () => {
 		expect(await pending).toBe("AbortError");
 	});
 
+	// The screen that asked closed while the call waited for the connection: once
+	// the connection is back, nothing goes out for it.
+	it("never sends a file, folder, search, image or feedback call cancelled while it waited", async () => {
+		const live = vi.fn();
+		const lan: FilesBackend = {
+			...filesFor("lan", []),
+			file: async () => { live("file"); return {} as never; },
+			tree: async () => { live("tree"); return { path: "", entries: [], truncated: false }; },
+			search: async () => { live("search"); return { results: [], truncated: false }; },
+			imageSource: async () => { live("imageSource"); return undefined; },
+			sendFeedback: async () => { live("sendFeedback"); return 0; },
+		};
+		const slot = createLiveSlot<FilesBackend>();
+		const held = holdFilesBackend(slot, lan, "machine-a");
+		const cancel = new AbortController();
+		const calls = [
+			held.file("s", "a.ts", {}, cancel.signal),
+			held.tree("s", "", cancel.signal),
+			held.search("s", "app", cancel.signal),
+			held.imageSource("s", "a.png", "after", "v1", {}, cancel.signal),
+			held.sendFeedback("s", [], undefined, cancel.signal),
+			held.git!.at({ branch: "main" }).file("s", "a.ts", {}, cancel.signal),
+		].map((call) => call.then(() => "sent", (error: Error) => error.name));
+		cancel.abort();
+		expect(await Promise.all(calls)).toEqual(Array(6).fill("AbortError"));
+		slot.set(lan);
+		await Promise.resolve();
+		expect(live).not.toHaveBeenCalled();
+	});
+
+	it("hands the caller's signal to the live call, so the request itself can be cancelled", async () => {
+		const signals: Array<AbortSignal | undefined> = [];
+		const lan: FilesBackend = {
+			...filesFor("lan", []),
+			file: async (_sessionId, _path, _read, signal) => { signals.push(signal); return {} as never; },
+			tree: async (_sessionId, _dir, signal) => { signals.push(signal); return { path: "", entries: [], truncated: false }; },
+			search: async (_sessionId, _query, signal) => { signals.push(signal); return { results: [], truncated: false }; },
+			imageSource: async (_sessionId, _path, _side, _version, _read, signal) => { signals.push(signal); return undefined; },
+			sendFeedback: async (_sessionId, _comments, _onSent, signal) => { signals.push(signal); return 0; },
+		};
+		const slot = createLiveSlot<FilesBackend>();
+		slot.set(lan);
+		const held = holdFilesBackend(slot, lan, "machine-a");
+		const { signal } = new AbortController();
+		await held.file("s", "a.ts", {}, signal);
+		await held.tree("s", "", signal);
+		await held.search("s", "app", signal);
+		await held.imageSource("s", "a.png", "after", "v1", {}, signal);
+		await held.sendFeedback("s", [], undefined, signal);
+		expect(signals).toEqual(Array(5).fill(signal));
+	});
+
 	it("reads another branch through the live connection too", async () => {
 		const calls: string[] = [];
 		const slot = createLiveSlot<FilesBackend>();

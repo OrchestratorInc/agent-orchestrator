@@ -1,6 +1,27 @@
 // The warnings above the spawn controls, decided in one place so a single cause
 // produces a single line. Pure, so it is unit-testable.
 
+import { isDesktopUnreachable } from "./connectionError";
+import { classifyLink, EMPTY_LINK_TRACKER, type LinkTracker, type PhoneNetwork } from "./linkHealth";
+
+/**
+ * Whether the chosen machine is offline, by the same rule as every other
+ * screen (store.tsx's HostScope): the link tracker has given up on it and its
+ * last poll failed as unreachable. A connection closed on purpose (the app
+ * going to the background drops it every time) is not offline: reading it as
+ * offline flashed the notice after every app switch, into the app-switcher
+ * snapshot too.
+ */
+export function spawnHostOffline(
+	host: { linkTracker?: LinkTracker; connection: string; error: string | null; errorStatus: number | null } | undefined,
+	phone: PhoneNetwork,
+	now: number,
+): boolean {
+	if (!host) return false;
+	return classifyLink(host.linkTracker ?? EMPTY_LINK_TRACKER, phone, now) === "unreachable"
+		&& isDesktopUnreachable({ connection: host.connection, error: host.error, errorStatus: host.errorStatus });
+}
+
 export const SPAWN_OFFLINE_NOTICE = "This machine is offline. You can start a worker once it reconnects.";
 export const NO_CHAT_AGENT_NOTICE =
 	"No installed agent on this Orchestrator host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.";

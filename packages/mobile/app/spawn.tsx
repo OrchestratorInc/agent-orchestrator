@@ -22,7 +22,7 @@ import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pa
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
-import { spawnNotices } from "../lib/spawnNotices";
+import { spawnHostOffline, spawnNotices } from "../lib/spawnNotices";
 import { createAgentModelCache, nextConnectionEpoch, type ConnectionEpoch } from "../lib/spawnLoads";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
@@ -53,7 +53,7 @@ export default function SpawnScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved } = useApp();
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn, configResolved, phoneNetwork } = useApp();
 	const cloudState = useCloud();
 	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
 	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -99,7 +99,9 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (cloudSelected) void reloadCloudPlan?.();
 	}, [cloudSelected, reloadCloudPlan]);
-	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
+	// Offline by the same rule as the other screens: a connection the app closed
+	// on going to the background is not (see spawnHostOffline).
+	const unreachable = spawnHostOffline(selectedHost, phoneNetwork, Date.now());
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
 		const selected = hostStates.find((host) => host.hostId === selectedHostId);
