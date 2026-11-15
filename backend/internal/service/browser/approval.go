@@ -19,6 +19,10 @@ const describeAction = "describe"
 // DefaultApprovalTimeout is how long an agent's command waits for the user.
 const DefaultApprovalTimeout = approval.BrowserWaitTimeout
 
+// DefaultDescribeTimeout bounds the runtime's read of a target. Past it the
+// target counts as unread, and the user is asked without the details.
+const DefaultDescribeTimeout = 8 * time.Second
+
 type approvalGate interface {
 	SessionMode(sessionID string) approval.Mode
 	Request(ctx context.Context, req approval.Request) (approval.Outcome, error)
@@ -196,7 +200,13 @@ func (s *Service) describe(ctx context.Context, sessionID domain.SessionID, rt r
 	fallback.Instruction, _ = args["instruction"].(string)
 	fallback.Key, _ = args["key"].(string)
 
-	result, err := rt.Execute(ctx, sessionID, describeAction, describeArgs)
+	limit := s.describeTimeout
+	if limit <= 0 {
+		limit = DefaultDescribeTimeout
+	}
+	describeCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	result, err := rt.Execute(describeCtx, sessionID, describeAction, describeArgs)
 	if err != nil {
 		if s.log != nil {
 			s.log.Info("browser approval: describe unavailable; asking", "session", sessionID, "action", action, "err", err)

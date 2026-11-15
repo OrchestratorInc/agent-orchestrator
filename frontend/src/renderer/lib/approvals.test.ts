@@ -16,6 +16,13 @@ vi.mock("./host-clients", () => ({
 	baseUrlForHost: (hostId: string) => `https://${hostId}.example/`,
 	clientForHost: vi.fn(),
 }));
+vi.mock("./api-client", () => ({
+	apiClient: {},
+	eventStreamBaseUrl: (base: string) => base,
+	getApiBaseUrl: () => "http://daemon.test",
+	hasTrustedApiBaseUrl: () => true,
+	subscribeApiBaseUrl: () => () => undefined,
+}));
 vi.mock("./remote-sse-probe", () => ({
 	probeRemoteSse: (url: string, _names: string[], onEvent: () => void, onVerified: () => void, onFailure: () => void) => {
 		const probe = { url, onEvent, onVerified, onFailure, closed: false };
@@ -26,7 +33,7 @@ vi.mock("./remote-sse-probe", () => ({
 	},
 }));
 
-import { connectRemoteApprovalStreams, remotePendingApprovalsQueryKey } from "./approvals";
+import { connectApprovalStream, connectRemoteApprovalStreams, isApprovalStreamLive, remotePendingApprovalsQueryKey } from "./approvals";
 
 describe("connectRemoteApprovalStreams", () => {
 	beforeEach(() => {
@@ -55,5 +62,92 @@ describe("connectRemoteApprovalStreams", () => {
 		expect(hosts.probes[1].closed).toBe(false);
 		dispose();
 		expect(hosts.probes[1].closed).toBe(true);
+	});
+});
+
+describe("connectRemoteApprovalStreams reconnects", () => {
+	beforeEach(() => {
+		hosts.list = [];
+		hosts.listeners.clear();
+		hosts.probes = [];
+	});
+
+	it("reopens a remote host's stream after it fails", async () => {
+		vi.useFakeTimers();
+		try {
+			hosts.list = ["box-a"];
+			const queryClient = new QueryClient();
+			vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+			const dispose = connectRemoteApprovalStreams(queryClient);
+			expect(hosts.probes).toHaveLength(1);
+			hosts.probes[0]!.onFailure();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(hosts.probes).toHaveLength(2);
+			expect(hosts.probes[0]!.closed).toBe(true);
+			expect(hosts.probes[1]!.url).toBe("https://box-a.example/api/v1/approvals/stream");
+			dispose();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+class FakeEventSource {
+	static instances: FakeEventSource[] = [];
+	readyState = 1;
+	closed = false;
+	onerror: (() => void) | null = null;
+	private listeners = new Map<string, Array<() => void>>();
+	constructor(readonly url: string) {
+		FakeEventSource.instances.push(this);
+	}
+	addEventListener(name: string, listener: () => void) {
+		this.listeners.set(name, [...(this.listeners.get(name) ?? []), listener]);
+	}
+	emit(name: string) {
+		for (const listener of this.listeners.get(name) ?? []) listener();
+	}
+	close() {
+		this.closed = true;
+		this.readyState = 2;
+	}
+}
+
+describe("connectApprovalStream", () => {
+	it("reconnects a stream that goes silent, and reports when it is live", async () => {
+		vi.useFakeTimers();
+		const original = globalThis.EventSource;
+		FakeEventSource.instances = [];
+		globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+		try {
+			const queryClient = new QueryClient();
+			vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+			const dispose = connectApprovalStream(queryClient);
+			const first = FakeEventSource.instances[0]!;
+			expect(first.url).toBe("http://daemon.test/api/v1/approvals/stream");
+			expect(isApprovalStreamLive()).toBe(false);
+			first.emit("ready");
+			expect(isApprovalStreamLive()).toBe(true);
+			// Heartbeats keep it alive.
+			await vi.advanceTimersByTimeAsync(30_000);
+			first.emit("heartbeat");
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(first.closed).toBe(false);
+			// Then the server goes quiet without closing: the watchdog reconnects.
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(first.closed).toBe(true);
+			expect(isApprovalStreamLive()).toBe(false);
+			await vi.advanceTimersByTimeAsync(60_000);
+			const second = FakeEventSource.instances[1]!;
+			expect(second).toBeDefined();
+			second.emit("ready");
+			expect(isApprovalStreamLive()).toBe(true);
+			dispose();
+			expect(second.closed).toBe(true);
+			expect(isApprovalStreamLive()).toBe(false);
+		} finally {
+			globalThis.EventSource = original;
+			vi.useRealTimers();
+		}
 	});
 });

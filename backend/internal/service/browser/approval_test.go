@@ -22,13 +22,19 @@ type scriptedRuntime struct {
 	lastArgs    map[string]interface{}
 	describe    map[string]interface{}
 	describeErr error
+	// describeHang makes describe block until its context ends.
+	describeHang bool
 }
 
 func (r *scriptedRuntime) Status() browserruntime.Status {
 	return browserruntime.Status{Connected: true}
 }
 
-func (r *scriptedRuntime) Execute(_ context.Context, _ domain.SessionID, action string, args map[string]interface{}) (browserruntime.Result, error) {
+func (r *scriptedRuntime) Execute(ctx context.Context, _ domain.SessionID, action string, args map[string]interface{}) (browserruntime.Result, error) {
+	if action == describeAction && r.describeHang {
+		<-ctx.Done()
+		return browserruntime.Result{}, ctx.Err()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.actions = append(r.actions, action)
@@ -376,5 +382,33 @@ func TestPartialDescriptionAsks(t *testing.T) {
 	svc2, gate2, token2 := approvalService(t, full)
 	if _, _, err := svc2.Execute(context.Background(), "s1", token2, "click", map[string]interface{}{"ref": "e5"}); err != nil || len(gate2.Pending()) != 0 {
 		t.Fatalf("complete description asked: err=%v", err)
+	}
+}
+
+func TestStuckDescribeStillShowsAPromptPromptly(t *testing.T) {
+	// A runtime that never answers describe (a hidden tab whose capture never
+	// finishes) must not hold the request back until the approval times out.
+	rt := &scriptedRuntime{describeHang: true}
+	svc, gate, token := approvalService(t, rt)
+	svc.describeTimeout = 50 * time.Millisecond
+	asked := make(chan time.Duration, 1)
+	start := time.Now()
+	go func() {
+		for range 400 {
+			if list := gate.Pending(); len(list) > 0 {
+				asked <- time.Since(start)
+				_ = gate.Decide(list[0].ID, approval.DecisionDeny)
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		close(asked)
+	}()
+	_, _, err := svc.Execute(context.Background(), "s1", token, "click", map[string]interface{}{"ref": "e4"})
+	if apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if waited, ok := <-asked; !ok || waited > time.Second {
+		t.Fatalf("prompt listed after %v (ok=%v)", waited, ok)
 	}
 }

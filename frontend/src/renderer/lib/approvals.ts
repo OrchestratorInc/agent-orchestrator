@@ -98,7 +98,7 @@ let disposeStream: (() => void) | undefined;
  */
 function retainApprovalStream(queryClient: QueryClient): () => void {
 	streamRefs += 1;
-	if (!disposeStream) disposeStream = openApprovalStream(queryClient);
+	if (!disposeStream) disposeStream = connectApprovalStream(queryClient);
 	return () => {
 		streamRefs -= 1;
 		if (streamRefs === 0) {
@@ -108,19 +108,65 @@ function retainApprovalStream(queryClient: QueryClient): () => void {
 	};
 }
 
-function openApprovalStream(queryClient: QueryClient): () => void {
+// The server sends a heartbeat every 10 s; a stream silent for longer than
+// this is treated as dead and reopened, even if it never reported an error.
+const STREAM_SILENCE_MS = 35_000;
+
+let localStreamLive = false;
+const liveListeners = new Set<() => void>();
+function setLocalStreamLive(live: boolean) {
+	if (localStreamLive === live) return;
+	localStreamLive = live;
+	for (const listener of liveListeners) listener();
+}
+const subscribeLocalStreamLive = (listener: () => void) => {
+	liveListeners.add(listener);
+	return () => liveListeners.delete(listener);
+};
+
+/** Whether this machine's approval stream is delivering events right now. */
+export function isApprovalStreamLive(): boolean {
+	return localStreamLive;
+}
+
+/**
+ * Holds this machine's approval stream open: every event rereads the pending
+ * list, and a stream that errors or goes silent is reopened with backoff.
+ */
+export function connectApprovalStream(queryClient: QueryClient): () => void {
 	let source: EventSource | undefined;
 	let sourceBaseUrl: string | undefined;
 	let retry: ReturnType<typeof setTimeout> | undefined;
 	let failures = 0;
 	let disposed = false;
+	let lastSeen = Date.now();
 	const refresh = () => void queryClient.invalidateQueries({ queryKey: ["approvals"] });
+	const alive = () => {
+		lastSeen = Date.now();
+		failures = 0;
+		setLocalStreamLive(true);
+	};
 	const close = () => {
 		if (retry) clearTimeout(retry);
 		retry = undefined;
 		source?.close();
 		source = undefined;
 		sourceBaseUrl = undefined;
+		setLocalStreamLive(false);
+	};
+	const reopenLater = () => {
+		source?.close();
+		source = undefined;
+		setLocalStreamLive(false);
+		// The poll covers the gap; refresh now so nothing waits for it.
+		refresh();
+		failures += 1;
+		if (retry) clearTimeout(retry);
+		retry = setTimeout(() => {
+			retry = undefined;
+			sourceBaseUrl = undefined;
+			connect();
+		}, computeSseRetryDelayMs(failures));
 	};
 	const connect = () => {
 		if (disposed || !hasTrustedApiBaseUrl() || typeof EventSource === "undefined") return;
@@ -128,30 +174,35 @@ function openApprovalStream(queryClient: QueryClient): () => void {
 		if (sourceBaseUrl === baseUrl && (source || retry)) return;
 		close();
 		sourceBaseUrl = baseUrl;
+		lastSeen = Date.now();
 		const next = new EventSource(`${eventStreamBaseUrl(baseUrl)}/api/v1/approvals/stream`);
 		source = next;
 		next.addEventListener("ready", () => {
-			failures = 0;
+			alive();
 			refresh();
 		});
-		next.addEventListener("approval_requested", refresh);
-		next.addEventListener("approval_resolved", refresh);
+		next.addEventListener("heartbeat", alive);
+		for (const name of ["approval_requested", "approval_resolved"]) {
+			next.addEventListener(name, () => {
+				alive();
+				refresh();
+			});
+		}
 		next.onerror = () => {
-			if (disposed || source !== next || next.readyState !== EVENTSOURCE_CLOSED) return;
-			next.close();
-			source = undefined;
-			failures += 1;
-			retry = setTimeout(() => {
-				retry = undefined;
-				sourceBaseUrl = undefined;
-				connect();
-			}, computeSseRetryDelayMs(failures));
+			if (disposed || source !== next) return;
+			// The browser retries a dropped stream itself; until it is back, poll.
+			setLocalStreamLive(false);
+			if (next.readyState === EVENTSOURCE_CLOSED) reopenLater();
 		};
 	};
+	const watchdog = setInterval(() => {
+		if (!disposed && source && Date.now() - lastSeen > STREAM_SILENCE_MS) reopenLater();
+	}, 10_000);
 	const unsubscribe = subscribeApiBaseUrl(connect);
 	connect();
 	return () => {
 		disposed = true;
+		clearInterval(watchdog);
 		unsubscribe();
 		close();
 	};
@@ -164,14 +215,15 @@ function openApprovalStream(queryClient: QueryClient): () => void {
  */
 export function usePendingApprovals({ live = false }: { live?: boolean } = {}) {
 	const queryClient = useQueryClient();
+	const streamLive = useSyncExternalStore(subscribeLocalStreamLive, isApprovalStreamLive, isApprovalStreamLive);
 	useEffect(() => (live && !usesPreviewWorkspaceData ? retainApprovalStream(queryClient) : undefined), [live, queryClient]);
 	return useQuery({
 		queryKey: pendingApprovalsQueryKey,
 		queryFn: fetchPendingApprovals,
 		// Only the live reader fetches; the rest read its cache.
 		enabled: live,
-		// The stream drives updates; this only covers a stream that cannot connect.
-		refetchInterval: live ? 15_000 : false,
+		// The stream drives updates; poll only while it is down.
+		refetchInterval: live && !streamLive ? 15_000 : false,
 	});
 }
 
@@ -209,6 +261,9 @@ function setStreaming(hostId: string, streaming: boolean) {
  */
 export function connectRemoteApprovalStreams(queryClient: QueryClient): () => void {
 	const connections = new Map<string, { base: string; close: () => void }>();
+	const failures = new Map<string, number>();
+	const retries = new Map<string, ReturnType<typeof setTimeout>>();
+	let disposed = false;
 	const refresh = (hostId: string) =>
 		void queryClient.invalidateQueries({ queryKey: remotePendingApprovalsQueryKey(hostId) });
 	const sync = () => {
@@ -227,12 +282,27 @@ export function connectRemoteApprovalStreams(queryClient: QueryClient): () => vo
 				["approval_requested", "approval_resolved"],
 				() => refresh(hostId),
 				() => {
+					failures.delete(hostId);
 					setStreaming(hostId, true);
 					refresh(hostId);
 				},
 				() => {
 					setStreaming(hostId, false);
 					refresh(hostId);
+					// Reopen with backoff; the slow poll covers the gap.
+					const count = (failures.get(hostId) ?? 0) + 1;
+					failures.set(hostId, count);
+					clearTimeout(retries.get(hostId));
+					retries.set(
+						hostId,
+						setTimeout(() => {
+							retries.delete(hostId);
+							if (disposed) return;
+							connections.get(hostId)?.close();
+							connections.delete(hostId);
+							sync();
+						}, computeSseRetryDelayMs(count)),
+					);
 				},
 			);
 			connections.set(hostId, { base, close });
@@ -241,6 +311,9 @@ export function connectRemoteApprovalStreams(queryClient: QueryClient): () => vo
 	const unsubscribe = subscribeConnectedHosts(sync);
 	sync();
 	return () => {
+		disposed = true;
+		for (const timer of retries.values()) clearTimeout(timer);
+		retries.clear();
 		unsubscribe();
 		for (const [hostId, connection] of connections) {
 			connection.close();
