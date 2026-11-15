@@ -17,27 +17,27 @@ SELECT * FROM reports WHERE id = ?;
 SELECT * FROM report_outputs WHERE report_id = ? ORDER BY position;
 
 -- name: ListReportsBySession :many
-SELECT * FROM reports WHERE session_id = ? ORDER BY created_at, id;
+SELECT * FROM reports WHERE session_id = ? ORDER BY created_at COLLATE ao_timestamp, id;
 
 -- name: ListReportedPRURLs :many
 SELECT o.reference FROM report_outputs o
 JOIN reports r ON r.id = o.report_id
 WHERE r.session_id = ? AND o.kind = 'pr_created'
-ORDER BY r.created_at, r.id, o.position;
+ORDER BY r.created_at COLLATE ao_timestamp, r.id, o.position;
 
 -- name: ListReportsByProject :many
-SELECT * FROM reports WHERE project_id = ? ORDER BY created_at, id;
+SELECT * FROM reports WHERE project_id = ? ORDER BY created_at COLLATE ao_timestamp, id;
 
 -- name: ListPendingReportSchedule :many
 SELECT * FROM reports
 WHERE delivery_state = 'pending'
-ORDER BY available_at, created_at, id
+ORDER BY available_at COLLATE ao_timestamp, created_at COLLATE ao_timestamp, id
 LIMIT ?;
 
 -- name: ListPendingReportsByProjectSchedule :many
 SELECT * FROM reports
 WHERE project_id = ? AND delivery_state = 'pending'
-ORDER BY available_at, created_at, id
+ORDER BY available_at COLLATE ao_timestamp, created_at COLLATE ao_timestamp, id
 LIMIT ?;
 
 -- name: AssignPendingReportsToBatch :exec
@@ -64,7 +64,7 @@ RETURNING *;
 
 -- name: ReleaseReportBatch :many
 UPDATE reports
-SET delivery_state = 'pending', available_at = min(available_at, sqlc.arg(available_at)),
+SET delivery_state = 'pending', available_at = min(available_at COLLATE ao_timestamp, sqlc.arg(available_at)),
     claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
@@ -72,7 +72,7 @@ RETURNING *;
 
 -- name: DeferReportBatch :many
 UPDATE reports
-SET delivery_state = 'pending', available_at = max(available_at, sqlc.arg(available_at)),
+SET delivery_state = 'pending', available_at = max(available_at COLLATE ao_timestamp, sqlc.arg(available_at)),
     claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
 WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
@@ -88,16 +88,16 @@ ON CONFLICT(session_id) DO UPDATE SET last_interrupted_at = excluded.last_interr
 
 -- name: ListPendingReports :many
 SELECT * FROM reports
-WHERE delivery_state = 'pending' AND available_at <= ?
-ORDER BY created_at, id
-LIMIT ?;
+WHERE delivery_state = 'pending' AND available_at <= sqlc.arg(available_at) COLLATE ao_timestamp
+ORDER BY created_at COLLATE ao_timestamp, id
+LIMIT sqlc.arg('limit');
 
 -- name: ClaimReport :one
 UPDATE reports
 SET delivery_state = 'claimed', claim_token = sqlc.arg(claim_token),
     claimed_at = sqlc.arg(claimed_at), delivery_attempts = delivery_attempts + 1,
     last_error = ''
-WHERE id = sqlc.arg(id) AND delivery_state = 'pending' AND available_at <= sqlc.arg(claimed_at)
+WHERE id = sqlc.arg(id) AND delivery_state = 'pending' AND available_at <= sqlc.arg(claimed_at) COLLATE ao_timestamp
 RETURNING *;
 
 -- name: AcknowledgeReport :one

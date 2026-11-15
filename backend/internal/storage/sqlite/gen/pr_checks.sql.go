@@ -14,7 +14,7 @@ import (
 
 const listChecksByPR = `-- name: ListChecksByPR :many
 SELECT pr_url, name, commit_hash, status, url, log_tail, created_at, conclusion, details
-FROM pr_checks WHERE pr_url = ? ORDER BY name, created_at
+FROM pr_checks WHERE pr_url = ? ORDER BY name, created_at COLLATE ao_timestamp
 `
 
 func (q *Queries) ListChecksByPR(ctx context.Context, prUrl string) ([]PRCheck, error) {

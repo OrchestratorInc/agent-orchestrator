@@ -1107,7 +1107,7 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
       ORDER BY latest.generation DESC, latest.id DESC
       LIMIT 1
   )
-ORDER BY ub.updated_at, ub.id
+ORDER BY ub.updated_at COLLATE ao_timestamp, ub.id
 `
 
 func (q *Queries) ListUsageBindingsForCodexParent(ctx context.Context, parentNativeSessionID string) ([]UsageBinding, error) {
@@ -1147,7 +1147,7 @@ const listUsageBindingsForSession = `-- name: ListUsageBindingsForSession :many
 SELECT id, session_id, harness, native_root_id, initial_model_id, state, last_error_code, updated_at, provider_hint
 FROM usage_bindings
 WHERE session_id = ?
-ORDER BY updated_at, id
+ORDER BY updated_at COLLATE ao_timestamp, id
 `
 
 func (q *Queries) ListUsageBindingsForSession(ctx context.Context, sessionID domain.SessionID) ([]UsageBinding, error) {
@@ -1535,8 +1535,8 @@ FROM model_usage_events
 JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
 JOIN sessions ON sessions.id = usage_bindings.session_id
 WHERE model_usage_events.created_at IS NOT NULL
-  AND substr(model_usage_events.created_at, 1, 19) >= CAST(?1 AS TEXT)
-  AND substr(model_usage_events.created_at, 1, 19) < CAST(?2 AS TEXT)
+  AND model_usage_events.created_at >= CAST(?1 AS TEXT) COLLATE ao_timestamp
+  AND model_usage_events.created_at < CAST(?2 AS TEXT) COLLATE ao_timestamp
 ORDER BY model_usage_events.id
 `
 
@@ -2005,7 +2005,7 @@ WHERE model_usage_events.id = ?10
         AND source.file_identity = ?25
         AND source.byte_offset = ?26
         AND source.parser_state_json = ?27
-        AND source.updated_at = ?28
+        AND source.updated_at = ?28 COLLATE ao_timestamp
         AND NOT (
             source.state = 'complete'
             AND source.last_error_code = 'artifact_replaced'

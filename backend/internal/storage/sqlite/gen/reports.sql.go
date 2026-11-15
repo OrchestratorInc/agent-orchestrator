@@ -189,7 +189,7 @@ UPDATE reports
 SET delivery_state = 'claimed', claim_token = ?1,
     claimed_at = ?2, delivery_attempts = delivery_attempts + 1,
     last_error = ''
-WHERE id = ?3 AND delivery_state = 'pending' AND available_at <= ?2
+WHERE id = ?3 AND delivery_state = 'pending' AND available_at <= ?2 COLLATE ao_timestamp
 RETURNING id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id
 `
 
@@ -308,7 +308,7 @@ func (q *Queries) CreateReportOutput(ctx context.Context, arg CreateReportOutput
 
 const deferReportBatch = `-- name: DeferReportBatch :many
 UPDATE reports
-SET delivery_state = 'pending', available_at = max(available_at, ?1),
+SET delivery_state = 'pending', available_at = max(available_at COLLATE ao_timestamp, ?1),
     claim_token = '', claimed_at = NULL, last_error = ?2
 WHERE project_id = ?3 AND delivery_state = 'claimed'
   AND claim_token = ?4
@@ -411,7 +411,7 @@ func (q *Queries) GetReportInterrupt(ctx context.Context, sessionID string) (tim
 const listPendingReportSchedule = `-- name: ListPendingReportSchedule :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
 WHERE delivery_state = 'pending'
-ORDER BY available_at, created_at, id
+ORDER BY available_at COLLATE ao_timestamp, created_at COLLATE ao_timestamp, id
 LIMIT ?
 `
 
@@ -458,9 +458,9 @@ func (q *Queries) ListPendingReportSchedule(ctx context.Context, limit int64) ([
 
 const listPendingReports = `-- name: ListPendingReports :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
-WHERE delivery_state = 'pending' AND available_at <= ?
-ORDER BY created_at, id
-LIMIT ?
+WHERE delivery_state = 'pending' AND available_at <= ?1 COLLATE ao_timestamp
+ORDER BY created_at COLLATE ao_timestamp, id
+LIMIT ?2
 `
 
 type ListPendingReportsParams struct {
@@ -512,7 +512,7 @@ func (q *Queries) ListPendingReports(ctx context.Context, arg ListPendingReports
 const listPendingReportsByProjectSchedule = `-- name: ListPendingReportsByProjectSchedule :many
 SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports
 WHERE project_id = ? AND delivery_state = 'pending'
-ORDER BY available_at, created_at, id
+ORDER BY available_at COLLATE ao_timestamp, created_at COLLATE ao_timestamp, id
 LIMIT ?
 `
 
@@ -599,7 +599,7 @@ const listReportedPRURLs = `-- name: ListReportedPRURLs :many
 SELECT o.reference FROM report_outputs o
 JOIN reports r ON r.id = o.report_id
 WHERE r.session_id = ? AND o.kind = 'pr_created'
-ORDER BY r.created_at, r.id, o.position
+ORDER BY r.created_at COLLATE ao_timestamp, r.id, o.position
 `
 
 func (q *Queries) ListReportedPRURLs(ctx context.Context, sessionID string) ([]string, error) {
@@ -626,7 +626,7 @@ func (q *Queries) ListReportedPRURLs(ctx context.Context, sessionID string) ([]s
 }
 
 const listReportsByProject = `-- name: ListReportsByProject :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE project_id = ? ORDER BY created_at, id
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE project_id = ? ORDER BY created_at COLLATE ao_timestamp, id
 `
 
 func (q *Queries) ListReportsByProject(ctx context.Context, projectID string) ([]Report, error) {
@@ -671,7 +671,7 @@ func (q *Queries) ListReportsByProject(ctx context.Context, projectID string) ([
 }
 
 const listReportsBySession = `-- name: ListReportsBySession :many
-SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE session_id = ? ORDER BY created_at, id
+SELECT id, session_id, project_id, state, note, message, created_at, delivery_state, available_at, settlement_deadline, repeat_count, claim_token, claimed_at, delivery_attempts, acknowledged_at, last_error, delivery_batch_id FROM reports WHERE session_id = ? ORDER BY created_at COLLATE ao_timestamp, id
 `
 
 func (q *Queries) ListReportsBySession(ctx context.Context, sessionID string) ([]Report, error) {
@@ -778,7 +778,7 @@ func (q *Queries) ReleaseReport(ctx context.Context, arg ReleaseReportParams) (R
 
 const releaseReportBatch = `-- name: ReleaseReportBatch :many
 UPDATE reports
-SET delivery_state = 'pending', available_at = min(available_at, ?1),
+SET delivery_state = 'pending', available_at = min(available_at COLLATE ao_timestamp, ?1),
     claim_token = '', claimed_at = NULL, last_error = ?2
 WHERE project_id = ?3 AND delivery_state = 'claimed'
   AND claim_token = ?4

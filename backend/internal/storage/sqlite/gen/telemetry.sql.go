@@ -47,8 +47,8 @@ func (q *Queries) CreateTelemetryEvent(ctx context.Context, arg CreateTelemetryE
 const listTelemetryEventsSince = `-- name: ListTelemetryEventsSince :many
 SELECT id, occurred_at, name, source, level, project_id, session_id, request_id, payload_json
 FROM telemetry_event
-WHERE occurred_at >= ?
-ORDER BY occurred_at ASC
+WHERE occurred_at >= ? COLLATE ao_timestamp
+ORDER BY occurred_at COLLATE ao_timestamp ASC
 LIMIT ?
 `
 
@@ -95,8 +95,8 @@ DELETE FROM telemetry_event
 WHERE id IN (
     SELECT te.id
     FROM telemetry_event te
-    WHERE te.occurred_at < ?
-    ORDER BY te.occurred_at ASC
+    WHERE te.occurred_at < ? COLLATE ao_timestamp
+    ORDER BY te.occurred_at COLLATE ao_timestamp ASC
     LIMIT ?
 )
 `

@@ -199,7 +199,7 @@ func (q *Queries) GetReviewByID(ctx context.Context, id string) (GetReviewByIDRo
 
 const getReviewBySession = `-- name: GetReviewBySession :one
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
-FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1
+FROM review WHERE session_id = ? ORDER BY updated_at COLLATE ao_timestamp DESC, created_at COLLATE ao_timestamp DESC, id DESC LIMIT 1
 `
 
 type GetReviewBySessionRow struct {
@@ -328,7 +328,7 @@ func (q *Queries) GetReviewRun(ctx context.Context, id string) (ReviewRun, error
 
 const getReviewRunBySessionPRAndSHA = `-- name: GetReviewRunBySessionPRAndSHA :one
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1
+FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at COLLATE ao_timestamp DESC LIMIT 1
 `
 
 type GetReviewRunBySessionPRAndSHAParams struct {
@@ -362,7 +362,7 @@ func (q *Queries) GetReviewRunBySessionPRAndSHA(ctx context.Context, arg GetRevi
 
 const getReviewRunBySessionPRSHAAndHarness = `-- name: GetReviewRunBySessionPRSHAAndHarness :one
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1
+FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at COLLATE ao_timestamp DESC LIMIT 1
 `
 
 type GetReviewRunBySessionPRSHAAndHarnessParams struct {
@@ -475,8 +475,8 @@ WHERE review_run.session_id = ?
         AND newer.target_sha = review_run.target_sha
         AND newer.harness = review_run.harness
         AND (
-            newer.created_at > review_run.created_at
-            OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
+            newer.created_at > review_run.created_at COLLATE ao_timestamp
+            OR (newer.created_at = review_run.created_at COLLATE ao_timestamp AND newer.id > review_run.id)
         )
   )
 `
@@ -569,8 +569,8 @@ WHERE pr.head_sha != ''
         AND newer.target_sha = review_run.target_sha
         AND newer.harness = review_run.harness
         AND (
-            newer.created_at > review_run.created_at
-            OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
+            newer.created_at > review_run.created_at COLLATE ao_timestamp
+            OR (newer.created_at = review_run.created_at COLLATE ao_timestamp AND newer.id > review_run.id)
         )
   )
 `
@@ -670,7 +670,7 @@ func (q *Queries) ListLiveReviewerHandles(ctx context.Context) ([]ListLiveReview
 
 const listRecoverableChatReviews = `-- name: ListRecoverableChatReviews :many
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
-FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at, id
+FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at COLLATE ao_timestamp, id
 `
 
 type ListRecoverableChatReviewsRow struct {
@@ -734,7 +734,7 @@ func (q *Queries) ListRecoverableChatReviews(ctx context.Context) ([]ListRecover
 
 const listReviewRunsByBatch = `-- name: ListReviewRunsByBatch :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC
+FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at COLLATE ao_timestamp ASC, id ASC
 `
 
 type ListReviewRunsByBatchParams struct {
@@ -783,7 +783,7 @@ func (q *Queries) ListReviewRunsByBatch(ctx context.Context, arg ListReviewRunsB
 
 const listReviewRunsBySession = `-- name: ListReviewRunsBySession :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? ORDER BY created_at DESC
+FROM review_run WHERE session_id = ? ORDER BY created_at COLLATE ao_timestamp DESC
 `
 
 func (q *Queries) ListReviewRunsBySession(ctx context.Context, sessionID domain.SessionID) ([]ReviewRun, error) {
@@ -827,7 +827,7 @@ func (q *Queries) ListReviewRunsBySession(ctx context.Context, sessionID domain.
 
 const listReviewsBySession = `-- name: ListReviewsBySession :many
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
-FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC
+FROM review WHERE session_id = ? ORDER BY updated_at COLLATE ao_timestamp DESC, created_at COLLATE ao_timestamp DESC, id DESC
 `
 
 type ListReviewsBySessionRow struct {
@@ -891,7 +891,7 @@ func (q *Queries) ListReviewsBySession(ctx context.Context, sessionID domain.Ses
 
 const listRunningReviewRunsBySession = `-- name: ListRunningReviewRunsBySession :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at DESC
+FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at COLLATE ao_timestamp DESC
 `
 
 func (q *Queries) ListRunningReviewRunsBySession(ctx context.Context, sessionID domain.SessionID) ([]ReviewRun, error) {

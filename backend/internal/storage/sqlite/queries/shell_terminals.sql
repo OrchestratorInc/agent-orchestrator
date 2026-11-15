@@ -13,19 +13,19 @@ WHERE handle_id = ?;
 SELECT *
 FROM shell_terminals
 WHERE app_run_id = ?
-ORDER BY created_at;
+ORDER BY created_at COLLATE ao_timestamp;
 
 -- name: SelectShellTerminalsBySessionID :many
 SELECT *
 FROM shell_terminals
 WHERE session_id = ?
-ORDER BY created_at;
+ORDER BY created_at COLLATE ao_timestamp;
 
 -- name: SelectShellTerminalsFromPreviousAppRuns :many
 SELECT *
 FROM shell_terminals
 WHERE app_run_id <> ?
-ORDER BY created_at;
+ORDER BY created_at COLLATE ao_timestamp;
 
 -- name: UpdateShellTerminalTitle :one
 UPDATE shell_terminals
@@ -49,4 +49,4 @@ WHERE app_run_id <> ?;
 -- name: SelectRestorableShellTerminals :many
 SELECT * FROM shell_terminals
 WHERE transient = FALSE OR app_run_id = ?
-ORDER BY created_at;
+ORDER BY created_at COLLATE ao_timestamp;

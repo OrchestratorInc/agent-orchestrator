@@ -18,4 +18,4 @@ DELETE FROM pr_reviews WHERE pr_url = ? AND review_id = ?;
 
 -- name: ListPRReviews :many
 SELECT pr_url, review_id, author, state, url, is_bot, submitted_at, body, auto_inject_review, target_sha
-FROM pr_reviews WHERE pr_url = ? ORDER BY submitted_at, review_id;
+FROM pr_reviews WHERE pr_url = ? ORDER BY submitted_at COLLATE ao_timestamp, review_id;

@@ -17,7 +17,7 @@ import (
 const advanceAutomationSchedule = `-- name: AdvanceAutomationSchedule :execrows
 UPDATE automations
 SET last_run_at = ?, next_run_at = ?, updated_at = ?
-WHERE id = ? AND enabled = 1 AND next_run_at = ?
+WHERE id = ? AND enabled = 1 AND next_run_at = ? COLLATE ao_timestamp
 `
 
 type AdvanceAutomationScheduleParams struct {
@@ -282,7 +282,7 @@ WHERE r.status = 'pending'
       WHERE active.automation_id = r.automation_id
         AND active.status IN ('spawning', 'running')
   )
-ORDER BY r.scheduled_for, r.id
+ORDER BY r.scheduled_for COLLATE ao_timestamp, r.id
 LIMIT 1
 `
 
@@ -412,7 +412,7 @@ SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     created_at, updated_at
 FROM automation_runs
 WHERE status IN ('spawning', 'running')
-ORDER BY scheduled_for, id
+ORDER BY scheduled_for COLLATE ao_timestamp, id
 `
 
 func (q *Queries) ListActiveAutomationRuns(ctx context.Context) ([]AutomationRun, error) {
@@ -459,7 +459,7 @@ SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
 FROM automation_runs
 WHERE automation_id = ?1
   AND (?2 = '' OR status = ?2)
-ORDER BY scheduled_for DESC, id DESC
+ORDER BY scheduled_for COLLATE ao_timestamp DESC, id DESC
 LIMIT ?4 OFFSET ?3
 `
 
@@ -518,7 +518,7 @@ SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
 FROM automations
 WHERE (?1 = '' OR project_id = ?1)
   AND (?2 < 0 OR enabled = ?2)
-ORDER BY created_at, id
+ORDER BY created_at COLLATE ao_timestamp, id
 LIMIT ?4 OFFSET ?3
 `
 
@@ -580,8 +580,8 @@ const listDueAutomations = `-- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
 FROM automations
-WHERE enabled = 1 AND next_run_at <= ?
-ORDER BY next_run_at, id
+WHERE enabled = 1 AND next_run_at <= ? COLLATE ao_timestamp
+ORDER BY next_run_at COLLATE ao_timestamp, id
 LIMIT ?
 `
 
@@ -642,7 +642,7 @@ WHERE r.automation_id IN (/*SLICE:automation_ids*/?)
       SELECT newest.id
       FROM automation_runs newest
       WHERE newest.automation_id = r.automation_id
-      ORDER BY newest.scheduled_for DESC, newest.id DESC
+      ORDER BY newest.scheduled_for COLLATE ao_timestamp DESC, newest.id DESC
       LIMIT 1
   )
 ORDER BY r.automation_id

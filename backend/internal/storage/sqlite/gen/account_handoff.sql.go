@@ -13,12 +13,12 @@ import (
 const selectAccountHandoffCandidateTurns = `-- name: SelectAccountHandoffCandidateTurns :many
 SELECT t.id, t.conversation_id, t.handled_by_session_id, t.provider_turn_id, t.controller_generation, t.state, t.error_message, t.requested_at, t.started_at, t.completed_at, t.diff_json, t.rolled_back_at, t.plan_json, t.branch_id, t.promotion_started_at, t.promoted_to_turn_id, t.retry_of_turn_id, t.handled_by_review_id, t.usage_limit_resets_at, t.usage_limit_auto_resume, t.usage_limit_resume_error, t.batched_input, t.provider_input_text, t.failure_code, t.batch_delivery_kind, t.batch_delivery_steer_id, t.artifacts_json FROM conversation_turns t
 JOIN sessions s ON s.id = t.handled_by_session_id
-WHERE t.state = 'failed' AND t.completed_at >= ?1
+WHERE t.state = 'failed' AND t.completed_at >= ?1 COLLATE ao_timestamp
   AND t.rolled_back_at IS NULL AND t.handled_by_review_id IS NULL
   AND t.error_message <> ''
   AND s.session_mode = 'chat' AND s.is_terminated = 0
   AND NOT EXISTS (SELECT 1 FROM conversation_turns r WHERE r.retry_of_turn_id = t.id)
-ORDER BY t.completed_at, t.id
+ORDER BY t.completed_at COLLATE ao_timestamp, t.id
 `
 
 func (q *Queries) SelectAccountHandoffCandidateTurns(ctx context.Context, since sql.NullTime) ([]ConversationTurn, error) {

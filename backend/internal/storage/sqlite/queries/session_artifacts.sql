@@ -37,7 +37,7 @@ WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(path);
 -- name: ListRegisteredSessionArtifactPaths :many
 SELECT path FROM session_artifacts
 WHERE session_id = sqlc.arg(session_id) AND registered_at IS NOT NULL
-ORDER BY registered_at, path;
+ORDER BY registered_at COLLATE ao_timestamp, path;
 
 -- name: SetSessionArtifactFile :execrows
 UPDATE session_artifacts
