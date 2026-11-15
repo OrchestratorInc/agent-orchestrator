@@ -48,7 +48,7 @@ const SELECT = `/*ao-vault:select*/(() => {
   return true;
 })()`;
 
-const FIND = `/*ao-vault:find*/(() => {
+export const FIND = `/*ao-vault:find*/(() => {
   const visible = (el) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
@@ -56,9 +56,10 @@ const FIND = `/*ao-vault:find*/(() => {
   };
   const inputs = [...document.querySelectorAll("input")].filter(visible);
   const roles = {};
-  const otp = /one.?time|otp|totp|2fa|mfa|verification|auth.?code|security.?code|^code$/i;
-  const totp = inputs.findIndex((el) => el.autocomplete === "one-time-code" ||
-    (el.type !== "password" && otp.test([el.name, el.id, el.getAttribute("aria-label") || "", el.placeholder].join(" "))));
+  const otp = /one.?time|otp|totp|2fa|mfa|verification|authenticator|auth.?code|security.?code|^code$/i;
+  // Each attribute on its own, so a field named just "code" matches ^code$.
+  const otpHint = (el) => [el.name, el.id, el.getAttribute("aria-label"), el.placeholder].some((v) => v && otp.test(v.trim()));
+  const totp = inputs.findIndex((el) => el.autocomplete === "one-time-code" || (el.type !== "password" && otpHint(el)));
   const password = inputs.findIndex((el) => el.type === "password" && el.autocomplete !== "new-password");
   if (password >= 0) {
     roles.password = password;
