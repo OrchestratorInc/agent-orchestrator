@@ -3,6 +3,7 @@ package minimaxcode
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -66,6 +67,39 @@ func TestLocalAuthStatus(t *testing.T) {
 			t.Setenv(name, "fixture-credential")
 			if got := localAuthStatus(t.TempDir()); got != ports.AgentAuthStatusUnknown {
 				t.Fatalf("environment credential reported %q", got)
+			}
+		})
+	}
+}
+
+// mcode logout signs out of MAVIS_REGION's account (China by default) unless
+// told otherwise, so logout carries the region the profile saved at login.
+func TestLogoutArgsFollowSavedRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name, preference string
+		want             []string
+	}{
+		{"global", `{"version":1,"regions":{"prod":"en"},"updatedAtMs":1}`, []string{"--region", "global"}},
+		{"china", `{"version":1,"regions":{"prod":"cn"},"updatedAtMs":1}`, []string{"--region", "cn"}},
+		{"no preference", "", nil},
+		{"other build only", `{"version":1,"regions":{"dev":"en"}}`, nil},
+		{"unknown version", `{"version":2,"regions":{"prod":"en"}}`, nil},
+		{"corrupt", `{`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := t.TempDir()
+			t.Setenv("MINIMAX_DATA_DIR", profile)
+			if tc.preference != "" {
+				path := filepath.Join(profile, "preferences", "mcode-region.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tc.preference), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := LogoutArgs(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("logout args = %q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -2,6 +2,7 @@ package minimaxcode
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -52,9 +53,10 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 	if archived != 0 {
 		return errors.New("native conversation is archived")
 	}
-	// Judge the cleaned path: "exact/../.." escapes as surely as "..".
+	// Judge the cleaned path: "exact/../.." escapes as surely as "..". On
+	// Windows a drive-relative "C:..\.." is not absolute but still escapes.
 	clean := filepath.Clean(relative)
-	if relative == "" || filepath.IsAbs(relative) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+	if relative == "" || filepath.IsAbs(relative) || filepath.VolumeName(relative) != "" || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
 		return errors.New("native history location is invalid")
 	}
 	canonicalProfile, err := filepath.EvalSymlinks(profile)
@@ -121,29 +123,55 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 
 // MiniMax 0.6.5 stores native message envelopes, not arbitrary JSON values.
 // Refuse unknown shapes rather than starting a conversation with lost context.
+// Roles follow its canonical history validation. Custom records include the
+// plugin_hook_context that carries AO's standing instructions.
 func validHistoryMessage(data []byte) bool {
 	var row struct {
 		ID      string `json:"message_id"`
 		TurnID  string `json:"turn_id"`
 		Message struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-			Summary *string         `json:"summary"`
+			Role       string          `json:"role"`
+			Content    json.RawMessage `json:"content"`
+			Summary    *string         `json:"summary"`
+			CustomType string          `json:"customType"`
+			Command    *string         `json:"command"`
+			Output     *string         `json:"output"`
+			FromID     string          `json:"fromId"`
 		} `json:"message"`
 	}
 	if json.Unmarshal(data, &row) != nil || row.ID == "" || row.TurnID == "" {
 		return false
 	}
-	if row.Message.Role == "compactionSummary" {
-		return row.Message.Summary != nil && *row.Message.Summary != "" && len(row.Message.Content) == 0
-	}
-	var content []json.RawMessage
-	if json.Unmarshal(row.Message.Content, &content) != nil || len(content) == 0 {
+	message := row.Message
+	switch message.Role {
+	case "compactionSummary":
+		return message.Summary != nil && *message.Summary != "" && len(message.Content) == 0
+	case "branchSummary":
+		return message.Summary != nil && message.FromID != ""
+	case "bashExecution":
+		return message.Command != nil && message.Output != nil
+	case "custom":
+		return message.CustomType != "" && (jsonString(message.Content) || contentParts(message.Content, true))
+	case "user":
+		return jsonString(message.Content) || contentParts(message.Content, false)
+	case "assistant", "toolResult":
+		return contentParts(message.Content, false)
+	default:
 		return false
 	}
-	switch row.Message.Role {
-	case "user", "assistant", "toolResult":
-	default:
+}
+
+func jsonString(raw json.RawMessage) bool {
+	var value string
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '"' && json.Unmarshal(trimmed, &value) == nil
+}
+
+// contentParts reports whether raw is an array of typed content blocks.
+func contentParts(raw json.RawMessage, allowEmpty bool) bool {
+	trimmed := bytes.TrimSpace(raw)
+	var content []json.RawMessage
+	if len(trimmed) == 0 || trimmed[0] != '[' || json.Unmarshal(trimmed, &content) != nil || (len(content) == 0 && !allowEmpty) {
 		return false
 	}
 	for _, part := range content {

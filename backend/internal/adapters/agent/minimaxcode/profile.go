@@ -1,6 +1,7 @@
 package minimaxcode
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -27,7 +28,30 @@ var hookSource []byte
 
 const profileMarker = "agent-orchestrator: private minimax-code profile\n"
 const standingTransportMarker = "agent-orchestrator: native user-prompt context v1\n"
-const maxStandingBytes = 512 << 10
+// maxHookOutputBytes is MiniMax Code's plugin hook stdout limit. Larger output
+// is rejected as invalid and its context is dropped without failing the prompt.
+const maxHookOutputBytes = 64 << 10
+
+// maxStandingBytes bounds the instruction file read. The encoded hook line
+// (hookContextLine) is the binding limit.
+const maxStandingBytes = maxHookOutputBytes
+
+// hookContextLine is the line assets/hook.cjs prints to deliver context. Go
+// escapes at least as much as JSON.stringify, so its length never understates
+// the hook's output.
+func hookContextLine(instructions []byte) ([]byte, error) {
+	var line bytes.Buffer
+	encoder := json.NewEncoder(&line)
+	encoder.SetEscapeHTML(false)
+	type output struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	}
+	err := encoder.Encode(struct {
+		HookSpecificOutput output `json:"hookSpecificOutput"`
+	}{output{HookEventName: "UserPromptSubmit", AdditionalContext: string(instructions)}})
+	return line.Bytes(), err
+}
 
 // GetAgentHooks creates a durable private provider profile. MiniMax's TUI has
 // no process-local permission flag, so the source profile is never edited.
@@ -57,6 +81,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	}
 	if len(instructions) > maxStandingBytes {
 		return errors.New("MiniMax standing instructions exceed the private context limit")
+	}
+	if line, err := hookContextLine(instructions); err != nil || len(line) > maxHookOutputBytes {
+		return errors.New("MiniMax standing instructions exceed MiniMax Code's 64 KiB hook output limit once encoded")
 	}
 	target, err := profilePath(cfg.DataDir, cfg.SessionID)
 	if err != nil {
@@ -176,10 +203,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 }
 func sourceProfile(env map[string]string) (string, error) {
 	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
-		if value := strings.TrimSpace(env[key]); value != "" {
-			return filepath.Abs(value)
+		// A launch environment that sets a key, even to empty, overrides the
+		// daemon's own value: empty unsets it for the CLI.
+		value, launched := env[key]
+		if !launched {
+			value = os.Getenv(key)
 		}
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		if value = strings.TrimSpace(value); value != "" {
 			return filepath.Abs(value)
 		}
 	}

@@ -332,7 +332,7 @@ child.spawnSync=(...args)=>{
 		t.Fatal("context injection must not override native admission decisions")
 	}
 	info, err := os.Stat(filepath.Join(profile, "launches", "restored", "standing.txt"))
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("private snapshot permissions: %v %v", info, err)
 	}
 	// Until a turn event confirms the prompt was admitted, another hook may

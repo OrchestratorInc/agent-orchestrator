@@ -455,3 +455,50 @@ func TestSourceProfileFollowsLaunchHome(t *testing.T) {
 		t.Fatalf("explicit profile = %q, %v; want %q", got, err, explicit)
 	}
 }
+
+// MiniMax drops a hook's context when its stdout exceeds 64 KiB, so launch
+// refuses instructions whose encoded hook line would not fit, even when the
+// raw text is smaller: every quote doubles once escaped.
+func TestStandingInstructionsMustFitNativeHookOutput(t *testing.T) {
+	t.Setenv("MINIMAX_DATA_DIR", t.TempDir())
+	envelope, err := hookContextLine(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := maxHookOutputBytes - len(envelope)
+	for _, tc := range []struct {
+		name, text string
+		fits       bool
+	}{
+		{"exact fit", strings.Repeat("x", room), true},
+		{"one byte over", strings.Repeat("x", room+1), false},
+		{"escaping overflows", strings.Repeat(`"`, room/2+1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "instructions.txt")
+			writeRefreshFixture(t, file, tc.text)
+			cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "standing", WorkspacePath: t.TempDir(), SystemPromptFile: file}
+			err := New().GetAgentHooks(context.Background(), cfg)
+			if tc.fits && err != nil {
+				t.Fatalf("instructions that fit MiniMax's hook output were refused: %v", err)
+			}
+			if !tc.fits && err == nil {
+				t.Fatal("instructions MiniMax would drop were accepted")
+			}
+		})
+	}
+}
+
+// A launch environment that sets MINIMAX_DATA_DIR to empty unsets the
+// daemon's value, so the next source in the CLI's order selects the profile.
+func TestSourceProfileHonorsLaunchUnset(t *testing.T) {
+	daemonProfile, launchProfile := t.TempDir(), t.TempDir()
+	t.Setenv("MINIMAX_DATA_DIR", daemonProfile)
+	got, err := sourceProfile(map[string]string{"MINIMAX_DATA_DIR": "", "MAVIS_DATA_DIR": launchProfile})
+	if err != nil || got != launchProfile {
+		t.Fatalf("source profile = %q, %v; want the launch's %q", got, err, launchProfile)
+	}
+	if got, err := sourceProfile(nil); err != nil || got != daemonProfile {
+		t.Fatalf("source profile without a launch value = %q, %v; want %q", got, err, daemonProfile)
+	}
+}

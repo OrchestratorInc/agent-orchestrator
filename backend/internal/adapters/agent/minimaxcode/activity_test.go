@@ -61,6 +61,8 @@ func TestAuthPresenceIsNotAuthorization(t *testing.T) {
 		{`{"providers":[{"kind":"minimax-api-key","active":true,"enabled":true,"hasApiKey":true}]}`, "configured"},
 		{`{"providers":[{"kind":"minimax-oauth","active":false,"enabled":true,"hasApiKey":false},{"kind":"minimax-api-key","active":true,"enabled":true,"hasApiKey":false}]}`, "unauthorized"},
 		{`{"providers":[{"kind":"custom","active":true,"enabled":true,"hasApiKey":false}]}`, "unknown"},
+		// A saved MiniMax key on an inactive provider is not a sign-out.
+		{`{"providers":[{"kind":"minimax-oauth","active":true,"enabled":true,"hasApiKey":false},{"kind":"minimax-api-key","active":false,"enabled":true,"hasApiKey":true}]}`, "unknown"},
 		// The OAuth row stays active by credential source while a custom
 		// provider with a key is the default model.
 		{`{"providers":[{"kind":"minimax-oauth","active":true,"enabled":true,"hasApiKey":false},{"kind":"minimax-api-key","active":false,"enabled":true,"hasApiKey":false},{"kind":"custom","active":true,"enabled":true,"hasApiKey":true}]}`, "configured"},
@@ -109,6 +111,12 @@ func TestOAuthLoginStatusComesFromStateFile(t *testing.T) {
 	}
 	if got := providerAuthStatus([]byte(oauthActive), ""); got != "unknown" {
 		t.Fatalf("missing data dir status=%q want unknown", got)
+	}
+	// A profile path is literal even when it looks like a glob pattern.
+	patterned := filepath.Join(t.TempDir(), "account[1]")
+	write(t, patterned, "auth/prod/en/mcode-public/auth-state.json", `{"status":"authenticated"}`)
+	if got := providerAuthStatus([]byte(oauthActive), patterned); got != "configured" {
+		t.Fatalf("patterned data dir status=%q want configured", got)
 	}
 }
 

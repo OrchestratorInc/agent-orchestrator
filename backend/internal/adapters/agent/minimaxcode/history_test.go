@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -146,10 +147,44 @@ func TestHistoryRejectsValidJSONWithInvalidNativeShape(t *testing.T) {
 		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary","summary":""}}`,
 		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary","summary":"ok","content":null}}`,
 		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary","summary":"ok","content":[]}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"custom","content":"no custom type","display":false}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"custom","customType":"note","content":null}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"custom","customType":"note","content":[{"text":"untyped"}]}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"bashExecution","command":"ls"}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"branchSummary","summary":"left branch"}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"user","content":null}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"user","content":[]}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"assistant","content":"plain text"}}`,
 	} {
 		if validHistoryMessage([]byte(data)) {
 			t.Fatalf("accepted invalid native envelope: %s", data)
 		}
+	}
+}
+
+// MiniMax Code 0.6.5's canonical history also stores custom records (among
+// them the plugin_hook_context that AO's standing instructions become), shell
+// executions and branch summaries. Restore must accept them.
+func TestHistoryAcceptsNativeRecordRoles(t *testing.T) {
+	records := []string{
+		`{"message_id":"m1","turn_id":"t1","message":{"role":"user","content":"plain prompt","timestamp":1}}`,
+		`{"message_id":"m2","turn_id":"t1","message":{"role":"custom","customType":"plugin_hook_context","content":"<plugin-hook-context>\nAO standing instructions\n</plugin-hook-context>","display":false,"timestamp":2}}`,
+		`{"message_id":"m3","turn_id":"t1","message":{"role":"custom","customType":"note","content":[{"type":"text","text":"portable"}],"display":true,"timestamp":3}}`,
+		`{"message_id":"m4","turn_id":"t1","message":{"role":"bashExecution","command":"ls","output":"README.md\n","exitCode":0,"cancelled":false,"truncated":false,"timestamp":4}}`,
+		`{"message_id":"m5","turn_id":"t2","message":{"role":"branchSummary","summary":"Earlier branch","fromId":"m4","timestamp":5}}`,
+		`{"message_id":"m6","turn_id":"t2","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":6}}`,
+	}
+	for _, data := range records {
+		if !validHistoryMessage([]byte(data)) {
+			t.Fatalf("rejected native record: %s", data)
+		}
+	}
+	p, w, id := historyFixture(t)
+	if err := os.WriteFile(filepath.Join(p, "v2", "sessions", "exact", "messages.jsonl"), []byte(strings.Join(records, "\n")+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNativeHistory(context.Background(), p, id, w); err != nil {
+		t.Fatalf("native history with hook context and native records refused restore: %v", err)
 	}
 }
 

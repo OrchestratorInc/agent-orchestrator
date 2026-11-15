@@ -70,12 +70,15 @@ try {
     let context;
     try {
       const info=fs.statSync(file);
-      if(!info.isFile() || info.size>512*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
+      if(!info.isFile() || info.size>64*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
       context=fs.readFileSync(file,'utf8');
     } catch {
       refuse('AO MiniMax private instructions are unavailable for this launch.');process.exit(0);
     }
-    if(Buffer.byteLength(context,'utf8')>512*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
+    // MiniMax rejects hook stdout over 64 KiB and drops its context, so the
+    // limit applies to the encoded line, envelope and escaping included.
+    const contextLine=context ? JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n' : '';
+    if(Buffer.byteLength(contextLine,'utf8')>64*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
     if(context) {
       // Native prompt context can become history. Emit it until an admitted
       // prompt carried it in this launch; restore prepares a fresh launch dir.
@@ -88,7 +91,7 @@ try {
       const clearPending=()=>{ try { fs.unlinkSync(pending); } catch {} };
       fs.writeFileSync(pending,'',{mode:0o600});
       try {
-        process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n',(error)=>{
+        process.stdout.write(contextLine,(error)=>{
           if(error) {
             clearPending();
             refuse('AO MiniMax private instructions could not be delivered.');

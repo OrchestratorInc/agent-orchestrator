@@ -5,6 +5,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -197,6 +198,15 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 		command:          command,
 		title:            title,
 	}
+}
+
+// nativeLogoutCommand completes a logout argv whose account scope lives in the
+// harness's own state when the logout runs.
+func nativeLogoutCommand(agentID string, command []string) []string {
+	if agentID == "minimax-code" {
+		return append(append([]string(nil), command...), minimaxcode.LogoutArgs()...)
+	}
+	return command
 }
 
 // Only documented CLI subcommands belong here. An absent entry explicitly

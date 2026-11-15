@@ -3,6 +3,7 @@ package minimaxcode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,6 +62,46 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	return providerAuthStatus(out, dataDir), nil
+}
+
+// LogoutArgs completes `mcode logout` with the account region the user's
+// profile last selected. Without --region, mcode logout signs out of
+// MAVIS_REGION's account (China by default), not a saved Global login.
+func LogoutArgs() []string {
+	dataDir, err := sourceProfile(nil)
+	if err != nil {
+		return nil
+	}
+	switch savedRegion(dataDir) {
+	case "en":
+		return []string{"--region", "global"}
+	case "cn":
+		return []string{"--region", "cn"}
+	default:
+		return nil
+	}
+}
+
+// savedRegion reads MiniMax's region preference ({"version":1,"regions":
+// {"<buildEnv>":"cn"|"en"}}) for released builds, which use buildEnv prod.
+func savedRegion(dataDir string) string {
+	path := filepath.Join(dataDir, filepath.FromSlash(nativeRegionPreference))
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var preference struct {
+		Version int               `json:"version"`
+		Regions map[string]string `json:"regions"`
+	}
+	if json.Unmarshal(data, &preference) != nil || preference.Version != 1 {
+		return ""
+	}
+	return preference.Regions["prod"]
 }
 
 var authCredentialEnvNames = [...]string{
@@ -127,7 +168,7 @@ func providerAuthStatus(data []byte, dataDir string) ports.AgentAuthStatus {
 	if json.Unmarshal(data, &snapshot) != nil {
 		return ports.AgentAuthStatusUnknown
 	}
-	minimaxListed, customListed := false, false
+	minimaxListed, customListed, inactiveKey := false, false, false
 	for _, p := range snapshot.Providers {
 		if !p.Enabled {
 			continue
@@ -135,6 +176,8 @@ func providerAuthStatus(data []byte, dataDir string) ports.AgentAuthStatus {
 		if p.Active && p.HasAPIKey {
 			return ports.AgentAuthStatusConfigured
 		}
+		// A saved key on an inactive provider is a credential, not its absence.
+		inactiveKey = inactiveKey || p.HasAPIKey
 		switch p.Kind {
 		case "minimax-oauth", "minimax-api-key":
 			minimaxListed = true
@@ -146,9 +189,10 @@ func providerAuthStatus(data []byte, dataDir string) ports.AgentAuthStatus {
 	switch {
 	case oauth == ports.AgentAuthStatusConfigured:
 		return ports.AgentAuthStatusConfigured
-	case customListed || !minimaxListed:
+	case customListed || !minimaxListed || inactiveKey:
 		// Custom providers may read their key from an environment variable
-		// the list does not report, so a missing key stays unknown.
+		// the list does not report, and an inactive provider's saved key may
+		// be selected later, so neither is reported as signed out.
 		return ports.AgentAuthStatusUnknown
 	default:
 		return oauth
@@ -163,7 +207,7 @@ func oauthAuthStatus(dataDir string) ports.AgentAuthStatus {
 		return ports.AgentAuthStatusUnknown
 	}
 	authHome := filepath.Join(dataDir, "auth")
-	paths, err := filepath.Glob(filepath.Join(authHome, "*", "*", "mcode-public", "auth-state.json"))
+	paths, err := scopedAuthStatePaths(authHome)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown
 	}
@@ -180,6 +224,33 @@ func oauthAuthStatus(dataDir string) ports.AgentAuthStatus {
 		}
 	}
 	return status
+}
+
+// scopedAuthStatePaths lists <authHome>/<buildEnv>/<region>/mcode-public/
+// auth-state.json files that exist. It reads directories rather than globbing,
+// so a profile path containing pattern characters such as [1] stays literal.
+func scopedAuthStatePaths(authHome string) ([]string, error) {
+	buildEnvs, err := os.ReadDir(authHome)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, buildEnv := range buildEnvs {
+		regions, err := os.ReadDir(filepath.Join(authHome, buildEnv.Name()))
+		if err != nil {
+			continue // not a directory, as a glob would skip it
+		}
+		for _, region := range regions {
+			path := filepath.Join(authHome, buildEnv.Name(), region.Name(), "mcode-public", "auth-state.json")
+			if _, err := os.Lstat(path); err == nil {
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths, nil
 }
 
 // readOAuthState returns the state file's status, "" when it is absent, and

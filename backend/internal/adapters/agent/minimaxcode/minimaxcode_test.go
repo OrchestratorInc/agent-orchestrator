@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -170,8 +171,10 @@ func TestPrivateProfileSnapshot(t *testing.T) {
 	if string(b) == string(original) {
 		t.Fatal("permission override not isolated")
 	}
-	st, _ := os.Stat(filepath.Join(profile, "config.yaml"))
-	if st.Mode().Perm() != 0600 {
+	// Windows reports writable files as 0666; only POSIX enforces these bits.
+	if st, err := os.Stat(filepath.Join(profile, "config.yaml")); err != nil {
+		t.Fatal(err)
+	} else if runtime.GOOS != "windows" && st.Mode().Perm() != 0600 {
 		t.Fatalf("config mode %o", st.Mode().Perm())
 	}
 	cfg.Config.Permissions = ports.PermissionModeBypassPermissions
@@ -254,8 +257,11 @@ func TestSnapshotPreservesSubagentsAndExecutableResources(t *testing.T) {
 	target, _ := profilePath(cfg.DataDir, cfg.SessionID)
 	for name, mode := range map[string]os.FileMode{"subagents/custom.md": 0600, "plugins/user/hooks/run.sh": 0700, "AGENTS.md": 0600, "tui/keybindings.json": 0600} {
 		info, err := os.Stat(filepath.Join(target, name))
-		if err != nil || info.Mode().Perm() != mode {
-			t.Fatalf("resource %s mode mismatch: %v", name, err)
+		if err != nil {
+			t.Fatalf("resource %s missing: %v", name, err)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != mode {
+			t.Fatalf("resource %s mode %o, want %o", name, info.Mode().Perm(), mode)
 		}
 	}
 	if err := p.CleanupWorkspace(context.Background(), cfg); err != nil {

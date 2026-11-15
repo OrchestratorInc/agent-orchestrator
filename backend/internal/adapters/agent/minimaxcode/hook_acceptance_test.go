@@ -82,12 +82,18 @@ child.spawnSync=(binary,args,options)=>{
 					}
 				}
 			case "oversized", "large", "empty":
+				// The limit is MiniMax's hook output: "large" fills the encoded
+				// line exactly, "oversized" exceeds it by one byte.
+				envelope, err := hookContextLine(nil)
+				if err != nil {
+					t.Fatal(err)
+				}
 				text := ""
 				switch mode {
 				case "oversized":
-					text = strings.Repeat("x", maxStandingBytes+1)
+					text = strings.Repeat("x", maxHookOutputBytes-len(envelope)+1)
 				case "large":
-					text = strings.Repeat("x", maxStandingBytes)
+					text = strings.Repeat("x", maxHookOutputBytes-len(envelope))
 				}
 				if err := os.WriteFile(standing, []byte(text), 0o600); err != nil {
 					t.Fatal(err)
