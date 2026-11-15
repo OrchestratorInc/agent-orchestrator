@@ -1,7 +1,9 @@
 /**
- * Swaps one inline label for another without a jump: when `swapKey` changes the
- * old content lifts out, the new one rises in, and the width eases between them.
- * Content changing under the same key only eases the width. Reduced motion swaps
+ * Swaps one inline label for another without a jump. When `swapKey` changes the
+ * old content folds into a small round shape and fades, then the new content
+ * grows out of that shape to its full width (a pill expands from its icon, text
+ * wipes in), while the container's width eases on the same curve. Content that
+ * changes under the same key only eases the width. Reduced motion swaps
  * instantly (styles.css).
  */
 
@@ -9,14 +11,20 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { cn } from "../../lib/utils";
 
 /** Long enough for the leave animation in styles.css to finish. */
-const LEAVE_MS = 220;
+const LEAVE_MS = 200;
 
 type Layer = { key: string; node: ReactNode };
 
-export function SmoothSwap({ swapKey, children, className }: { swapKey: string; children: ReactNode; className?: string }) {
+export function SmoothSwap({ swapKey, children, className, appear = false }: {
+	swapKey: string;
+	children: ReactNode;
+	className?: string;
+	/** Grow in from nothing when first mounted, rather than starting in place. */
+	appear?: boolean;
+}) {
 	const [shownKey, setShownKey] = useState(swapKey);
 	const [leaving, setLeaving] = useState<Layer | null>(null);
-	const [swapped, setSwapped] = useState(false);
+	const [swapped, setSwapped] = useState(appear);
 	const lastChildren = useRef(children);
 
 	// Derived during render so the outgoing layer and the new one land in the same paint.
@@ -35,20 +43,13 @@ export function SmoothSwap({ swapKey, children, className }: { swapKey: string; 
 	}, [leaving]);
 
 	const current = useRef<HTMLSpanElement>(null);
-	const [width, setWidth] = useState<number>();
-	// While the width eases, its trailing edge fades instead of cutting content off.
-	const [moving, setMoving] = useState(false);
-	const lastWidth = useRef<number | undefined>(undefined);
+	const [width, setWidth] = useState<number | undefined>(appear ? 0 : undefined);
 	useLayoutEffect(() => {
 		const element = current.current;
 		if (!element) return;
-		// Zero means nothing was laid out (a hidden tab, a test DOM): leave the width natural.
-		const measure = () => {
-			const next = element.offsetWidth || undefined;
-			if (next && lastWidth.current && next !== lastWidth.current) setMoving(true);
-			lastWidth.current = next;
-			setWidth(next);
-		};
+		// Nothing laid out (a hidden tab, a test DOM) has no offsetParent: leave the width natural.
+		// An empty layer that is laid out measures 0 on purpose, so the width can ease to and from it.
+		const measure = () => setWidth(element.offsetParent ? element.offsetWidth : undefined);
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
@@ -56,13 +57,7 @@ export function SmoothSwap({ swapKey, children, className }: { swapKey: string; 
 	}, [swapKey]);
 
 	return (
-		<span
-			data-smooth-swap=""
-			data-moving={moving ? "" : undefined}
-			className={cn("smooth-swap", className)}
-			style={width ? { width } : undefined}
-			onTransitionEnd={(event) => { if (event.propertyName === "width") setMoving(false); }}
-		>
+		<span data-smooth-swap="" className={cn("smooth-swap", className)} style={width === undefined ? undefined : { width }}>
 			{leaving ? (
 				<span key={`leave:${leaving.key}`} aria-hidden="true" className="smooth-swap-layer" data-leave="">
 					{leaving.node}

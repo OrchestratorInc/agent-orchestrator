@@ -2375,7 +2375,7 @@ function ChatWorkspaceContent({
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{/* Flashes like the agent picker's; a full window stays until it resets. */}
 											{!agentSwitch && nearQuota ? (
-												<SmoothSwap swapKey={pickerOverride?.key ?? "hidden"}>
+												<SmoothSwap swapKey={pickerOverride?.key ?? "hidden"} appear>
 													{pickerOverride ? <QuotaPill quota={nearQuota} /> : null}
 												</SmoothSwap>
 											) : null}
