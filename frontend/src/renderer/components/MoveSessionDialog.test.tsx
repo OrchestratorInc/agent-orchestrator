@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MoveSessionDialog } from "./MoveSessionDialog";
 import { useUiStore } from "../stores/ui-store";
+import { CloudCpError } from "../lib/cloud-cp";
 import { useUnfinishedMoveStore } from "../lib/move-finish";
 import { TooltipProvider } from "./ui/tooltip";
 import type { WorkspaceSession } from "../types/workspace";
@@ -11,10 +12,13 @@ import type { WorkspaceSession } from "../types/workspace";
 type Reply = { data?: unknown; error?: unknown };
 
 const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
-	daemon: { posts: {} as Record<string, Reply>, repo: "", preview: {} as Reply, transcript: {} as Reply },
+	daemon: { posts: {} as Record<string, Reply>, repo: "", preview: {} as Reply, transcript: {} as Reply, targets: {} as Reply, agents: [] as unknown[] },
 	uploadCloudTranscript: vi.fn(),
 	navigate: vi.fn(),
-	cloud: { features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true },
+	cloud: {
+		features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true,
+		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(),
+	},
 }));
 
 vi.mock("../lib/host-clients", () => ({
@@ -24,14 +28,16 @@ vi.mock("../lib/host-clients", () => ({
 				? daemon.preview
 				: path === "/api/v1/sessions/{sessionId}/move/transcript"
 					? daemon.transcript
-					: { data: { project: { id: "app", repo: daemon.repo } } }),
+					: path === "/api/v1/sessions/move/targets"
+						? daemon.targets
+						: { data: { project: { id: "app", repo: daemon.repo } } }),
 		POST: vi.fn(async (path: string) => daemon.posts[path] ?? { error: { code: "UNEXPECTED", message: path } }),
 	}),
 	labelForHost: () => undefined,
 }));
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigate }));
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: cloud.signedIn ? { createSession: cloud.createSession } : null, baseUrl: "http://cp.test" }),
+	useCloudCp: () => ({ client: cloud.signedIn ? cloud : null, baseUrl: "http://cp.test" }),
 }));
 vi.mock("../lib/cloud-attachments", () => ({ uploadCloudTranscript }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signedIn ? { id: "org-1" } : undefined }) }));
@@ -41,7 +47,9 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudSessionsQuery: () => ({ data: cloud.sessions, isPending: false }),
 	workspaceQueryKeyForHost: (host?: string) => ["workspace", host ?? "local"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
+	workspaceQueryOptions: { queryKey: ["workspaces"], queryFn: async () => [] },
 }));
+vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: daemon.agents } }) }));
 
 const session = {
 	id: "app-1", title: "Fix login", workspaceId: "app", workspaceName: "app", provider: "claude-code", status: "working",
@@ -67,6 +75,8 @@ function renderDialog() {
 beforeEach(() => {
 	navigate.mockReset();
 	cloud.createSession.mockReset();
+	for (const fn of [cloud.previewSessionMove, cloud.exportSessionMove, cloud.restartSessionAgent, cloud.deleteSession]) fn.mockReset();
+	daemon.agents = [];
 	uploadCloudTranscript.mockReset();
 	daemon.transcript = { data: { agentSessionId: "aid-1", transcriptGzip: btoa("gz") } };
 	cloud.signedIn = true;
@@ -223,4 +233,103 @@ it("keeps recording the move on this computer when that last step fails", async 
 	expect(useUnfinishedMoveStore.getState().moves).toEqual([
 		expect.objectContaining({ kind: "complete", sessionId: "app-1", orgId: "org-1", cloudSessionId: "cloud-9" }),
 	]);
+});
+
+describe("moving a Cloud session to this computer", () => {
+	const cloudSession = {
+		id: "cloud-1", title: "Fix login", workspaceId: "cloud-proj", workspaceName: "app", provider: "claude-code", status: "working",
+		cloud: { orgId: "org-1" }, activity: { state: "active" }, autoReviewEnabled: true,
+	} as unknown as WorkspaceSession;
+	const tip = "3f2a91c".padEnd(40, "0");
+	const local = { projectId: "app", name: "app", path: "/Users/me/code/app" };
+
+	function renderHere() {
+		useUiStore.setState({ moveSessionTarget: cloudSession, globalToast: null });
+		return render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<TooltipProvider>
+					<MoveSessionDialog />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+	}
+
+	beforeEach(() => {
+		cloud.previewSessionMove.mockResolvedValue({
+			branch: "feat/login",
+			changes: [{ path: "README.md", status: "modified" }, { path: "docs/old-login.md", status: "deleted" }],
+			transcript: { bytes: 524288, subagents: 2 },
+		});
+		cloud.exportSessionMove.mockResolvedValue({
+			manifest: { sourceSessionId: "cloud-1", sourceLabel: "AO Cloud", repoKey: "github.com/acme/app", branch: "feat/login", tip, wip: true, harness: "claude-code" },
+			handoffNote: "moved",
+		});
+		cloud.restartSessionAgent.mockResolvedValue({ requested: true });
+		cloud.deleteSession.mockResolvedValue({ session: { id: "cloud-1", desiredState: "deleted" } });
+		daemon.targets = { data: { targets: [local] } };
+		daemon.posts = { "/api/v1/sessions/move/import": { data: { session: { id: "local-9" } } } };
+	});
+
+	it("shows what moves, then opens the session here and deletes the Cloud one", async () => {
+		renderHere();
+		const user = userEvent.setup();
+		expect(await screen.findByText("feat/login")).toBeTruthy();
+		expect(screen.getByText("~/code/app")).toBeTruthy();
+		expect(screen.getByText("Full transcript with 2 subagents, 512 KB")).toBeTruthy();
+		expect(screen.getByText("Working. Moving stops it first.")).toBeTruthy();
+		expect(screen.getByText("D docs/old-login.md")).toBeTruthy();
+		expect(screen.getByText(/The Cloud session is then deleted, ignored files such as \.env included\./)).toBeTruthy();
+		await user.click(screen.getByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
+		expect(useUiStore.getState().globalToast).toMatchObject({ title: "Moved to this computer", body: "Fix login continues in app." });
+	});
+
+	it.each([
+		["no project here has the repository", () => { daemon.targets = { data: { targets: [] } }; }, "No project on this computer has acme/app."],
+		["the branch is checked out here", () => {
+			daemon.targets = { data: { targets: [{ ...local, refusal: { code: "MOVE_BRANCH_CHECKED_OUT", message: "feat/login is checked out here by Fix login (old). Archive that session first." } }] } };
+		}, "feat/login is checked out here by Fix login (old). Archive that session first."],
+		["the agent is not set up here", () => { daemon.agents = [{ id: "claude-code", label: "Claude Code", effectiveReadiness: "not_ready" }]; }, "Claude Code isn't set up on this computer. Set it up in Settings, then move."],
+		["the sandbox cannot be reached", () => { cloud.previewSessionMove.mockRejectedValue(new CloudCpError("worker offline", { status: 503 })); }, "Orchestrator Cloud can't reach this session's sandbox. Try again in a moment."],
+	])("explains why it cannot move when %s", async (_, setup, message) => {
+		setup();
+		renderHere();
+		expect(await screen.findByText(message)).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Move to this computer" })?.hasAttribute("disabled") ?? true).toBe(true);
+	});
+
+	it("offers to add a project when none has the repository", async () => {
+		daemon.targets = { data: { targets: [] } };
+		const requestCreateProject = vi.fn();
+		useUiStore.setState({ requestCreateProject });
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Add project…" }));
+		expect(requestCreateProject).toHaveBeenCalled();
+	});
+
+	it("starts the Cloud agent again and names the pushed commit when this computer refuses", async () => {
+		daemon.posts = { "/api/v1/sessions/move/import": { error: { code: "MOVE_LOCAL_AHEAD", message: "feat/login here has commits that Orchestrator Cloud's does not. Push them first." } } };
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("feat/login here has commits that Orchestrator Cloud's does not. Push them first.")).toBeTruthy();
+		expect(screen.getByText("The uncommitted files are now commit 3f2a91c on feat/login, in Orchestrator Cloud and on GitHub.")).toBeTruthy();
+		expect(screen.getByText("The session continues in Orchestrator Cloud and its agent is running again.")).toBeTruthy();
+		expect(cloud.restartSessionAgent).toHaveBeenCalledWith("org-1", "cloud-1");
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps deleting the Cloud copy when that last step fails", async () => {
+		useUnfinishedMoveStore.setState({ moves: [] });
+		cloud.deleteSession.mockRejectedValue(new CloudCpError("busy", { status: 503 }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText(/Fix login runs on this computer\. .*Orchestrator keeps trying/)).toBeTruthy();
+		expect(useUnfinishedMoveStore.getState().moves).toEqual([{ kind: "delete-cloud", orgId: "org-1", cloudSessionId: "cloud-1" }]);
+		await user.click(screen.getByRole("button", { name: "Open session" }));
+		expect(navigate).toHaveBeenCalledWith("app", "local-9");
+	});
 });

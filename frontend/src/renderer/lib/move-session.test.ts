@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
-import { MoveError, moveSession, type MoveDeps } from "./move-session";
+import { MoveError, moveSession, moveSessionHere, type MoveDeps, type MoveHereDeps } from "./move-session";
 
 type Reply = { data?: unknown; error?: unknown };
 
@@ -195,5 +195,75 @@ describe("moveSession", () => {
 			expect(result.conversation).toBe("transcript");
 			expect(cp.createSession.mock.calls[1][1]).toEqual(cp.createSession.mock.calls[0][1]);
 		});
+	});
+});
+
+describe("moveSessionHere", () => {
+	const tip = "a".repeat(40);
+	const cloudExport = {
+		manifest: { sourceSessionId: "cloud-1", sourceLabel: "AO Cloud", repoKey: "github.com/acme/app", branch: "feat/login", tip, wip: true, harness: "claude-code" },
+		handoffNote: "moved",
+		transcript: { agentSessionId: "conv-1", projectDir: "/p", transcriptGzip: "H4sI" },
+	};
+	const settings = { autoReview: true, terminateOnPrMerge: false, autoInjectReview: true, autoInjectCI: false };
+	const input = { orgId: "org-1", cloudSessionId: "cloud-1", projectId: "proj-1", moveId: "m-1", settings };
+	const cloudFake = (over: Partial<Record<"exportSessionMove" | "restartSessionAgent" | "deleteSession", () => Promise<unknown>>> = {}) => ({
+		exportSessionMove: vi.fn(over.exportSessionMove ?? (async () => cloudExport)),
+		restartSessionAgent: vi.fn(over.restartSessionAgent ?? (async () => ({ requested: true }))),
+		deleteSession: vi.fn(over.deleteSession ?? (async () => ({ session: { id: "cloud-1", desiredState: "deleted" } }))),
+	}) as unknown as MoveHereDeps["cloud"] & Record<"exportSessionMove" | "restartSessionAgent" | "deleteSession", ReturnType<typeof vi.fn>>;
+	const daemon = (reply: Reply, calls: string[] = []) => fakeDaemon({ "/api/v1/sessions/move/import": reply }, calls) as unknown as MoveHereDeps["daemon"];
+
+	it("pushes in Cloud, starts the session here with the conversation, then deletes the Cloud session", async () => {
+		const cp = cloudFake();
+		const local = daemon(ok({ session: { id: "local-9" }, warnings: ["w"] }));
+		const steps: string[] = [];
+		const result = await moveSessionHere(input, { daemon: local, cloud: cp, onStep: (step) => steps.push(step) });
+		expect(result).toEqual({ sessionId: "local-9", conversation: "transcript", warnings: ["w"] });
+		expect(steps).toEqual(["stop", "import", "complete"]);
+		const body = (local.POST as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
+		expect(body).toEqual({
+			projectId: "proj-1", moveId: "m-1", handoffNote: "moved", transcript: cloudExport.transcript,
+			manifest: { ...cloudExport.manifest, ...settings },
+		});
+		expect(cp.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
+	it("starts the Cloud agent again when Cloud cannot push", async () => {
+		const cp = cloudFake({ exportSessionMove: async () => { throw new CloudCpError("could not fetch origin", { status: 502, code: "WORKER_REQUEST_FAILED" }); } });
+		const calls: string[] = [];
+		const error = await moveSessionHere(input, { daemon: daemon(ok(), calls), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", code: "WORKER_REQUEST_FAILED", rolledBack: true, pushed: undefined, message: "could not fetch origin" });
+		expect(calls).toEqual([]);
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("starts the Cloud agent again and names the pushed commit when this computer refuses", async () => {
+		const cp = cloudFake();
+		const error = await moveSessionHere(input, { daemon: daemon(fail("MOVE_LOCAL_AHEAD", "feat/login here has commits")), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(MoveError);
+		expect(error).toMatchObject({ step: "import", code: "MOVE_LOCAL_AHEAD", rolledBack: true, pushed: { branch: "feat/login", tip, wip: true } });
+		expect(cp.restartSessionAgent).toHaveBeenCalledWith("org-1", "cloud-1");
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("says the agent stayed stopped when Cloud cannot start it again", async () => {
+		const cp = cloudFake({ restartSessionAgent: async () => { throw new Error("offline"); } });
+		const error = await moveSessionHere(input, { daemon: daemon(fail("MOVE_IMPORT_FAILED")), cloud: cp }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "import", rolledBack: false });
+	});
+
+	it("keeps the session here when Cloud does not delete its copy", async () => {
+		const cp = cloudFake({ deleteSession: async () => { throw new CloudCpError("busy", { status: 503 }); } });
+		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
+		expect(result).toMatchObject({ sessionId: "local-9", deleteError: "busy" });
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+	});
+
+	it("treats a Cloud session that is already gone as deleted", async () => {
+		const cp = cloudFake({ deleteSession: async () => { throw new CloudCpError("not found", { status: 404 }); } });
+		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });
+		expect(result.deleteError).toBeUndefined();
 	});
 });

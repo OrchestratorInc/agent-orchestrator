@@ -1749,6 +1749,46 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: previewSessionMove
+      tags: [Sessions]
+      description: >-
+        What move/export would push now: the branch, the uncommitted paths it
+        would commit and the conversation it would carry. Changes nothing.
+      responses:
+        "200":
+          description: The move as it stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branch, changes]
+                properties:
+                  branch: { type: string }
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, status]
+                      properties:
+                        path: { type: string }
+                        status: { type: string, enum: [added, modified, deleted] }
+                  transcript:
+                    type: object
+                    description: The Claude Code conversation the move would carry. Absent when there is none.
+                    required: [bytes]
+                    properties:
+                      bytes:
+                        type: integer
+                        format: int64
+                        description: The transcript and its sidecar folder.
+                      subagents: { type: integer }
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export:
     parameters:
       - $ref: "#/components/parameters/OrgId"

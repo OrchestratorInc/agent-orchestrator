@@ -1422,6 +1422,32 @@ export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	projectId?: string;
 }
 
+/** GET /orgs/{orgId}/sessions/{sessionId}/move/preview: what move/export would push now. */
+export interface CloudCpMovePreviewResponse {
+	branch: string;
+	changes: { path: string; status: "added" | "modified" | "deleted" }[];
+	/** The Claude Code conversation the move would carry; bytes count its sidecar folder too. */
+	transcript?: { bytes: number; subagents?: number };
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/move/export: the pushed branch, in the shape an AO daemon's move/import takes. */
+export interface CloudCpMoveExportResponse {
+	manifest: {
+		sourceSessionId: string;
+		sourceLabel: string;
+		repoKey: string;
+		branch: string;
+		tip: string;
+		wip: boolean;
+		harness: string;
+		model?: string;
+		displayName?: string;
+	};
+	handoffNote: string;
+	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */
+	transcript?: { agentSessionId: string; projectDir: string; transcriptGzip: string; sidecarGzip?: string };
+}
+
 /** DELETE /orgs/{orgId}/sessions/{sessionId} responds 202: teardown is reconciler-owned. */
 export interface CloudCpSessionDeletedResponse {
 	session: {

@@ -994,6 +994,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description What move/export would push now: the branch, the uncommitted paths it would commit and the conversation it would carry. Changes nothing. */
+        get: operations["previewSessionMove"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export": {
         parameters: {
             query?: never;
@@ -8205,6 +8225,46 @@ export interface operations {
                 content: {
                     "application/json": {
                         session: components["schemas"]["Session"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The move as it stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        branch: string;
+                        changes: {
+                            path: string;
+                            /** @enum {string} */
+                            status: "added" | "modified" | "deleted";
+                        }[];
+                        /** @description The Claude Code conversation the move would carry. Absent when there is none. */
+                        transcript?: {
+                            /**
+                             * Format: int64
+                             * @description The transcript and its sidecar folder.
+                             */
+                            bytes: number;
+                            subagents?: number;
+                        };
                     };
                 };
             };

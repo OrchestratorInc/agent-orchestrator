@@ -1793,6 +1793,19 @@ describe("Sidebar", () => {
 		expect(screen.getByRole("button", { name: "Archive session" })).toBeTruthy();
 	});
 
+	it("offers to move the owner's Cloud session to this computer, and not a guest's", async () => {
+		const own: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [{ ...session, cloud: { orgId: "org-mine" } }] };
+		renderSidebar({ workspaces: [own], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect(await screen.findByRole("menuitem", { name: "Move to this computer…" })).toBeTruthy();
+		expect(screen.queryByRole("menuitem", { name: "Move to Orchestrator Cloud…" })).toBeNull();
+		cleanup();
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [{ ...session, cloud: { orgId: "org-elsewhere", shared: true } }] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		expect(screen.queryByRole("menuitem", { name: "Move to this computer…" })).toBeNull();
+	});
+
 	it("keeps the owner's project actions on a project of their own", () => {
 		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [session] }], expandedProjectIds: ["proj-1"] });
 		expect(screen.getByRole("button", { name: "Project actions for Project One" })).toBeTruthy();

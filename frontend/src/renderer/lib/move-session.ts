@@ -163,3 +163,88 @@ async function carryTranscript(deps: MoveDeps, path: { params: { path: { session
 		return undefined;
 	}
 }
+
+export interface MoveHereDeps {
+	daemon: DaemonClient;
+	cloud: Pick<CloudCpClient, "exportSessionMove" | "restartSessionAgent" | "deleteSession">;
+	onStep?: (step: MoveStep) => void;
+}
+
+/** The Cloud session's settings the session keeps here; Cloud's export does not carry them. */
+export type MoveHereSettings = { autoReview: boolean; terminateOnPrMerge: boolean; autoInjectReview: boolean; autoInjectCI: boolean };
+
+export interface MoveHereResult {
+	sessionId: string;
+	conversation: "transcript" | "note";
+	/** What did not carry over, such as subagent transcripts that stayed in Cloud. */
+	warnings: string[];
+	/** Set when the session runs here but Orchestrator Cloud did not delete its copy. */
+	deleteError?: string;
+}
+
+/**
+ * Moves an Orchestrator Cloud session to a project on this computer: Cloud
+ * stops its agent and pushes its branch, this computer starts the session on
+ * that branch, then the Cloud session is deleted. Until this computer has the
+ * session a failure starts the Cloud agent again. moveId makes each call safe
+ * to retry.
+ */
+export async function moveSessionHere(
+	input: { orgId: string; cloudSessionId: string; projectId: string; moveId: string; settings: MoveHereSettings },
+	deps: MoveHereDeps,
+): Promise<MoveHereResult> {
+	const { orgId, cloudSessionId } = input;
+	const restart = () => deps.cloud.restartSessionAgent(orgId, cloudSessionId).then(() => true, () => false);
+
+	// One Cloud call stops the agent and pushes; a failure is shown on the push.
+	deps.onStep?.("stop");
+	let exported: Awaited<ReturnType<MoveHereDeps["cloud"]["exportSessionMove"]>>;
+	try {
+		exported = await deps.cloud.exportSessionMove(orgId, cloudSessionId);
+	} catch (error) {
+		deps.onStep?.("export");
+		const reason = error instanceof CloudCpError && error.status !== 0 ? error : "Could not reach Orchestrator Cloud.";
+		throw new MoveError(apiErrorMessage(reason, "Could not push the session"), "export", errorCode(error), await restart());
+	}
+
+	deps.onStep?.("import");
+	const m = exported.manifest;
+	const imported = await deps.daemon.POST("/api/v1/sessions/move/import", {
+		body: {
+			projectId: input.projectId,
+			moveId: input.moveId,
+			manifest: { ...m, ...input.settings },
+			handoffNote: exported.handoffNote,
+			...(exported.transcript ? { transcript: exported.transcript } : {}),
+		},
+	});
+	if (imported.error || !imported.data) {
+		throw new MoveError(
+			apiErrorMessage(imported.error, "Could not start the session on this computer"),
+			"import",
+			apiErrorCode(imported.error),
+			await restart(),
+			{ branch: m.branch, tip: m.tip, wip: m.wip },
+		);
+	}
+
+	deps.onStep?.("complete");
+	let deleteError: string | undefined;
+	try {
+		await deps.cloud.deleteSession(orgId, cloudSessionId);
+	} catch (error) {
+		if (!(error instanceof CloudCpError && error.status === 404)) {
+			deleteError = error instanceof Error ? error.message : String(error);
+		}
+	}
+	return {
+		sessionId: imported.data.session.id,
+		conversation: exported.transcript ? "transcript" : "note",
+		warnings: imported.data.warnings ?? [],
+		...(deleteError ? { deleteError } : {}),
+	};
+}
+
+function errorCode(error: unknown): string | undefined {
+	return error instanceof CloudCpError ? error.code : undefined;
+}

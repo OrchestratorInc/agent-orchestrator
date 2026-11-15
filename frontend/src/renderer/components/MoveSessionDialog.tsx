@@ -2,17 +2,19 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Check, CircleAlert, Loader2 } from "@/components/app-icons";
+import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
 import { useUnfinishedMoveStore } from "../lib/move-finish";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
-import { MoveError, moveSession, type CloudSessionRequest, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
+import { CloudCpError } from "../lib/cloud-cp";
+import { MoveError, moveSession, moveSessionHere, type CloudSessionRequest, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { repoKey } from "../lib/repo-key";
 import { cn } from "../lib/utils";
@@ -29,13 +31,18 @@ import {
 	settingsDialogFooterClass,
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
 /** The session the Move to AO Cloud dialog is open for, mounted once in the shell. */
 export function MoveSessionDialog() {
 	const session = useUiStore((state) => state.moveSessionTarget);
 	const close = useUiStore((state) => state.closeMoveSession);
 	if (!session) return null;
-	return <MoveSessionDialogBody key={session.id} session={session} onClose={close} />;
+	return session.cloud ? (
+		<MoveHereDialogBody key={session.id} session={session} orgId={session.cloud.orgId} onClose={close} />
+	) : (
+		<MoveSessionDialogBody key={session.id} session={session} onClose={close} />
+	);
 }
 
 /** The session-move feature AO Cloud advertises once createSession takes a branch. */
@@ -176,16 +183,6 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		navigateToSession(target.projectId, result.sessionId);
 	};
 
-	const stepState = (candidate: MoveStep): "done" | "running" | "failed" | "pending" => {
-		if (step === undefined) return "pending";
-		const current = STEPS.indexOf(step);
-		const index = STEPS.indexOf(candidate);
-		if (error instanceof MoveError && error.step === candidate) return "failed";
-		if (result && candidate === "complete" && result.completeError) return "failed";
-		if (index < current || (result && index <= current)) return "done";
-		return index === current && !error ? "running" : "pending";
-	};
-
 	return (
 		<Dialog open onOpenChange={(open) => !open && !moving && onClose()}>
 			<DialogContent
@@ -224,48 +221,24 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 												? t("move.conversationTooLarge")
 												: t("move.conversationNote")}
 									</dd>
+									<AgentRow session={session} />
 									<dt className="text-settings-muted">{t("move.uncommitted")}</dt>
 									<dd className="text-settings-label">{changes.length || t("move.uncommittedNone")}</dd>
 								</dl>
-								{changes.length > 0 ? (
-									<ul className="flex flex-col gap-0.5 font-mono text-xs text-settings-muted" aria-label={t("move.uncommitted")}>
-										{changes.slice(0, LISTED_FILES).map((change) => (
-											<li key={change.path} className="break-all">
-												{STATUS_LETTER[change.status]} {change.path}
-											</li>
-										))}
-										{changes.length > LISTED_FILES ? (
-											<li className="font-sans">{t("move.uncommittedMore", { count: changes.length - LISTED_FILES })}</li>
-										) : null}
-									</ul>
-								) : null}
+								<UncommittedList changes={changes} />
 								<p className="text-sm text-settings-muted">
 									{changes.length > 0 ? t("move.consequence", { branch }) : t("move.consequenceClean", { branch })}
 								</p>
 							</>
 						)
 					) : (
-						<ol className="flex flex-col gap-2" aria-live="polite">
-							{STEPS.map((candidate) => {
-								const state = stepState(candidate);
-								return (
-									<li key={candidate} className="flex items-center gap-2.5 text-sm">
-										{state === "done" ? (
-											<Check className="size-icon-sm text-success" aria-hidden="true" />
-										) : state === "running" ? (
-											<Loader2 className="size-icon-sm animate-spin text-muted-foreground" aria-hidden="true" />
-										) : state === "failed" ? (
-											<CircleAlert className="size-icon-sm text-destructive" aria-hidden="true" />
-										) : (
-											<span className="size-icon-sm" aria-hidden="true" />
-										)}
-										<span className={state === "pending" ? "text-settings-muted" : "text-settings-label"}>
-											{t(`move.step.${candidate}`, { branch })}
-										</span>
-									</li>
-								);
-							})}
-						</ol>
+						<MoveStepList
+							step={step}
+							error={error}
+							finished={Boolean(result)}
+							lastFailed={Boolean(result?.completeError)}
+							label={(candidate) => t(`move.step.${candidate}`, { branch })}
+						/>
 					)}
 					{error ? (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
@@ -309,6 +282,325 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			</DialogContent>
 		</Dialog>
 	);
+}
+
+/** Says a working agent is stopped by the move; absent while it is idle. */
+function AgentRow({ session }: { session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const state = session.activity?.state;
+	if (state !== "active" && state !== "blocked") return null;
+	return (
+		<>
+			<dt className="text-settings-muted">{t("move.agent")}</dt>
+			<dd className="text-settings-label">{t("move.agentWorking")}</dd>
+		</>
+	);
+}
+
+function UncommittedList({ changes }: { changes: { path: string; status: keyof typeof STATUS_LETTER }[] }) {
+	const { t } = useTranslation();
+	if (changes.length === 0) return null;
+	return (
+		<ul className="flex flex-col gap-0.5 font-mono text-xs text-settings-muted" aria-label={t("move.uncommitted")}>
+			{changes.slice(0, LISTED_FILES).map((change) => (
+				<li key={change.path} className="break-all">
+					{STATUS_LETTER[change.status]} {change.path}
+				</li>
+			))}
+			{changes.length > LISTED_FILES ? <li className="font-sans">{t("move.uncommittedMore", { count: changes.length - LISTED_FILES })}</li> : null}
+		</ul>
+	);
+}
+
+/** The move's four steps; finished is set once the session runs at its destination. */
+function MoveStepList({ step, error, finished, lastFailed, label }: {
+	step: MoveStep;
+	error?: Error;
+	finished: boolean;
+	lastFailed: boolean;
+	label: (step: MoveStep) => string;
+}) {
+	const current = STEPS.indexOf(step);
+	const stepState = (candidate: MoveStep): "done" | "running" | "failed" | "pending" => {
+		const index = STEPS.indexOf(candidate);
+		if (error instanceof MoveError && error.step === candidate) return "failed";
+		if (finished && candidate === "complete" && lastFailed) return "failed";
+		if (index < current || (finished && index <= current)) return "done";
+		return index === current && !error ? "running" : "pending";
+	};
+	return (
+		<ol className="flex flex-col gap-2" aria-live="polite">
+			{STEPS.map((candidate) => {
+				const state = stepState(candidate);
+				return (
+					<li key={candidate} className="flex items-center gap-2.5 text-sm">
+						{state === "done" ? (
+							<Check className="size-icon-sm text-success" aria-hidden="true" />
+						) : state === "running" ? (
+							<Loader2 className="size-icon-sm animate-spin text-muted-foreground" aria-hidden="true" />
+						) : state === "failed" ? (
+							<CircleAlert className="size-icon-sm text-destructive" aria-hidden="true" />
+						) : (
+							<span className="size-icon-sm" aria-hidden="true" />
+						)}
+						<span className={state === "pending" ? "text-settings-muted" : "text-settings-label"}>{label(candidate)}</span>
+					</li>
+				);
+			})}
+		</ol>
+	);
+}
+
+/** Moves an AO Cloud session to a project on this computer. */
+function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSession; orgId: string; onClose: () => void }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const navigateToSession = useNavigateToSession();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const requestCreateProject = useUiStore((state) => state.requestCreateProject);
+	const { client: cloudClient } = useCloudCp();
+	const cloudProjects = useCloudProjectsQuery();
+	const localProjects = useQuery(workspaceQueryOptions);
+	const readiness = useAgentReadinessQuery();
+	const [step, setStep] = useState<MoveStep>();
+	const [result, setResult] = useState<MoveHereResult>();
+	const [error, setError] = useState<Error>();
+	const [chosen, setChosen] = useState<string>();
+	const moving = step !== undefined && !result && !error;
+	// One move per dialog: Try again reuses its id, so this computer returns
+	// the session it already started instead of starting a second one.
+	const moveId = useRef(crypto.randomUUID()).current;
+
+	const repo = repoKey(cloudProjects.data?.find((project) => project.id === session.workspaceId)?.repositoryUrl ?? "");
+	const preview = useQuery({
+		queryKey: ["move-here-preview", orgId, session.id],
+		queryFn: () => cloudClient!.previewSessionMove(orgId, session.id),
+		enabled: Boolean(cloudClient),
+		retry: false,
+		gcTime: 0,
+	});
+	const branch = preview.data?.branch ?? "";
+	// Refetched when a project is added here, so Add project… comes back to this dialog ready.
+	const localProjectIds = (localProjects.data ?? []).map((project) => project.id).sort().join(",");
+	const targets = useQuery({
+		queryKey: ["move-here-targets", repo, branch, localProjectIds],
+		queryFn: async () => {
+			const { data, error: failure } = await clientForSessionHost(LOCAL_HOST).GET("/api/v1/sessions/move/targets", {
+				params: { query: { repoKey: repo, branch } },
+			});
+			if (failure || !data) throw apiErrorException(failure, "Could not look for a project here");
+			return data.targets;
+		},
+		enabled: Boolean(repo && branch) && step === undefined,
+		retry: false,
+		gcTime: 0,
+	});
+	const agent = readiness.data?.agents.find((candidate) => candidate.id === session.provider);
+	const loading = Boolean(cloudClient) && (preview.isPending || cloudProjects.isPending || (Boolean(repo && branch) && targets.isPending));
+	const candidates = targets.data ?? [];
+	const target = candidates.find((candidate) => candidate.projectId === chosen) ?? candidates.find((candidate) => !candidate.refusal) ?? candidates[0];
+	const noProject = !loading && targets.isSuccess && candidates.length === 0;
+	const unavailable = !cloudClient
+		? t("move.signedOut")
+		: loading
+			? undefined
+			: preview.error
+				? preview.error instanceof CloudCpError && (preview.error.status === 0 || preview.error.status >= 500)
+					? t("moveHere.sandboxUnreachable")
+					: preview.error.message
+				: !repo
+					? t("moveHere.noRepository")
+					: agent?.effectiveReadiness === "not_ready"
+						? t("moveHere.agentNotSetUp", { agent: agent.label })
+						: targets.error
+							? targets.error.message
+							: noProject
+								? t("moveHere.noProject", { repo: repo.split("/").slice(1).join("/") })
+								: target?.refusal?.message;
+	const ready = !loading && !unavailable && target !== undefined;
+	const changes = preview.data?.changes ?? [];
+	const transcript = session.provider === "claude-code" ? preview.data?.transcript : undefined;
+
+	const start = async () => {
+		if (!ready || !cloudClient || !target) return;
+		setError(undefined);
+		setResult(undefined);
+		try {
+			const moved = await moveSessionHere(
+				{
+					orgId,
+					cloudSessionId: session.id,
+					projectId: target.projectId,
+					moveId,
+					settings: {
+						autoReview: session.autoReviewEnabled ?? false,
+						terminateOnPrMerge: session.terminateOnPrMerge ?? false,
+						autoInjectReview: session.autoInjectReview ?? false,
+						autoInjectCI: session.autoInjectCI ?? false,
+					},
+				},
+				{ daemon: clientForSessionHost(LOCAL_HOST), cloud: cloudClient, onStep: setStep },
+			);
+			if (moved.deleteError) {
+				// The session runs here; deleting the Cloud copy is retried until it lands.
+				useUnfinishedMoveStore.getState().add({ kind: "delete-cloud", orgId, cloudSessionId: session.id });
+				setResult(moved);
+				return;
+			}
+			onClose();
+			navigateToSession(target.projectId, moved.sessionId);
+			showGlobalToast(t("moveHere.done"), [t("moveHere.doneBody", { title: session.title, project: target.name }), ...moved.warnings].join(" "), { tone: "success" });
+		} catch (failure) {
+			setError(failure instanceof Error ? failure : new Error(String(failure)));
+		} finally {
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(LOCAL_HOST) });
+			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+		}
+	};
+
+	const openMoved = () => {
+		if (!result || !target) return;
+		onClose();
+		navigateToSession(target.projectId, result.sessionId);
+	};
+
+	return (
+		<Dialog open onOpenChange={(open) => !open && !moving && onClose()}>
+			<DialogContent
+				className={settingsDialogContentClass}
+				data-testid="move-here-dialog"
+				showCloseButton={!moving}
+				onEscapeKeyDown={(event) => moving && event.preventDefault()}
+				onInteractOutside={(event) => moving && event.preventDefault()}
+			>
+				<div className={cn(settingsDialogHeaderClass, "py-4")}>
+					<DialogTitle>{t("moveHere.title", { title: session.title })}</DialogTitle>
+				</div>
+				<div className={cn(settingsDialogBodyClass, "gap-3 pt-4")}>
+					{step === undefined ? (
+						loading ? (
+							<p role="status" className="flex items-center gap-2 text-sm text-settings-muted">
+								<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+								{t("move.loading")}
+							</p>
+						) : (
+							<>
+								{preview.data ? (
+									<dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
+										<dt className="text-settings-muted">{t("move.branch")}</dt>
+										<dd className="min-w-0 truncate font-mono text-settings-label">{branch}</dd>
+										{target ? (
+											<>
+												<dt className="self-center text-settings-muted">{t("moveHere.project")}</dt>
+												<dd className="min-w-0">
+													{candidates.length > 1 ? (
+														<Select value={target.projectId} onValueChange={setChosen}>
+															<SelectTrigger size="sm" className="w-full text-control" aria-label={t("moveHere.project")}>
+																<SelectValue />
+															</SelectTrigger>
+															<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
+																{candidates.map((candidate) => (
+																	<SelectItem key={candidate.projectId} value={candidate.projectId}>
+																		{candidate.name} <span className="text-settings-muted">{homePath(candidate.path)}</span>
+																	</SelectItem>
+																))}
+															</SelectContent>
+														</Select>
+													) : (
+														<span className="flex min-w-0 gap-2">
+															<span className="truncate text-settings-label">{target.name}</span>
+															<span className="truncate text-settings-muted">{homePath(target.path)}</span>
+														</span>
+													)}
+												</dd>
+											</>
+										) : null}
+										<dt className="text-settings-muted">{t("move.conversation")}</dt>
+										<dd className="text-settings-label">
+											{transcript && transcript.bytes > 0
+												? transcript.subagents
+													? t("move.conversationTranscriptSubagents", { count: transcript.subagents, size: formatBytes(transcript.bytes) })
+													: t("move.conversationTranscript", { size: formatBytes(transcript.bytes) })
+												: t("move.conversationNote")}
+										</dd>
+										{ready ? (
+											<>
+												<AgentRow session={session} />
+												<dt className="text-settings-muted">{t("move.uncommitted")}</dt>
+												<dd className="text-settings-label">{changes.length || t("move.uncommittedNone")}</dd>
+											</>
+										) : null}
+									</dl>
+								) : null}
+								{unavailable ? (
+									<p className="text-sm text-settings-muted">{unavailable}</p>
+								) : (
+									<>
+										<UncommittedList changes={changes} />
+										<p className="text-sm text-settings-muted">
+											{changes.length > 0 ? t("moveHere.consequence", { branch }) : t("moveHere.consequenceClean", { branch })}
+										</p>
+									</>
+								)}
+							</>
+						)
+					) : (
+						<MoveStepList
+							step={step}
+							error={error}
+							finished={Boolean(result)}
+							lastFailed={Boolean(result?.deleteError)}
+							label={(candidate) => (candidate === "export" ? t("move.step.export", { branch }) : t(`moveHere.step.${candidate}`))}
+						/>
+					)}
+					{error ? (
+						<div role="alert" className="space-y-1 text-sm text-destructive">
+							<p>{error.message}</p>
+							{error instanceof MoveError && error.pushed ? (
+								<p className="text-settings-muted">
+									{error.pushed.wip
+										? t("moveHere.failedPushedWip", { commit: error.pushed.tip.slice(0, 7), branch: error.pushed.branch })
+										: t("move.failedPushed", { branch: error.pushed.branch })}
+								</p>
+							) : null}
+							<p className="text-settings-muted">
+								{error instanceof MoveError && !error.rolledBack ? t("moveHere.failedNotRestarted") : t("moveHere.failedRestarted")}
+							</p>
+						</div>
+					) : null}
+					{result?.deleteError ? (
+						<p role="alert" className="text-sm text-settings-label">{t("moveHere.deleteFailed", { title: session.title })}</p>
+					) : null}
+				</div>
+				<div className={cn(settingsDialogFooterClass, "py-4")}>
+					{result ? (
+						<Button type="button" variant="primary" onClick={openMoved}>
+							{t("move.open")}
+						</Button>
+					) : (
+						<>
+							<Button type="button" variant="secondary" onClick={onClose} disabled={moving}>
+								{t("confirm.cancel")}
+							</Button>
+							{noProject && step === undefined ? (
+								<Button type="button" variant="primary" onClick={() => requestCreateProject()}>
+									{t("moveHere.addProject")}
+								</Button>
+							) : (
+								<Button type="button" variant="primary" onClick={() => void start()} disabled={!ready || moving}>
+									{moving ? t("move.moving") : error ? t("move.retry") : t("moveHere.submit")}
+								</Button>
+							)}
+						</>
+					)}
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+function homePath(path: string): string {
+	return path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
 }
 
 /** A project's origin URL; a project the daemon could not resolve has none. */
