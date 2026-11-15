@@ -88,8 +88,8 @@ vi.mock("./ArtifactFileView", () => ({
 	),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
-	CloudArtifactFrame: ({ url, onAccessRefused, onNavigate }: { url: string; onAccessRefused?: () => void; onNavigate?: (path: string) => void }) => (
-		<div data-testid="cloud-frame">
+	CloudArtifactFrame: ({ url, source, onAccessRefused, onNavigate }: { url: string; source?: string; onAccessRefused?: () => void; onNavigate?: (path: string) => void }) => (
+		<div data-source={source ?? "cloud"} data-testid="cloud-frame">
 			{url}
 			<button type="button" onClick={onAccessRefused}>refuse</button>
 			<button type="button" onClick={() => onNavigate?.("docs/notes.md")}>open notes</button>
@@ -566,6 +566,21 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView hostId="remote-1" session={session()} />);
 
 		expect(screen.queryByRole("button", { name: /^Open in (?!session)/ })).not.toBeInTheDocument();
+	});
+
+	it("renders a remote host's HTML page in the viewer, framed from its proxy URL, never from an inline origin", async () => {
+		const proxied = "http://ao-preview-abc123.localhost:4100/report.html?raw=true";
+		const page: SessionArtifact = { kind: "html", name: "report.html", path: "report.html", rawUrl: proxied, size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true };
+		renderView(<SessionArtifactsView hostId="remote-1" session={session([page])} />);
+		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
+		const frame = await screen.findByTestId("cloud-frame");
+		expect(frame).toHaveAttribute("data-source", "host");
+		expect(frame).toHaveTextContent(proxied);
+		expect(screen.getByTestId("artifact-view").parentElement).toHaveClass("hidden");
+		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
+		expect(screen.getByRole("menuitemradio", { name: "Rich preview" })).toHaveAttribute("aria-checked", "true");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "View source" }));
+		expect(screen.queryByTestId("cloud-frame")).toBeNull();
 	});
 
 	it("opens HTML in the artifact viewer and can switch to its source", async () => {

@@ -321,3 +321,59 @@ describe("local video artifact thumbnails", () => {
 		expect(container.querySelector("video")).toBeNull();
 	});
 });
+
+describe("remote host artifact thumbnails", () => {
+	const PROXY = "http://ao-preview-abc123.localhost:4100/report.html?raw=true";
+	const remote = (overrides: Partial<ArtifactRow> = {}): ArtifactRow => ({
+		path: "report.html",
+		name: "report.html",
+		kind: "html",
+		updatedAt: VERSION,
+		sessionId: "session-1",
+		sessionTitle: "Remote output",
+		hostId: "host-2",
+		rawUrl: PROXY,
+		...overrides,
+	});
+	const hostFetch = vi.fn();
+
+	beforeEach(() => {
+		mocks.access.mockReset();
+		mocks.fetch.mockReset();
+		hostFetch.mockReset().mockImplementation(async () => new Response(null, { status: 200 }));
+		vi.stubGlobal("fetch", hostFetch);
+		vi.stubGlobal("IntersectionObserver", class {
+			constructor(private callback: (entries: { isIntersecting: boolean }[]) => void) {}
+			observe() { this.callback([{ isIntersecting: true }]); }
+			disconnect() {}
+		});
+		vi.stubGlobal("ResizeObserver", class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("frames another host's page from its proxy URL in an opaque sandbox, checked with a plain HEAD", async () => {
+		const { container } = renderThumbnails([remote()]);
+
+		const frame = await screen.findByTitle("report.html");
+		expect(frame).toHaveAttribute("src", PROXY);
+		expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-forms");
+		expect(hostFetch).toHaveBeenCalledWith(PROXY, expect.objectContaining({ method: "HEAD" }));
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.access).not.toHaveBeenCalled();
+		fireEvent.load(frame);
+		await waitFor(() => expect(container.querySelector("[data-preview-state]")).toHaveAttribute("data-preview-state", "content"));
+	});
+
+	it("shows the placeholder, and reports an error, for a page the host does not have", async () => {
+		hostFetch.mockImplementation(async () => new Response(null, { status: 404 }));
+		const { container } = renderThumbnails([remote()]);
+
+		expect(await screen.findByTitle("No preview available")).toBeInTheDocument();
+		expect(container.querySelector("iframe")).toBeNull();
+		await waitFor(() => expect(container.querySelector("[data-preview-state]")).toHaveAttribute("data-preview-state", "error"));
+	});
+});

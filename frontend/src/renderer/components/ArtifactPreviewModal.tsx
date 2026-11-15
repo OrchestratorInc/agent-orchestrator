@@ -121,6 +121,10 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 		if (artifact.kind === "html") return <CloudArtifactFrame onAccessRefused={accessRefused} title={artifact.name} url={pinned.url} />;
 		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
 	}
+	// Another host's page has no inline origin here: it is framed, sandboxed, from its proxy's artifact origin.
+	if (artifact.kind === "html" && artifact.hostId && artifact.hostId !== LOCAL_HOST && artifact.rawUrl) {
+		return <CloudArtifactFrame key={`${artifact.rawUrl}:${artifact.updatedAt}`} source="host" title={artifact.name} url={artifact.rawUrl} />;
+	}
 	if (page) {
 		return <iframe className="h-full w-full border-0 bg-background" key={`${page}:${artifact.updatedAt}`} sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
 	}

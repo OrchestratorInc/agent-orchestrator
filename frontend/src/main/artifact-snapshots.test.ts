@@ -191,6 +191,21 @@ describe("artifact snapshot store", () => {
 			expect(await cache.get(job({ path: "local.html" }))).not.toBeNull();
 		});
 
+		it("include another host's, which are kept with the account and cleared on sign-out", async () => {
+			const hostJob = job({ path: "remote.html", hostId: "host-2", rawUrl: "http://ao-preview-abc.localhost:5000/remote.html?raw=true" });
+			const cache = store();
+			expect(await cache.request(hostJob)).toBeNull();
+			await cache.bindCloudAccount("user-1");
+			await cache.request(job({ path: "local.html", hostId: "local" }));
+			expect(await cache.request(hostJob)).not.toBeNull();
+			expect(await fs.readdir(path.join(directory, "cloud"))).toHaveLength(1);
+			// The same session and path on this computer is another snapshot.
+			expect(await cache.get(job({ path: "remote.html" }))).toBeNull();
+			await cache.clearCloud();
+			expect(await cache.get(hostJob)).toBeNull();
+			expect(await cache.get(job({ path: "local.html", hostId: "local" }))).not.toBeNull();
+		});
+
 		it("go when another account signs in or this one is lost, even across a restart", async () => {
 			const first = store();
 			await first.bindCloudAccount("user-1");
@@ -303,9 +318,10 @@ describe("registerArtifactSnapshotIpc", () => {
 		registerArtifactSnapshotIpc({ ipcMain: { handle: (channel, handler) => void handlers.set(channel, handler as never) }, store });
 		const request = handlers.get("artifactSnapshot:request")!;
 		expect(await request({}, { nope: true })).toBe(false);
-		// Main refuses another host's artifact whatever the renderer decided.
-		expect(await request({}, job({ hostId: "host-2" }))).toBe(false);
+		expect(await request({}, job({ hostId: 42 as unknown as string }))).toBe(false);
 		expect(store.request).not.toHaveBeenCalled();
+		expect(await request({}, job({ hostId: "host-2" }))).toBe(true);
+		expect(store.request).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "host-2" }));
 		expect(await request({}, job())).toBe(true);
 		store.request.mockResolvedValueOnce(SNAPSHOT_DROPPED).mockResolvedValueOnce(null);
 		expect(await request({}, job())).toBe(false);
@@ -322,8 +338,10 @@ describe("snapshot URLs", () => {
 		expect(artifactSnapshotKey(parseArtifactSnapshotUrl(`${artifactSnapshotUrl(job())}&r=1`)!)).toBe(artifactSnapshotKey(job()));
 	});
 
-	it("refuse another host's artifact and any other URL", () => {
-		expect(parseArtifactSnapshotUrl(artifactSnapshotUrl(job({ hostId: "host-2" })))).toBeUndefined();
+	it("name another host's snapshot apart from this computer's, and refuse any other URL", () => {
+		const hostJob = job({ hostId: "host-2" });
+		expect(artifactSnapshotKey(parseArtifactSnapshotUrl(artifactSnapshotUrl(hostJob))!)).toBe(artifactSnapshotKey(hostJob));
+		expect(artifactSnapshotKey(hostJob)).not.toBe(artifactSnapshotKey(job()));
 		expect(parseArtifactSnapshotUrl(artifactSnapshotUrl(job()).replace("://cache/", "://other/"))).toBeUndefined();
 		expect(parseArtifactSnapshotUrl("https://example.com/?s=s1&p=a&u=1&t=dark&y=")).toBeUndefined();
 		expect(parseArtifactSnapshotUrl("not a url")).toBeUndefined();
@@ -343,6 +361,7 @@ describe("registerArtifactSnapshotProtocol", () => {
 		expect(found.status).toBe(200);
 		expect(found.headers.get("content-type")).toBe("image/webp");
 		expect(Buffer.from(await found.arrayBuffer()).toString()).toBe("webp-bytes");
+		// Another host's snapshot is the account's: not served while signed out.
 		expect((await handler!(new Request(artifactSnapshotUrl(job({ hostId: "host-2" }))))).status).toBe(404);
 	});
 });

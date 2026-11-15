@@ -20,7 +20,7 @@ import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
-import { sessionUiKey } from "../lib/hosts";
+import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
@@ -461,7 +461,9 @@ function ArtifactViewerBody({
 	const restore = useRestoreArtifactVersion({ cloud: cloudVersions, hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
 	const media = fileMediaKind(artifact.path);
-	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
+	// Another host's page has no inline origin here; it is framed from its proxy's artifact origin, sandboxed.
+	const remotePage = artifact.kind === "html" && hostId && hostId !== LOCAL_HOST ? artifact.rawUrl : undefined;
+	const page = remotePage ?? (artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined);
 	const showingPage = Boolean(page) && !htmlSource && !previewing;
 	// An error from one version's restore does not belong to the next one looked at.
 	const resetRestore = restore.reset;
@@ -512,7 +514,11 @@ function ArtifactViewerBody({
 							sendMessage={sendMessage}
 							sessionId={sessionId}
 						>
-							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+							{remotePage ? (
+								<HostArtifactPageFrame key={`${page}:${artifact.updatedAt}`} title={artifact.name} url={page} />
+							) : (
+								<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+							)}
 						</ArtifactPageFeedback>
 					</ArtifactZoomContext.Provider>
 				) : null}
@@ -588,6 +594,15 @@ function ArtifactPageFeedback({
 	);
 }
 
+/**
+ * A remote host's HTML artifact, framed from its loopback proxy's artifact origin in an opaque
+ * sandbox, as a Cloud page is. The frame zooms itself, from the viewer's buttons and shortcuts.
+ */
+function HostArtifactPageFrame({ title, url }: { title: string; url: string }) {
+	const { zoom } = useArtifactZoomTarget();
+	return <CloudArtifactFrame source="host" title={title} url={url} zoom={zoom} />;
+}
+
 /** A cloud session's HTML artifact, framed from the control plane. */
 function CloudHtmlArtifactView({
 	artifact,
@@ -649,6 +664,7 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const openInBrowser = useContext(AppBrowserLinkContext);
 	const cloud = Boolean(session.cloud);
+	const remote = !cloud && Boolean(hostId && hostId !== LOCAL_HOST);
 	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
 	const cloudRoot = cloudAccess.data;
 	// A cloud file's URL comes from the session's short-lived access prefix.
@@ -664,10 +680,10 @@ export function SessionArtifactsView({
 	const listedArtifacts = useMemo(() => deliverableArtifacts(artifacts), [artifacts]);
 	const livePreviewPaths = useMemo(() => new Set(
 		listedArtifacts.filter((artifact) =>
-			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
+			(artifact.kind === "html" && (cloud || (artifact.rawUrl && (artifact.inlineUrl || remote))))
 			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
-	), [listedArtifacts, cloud]);
+	), [listedArtifacts, cloud, remote]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	// A file a request opened before the session listed it, until the list has
 	// it. Only that file gets the not-listed-yet note: one that leaves the list
@@ -851,7 +867,7 @@ export function SessionArtifactsView({
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
-		const hasHtmlPreview = selected.kind === "html" && (cloud || (selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
+		const hasHtmlPreview = selected.kind === "html" && (cloud || (remote ? Boolean(selected.rawUrl) : selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
 		const showingHtmlSource = htmlSourcePath === selected.path;
 		// The page also opens in the session's Browser, the same target as
 		// `ao preview` on its path; full screen is left first since it covers it.

@@ -154,7 +154,8 @@ export function ArtifactsView() {
 		const live = new Set<string>();
 		for (const { row } of cards) {
 			if (live.size >= MAX_LIVE_PREVIEWS) break;
-			const page = row.kind === "html" && (row.cloud || (row.inlineUrl && row.rawUrl));
+			const remote = row.hostId && row.hostId !== LOCAL_HOST;
+			const page = row.kind === "html" && (row.cloud || (row.rawUrl && (row.inlineUrl || remote)));
 			const pdf = /\.pdf$/i.test(row.path) && (row.cloud || row.rawUrl);
 			if (page || pdf) live.add(artifactKey(row));
 		}

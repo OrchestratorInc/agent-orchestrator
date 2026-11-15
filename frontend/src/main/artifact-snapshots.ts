@@ -17,6 +17,7 @@ import {
 	ARTIFACT_SNAPSHOT_VERSION,
 	type ArtifactSnapshotIdentity,
 	type ArtifactSnapshotJob,
+	isAccountBoundSnapshot,
 	parseArtifactSnapshotJob,
 	parseArtifactSnapshotUrl,
 } from "../shared/artifact-snapshot";
@@ -29,6 +30,7 @@ export const SNAPSHOT_RETRY_MS = 60_000;
 /** More than this waiting in the queue and the oldest request is dropped, so a long scroll cannot pile up work. */
 export const SNAPSHOT_MAX_QUEUED = 64;
 const PRUNE_EVERY_WRITES = 25;
+/** The account-bound folder: Cloud sessions' snapshots and other hosts', both reached only while signed in. */
 const CLOUD_FOLDER = "cloud";
 /** Names the account the Cloud folder belongs to (a hash of its user id), so another account never sees its files. */
 const OWNER_FILE = "cloud-owner";
@@ -161,7 +163,7 @@ export function createArtifactSnapshotStore(options: {
 	}
 
 	function enqueue(job: ArtifactSnapshotJob, key: string): Promise<SnapshotResult> {
-		const cloud = Boolean(job.cloud);
+		const cloud = isAccountBoundSnapshot(job);
 		const epoch = cloudEpoch;
 		const signedOut = () => cloud && (epoch !== cloudEpoch || cloudOwner === undefined);
 		return new Promise((resolve) => {
@@ -203,17 +205,19 @@ export function createArtifactSnapshotStore(options: {
 	return {
 		/** The image already cached for the snapshot, or null. */
 		async get(snapshot: ArtifactSnapshotIdentity): Promise<Buffer | null> {
-			if (snapshot.cloud && cloudOwner === undefined) return null;
-			return read(artifactSnapshotKey(snapshot), Boolean(snapshot.cloud));
+			const accountBound = isAccountBoundSnapshot(snapshot);
+			if (accountBound && cloudOwner === undefined) return null;
+			return read(artifactSnapshotKey(snapshot), accountBound);
 		},
 		/**
 		 * The job's image, rendered if it is not cached yet; null when it cannot be rendered,
 		 * SNAPSHOT_DROPPED when the queue was full and the request should be made again.
 		 */
 		async request(job: ArtifactSnapshotJob): Promise<SnapshotResult> {
-			if (job.cloud && cloudOwner === undefined) return null;
+			const accountBound = isAccountBoundSnapshot(job);
+			if (accountBound && cloudOwner === undefined) return null;
 			const key = artifactSnapshotKey(job);
-			const cached = await read(key, Boolean(job.cloud));
+			const cached = await read(key, accountBound);
 			if (cached) return cached;
 			const existing = inFlight.get(key);
 			if (existing) return existing;

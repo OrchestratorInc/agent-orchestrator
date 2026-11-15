@@ -91,7 +91,7 @@ vi.mock("../lib/cloud-cp/renderer-client", async (importOriginal) => ({
 	cloudCpFetch: async () => new Response("Cloud artifact thumbnail"),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
-	CloudArtifactFrame: ({ title, url }: { title: string; url: string }) => <iframe data-testid="cloud-artifact-preview" title={title} src={url} />,
+	CloudArtifactFrame: ({ title, url, source }: { title: string; url: string; source?: string }) => <iframe data-source={source ?? "cloud"} data-testid="cloud-artifact-preview" title={title} src={url} />,
 }));
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, path, rawUrl, readOnly }: { cloud?: boolean; path: string; rawUrl?: string; readOnly?: boolean }) => <div data-testid="artifact-file-preview" data-cloud={cloud} data-path={path} data-raw-url={rawUrl} data-read-only={readOnly} />,
@@ -1237,6 +1237,22 @@ describe("ArtifactsView", () => {
 		const frame = screen.getByRole("dialog", { name: "page.html" }).querySelector("iframe");
 		expect(frame).toHaveAttribute("src", html.artifactFiles![0].inlineUrl);
 		expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("previews a remote machine's HTML in the modal, framed from its proxy URL and never in the Browser", async () => {
+		const user = userEvent.setup();
+		const proxied = "http://ao-preview-abc123.localhost:4100/page.html?raw=true";
+		mocks.remoteHosts = [{ hostId: "https://h-vm.useao.dev", label: "build-vm", url: "https://h-vm.useao.dev", status: "connected" }];
+		const remote = session("ao-9", "VM design", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		remote.artifactFiles![0].rawUrl = proxied;
+		mocks.workspaces = [];
+		mocks.remoteWorkspaces = [{ hostId: "https://h-vm.useao.dev", id: "ao", name: "AO", path: "/home/ao/code/ao", sessions: [{ ...remote, hostId: "https://h-vm.useao.dev" }] }];
+		renderView();
+		await user.click(within(artifactList()).getByRole("button", { name: /^page\.html/ }));
+		const frame = within(screen.getByRole("dialog", { name: "page.html" })).getByTestId("cloud-artifact-preview");
+		expect(frame).toHaveAttribute("src", proxied);
+		expect(frame).toHaveAttribute("data-source", "host");
 		expect(mocks.navigate).not.toHaveBeenCalled();
 	});
 
