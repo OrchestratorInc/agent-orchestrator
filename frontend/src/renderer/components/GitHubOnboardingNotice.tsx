@@ -1,4 +1,5 @@
-import { X } from "@/components/app-icons";
+import { RefreshCw, X } from "@/components/app-icons";
+import { cn } from "@/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
@@ -128,16 +129,24 @@ export function useGitHubLogin() {
 
 export type GitHubLogin = ReturnType<typeof useGitHubLogin>;
 
-/** Sign in with GitHub (or Try again once a login ended) and Check again,
- * side by side; Check again steps aside while a login runs. */
+/** Check again (a refresh icon) and Sign in (or Try again once a login
+ * ended), side by side; Check again steps aside while a login runs. */
 export function GitHubLoginActions({ login }: { login: GitHubLogin }) {
 	const { t } = useTranslation();
 	if (!login.signedOut) return null;
 	return (
 		<span className="flex items-center gap-2">
 			{login.loginRunning ? null : (
-				<Button type="button" size="sm" variant="secondary" disabled={login.checkPending} onClick={() => void login.checkAgain()}>
-					{login.checkPending ? t("startup.checkingAgain") : t("startup.checkAgain")}
+				<Button
+					type="button"
+					size="icon-sm"
+					variant="quiet"
+					aria-label={login.checkPending ? t("startup.checkingAgain") : t("startup.checkAgain")}
+					title={t("startup.checkAgain")}
+					disabled={login.checkPending}
+					onClick={() => void login.checkAgain()}
+				>
+					<RefreshCw className={cn("size-icon-md", login.checkPending && "animate-spin")} aria-hidden="true" />
 				</Button>
 			)}
 			<Button
@@ -151,7 +160,7 @@ export function GitHubLoginActions({ login }: { login: GitHubLogin }) {
 					? t("startup.githubLoginStarting")
 					: login.loginEnded
 						? t("startup.githubLoginTryAgain")
-						: t("startup.githubLogin")}
+						: t("firstRun.signIn")}
 			</Button>
 		</span>
 	);
