@@ -1306,6 +1306,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/browser/remote-commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an agent-browser command on this host's self-hosted agent browser, after the approval gate */
+        post: operations["executeRemoteBrowserCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/status": {
         parameters: {
             query?: never;
@@ -5951,6 +5968,23 @@ export interface components {
             requestId: string;
             result: unknown;
             sessionId: string;
+        };
+        BrowserRemoteCommandRequest: {
+            /** @description agent-browser arguments, e.g. ["click", "@e2"]. */
+            args: string[];
+            /** @description Uploaded files by path, base64. */
+            files?: {
+                [key: string]: string;
+            };
+            sessionId: string;
+        };
+        BrowserRemoteCommandResponse: {
+            error?: string;
+            /** @description Files the command wrote, by path, base64. */
+            files?: {
+                [key: string]: string;
+            };
+            output: string;
         };
         BrowserStatusResponse: {
             client?: string;
@@ -14133,6 +14167,87 @@ export interface operations {
             };
             /** @description Gateway Timeout */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    executeRemoteBrowserCommand: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserRemoteCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserRemoteCommandResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

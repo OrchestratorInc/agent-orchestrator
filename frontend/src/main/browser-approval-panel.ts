@@ -40,6 +40,8 @@ export type PanelApprovalDescription = {
 	 * rather than trust a benign verdict.
 	 */
 	partial?: true;
+	/** For Enter: the id marked on the focused element, checked again at dispatch. */
+	focus?: string;
 	image?: string;
 	untrustedExternalContent: true;
 };
@@ -80,12 +82,14 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 
 	let facts: ApprovalElementFacts | null = null;
 	let viewport = { width: 0, height: 0 };
+	let focus: string | undefined;
 	try {
 		const evaluated = (await input.page.evaluate(approvalDescribeScript(request))) as
-			| { facts?: ApprovalElementFacts | null; viewport?: { width: number; height: number } }
+			| { facts?: ApprovalElementFacts | null; viewport?: { width: number; height: number }; focus?: string }
 			| undefined;
 		facts = evaluated?.facts ?? null;
 		viewport = evaluated?.viewport ?? viewport;
+		focus = evaluated?.focus;
 	} catch {
 		// A page that refuses scripts still has its accessibility role and name.
 	}
@@ -111,6 +115,7 @@ export async function describePanelApprovalTarget(input: PanelApprovalInput): Pr
 		...(resolvedRef ? { resolvedRef } : {}),
 		// A named element whose DOM could not be read has no form facts.
 		...(!facts && (role || name) ? { partial: true as const } : {}),
+		...(focus ? { focus } : {}),
 		...(image ? { image } : {}),
 		untrustedExternalContent: true,
 	};

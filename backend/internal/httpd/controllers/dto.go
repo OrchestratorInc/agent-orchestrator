@@ -4808,3 +4808,18 @@ type ApprovalSiteRuleQuery struct {
 	Site     string `query:"site" required:"true"`
 	Category string `query:"category" required:"true"`
 }
+
+// BrowserRemoteCommandRequest is one raw agent-browser command for this
+// host's self-hosted agent browser.
+type BrowserRemoteCommandRequest struct {
+	SessionID domain.SessionID  `json:"sessionId" required:"true"`
+	Args      []string          `json:"args" required:"true" description:"agent-browser arguments, e.g. [\"click\", \"@e2\"]."`
+	Files     map[string]string `json:"files,omitempty" description:"Uploaded files by path, base64."`
+}
+
+// BrowserRemoteCommandResponse is the agent browser's reply.
+type BrowserRemoteCommandResponse struct {
+	Output string            `json:"output"`
+	Error  string            `json:"error,omitempty"`
+	Files  map[string]string `json:"files,omitempty" description:"Files the command wrote, by path, base64."`
+}

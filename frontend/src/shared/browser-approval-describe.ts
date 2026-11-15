@@ -40,7 +40,9 @@ export function describeApprovalTarget(
 	const clean = (value: string | null | undefined, limit = 120): string =>
 		(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
 	const normalized = (value: string): string =>
-		value.toLowerCase().replace(/[^a-z0-9\u0080-￿]+/g, " ").trim();
+		// ASCII-only source: a raw noncharacter here once stopped Chrome loading
+		// the extension's content script (source-encoding.test.ts guards it).
+		value.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, " ").trim();
 	const implicitRole = (el: Element): string => {
 		const explicit = el.getAttribute("role");
 		if (explicit) return explicit.split(/\s+/)[0].toLowerCase();
@@ -120,16 +122,18 @@ export function describeApprovalTarget(
 				"button, a[href], input, textarea, select, summary, [role], [contenteditable=''], [contenteditable='true']",
 			),
 		);
-		let fallback: Element | null = null;
-		for (const candidate of candidates) {
-			if (normalized(accessibleName(candidate)) !== wantName || !visible(candidate)) continue;
-			if (implicitRole(candidate) === wantRole) {
-				target = candidate;
-				break;
-			}
-			fallback ??= candidate;
-		}
-		target ??= fallback;
+		// The exact accessible name first. A normalized match ("Continue!" vs
+		// "Continue") is used only when it is the only one: picking the first of
+		// several could describe another control's form.
+		const visibleCandidates = candidates.filter(visible);
+		const pick = (matches: Element[]) => {
+			const sameRole = matches.filter((candidate) => implicitRole(candidate) === wantRole);
+			if (sameRole.length === 1) return sameRole[0]!;
+			if (sameRole.length === 0 && matches.length === 1) return matches[0]!;
+			return null;
+		};
+		const exact = visibleCandidates.filter((candidate) => accessibleName(candidate) === clean(request.name));
+		target = exact.length > 0 ? pick(exact) : pick(visibleCandidates.filter((candidate) => normalized(accessibleName(candidate)) === wantName));
 	}
 	if (!target) return null;
 
@@ -201,8 +205,31 @@ export function describeApprovalTarget(
  * `{ facts, viewport }`.
  */
 export function approvalDescribeScript(request: ApprovalDescribeRequest): string {
-	return `({ facts: (${describeApprovalTarget.toString()})(document, ${JSON.stringify(request)}), viewport: { width: window.innerWidth, height: window.innerHeight } })`;
+	// For Enter, the focused element gets an id kept in this (isolated) world,
+	// so APPROVAL_FOCUS_SCRIPT can confirm at dispatch that focus did not move.
+	const markFocus = request.mode === "focused";
+	return `(() => {
+	const facts = (${describeApprovalTarget.toString()})(document, ${JSON.stringify(request)});
+	let focus;
+	const el = document.activeElement;
+	if (${markFocus} && el && el !== document.body) {
+		const marks = (window.__aoApprovalFocus = window.__aoApprovalFocus || new WeakMap());
+		focus = marks.get(el);
+		if (!focus) {
+			focus = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2);
+			marks.set(el, focus);
+		}
+	}
+	return { facts, viewport: { width: window.innerWidth, height: window.innerHeight }, ...(focus ? { focus } : {}) };
+})()`;
 }
+
+/** Source text returning the focus id approvalDescribeScript gave the focused element, or "". */
+export const APPROVAL_FOCUS_SCRIPT = `(() => {
+	const marks = window.__aoApprovalFocus;
+	const el = document.activeElement;
+	return (marks && el && marks.get(el)) || "";
+})()`;
 
 /** A crop rectangle around the element, padded and kept inside the viewport. */
 export function approvalCropRect(

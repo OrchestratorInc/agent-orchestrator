@@ -194,3 +194,22 @@ func TestIsEnterKey(t *testing.T) {
 		t.Fatal("chorded Enter not gated")
 	}
 }
+
+func TestPaymentFormEvidenceBeatsTheButtonLabel(t *testing.T) {
+	for _, name := range []string{"Send", "Search", "Continue", "Log in"} {
+		form := Target{Role: "button", Name: name, IsSubmit: true, FormMethod: "post", FormHasPayment: true, SubmitName: name, PageURL: "https://shop.example/"}
+		click := form
+		click.Action = "click"
+		enter := form
+		enter.Action, enter.Key, enter.Role, enter.Name = "press", "Enter", "textbox", "Card number"
+		for _, target := range []Target{click, enter} {
+			if got := Classify(target, ModeRisky); !got.NeedsApproval || got.Category != CategoryPayment {
+				t.Errorf("%s %q in a payment form = %+v", target.Action, name, got)
+			}
+		}
+	}
+	// An ordinary search form stays exempt.
+	if got := Classify(Target{Action: "click", Role: "button", Name: "Search", IsSubmit: true, FormMethod: "get"}, ModeRisky); got.NeedsApproval {
+		t.Fatalf("search form flagged: %+v", got)
+	}
+}
