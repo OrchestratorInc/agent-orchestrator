@@ -13,10 +13,14 @@ import { baseUrlForHost, clientForHost, clientForSessionHost, connectedHosts, su
 import { probeRemoteSse } from "./remote-sse-probe";
 import { usesPreviewWorkspaceData } from "./preview-mode";
 import { computeSseRetryDelayMs } from "./sse-backoff";
+import { decideCloudApproval } from "./cloud-approvals";
+import { createRendererCloudCpClient } from "./cloud-cp/renderer-client";
 
 export type PendingApproval = components["schemas"]["ApprovalPendingResponse"] & {
 	/** The remote host whose daemon holds the request; absent for this machine. */
 	hostId?: string;
+	/** Set when AO Cloud holds the request (a cloud session's agent browser). */
+	cloud?: { baseUrl: string; orgId: string };
 };
 export type ApprovalAuditEntry = components["schemas"]["ApprovalAuditEntryResponse"];
 export type ApprovalPolicy = components["schemas"]["ApprovalPolicyResponse"];
@@ -46,7 +50,16 @@ export async function decideApproval(
 	decision: ApprovalDecision,
 	queryClient: QueryClient,
 	hostId?: string,
+	cloud?: PendingApproval["cloud"],
 ): Promise<void> {
+	if (cloud) {
+		try {
+			await decideCloudApproval(createRendererCloudCpClient(cloud.baseUrl), cloud.orgId, id, decision);
+		} finally {
+			await queryClient.invalidateQueries({ queryKey: ["approvals"] });
+		}
+		return;
+	}
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const { error } = await client.POST("/api/v1/approvals/{id}/decision", {
 		params: { path: { id } },

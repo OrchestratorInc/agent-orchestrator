@@ -11,6 +11,7 @@ import {
 	type ApprovalDecision,
 	type PendingApproval,
 } from "../../lib/approvals";
+import { useCloudPendingApprovals } from "../../lib/cloud-approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import type { AgentAvatarProps } from "../AgentAvatar";
@@ -27,7 +28,7 @@ function useDecide(request: PendingApproval | undefined) {
 		setBusyId(request.id);
 		setError(undefined);
 		try {
-			await decideApproval(request.id, decision, queryClient, request.hostId);
+			await decideApproval(request.id, decision, queryClient, request.hostId, request.cloud);
 		} catch (reason) {
 			setError({ id: request.id, message: reason instanceof Error ? reason.message : String(reason) });
 		} finally {
@@ -45,7 +46,10 @@ function useDecide(request: PendingApproval | undefined) {
 function useSessionApprovals(sessionId: string, hostId: string | undefined) {
 	const local = usePendingApprovals();
 	const remote = useRemotePendingApprovals();
-	return (hostId ? remote : local.data ?? []).filter(
+	// A cloud session's agent browser is gated by AO Cloud; its requests
+	// share the route key of a local session (no host).
+	const cloud = useCloudPendingApprovals();
+	return (hostId ? remote : [...(local.data ?? []), ...cloud]).filter(
 		(request) => request.sessionId === sessionId && (request.hostId ?? undefined) === hostId,
 	);
 }
@@ -120,10 +124,12 @@ function GlobalApprovalCardContent() {
 	const pending = usePendingApprovals({ live: true });
 	// Self-hosted remote hosts gate their agent browsers the same way.
 	const remote = useRemotePendingApprovals({ live: true });
+	// AO Cloud gates cloud sessions' agent browsers; one org stream holds them.
+	const cloud = useCloudPendingApprovals({ live: true });
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();
-	const elsewhere = [...(pending.data ?? []), ...remote].filter((request) => requestKey(request) !== routed);
+	const elsewhere = [...(pending.data ?? []), ...remote, ...cloud].filter((request) => requestKey(request) !== routed);
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
 	const placement = useCornerPlacement();
