@@ -1,5 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot, fetchCatalogProviders, startCatalogKeyLogin } from "../../../hooks/useAgentAuth";
 import { isAgentLoginPending } from "../../../lib/agent-login-lifecycle";
@@ -52,7 +53,12 @@ describe("HarnessLoginPanel", () => {
 		// The device choice shown beside the key is always sent explicitly.
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "test-secret", undefined, undefined, false);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledWith("env_OPENAI_API_KEY"));
-		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		// A saved key is not a verified sign-in: the panel stays to confirm it
+		// was stored, since the account row may not reflect it yet.
+		expect(await screen.findByText("Configured")).toBeVisible();
+		expect(onClose).not.toHaveBeenCalled();
+		await userEvent.setup().click(screen.getByRole("button", { name: "Close" }));
+		await waitFor(() => expect(onClose).toHaveBeenCalledWith(false));
 		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 	});
 	it("waits for the saved keys before saving one, and offers a retry when they fail to load", async () => {
@@ -440,7 +446,8 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(submitAgentUILoginCode).mockResolvedValue({ ...claude, acceptsCode: false, loginUrl: undefined });
 		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		const onVerify = vi.fn().mockResolvedValue(true);
-		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "console", label: "Anthropic Console", secret: false }]} hostId="remote-1" onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		const onClose = vi.fn();
+		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "console", label: "Anthropic Console", secret: false }]} hostId="remote-1" onVerify={onVerify} onClose={onClose} onTerminal={vi.fn()} />);
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("button", { name: "Anthropic Console" }));
 		const codeInput = await screen.findByLabelText("Sign-in code");
@@ -453,7 +460,7 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.queryByLabelText("Sign-in code")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Open sign-in page" })).toBeNull();
 		vi.mocked(getAgentUILogin).mockResolvedValue({ ...claude, status: "succeeded", acceptsCode: false, loginUrl: undefined });
-		expect(await screen.findByText("Connected", {}, { timeout: 3_000 })).toBeVisible();
+		await waitFor(() => expect(onClose).toHaveBeenCalledWith(true), { timeout: 3_000 });
 		expect(onVerify).toHaveBeenCalledTimes(1);
 	});
 
@@ -488,9 +495,8 @@ describe("HarnessLoginPanel", () => {
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 		expect(startAgentUILogin).toHaveBeenCalledWith("codex", "api_key", "test-secret", undefined);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledTimes(1));
-		expect(await screen.findByText("Connected")).toBeVisible();
 		// A verified sign-in closes itself; there is no Done step.
-		await waitFor(() => expect(onClose).toHaveBeenCalled());
+		await waitFor(() => expect(onClose).toHaveBeenCalledWith(true));
 		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 		expect(document.body).not.toHaveTextContent("test-secret");
 	});
@@ -498,10 +504,11 @@ describe("HarnessLoginPanel", () => {
 	it("saves a masked Claude setup token and verifies it like other sign-ins", async () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "claude-code", method: "setup_token", loginUrl: undefined, deviceCode: undefined, status: "succeeded" });
 		const onVerify = vi.fn().mockResolvedValue(true);
+		const onClose = vi.fn();
 		render(<HarnessLoginPanel agentId="claude-code" methods={[
 			{ id: "browser", label: "Claude subscription", secret: false },
 			{ id: "setup_token", label: "Setup token", secret: true },
-		]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		]} onVerify={onVerify} onClose={onClose} onTerminal={vi.fn()} />);
 		const user = userEvent.setup();
 		const method = screen.getByRole("button", { name: "Setup token" });
 		expect(method).toHaveAccessibleDescription("Paste a token from claude setup-token.");
@@ -514,7 +521,7 @@ describe("HarnessLoginPanel", () => {
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 		expect(startAgentUILogin).toHaveBeenCalledWith("claude-code", "setup_token", "sk-ant-oat01-test-setup-token", undefined);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledTimes(1));
-		expect(await screen.findByText("Connected")).toBeVisible();
+		await waitFor(() => expect(onClose).toHaveBeenCalledWith(true));
 		expect(document.body).not.toHaveTextContent("sk-ant-oat01-test-setup-token");
 	});
 
@@ -622,11 +629,41 @@ describe("HarnessLoginPanel", () => {
 		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
 	});
 
+	// The parent unmounts the panel on close, as Settings does.
+	it("stays open while verifying, then ends the sign-in and unmounts with nothing pending", async () => {
+		let finishVerify!: (verified: boolean) => void;
+		const onVerify = vi.fn(() => new Promise<boolean>((resolve) => { finishVerify = resolve; }));
+		const onClose = vi.fn();
+		vi.mocked(getAgentUILogin).mockResolvedValue({ ...snapshot, status: "succeeded" });
+		function Settings() {
+			const [open, setOpen] = useState(true);
+			return open
+				? <HarnessLoginPanel agentId="codex" methods={methods} hostId="remote-3" onVerify={onVerify} onClose={(signedIn) => { onClose(signedIn); setOpen(false); }} onTerminal={vi.fn()} />
+				: <p>Account row</p>;
+		}
+		render(<Settings />);
+		await userEvent.setup().click(screen.getByRole("button", { name: "Device code" }));
+		await waitFor(() => expect(onVerify).toHaveBeenCalledTimes(1), { timeout: 3000 });
+		// Still checking: the panel stays and the sign-in is not ended yet.
+		expect(screen.getByText("Checking…")).toBeVisible();
+		expect(screen.queryByText("Account row")).toBeNull();
+		expect(cancelAgentUILogin).not.toHaveBeenCalled();
+		await act(async () => finishVerify(true));
+		expect(await screen.findByText("Account row")).toBeVisible();
+		// Ended once, before closing; the unmount cleanup has nothing left to dispose.
+		expect(cancelAgentUILogin).toHaveBeenCalledTimes(1);
+		expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", "remote-3");
+		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(onClose).toHaveBeenCalledWith(true);
+		await waitFor(() => expect(isAgentLoginPending("codex", "remote-3")).toBe(false));
+		expect(screen.queryByText("Connected")).toBeNull();
+	});
+
 	it("polls the selected host and verifies when the process finishes", async () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue({ ...snapshot, status: "succeeded" });
-		const { user, onVerify } = setup("remote-1");
+		const { user, onVerify, onClose } = setup("remote-1");
 		await user.click(screen.getByRole("button", { name: "Device code" }));
-		expect(await screen.findByText("Connected", {}, { timeout: 3000 })).toBeVisible();
+		await waitFor(() => expect(onClose).toHaveBeenCalledWith(true), { timeout: 3000 });
 		expect(getAgentUILogin).toHaveBeenCalledWith("codex", "login-1", "remote-1");
 		expect(onVerify).toHaveBeenCalledTimes(1);
 	});
@@ -655,9 +692,9 @@ describe("HarnessLoginPanel", () => {
 
 	it("retries a transient polling failure and still verifies completion", async () => {
 		vi.mocked(getAgentUILogin).mockRejectedValueOnce(new Error("Temporarily unavailable")).mockResolvedValue({ ...snapshot, status: "succeeded" });
-		const { user, onVerify } = setup();
+		const { user, onVerify, onClose } = setup();
 		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
-		expect(await screen.findByText("Connected", {}, { timeout: 4_000 })).toBeVisible();
+		await waitFor(() => expect(onClose).toHaveBeenCalledWith(true), { timeout: 4_000 });
 		expect(onVerify).toHaveBeenCalledTimes(1);
 	});
 

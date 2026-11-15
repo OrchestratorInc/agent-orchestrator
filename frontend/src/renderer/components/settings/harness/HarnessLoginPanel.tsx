@@ -37,7 +37,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	onRetryProviderKeys?: () => void;
 	onProviderKeysChanged?: () => void;
 	onVerify: (methodId: string) => Promise<boolean | "configured">;
-	onClose: () => void;
+	/** Closes the panel; signedIn when a verified sign-in closed it. */
+	onClose: (signedIn?: boolean) => void;
 	onTerminal: () => Promise<unknown>;
 }) {
 	const { t } = useTranslation();
@@ -177,7 +178,12 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		if (operation?.status !== "succeeded") return;
 		let active = true;
 		setVerifying(true);
-		void verifyRef.current(operation.method).then((verified) => {
+		void verifyRef.current(operation.method).then(async (verified) => {
+			if (!active) return;
+			// A verified sign-in ends the operation and closes; the account row
+			// takes over. A saved key the provider has not accepted, a key left in
+			// the user environment, or a failed cancel stays open to say so.
+			if (verified === true && !operationRef.current?.withdrawFailed && await exit(false, true)) return;
 			if (!active) return;
 			setConnected(Boolean(verified));
 			setConfigured(verified === "configured");
@@ -288,8 +294,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		}
 	};
 
-	const leave = async (terminal = false) => {
-		if (pending.current || verifying) return;
+	// Cancels the operation before closing, so nothing is left for the unmount
+	// cleanup to dispose and the account row is not held pending. Resolves
+	// whether the panel closed; a failed cancel keeps it open with the error.
+	const exit = async (terminal = false, signedIn = false) => {
+		if (pending.current) return false;
 		pending.current = true;
 		setBusy(true);
 		setSecret("");
@@ -297,15 +306,20 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		try {
 			const current = operationRef.current;
 			if (current) await runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId));
-			if (!mounted.current) return;
+			if (!mounted.current) return false;
 			operationRef.current = undefined;
-			if (terminal) await onTerminal(); else onClose();
+			if (terminal) await onTerminal(); else onClose(signedIn);
+			return true;
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
+			return false;
 		} finally {
 			pending.current = false;
 			if (mounted.current) setBusy(false);
 		}
+	};
+	const leave = async (terminal = false) => {
+		if (!verifying) await exit(terminal, connected && !configured);
 	};
 	// With native sign-in as the only method there is nothing to choose: start
 	// it straight away. The timer keeps a double mount from starting twice.
@@ -335,17 +349,6 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		return () => window.clearTimeout(timer);
 	}, [operation?.id, operation?.status, operation?.method, operation?.nativePrompt]);
 	const needsTerminal = running && (operation?.nativePrompt === "terminal_required" || stalled);
-	// A verified sign-in closes the panel; the account row shows it connected.
-	// It leaves through leave(), which cancels the finished operation first,
-	// so the row is not left pending on a disposal. A failed cancel keeps the
-	// panel open with its error, and a key left in the user environment keeps
-	// it open with that warning: the account row shows neither.
-	const withdrawFailed = Boolean(operation?.withdrawFailed);
-	useEffect(() => {
-		if (connected && !verifying && !withdrawFailed) void leave();
-	// Leave once per verified sign-in; this render's leave sees the settled state.
-	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [connected, verifying, withdrawFailed]);
 	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
 		if (locked) return;
 		// Clicking an open credential row again collapses it.
@@ -455,6 +458,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 			await cancelAgentUILogin(agentId, operation.id, hostId);
 			if (!mounted.current) return;
 			updateOperation(undefined);
+			// Verified: close onto the account row. Configured stays open to say so.
+			if (verified === true) {
+				onClose(true);
+				return;
+			}
 			setConnected(true);
 			// Present, not verified: shown as configured.
 			setConfigured(verified === "configured");
@@ -664,7 +672,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
 				{needsTerminal && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
-				{(!connected || withdrawFailed || error) && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "common.close" : "settings.harness.loginUi.cancel")}</Button>}
+				<Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "common.close" : "settings.harness.loginUi.cancel")}</Button>
 			</div>
 		</div>
 	</section>;
