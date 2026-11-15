@@ -36,8 +36,8 @@ func reviewNumberFromURL(url string) string {
 // come from this machine's clock and the observed rows' from the provider's.
 const NoInjectReviewSkew = time.Minute
 
-// NoInjectReviewWindow is the time a --no-inject AO review pass without a
-// recorded provider review id was running. A zero End means it still is.
+// NoInjectReviewWindow is the time a --no-inject AO review pass was running.
+// A zero End means it still is.
 type NoInjectReviewWindow struct {
 	Start time.Time
 	End   time.Time

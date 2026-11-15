@@ -1022,6 +1022,14 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if githubReviewID != "" && githubReviewID != run.GithubReviewID {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded GitHub review id %q", ErrInvalid, runID, run.GithubReviewID)
 		}
+		// A retry after the first submit completed the run but failed to
+		// suppress its observed rows finishes that suppression; it is
+		// idempotent, so a plain duplicate submit costs one write.
+		if run.NoInject && run.GithubReviewID != "" {
+			if err := s.store.SuppressAOReviewInject(ctx, run.PRURL, run.GithubReviewID); err != nil {
+				return domain.ReviewRun{}, err
+			}
+		}
 	case domain.ReviewRunDelivered:
 		return run, nil
 	default:

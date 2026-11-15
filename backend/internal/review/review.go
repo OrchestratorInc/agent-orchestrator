@@ -269,8 +269,30 @@ type TriggerOptions struct {
 	// no-PR error may say so.
 	BranchPRLookupFoundNone bool
 	// NoInject marks every pass this trigger starts as never delivered to the
-	// worker session, whatever its auto-inject setting (#6810).
+	// worker session, whatever its auto-inject setting (#6810). A running pass
+	// it restarts becomes never delivered too; a trigger without it never
+	// lifts that from a pass.
 	NoInject bool
+}
+
+// runNoInjectMarker is the optional part of the store that can make a running
+// pass never delivered (#6810).
+type runNoInjectMarker interface {
+	MarkReviewRunNoInject(ctx stdctx.Context, id string) (bool, error)
+}
+
+// markRunNoInject makes the running pass id never delivered before a
+// --no-inject trigger relaunches its reviewer. A store that cannot record it
+// fails the trigger rather than restart a pass that could still be delivered.
+func (e *Engine) markRunNoInject(ctx stdctx.Context, id string) error {
+	marker, ok := e.store.(runNoInjectMarker)
+	if !ok {
+		return fmt.Errorf("review store cannot record --no-inject on restarted run %q", id)
+	}
+	if _, err := marker.MarkReviewRunNoInject(ctx, id); err != nil {
+		return fmt.Errorf("mark restarted run %q no-inject: %w", id, err)
+	}
+	return nil
 }
 
 // TriggerWithOptions starts reviews for every PR on the worker session that needs review.
@@ -505,7 +527,14 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if hasConfigOverride {
 			pendingSupersedes = append(pendingSupersedes, staleSupersede{prURL: reviewState.PRURL, targetSHA: reviewState.TargetSHA})
 			if reviewState.LatestRun != nil && reviewState.LatestRun.Status == domain.ReviewRunRunning && (reviewState.LatestRun.Harness == harness || reviewState.LatestRun.Harness == "") {
-				restarted = append(restarted, *reviewState.LatestRun)
+				run := *reviewState.LatestRun
+				if opts.NoInject && !run.NoInject {
+					if err := e.markRunNoInject(ctx, run.ID); err != nil {
+						return TriggerResult{}, err
+					}
+					run.NoInject, run.AutoInjectReview = true, false
+				}
+				restarted = append(restarted, run)
 				continue
 			}
 		} else if _, err := e.store.SupersedeStaleRunningReviewRuns(ctx, workerID, reviewState.PRURL, reviewState.TargetSHA, "superseded by a review trigger for a newer commit"); err != nil {

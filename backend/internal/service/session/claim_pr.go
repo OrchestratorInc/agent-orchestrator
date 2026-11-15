@@ -157,6 +157,12 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
+	// The PR has changed hands: tell the previous owner now, before anything
+	// below can fail, so it never keeps acting on a PR it no longer owns.
+	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id
+	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
+		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
+	}
 	if hasReviewOnly && !opts.KeepReviewOnly {
 		if _, err := reviewOnly.SetPRReviewOnly(ctx, pr.URL, id, false); err != nil {
 			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
@@ -164,12 +170,6 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		}
 	}
 	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
-	// The PR has changed hands: tell the previous owner now, so a later read
-	// failing doesn't leave it acting on a PR it no longer owns.
-	tookOver := outcome.PreviousOwner != "" && outcome.PreviousOwner != id
-	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
-		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
-	}
 	// Reconcile immediately rather than waiting for the artifact-output
 	// poller's next tick: a session that already produced artifacts must move
 	// to pr OutputType (and out of the artifact Kanban placement) with the

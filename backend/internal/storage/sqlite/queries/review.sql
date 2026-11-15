@@ -243,9 +243,15 @@ FROM review_run
 WHERE pr_url = ? AND github_review_id != '' AND status = 'complete' AND no_inject;
 
 -- name: ListNoInjectReviewRunWindowsByPR :many
--- --no-inject AO review passes on this PR that have no provider review id:
--- still running, or ended without recording one. Whatever their reviewer
--- posted while they ran must not be sent back to the session (#6810).
+-- When each --no-inject AO review pass on this PR ran (finished_at is NULL
+-- while it still runs). Whatever its reviewer posted then must not be sent
+-- back to the session (#6810), including before `ao review submit` records
+-- the review id and when the reviewer exits without submitting.
 SELECT created_at, finished_at
 FROM review_run
-WHERE pr_url = ? AND github_review_id = '' AND no_inject;
+WHERE pr_url = ? AND no_inject;
+
+-- name: MarkReviewRunNoInject :execrows
+-- A --no-inject trigger restarting a running pass makes that pass never
+-- delivered too (#6810).
+UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE WHERE id = ? AND status = 'running';

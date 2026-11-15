@@ -121,3 +121,30 @@ func TestTriggerRejectsNoInjectWithEnableAutoInject(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 }
+
+// A submit that completed a --no-inject run but failed to suppress its observed
+// rows is finished by the reviewer's retry, which finds the run complete.
+func TestSubmitNoInjectRetryFinishesSuppression(t *testing.T) {
+	st := &fakeStore{
+		ok: true,
+		run: domain.ReviewRun{
+			ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, NoInject: true,
+		},
+		prs:         []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+		suppressErr: errors.New("db locked"),
+	}
+	svc := New(nil, st)
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987"); err == nil {
+		t.Fatal("want the suppression error")
+	}
+	if st.run.Status != domain.ReviewRunComplete {
+		t.Fatalf("run = %+v, want completed by the first submit", st.run)
+	}
+	st.suppressErr = nil
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.suppressedReviews) != 1 || st.suppressedReviews[0] != "pr1#987" {
+		t.Fatalf("suppressed = %v, want the retry to suppress the posted review", st.suppressedReviews)
+	}
+}

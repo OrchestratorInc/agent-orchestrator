@@ -27,6 +27,7 @@ type fakeStore struct {
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
 	suppressedReviews       []string
+	suppressErr             error
 	reviewOnlySets          map[string]bool
 
 	updateCalls       int
@@ -162,6 +163,9 @@ func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadI
 }
 
 func (f *fakeStore) SuppressAOReviewInject(_ context.Context, prURL, githubReviewID string) error {
+	if f.suppressErr != nil {
+		return f.suppressErr
+	}
 	f.suppressedReviews = append(f.suppressedReviews, prURL+"#"+githubReviewID)
 	return nil
 }

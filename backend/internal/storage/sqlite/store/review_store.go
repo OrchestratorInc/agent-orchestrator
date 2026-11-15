@@ -616,9 +616,8 @@ func (s *Store) SuppressAOReviewInject(ctx context.Context, prURL, githubReviewI
 }
 
 // NoInjectAOReviewWindows returns when each --no-inject AO review pass on prURL
-// without a recorded provider review id was running: still running (zero End),
-// or ended without one. What its reviewer posted then is never delivered
-// (#6810).
+// ran; a zero End means it still runs. What its reviewer posted then is never
+// delivered (#6810), whether or not the pass recorded its review id yet.
 func (s *Store) NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]domain.NoInjectReviewWindow, error) {
 	rows, err := s.qr.ListNoInjectReviewRunWindowsByPR(ctx, prURL)
 	if err != nil {
@@ -636,4 +635,17 @@ func (s *Store) NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]do
 		out = append(out, w)
 	}
 	return out, nil
+}
+
+// MarkReviewRunNoInject makes a running review pass never delivered, for a
+// --no-inject trigger that restarts it. It reports whether the run was still
+// running.
+func (s *Store) MarkReviewRunNoInject(ctx context.Context, id string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkReviewRunNoInject(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("mark review run %s no-inject: %w", id, err)
+	}
+	return n > 0, nil
 }

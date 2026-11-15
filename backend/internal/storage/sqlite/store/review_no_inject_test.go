@@ -130,9 +130,8 @@ func TestPRReviewOnlyRoundTripAndTakeoverClearsIt(t *testing.T) {
 	}
 }
 
-// #6810: a --no-inject pass without a provider review id is listed with when it
-// ran: open while running, closed once it fails or is cancelled. A pass that
-// recorded its id, and a normal pass, are not listed.
+// #6810: every --no-inject pass is listed with when it ran: open while running,
+// closed once it completes, fails, or is cancelled. A normal pass is not.
 func TestNoInjectAOReviewWindows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -173,8 +172,13 @@ func TestNoInjectAOReviewWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(windows) != 1 || windows[0].End.IsZero() || windows[0].End.Before(now) {
-		t.Fatalf("windows = %+v, want only the exited pass, closed at or after %v", windows, now)
+	if len(windows) != 2 {
+		t.Fatalf("windows = %+v, want the submitted and the exited pass", windows)
+	}
+	for _, w := range windows {
+		if w.End.IsZero() || w.End.Before(now) {
+			t.Fatalf("windows = %+v, want both closed at or after %v", windows, now)
+		}
 	}
 
 	// Cancelling a running pass closes its window too.
@@ -192,5 +196,38 @@ func TestNoInjectAOReviewWindows(t *testing.T) {
 		if w.End.IsZero() {
 			t.Fatalf("windows = %+v, want every ended pass closed", windows)
 		}
+	}
+}
+
+// #6810: a --no-inject trigger restarting a running pass makes it never
+// delivered; an ended pass is left alone.
+func TestMarkReviewRunNoInject(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	url := "https://github.com/acme/repo/pull/3"
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: r.ID, ProjectID: "mer", Harness: "claude-code", PRURL: url, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertReviewRun(ctx, domain.ReviewRun{ID: "run", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: url, TargetSHA: "h", Status: domain.ReviewRunRunning, CreatedAt: now, AutoInjectReview: true}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkReviewRunNoInject(ctx, "run"); err != nil || !ok {
+		t.Fatalf("mark running run: ok=%v err=%v", ok, err)
+	}
+	got, _, err := s.GetReviewRun(ctx, "run")
+	if err != nil || !got.NoInject || got.AutoInjectReview {
+		t.Fatalf("run = %+v err=%v, want no-inject and not auto-injected", got, err)
+	}
+	if _, err := s.UpdateReviewRunResult(ctx, "run", domain.ReviewRunFailed, domain.VerdictNone, "x", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.MarkReviewRunNoInject(ctx, "run"); err != nil || ok {
+		t.Fatalf("mark ended run: ok=%v err=%v, want no change", ok, err)
 	}
 }

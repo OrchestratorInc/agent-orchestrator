@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -54,5 +55,22 @@ func TestSessionCompleteIgnoresReviewOnlyPRs(t *testing.T) {
 	st.prs["mer-1"] = []domain.PullRequest{{URL: "reviewed", SessionID: "mer-1", ReviewOnly: true, Merged: true}}
 	if done, err = m.sessionComplete(ctx, "mer-1"); err != nil || done {
 		t.Fatalf("done=%v err=%v, want a merged review-only PR not to complete the session", done, err)
+	}
+}
+
+// #6810: until the PR's review-only state is known, no nudge is sent; the
+// lookup error is returned so the observer polls again.
+func TestPRObservation_ReviewOnlyLookupErrorSendsNoNudges(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prs["mer-1"] = []domain.PullRequest{{URL: "pr1", SessionID: "mer-1", ReviewOnly: true}}
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", ThreadID: "T1", Author: "alice", File: "a.go", Line: 1, Body: "fix this", AutoInjectReview: true}}
+	st.getPRErr = errors.New("db locked")
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err == nil {
+		t.Fatal("want the review-only lookup error")
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("nudged before the review-only state was known: %v", msg.msgs)
 	}
 }

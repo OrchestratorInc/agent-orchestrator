@@ -712,7 +712,7 @@ func (q *Queries) ListNoInjectReviewRunIDsByPR(ctx context.Context, prUrl string
 const listNoInjectReviewRunWindowsByPR = `-- name: ListNoInjectReviewRunWindowsByPR :many
 SELECT created_at, finished_at
 FROM review_run
-WHERE pr_url = ? AND github_review_id = '' AND no_inject
+WHERE pr_url = ? AND no_inject
 `
 
 type ListNoInjectReviewRunWindowsByPRRow struct {
@@ -720,9 +720,10 @@ type ListNoInjectReviewRunWindowsByPRRow struct {
 	FinishedAt sql.NullTime
 }
 
-// --no-inject AO review passes on this PR that have no provider review id:
-// still running, or ended without recording one. Whatever their reviewer
-// posted while they ran must not be sent back to the session (#6810).
+// When each --no-inject AO review pass on this PR ran (finished_at is NULL
+// while it still runs). Whatever its reviewer posted then must not be sent
+// back to the session (#6810), including before `ao review submit` records
+// the review id and when the reviewer exits without submitting.
 func (q *Queries) ListNoInjectReviewRunWindowsByPR(ctx context.Context, prUrl string) ([]ListNoInjectReviewRunWindowsByPRRow, error) {
 	rows, err := q.db.QueryContext(ctx, listNoInjectReviewRunWindowsByPR, prUrl)
 	if err != nil {
@@ -1015,6 +1016,20 @@ func (q *Queries) ListRunningReviewRunsBySession(ctx context.Context, sessionID 
 		return nil, err
 	}
 	return items, nil
+}
+
+const markReviewRunNoInject = `-- name: MarkReviewRunNoInject :execrows
+UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE WHERE id = ? AND status = 'running'
+`
+
+// A --no-inject trigger restarting a running pass makes that pass never
+// delivered too (#6810).
+func (q *Queries) MarkReviewRunNoInject(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markReviewRunNoInject, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const recordReviewChatControllerError = `-- name: RecordReviewChatControllerError :execrows

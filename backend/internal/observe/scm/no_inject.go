@@ -15,7 +15,7 @@ type NoInjectReviewLister interface {
 }
 
 // NoInjectReviewWindowLister lists when the --no-inject AO review passes on a
-// PR that have no recorded provider review id were running.
+// PR were running.
 type NoInjectReviewWindowLister interface {
 	NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]domain.NoInjectReviewWindow, error)
 }
@@ -27,11 +27,13 @@ type NoInjectReviewWindowLister interface {
 // leaves on, and keep it once stored. A store without the listers keeps the
 // session-wide behavior.
 //
-// A pass is matched by its recorded review id once `ao review submit` ran.
-// Before that, or when the reviewer exited after posting without submitting,
-// whatever the account AO's reviewer posts with wrote while the pass ran is
-// matched instead; that needs identity, and an unresolvable account is an
-// error so the poll retries rather than store deliverable rows.
+// A pass is matched by its recorded review id once `ao review submit` ran, and
+// by what the account AO's reviewer posts with wrote while the pass ran. The
+// second covers the pass before it records its id, a reviewer that exited
+// after posting without submitting, and a pass completing between these two
+// lookups, since every --no-inject pass has a window whatever its status. It
+// needs identity; an unresolvable account is an error so the poll retries
+// rather than store deliverable rows.
 func suppressNoInjectAOReviews(ctx context.Context, store any, identity ports.ScopedIdentityResolver, repo ports.SCMRepo, prURL string, reviews []domain.PullRequestReview, comments []domain.PullRequestComment) error {
 	if prURL == "" || (len(reviews) == 0 && len(comments) == 0) {
 		return nil

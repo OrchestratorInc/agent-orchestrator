@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -145,8 +146,13 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// A PR attached only so a --no-inject review could run on it is not this
 	// session's to fix: it gets none of the CI, review, or merge-conflict nudges
 	// below (#6810). The PR row is read once here and reused for the CI policy.
+	// Until it is known whether the PR is review-only, no nudge is sent; the
+	// next poll retries.
 	pr, prFound, prErr := m.store.GetPR(ctx, o.URL)
-	if prErr == nil && prFound && pr.ReviewOnly {
+	if prErr != nil {
+		return errors.Join(fmt.Errorf("load review-only state for %s: %w", o.URL, prErr), rearmErr)
+	}
+	if prFound && pr.ReviewOnly {
 		return rearmErr
 	}
 	// cannotNudge's remaining condition, needs-input, defers CI-failure and
@@ -187,8 +193,6 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 
 		if o.CI == domain.CIFailing {
 			switch {
-			case prErr != nil:
-				ciPolicyErr = fmt.Errorf("load CI injection policy for %s: %w", o.URL, prErr)
 			case !prFound:
 				ciPolicyErr = fmt.Errorf("load CI injection policy for %s: PR not found", o.URL)
 			case pr.AutoInjectCI:
