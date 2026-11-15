@@ -59,6 +59,150 @@ function acceptOpening(clientMessageId: string, state = "queued") {
 }
 
 describe("deferred side opening", () => {
+	it.each(["draft-read", "image-load"])("settles a new follow-up bubble when %s fails before dispatch", async failure => {
+		acceptOpening("first", "completed");
+		let finish!: (value: unknown) => void;
+		const normal = get.getMockImplementation()!;
+		if (failure === "draft-read") get.mockImplementation((path, options) => path.endsWith("/draft") ? new Promise(resolve => { finish = resolve; }) : normal(path, options));
+		else {
+			draft = { ...emptySideChatDraft(), attachments: [{ id: "image", path: "image.png", name: "image.png", mimeType: "image/png", bytes: 3 }] };
+			vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Image unavailable")));
+		}
+		render(<Harness />);
+		await screen.findByText("My first question");
+		if (failure === "image-load") await screen.findByRole("button", { name: "Remove image.png" });
+		act(() => { chat.setQuestionDraft("side", "Unsent follow-up"); });
+		let sending!: Promise<void>;
+		act(() => { sending = chat.send("side", "Unsent follow-up"); });
+		await act(async () => {
+			if (failure === "draft-read") finish({ error: new Error("Draft unavailable") });
+			await sending;
+		});
+		expect(post).not.toHaveBeenCalled();
+		expect(within(screen.getByRole("log")).queryByText("Unsent follow-up")).not.toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: "Side chat question" })).toHaveTextContent("Unsent follow-up");
+		if (failure === "draft-read") get.mockImplementation(normal);
+		else await userEvent.click(screen.getByRole("button", { name: "Remove image.png" }));
+		let accept!: (value: unknown) => void;
+		post.mockImplementationOnce(() => new Promise(resolve => { accept = resolve; }));
+		act(() => { chat.setQuestionDraft("side", "Corrected follow-up"); });
+		act(() => { sending = chat.send("side", "Corrected follow-up"); });
+		expect(await within(screen.getByRole("log")).findByText("Corrected follow-up")).toBeInTheDocument();
+		await waitFor(() => expect(post).toHaveBeenCalledOnce());
+		await act(async () => { accept({}); await sending; });
+	});
+
+	it.each([false, true])("keeps a frozen follow-up identity when recovery capture fails before dispatch (remount: %s)", async remount => {
+		acceptOpening("first", "completed");
+		const view = render(<Harness />);
+		await screen.findByText("My first question");
+		capture.mockRejectedValueOnce(new Error("Capture unavailable"));
+		await act(async () => { await chat.send("side", "Frozen follow-up"); });
+		expect(post).not.toHaveBeenCalled();
+		const original = draft.pendingDelivery!.request;
+		expect(within(screen.getByRole("log")).getByText("Frozen follow-up")).toBeInTheDocument();
+		expect(within(screen.getByRole("log")).getByText("Not delivered")).toBeInTheDocument();
+		if (remount) {
+			view.unmount();
+			render(<Harness />);
+			expect(await within(await screen.findByRole("log")).findByText("Not delivered")).toBeInTheDocument();
+		}
+		await act(async () => { await chat.send("side", ""); });
+		expect(post.mock.calls[0][1].body).toEqual(original);
+		expect(within(screen.getByRole("log")).getAllByText("Frozen follow-up")).toHaveLength(1);
+		expect(within(screen.getByRole("log")).queryByText("Not delivered")).not.toBeInTheDocument();
+	});
+
+	it("keeps an acknowledged question delivered when saving its cleared draft fails", async () => {
+		acceptOpening("first", "completed");
+		render(<Harness />);
+		await screen.findByText("My first question");
+		let savedReceipt = false;
+		put.mockImplementation(async (_path, options) => {
+			const next = JSON.parse(options.body.contentJson);
+			if (next.pendingDelivery) savedReceipt = true;
+			else if (savedReceipt) { savedReceipt = false; return { error: new Error("Draft save failed") }; }
+			draft = next;
+			return {};
+		});
+		post.mockImplementation(async (_path, options) => ({ data: { turn: { id: "acknowledged", sideId: "side", clientMessageId: options.body.clientMessageId, text: "Acknowledged question", state: "queued", createdAt: at } } }));
+		await act(async () => { await chat.send("side", "Acknowledged question"); });
+		const log = screen.getByRole("log");
+		expect(within(log).getByText("Acknowledged question")).toBeInTheDocument();
+		expect(within(log).queryByText("Delivery uncertain — not retried automatically")).not.toBeInTheDocument();
+		expect(within(log).queryByText("Not delivered")).not.toBeInTheDocument();
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it.each(["New replacement draft", ""])("preserves manually edited replacement text while copying recovery (text: %s)", async text => {
+		acceptOpening("first", "failed");
+		snapshot.side = { ...snapshot.side, state: "failed", recreateRequired: true };
+		const file = { id: "file", path: "notes.txt", name: "notes.txt", mimeType: "text/plain", bytes: 12 };
+		const sourceDraft = { ...emptySideChatDraft(), openingDelivery: { clientMessageId: "first", request: { clientMessageId: "first", text: "My first question" }, submitted: { text: "My first question", attachments: [file], references: [] } } };
+		let finish!: (value: unknown) => void;
+		const replacement = { ...snapshot.side, id: "replacement", state: "draft", recreateRequired: false, openingTurnId: undefined };
+		get.mockImplementation(async (path, options) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: [snapshot.side] } };
+			if (options?.params?.path.sideId === "replacement") return path.endsWith("/draft") ? new Promise(resolve => { finish = resolve; }) : { data: { snapshot: { side: replacement, turns: [], messages: [], activities: [], hasMore: false } } };
+			return path.endsWith("/draft") ? { data: { contentJson: JSON.stringify(sourceDraft) } } : { data: { snapshot } };
+		});
+		post.mockResolvedValue({ data: { side: replacement } });
+		render(<Harness />);
+		await userEvent.click(within(await screen.findByTestId("session-startup")).getByRole("button", { name: "New side chat" }));
+		await waitFor(() => expect(chat.sides.some(side => side.id === "replacement")).toBe(true));
+		act(() => { chat.show("replacement"); });
+		const editor = await screen.findByRole("combobox", { name: "Side chat question" });
+		act(() => { chat.setQuestionDraft("replacement", "New replacement draft"); });
+		if (!text) act(() => { chat.setQuestionDraft("replacement", ""); });
+		await waitFor(() => expect(editor.textContent).toBe(text));
+		await act(async () => { finish({ data: { contentJson: "" } }); });
+		await waitFor(() => expect(put.mock.calls.some(([, options]) => options.params.path.sideId === "replacement" && JSON.parse(options.body.contentJson).attachments[0]?.path === file.path)).toBe(true));
+		expect(editor.textContent).toBe(text);
+		expect(put.mock.calls.filter(([, options]) => options.params.path.sideId === "replacement").every(([, options]) => JSON.parse(options.body.contentJson).text === text)).toBe(true);
+	});
+
+	it("leaves a manually submitted replacement untouched by a late recovery copy", async () => {
+		acceptOpening("first", "failed");
+		snapshot.side = { ...snapshot.side, state: "failed", recreateRequired: true };
+		const sourceDraft = { ...emptySideChatDraft(), openingDelivery: { clientMessageId: "first", request: { clientMessageId: "first", text: "Original source question" }, submitted: { text: "Original source question", attachments: [{ id: "file", path: "notes.txt", name: "notes.txt", mimeType: "text/plain", bytes: 12 }], references: [] } } };
+		let finish!: (value: unknown) => void;
+		const replacement = { ...snapshot.side, id: "replacement", state: "draft", recreateRequired: false, openingTurnId: undefined };
+		get.mockImplementation(async (path, options) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: [snapshot.side] } };
+			if (options?.params?.path.sideId === "replacement") return path.endsWith("/draft") ? new Promise(resolve => { finish = resolve; }) : { data: { snapshot: { side: replacement, turns: [], messages: [], activities: [], hasMore: false } } };
+			return path.endsWith("/draft") ? { data: { contentJson: JSON.stringify(sourceDraft) } } : { data: { snapshot } };
+		});
+		post.mockImplementation(async path => path.endsWith("/side-chats") ? { data: { side: replacement } } : {});
+		render(<Harness />);
+		await userEvent.click(within(await screen.findByTestId("session-startup")).getByRole("button", { name: "New side chat" }));
+		await waitFor(() => expect(chat.sides.some(side => side.id === "replacement")).toBe(true));
+		act(() => { chat.show("replacement"); chat.setQuestionDraft("replacement", "My own replacement question"); });
+		let sending!: Promise<void>;
+		act(() => { sending = chat.send("replacement", "My own replacement question"); });
+		await act(async () => { finish({ data: { contentJson: "" } }); await sending; });
+		expect(post.mock.calls.find(([path]) => path.endsWith("/messages"))?.[1].body).toMatchObject({ text: "My own replacement question", resources: [] });
+		expect(put.mock.calls.filter(([, options]) => options.params.path.sideId === "replacement").every(([, options]) => !JSON.parse(options.body.contentJson).attachments.length && JSON.parse(options.body.contentJson).text !== "Original source question")).toBe(true);
+	});
+
+	it("preserves an acknowledged destination even when its creation response still says draft", async () => {
+		acceptOpening("first", "failed");
+		snapshot.side = { ...snapshot.side, state: "failed", recreateRequired: true };
+		const receipt = { clientMessageId: "first", request: { clientMessageId: "first", text: "Original source question" }, submitted: { text: "Original source question", attachments: [], references: [] } };
+		const sourceDraft = { ...emptySideChatDraft(), openingDelivery: receipt };
+		const destinationDraft = { ...emptySideChatDraft(), text: "Newer destination draft", openingDelivery: { ...receipt, clientMessageId: "destination-first", request: { clientMessageId: "destination-first", text: "Already submitted there" } } };
+		const replacement = { ...snapshot.side, id: "replacement", state: "draft", recreateRequired: false, openingTurnId: undefined };
+		get.mockImplementation(async (path, options) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: [snapshot.side] } };
+			if (path.endsWith("/draft")) return { data: { contentJson: JSON.stringify(options?.params?.path.sideId === "replacement" ? destinationDraft : sourceDraft) } };
+			return { data: { snapshot } };
+		});
+		post.mockResolvedValue({ data: { side: replacement } });
+		render(<Harness />);
+		await userEvent.click(within(await screen.findByTestId("session-startup")).getByRole("button", { name: "New side chat" }));
+		await waitFor(() => expect(get.mock.calls.some(([path, options]) => path.endsWith("/draft") && options.params.path.sideId === "replacement")).toBe(true));
+		await act(async () => { await Promise.resolve(); });
+		expect(put.mock.calls.filter(([, options]) => options.params.path.sideId === "replacement").every(([, options]) => JSON.parse(options.body.contentJson).text === "Newer destination draft")).toBe(true);
+	});
 	it("hydrates saved context before Send, blocks early autosaves, and preserves edits after Send", async () => {
 		const file = { id: "notes", path: ".ao/attachments/notes.txt", name: "notes.txt", mimeType: "text/plain", bytes: 12 };
 		const ref = { id: "excerpt", conversationId: "main", messageId: "message", revision: 1, text: "Saved excerpt", role: "assistant" as const };
