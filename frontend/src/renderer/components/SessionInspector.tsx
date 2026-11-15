@@ -2482,7 +2482,7 @@ function MergedReviewsSection({
 		const resolvedByReviewer = new Map(
 			resolvedReviewers.map((reviewer) => [reviewer.reviewerId, reviewer]),
 		);
-		const externalEntries = entries.map((entry) => {
+		const externalEntries: InspectorGithubReview[] = entries.map((entry) => {
 			const reviewer = unresolvedByReviewer.get(entry.reviewerId);
 			const resolvedReviewer = resolvedByReviewer.get(entry.reviewerId);
 			unresolvedByReviewer.delete(entry.reviewerId);
