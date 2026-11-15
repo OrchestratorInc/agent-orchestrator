@@ -885,14 +885,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// A poll that started against the previous pairing must not publish any
 			// of its board state after the user has moved to another machine.
 			if (!isCurrent()) return false;
-			setKnownProjects((prev) => retainProjects(
-				prev,
-				{ machine: machineIdentity(c), projects: sess.projects },
-				machineIdentity(c),
-			));
+			const machine = machineIdentity(c);
+			// /projects failed with no list from this machine known yet (the
+			// first poll since launch): the saved board's list stands in. This
+			// poll publishes the board, so the saved one is never shown after it,
+			// and saving null would wipe that list for the next launch too. A
+			// successful [] stays what this machine has.
+			const known = knownProjectsRef.current;
+			const savedProjects = sess.projects === null && !(known.machine === machine && known.known) && c.hostId
+				? (await loadBoard(hostMachineIdentity(c.hostId)))?.projects ?? null
+				: null;
+			if (!isCurrent()) return false;
+			const answer = { machine, projects: sess.projects ?? savedProjects };
+			setKnownProjects((prev) => retainProjects(prev, answer, machine));
 			// What the board shows: a list /projects failed to send this time is
 			// the one this machine sent before, so that one is what gets saved.
-			const shownProjects = retainProjects(knownProjectsRef.current, { machine: machineIdentity(c), projects: sess.projects }, machineIdentity(c));
+			const shownProjects = retainProjects(knownProjectsRef.current, answer, machine);
 			setSessions((previous) => reconcileRows(previous, sess.sessions));
 			setArchive((previous) => (sameArchiveSummary(previous, sess.archive) ? previous : sess.archive ?? null));
 			setOrchestrators((previous) => reconcileRows(previous, sess.orchestrators));

@@ -7,10 +7,19 @@ const state = vi.hoisted(() => ({
 	onState: undefined as ((value: string) => void) | undefined,
 	resolve: vi.fn(), sessions: vi.fn(), notifications: vi.fn(), selected: "a",
 	items: new Map<string, string>(),
+	/** When set, the next read of a saved board waits until `releaseBoardRead` is called. */
+	holdNextBoardRead: false,
+	releaseBoardRead: null as null | (() => void),
 }));
 vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
-	getItem: async (key: string) => state.items.get(key) ?? null,
+	getItem: async (key: string) => {
+		if (state.holdNextBoardRead && key.startsWith("ao.board.")) {
+			state.holdNextBoardRead = false;
+			await new Promise<void>((resolve) => { state.releaseBoardRead = resolve; });
+		}
+		return state.items.get(key) ?? null;
+	},
 	setItem: async (key: string, value: string) => { state.items.set(key, value); },
 	removeItem: async (key: string) => { state.items.delete(key); },
 } }));
@@ -63,7 +72,7 @@ const configFor = (id: string) => id === "b" ? null : { ...(id === "c" ? {} : { 
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.items.clear();
+	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.items.clear(); state.holdNextBoardRead = false; state.releaseBoardRead = null;
 	state.resolve.mockImplementation(async () => configFor(state.selected));
 	state.sessions.mockResolvedValue(board("Live A", [{ id: "a-app", name: "a-app" }]));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
@@ -114,6 +123,23 @@ it("saves the projects it kept when a poll could not load them", async () => {
 	await act(async () => { state.onState!("background"); });
 	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 	expect(JSON.parse(state.items.get(boardKey("host.a")) ?? "null")?.projects).toEqual([{ id: "a-app", name: "a-app" }]);
+});
+
+// The first poll since launch answered before the saved board was read, and
+// its /projects failed: the saved list stays, on screen and on the phone,
+// instead of a background flush saving null over it.
+it("keeps the saved projects when the first poll could not load them", async () => {
+	saveBoard("host.a", board("Saved A", [{ id: "a-app", name: "a-app" }]));
+	state.holdNextBoardRead = true;
+	state.sessions.mockResolvedValue({ ...board("Live A"), projects: null });
+	await mount();
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect(current.sessions[0]?.displayName).toBe("Live A");
+	expect(current.projects.map((project) => project.id)).toEqual(["a-app"]);
+	await act(async () => { state.onState!("background"); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect(JSON.parse(state.items.get(boardKey("host.a")) ?? "null")?.projects).toEqual([{ id: "a-app", name: "a-app" }]);
+	await act(async () => { state.releaseBoardRead?.(); });
 });
 
 // Shown and forgotten by the paired machine's id: one saved under its address
