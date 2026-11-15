@@ -445,6 +445,15 @@ that cutoff. Opening-turn IDs and timestamps travel with the side's recovery
 state; the shared chat timeline shows that opening question and its lattice
 loader while later questions remain in the queue dock.
 
+The renderer loads each saved side draft before freezing a Send or copying a
+replacement. Typing alone does not mark that draft as loaded, and autosaves wait
+for the read so they cannot erase saved files or delivery receipts. Edits made
+after Send remain in the next draft. Known opening failures are saved with the
+receipt and restore their Retry or Recreate action without automatic dispatch;
+accepted daemon turns take precedence over older local failures. Definitively
+rejected follow-ups remove their temporary bubbles, while uncertain delivery
+keeps its original identity until reconciliation.
+
 Unused drafts restore without provider work. A recovered pre-dispatch receipt or
 interrupted startup with unverified ownership requires visible recreation instead
 of silently capturing newer context or submitting again. Safe startup retries
