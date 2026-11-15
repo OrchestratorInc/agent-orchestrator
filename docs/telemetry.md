@@ -620,11 +620,14 @@ email address.
   cloud session's file.
 - `surface` on `opened_externally` and `deleted` is `page` (the Artifacts
   page), `tab` (a session's Artifacts tab), or `viewer` (the open artifact).
-- `outcome` is `loaded` (the first card appeared), `empty` (no artifacts),
-  `failed` (the list could not be read, or no cards showed because a cloud session's list or files could not be read), or `left` (closed before the list
-  loaded). `time_to_first_card_ms` is sent only with `loaded`.
+- `outcome` is `loaded` (the first card appeared, even while cloud lists
+  were still loading), `empty` (no artifacts once every list loaded),
+  `failed` (the list could not be read, or no cards showed because a cloud
+  session's list or files could not be read), or `left` (closed before
+  either). `time_to_first_card_ms` is sent only with `loaded`.
 - `artifact_count_bucket` is `0`, `1`, `2-5`, `6-20`, `21-50`, `51-200`, or
-  `200+`.
+  `200+`: the artifacts listed when the first card appeared, or when every
+  list had loaded for `empty`.
 - `access` is `restricted` (only the owner and the people invited) or
   `anyone` (anyone with the link). `invite_count` is the number of people
   added in that action, never who they are. `republish` is true when an

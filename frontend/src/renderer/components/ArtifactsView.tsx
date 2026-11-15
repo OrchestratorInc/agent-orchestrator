@@ -144,7 +144,7 @@ export function ArtifactsView() {
 	const grid = useVirtualGridRows(cards.length, scrollElement);
 	useArtifactListTelemetry({
 		surface: "page",
-		// Cloud cards join the local ones, so the open waits for both lists.
+		// Only an empty outcome waits for the cloud lists; the first card does not.
 		settled: !workspaceQuery.isLoading && !workspaceQuery.cloudLoading,
 		// The same condition that shows the error in place of any cached cards,
 		// or no cards because a cloud list could not be read (not an empty list).

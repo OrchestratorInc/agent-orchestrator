@@ -1086,7 +1086,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const cloud = useCloudProjectsQuery(cloudOptions);
 	const cloudSessions = useCloudSessionsQuery(cloudOptions);
 	const sharedWorkspaces = useSharedCloudWorkspacesQuery(cloudOptions);
-	const { org, ready } = useCloudOrg();
+	const { org, ready, isLoading: orgLoading } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
@@ -1121,9 +1121,12 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// removalVersion is read outside React by applyOptimisticProjectRemovals.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready, removalVersion]);
-	// True while a cloud list, or a cloud session's artifact files, is still on
-	// its first fetch: the merged data may still grow. Disabled cloud queries (signed out, offering off) never count.
-	const cloudLoading = includeCloud && (cloud.isLoading || cloudSessions.isLoading || cloudSessions.filesLoading || sharedWorkspaces.isLoading);
+	// True while the cloud org, a cloud list, or a cloud session's artifact
+	// files are still on their first fetch, or an empty cached session list is
+	// refreshing: the merged data may still grow. Disabled cloud queries
+	// (signed out, offering off) never count.
+	const cloudLoading = includeCloud && (orgLoading || cloud.isLoading || cloudSessions.isLoading || cloudSessions.filesLoading || sharedWorkspaces.isLoading
+		|| (cloudSessions.isFetching && cloudSessions.data?.length === 0));
 	// A cloud list that could not be read, so its cards are missing rather than absent.
 	const cloudFailed = includeCloud && ((cloudSessions.isError && cloudSessions.data === undefined) || cloudSessions.filesFailed);
 	return { ...local, data, cloudLoading, cloudFailed };

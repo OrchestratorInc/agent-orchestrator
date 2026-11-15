@@ -7,7 +7,8 @@ import { captureRendererEvent } from "../lib/telemetry";
  * Artifacts page, or a session's Artifacts tab while the inspector shows it.
  * `open` is the list's surface being open; `showing` is its cards being on
  * screen rather than covered by one open artifact. The clock starts when the
- * cards first show in an open and stops on the first painted card. Closing
+ * cards first show in an open and stops on the first painted card, even while
+ * other lists load; `settled` (every list loaded) only gates `empty`. Closing
  * the list before an outcome reports `left`, and the next open counts again;
  * re-renders, refetches and count changes within an open send nothing.
  */
@@ -43,8 +44,10 @@ export function useArtifactListTelemetry({ surface, open = true, showing = true,
 
 	useEffect(() => {
 		const start = startedAt.current;
-		if (!open || !showing || sent.current || frame.current !== null || start === null || !settled) return;
-		if (failed || !hasCards) {
+		if (!open || !showing || sent.current || frame.current !== null || start === null) return;
+		// The first card ends the clock whether or not other lists are still
+		// loading; only an empty outcome waits for every list to settle.
+		if (failed || (!hasCards && settled)) {
 			sent.current = true;
 			void captureRendererEvent("ao.artifacts.list_opened", {
 				surface,
@@ -53,6 +56,7 @@ export function useArtifactListTelemetry({ surface, open = true, showing = true,
 			});
 			return;
 		}
+		if (!hasCards) return;
 		// The cards are committed; the next frame is when they are on screen.
 		frame.current = requestAnimationFrame(() => {
 			frame.current = null;
