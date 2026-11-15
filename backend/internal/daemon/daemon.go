@@ -585,7 +585,7 @@ func Run(buildVersion string) (retErr error) {
 				}, request.WorkingDir, log)
 			},
 			"docker-agent": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-				return dockeragentacp.DiscoverConfigOptions(listCtx, request.Binary, request.WorkingDir, cfg.DataDir, request.Env, log)
+				return dockeragentacp.DiscoverConfigOptions(listCtx, request.Binary, cfg.DataDir, request.Env, log)
 			},
 			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{

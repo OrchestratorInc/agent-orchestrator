@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -191,6 +192,9 @@ func TestInitializeAdmitsQualifiedAndNewerReleases(t *testing.T) {
 	for version, admitted := range map[string]bool{
 		"v1.149.9": false, "v0.999.0": false, "": false, "latest": false,
 		"v1.150.0": true, "v1.151.0": true, "v1.200.3": true, "v2.0.0": true, "v1.152.0-rc.1": true,
+		// A prerelease sorts before its release; build metadata is ignored.
+		"v1.150.0-rc.1": false, "1.150.0-beta": false, "v1.149.9-rc.1": false,
+		"v1.150.0+build.7": true, "v1.150.0+build-7": true, "v1.150.0-rc.1+build": false,
 	} {
 		err := validateInitialize(acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "docker agent", Version: version}, AgentCapabilities: acpsdk.AgentCapabilities{LoadSession: true}})
 		if (err == nil) != admitted {
@@ -242,6 +246,44 @@ func TestSessionOptionsLeaveDefaultModelToNativeConfig(t *testing.T) {
 	want := []acpdriver.SessionOption{{ID: "model", Value: "model:main"}}
 	if got := sessionOptions(ports.ChatTurnSettings{Model: "model:main"}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %+v, want %+v", got, want)
+	}
+}
+
+// Model discovery starts a native session, which runs the config's
+// session-start hooks, so it must never run in the selected project.
+func TestDiscoveryRunsOutsideTheProject(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
+	clearProviderKeys(t)
+	t.Setenv(dockeragent.ConfigEnv, "")
+	dataDir := t.TempDir()
+	var launch acpdriver.Launch
+	var cwd string
+	original := discoverACPConfigOptions
+	t.Cleanup(func() { discoverACPConfigOptions = original })
+	discoverACPConfigOptions = func(_ context.Context, l acpdriver.Launch, workingDir string, _ *slog.Logger) ([]ports.ChatConfigOption, error) {
+		launch, cwd = l, workingDir
+		return nil, nil
+	}
+	if _, err := DiscoverConfigOptions(context.Background(), "/installed/docker-agent", dataDir, map[string]string{"GEMINI_API_KEY": "key"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dataDir, "agent-runtime", "docker-agent")
+	if !strings.HasPrefix(cwd, root+string(filepath.Separator)) {
+		t.Fatalf("discovery cwd %q is not a private directory under %q", cwd, root)
+	}
+	workingDir := ""
+	for i, arg := range launch.Args {
+		if arg == "--working-dir" && i+1 < len(launch.Args) {
+			workingDir = launch.Args[i+1]
+		}
+	}
+	if workingDir != cwd {
+		t.Fatalf("--working-dir = %q, want the discovery directory %q", workingDir, cwd)
+	}
+	if _, err := os.Stat(cwd); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("discovery directory was not removed: %v", err)
 	}
 }
 

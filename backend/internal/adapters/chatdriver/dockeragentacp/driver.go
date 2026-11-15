@@ -51,11 +51,12 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	return nil
 }
 
-// atLeastMinimum reports whether a "vMAJOR.MINOR.PATCH" version (prerelease
-// or build suffix ignored) is minimumVersion or newer.
+// atLeastMinimum reports whether a "vMAJOR.MINOR.PATCH" version is
+// minimumVersion or newer. Build metadata is ignored; a prerelease sorts
+// before its release, so a prerelease of minimumVersion itself is refused.
 func atLeastMinimum(version string) bool {
-	core, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(version), "v"), "-")
-	core, _, _ = strings.Cut(core, "+")
+	version, _, _ = strings.Cut(strings.TrimPrefix(strings.TrimSpace(version), "v"), "+")
+	core, prerelease, _ := strings.Cut(version, "-")
 	parts := strings.Split(core, ".")
 	if len(parts) != 3 {
 		return false
@@ -69,7 +70,7 @@ func atLeastMinimum(version string) bool {
 			return n > minimumVersion[i]
 		}
 	}
-	return true
+	return prerelease == ""
 }
 
 func preflight(ctx context.Context) error {
@@ -178,10 +179,16 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	return args, env, nil
 }
 
+// discoverACPConfigOptions is the shared ACP discovery call; tests replace it
+// to observe the launch without a Docker Agent binary.
+var discoverACPConfigOptions = acpdriver.DiscoverConfigOptions
+
 // DiscoverConfigOptions lists the model choices Docker Agent advertises for
 // the effective config, launching it against a throwaway runtime directory
-// under dataDir that is removed afterwards.
-func DiscoverConfigOptions(ctx context.Context, binary, workingDir, dataDir string, env map[string]string, log *slog.Logger) ([]ports.ChatConfigOption, error) {
+// under dataDir that is removed afterwards. Discovery never runs in a project
+// directory: session/new fires the native config's session-start hooks, which
+// must not touch a workspace before any task exists.
+func DiscoverConfigOptions(ctx context.Context, binary, dataDir string, env map[string]string, log *slog.Logger) ([]ports.ChatConfigOption, error) {
 	if err := preflight(ctx); err != nil {
 		return nil, err
 	}
@@ -207,9 +214,6 @@ func DiscoverConfigOptions(ctx context.Context, binary, workingDir, dataDir stri
 			return nil, err
 		}
 	}
-	if strings.TrimSpace(workingDir) == "" {
-		workingDir = dir
-	}
 	launchEnv := dockeragent.ProviderEnv(env)
 	for key, value := range env {
 		if _, aliased := launchEnv[key]; !aliased {
@@ -217,11 +221,11 @@ func DiscoverConfigOptions(ctx context.Context, binary, workingDir, dataDir stri
 		}
 	}
 	launchEnv["TELEMETRY_ENABLED"] = "false"
-	return acpdriver.DiscoverConfigOptions(ctx, acpdriver.Launch{
+	return discoverACPConfigOptions(ctx, acpdriver.Launch{
 		Command: binary,
-		Args:    []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", workingDir},
+		Args:    []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", dir},
 		Env:     launchEnv,
-	}, workingDir, log)
+	}, dir, log)
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
