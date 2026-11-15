@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const stored = new Map<string, string>();
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
@@ -31,7 +32,10 @@ const PAGE_PREFIX = "ao.chat.saved.v1.";
 const entries = (count: number, bytes = 1) => Array.from({ length: count }, (_, n) => ({ key: `chat-${n}`, bytes }));
 const page = (text: string, sessionId = "s") => ({ sessionId, conversationId: "c", latestSequence: 1, items: [{ kind: "message", id: "m", text }], turns: [] } as unknown as ConversationPage);
 const savedKeys = () => [...stored.keys()].filter((key) => key.startsWith(PAGE_PREFIX)).map((key) => key.slice(PAGE_PREFIX.length)).sort();
-const indexKeys = () => (JSON.parse(stored.get(INDEX_KEY) ?? "[]") as Array<[string, number]>).map(([key]) => key);
+const indexEntries = () => JSON.parse(stored.get(INDEX_KEY) ?? "[]") as Array<[string, number]>;
+const indexKeys = () => indexEntries().map(([key]) => key);
+const indexBytes = (key: string) => indexEntries().find(([saved]) => saved === key)?.[1];
+const storedBytes = (key: string) => utf8Bytes(stored.get(PAGE_PREFIX + key) ?? "");
 
 /** Saves one page through a saver, written as soon as it is flushed. */
 async function save(key: string, value: ConversationPage) {
@@ -94,6 +98,32 @@ describe("saved chat pages", () => {
 		for (let n = 0; n < SAVED_CONVERSATIONS; n++) await save(`host.a/chat-${n}`, page("hi"));
 		expect(savedKeys()).not.toContain("host.a/orphan");
 		expect(savedKeys()).toHaveLength(SAVED_CONVERSATIONS);
+	});
+
+	it("count the old, larger page until its smaller replacement is written", async () => {
+		await save("host.a/chat", page("x".repeat(300_000)));
+		const large = storedBytes("host.a/chat");
+		expect(indexBytes("host.a/chat")).toBe(large);
+
+		// The index is written first; the page write after it fails (or the app is
+		// killed between the two), so the phone still holds the large page.
+		const setItem = vi.mocked(AsyncStorage.setItem);
+		const write = setItem.getMockImplementation()!;
+		setItem.mockImplementation(async (key, value) => {
+			if (key === PAGE_PREFIX + "host.a/chat") throw new Error("database or disk is full");
+			return write(key, value);
+		});
+		try {
+			await save("host.a/chat", page("small"));
+		} finally {
+			setItem.mockImplementation(write);
+		}
+		expect(storedBytes("host.a/chat")).toBe(large);
+		expect(indexBytes("host.a/chat")).toBe(large);
+
+		await save("host.a/chat", page("small"));
+		expect(indexBytes("host.a/chat")).toBe(storedBytes("host.a/chat"));
+		expect(storedBytes("host.a/chat")).toBeLessThan(1_000);
 	});
 
 	it("are written once a streaming chat settles, the newest page per chat", async () => {

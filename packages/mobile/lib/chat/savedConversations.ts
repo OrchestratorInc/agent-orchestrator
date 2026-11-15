@@ -151,7 +151,12 @@ async function writeSaved(key: string, page: ConversationPage, now: number): Pro
 	const text = JSON.stringify({ v: 1, savedAt: now, page } satisfies Saved);
 	const bytes = utf8Bytes(text);
 	if (bytes > SAVED_PAGE_MAX_BYTES) return;
-	const { keep, drop } = nextIndex(await readIndex(), key, bytes);
+	const index = await readIndex();
+	// Until the new page is written, storage still holds the old one, so its
+	// entry counts the larger of the two: a save cut short or refused never
+	// leaves the index counting less than the phone holds.
+	const old = index.find((entry) => entry.key === key)?.bytes ?? 0;
+	const { keep, drop } = nextIndex(index, key, Math.max(bytes, old));
 	// Pages no kept entry names go too: the dropped ones, and any an interrupted
 	// save or removal left behind with no entry, which nothing else would clear.
 	const kept = new Set(keep.map((entry) => entry.key));
@@ -165,6 +170,8 @@ async function writeSaved(key: string, page: ConversationPage, now: number): Pro
 	// page (which loads as nothing), never a page outside the budget.
 	await writeIndex(keep);
 	await AsyncStorage.setItem(PAGE_PREFIX + key, text);
+	// Written: a smaller page now counts its own size.
+	if (old > bytes) await writeIndex(keep.map((entry) => (entry.key === key ? { key, bytes } : entry)));
 }
 
 /** Removes every saved chat `matches` picks, listed in the index or not. */
