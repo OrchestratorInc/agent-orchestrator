@@ -810,7 +810,7 @@ export function SessionArtifactsView({
 		hostId,
 		...(artifact.shareUrl && shareAccess.has(artifact.shareUrl) ? { shareAccess: shareAccess.get(artifact.shareUrl) } : {}),
 	});
-	const openArtifact = (artifact: Pick<SessionArtifact, "path" | "bundle">) => {
+	const openArtifact = (artifact: { path: string; bundle?: unknown }) => {
 		void captureRendererEvent("ao.artifacts.opened", {
 			surface: "tab",
 			file_type: artifactFileType(artifact.path, Boolean(artifact.bundle)),
