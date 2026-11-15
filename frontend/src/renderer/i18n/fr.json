@@ -5342,6 +5342,7 @@
 	"move.conversationTranscript": "Transcription complète, {{size}}",
 	"move.conversationTranscriptSubagents_one": "Transcription complète avec {{count}} sous-agent, {{size}}",
 	"move.conversationTranscriptSubagents_other": "Transcription complète avec {{count}} sous-agents, {{size}}",
+	"move.conversationTranscriptSubagents_many": "Transcription complète avec {{count}} sous-agents, {{size}}",
 	"move.conversationNote": "Note de synthèse",
 	"move.conversationTooLarge": "Note de synthèse : la transcription dépasse 64 Mio",
 	"move.doneNote": "La conversation a été déplacée sous forme de note de synthèse.",

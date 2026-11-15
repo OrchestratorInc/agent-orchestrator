@@ -5342,6 +5342,7 @@
 	"move.conversationTranscript": "Transcripción completa, {{size}}",
 	"move.conversationTranscriptSubagents_one": "Transcripción completa con {{count}} subagente, {{size}}",
 	"move.conversationTranscriptSubagents_other": "Transcripción completa con {{count}} subagentes, {{size}}",
+	"move.conversationTranscriptSubagents_many": "Transcripción completa con {{count}} subagentes, {{size}}",
 	"move.conversationNote": "Nota de resumen",
 	"move.conversationTooLarge": "Nota de resumen: la transcripción supera los 64 MiB",
 	"move.doneNote": "La conversación se movió como nota de resumen.",
