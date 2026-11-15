@@ -721,6 +721,11 @@ function queryResultsData<T>(results: { data?: T }[]): (T | undefined)[] {
 	return results.map((result) => result.data);
 }
 
+/** Each query's data, and whether any is still on its first fetch. Structurally shared, so `data` keeps its identity. */
+function queryResultsDataAndLoading<T>(results: { data?: T; isLoading: boolean }[]): { data: (T | undefined)[]; loading: boolean } {
+	return { data: queryResultsData(results), loading: results.some((result) => result.isLoading) };
+}
+
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
@@ -745,7 +750,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	// read in their own query, once per artifact version, without holding up
 	// the list.
 	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
-	const fileData = useQueries({
+	const { data: fileData, loading: filesLoading } = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
 			enabled: orgId !== undefined && options.enabled !== false,
@@ -755,7 +760,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			queryFn: ({ signal }: { signal: AbortSignal }) =>
 				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(orgId ?? "", session.id, { signal })).artifacts),
 		})),
-		combine: queryResultsData,
+		combine: queryResultsDataAndLoading,
 	});
 	// A session keeps its last good list while a new version loads or after a
 	// failed read, so its Artifacts tab and open file stay.
@@ -770,7 +775,8 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [list.data, fileData]);
-	return { ...list, data };
+	// The list has loaded but a live session's first file read has not: its cards are still on the way.
+	return { ...list, data, filesLoading };
 }
 
 /** Who shared a project and its sessions, how, and through which team. */
@@ -1100,9 +1106,9 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// removalVersion is read outside React by applyOptimisticProjectRemovals.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready, removalVersion]);
-	// True while a cloud list is still on its first fetch: the merged data may
-	// still grow. Disabled cloud queries (signed out, offering off) never count.
-	const cloudLoading = includeCloud && (cloud.isLoading || cloudSessions.isLoading || sharedWorkspaces.isLoading);
+	// True while a cloud list, or a cloud session's artifact files, is still on
+	// its first fetch: the merged data may still grow. Disabled cloud queries (signed out, offering off) never count.
+	const cloudLoading = includeCloud && (cloud.isLoading || cloudSessions.isLoading || cloudSessions.filesLoading || sharedWorkspaces.isLoading);
 	return { ...local, data, cloudLoading };
 }
 

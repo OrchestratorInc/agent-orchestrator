@@ -71,8 +71,11 @@ describe("useCloudSessionsQuery artifact files", () => {
 		const { result } = renderHook(() => useCloudSessionsQuery(), { wrapper });
 		await waitFor(() => expect(result.current.data).toHaveLength(1));
 		expect(result.current.data?.[0]?.artifactFiles).toBeUndefined();
+		// The list is in, but its cards are still on the way.
+		await waitFor(() => expect(result.current.filesLoading).toBe(true));
 		release({ artifacts: files });
 		await waitFor(() => expect(result.current.data?.[0]?.artifactFiles).toEqual(files));
+		expect(result.current.filesLoading).toBe(false);
 	});
 
 	it("follows a change in how many sessions have files without a hook warning", async () => {
