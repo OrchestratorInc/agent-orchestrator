@@ -420,12 +420,13 @@ function StepAction({ children }: { children: ReactNode }) {
 const BackContext = createContext<(() => void) | undefined>(undefined);
 
 /** The step's actions, just under its content and flush right: Back, then the
- * step's own, its primary last. */
+ * step's own, its primary last. On a step taller than the window they stay in
+ * view at the column's foot while the content scrolls under them. */
 function StepActions({ setSlot }: { setSlot: (slot: HTMLDivElement | null) => void }) {
 	const { t } = useTranslation();
 	const onBack = useContext(BackContext);
 	return (
-		<div className="flex flex-wrap items-start justify-end gap-2 pt-8 [&_button]:h-11 [&_button]:rounded-xl [&_button]:px-5 [&_button]:text-base">
+		<div className="sticky bottom-0 z-10 flex flex-wrap items-start justify-end gap-2 bg-background pb-14 pt-8 [&_button]:h-11 [&_button]:rounded-xl [&_button]:px-5 [&_button]:text-base">
 			{onBack ? (
 				<Button type="button" variant="ghost" className="!w-11 !px-0" aria-label={t("firstRun.back")} title={t("firstRun.back")} onClick={onBack}>
 					<ArrowLeft className="!size-5" aria-hidden="true" />
@@ -468,7 +469,9 @@ function StepSplit({
 		// The copy and its actions sit centred in the column's height, a little
 		// below the middle (more padding on top than under it). my-auto rather
 		// than justify-center so a tall step still scrolls from its top.
-		<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pb-14 pl-12 pr-10 pt-[max(6rem,16vh)]">
+		// No bottom padding here: the actions carry it, so when they stick to the
+		// foot of a tall step nothing shows beneath them.
+		<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pl-12 pr-10 pt-[max(6rem,16vh)]">
 			<div className="my-auto flex w-full max-w-md flex-col">
 				<h1 className={titleHidden ? "sr-only" : "text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground"}>{title}</h1>
 				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
@@ -1004,6 +1007,16 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 		void refresh();
 	};
 
+	// A harness from the full list that's installed, waiting to be signed in,
+	// installing or failed joins the main list, so it never hides behind
+	// "N more" (or scrolls out of sight in the full list).
+	const pinned = more.filter(({ agent, state }) => {
+		const view = agentInstalls.view(agent.id);
+		return state !== "missing" || view.busy || view.ended;
+	});
+	const pinnedIds = new Set(pinned.map(({ agent }) => agent.id));
+	const listed = [...agents, ...pinned];
+	const rest = more.filter(({ agent }) => !pinnedIds.has(agent.id));
 	const agentRow = ({ agent, state }: (typeof agents)[number]) => {
 		const view = agentInstalls.view(agent.id);
 		const plan = agentInstalls.planFor(agent.id);
@@ -1115,16 +1128,16 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 						}
 					>
 						<ul className={ROW_LIST}>
-							{agents.map(agentRow)}
-							{more.length > 0 && !showAllAgents ? (
-								<MoreHarnessesRow ids={more.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
+							{listed.map(agentRow)}
+							{rest.length > 0 && !showAllAgents ? (
+								<MoreHarnessesRow ids={rest.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
 							) : null}
 						</ul>
-						{showAllAgents && more.length > 0 ? (
+						{showAllAgents && rest.length > 0 ? (
 							<>
 								{/* Every other harness, installable from here too; scrolls past a few rows. */}
 								<ul className={cn(ROW_LIST, "max-h-80 overflow-y-auto")} aria-label={t("firstRun.moreHarnessesList")}>
-									{more.map(agentRow)}
+									{rest.map(agentRow)}
 								</ul>
 								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
 									{t("firstRun.showFewerHarnesses")}
