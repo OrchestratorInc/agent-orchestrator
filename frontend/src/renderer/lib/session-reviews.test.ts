@@ -86,14 +86,17 @@ describe("shared review eligibility helpers", () => {
 	});
 
 	it("reads the review phase from the run state, not the reviewer's activity", () => {
-		const withRun = (status: NonNullable<PRReviewState["latestRun"]>["status"]): PRReviewState[] => [
-			{ ...reviewState(1, "running"), latestRun: { status } as NonNullable<PRReviewState["latestRun"]> },
+		const withRun = (status: NonNullable<PRReviewState["latestRun"]>["status"], harness = "codex"): PRReviewState[] => [
+			{ ...reviewState(1, "running"), latestRun: { status, harness } as NonNullable<PRReviewState["latestRun"]> },
 		];
 		expect(reviewPhase(withRun("queued"), "idle")).toBe("starting");
 		expect(reviewPhase(withRun("launching"), undefined)).toBe("starting");
 		expect(reviewPhase(withRun("running"), "idle")).toBe("reviewing");
 		expect(reviewPhase(withRun("running"), "exited")).toBe("reviewing");
-		expect(reviewPhase(withRun("running"), "waiting_input")).toBe("waiting_input");
+		expect(reviewPhase(withRun("running"), "waiting_input", "codex")).toBe("waiting_input");
+		// The waiting reviewer is not the one whose pass is running.
+		expect(reviewPhase(withRun("running", "claude-code"), "waiting_input", "codex")).toBe("reviewing");
+		expect(reviewPhase(withRun("running"), "waiting_input")).toBe("reviewing");
 		expect(reviewPhase(withRun("cancelling"), "active")).toBe("stopping");
 		expect(reviewPhase([reviewState(1, "running")], "idle")).toBe("reviewing");
 		expect(reviewPhase([reviewState(1, "needs_review")], "active")).toBeNull();

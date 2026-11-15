@@ -102,7 +102,7 @@ UPDATE review_run SET
     launch_id = COALESCE(NULLIF(CAST(sqlc.arg(launch_id) AS TEXT), ''), launch_id),
     launching_at = COALESCE(sqlc.narg(launching_at), launching_at),
     started_at = COALESCE(sqlc.narg(started_at), started_at),
-    first_activity_at = COALESCE(sqlc.narg(first_activity_at), first_activity_at),
+    first_activity_at = CASE WHEN CAST(sqlc.arg(clear_first_activity) AS BOOLEAN) THEN NULL ELSE COALESCE(sqlc.narg(first_activity_at), first_activity_at) END,
     cancel_requested_at = COALESCE(sqlc.narg(cancel_requested_at), cancel_requested_at),
     ended_at = COALESCE(sqlc.narg(ended_at), ended_at)
 WHERE id = sqlc.arg(id) AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(sqlc.arg(from_statuses) AS TEXT)));
@@ -121,7 +121,7 @@ UPDATE review_run SET
     launch_id = COALESCE(NULLIF(CAST(sqlc.arg(launch_id) AS TEXT), ''), launch_id),
     launching_at = COALESCE(sqlc.narg(launching_at), launching_at),
     started_at = COALESCE(sqlc.narg(started_at), started_at),
-    first_activity_at = COALESCE(sqlc.narg(first_activity_at), first_activity_at),
+    first_activity_at = CASE WHEN CAST(sqlc.arg(clear_first_activity) AS BOOLEAN) THEN NULL ELSE COALESCE(sqlc.narg(first_activity_at), first_activity_at) END,
     cancel_requested_at = COALESCE(sqlc.narg(cancel_requested_at), cancel_requested_at),
     ended_at = COALESCE(sqlc.narg(ended_at), ended_at)
 WHERE session_id = sqlc.arg(session_id)
@@ -142,7 +142,7 @@ UPDATE review_run SET
     launch_id = COALESCE(NULLIF(CAST(sqlc.arg(launch_id) AS TEXT), ''), launch_id),
     launching_at = COALESCE(sqlc.narg(launching_at), launching_at),
     started_at = COALESCE(sqlc.narg(started_at), started_at),
-    first_activity_at = COALESCE(sqlc.narg(first_activity_at), first_activity_at),
+    first_activity_at = CASE WHEN CAST(sqlc.arg(clear_first_activity) AS BOOLEAN) THEN NULL ELSE COALESCE(sqlc.narg(first_activity_at), first_activity_at) END,
     cancel_requested_at = COALESCE(sqlc.narg(cancel_requested_at), cancel_requested_at),
     ended_at = COALESCE(sqlc.narg(ended_at), ended_at)
 WHERE session_id = sqlc.arg(session_id)

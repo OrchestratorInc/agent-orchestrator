@@ -235,18 +235,21 @@ const (
 // ReviewRunPatch carries the fields one guarded transition writes alongside
 // the new status. Nil and empty fields leave the stored value unchanged.
 type ReviewRunPatch struct {
-	Verdict           ReviewVerdict
-	Body              *string
-	GithubReviewID    *string
-	AutoInjectReview  *bool
-	FailureReason     ReviewFailureReason
-	CancelledBy       ReviewCancelledBy
-	LaunchID          string
-	LaunchingAt       *time.Time
-	StartedAt         *time.Time
-	FirstActivityAt   *time.Time
-	CancelRequestedAt *time.Time
-	EndedAt           *time.Time
+	Verdict          ReviewVerdict
+	Body             *string
+	GithubReviewID   *string
+	AutoInjectReview *bool
+	FailureReason    ReviewFailureReason
+	CancelledBy      ReviewCancelledBy
+	LaunchID         string
+	LaunchingAt      *time.Time
+	StartedAt        *time.Time
+	FirstActivityAt  *time.Time
+	// ClearFirstActivity drops recorded first activity: a relaunch must earn
+	// its own. FirstActivityAt is ignored when set.
+	ClearFirstActivity bool
+	CancelRequestedAt  *time.Time
+	EndedAt            *time.Time
 }
 
 // ReviewVerdict is the outcome a reviewer reports. The empty verdict marks a

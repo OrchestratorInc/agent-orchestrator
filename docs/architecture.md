@@ -216,7 +216,13 @@ reviewers are reaped, and the boot pass never touches a run this daemon
 created. Reviewer activity hooks, trigger, cancel and the reviews list settle
 their worker's runs directly without waiting for the next pass. Time the
 daemon did not observe (the machine slept) never counts against a run, and a
-reviewer that is still being cancelled is not given new work.
+reviewer that is still being cancelled is not given new work. The boot pass
+never waits on a worker's lock; a worker a trigger holds is settled on a later
+pass. A reviewer interrupted because its pass timed out stays supervised until
+it stops or is force-stopped. A force-stop captures the reviewer's whole
+process tree before tearing down its runtime and kills any survivor, so an
+agent that cannot react to hangup is not left running; the stop counts as
+confirmed only when none of those processes remains.
 
 ### 4. Change data capture
 

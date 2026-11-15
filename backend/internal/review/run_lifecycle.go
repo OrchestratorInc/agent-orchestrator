@@ -3,6 +3,7 @@ package review
 import (
 	stdctx "context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -81,10 +82,15 @@ type activityMark struct {
 	at       time.Time
 }
 
-// pendingOrphan is a reviewer the boot pass must still destroy: its runs are
-// already final, so only this obligation can bring it back to a later pass.
-type pendingOrphan struct {
-	review domain.Review
+// pendingStop is a reviewer that must still be stopped although none of its
+// runs is active any more, so only this obligation brings it back to a later
+// pass. An orphan left by a previous daemon is force-stopped at once; a
+// reviewer interrupted because its pass timed out or never started is
+// force-stopped if it has not stopped within CancelTimeout of since.
+type pendingStop struct {
+	review    domain.Review
+	since     time.Time
+	immediate bool
 }
 
 // suspendGap is a stretch of wall-clock time the daemon did not observe, which
@@ -109,16 +115,20 @@ type runLifecycleState struct {
 	startedAt time.Time
 	awaitBoot bool
 	booted    bool
-	orphans   map[string]pendingOrphan
+	// bootPending names workers the boot pass could not settle yet because a
+	// trigger held their lock; later passes retry them without blocking.
+	bootPending map[domain.SessionID]bool
+	stops       map[string]pendingStop
 }
 
 func newRunLifecycleState(config RunLifecycleConfig, startedAt time.Time, awaitBoot bool) runLifecycleState {
 	return runLifecycleState{
-		config:    config.withDefaults(),
-		activity:  make(map[string]activityMark),
-		startedAt: startedAt,
-		awaitBoot: awaitBoot,
-		orphans:   make(map[string]pendingOrphan),
+		config:      config.withDefaults(),
+		activity:    make(map[string]activityMark),
+		startedAt:   startedAt,
+		awaitBoot:   awaitBoot,
+		bootPending: make(map[domain.SessionID]bool),
+		stops:       make(map[string]pendingStop),
 	}
 }
 
@@ -127,12 +137,52 @@ func (e *Engine) fromPreviousDaemon(run domain.ReviewRun) bool {
 	return !run.CreatedAt.After(e.runs.startedAt)
 }
 
-// awaitingBoot reports whether runs from a previous daemon are still reserved
-// for the reaper's boot pass.
-func (e *Engine) awaitingBoot() bool {
+// bootReserved reports whether a worker's runs from a previous daemon are
+// still reserved for the boot pass: it has not run yet, or it could not take
+// this worker's lock.
+func (e *Engine) bootReserved(workerID domain.SessionID) bool {
 	e.runs.mu.Lock()
 	defer e.runs.mu.Unlock()
-	return e.runs.awaitBoot && !e.runs.booted
+	return e.runs.awaitBoot && (!e.runs.booted || e.runs.bootPending[workerID])
+}
+
+func (e *Engine) setBootPending(workerID domain.SessionID, pending bool) {
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if pending {
+		e.runs.bootPending[workerID] = true
+	} else {
+		delete(e.runs.bootPending, workerID)
+	}
+}
+
+func (e *Engine) bootPendingWorkers() []domain.SessionID {
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	out := make([]domain.SessionID, 0, len(e.runs.bootPending))
+	for id := range e.runs.bootPending {
+		out = append(out, id)
+	}
+	return out
+}
+
+// bootSweep settles one worker's previous-daemon runs if its lock is free.
+// It never waits: a trigger may hold the lock through a hung launch, and the
+// boot pass must not stall every other worker (or the reaper loop) behind it.
+// A worker it cannot settle stays reserved and is retried on later passes.
+func (e *Engine) bootSweep(ctx stdctx.Context, workerID domain.SessionID, observed map[string]reviewerProbe) error {
+	unlock, ok := e.tryLockWorker(workerID)
+	if !ok {
+		e.setBootPending(workerID, true)
+		return nil
+	}
+	defer unlock()
+	if err := e.sweepSessionLocked(ctx, workerID, observed); err != nil {
+		e.setBootPending(workerID, true)
+		return err
+	}
+	e.setBootPending(workerID, false)
+	return nil
 }
 
 // activityReporter is implemented by launchers that know which reviewer
@@ -218,7 +268,9 @@ func (e *Engine) markRunRunning(ctx stdctx.Context, run domain.ReviewRun, from [
 func (e *Engine) markRunsRelaunching(ctx stdctx.Context, runs []domain.ReviewRun, launchID string) error {
 	now := e.clock()
 	for _, run := range runs {
-		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunRunning, domain.ReviewRunLaunching}, domain.ReviewRunLaunching, domain.ReviewRunPatch{LaunchID: launchID, LaunchingAt: &now}); err != nil {
+		// The replacement must report its own first activity: evidence from the
+		// launch it replaces would skip the never-started check.
+		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunRunning, domain.ReviewRunLaunching}, domain.ReviewRunLaunching, domain.ReviewRunPatch{LaunchID: launchID, LaunchingAt: &now, ClearFirstActivity: true}); err != nil {
 			return err
 		}
 	}
@@ -230,7 +282,8 @@ func (e *Engine) markRunsRelaunching(ctx stdctx.Context, runs []domain.ReviewRun
 func (e *Engine) revertRelaunch(ctx stdctx.Context, runs []domain.ReviewRun) error {
 	var errs []error
 	for _, run := range runs {
-		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunLaunching}, domain.ReviewRunRunning, domain.ReviewRunPatch{LaunchID: run.LaunchID}); err != nil {
+		// Back on the launch that was serving it, with that launch's evidence.
+		if _, err := e.transitionRun(ctx, run, []domain.ReviewRunStatus{domain.ReviewRunLaunching}, domain.ReviewRunRunning, domain.ReviewRunPatch{LaunchID: run.LaunchID, FirstActivityAt: run.FirstActivityAt}); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -382,10 +435,10 @@ func (e *Engine) tracksActivity(review domain.Review) bool {
 // have no reviewer row gets a handle-less target so its runs are still
 // judged on their time limits.
 func (e *Engine) ListObservableReviewers(ctx stdctx.Context) ([]ports.ReviewerTarget, error) {
-	// An orphan the boot pass could not destroy yet stays observed until it is.
+	// A reviewer that must still be stopped stays observed until it is.
 	var targets []ports.ReviewerTarget
-	for _, orphan := range e.pendingOrphans() {
-		targets = append(targets, ports.ReviewerTarget{ReviewID: orphan.review.ID, SessionID: orphan.review.SessionID, HandleID: orphan.review.ReviewerHandleID, LaunchID: orphan.review.ReviewerLaunchID})
+	for _, stop := range e.pendingStops() {
+		targets = append(targets, ports.ReviewerTarget{ReviewID: stop.review.ID, SessionID: stop.review.SessionID, HandleID: stop.review.ReviewerHandleID, LaunchID: stop.review.ReviewerLaunchID})
 	}
 	runs, err := e.store.ListActiveReviewRuns(ctx)
 	if err != nil || len(runs) == 0 {
@@ -446,19 +499,19 @@ func (e *Engine) ApplyReviewerObservations(ctx stdctx.Context, pass ports.Review
 	var errs []error
 	if pass.Boot {
 		for _, workerID := range bySession.order {
-			unlock := e.lockWorker(workerID)
-			errs = append(errs, e.sweepSessionLocked(ctx, workerID, probes[workerID]))
-			unlock()
+			errs = append(errs, e.bootSweep(ctx, workerID, probes[workerID]))
 		}
-		if err := errors.Join(errs...); err != nil {
-			return err
-		}
+		// Workers it could not settle stay reserved in bootPending; every other
+		// worker is now supervised normally.
 		e.runs.mu.Lock()
 		e.runs.booted = true
 		e.runs.mu.Unlock()
-		return nil
+		return errors.Join(errs...)
 	}
-	errs = append(errs, e.retryOrphans(ctx))
+	for _, workerID := range e.bootPendingWorkers() {
+		errs = append(errs, e.bootSweep(ctx, workerID, probes[workerID]))
+	}
+	errs = append(errs, e.settleStops(ctx, probes))
 	for _, workerID := range bySession.order {
 		unlock, ok := e.tryLockWorker(workerID)
 		if !ok {
@@ -565,9 +618,8 @@ func (e *Engine) EvaluateSession(ctx stdctx.Context, workerID domain.SessionID) 
 func (e *Engine) failHungLaunches(ctx stdctx.Context, runs []domain.ReviewRun) error {
 	now := e.clock()
 	var hung []domain.ReviewRun
-	reserved := e.awaitingBoot()
 	for _, run := range runs {
-		if reserved && e.fromPreviousDaemon(run) {
+		if e.fromPreviousDaemon(run) && e.bootReserved(run.SessionID) {
 			continue
 		}
 		if run.Status == domain.ReviewRunLaunching && e.elapsed(now, launchingSince(run)) >= e.runs.config.LaunchTimeout {
@@ -608,7 +660,7 @@ func (e *Engine) evaluateSessionWith(ctx stdctx.Context, workerID domain.Session
 	// Direct evaluations (List, Trigger, hooks) can be the first to run after
 	// the machine resumes; record the pause before any time limit is applied.
 	e.noteObservation(now)
-	reserved := e.awaitingBoot()
+	reserved := e.bootReserved(workerID)
 	changed := false
 	exited := map[string]domain.Review{}
 	interrupt := map[string]domain.Review{}
@@ -670,6 +722,9 @@ func (e *Engine) evaluateSessionWith(ctx stdctx.Context, workerID domain.Session
 			if err := e.launcher.Cancel(ctx, review.ReviewerHandleID, review.Harness); err != nil {
 				slog.Default().WarnContext(ctx, "interrupt reviewer after its pass ended", "review", review.ID, "err", err)
 			}
+			// Delivering the interrupt does not prove the reviewer stopped:
+			// keep it supervised until it does, or force-stop it.
+			e.addStop(pendingStop{review: review, since: now})
 		}
 	}
 	return changed, errors.Join(errs...)
@@ -822,12 +877,10 @@ func (e *Engine) forceKill(ctx stdctx.Context, run domain.ReviewRun, review doma
 	if review.ReviewerHandleID == "" {
 		return runDecision{to: domain.ReviewRunCancelled, patch: domain.ReviewRunPatch{EndedAt: &now}}, nil
 	}
-	if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
-		slog.Default().WarnContext(ctx, "force-kill reviewer after cancel timeout", "run", run.ID, "review", review.ID, "err", err)
-		return unconfirmed, nil
-	}
+	stopped, err := e.forceStop(ctx, review)
 	delete(probes, review.ID)
-	if probe := e.probeReviewer(ctx, review, probes); !probe.known || probe.alive {
+	if err != nil || !stopped {
+		slog.Default().WarnContext(ctx, "force-kill reviewer after cancel timeout was not confirmed", "run", run.ID, "review", review.ID, "err", err)
 		return unconfirmed, nil
 	}
 	if err := e.store.ClearReviewerHandleByHarness(ctx, run.SessionID, review.Harness); err != nil {
@@ -934,6 +987,11 @@ func (e *Engine) sweepSessionLocked(ctx stdctx.Context, workerID domain.SessionI
 	var errs []error
 	for _, run := range runs {
 		if !e.fromPreviousDaemon(run) {
+			// This daemon's work: the normal rules own it, and its reviewer
+			// (the current launch) must survive the boot pass.
+			if review, ok := lookup.find(run); ok {
+				kept[review.ID] = true
+			}
 			continue
 		}
 		review, ok := lookup.find(run)
@@ -964,9 +1022,7 @@ func (e *Engine) sweepSessionLocked(ctx stdctx.Context, workerID domain.SessionI
 		if err := e.reapOrphan(ctx, workerID, review); err != nil {
 			// Keep the obligation: its runs are final now, so nothing else
 			// would bring this reviewer back to a later pass.
-			e.runs.mu.Lock()
-			e.runs.orphans[review.ID] = pendingOrphan{review: review}
-			e.runs.mu.Unlock()
+			e.addStop(pendingStop{review: review, since: now, immediate: true})
 			errs = append(errs, err)
 		}
 	}
@@ -974,68 +1030,124 @@ func (e *Engine) sweepSessionLocked(ctx stdctx.Context, workerID domain.SessionI
 }
 
 func (e *Engine) reapOrphan(ctx stdctx.Context, workerID domain.SessionID, review domain.Review) error {
-	if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
+	stopped, err := e.forceStop(ctx, review)
+	if err != nil {
 		return err
+	}
+	if !stopped {
+		return fmt.Errorf("reviewer %s: process tree still alive after force-stop", review.ID)
 	}
 	return e.store.ClearReviewerHandleByHarness(ctx, workerID, review.Harness)
 }
 
-func (e *Engine) pendingOrphans() []pendingOrphan {
+// forceStopper is implemented by launchers that can force-stop a reviewer's
+// whole process tree and confirm nothing in it survived.
+type forceStopper interface {
+	ForceStop(ctx stdctx.Context, handleID string) (bool, error)
+}
+
+// forceStop destroys a reviewer and reports whether the stop is confirmed.
+// The real launcher kills and checks the reviewer's whole process tree, since
+// destroying the runtime alone can leave a stopped agent process behind.
+func (e *Engine) forceStop(ctx stdctx.Context, review domain.Review) (bool, error) {
+	handle := reviewerProbeHandle(review)
+	if handle == "" {
+		return true, nil
+	}
+	if stopper, ok := e.launcher.(forceStopper); ok {
+		return stopper.ForceStop(ctx, handle)
+	}
+	if err := e.launcher.Destroy(ctx, handle); err != nil {
+		return false, err
+	}
+	alive, err := e.launcher.Alive(ctx, handle, review.ReviewerLaunchID)
+	return err == nil && !alive, nil
+}
+
+func (e *Engine) addStop(stop pendingStop) {
 	e.runs.mu.Lock()
 	defer e.runs.mu.Unlock()
-	out := make([]pendingOrphan, 0, len(e.runs.orphans))
-	for _, orphan := range e.runs.orphans {
-		out = append(out, orphan)
+	if prev, ok := e.runs.stops[stop.review.ID]; ok && prev.review.ReviewerLaunchID == stop.review.ReviewerLaunchID {
+		stop.since = prev.since
+		stop.immediate = stop.immediate || prev.immediate
+	}
+	e.runs.stops[stop.review.ID] = stop
+}
+
+func (e *Engine) forgetStop(reviewID string) {
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	delete(e.runs.stops, reviewID)
+}
+
+func (e *Engine) pendingStops() []pendingStop {
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	out := make([]pendingStop, 0, len(e.runs.stops))
+	for _, stop := range e.runs.stops {
+		out = append(out, stop)
 	}
 	return out
 }
 
-// retryOrphans destroys reviewers the boot pass failed to reap. An orphan is
-// dropped once it is gone, or once its review moved on to a new launch or new
-// work, which then owns the handle.
-func (e *Engine) retryOrphans(ctx stdctx.Context) error {
+// settleStops follows up every reviewer that must still be stopped. One that
+// stopped on its own (its process is gone, or it reported its turn ended) is
+// done; one past CancelTimeout, or an orphan, is force-stopped. An obligation
+// is dropped once its review moved on to a new launch or new work, which then
+// owns the reviewer.
+func (e *Engine) settleStops(ctx stdctx.Context, observed map[domain.SessionID]map[string]reviewerProbe) error {
 	var errs []error
-	for _, orphan := range e.pendingOrphans() {
-		workerID := orphan.review.SessionID
+	for _, stop := range e.pendingStops() {
+		workerID := stop.review.SessionID
 		unlock, ok := e.tryLockWorker(workerID)
 		if !ok {
 			continue
 		}
-		err := e.retryOrphanLocked(ctx, orphan)
+		err := e.settleStopLocked(ctx, stop, observed[workerID])
 		unlock()
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
 
-func (e *Engine) retryOrphanLocked(ctx stdctx.Context, orphan pendingOrphan) error {
-	forget := func() {
-		e.runs.mu.Lock()
-		delete(e.runs.orphans, orphan.review.ID)
-		e.runs.mu.Unlock()
-	}
-	current, ok, err := e.store.GetReviewBySessionAndHarness(ctx, orphan.review.SessionID, orphan.review.Harness)
+func (e *Engine) settleStopLocked(ctx stdctx.Context, stop pendingStop, observed map[string]reviewerProbe) error {
+	current, ok, err := e.store.GetReviewBySessionAndHarness(ctx, stop.review.SessionID, stop.review.Harness)
 	if err != nil {
 		return err
 	}
-	if !ok || current.ID != orphan.review.ID || current.ReviewerHandleID != orphan.review.ReviewerHandleID || current.ReviewerLaunchID != orphan.review.ReviewerLaunchID {
-		forget()
+	if !ok || current.ID != stop.review.ID || current.ReviewerHandleID != stop.review.ReviewerHandleID || current.ReviewerLaunchID != stop.review.ReviewerLaunchID {
+		e.forgetStop(stop.review.ID)
 		return nil
 	}
-	active, err := e.store.ListActiveReviewRunsBySession(ctx, orphan.review.SessionID)
+	active, err := e.store.ListActiveReviewRunsBySession(ctx, stop.review.SessionID)
 	if err != nil {
 		return err
 	}
 	for _, run := range active {
 		if run.ReviewID == current.ID {
-			forget()
+			e.forgetStop(stop.review.ID)
 			return nil
 		}
 	}
-	if err := e.reapOrphan(ctx, orphan.review.SessionID, current); err != nil {
+	now := e.clock()
+	if !stop.immediate {
+		probes := seedProbes(observed, newReviewLookup([]domain.Review{current}))
+		if probe := e.probeReviewer(ctx, current, probes); probe.known && !probe.alive {
+			e.forgetStop(stop.review.ID)
+			return nil
+		}
+		if e.tracksActivity(current) && e.turnStoppedSince(current, stop.since) {
+			e.forgetStop(stop.review.ID)
+			return nil
+		}
+		if e.elapsed(now, stop.since) < e.runs.config.CancelTimeout {
+			return nil
+		}
+	}
+	if err := e.reapOrphan(ctx, stop.review.SessionID, current); err != nil {
 		return err
 	}
-	forget()
+	e.forgetStop(stop.review.ID)
 	return nil
 }
 

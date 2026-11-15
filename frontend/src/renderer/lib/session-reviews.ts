@@ -77,16 +77,24 @@ export type ReviewPhase = "starting" | "reviewing" | "waiting_input" | "stopping
 export function reviewPhase(
 	openReviewStates: PRReviewState[],
 	reviewerActivityState: ReviewerActivityState | undefined,
+	reviewerActivityHarness?: string,
 ): ReviewPhase | null {
-	const statuses = openReviewStates
+	const running = openReviewStates
 		.filter((reviewState) => reviewState.status === "running")
-		.map((reviewState) => reviewState.latestRun?.status);
-	if (statuses.length === 0) return null;
-	if (statuses.some((status) => status === "running" || status === undefined)) {
+		.map((reviewState) => reviewState.latestRun);
+	if (running.length === 0) return null;
+	const reviewing = running.filter((run) => run?.status === "running" || run === undefined);
+	if (reviewing.length > 0) {
 		// The daemon keeps a run alive while its reviewer waits for input, so say
-		// so instead of implying it is working.
-		return reviewerActivityState === "waiting_input" ? "waiting_input" : "reviewing";
+		// so instead of implying it is working. The activity state belongs to
+		// one reviewer; another reviewer's running pass must not borrow it.
+		const waiting =
+			reviewerActivityState === "waiting_input" &&
+			Boolean(reviewerActivityHarness) &&
+			reviewing.some((run) => run?.harness === reviewerActivityHarness);
+		return waiting ? "waiting_input" : "reviewing";
 	}
+	const statuses = running.map((run) => run?.status);
 	if (statuses.some((status) => status === "queued" || status === "launching")) return "starting";
 	return "stopping";
 }

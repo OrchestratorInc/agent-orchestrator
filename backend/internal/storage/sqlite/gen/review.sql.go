@@ -1137,28 +1137,29 @@ UPDATE review_run SET
     launch_id = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), launch_id),
     launching_at = COALESCE(?9, launching_at),
     started_at = COALESCE(?10, started_at),
-    first_activity_at = COALESCE(?11, first_activity_at),
-    cancel_requested_at = COALESCE(?12, cancel_requested_at),
-    ended_at = COALESCE(?13, ended_at)
-WHERE id = ?14 AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?15 AS TEXT)))
+    first_activity_at = CASE WHEN CAST(?11 AS BOOLEAN) THEN NULL ELSE COALESCE(?12, first_activity_at) END,
+    cancel_requested_at = COALESCE(?13, cancel_requested_at),
+    ended_at = COALESCE(?14, ended_at)
+WHERE id = ?15 AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?16 AS TEXT)))
 `
 
 type TransitionReviewRunParams struct {
-	ToStatus          domain.ReviewRunStatus
-	Verdict           string
-	Body              sql.NullString
-	GithubReviewID    sql.NullString
-	AutoInjectReview  sql.NullBool
-	FailureReason     string
-	CancelledBy       string
-	LaunchID          string
-	LaunchingAt       sql.NullTime
-	StartedAt         sql.NullTime
-	FirstActivityAt   sql.NullTime
-	CancelRequestedAt sql.NullTime
-	EndedAt           sql.NullTime
-	ID                string
-	FromStatuses      string
+	ToStatus           domain.ReviewRunStatus
+	Verdict            string
+	Body               sql.NullString
+	GithubReviewID     sql.NullString
+	AutoInjectReview   sql.NullBool
+	FailureReason      string
+	CancelledBy        string
+	LaunchID           string
+	LaunchingAt        sql.NullTime
+	StartedAt          sql.NullTime
+	ClearFirstActivity bool
+	FirstActivityAt    sql.NullTime
+	CancelRequestedAt  sql.NullTime
+	EndedAt            sql.NullTime
+	ID                 string
+	FromStatuses       string
 }
 
 // The one guarded write for a run's state. It changes nothing unless the run
@@ -1176,6 +1177,7 @@ func (q *Queries) TransitionReviewRun(ctx context.Context, arg TransitionReviewR
 		arg.LaunchID,
 		arg.LaunchingAt,
 		arg.StartedAt,
+		arg.ClearFirstActivity,
 		arg.FirstActivityAt,
 		arg.CancelRequestedAt,
 		arg.EndedAt,
@@ -1200,33 +1202,34 @@ UPDATE review_run SET
     launch_id = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), launch_id),
     launching_at = COALESCE(?9, launching_at),
     started_at = COALESCE(?10, started_at),
-    first_activity_at = COALESCE(?11, first_activity_at),
-    cancel_requested_at = COALESCE(?12, cancel_requested_at),
-    ended_at = COALESCE(?13, ended_at)
-WHERE session_id = ?14
-  AND (CAST(?15 AS BOOLEAN) OR harness = ?16)
-  AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?17 AS TEXT)))
+    first_activity_at = CASE WHEN CAST(?11 AS BOOLEAN) THEN NULL ELSE COALESCE(?12, first_activity_at) END,
+    cancel_requested_at = COALESCE(?13, cancel_requested_at),
+    ended_at = COALESCE(?14, ended_at)
+WHERE session_id = ?15
+  AND (CAST(?16 AS BOOLEAN) OR harness = ?17)
+  AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?18 AS TEXT)))
 RETURNING id
 `
 
 type TransitionReviewRunsBySessionParams struct {
-	ToStatus          domain.ReviewRunStatus
-	Verdict           string
-	Body              sql.NullString
-	GithubReviewID    sql.NullString
-	AutoInjectReview  sql.NullBool
-	FailureReason     string
-	CancelledBy       string
-	LaunchID          string
-	LaunchingAt       sql.NullTime
-	StartedAt         sql.NullTime
-	FirstActivityAt   sql.NullTime
-	CancelRequestedAt sql.NullTime
-	EndedAt           sql.NullTime
-	SessionID         domain.SessionID
-	AnyHarness        bool
-	Harness           domain.ReviewerHarness
-	FromStatuses      string
+	ToStatus           domain.ReviewRunStatus
+	Verdict            string
+	Body               sql.NullString
+	GithubReviewID     sql.NullString
+	AutoInjectReview   sql.NullBool
+	FailureReason      string
+	CancelledBy        string
+	LaunchID           string
+	LaunchingAt        sql.NullTime
+	StartedAt          sql.NullTime
+	ClearFirstActivity bool
+	FirstActivityAt    sql.NullTime
+	CancelRequestedAt  sql.NullTime
+	EndedAt            sql.NullTime
+	SessionID          domain.SessionID
+	AnyHarness         bool
+	Harness            domain.ReviewerHarness
+	FromStatuses       string
 }
 
 // Bulk form of TransitionReviewRun over one worker's runs, optionally scoped to
@@ -1243,6 +1246,7 @@ func (q *Queries) TransitionReviewRunsBySession(ctx context.Context, arg Transit
 		arg.LaunchID,
 		arg.LaunchingAt,
 		arg.StartedAt,
+		arg.ClearFirstActivity,
 		arg.FirstActivityAt,
 		arg.CancelRequestedAt,
 		arg.EndedAt,
@@ -1284,34 +1288,35 @@ UPDATE review_run SET
     launch_id = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), launch_id),
     launching_at = COALESCE(?9, launching_at),
     started_at = COALESCE(?10, started_at),
-    first_activity_at = COALESCE(?11, first_activity_at),
-    cancel_requested_at = COALESCE(?12, cancel_requested_at),
-    ended_at = COALESCE(?13, ended_at)
-WHERE session_id = ?14
-  AND pr_url = ?15
-  AND target_sha != ?16
-  AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?17 AS TEXT)))
+    first_activity_at = CASE WHEN CAST(?11 AS BOOLEAN) THEN NULL ELSE COALESCE(?12, first_activity_at) END,
+    cancel_requested_at = COALESCE(?13, cancel_requested_at),
+    ended_at = COALESCE(?14, ended_at)
+WHERE session_id = ?15
+  AND pr_url = ?16
+  AND target_sha != ?17
+  AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?18 AS TEXT)))
 RETURNING id
 `
 
 type TransitionReviewRunsForOlderSHAParams struct {
-	ToStatus          domain.ReviewRunStatus
-	Verdict           string
-	Body              sql.NullString
-	GithubReviewID    sql.NullString
-	AutoInjectReview  sql.NullBool
-	FailureReason     string
-	CancelledBy       string
-	LaunchID          string
-	LaunchingAt       sql.NullTime
-	StartedAt         sql.NullTime
-	FirstActivityAt   sql.NullTime
-	CancelRequestedAt sql.NullTime
-	EndedAt           sql.NullTime
-	SessionID         domain.SessionID
-	PRURL             string
-	TargetSha         string
-	FromStatuses      string
+	ToStatus           domain.ReviewRunStatus
+	Verdict            string
+	Body               sql.NullString
+	GithubReviewID     sql.NullString
+	AutoInjectReview   sql.NullBool
+	FailureReason      string
+	CancelledBy        string
+	LaunchID           string
+	LaunchingAt        sql.NullTime
+	StartedAt          sql.NullTime
+	ClearFirstActivity bool
+	FirstActivityAt    sql.NullTime
+	CancelRequestedAt  sql.NullTime
+	EndedAt            sql.NullTime
+	SessionID          domain.SessionID
+	PRURL              string
+	TargetSha          string
+	FromStatuses       string
 }
 
 // Bulk transition for one PR's runs against any head other than target_sha.
@@ -1327,6 +1332,7 @@ func (q *Queries) TransitionReviewRunsForOlderSHA(ctx context.Context, arg Trans
 		arg.LaunchID,
 		arg.LaunchingAt,
 		arg.StartedAt,
+		arg.ClearFirstActivity,
 		arg.FirstActivityAt,
 		arg.CancelRequestedAt,
 		arg.EndedAt,

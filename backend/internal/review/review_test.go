@@ -263,7 +263,9 @@ func applyReviewRunPatch(run *domain.ReviewRun, to domain.ReviewRunStatus, patch
 	if patch.StartedAt != nil {
 		run.StartedAt = patch.StartedAt
 	}
-	if patch.FirstActivityAt != nil {
+	if patch.ClearFirstActivity {
+		run.FirstActivityAt = nil
+	} else if patch.FirstActivityAt != nil {
 		run.FirstActivityAt = patch.FirstActivityAt
 	}
 	if patch.CancelRequestedAt != nil {

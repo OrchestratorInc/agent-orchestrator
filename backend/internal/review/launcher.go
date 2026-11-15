@@ -161,6 +161,7 @@ type agentLauncher struct {
 	auth       agentAuthResolver
 	executable func() (string, error)
 	chat       ReviewerChatController
+	forceStop  forceStopHooks
 }
 
 type preLaunchReviewer interface {

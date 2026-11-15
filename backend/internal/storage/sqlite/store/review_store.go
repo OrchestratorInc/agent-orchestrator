@@ -272,21 +272,22 @@ func (s *Store) TransitionReviewRun(ctx context.Context, id string, from []domai
 	defer s.writeMu.Unlock()
 	p := reviewRunPatchParams(patch)
 	n, err := s.qw.TransitionReviewRun(ctx, gen.TransitionReviewRunParams{
-		ToStatus:          to,
-		Verdict:           p.verdict,
-		Body:              p.body,
-		GithubReviewID:    p.githubReviewID,
-		AutoInjectReview:  p.autoInjectReview,
-		FailureReason:     p.failureReason,
-		CancelledBy:       p.cancelledBy,
-		LaunchID:          p.launchID,
-		LaunchingAt:       p.launchingAt,
-		StartedAt:         p.startedAt,
-		FirstActivityAt:   p.firstActivityAt,
-		CancelRequestedAt: p.cancelRequestedAt,
-		EndedAt:           p.endedAt,
-		ID:                id,
-		FromStatuses:      fromJSON,
+		ToStatus:           to,
+		Verdict:            p.verdict,
+		Body:               p.body,
+		GithubReviewID:     p.githubReviewID,
+		AutoInjectReview:   p.autoInjectReview,
+		FailureReason:      p.failureReason,
+		CancelledBy:        p.cancelledBy,
+		LaunchID:           p.launchID,
+		LaunchingAt:        p.launchingAt,
+		StartedAt:          p.startedAt,
+		FirstActivityAt:    p.firstActivityAt,
+		ClearFirstActivity: p.clearFirstActivity,
+		CancelRequestedAt:  p.cancelRequestedAt,
+		EndedAt:            p.endedAt,
+		ID:                 id,
+		FromStatuses:       fromJSON,
 	})
 	if err != nil {
 		return false, fmt.Errorf("transition review run %s to %s: %w", id, to, err)
@@ -306,22 +307,23 @@ func (s *Store) TransitionReviewRunsBySession(ctx context.Context, sessionID dom
 	defer s.writeMu.Unlock()
 	p := reviewRunPatchParams(patch)
 	params := gen.TransitionReviewRunsBySessionParams{
-		ToStatus:          to,
-		Verdict:           p.verdict,
-		Body:              p.body,
-		GithubReviewID:    p.githubReviewID,
-		AutoInjectReview:  p.autoInjectReview,
-		FailureReason:     p.failureReason,
-		CancelledBy:       p.cancelledBy,
-		LaunchID:          p.launchID,
-		LaunchingAt:       p.launchingAt,
-		StartedAt:         p.startedAt,
-		FirstActivityAt:   p.firstActivityAt,
-		CancelRequestedAt: p.cancelRequestedAt,
-		EndedAt:           p.endedAt,
-		SessionID:         sessionID,
-		AnyHarness:        harness == nil,
-		FromStatuses:      fromJSON,
+		ToStatus:           to,
+		Verdict:            p.verdict,
+		Body:               p.body,
+		GithubReviewID:     p.githubReviewID,
+		AutoInjectReview:   p.autoInjectReview,
+		FailureReason:      p.failureReason,
+		CancelledBy:        p.cancelledBy,
+		LaunchID:           p.launchID,
+		LaunchingAt:        p.launchingAt,
+		StartedAt:          p.startedAt,
+		FirstActivityAt:    p.firstActivityAt,
+		ClearFirstActivity: p.clearFirstActivity,
+		CancelRequestedAt:  p.cancelRequestedAt,
+		EndedAt:            p.endedAt,
+		SessionID:          sessionID,
+		AnyHarness:         harness == nil,
+		FromStatuses:       fromJSON,
 	}
 	if harness != nil {
 		params.Harness = *harness
@@ -344,23 +346,24 @@ func (s *Store) TransitionReviewRunsForOlderSHA(ctx context.Context, sessionID d
 	defer s.writeMu.Unlock()
 	p := reviewRunPatchParams(patch)
 	ids, err := s.qw.TransitionReviewRunsForOlderSHA(ctx, gen.TransitionReviewRunsForOlderSHAParams{
-		ToStatus:          to,
-		Verdict:           p.verdict,
-		Body:              p.body,
-		GithubReviewID:    p.githubReviewID,
-		AutoInjectReview:  p.autoInjectReview,
-		FailureReason:     p.failureReason,
-		CancelledBy:       p.cancelledBy,
-		LaunchID:          p.launchID,
-		LaunchingAt:       p.launchingAt,
-		StartedAt:         p.startedAt,
-		FirstActivityAt:   p.firstActivityAt,
-		CancelRequestedAt: p.cancelRequestedAt,
-		EndedAt:           p.endedAt,
-		SessionID:         sessionID,
-		PRURL:             prURL,
-		TargetSha:         targetSHA,
-		FromStatuses:      fromJSON,
+		ToStatus:           to,
+		Verdict:            p.verdict,
+		Body:               p.body,
+		GithubReviewID:     p.githubReviewID,
+		AutoInjectReview:   p.autoInjectReview,
+		FailureReason:      p.failureReason,
+		CancelledBy:        p.cancelledBy,
+		LaunchID:           p.launchID,
+		LaunchingAt:        p.launchingAt,
+		StartedAt:          p.startedAt,
+		FirstActivityAt:    p.firstActivityAt,
+		ClearFirstActivity: p.clearFirstActivity,
+		CancelRequestedAt:  p.cancelRequestedAt,
+		EndedAt:            p.endedAt,
+		SessionID:          sessionID,
+		PRURL:              prURL,
+		TargetSha:          targetSHA,
+		FromStatuses:       fromJSON,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transition older review runs for session %s pr %s to %s: %w", sessionID, prURL, to, err)
@@ -381,18 +384,19 @@ func (s *Store) MarkReviewRunsFirstActivity(ctx context.Context, reviewID, launc
 }
 
 type reviewRunPatchSQL struct {
-	verdict           string
-	body              sql.NullString
-	githubReviewID    sql.NullString
-	autoInjectReview  sql.NullBool
-	failureReason     string
-	cancelledBy       string
-	launchID          string
-	launchingAt       sql.NullTime
-	startedAt         sql.NullTime
-	firstActivityAt   sql.NullTime
-	cancelRequestedAt sql.NullTime
-	endedAt           sql.NullTime
+	verdict            string
+	body               sql.NullString
+	githubReviewID     sql.NullString
+	autoInjectReview   sql.NullBool
+	failureReason      string
+	cancelledBy        string
+	launchID           string
+	launchingAt        sql.NullTime
+	startedAt          sql.NullTime
+	firstActivityAt    sql.NullTime
+	clearFirstActivity bool
+	cancelRequestedAt  sql.NullTime
+	endedAt            sql.NullTime
 }
 
 func reviewRunPatchParams(p domain.ReviewRunPatch) reviewRunPatchSQL {
@@ -414,6 +418,7 @@ func reviewRunPatchParams(p domain.ReviewRunPatch) reviewRunPatchSQL {
 	out.launchingAt = timePtrToNullTime(p.LaunchingAt)
 	out.startedAt = timePtrToNullTime(p.StartedAt)
 	out.firstActivityAt = timePtrToNullTime(p.FirstActivityAt)
+	out.clearFirstActivity = p.ClearFirstActivity
 	out.cancelRequestedAt = timePtrToNullTime(p.CancelRequestedAt)
 	out.endedAt = timePtrToNullTime(p.EndedAt)
 	return out

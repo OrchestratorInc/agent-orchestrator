@@ -235,6 +235,7 @@ function commonGetsResponder(
   reviewerHandleId = "",
   reviews: unknown[] = [],
   reviewerActivityState?: string,
+  reviewerHarness?: string,
 ) {
   return async (path: string) => {
     if (path === "/api/v1/agents/readiness") {
@@ -262,7 +263,7 @@ function commonGetsResponder(
       };
     }
     if (path === "/api/v1/sessions/{sessionId}/reviews") {
-      return { data: { reviewerHandleId, reviewerActivityState, reviews } };
+      return { data: { reviewerHandleId, reviewerActivityState, reviews, ...(reviewerHarness ? { reviewerHarness } : {}) } };
     }
     if (path === "/api/v1/projects/{id}") {
       return {
@@ -304,8 +305,9 @@ function mockCommonGets(
   reviewerHandleId = "",
   reviews: unknown[] = [],
   reviewerActivityState?: string,
+  reviewerHarness?: string,
 ) {
-  getMock.mockImplementation(commonGetsResponder(_unusedRuns, reviewerHandleId, reviews, reviewerActivityState));
+  getMock.mockImplementation(commonGetsResponder(_unusedRuns, reviewerHandleId, reviews, reviewerActivityState, reviewerHarness));
 }
 
 const approvedReview = {
@@ -5863,12 +5865,27 @@ describe("SessionInspector summary reviews", () => {
       ...reviewState(3, "running", "sha-1"),
       latestRun: { ...approvedReview, id: "run-live", harness: "codex", status, verdict: "" },
     };
-    mockCommonGets([], "reviewer-pane", [live], activity);
+    mockCommonGets([], "reviewer-pane", [live], activity, "codex");
 
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
     expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
+  });
+
+  it("does not attribute the selected reviewer's wait to another reviewer's running pass", async () => {
+    const live = {
+      ...reviewState(3, "running", "sha-1"),
+      latestRun: { ...approvedReview, id: "run-live", harness: "codex", status: "running", verdict: "" },
+    };
+    // The selected reviewer (claude-code) is waiting; codex is the one working.
+    mockCommonGets([], "reviewer-pane", [live], "waiting_input", "claude-code");
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(await screen.findByText("Reviewing... · Codex")).toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for input/)).not.toBeInTheDocument();
   });
 
   it("does not report a run a newer commit replaced as a failure", async () => {
@@ -6100,6 +6117,23 @@ describe("SessionInspector summary reviews", () => {
     await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Retry" }));
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
+    );
+  });
+
+  it("keeps Retry available when the retry request fails", async () => {
+    const failedManualReview = { ...failedReview, triggerSource: "manual", body: "", failureReason: "process_exited" };
+    mockCommonGets([], "", [{ ...reviewState(3, "needs_review", "abc123"), latestRun: failedManualReview }]);
+    postMock.mockResolvedValue({ error: { error: { message: "daemon unavailable" } } });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
+    );
+    await waitFor(() =>
+      expect(within(screen.getByRole("status")).getByRole("button", { name: "Retry" })).toBeEnabled(),
     );
   });
 
