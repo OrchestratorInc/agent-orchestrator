@@ -48,7 +48,7 @@ When showing or demoing frontend changes, run `ao preview [url]` from inside the
 
 ### Desktop lab (running the real Electron app for UI review)
 
-For visual verification that needs the real app rather than `ao preview` or `dev:web`, run the checkout in an isolated worktree against scratch data. Never use the invoking working tree (it may hold unrelated uncommitted work) and never touch the user's real `~/.ao` data.
+To run, show, or check the desktop app, follow `.agents/skills/ao-desktop-dev/SKILL.md` by default: `npm run dev:warm`, then a launch with per-checkout isolated data and port, ready in about 30 s from a fresh worktree. For visual verification that needs the real app rather than `ao preview` or `dev:web`, run the checkout in an isolated worktree against scratch data. Never use the invoking working tree (it may hold unrelated uncommitted work) and never touch the user's real `~/.ao` data.
 
 ```bash
 git worktree add /tmp/ao-lab <branch>   # the PR branch under review
