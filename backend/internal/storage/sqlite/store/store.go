@@ -202,6 +202,7 @@ func (s *Store) conversationReader(ctx context.Context) *gen.Queries {
 }
 
 // NewStore wraps an opened writer + reader *sql.DB (see Open) as a Store.
+// Use the registered sqlite or ao-sqlite driver, which supplies time comparisons.
 func NewStore(writeDB, readDB *sql.DB) *Store {
 	return &Store{
 		writeDB: writeDB,

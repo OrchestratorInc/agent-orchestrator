@@ -125,12 +125,12 @@ OR %[1]s GLOB '????-??-??T*') THEN CAST(%[1]s AS TEXT) END`, column)
 				return 0, false, err
 			}
 		}
-		query := fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s`, table, strings.Join(sets, ","), strings.Join(checks, " AND "))
+		returning := ""
 		if columns[0].table == "sessions" {
 			// RETURNING sees the revision before the AFTER UPDATE trigger runs.
-			query += ` RETURNING revision`
+			returning = ` RETURNING revision`
 		}
-		stmt, err := tx.PrepareContext(ctx, query)
+		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s%s`, table, strings.Join(sets, ","), strings.Join(checks, " AND "), returning))
 		if err != nil {
 			return 0, false, err
 		}
