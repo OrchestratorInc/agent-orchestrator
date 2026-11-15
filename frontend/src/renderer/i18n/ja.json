@@ -409,7 +409,7 @@
 	"firstRun.install": "インストール",
 	"firstRun.agentsBodyNone": "続けるには、少なくとも1つの Harness をインストールしてサインインしてください。",
 	"firstRun.toolsGithubHeading": "ツール",
-	"firstRun.toolsGithubHint": "エージェントがプルリクエストを作成できるようになります。",
+	"firstRun.toolsGithubHint": "エージェントがあなたに代わってブランチをプッシュし、プルリクエストを作成できるようになります。",
 	"firstRun.toolsAgentsHeading": "Harness",
 	"firstRun.moreHarnesses_one": "ほか {{count}} 個の Harness",
 	"firstRun.moreHarnesses_other": "ほか {{count}} 個の Harness",

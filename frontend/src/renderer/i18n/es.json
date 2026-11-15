@@ -410,7 +410,7 @@
 	"firstRun.install": "Instalar",
 	"firstRun.agentsBodyNone": "Instala al menos un harness e inicia sesión para continuar.",
 	"firstRun.toolsGithubHeading": "Herramientas",
-	"firstRun.toolsGithubHint": "Permite que los agentes abran pull requests.",
+	"firstRun.toolsGithubHint": "Permite que los agentes suban ramas y abran pull requests en tu nombre.",
 	"firstRun.toolsAgentsHeading": "Harnesses",
 	"firstRun.moreHarnesses_one": "{{count}} harness más",
 	"firstRun.moreHarnesses_other": "{{count}} harnesses más",
