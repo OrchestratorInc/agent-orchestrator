@@ -206,6 +206,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -665,7 +666,24 @@ export interface ChatWorkspaceProps {
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
 	steerRefusal?: string;
+	/**
+	 * Steers a queued message into the running turn (the queue's Steer). Absent means this
+	 * chat cannot, and the queue offers no Steer: a Steer that reached nothing would show the
+	 * message as steered while it stayed queued.
+	 */
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/**
+	 * Why the last steer of a queued message failed, by its turn, from the host's durable
+	 * record (a Cloud chat's events), so the row says so after a remount too.
+	 */
+	queuedSteerErrors?: Readonly<Record<string, string>>;
+	/**
+	 * Queued messages the host's durable record shows being steered (a Cloud chat's events).
+	 * With it, a message being steered stays in the queue, in its place, marked steering and
+	 * still deletable, until the agent takes it; without it (a local chat) it leaves the queue
+	 * for the running turn at once.
+	 */
+	steeringQueuedTurnIds?: ReadonlySet<string>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
 	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
 	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
@@ -911,6 +929,8 @@ function ChatWorkspaceContent({
 	steerPending,
 	steerRefusal,
 	onPromoteQueuedTurn,
+	queuedSteerErrors,
+	steeringQueuedTurnIds,
 	onEditQueuedTurn,
 	canEditQueuedMessage,
 	onCancelQueuedTurn,
@@ -1228,14 +1248,20 @@ function ChatWorkspaceContent({
 			})),
 		[backgroundWakeQueuedTurnIds, localEchos, snapshot.items, snapshot.latestSequence],
 	);
+	// A host that records steers keeps a message being steered in the queue (see steeringQueuedTurnIds).
+	const steerInQueue = steeringQueuedTurnIds !== undefined;
 	const visibleQueuedMessages = useMemo(
 		() => [
 			...queuedMessages.filter(
-				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && !steerStartedAt.has(message.turnId),
+				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && (steerInQueue || !steerStartedAt.has(message.turnId)),
 			),
 			...pendingQueuedMessages,
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt],
+	);
+	const steeringTurnIds = useMemo(
+		() => (steerInQueue ? new Set([...steeringQueuedTurnIds, ...steerStartedAt.keys()]) : undefined),
+		[steerInQueue, steeringQueuedTurnIds, steerStartedAt],
 	);
 	// A steer sent from the composer shows in its turn at once, as a send's echo does.
 	// The daemon places its row when the agent accepts the steer, so until then the echo
@@ -1254,7 +1280,7 @@ function ChatWorkspaceContent({
 		});
 	}, [pendingSteerEchoes]);
 	const timelineSnapshot = useMemo(() => {
-		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
+		const steering = steerInQueue ? [] : queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
 		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
 		const items = [...snapshot.items];
 		pendingSteerEchoes.forEach((echo, index) => {
@@ -1291,7 +1317,7 @@ function ChatWorkspaceContent({
 				})),
 			],
 		};
-	}, [pendingSteerEchoes, queuedMessages, snapshot, steerStartedAt, turn]);
+	}, [pendingSteerEchoes, queuedMessages, snapshot, steerInQueue, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1860,7 +1886,13 @@ function ChatWorkspaceContent({
 		[onResolveInput, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
-		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
+		Boolean(onSteer) && Boolean(onPromoteQueuedTurn) && can(snapshot, "steer") && turn?.state === "running";
+	// A failure the host recorded shows until the person retries; one this view saw first
+	// (a refused request) shows over it.
+	const queuedSteerFailures = useMemo(
+		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
+		[queuedSteerErrors, steerErrors],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
@@ -1869,7 +1901,7 @@ function ChatWorkspaceContent({
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
-					onPromoteQueuedTurn={newWorkDisabled ? undefined : promoteQueuedTurn}
+					onPromoteQueuedTurn={newWorkDisabled || !onPromoteQueuedTurn ? undefined : promoteQueuedTurn}
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
@@ -1881,7 +1913,8 @@ function ChatWorkspaceContent({
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
-					steerErrors={steerErrors}
+					steerErrors={queuedSteerFailures}
+					steeringTurnIds={steeringTurnIds}
 				/>
 			) : null,
 		[
@@ -1895,13 +1928,15 @@ function ChatWorkspaceContent({
 			newWorkDisabled,
 			onCancelQueuedTurn,
 			onEditQueuedTurn,
+			onPromoteQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,
 			promoteQueuedTurn,
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
-			steerErrors,
+			queuedSteerFailures,
+			steeringTurnIds,
 			visibleQueuedMessages,
 		],
 	);
@@ -2165,7 +2200,7 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy || importBlock ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -4307,7 +4342,7 @@ export function Timeline({
 		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
-		const items = atCarryingSteer(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
+		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
@@ -6333,7 +6368,7 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
 				)}
 			</FromAgent>
 		);
@@ -7228,41 +7263,46 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 const carriedRows = new WeakMap<ConversationItem, ConversationItem>();
 const carriedInto = new WeakMap<ConversationItem, string>();
 
-function atCarryingSteer(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
+function atCarrier(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
 	if (deliveries.length === 0) return items;
 	const steers = new Map(items.flatMap((item) => (item.kind === "activity" && item.turnId && isSteer(item) ? [[item.id, item] as const] : [])));
+	const leaders = new Map<string, ConversationItem>();
+	for (const item of items) {
+		if (item.kind === "message" && item.role === "user" && item.turnId && !leaders.has(item.turnId)) leaders.set(item.turnId, item);
+	}
 	const carriers = new Map(deliveries.flatMap((delivery) => {
-		const steer = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : undefined;
-		return steer && !moved.has(delivery.turnId) ? [[delivery.turnId, steer] as const] : [];
+		const carrier = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : leaders.get(delivery.deliveredWithTurnId);
+		return carrier && !moved.has(delivery.turnId) ? [[delivery.turnId, carrier] as const] : [];
 	}));
 	if (carriers.size === 0) return items;
 	const sentAt = (turnId: string) => {
-		const index = carriers.get(turnId)?.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1;
+		const carrier = carriers.get(turnId);
+		const index = carrier?.kind === "activity" ? carrier.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1 : -1;
 		return index < 0 ? Number.MAX_SAFE_INTEGER : index;
 	};
 	const carried = items.filter((item) => item.turnId && carriers.has(item.turnId));
 	const blocks = new Map<ConversationItem, ConversationItem[]>();
 	for (const item of carried.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)) {
-		const steer = carriers.get(item.turnId!)!;
-		const block = blocks.get(steer);
+		const carrier = carriers.get(item.turnId!)!;
+		const block = blocks.get(carrier);
 		if (block) block.push(item);
-		else blocks.set(steer, [item]);
+		else blocks.set(carrier, [item]);
 	}
 	const isCarried = new Set(carried);
-	const place = new Map([...blocks].flatMap(([steer, block]) => {
-		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > steer.sequence && item.sequence < min ? item.sequence : min), steer.sequence + 1);
-		return block.map((item, index) => [item, steer.sequence + ((next - steer.sequence) * (index + 1)) / (block.length + 1)] as const);
+	const place = new Map([...blocks].flatMap(([carrier, block]) => {
+		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > carrier.sequence && item.sequence < min ? item.sequence : min), carrier.sequence + 1);
+		return block.map((item, index) => [item, carrier.sequence + ((next - carrier.sequence) * (index + 1)) / (block.length + 1)] as const);
 	}));
 	return items
 		.map((item) => {
-			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
+			const carrier = item.turnId ? carriers.get(item.turnId) : undefined;
 			const sequence = place.get(item);
-			if (!steer || sequence === undefined) return item;
+			if (!carrier || sequence === undefined) return item;
 			const cached = carriedRows.get(item);
-			if (cached && carriedInto.get(cached) === steer.turnId && cached.sequence === sequence) return cached;
+			if (cached && carriedInto.get(cached) === carrier.turnId && cached.sequence === sequence) return cached;
 			const row = { ...item, sequence };
 			carriedRows.set(item, row);
-			carriedInto.set(row, steer.turnId!);
+			carriedInto.set(row, carrier.turnId!);
 			return row;
 		})
 		.sort((a, b) => a.sequence - b.sequence);

@@ -798,6 +798,8 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
 	DisplayNameExplicit              bool
+	AcceptedDeliveryID               string
+	AcceptedDeliveryLaunchID         string
 }
 
 type SessionAgentAccount struct {

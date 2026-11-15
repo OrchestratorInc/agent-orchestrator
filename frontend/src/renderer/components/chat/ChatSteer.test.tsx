@@ -581,6 +581,82 @@ describe("ChatWorkspace steering", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByText("second queued")).toBeVisible();
 	});
 
+	// A chat that cannot steer a queued message (a Cloud control plane without
+	// queued-steer) offers no Steer on its queue. The button once called nothing
+	// there, yet hid the message and drew it as steered until the next remount
+	// put it back in the queue.
+	it("offers no queued Steer where the chat cannot steer a queued message, and shows a recorded failure on its row", async () => {
+		const snapshot = {
+			...chatFixture,
+			turns: [...chatFixture.turns, { id: "queued-mine", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" }],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message" as const, id: "queued-mine-message", turnId: "queued-mine", sequence: 100, revision: 0,
+					role: "user" as const, origin: "human" as const, text: "my follow-up", streaming: false, createdAt: "2026-08-11T10:01:00Z",
+				},
+			],
+		};
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onCancelQueuedTurn={vi.fn()} />);
+		const row = screen.getByTestId("queued-message-queued-mine");
+		expect(within(row).getByText("my follow-up")).toBeVisible();
+		expect(within(row).queryByRole("button", { name: "Steer this queued message into the running turn" })).not.toBeInTheDocument();
+
+		rerender(
+			<ChatWorkspace
+				snapshot={snapshot}
+				onSteer={vi.fn()}
+				onPromoteQueuedTurn={vi.fn().mockResolvedValue(undefined)}
+				onCancelQueuedTurn={vi.fn()}
+				queuedSteerErrors={{ "queued-mine": "Couldn't steer: the agent finished first. It's back in the queue; select Steer to try again." }}
+			/>,
+		);
+		const failed = screen.getByTestId("queued-message-queued-mine");
+		expect(within(failed).getByText("my follow-up")).toBeVisible();
+		expect(within(failed).getByText("Couldn't steer: the agent finished first. It's back in the queue; select Steer to try again.")).toBeVisible();
+		expect(within(failed).getAllByRole("button", { name: "Steer this queued message into the running turn" }).length).toBeGreaterThan(0);
+	});
+
+	// A steer that fails (refused, timed out, the turn ended, the server or the
+	// network failed) never fails silently: the message is back in the queue, in
+	// its place, with the reason on its row, and its Steer tries again.
+	it("puts a queued message whose steer failed back in its place in the queue, with the reason and a retry", async () => {
+		const queued = (id: string, sequence: number, text: string) => ({
+			kind: "message" as const, id: `${id}-message`, turnId: id, sequence, revision: 0,
+			role: "user" as const, origin: "human" as const, text, streaming: false, createdAt: `2026-08-11T10:0${sequence - 99}:00Z`,
+		});
+		const snapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				{ id: "queued-a", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" },
+				{ id: "queued-b", state: "queued" as const, requestedAt: "2026-08-11T10:02:00Z" },
+			],
+			items: [...chatFixture.items, queued("queued-a", 100, "first"), queued("queued-b", 101, "second")],
+		};
+		let fail: (error: Error) => void = () => undefined;
+		const onPromoteQueuedTurn = vi.fn(() => new Promise((_resolve, reject) => { fail = reject; }));
+		render(<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onPromoteQueuedTurn={onPromoteQueuedTurn} onCancelQueuedTurn={vi.fn()} />);
+		const steerOf = (turnId: string) =>
+			within(screen.getByTestId(`queued-message-${turnId}`)).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0];
+
+		await userEvent.click(steerOf("queued-a"));
+		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-a");
+		// While the steer is in flight the message has left the queue.
+		await waitFor(() => expect(screen.queryByTestId("queued-message-queued-a")).not.toBeInTheDocument());
+
+		const reason = "Couldn't steer: the agent finished its turn first. It's back in the queue; select Steer to try again.";
+		await act(async () => { fail(new Error(reason)); });
+		const rows = within(screen.getByTestId("queued-message-dock")).getAllByTestId(/^queued-message-queued-/);
+		expect(rows.map((row) => row.dataset.testid)).toEqual(["queued-message-queued-a", "queued-message-queued-b"]);
+		expect(within(rows[0]).getByText(reason)).toBeVisible();
+		expect(within(rows[1]).queryByText(reason)).not.toBeInTheDocument();
+
+		onPromoteQueuedTurn.mockImplementation(() => Promise.resolve());
+		await userEvent.click(steerOf("queued-a"));
+		expect(onPromoteQueuedTurn).toHaveBeenCalledTimes(2);
+	});
+
 	it("lets the user steer or delete a queued browser annotation, but not edit it", async () => {
 		const annotationText = [
 			"<browser_annotations>",
@@ -921,6 +997,30 @@ describe("ChatWorkspace steering", () => {
 		const carried = screen.getByText(/Rename the pairing helper/);
 		const answer = screen.getByText("Writing the explainer first.");
 		expect(carried.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("draws a message drained behind an earlier queued report before the reply to it", () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				sessionRole="orchestrator"
+				snapshot={{
+					...chatFixture,
+					latestSequence: 13,
+					turns: [{ id: "leader", state: "running", providerTurnId: "provider-leader", requestedAt: at(0), startedAt: at(2) }],
+					items: [
+						{ kind: "message", id: "report", turnId: "leader", sequence: 10, revision: 0, role: "user", origin: "automation", text: "Reports since your previous turn:\n\n- worker-1 (Fix login) [ready]: PR is green", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "human", turnId: "follower", sequence: 11, revision: 0, role: "user", origin: "human", text: "also check this bug", streaming: false, createdAt: at(1) },
+						{ kind: "message", id: "answer", turnId: "leader", sequence: 12, revision: 0, role: "assistant", origin: "provider", text: "Looking at the bug now.", streaming: false, createdAt: at(3) },
+						{ kind: "message", id: "later", turnId: "leader", sequence: 13, revision: 0, role: "assistant", origin: "provider", text: "Found it.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [{ turnId: "follower", deliveredWithTurnId: "leader" }],
+				}}
+			/>,
+		);
+		const human = screen.getByText("also check this bug");
+		expect(human.compareDocumentPosition(screen.getByText("Looking at the bug now.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(human.compareDocumentPosition(screen.getByText("Found it.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("draws carried turns in the order the steer sent them, not the order they were queued", () => {

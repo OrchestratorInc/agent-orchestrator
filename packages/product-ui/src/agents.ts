@@ -40,6 +40,7 @@ export const AGENT_OPTIONS = [
 	"command-code",
 	"memcode",
 	"hermes",
+	"stakpak",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
@@ -90,6 +91,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"command-code": "Command Code",
 	memcode: "memcode",
 	"hermes": "Hermes Agent",
+	stakpak: "Stakpak",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

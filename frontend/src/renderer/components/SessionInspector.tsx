@@ -72,7 +72,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { PRActionButton } from "./PRActions";
+import { CloudPRGitStepButton, PRActionButton } from "./PRActions";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -109,7 +109,7 @@ import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
-import { ReviewerSelect } from "./ReviewerSelect";
+import { ReviewerPicker, type ReviewerModelConfig } from "./ReviewerPicker";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { Switch } from "./ui/switch";
@@ -181,10 +181,13 @@ export const SessionInspector = memo(function SessionInspector({
 	sideChatView,
 	view: viewProp,
 	onViewChange,
+	standaloneAgent = false,
 }: {
 	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
 	orchestrator?: boolean;
 	session?: WorkspaceSession;
+	/** The session is a Cloud standalone agent's, alone in its own project. */
+	standaloneAgent?: boolean;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
 	browserPoppedOut?: boolean;
@@ -363,6 +366,7 @@ export const SessionInspector = memo(function SessionInspector({
 							onOpenReviewFile={onOpenReviewFile}
 							orchestrator={orchestrator}
 							session={session}
+							standaloneAgent={standaloneAgent}
 						/>
 					) : undefined
 				}
@@ -400,6 +404,7 @@ const SummaryView = memo(function SummaryView({
 	onOpenReviews,
 	orchestrator,
 	session,
+	standaloneAgent = false,
 }: {
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
@@ -412,6 +417,7 @@ const SummaryView = memo(function SummaryView({
 	onOpenReviews: () => void;
 	orchestrator: boolean;
 	session: WorkspaceSession;
+	standaloneAgent?: boolean;
 }) {
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
@@ -467,9 +473,14 @@ const SummaryView = memo(function SummaryView({
 	};
 	const focusedIsBranchPR = Boolean(branchPR && focusedPR && prFocusKey(focusedPR) === prFocusKey(branchPR));
 	// Another PR of the session that conflicts: its card hands that to the agent.
-	const otherPRConflict = useOtherPRConflictStep(session, hostId, focusedIsBranchPR ? undefined : focusedPR);
-	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
-	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
+	// A Cloud session has no local branch rows to plan from, so its focused PR,
+	// the branch's own included, takes the same step; a guest leaves it to the owner.
+	const conflictStepPR = session.cloud ? (session.cloud.shared ? undefined : focusedPR) : focusedIsBranchPR ? undefined : focusedPR;
+	const otherPRConflict = useOtherPRConflictStep(session, hostId, conflictStepPR);
+	// CI, review, and merge policies act on a PR. Standalone sessions, local or
+	// a Cloud standalone agent, keep the row for Archive.
+	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
+	const showSessionControls = hasPRs || scratchpadSession;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -538,7 +549,7 @@ const SummaryView = memo(function SummaryView({
 										projectId={session.workspaceId}
 										sessionId={session.id}
 										showRepository={prsSpanRepositories(prSummaries)}
-										work={focusedIsBranchPR ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
+										work={focusedIsBranchPR && !session.cloud ? work : otherPRConflict ? { content: null, hasRows: false, git: otherPRConflict } : undefined}
 									/>
 								</div>
 							) : null}
@@ -577,7 +588,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			)}
-			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} scratchpad={scratchpadSession} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
@@ -862,7 +873,7 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function SessionControls({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
+function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSession; hostId?: string; scratchpad: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -900,7 +911,8 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	});
 	const policyError = policy.error instanceof Error ? policy.error.message : null;
 	const canTerminateNow = session.status === "merged";
-	const isStandaloneSession = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	// Its project has no board to return to, and no policies apart from Archive.
+	const isStandaloneSession = scratchpad;
 
 	const confirmTermination = ({ deleteArtifacts }: SessionArchiveChoice) => {
 		const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceKey) ?? [];
@@ -1220,6 +1232,10 @@ function PRViewSummaryCard({
 			{!cloudOrgId && !guest && pr.state !== "merged" ? (
 				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
 					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
+				</div>
+			) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
+				<div className={cn("pt-2 pb-2", !work.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
+					<CloudPRGitStepButton git={work.git} />
 				</div>
 			) : null}
 		</section>
@@ -1764,6 +1780,29 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 type ReviewerHarness = NonNullable<components["schemas"]["TriggerReviewRequest"]["harness"]>;
 type AgentCatalog = components["schemas"]["AgentReadinessResponse"];
 
+/**
+ * The project-level reviewer model/mode/effort the daemon puts under a session's
+ * own reviewer settings when the session reviews with the same agent (see
+ * projectReviewerSelection and DefaultWorkerReviewer in the daemon). An empty
+ * session field means "use this", not the model's own default.
+ */
+function inheritedReviewerConfig(config: ProjectConfig | undefined, harness: string): ReviewerModelConfig {
+	const reviewer = config?.reviewers?.[0];
+	if (reviewer) {
+		if (reviewer.harness !== harness) return {};
+		const { model, mode, effort } = reviewer.agentConfig ?? {};
+		return { model: model || undefined, mode: mode || undefined, effort: effort || undefined };
+	}
+	const worker = config?.worker?.agent ?? "";
+	// The project's default worker reviews with its own model and effort, but only
+	// when that agent reviews as itself.
+	if (!worker || WORKER_DEFAULT_REVIEWERS[worker] !== worker || worker !== harness) return {};
+	return {
+		model: config?.worker?.agentConfig?.model || config?.agentConfig?.model || undefined,
+		effort: config?.worker?.agentConfig?.effort || config?.agentConfig?.effort || undefined,
+	};
+}
+
 function resolveDefaultReviewerHarness(config: ProjectConfig | undefined, workerHarness: WorkspaceSession["provider"]): ReviewerHarness {
 	const configuredHarness = config?.reviewers?.[0]?.harness;
 	if (configuredHarness) return configuredHarness as ReviewerHarness;
@@ -1858,6 +1897,7 @@ function LocalReviewsSection({
 	);
 	const [reviewerModel, setReviewerModel] = useState(session.reviewerConfig?.model ?? "");
 	const [reviewerMode, setReviewerMode] = useState(session.reviewerConfig?.mode ?? "");
+	const [reviewerEffort, setReviewerEffort] = useState(session.reviewerConfig?.effort ?? "");
 	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewsQuery.data?.reviews ?? []);
 	const reviewHeads = openReviewStates.map((review) => `${review.prUrl}@${review.targetSha}`).sort().join("\n");
@@ -1874,18 +1914,19 @@ function LocalReviewsSection({
 		setReviewerOverride(session.reviewerHarness ?? "");
 		setReviewerModel(session.reviewerConfig?.model ?? "");
 		setReviewerMode(session.reviewerConfig?.mode ?? "");
-	}, [hostId, session.id, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
+		setReviewerEffort(session.reviewerConfig?.effort ?? "");
+	}, [hostId, session.id, session.reviewerConfig?.effort, session.reviewerConfig?.mode, session.reviewerConfig?.model, session.reviewerHarness]);
 	const saveReviewer = useMutation({
 		mutationKey: [...reviewsKey, "switch-reviewer"],
-		mutationFn: async ({ harness, model, mode }: { harness: ReviewerHarness | ""; model: string; mode: string }) => {
-			const clearingToProjectDefault = harness === "" && model === "" && mode === "";
+		mutationFn: async ({ harness, model, mode, effort }: { harness: ReviewerHarness | ""; model: string; mode: string; effort: string }) => {
+			const clearingToProjectDefault = harness === "" && model === "" && mode === "" && effort === "";
 			const currentEffectiveReviewerHarness = (session.reviewerHarness ?? "") || currentDefaultReviewerHarness;
 			const nextEffectiveReviewerHarness = harness || currentDefaultReviewerHarness;
 			const existingReviewerConfig =
 				!clearingToProjectDefault && currentEffectiveReviewerHarness === nextEffectiveReviewerHarness
 					? session.reviewerConfig
 					: undefined;
-			const nextReviewerConfig = buildReviewerAgentConfig(existingReviewerConfig, model, mode);
+			const nextReviewerConfig = buildReviewerAgentConfig(existingReviewerConfig, model, mode, effort);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/switch", {
 				params: { path: { sessionId: session.id } },
 				body: {
@@ -1918,9 +1959,9 @@ function LocalReviewsSection({
 	});
 	const triggerReview = useMutation({
 		mutationFn: async ({ ownerKey, rerun = false }: { ownerKey: string; rerun?: boolean }) => {
-			// Keep agent/model overrides scoped to this pass; the daemon selects the surface.
-			const reviewerConfig = reviewerModel || reviewerMode
-				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}) }
+			// Keep agent/model/effort overrides scoped to this pass; the daemon selects the surface.
+			const reviewerConfig = reviewerModel || reviewerMode || reviewerEffort
+				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}), ...(reviewerEffort ? { effort: reviewerEffort } : {}) }
 				: undefined;
 			const selectedHarness = reviewerOverride || undefined;
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
@@ -2034,16 +2075,13 @@ function LocalReviewsSection({
 				reviewerOverride={reviewerOverride}
 				reviewerModel={reviewerModel}
 				reviewerMode={reviewerMode}
+				reviewerEffort={reviewerEffort}
 				onReviewerOverrideChange={(next, config) => {
 					setReviewerOverride(next);
 					setReviewerModel(config.model ?? "");
 					setReviewerMode(config.mode ?? "");
-					saveReviewer.mutate({ harness: next, model: config.model ?? "", mode: config.mode ?? "" });
-				}}
-				onReviewerHarnessPreviewChange={(next) => {
-					setReviewerOverride(next);
-					setReviewerModel("");
-					setReviewerMode("");
+					setReviewerEffort(config.effort ?? "");
+					saveReviewer.mutate({ harness: next, model: config.model ?? "", mode: config.mode ?? "", effort: config.effort ?? "" });
 				}}
 				session={session}
 			/>
@@ -2224,7 +2262,6 @@ function CloudReviewsSection({
 				onAutoReviewChange={(enabled) => updateAutoReview.mutate(enabled)}
 				onCancel={() => cancelReview.mutate()}
 				onKill={() => undefined}
-				onReviewerHarnessPreviewChange={() => undefined}
 				onReviewerOverrideChange={() => undefined}
 				cloudReviewerHarnesses={reviewsQuery.data?.availableReviewerHarnesses ?? []}
 				cloudReviewerHarness={selectedReviewerHarness}
@@ -2239,6 +2276,7 @@ function CloudReviewsSection({
 				}}
 				onTrigger={() => triggerReview.mutate()}
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
+				reviewerEffort=""
 				reviewerMode=""
 				reviewerModel=""
 				reviewerOverride=""
@@ -2712,12 +2750,15 @@ function buildReviewerAgentConfig(
 	existing: WorkspaceSession["reviewerConfig"] | undefined,
 	model: string,
 	mode: string,
-): { model?: string; mode?: string; permissions?: string } | undefined {
+	effort: string,
+): { model?: string; mode?: string; effort?: string; permissions?: string } | undefined {
 	const next = { ...existing };
 	if (model) next.model = model;
 	else delete next.model;
 	if (mode) next.mode = mode;
 	else delete next.mode;
+	if (effort) next.effort = effort;
+	else delete next.effort;
 	return Object.keys(next).length > 0 ? next : undefined;
 }
 
@@ -2803,8 +2844,8 @@ function ReviewPanel({
 	reviewerOverride,
 	reviewerModel,
 	reviewerMode,
+	reviewerEffort,
 	onReviewerOverrideChange,
-	onReviewerHarnessPreviewChange,
 	onTrigger,
 	onCancel,
 	onAutoReviewChange,
@@ -2830,8 +2871,8 @@ function ReviewPanel({
 	reviewerOverride: ReviewerHarness | "";
 	reviewerModel: string;
 	reviewerMode: string;
-	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string }) => void;
-	onReviewerHarnessPreviewChange: (next: ReviewerHarness | "") => void;
+	reviewerEffort: string;
+	onReviewerOverrideChange: (next: ReviewerHarness | "", config: { model?: string; mode?: string; effort?: string }) => void;
 	onTrigger: () => void;
 	onCancel: () => void;
 	onAutoReviewChange: (enabled: boolean) => void;
@@ -2897,6 +2938,7 @@ function ReviewPanel({
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
+	const reviewerControlsLocked = reviewRunning || autoReviewEnabled || isKilling || isSwitchingReviewer || isTriggering || isCancelling;
 	const reviewLive = reviewHasLiveActivity(openReviewStates, reviewerActivityState, hasReviewerSession);
 	const reviewHasRun = reviewRunning || Boolean(latest);
 	const runAction = reviewSessionRunAction(openReviewStates, isTriggering);
@@ -2983,24 +3025,23 @@ function ReviewPanel({
 							</div>
 						</div>
 					) : (
+					// Agent, model, and effort in one menu, picked the way the chat box picks them.
 					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-						<span className="min-w-0 text-sm text-settings-label">
-							{t("inspector.selectReviewerAgent")}
-						</span>
-						<ReviewerSelect
+						<span className="shrink-0 text-sm text-settings-label">{t("settings.models.reviewerRole")}</span>
+						<ReviewerPicker
 							ariaLabel={t("inspector.selectReviewerAgent")}
 							agents={agentCatalog?.agents}
-							contentAlign="end"
 							defaultHarness={resolvedDefaultHarness}
-							disabled={reviewRunning || autoReviewEnabled || isKilling || isSwitchingReviewer || isTriggering || isCancelling}
-							onChange={(next) => onReviewerHarnessPreviewChange(next as ReviewerHarness | "")}
-							onConfigChange={(harness, config) => onReviewerOverrideChange(harness as ReviewerHarness | "", config)}
+							value={reviewerOverride}
 							model={reviewerModel}
 							mode={reviewerMode}
-							hostId={hostId}
+							effort={reviewerEffort}
+							inherited={inheritedReviewerConfig(config, reviewerOverride || resolvedDefaultHarness)}
 							projectId={session.workspaceId}
-							triggerClassName="review-run-agent-select ml-auto h-control-md w-auto min-w-0 shrink-0 justify-end px-2 text-right text-xs"
-							value={reviewerOverride}
+							hostId={hostId}
+							disabled={reviewerControlsLocked}
+							onAgentChange={(next) => onReviewerOverrideChange(next as ReviewerHarness | "", {})}
+							onConfigChange={(next) => onReviewerOverrideChange(reviewerOverride, next)}
 						/>
 					</div>
 					)}
@@ -3009,7 +3050,10 @@ function ReviewPanel({
 					    shows one at a time, so each live reviewer gets a row to open it
 					    whenever any of them is not the selected reviewer. */}
 					{activeReviewers.some((surface) => surface.reviewId !== reviewerSurface?.reviewId)
-						? activeReviewers.map((surface) => (
+						? <>
+							{/* Labelled, so these rows do not read as stray lines under the reviewer box. */}
+							<p className="mt-2 mb-0.5 text-xs text-settings-muted">{t("inspector.review.activeReviewers")}</p>
+							{activeReviewers.map((surface) => (
 								<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1" key={surface.reviewId}>
 									<span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
 										<AgentAvatar className="size-4" decorative provider={surface.harness} />
@@ -3026,7 +3070,8 @@ function ReviewPanel({
 										{t("inspector.review.openReviewer")}
 									</Button>
 								</div>
-							))
+							))}
+						</>
 						: null}
 					<InspectorPolicyRow
 						checked={autoReviewEnabled}

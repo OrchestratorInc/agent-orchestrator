@@ -30,18 +30,20 @@ var (
 // memorySideStore is deliberately process-local. Electron owns recovery across
 // supervised daemon restarts; AO never writes side transcripts or drafts to DB.
 type memorySideStore struct {
-	mu          sync.Mutex
-	runID       string
-	closed      map[string]bool
-	sides       map[string]domain.SideConversation
-	createKeys  map[sideCreateIdentity]string
-	turns       map[string][]domain.SideTurn
-	messages    map[string][]domain.SideMessage
-	activities  map[string][]domain.SideActivity
-	drafts      map[string]string
-	hostCleanup map[string]domain.SideConversation
-	hostStopped map[string]bool
-	cleanup     map[string]domain.SideProviderCleanup
+	mu             sync.Mutex
+	runID          string
+	closed         map[string]bool
+	sides          map[string]domain.SideConversation
+	createKeys     map[sideCreateIdentity]string
+	turns          map[string][]domain.SideTurn
+	messages       map[string][]domain.SideMessage
+	activities     map[string][]domain.SideActivity
+	drafts         map[string]string
+	hostCleanup    map[string]domain.SideConversation
+	hostStopped    map[string]bool
+	cleanup        map[string]domain.SideProviderCleanup
+	cleanupEpoch   map[string]uint64
+	completedForks map[string]string
 }
 
 type sideCreateIdentity struct {
@@ -144,6 +146,9 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		}
 		seenIDs[side.ID] = true
 		if m.closed[side.ID] {
+			if pending, exists := m.hostCleanup[side.ID]; exists && record.CleanupOnly && pending.ProviderForkID != "" && record.ProviderForkID != "" && pending.ProviderForkID != record.ProviderForkID {
+				return nil, ErrSideUnavailable
+			}
 			continue
 		}
 		for _, existing := range m.sides {
@@ -162,11 +167,21 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 			if alreadyRestored[side.ID] {
 				return nil, ErrSideUnavailable
 			}
+			previous, pending := m.hostCleanup[side.ID]
+			if m.closed[side.ID] && !pending {
+				continue // Cleanup already drained in this daemon; an old replay cannot recreate it.
+			}
 			side.AppRunID = runID
 			side.Harness = record.Harness
 			side.ProviderHostID, side.ProviderForkID = record.ProviderHostID, record.ProviderForkID
+			if pending && previous.ProviderForkID != "" && side.ProviderForkID == "" {
+				side.ProviderForkID = previous.ProviderForkID
+			}
+			if !pending || previous.ProviderForkID != side.ProviderForkID {
+				m.cleanupEpoch[side.ID]++
+			}
 			m.hostCleanup[side.ID] = side
-			m.hostStopped[side.ID] = record.HostStopped
+			m.hostStopped[side.ID] = m.hostStopped[side.ID] || record.HostStopped
 			m.closed[side.ID] = true
 			if side.ProviderForkID != "" {
 				m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID, Harness: side.Harness}
@@ -251,7 +266,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 }
 
 func newMemorySideStore() *memorySideStore {
-	return &memorySideStore{hostCleanup: map[string]domain.SideConversation{}, hostStopped: map[string]bool{}, closed: map[string]bool{}, sides: map[string]domain.SideConversation{}, createKeys: map[sideCreateIdentity]string{}, turns: map[string][]domain.SideTurn{}, messages: map[string][]domain.SideMessage{}, activities: map[string][]domain.SideActivity{}, drafts: map[string]string{}, cleanup: map[string]domain.SideProviderCleanup{}}
+	return &memorySideStore{hostCleanup: map[string]domain.SideConversation{}, hostStopped: map[string]bool{}, closed: map[string]bool{}, sides: map[string]domain.SideConversation{}, createKeys: map[sideCreateIdentity]string{}, turns: map[string][]domain.SideTurn{}, messages: map[string][]domain.SideMessage{}, activities: map[string][]domain.SideActivity{}, drafts: map[string]string{}, cleanup: map[string]domain.SideProviderCleanup{}, cleanupEpoch: map[string]uint64{}, completedForks: map[string]string{}}
 }
 
 func (m *memorySideStore) ClaimSideLaunch(_ context.Context, runID string, _ time.Time) ([]domain.SideConversation, error) {
@@ -480,6 +495,7 @@ func (m *memorySideStore) CloseSideConversation(_ context.Context, id string, no
 	}
 	m.closed[id] = true
 	m.hostCleanup[id] = side
+	m.cleanupEpoch[id]++
 	side.ClosedAt = &now
 	side.Generation = ""
 	delete(m.sides, id)
@@ -514,6 +530,7 @@ func (m *memorySideStore) CompleteSideProviderCleanup(_ context.Context, id stri
 	defer m.mu.Unlock()
 	for sideID, side := range m.hostCleanup {
 		if side.ProviderForkID == id {
+			m.completedForks[sideID] = id
 			delete(m.hostCleanup, sideID)
 			delete(m.hostStopped, sideID)
 		}
