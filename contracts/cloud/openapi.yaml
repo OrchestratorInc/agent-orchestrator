@@ -518,7 +518,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ArtifactShareFinalizeInput"
+              $ref: "#/components/schemas/ArtifactShareFileCompleteInput"
       responses:
         "200":
           description: The finished file.
@@ -9318,6 +9318,37 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ArtifactShareCompletedPart:
+      type: object
+      additionalProperties: false
+      required: [partNumber, sha256, etag]
+      properties:
+        partNumber:
+          type: integer
+          minimum: 1
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        etag:
+          type: string
+          description: The ETag the part's PUT returned.
+    ArtifactShareFileCompleteInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      description: >-
+        An included file's upload and every one of its parts, in order. It
+        takes no access, emails or files: those are the page's, set when the
+        page is finalized.
+      properties:
+        uploadToken:
+          type: string
+          description: The file's uploadToken, from createArtifactShareFileUpload.
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ArtifactShareCompletedPart"
     ArtifactShareFinalizeInput:
       type: object
       additionalProperties: false
@@ -9329,19 +9360,7 @@ components:
           type: array
           minItems: 1
           items:
-            type: object
-            additionalProperties: false
-            required: [partNumber, sha256, etag]
-            properties:
-              partNumber:
-                type: integer
-                minimum: 1
-              sha256:
-                type: string
-                pattern: "^[0-9a-f]{64}$"
-              etag:
-                type: string
-                description: The ETag the part's PUT returned.
+            $ref: "#/components/schemas/ArtifactShareCompletedPart"
         access:
           $ref: "#/components/schemas/ArtifactShareAccess"
           description: >-

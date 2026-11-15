@@ -5013,14 +5013,21 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        ArtifactShareCompletedPart: {
+            partNumber: number;
+            sha256: string;
+            /** @description The ETag the part's PUT returned. */
+            etag: string;
+        };
+        /** @description An included file's upload and every one of its parts, in order. It takes no access, emails or files: those are the page's, set when the page is finalized. */
+        ArtifactShareFileCompleteInput: {
+            /** @description The file's uploadToken, from createArtifactShareFileUpload. */
+            uploadToken: string;
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
+        };
         ArtifactShareFinalizeInput: {
             uploadToken: string;
-            parts: {
-                partNumber: number;
-                sha256: string;
-                /** @description The ETag the part's PUT returned. */
-                etag: string;
-            }[];
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
             /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
             access?: components["schemas"]["ArtifactShareAccess"];
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
@@ -6677,7 +6684,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ArtifactShareFinalizeInput"];
+                "application/json": components["schemas"]["ArtifactShareFileCompleteInput"];
             };
         };
         responses: {
