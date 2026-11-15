@@ -143,15 +143,16 @@ export function ArtifactsView() {
 	}, [visibleGroups, pinnedArtifactIds, t]);
 	// Only the cards on screen and near it are built; a long list would otherwise build every card at once.
 	const grid = useVirtualGridRows(cards.length, scrollElement);
+	// Every list has answered: /me (signed out it never loads and does not
+	// wait), the local list and the cloud lists.
+	const listsSettled = !offering.isLoading && !workspaceQuery.isLoading && !workspaceQuery.cloudLoading;
 	useArtifactListTelemetry({
 		surface: "page",
-		// Only an empty outcome waits for the cloud lists, and for /me to say
-		// whether there are any (signed out, it never loads and does not wait);
-		// the first card does not.
-		settled: !offering.isLoading && !workspaceQuery.isLoading && !workspaceQuery.cloudLoading,
-		// The same condition that shows the error in place of any cached cards,
-		// or no cards because a cloud list could not be read (not an empty list).
-		failed: Boolean(workspaceQuery.error) || (cards.length === 0 && workspaceQuery.cloudFailed),
+		// Only an empty outcome waits for every list; the first card does not.
+		settled: listsSettled,
+		// The local error replaces any cards at once. A cloud list that could not
+		// be read is a failure only once the rest have answered with no cards.
+		failed: Boolean(workspaceQuery.error) || (listsSettled && cards.length === 0 && workspaceQuery.cloudFailed),
 		count: artifactCount(groups),
 		hasCards: cards.length > 0,
 	});

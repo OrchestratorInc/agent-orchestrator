@@ -1127,8 +1127,10 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	// (signed out, offering off) never count.
 	const cloudLoading = includeCloud && (orgLoading || cloud.isLoading || cloudSessions.isLoading || cloudSessions.filesLoading || sharedWorkspaces.isLoading
 		|| (cloudSessions.isFetching && cloudSessions.data?.length === 0));
-	// A cloud list that could not be read, so its cards are missing rather than absent.
-	const cloudFailed = includeCloud && ((cloudSessions.isError && cloudSessions.data === undefined) || cloudSessions.filesFailed);
+	// A cloud list that could not be read, so its cards are missing rather than
+	// absent. A 404 is a control plane without that list, not a failure.
+	const unreadable = (query: { isError: boolean; data?: unknown; error: unknown }) => query.isError && query.data === undefined && !isCloudNotFound(query.error);
+	const cloudFailed = includeCloud && (unreadable(cloud) || unreadable(cloudSessions) || unreadable(sharedWorkspaces) || cloudSessions.filesFailed);
 	return { ...local, data, cloudLoading, cloudFailed };
 }
 
