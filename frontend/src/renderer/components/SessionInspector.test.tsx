@@ -6163,6 +6163,36 @@ describe("SessionInspector branch summary", () => {
     expect(await within(screen.getByTestId("pr-card")).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
   });
 
+  it("states the diff once in the PR card: the commits row drops numbers the card already shows", async () => {
+    const same = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 2)], prs: [same] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [same]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByText("2 commits")).toBeInTheDocument();
+    expect(card.getAllByText("+5")).toHaveLength(1);
+    expect(card.getAllByText("−2")).toHaveLength(1);
+  });
+
+  it("keeps the commits row's numbers when the branch differs from the PR", async () => {
+    const behindPR = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
+    mockGitState({ committed: [changedFile("src/a.ts", 9, 2)], prs: [behindPR] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(3), unpushed: 1 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [behindPR]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByText("3 commits")).toBeInTheDocument();
+    expect(card.getByText("+5")).toBeInTheDocument();
+    expect(card.getByText("+9")).toBeInTheDocument();
+  });
+
   it("keeps committing first and puts the update in the menu while work is uncommitted", async () => {
     mockGitState({ uncommitted: [changedFile("src/c.ts", 1, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />);

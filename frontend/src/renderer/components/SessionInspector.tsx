@@ -505,6 +505,7 @@ const SummaryView = memo(function SummaryView({
 					onOpenFile={onOpenReviewFile}
 					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
+					openPRDiff={branchPR ? { additions: branchPR.additions, deletions: branchPR.deletions } : undefined}
 					openPRNumber={openPRNumber}
 					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
 					pullRequests={hasPRs ? (work: BranchWork | undefined) => (

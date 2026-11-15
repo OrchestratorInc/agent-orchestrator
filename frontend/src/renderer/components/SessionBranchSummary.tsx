@@ -82,6 +82,7 @@ export function SessionBranchSummary({
 	merged = false,
 	onOpenFiles,
 	openPRConflicting = false,
+	openPRDiff,
 	openPRNumber,
 	pullRequests,
 	session,
@@ -98,6 +99,8 @@ export function SessionBranchSummary({
 	/** The provider says that PR conflicts with its base, whatever the local checkout knows. */
 	openPRConflicting?: boolean;
 	/** The open or draft PR that new commits would update. */
+	/** The open PR's diff size as its card states it, so the commits row doesn't say the same numbers again. */
+	openPRDiff?: { additions: number; deletions: number };
 	openPRNumber?: number;
 	/**
 	 * The PR cards. As a function it receives the branch rows and git action
@@ -166,6 +169,12 @@ export function SessionBranchSummary({
 		);
 	}
 
+	// Inside the PR's card, the line under the title already states the diff. The
+	// commits row repeats it only when the branch differs, as with unpushed work.
+	const committedAdditions = sum(facts.committed, "additions");
+	const committedDeletions = sum(facts.committed, "deletions");
+	const repeatsPRDiff = typeof pullRequests === "function" && openPRNumber !== undefined
+		&& openPRDiff?.additions === committedAdditions && openPRDiff.deletions === committedDeletions;
 	const rows = (
 		<>
 			{facts.uncommitted.length > 0 ? (
@@ -181,8 +190,9 @@ export function SessionBranchSummary({
 			) : null}
 			{commitsRow ? (
 				<GitStatusRow
-					additions={sum(facts.committed, "additions")}
-					deletions={sum(facts.committed, "deletions")}
+					additions={committedAdditions}
+					deletions={committedDeletions}
+					hideCounts={repeatsPRDiff}
 					icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
 					files={facts.committed}
 					label={commitsRow.label}
@@ -257,6 +267,7 @@ function GitStatusRow({
 	additions,
 	deletions,
 	files,
+	hideCounts = false,
 	icon,
 	label,
 	note,
@@ -267,6 +278,8 @@ function GitStatusRow({
 	additions: number;
 	deletions: number;
 	files: WorkspaceFileSummary[];
+	/** Leave the numbers out: something beside the row already states them. */
+	hideCounts?: boolean;
 	icon: ReactNode;
 	label: string;
 	note?: string;
@@ -293,7 +306,7 @@ function GitStatusRow({
 						<span className={noteTone === "warn" ? "shrink-0 text-xs text-status-in-review" : "shrink-0 text-xs text-passive"}>{note}</span>
 					) : null}
 				</span>
-				<ChangeCounts additions={additions} deletions={deletions} className="gap-1.5 text-xs" />
+				{hideCounts ? null : <ChangeCounts additions={additions} deletions={deletions} className="gap-1.5 text-xs" />}
 				<ChevronRight aria-hidden="true" className={cn("size-icon-sm shrink-0 text-passive transition-transform motion-reduce:transition-none", opens && open && "rotate-90")} />
 			</Pressable>
 			{opens && open ? <ChangedFilesList files={files} id={id} onOpenAll={onOpenAll} onOpenFile={onOpenFile} /> : null}
