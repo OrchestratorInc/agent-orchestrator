@@ -126,6 +126,29 @@ type Engine struct {
 	// lockWorker). Distinct workers never contend.
 	triggerMu    sync.Mutex
 	triggerLocks map[domain.SessionID]*sync.Mutex
+
+	// cancelMu guards cancelGens, a per-worker count of Cancel calls. Cancel
+	// does not wait for the trigger lock, so a multi-reviewer trigger compares
+	// this count after each reviewer to learn that a cancel landed mid-fan-out.
+	cancelMu   sync.Mutex
+	cancelGens map[domain.SessionID]uint64
+}
+
+// cancelGen returns how many times Cancel has started for the worker.
+func (e *Engine) cancelGen(id domain.SessionID) uint64 {
+	e.cancelMu.Lock()
+	defer e.cancelMu.Unlock()
+	return e.cancelGens[id]
+}
+
+// noteCancel records that Cancel started for the worker.
+func (e *Engine) noteCancel(id domain.SessionID) {
+	e.cancelMu.Lock()
+	defer e.cancelMu.Unlock()
+	if e.cancelGens == nil {
+		e.cancelGens = make(map[domain.SessionID]uint64)
+	}
+	e.cancelGens[id]++
 }
 
 const autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
@@ -418,15 +441,17 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 	// active reports that some reviewer started a pass or is still running one.
 	active := false
 	skipReasons := map[string]bool{}
+	// Cancel does not wait for this worker's trigger lock, so it can land
+	// between or during reviewer launches. Once one has started, no further
+	// reviewer starts.
+	gen := e.cancelGen(worker.ID)
 	for _, sel := range selections {
+		if e.cancelGen(worker.ID) != gen {
+			break
+		}
 		runs, err := e.store.ListReviewRunsBySession(ctx, worker.ID)
 		if err != nil {
 			return TriggerResult{}, err
-		}
-		// Cancel does not wait for this worker's trigger lock. Once it has
-		// cancelled a pass this trigger started, start no further reviewer.
-		if cancelledAnyRun(runs, combined.CreatedRuns) {
-			break
 		}
 		res, err := e.triggerReviewer(ctx, worker, prs, runs, sel.Harness, sel.AgentConfig, opts, noOpenPR, configured)
 		if err != nil {
@@ -462,6 +487,16 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 		if combined.ReviewerSurface.ReviewID == "" {
 			combined.ReviewerSurface = res.ReviewerSurface
 		}
+		// A cancel that started while this reviewer launched may have read the
+		// runs before its pass existed, so stop the pass here.
+		if e.cancelGen(worker.ID) != gen {
+			if res.Created {
+				if err := e.cancelReviewerPass(ctx, worker.ID, sel.Harness); err != nil {
+					return TriggerResult{}, err
+				}
+			}
+			break
+		}
 	}
 	if !combined.Created && len(skipReasons) == 1 {
 		for reason := range skipReasons {
@@ -490,16 +525,23 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 	return combined, nil
 }
 
-// cancelledAnyRun reports whether any of started is now cancelled in runs.
-func cancelledAnyRun(runs, started []domain.ReviewRun) bool {
-	for _, s := range started {
-		for _, run := range runs {
-			if run.ID == s.ID && run.Status == domain.ReviewRunCancelled {
-				return true
+// cancelReviewerPass interrupts one reviewer and cancels its running passes,
+// as Cancel would have had it seen them.
+func (e *Engine) cancelReviewerPass(ctx stdctx.Context, workerID domain.SessionID, harness domain.ReviewerHarness) error {
+	review, ok, err := e.store.GetReviewBySessionAndHarness(ctx, workerID, harness)
+	if err != nil {
+		return err
+	}
+	if ok && review.ReviewerHandleID != "" {
+		if err := e.launcher.Cancel(ctx, review.ReviewerHandleID, harness); err != nil {
+			alive, aliveErr := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
+			if aliveErr != nil || alive {
+				return err
 			}
 		}
 	}
-	return false
+	_, err = e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, harness, "cancelled by user")
+	return err
 }
 
 // triggerReviewer runs one reviewer harness over the worker's PRs. configured
@@ -1869,6 +1911,9 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	if workerID == "" {
 		return CancelResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
 	}
+	// Recorded before reading any run, so a multi-reviewer trigger that starts
+	// a reviewer this call cannot see still learns of the cancel and stops it.
+	e.noteCancel(workerID)
 	if err := e.waitForChatRecovery(ctx); err != nil {
 		return CancelResult{}, err
 	}
