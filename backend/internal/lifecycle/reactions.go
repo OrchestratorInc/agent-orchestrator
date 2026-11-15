@@ -142,6 +142,13 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
 		return rearmErr
 	}
+	// A PR attached only so a --no-inject review could run on it is not this
+	// session's to fix: it gets none of the CI, review, or merge-conflict nudges
+	// below (#6810). The PR row is read once here and reused for the CI policy.
+	pr, prFound, prErr := m.store.GetPR(ctx, o.URL)
+	if prErr == nil && prFound && pr.ReviewOnly {
+		return rearmErr
+	}
 	// cannotNudge's remaining condition, needs-input, defers CI-failure and
 	// review-feedback nudges until the agent is active again: both are
 	// actionable only by the agent, so re-surfacing them once it resumes loses
@@ -179,11 +186,10 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		o.Comments = prCommentObservations(comments)
 
 		if o.CI == domain.CIFailing {
-			pr, ok, err := m.store.GetPR(ctx, o.URL)
 			switch {
-			case err != nil:
-				ciPolicyErr = fmt.Errorf("load CI injection policy for %s: %w", o.URL, err)
-			case !ok:
+			case prErr != nil:
+				ciPolicyErr = fmt.Errorf("load CI injection policy for %s: %w", o.URL, prErr)
+			case !prFound:
 				ciPolicyErr = fmt.Errorf("load CI injection policy for %s: PR not found", o.URL)
 			case pr.AutoInjectCI:
 				checks := failedPRChecks(o.Checks)
@@ -336,6 +342,11 @@ func (m *Manager) sessionComplete(ctx context.Context, id domain.SessionID) (boo
 	}
 	merged := false
 	for _, pr := range prs {
+		// A PR the session only reviewed is someone else's work; it neither
+		// completes nor holds open this session (#6810).
+		if pr.ReviewOnly {
+			continue
+		}
 		if !pr.Merged && !pr.Closed {
 			return false, nil
 		}

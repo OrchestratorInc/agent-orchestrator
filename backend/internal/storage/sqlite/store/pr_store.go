@@ -843,6 +843,7 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		ReviewObservedAt:         timeFromNull(p.ReviewObservedAt),
 		ReviewPartial:            p.ReviewPartial,
 		AutoInjectCI:             p.AutoInjectCI,
+		ReviewOnly:               p.ReviewOnly,
 	}
 }
 
@@ -953,4 +954,16 @@ func timeFromNull(t sql.NullTime) time.Time {
 		return time.Time{}
 	}
 	return t.Time
+}
+
+// SetPRReviewOnly marks or clears prURL as a review-only attachment of
+// sessionID. It reports false when the PR does not belong to that session.
+func (s *Store) SetPRReviewOnly(ctx context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.SetPRReviewOnly(ctx, gen.SetPRReviewOnlyParams{ReviewOnly: reviewOnly, URL: prURL, SessionID: sessionID})
+	if err != nil {
+		return false, fmt.Errorf("set review-only for pr %s: %w", prURL, err)
+	}
+	return n > 0, nil
 }

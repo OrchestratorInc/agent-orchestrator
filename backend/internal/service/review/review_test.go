@@ -26,6 +26,8 @@ type fakeStore struct {
 	prComments              map[string][]domain.PullRequestComment
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
+	suppressedReviews       []string
+	reviewOnlySets          map[string]bool
 
 	updateCalls       int
 	activityUpdates   int
@@ -157,6 +159,26 @@ func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadI
 	}
 	f.prComments[prURL] = comments
 	return nil
+}
+
+func (f *fakeStore) SuppressAOReviewInject(_ context.Context, prURL, githubReviewID string) error {
+	f.suppressedReviews = append(f.suppressedReviews, prURL+"#"+githubReviewID)
+	return nil
+}
+
+func (f *fakeStore) SetPRReviewOnly(_ context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error) {
+	for i := range f.prs {
+		if f.prs[i].URL != prURL || f.prs[i].SessionID != sessionID {
+			continue
+		}
+		f.prs[i].ReviewOnly = reviewOnly
+		if f.reviewOnlySets == nil {
+			f.reviewOnlySets = map[string]bool{}
+		}
+		f.reviewOnlySets[prURL] = reviewOnly
+		return true, nil
+	}
+	return false, nil
 }
 
 type fakeReviewResolver struct {

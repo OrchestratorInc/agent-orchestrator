@@ -4383,6 +4383,7 @@ type TriggerReviewRequest struct {
 	RejectReviewedHead bool `json:"rejectReviewedHead,omitempty" description:"Return 409 instead of reusing when every open PR head is already being reviewed or already has a review."`
 	Rerun              bool `json:"rerun,omitempty" description:"Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead."`
 	EnableAutoInject   bool `json:"enableAutoInject,omitempty" description:"Turn on the worker session's review auto-inject once a pass has started, so the reviewer's PR review comments reach the worker."`
+	NoInject           bool `json:"noInject,omitempty" description:"Never deliver this pass's review to the worker session, whatever its auto-inject setting. A PR that prUrl attaches for it is review-only: the session gets no CI, review, or merge-conflict nudges for it. Cannot be combined with enableAutoInject."`
 }
 
 // ResolveReviewCommentRequest is the body of POST /api/v1/sessions/{sessionId}/reviews/comments/resolve.

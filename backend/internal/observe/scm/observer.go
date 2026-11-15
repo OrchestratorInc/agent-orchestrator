@@ -741,6 +741,11 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			}
 			pr, checks, reviews, threads, comments = domainFromObservation(subj.session.ID, subj.session, prepared, local, pendingOpts, now)
 		}
+		if err := suppressNoInjectAOReviews(ctx, o.store, pr.URL, reviews, comments); err != nil {
+			o.logger.Warn("scm observer: load no-inject AO reviews failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+			markRepoRefreshFailed(subj.repo)
+			continue
+		}
 		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
 			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
 			sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})

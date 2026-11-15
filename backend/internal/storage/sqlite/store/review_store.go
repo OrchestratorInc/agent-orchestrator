@@ -253,6 +253,7 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 		GithubReviewID:   r.GithubReviewID,
 		CreatedAt:        r.CreatedAt,
 		AutoInjectReview: r.AutoInjectReview,
+		NoInject:         r.NoInject,
 	})
 	if isSQLiteUnique(err) {
 		return fmt.Errorf("insert review run for session %s pr %s sha %s: %w", r.SessionID, r.PRURL, r.TargetSHA, domain.ErrDuplicateReviewRun)
@@ -505,6 +506,7 @@ func reviewRunFromRow(r gen.ReviewRun) domain.ReviewRun {
 		CreatedAt:        r.CreatedAt,
 		DeliveredAt:      deliveredAt,
 		AutoInjectReview: r.AutoInjectReview,
+		NoInject:         r.NoInject,
 	}
 }
 
@@ -576,4 +578,39 @@ func (s *Store) ArchiveReviewsBySession(ctx context.Context, workerID domain.Ses
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.ArchiveReviewsBySession(ctx, gen.ArchiveReviewsBySessionParams{SessionID: workerID, UpdatedAt: now})
+}
+
+// NoInjectAOReviewIDs returns the provider review ids of the completed AO
+// review passes on prURL that were started with --no-inject. Their observed
+// reviews and inline comments must never be delivered to the session (#6810).
+func (s *Store) NoInjectAOReviewIDs(ctx context.Context, prURL string) (map[string]bool, error) {
+	ids, err := s.qr.ListNoInjectReviewRunIDsByPR(ctx, prURL)
+	if err != nil {
+		return nil, fmt.Errorf("list no-inject AO reviews for %s: %w", prURL, err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
+
+// SuppressAOReviewInject marks the observed review and its inline comments for
+// githubReviewID on prURL as never deliverable. It covers rows the SCM
+// observer stored before the pass recorded its provider review id.
+func (s *Store) SuppressAOReviewInject(ctx context.Context, prURL, githubReviewID string) error {
+	if prURL == "" || githubReviewID == "" {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "suppress AO review inject", func(q *gen.Queries) error {
+		if err := q.SuppressPRCommentInjectByReview(ctx, gen.SuppressPRCommentInjectByReviewParams{PRURL: prURL, ReviewID: githubReviewID}); err != nil {
+			return err
+		}
+		return q.SuppressPRReviewInjectByReview(ctx, gen.SuppressPRReviewInjectByReviewParams{PRURL: prURL, ReviewID: githubReviewID})
+	})
 }

@@ -23035,6 +23035,8 @@ components:
           type: string
         id:
           type: string
+        noInject:
+          type: boolean
         prUrl:
           type: string
         reviewId:
@@ -25896,6 +25898,12 @@ components:
           - chat
           - tui
           type: string
+        noInject:
+          description: 'Never deliver this pass''s review to the worker session, whatever
+            its auto-inject setting. A PR that prUrl attaches for it is review-only:
+            the session gets no CI, review, or merge-conflict nudges for it. Cannot
+            be combined with enableAutoInject.'
+          type: boolean
         prUrl:
           description: Restrict the pass to this pull request, attaching it to the
             session first if AO does not track it yet (never from another active session).

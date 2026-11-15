@@ -142,7 +142,7 @@ ao review trigger [worker-session-id] [flags]
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
 | `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |
-| `--no-inject` | Leave the session's review auto-inject setting unchanged | Auto-inject is turned on |
+| `--no-inject` | Leave the session's review auto-inject setting unchanged and never deliver this pass's review to the session. A PR that `--pr` attaches for it is review-only: the session gets no CI, review, or merge-conflict nudges for it | Auto-inject is turned on |
 
 Orchestrator fetches the session's PRs fresh from the provider before deciding what is
 due, so the pass covers the commit really on the PR. Right after opening a PR,

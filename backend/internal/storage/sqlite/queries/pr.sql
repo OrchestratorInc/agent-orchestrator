@@ -511,6 +511,9 @@ ON CONFLICT (url) DO UPDATE SET
     -- The PR follows its new owner's "Automatically fix CI failures" switch,
     -- not the previous owner's.
     auto_inject_ci = excluded.auto_inject_ci,
+    -- A review-only attachment belongs to the session that started the review;
+    -- a takeover by another session makes that session the PR's real owner.
+    review_only = CASE WHEN pr.session_id != excluded.session_id THEN FALSE ELSE pr.review_only END,
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
@@ -557,3 +560,6 @@ WHERE pr_key IN (
 )
 AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
     AND pr.provider <> '' AND pr.provider_id <> '');
+
+-- name: SetPRReviewOnly :execrows
+UPDATE pr SET review_only = ? WHERE url = ? AND session_id = ?;

@@ -268,6 +268,9 @@ type TriggerOptions struct {
 	// the worker's branch just before this trigger and found none, so a
 	// no-PR error may say so.
 	BranchPRLookupFoundNone bool
+	// NoInject marks every pass this trigger starts as never delivered to the
+	// worker session, whatever its auto-inject setting (#6810).
+	NoInject bool
 }
 
 // TriggerWithOptions starts reviews for every PR on the worker session that needs review.
@@ -525,7 +528,8 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			CreatedAt:     now,
 			// Completion refreshes this snapshot before delivery. Keeping the
 			// trigger-time value also makes a running pass truthful in the API.
-			AutoInjectReview: worker.AutoInjectReview,
+			AutoInjectReview: worker.AutoInjectReview && !opts.NoInject,
+			NoInject:         opts.NoInject,
 		}
 		if err := e.store.InsertReviewRun(ctx, run); err != nil {
 			if errors.Is(err, domain.ErrDuplicateReviewRun) {

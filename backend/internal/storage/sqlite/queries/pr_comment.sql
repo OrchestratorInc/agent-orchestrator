@@ -31,3 +31,6 @@ WHERE pr_url = ? AND thread_id = ? AND resolved = FALSE;
 -- name: ListPRComments :many
 SELECT pr_url, comment_id, author, file, line, body, resolved, created_at, thread_id, url, is_bot, auto_inject_review, review_id
 FROM pr_comment WHERE pr_url = ? ORDER BY created_at, comment_id;
+
+-- name: SuppressPRCommentInjectByReview :exec
+UPDATE pr_comment SET auto_inject_review = FALSE WHERE pr_url = ? AND review_id = ?;

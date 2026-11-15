@@ -947,7 +947,7 @@ func (r reviewPRRefresher) FindBranchPRs(ctx context.Context, workerID domain.Se
 }
 
 func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {
-	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false})
+	_, err := r.sessions.ClaimPR(ctx, workerID, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false, KeepReviewOnly: true})
 	var owned ports.PRClaimedByActiveSessionError
 	switch {
 	case err == nil:

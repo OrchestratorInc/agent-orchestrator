@@ -84,8 +84,8 @@ WHERE id = ?
     OR (? = '' AND reviewer_launch_id = ''));
 
 -- name: InsertReviewRun :exec
-INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, no_inject)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateReviewRunResult :execrows
 UPDATE review_run SET status = ?, verdict = ?, body = ?, github_review_id = ?, auto_inject_review = ? WHERE id = ? AND status = 'running';
@@ -100,27 +100,27 @@ UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND st
 UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND harness = ? AND status = 'running' AND verdict = '';
 
 -- name: GetReviewRun :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, no_inject
 FROM review_run WHERE id = ?;
 
 -- name: GetReviewRunBySessionPRAndSHA :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, no_inject
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: GetReviewRunBySessionPRSHAAndHarness :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, no_inject
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: ListReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, no_inject
 FROM review_run WHERE session_id = ? ORDER BY created_at DESC;
 
 -- name: ListRunningReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, no_inject
 FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at DESC;
 
 -- name: ListReviewRunsByBatch :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, no_inject
 FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC;
 
 -- name: ListCurrentHeadReviewRunsBySession :many
@@ -233,3 +233,11 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
 -- name: ArchiveReviewsBySession :exec
 UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_id = '',
     controller_generation = '', reviewer_activity_state = 'exited', updated_at = ? WHERE session_id = ?;
+
+-- name: ListNoInjectReviewRunIDsByPR :many
+-- The provider review ids of completed --no-inject AO review passes on this
+-- PR, so their observed comments and reviews are never sent back to the
+-- session (#6810).
+SELECT github_review_id
+FROM review_run
+WHERE pr_url = ? AND github_review_id != '' AND status = 'complete' AND no_inject;

@@ -556,6 +556,7 @@ type PR struct {
 	ProviderID               string
 	AuthorAvatarURL          string
 	ReviewPartial            bool
+	ReviewOnly               bool
 }
 
 type PRCheck struct {
@@ -713,6 +714,7 @@ type ReviewRun struct {
 	BatchID          string
 	AutoInjectReview bool
 	TriggerSource    domain.ReviewTriggerSource
+	NoInject         bool
 }
 
 type Session struct {

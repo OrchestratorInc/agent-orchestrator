@@ -19,3 +19,10 @@ DELETE FROM pr_reviews WHERE pr_url = ? AND review_id = ?;
 -- name: ListPRReviews :many
 SELECT pr_url, review_id, author, state, url, is_bot, submitted_at, body, auto_inject_review, target_sha
 FROM pr_reviews WHERE pr_url = ? ORDER BY submitted_at, review_id;
+
+-- name: SuppressPRReviewInjectByReview :exec
+-- GitHub stores submitted reviews by GraphQL node id; the review URL carries
+-- the numeric id AO records for its own reviews.
+UPDATE pr_reviews SET auto_inject_review = FALSE
+WHERE pr_url = sqlc.arg(pr_url)
+  AND (review_id = sqlc.arg(review_id) OR url LIKE '%#pullrequestreview-' || sqlc.arg(review_id));

@@ -97,6 +97,10 @@ type ReviewRun struct {
 	// AutoInjectReview snapshots the session policy when this result is first
 	// recorded. Later toggle changes must not rewrite or deliver this run.
 	AutoInjectReview bool `json:"autoInjectReview"`
+	// NoInject records that the pass was started with --no-inject: its review
+	// is never delivered to the session, whatever the session's live
+	// auto-inject setting is when the result arrives (#6810).
+	NoInject bool `json:"noInject,omitempty"`
 }
 
 // ReviewTriggerSource identifies who initiated a review pass.

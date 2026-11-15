@@ -36,6 +36,17 @@ var (
 // ClaimPROptions controls PR claim conflict behavior.
 type ClaimPROptions struct {
 	AllowTakeover bool
+	// KeepReviewOnly leaves a review-only attachment as it is. A review
+	// trigger refreshing a PR sets it; it then decides the PR's review-only
+	// mark itself. Any other claim makes the session the PR's owner (#6810).
+	KeepReviewOnly bool
+}
+
+// reviewOnlyStore is the optional part of the PR claimer that knows about
+// review-only attachments and --no-inject AO reviews (#6810).
+type reviewOnlyStore interface {
+	NoInjectAOReviewIDs(ctx context.Context, prURL string) (map[string]bool, error)
+	SetPRReviewOnly(ctx context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error)
 }
 
 // ClaimPRResult is the session PR read model returned after a claim.
@@ -130,10 +141,27 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	}
 	now := s.clock().UTC()
 	pr, checks, reviews, threads, comments := claimRowsFromSCM(id, obs, reviewMode, now, rec)
+	reviewOnly, hasReviewOnly := s.prClaimer.(reviewOnlyStore)
+	if hasReviewOnly {
+		// Rows snapshot the session's auto-inject setting; a --no-inject AO
+		// review on this PR must still never be delivered.
+		ids, err := reviewOnly.NoInjectAOReviewIDs(ctx, pr.URL)
+		if err != nil {
+			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
+			return ClaimPRResult{}, err
+		}
+		domain.SuppressNoInjectReviewRows(ids, reviews, comments)
+	}
 	outcome, err := s.prClaimer.ClaimPR(ctx, pr, checks, reviews, threads, comments, reviewMode, opts.AllowTakeover)
 	if err != nil {
 		s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
+	}
+	if hasReviewOnly && !opts.KeepReviewOnly {
+		if _, err := reviewOnly.SetPRReviewOnly(ctx, pr.URL, id, false); err != nil {
+			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
+			return ClaimPRResult{}, err
+		}
 	}
 	s.recordClaimed(ctx, id, pr, domain.ActivityStatusCompleted, nil)
 	// The PR has changed hands: tell the previous owner now, so a later read

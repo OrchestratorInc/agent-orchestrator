@@ -125,6 +125,12 @@ type Store interface {
 	// MarkPRReviewThreadResolved records a thread resolved along with all its
 	// comments; the PR summary reads a thread's state from the thread row.
 	MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error
+	// SuppressAOReviewInject marks the observed review and inline comments of
+	// one AO review as never deliverable to the session.
+	SuppressAOReviewInject(ctx context.Context, prURL, githubReviewID string) error
+	// SetPRReviewOnly marks or clears a PR as attached to the session only so a
+	// --no-inject review could run on it.
+	SetPRReviewOnly(ctx context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error)
 }
 
 // PRRefresher fetches one pull request fresh from its provider and records it
@@ -474,6 +480,11 @@ type TriggerRequest struct {
 	// EnableAutoInject turns on the worker session's review auto-inject once a
 	// pass has started, so the reviewer's PR review comments reach the worker.
 	EnableAutoInject bool
+	// NoInject guarantees this pass's review never reaches the worker session,
+	// whatever its auto-inject setting. A PR that --pr attaches for it is
+	// review-only: the session gets no CI, review, or merge-conflict nudges
+	// for it (#6810). It cannot be combined with EnableAutoInject.
+	NoInject bool
 }
 
 // TriggerOutcome is the trigger result plus whether this request turned the
@@ -498,7 +509,10 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if req.Rerun && req.RejectReviewedHead {
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
 	}
-	branchLookupFoundNone, err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL))
+	if req.NoInject && req.EnableAutoInject {
+		return TriggerOutcome{}, fmt.Errorf("%w: no-inject cannot be combined with enabling auto-inject", ErrInvalid)
+	}
+	branchLookupFoundNone, err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL), req.NoInject)
 	if err != nil {
 		return TriggerOutcome{}, err
 	}
@@ -511,6 +525,7 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 		RejectReviewedHead:      req.RejectReviewedHead,
 		Rerun:                   req.Rerun,
 		BranchPRLookupFoundNone: branchLookupFoundNone,
+		NoInject:                req.NoInject,
 	})
 	if err != nil {
 		return TriggerOutcome{}, err
@@ -548,7 +563,12 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 // trigger proceeds with the facts AO has, and its same-commit checks still
 // report a push AO has not observed. It reports whether a lookup of the
 // worker's branch ran and found no open PR.
-func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) (bool, error) {
+//
+// With noInject, a named PR the session did not track before is marked
+// review-only: the session only asked for a review of it, so it must not
+// inherit the PR's fix/push lifecycle (#6810). A named PR triggered without
+// noInject is the session's own again.
+func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string, noInject bool) (bool, error) {
 	if s.prRefresher == nil {
 		return false, nil
 	}
@@ -574,6 +594,9 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 		} else if err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
 		}
+		if err := s.setNamedPRReviewOnly(ctx, workerID, prURL, noInject, known); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 	for _, pr := range tracked {
@@ -585,6 +608,33 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 		}
 	}
 	return false, nil
+}
+
+// setNamedPRReviewOnly records whether a PR named by --pr is only being
+// reviewed by the session. Only a --no-inject trigger that attached the PR
+// marks it; a --no-inject trigger on a PR the session already owned leaves it
+// owned, and a trigger without --no-inject makes the session its owner.
+func (s *Service) setNamedPRReviewOnly(ctx context.Context, workerID domain.SessionID, prURL string, noInject, known bool) error {
+	if noInject && known {
+		return nil
+	}
+	tracked, err := s.store.ListPRsBySession(ctx, workerID)
+	if err != nil {
+		return err
+	}
+	for _, pr := range tracked {
+		if pr.URL != prURL && pr.HTMLURL != prURL {
+			continue
+		}
+		if pr.ReviewOnly == noInject {
+			return nil
+		}
+		if _, err := s.store.SetPRReviewOnly(ctx, pr.URL, workerID, noInject); err != nil {
+			return fmt.Errorf("record review-only attachment: %w", err)
+		}
+		return nil
+	}
+	return nil
 }
 
 // hasOpenPR reports whether any tracked PR is still open. A session whose
@@ -916,7 +966,10 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, session.AutoInjectReview)
+		// A --no-inject pass is never delivered, even if the session's
+		// auto-inject is on now (#6810).
+		autoInject := session.AutoInjectReview && !run.NoInject
+		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, autoInject)
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
@@ -927,7 +980,15 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Verdict = verdict
 		run.Body = body
 		run.GithubReviewID = githubReviewID
-		run.AutoInjectReview = session.AutoInjectReview
+		run.AutoInjectReview = autoInject
+		if run.NoInject && githubReviewID != "" {
+			// The SCM observer may have stored this review's rows before the
+			// pass recorded its provider id, snapshotting the session's setting
+			// onto them; make sure none of them is delivered.
+			if err := s.store.SuppressAOReviewInject(ctx, run.PRURL, githubReviewID); err != nil {
+				return domain.ReviewRun{}, err
+			}
+		}
 		if githubReviewID != "" && s.reviewRefresher != nil {
 			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
 		}
@@ -949,7 +1010,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			"body_bytes": len(body),
 			// Whether the session policy will let this result reach the worker at
 			// all, recorded at the moment it is snapshotted onto the run.
-			"auto_inject": session.AutoInjectReview,
+			"auto_inject": autoInject,
 		})
 	case domain.ReviewRunComplete:
 		if run.Verdict != verdict {

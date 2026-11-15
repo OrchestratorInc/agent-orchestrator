@@ -205,6 +205,7 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		RejectReviewedHead: in.RejectReviewedHead,
 		Rerun:              in.Rerun,
 		EnableAutoInject:   in.EnableAutoInject,
+		NoInject:           in.NoInject,
 	})
 	if err != nil {
 		writeReviewError(w, r, err)
