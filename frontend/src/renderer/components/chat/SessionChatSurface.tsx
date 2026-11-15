@@ -718,6 +718,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				accountMoving={accountMoving}
 				accountMoveQueues={accountMoveQueues}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
+				// A stand-in is on screen until the conversation is read; an existing
+				// session may hold messages, so its composer opens docked. One still
+				// being created has none and opens centered, like the start before it.
+				historyUnread={!conversationShown && !renderShellFallback && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}
