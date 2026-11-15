@@ -2004,7 +2004,12 @@ function ChatWorkspaceContent({
 	// An existing session opens docked before its history is read, never centered
 	// and then dropped once it loads. One that turns out empty stays docked: only a
 	// chat known to be new (the new chat page, a session still being created) centers.
-	const [openedDocked] = useState(historyUnread);
+	// Settled the first time the chat itself shows: behind a shell tab the surface
+	// holds a fallback, and the stand-in only arrives once Chat is picked. Until
+	// then it counts as docked, so nothing glides in when Chat appears.
+	const [settledDocked, setSettledDocked] = useState<boolean | undefined>(shellActive ? undefined : historyUnread);
+	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
+	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(

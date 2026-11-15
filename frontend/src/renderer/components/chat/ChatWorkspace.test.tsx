@@ -6606,6 +6606,28 @@ describe("ChatWorkspace shell tabs", () => {
 		};
 	};
 
+	it("docks the composer when Chat is picked from a shell before the history is read", () => {
+		const common = { session: chatSession, shellTerminals: shells, onSelectChat: vi.fn() };
+		// Opened on a shell tab: the surface shows its fallback, not a stand-in.
+		const view = render(<ChatWorkspace {...common} snapshot={chatFixtureEmpty} shellTarget={shellTarget("shell-1")} />);
+		// Chat is picked while the conversation is still being read.
+		view.rerender(<ChatWorkspace {...common} snapshot={chatFixtureEmpty} historyUnread />);
+		const placement = () => document.querySelector("[data-composer-placement]");
+		expect(placement()).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement()).toHaveClass("justify-end");
+		view.rerender(<ChatWorkspace {...common} snapshot={{ ...chatFixtureEmpty, items: [humanMessage("hello")] }} />);
+		expect(placement()).toHaveAttribute("data-composer-placement", "dock");
+		expect(document.querySelector("[data-composer-motion]")).toBeNull();
+	});
+
+	it("centers a chat known to be empty when Chat is picked from a shell", () => {
+		const common = { session: chatSession, shellTerminals: shells, onSelectChat: vi.fn() };
+		const view = render(<ChatWorkspace {...common} snapshot={chatFixtureEmpty} shellTarget={shellTarget("shell-1")} />);
+		view.rerender(<ChatWorkspace {...common} snapshot={chatFixtureEmpty} />);
+		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+		expect(document.querySelector("[data-composer-motion]")).toBeNull();
+	});
+
 	it("does not replay entrances for rows written while a shell covered the conversation", () => {
 		const opened = Date.now();
 		const now = vi.spyOn(Date, "now").mockReturnValue(opened);
