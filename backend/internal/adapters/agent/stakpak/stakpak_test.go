@@ -706,3 +706,30 @@ func TestConversationChecksNeverReplaceTheSessionEnvironment(t *testing.T) {
 		t.Fatalf("check without an environment after a preflight = %t, %v; want the session's own store", exists, err)
 	}
 }
+
+// The activity observer passes an environment AO rebuilds from the current
+// project and account. After a key change it names credentials the running
+// Stakpak never received, so discovery uses the launch environment this
+// process kept, and the rebuilt one only when nothing is kept.
+func TestResolveNativeSessionIDPrefersTheRunningLaunchEnvironment(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	t.Setenv("STAKPAK_API_KEY", "")
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	ctx := context.Background()
+	launched := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "launch-key"}
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: launched}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := json.Marshal(map[string]any{"sessions": []map[string]any{{"id": nativeA, "cwd": ws, "created_at": time.Now().UTC().Add(time.Second)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "sessions-remote.json"), list, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "revoked"}
+	if id, ok, err := p.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1", Env: rebuilt}); err != nil || !ok || id != nativeA {
+		t.Fatalf("discovery with a rebuilt environment = %q, %t, %v; want %s via the running launch's credentials", id, ok, err, nativeA)
+	}
+}

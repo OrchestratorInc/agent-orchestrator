@@ -82,16 +82,15 @@ func (p *Plugin) rememberLaunchEnv(sessionID string, env map[string]string) {
 }
 
 // sessionEnv is the environment every Stakpak command about a session runs
-// in. An environment the caller passes wins: AO's activity observer, its
-// update-when-idle probe and its restores pass the session's runtime
-// environment. A caller that passes none (SessionInfo) gets the one this
-// process launched or resumed the session with. Either way the launch's
-// recorded profile applies when the environment names none.
+// in. An environment the caller passes wins: a restore's or update-when-idle
+// probe's describes the process about to start, a preflight's its target. A
+// caller that passes none (SessionInfo) gets the one this process launched or
+// resumed the session with; ResolveNativeSessionID prefers that one too (see
+// there). Either way the launch's recorded profile applies when the
+// environment names none.
 func (p *Plugin) sessionEnv(sessionID string, env map[string]string, record launchRecord) map[string]string {
 	if env == nil {
-		p.recordMu.Lock()
-		env = p.launchEnvs[sessionID]
-		p.recordMu.Unlock()
+		env = p.keptEnv(sessionID)
 	}
 	return restoreEnv(env, record)
 }
@@ -209,7 +208,22 @@ func parseSessionList(out []byte) ([]nativeSession, error) {
 // conversation the user starts with /new inside the TUI is therefore not
 // followed.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
-	return p.resolveNativeSessionID(ctx, cfg.DataDir, string(cfg.SessionID), cfg.Env)
+	// The running process's own launch environment wins: AO rebuilds cfg.Env
+	// from the current project and account, which may name keys rotated since
+	// the launch. It is used only when nothing is kept, after a restart.
+	env := p.keptEnv(string(cfg.SessionID))
+	if env == nil {
+		env = cfg.Env
+	}
+	return p.resolveNativeSessionID(ctx, cfg.DataDir, string(cfg.SessionID), env)
+}
+
+// keptEnv is the environment this process launched or resumed the session
+// with, or nil.
+func (p *Plugin) keptEnv(sessionID string) map[string]string {
+	p.recordMu.Lock()
+	defer p.recordMu.Unlock()
+	return p.launchEnvs[sessionID]
 }
 
 // resolveNativeSessionID lists sessions in sessionEnv(env): a restore passes
