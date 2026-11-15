@@ -4986,12 +4986,17 @@ export function createBrowserViewHost(
             return devtoolsAction(session, operation);
           }
           case "screenshot": {
-            const shownEntry = activeEntry(session);
-            const codeOnScreen = options.credentialFiller?.screenshotBlocked(
-              sessionId,
-              `${shownEntry.tabId}:${shownEntry.documentGeneration}`,
-            );
-            if (codeOnScreen) throw browserError("BROWSER_SECRET_ON_SCREEN", codeOnScreen);
+            // A typed 2FA code may be visible in this tab's document. Checked
+            // now as a fast failure, and again for the tab the queued capture
+            // actually reads, since a tab switch can happen while it waits.
+            const refuseIfCodeOnScreen = (shown: BrowserEntry) => {
+              const codeOnScreen = options.credentialFiller?.screenshotBlocked(
+                sessionId,
+                `${shown.tabId}:${shown.documentGeneration}`,
+              );
+              if (codeOnScreen) throw browserError("BROWSER_SECRET_ON_SCREEN", codeOnScreen);
+            };
+            refuseIfCodeOnScreen(activeEntry(session));
             if (!options.agentBrowserRuntime) {
               throw browserError(
                 "BROWSER_AUTOMATION_UNAVAILABLE",
@@ -5004,6 +5009,7 @@ export function createBrowserViewHost(
                 await ensureNativeActiveTab(session, signal);
                 const targetEntry = activeEntry(session);
                 await targetEntry.ready;
+                refuseIfCodeOnScreen(targetEntry);
                 try {
                   const result = await options.agentBrowserRuntime!.screenshot(
                     sessionId,

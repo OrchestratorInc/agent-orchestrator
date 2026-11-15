@@ -6936,6 +6936,27 @@ describe("browser view host credential fills", () => {
 		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
 	});
 
+	it("re-checks screenshot protection for the tab the queued capture actually reads", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			screenshot: vi.fn(async () => ({ data: "cG5n", width: 1, height: 1, untrustedExternalContent: true as const })),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		// Allowed when the command is admitted; by the time the queued capture
+		// runs, the tab it reads holds a typed 2FA code.
+		const screenshotBlocked = vi
+			.fn<(sessionId: string, documentKey: string) => string | undefined>()
+			.mockReturnValueOnce(undefined)
+			.mockReturnValue("A 2FA code is on screen");
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
+		expect(screenshotBlocked).toHaveBeenCalledTimes(2);
+		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
+	});
+
 	it("refuses fills without a daemon-stamped project", async () => {
 		const { host, item, inserted } = await setupVaultHost({});
 		await expect(
