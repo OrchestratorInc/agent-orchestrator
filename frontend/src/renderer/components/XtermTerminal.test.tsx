@@ -11,6 +11,8 @@ import { XtermTerminal } from "./XtermTerminal";
 
 const state = vi.hoisted(() => ({
 	fit: vi.fn(),
+	webglCreated: vi.fn(),
+	webglDisposed: vi.fn(),
 	lifecycle: [] as string[],
 	linkHandler: null as null | ((event: MouseEvent, uri: string) => void),
 	queueViewportSyncOnOpen: false,
@@ -82,6 +84,7 @@ const state = vi.hoisted(() => ({
 		scrollToLine: ReturnType<typeof vi.fn>;
 		refresh: ReturnType<typeof vi.fn>;
 		clear: ReturnType<typeof vi.fn>;
+		reset: ReturnType<typeof vi.fn>;
 		dispose: ReturnType<typeof vi.fn>;
 		focus: ReturnType<typeof vi.fn>;
 		selectAll: ReturnType<typeof vi.fn>;
@@ -159,6 +162,7 @@ vi.mock("@xterm/xterm", () => ({
 		scrollToLine = vi.fn();
 		refresh = vi.fn();
 		clear = vi.fn();
+		reset = vi.fn();
 		focus = vi.fn();
 		selectAll = vi.fn();
 		dataListeners = new Set<(data: string) => void>();
@@ -317,8 +321,9 @@ vi.mock("@xterm/addon-web-links", () => ({
 
 vi.mock("@xterm/addon-webgl", () => ({
 	WebglAddon: class FakeWebglAddon {
+		constructor() { state.webglCreated(); }
 		onContextLoss() {}
-		dispose() {}
+		dispose() { state.webglDisposed(); }
 	},
 }));
 
@@ -377,6 +382,8 @@ describe("XtermTerminal", () => {
 	});
 	beforeEach(() => {
 		state.fit.mockReset();
+		state.webglCreated.mockClear();
+		state.webglDisposed.mockClear();
 		state.lifecycle.length = 0;
 		state.lastTerminal = null;
 		state.linkHandler = null;
@@ -850,14 +857,17 @@ describe("XtermTerminal", () => {
 		}
 	});
 
-	it.each(["dark", "light"] as const)("toggles transparency on a retained %s terminal", (theme) => {
+	it.each(["dark", "light"] as const)("keeps macOS live transparency on a retained %s terminal", async (theme) => {
 		setNavigatorPlatform("MacIntel");
+		const { applyWindowTranslucency } = await import("../lib/window-translucency");
+		await applyWindowTranslucency(true);
 		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
 		const view = render(<XtermTerminal theme={theme} />);
 		const terminal = state.lastTerminal!;
 		const background = theme === "dark" ? "#0d1117" : "#ffffff";
 		try {
 			expect(terminal.options.allowTransparency).toBe(true);
+			expect(state.webglCreated).not.toHaveBeenCalled();
 			expect(terminal.options.theme).toMatchObject({
 				background: "#00000000",
 				black: background,
@@ -865,9 +875,13 @@ describe("XtermTerminal", () => {
 			});
 
 			act(() => useUiStore.getState().setWindowTranslucency(false));
+			await act(() => applyWindowTranslucency(false));
 			expect(terminal.options.theme).toMatchObject({ background });
+			expect(state.webglCreated).toHaveBeenCalledTimes(1);
 			act(() => useUiStore.getState().setWindowTranslucency(true));
+			await act(() => applyWindowTranslucency(true));
 			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			expect(state.webglDisposed).toHaveBeenCalledTimes(1);
 			act(() => useUiStore.getState().setThemeStyle("orchestrate"));
 			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
 			expect(state.lastTerminal).toBe(terminal);
@@ -875,6 +889,60 @@ describe("XtermTerminal", () => {
 			expect(terminal.clear).not.toHaveBeenCalled();
 		} finally {
 			view.unmount();
+			await applyWindowTranslucency(false);
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
+		}
+	});
+
+	it.each((["dark", "light"] as const).flatMap((theme) => [false, true].map((enabled) => ({ theme, enabled }))))("keeps a Windows $theme terminal opaque and accelerated with initial glass $enabled and live toggles", async ({ theme, enabled }) => {
+		setNavigatorPlatform("Win32");
+		const { applyWindowTranslucency } = await import("../lib/window-translucency");
+		await applyWindowTranslucency(enabled);
+		useUiStore.setState({ windowTranslucency: enabled, themeStyle: "github" });
+		const onReady = vi.fn();
+		let opened = () => {};
+		const mux: TerminalMux = {
+			open: vi.fn(), close: vi.fn(), resize: vi.fn(), dispose: vi.fn(), sendInput: vi.fn(),
+			onData: () => () => {}, onOpened: (_id, listener) => { opened = listener; return () => {}; },
+			onExit: () => () => {}, onError: () => () => {}, onConnectionChange: () => () => {},
+		};
+		const createMux = vi.fn(() => mux);
+		function Shell() {
+			const session = useTerminalSession(undefined, { daemonReady: true, shellTerminalHandleId: "retained-glass", createMux });
+			return <XtermTerminal theme={theme} onReady={(ready) => { onReady(ready); session.attach(ready); }} />;
+		}
+		const view = render(<QueryClientProvider client={new QueryClient()}><Shell /></QueryClientProvider>);
+		act(() => opened());
+		const terminal = state.lastTerminal!;
+		const background = theme === "dark" ? "#0d1117" : "#ffffff";
+		try {
+			expect(terminal.options.allowTransparency).toBe(false);
+			expect(terminal.options.theme).toMatchObject({ background, black: background, cursorAccent: background });
+			expect(state.webglCreated).toHaveBeenCalledTimes(1);
+			for (const next of [!enabled, enabled]) {
+				act(() => useUiStore.getState().setWindowTranslucency(next));
+				await act(() => applyWindowTranslucency(next));
+				expect(terminal.options.theme).toMatchObject({ background });
+				expect(state.lastTerminal).toBe(terminal);
+				expect(terminal.options.allowTransparency).toBe(false);
+				expect(terminal.dispose).not.toHaveBeenCalled();
+				expect(terminal.clear).not.toHaveBeenCalled();
+				expect(terminal.reset).not.toHaveBeenCalled();
+			}
+			expect(state.webglCreated).toHaveBeenCalledTimes(1);
+			expect(state.webglDisposed).not.toHaveBeenCalled();
+			expect(onReady).toHaveBeenCalledTimes(1);
+			expect(createMux).toHaveBeenCalledTimes(1);
+			expect(mux.open).toHaveBeenCalledTimes(1);
+			expect(mux.close).not.toHaveBeenCalled();
+			expect(mux.dispose).not.toHaveBeenCalled();
+			expect(terminal.dispose).not.toHaveBeenCalled();
+			expect(terminal.clear).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			await waitFor(() => expect(terminal.dispose).toHaveBeenCalledTimes(1));
+			expect(mux.dispose).toHaveBeenCalledTimes(1);
+			await applyWindowTranslucency(false);
 			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
 		}
 	});

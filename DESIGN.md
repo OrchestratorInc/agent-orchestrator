@@ -75,13 +75,15 @@ Never use visual polish to obscure a state transition, destructive action, conne
 - **Color:** rare, semantic, and stateful. A colored element must answer “what does this mean?”
 - **Shape:** modest radius, not a field of pills. A rounded control should read as a control; a panel should read as one composed container; ordinary metadata should remain text.
 - **Density:** compact by default. AO is used all day and needs high information capacity without cramped target sizes.
-- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI, except the transient glass surfaces defined below.
+- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI, except the native window transparency and transient glass surfaces defined below.
 
 ## 3. App architecture expressed visually
 
 AO has one persistent shell; routes replace the center surface rather than replacing the app's orientation.
 
 ### Shell
+
+Windows 11 may offer opt-in native Acrylic using the shared macOS sidebar material recipe: the default theme uses 70% tint in dark mode and 72% in light mode; named themes use their palette colors at 70% in both modes. Agent/chat and inspector working surfaces stay translucent in dark mode and restore solid theme fills in light mode for readability on both platforms. Windows terminal canvases remain intentionally opaque and accelerated; their existing boundary with surrounding panels is retained without an additional frame. Floating surfaces retain solid theme tokens where they overlap working content, and native-browser cutouts remain clear. Native transparency respects system transparency and contrast preferences on both platforms: macOS Reduce transparency or Increase contrast now makes the shell fully opaque without discarding the saved preference. This is an accessibility behavior change from the previous system-managed vibrancy. Core-team/design approval for the Windows feature and its native-window exception remains pending; this specification does not record approval. This exception does not authorize decorative glass elsewhere in the working UI.
 
 - **Sidebar:** persistent project navigation and global utility. It answers “where am I?” and “what can I switch to?”
 - **Center:** the primary task surface: home, board, session, terminals, settings, or setup.
@@ -382,7 +384,7 @@ Test meaningful variants: dark/light theme, expanded/collapsed sidebar, long pro
 Reject these patterns in renderer work unless a specific exception is approved:
 
 - Generic SaaS hero/feature-grid language inside the application shell.
-- Decorative gradients, glows, glass (except the Cmd+K, archive, and cloud New task surfaces defined above), blobs, textures, or ornamental shadows.
+- Decorative gradients, glows, glass (except native window transparency—macOS vibrancy and opt-in Windows Acrylic—and the Cmd+K, archive, and cloud New task surfaces defined above), blobs, textures, or ornamental shadows.
 - ALL CAPS labels, uppercase tracking used as decoration, or mono used to make ordinary prose look technical.
 - A rainbow of status colors, decorative accent borders, or color-only meaning.
 - Oversized avatars or icons that compete with task names and state.
@@ -461,3 +463,4 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-11-18 | Looping animations animate only `transform` or `opacity`; working sidebar titles sweep a masked copy of the title with `transform` | The old `background-position` sweep repainted every working row each frame and delayed typing while replies streamed (ADEMark A8 median 50.1 to 35.4 ms). |
 | 2026-11-19 | Sidebar activity carries colour: the working spinner is blue, the working title sweep is tinted blue at low strength, the unread dot stays filled grey, and a collapsed project keeps its icon with the orchestrator button's corner dot for working and unopened finished turns (the red attention alert still replaces it) | Working and finished turns were both grey, so a long list had to be read row by row; the board already used the working blue. A green unread dot was tried and dropped: it competed with ready-to-merge green and made every changed row loud. Swapping a project's avatar for a spinner or dot hid which project it was; the corner dot already means "new reply" on the orchestrator button. |
 | 2026-11-22 | Filled buttons keep `--radius-md` corners (in step with the window radius) and use an edge 13% darker than the fill, a 12% top highlight, an 8% bottom shade and a 1% outer shadow; selected tab pills share the bevel. The Orchestrate accent is one mid-tone blue, `#338ad3`, with white text in dark and light. Small text in the accent (links, inline code, skill tokens, file-status letters) uses `--color-brand-logo-text` (`#66a4de` dark, `#2f6da4` light). Supersedes the pastel `#79b0dc` dark and navy `#304c83` light accents | Tuned in the button lab across all themes. One accent in both modes reads as one brand; the fill is too dark for small text, so text gets its own shade that clears 4.5:1. |
+| 2026-11-22 | Proposed native-window exception: Windows 11 Acrylic shares macOS sidebar styling and dark translucent / light solid working panels; Windows terminals remain opaque and accelerated with their existing edge. Both platforms use a fully opaque shell under system transparency/contrast suppression. Core-team/design approval: pending; no approving owner recorded | Consistent native shell styling across desktop platforms, solid light content for text readability, and opaque Windows terminals for normal glyph rendering and acceleration. Accessibility suppression preserves the saved choice while avoiding glass when the system requests reduced transparency or increased contrast. |

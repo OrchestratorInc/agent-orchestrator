@@ -1,6 +1,7 @@
 import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { WINDOW_TRANSPARENCY_CHANGED, type WindowTransparencyState } from "./shared/window-transparency";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
 import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
@@ -516,10 +517,16 @@ const api = {
 		// The shell goes transparent over a live native browser page, so whatever
 		// shows through its unpainted gutters is the native window background.
 		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
-		// macOS only: swap the painted window background for native vibrancy so
+		// Swap the painted background for a supported native blur material so
 		// the translucent shell blurs the desktop behind it.
 		setWindowTranslucent: (enabled: boolean) =>
-			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
+			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<WindowTransparencyState>,
+		getWindowTransparency: () => ipcRenderer.invoke("theme:get-window-transparency") as Promise<WindowTransparencyState>,
+		onWindowTransparency: (callback: (state: WindowTransparencyState) => void) => {
+			const listener = (_event: Electron.IpcRendererEvent, state: WindowTransparencyState) => callback(state);
+			ipcRenderer.on(WINDOW_TRANSPARENCY_CHANGED, listener);
+			return () => { ipcRenderer.removeListener(WINDOW_TRANSPARENCY_CHANGED, listener); };
+		},
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,

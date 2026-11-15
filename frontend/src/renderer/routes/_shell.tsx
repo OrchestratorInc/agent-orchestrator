@@ -1281,28 +1281,52 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
-	// macOS Appearance preference: the shell becomes one
-	// translucent plate over the native vibrancy blur (styles.css, "macOS window
-	// transparency").
-	const windowTranslucent = isMac && windowTranslucency;
-
-	// Match the native window background to the sidebar fill, following both the
-	// mode and the color theme. Deferred a frame so data-theme and
-	// data-style-theme have been applied before the token is read. A translucent
-	// window paints no background, and the read forces a whole-document style
-	// recalc mid-switch, so it is skipped there.
+	// Keep the opaque fallback current even during glass and palette previews.
+	// Repeated same-value theme writes must not force CSS/canvas reads or IPC.
 	useEffect(() => {
-		if (windowTranslucent) return;
-		const frame = requestAnimationFrame(() => {
-			const color = resolveCssColorToHex("--sidebar");
-			if (color) void aoBridge.theme?.setWindowBackground(color);
-		});
-		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, themeStyle, windowTranslucent]);
+		let frame = 0;
+		let disposed = false;
+		let lastAppearance: string | undefined;
+		let lastColor: string | undefined;
+		let pendingColor: string | undefined;
+		let request = 0;
+		const appearance = () => JSON.stringify([
+			document.documentElement.dataset.theme,
+			document.documentElement.dataset.styleTheme,
+		]);
+		const update = () => {
+			if (appearance() === lastAppearance) {
+				cancelAnimationFrame(frame);
+				frame = 0;
+				return;
+			}
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				lastAppearance = appearance();
+				const color = resolveCssColorToHex("--sidebar");
+				if (!color || color === pendingColor || (!pendingColor && color === lastColor)) return;
+				const version = ++request;
+				pendingColor = color;
+				void aoBridge.theme.setWindowBackground(color).then(() => {
+					if (disposed || version !== request) return;
+					lastColor = color;
+					pendingColor = undefined;
+				}).catch(() => {
+					if (disposed || version !== request) return;
+					lastColor = undefined;
+					pendingColor = undefined;
+				});
+			});
+		};
+		const observer = new MutationObserver(update);
+		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style-theme"] });
+		update();
+		return () => { disposed = true; observer.disconnect(); cancelAnimationFrame(frame); };
+	}, []);
 	useEffect(() => {
-		if (!isMac) return;
-		applyWindowTranslucency(windowTranslucent);
-	}, [windowTranslucent]);
+		void applyWindowTranslucency(windowTranslucency);
+	}, [windowTranslucency]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.

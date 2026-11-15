@@ -49,6 +49,7 @@ import {
 import { LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { isMacPlatform } from "../lib/platform";
 import { applyDocumentTheme, applyDocumentThemeStyle, isThemeStylePreviewActive, onThemeStylePreviewEnd } from "../lib/theme";
+import { useWindowTransparency } from "../lib/window-translucency";
 import {
 	buildCursorColorSchemeNotification,
 	cursorColorSchemeReplyForOutput,
@@ -551,9 +552,11 @@ export function sessionLinkProvider(
 export function XtermTerminal(props: XtermTerminalProps) {
 	const { t } = useTranslation();
 	const themeStyle = useUiStore((state) => state.themeStyle);
-	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const transparency = useWindowTransparency();
 	const macPlatform = isMacPlatform();
-	const translucent = macPlatform && windowTranslucency;
+	// Windows working panels can be translucent while terminal canvases retain
+	// their normal opaque glyph atlas and accelerated renderer through toggles.
+	const translucent = macPlatform && transparency.enabled;
 	const shellRef = useRef<HTMLDivElement | null>(null);
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const saveDroppedFileRef = useRef(props.saveDroppedFile);
@@ -876,8 +879,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		try {
 			const { dark, light } = buildTerminalThemes(translucent);
 			term = new Terminal({
-				// xterm requires this before open; keep macOS terminals ready for
-				// live transparency toggles without recreating their buffers.
+				// macOS already supports transparent terminal canvases. Windows keeps
+				// an opaque glyph atlas even when the surrounding chrome uses Acrylic.
 				allowTransparency: macPlatform,
 				// Required for the Unicode 11 width addon below.
 				allowProposedApi: true,

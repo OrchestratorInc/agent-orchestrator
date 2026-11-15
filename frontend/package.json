@@ -38,6 +38,7 @@
 		"test:browser-postcondition-integration": "node ./scripts/run-browser-postcondition-integration.mjs",
 		"test:e2e": "playwright test",
 		"test:e2e:renderer": "playwright test --grep \"@T0|@P0\"",
+		"test:e2e:window-transparency": "playwright test window-transparency-overlap.spec.ts",
 		"api:ts": "openapi-typescript ../backend/internal/httpd/apispec/openapi.yaml -o src/api/schema.ts"
 	},
 	"devDependencies": {

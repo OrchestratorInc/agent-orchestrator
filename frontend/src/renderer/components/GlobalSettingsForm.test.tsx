@@ -13,6 +13,13 @@ import { useUiStore } from "../stores/ui-store";
 import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../stores/analytics-opt-out-store";
 import { TooltipProvider } from "./ui/tooltip";
+import type { WindowTransparencyView } from "../lib/window-transparency-presentation";
+
+const transparencyState = vi.hoisted((): WindowTransparencyView => ({ supported: false, enabled: false, reason: "unsupported" }));
+vi.mock("../lib/window-translucency", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/window-translucency")>(),
+	useWindowTransparency: () => transparencyState,
+}));
 
 const { harnessSettingsSectionMock, triageLaunch } = vi.hoisted(() => ({
 	harnessSettingsSectionMock: vi.fn(), triageLaunch: vi.fn(),
@@ -171,6 +178,7 @@ function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: strin
 }
 
 beforeEach(async () => {
+	Object.assign(transparencyState, { supported: false, enabled: false, reason: "unsupported" });
 	harnessSettingsSectionMock.mockReset();
 	for (const m of [
 		getUpdate,
@@ -279,6 +287,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("keeps window transparency in Appearance when Developer Mode changes", async () => {
 		isMacPlatform.mockReturnValue(true);
+		isWindowsPlatform.mockReturnValue(false);
 		const user = userEvent.setup();
 		renderForm("general");
 		const appearance = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
@@ -292,10 +301,39 @@ describe("GlobalSettingsForm", () => {
 		expect(useUiStore.getState().windowTranslucency).toBe(true);
 	});
 
-	it("hides window transparency on platforms without native vibrancy", async () => {
+	it("hides window transparency on Linux", async () => {
+		isWindowsPlatform.mockReturnValue(false);
 		renderForm("general");
 		await screen.findByRole("switch", { name: "Developer mode" });
 		expect(screen.queryByRole("switch", { name: "Window transparency" })).not.toBeInTheDocument();
+	});
+
+	it("shows a disabled Windows switch while native capability is unavailable", async () => {
+		renderForm("general");
+		expect(screen.getByRole("switch", { name: "Window transparency" })).toBeDisabled();
+		expect(screen.getByText("Requires Windows 11 version 22H2 or newer.")).toBeVisible();
+	});
+
+	it("keeps the Windows switch available to retry when startup capability is unknown after an IPC error", () => {
+		transparencyState.supported = null;
+		transparencyState.reason = "error";
+		renderForm("general");
+		expect(screen.getByRole("switch", { name: "Window transparency" })).toBeEnabled();
+		expect(screen.queryByText("Requires Windows 11 version 22H2 or newer.")).not.toBeInTheDocument();
+	});
+
+	it("keeps the Windows switch available before the first capability reply", () => {
+		Object.assign(transparencyState, { supported: null, enabled: false, reason: null });
+		renderForm("general");
+		expect(screen.getByRole("switch", { name: "Window transparency" })).toBeEnabled();
+		expect(screen.queryByText("Requires Windows 11 version 22H2 or newer.")).not.toBeInTheDocument();
+	});
+
+	it("explains system suppression while keeping the saved preference editable", () => {
+		Object.assign(transparencyState, { supported: true, enabled: false, reason: "system" });
+		renderForm("general");
+		expect(screen.getByRole("switch", { name: "Window transparency" })).toBeEnabled();
+		expect(screen.getByText("Paused by your system transparency or contrast settings.")).toBeVisible();
 	});
 
 	it("propagates a Harness focus target through the settings catalog", async () => {

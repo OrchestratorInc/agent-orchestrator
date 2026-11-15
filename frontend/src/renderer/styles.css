@@ -6402,7 +6402,7 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.ultra-text { animation: none; }
 }
 
-/* macOS window transparency.
+/* Native window transparency (macOS vibrancy / Windows Acrylic).
  *
  * Native vibrancy blurs the desktop below the window. To keep translucent
  * layers from compounding (a tinted panel over a tinted shell reads as a
@@ -6413,7 +6413,8 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
  *      card or button reads one step up from whatever sits behind it.
  *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
  *      solid theme values so they stay legible above the material.
- * Terminal canvases are clear too, showing the same shell tint. */
+ * Light working panels restore solid fills for readability on both platforms.
+ * macOS terminal behavior is preserved; Windows terminals stay opaque. */
 
 /* Solid copies, resolved on :root where the theme declares them. :root raises
  * specificity past the theme catalog's :root[data-style-theme] blocks. */
@@ -6469,6 +6470,14 @@ html[data-window-translucent="true"] body {
 	background: transparent;
 }
 
+/* Windows terminals retain an opaque canvas in every placement, independently
+ * of the light solid / dark translucent working backgrounds. */
+html:root[data-window-material="acrylic"][data-window-translucent="true"] body {
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
+}
+
 /* Floating surfaces sit above the material: back to solid theme values.
  * `.z-overlay` covers custom floating menus; update notices also need solid
  * fills so the decorative stack stays behind the front card. */
@@ -6493,10 +6502,8 @@ html[data-window-translucent="true"] :is(
 	--sidebar-accent: var(--solid-sidebar-accent);
 }
 
-/* Light: the center panel keeps the solid surfaces, so content reads as it does
- * in an opaque window. It clears over a live browser page exactly as the
- * opaque panel does (the native browser rules above). Dark keeps the clear
- * single-tint panel. */
+/* Both platforms keep light working panels solid for readability. Native
+ * browser composition still clears the layers covering its live page. */
 html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
 	--color-bg-primary: var(--solid-bg-primary);
 	--color-bg-secondary: var(--solid-bg-secondary);

@@ -163,6 +163,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		theme: {
+			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
+			onWindowTransparency: () => () => undefined,
+			setWindowTranslucent: async () => ({ supported: false, enabled: false, reason: "unsupported" }),
+		},
 		app: {
 			onScrollPhase: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
