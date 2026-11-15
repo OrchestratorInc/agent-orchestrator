@@ -8,7 +8,7 @@ import { COMPANY } from "@/lib/constants";
 import { docsTree } from "@/lib/docs-tree";
 import { OG_IMAGE_SIZE, ogImagePath, SITE_NAME } from "@/lib/seo";
 import { source } from "@/lib/source";
-import { translations } from "@/lib/translations";
+import { translatedLocales, translations } from "@/lib/translations";
 import { LocalizedDocsLayout } from "./docs-layout";
 import { Providers } from "./providers";
 import "../app/global.css";
@@ -35,6 +35,7 @@ export const siteMetadata: Metadata = {
 export function siteLayout(locale: SupportedLocale) {
   return function Layout({ children }: { children: ReactNode }) {
     const translated = translations();
+    const served = [DEFAULT_LOCALE, ...translatedLocales()];
     const isEnglish = locale === DEFAULT_LOCALE;
     return (
       <html
@@ -43,10 +44,10 @@ export function siteLayout(locale: SupportedLocale) {
         suppressHydrationWarning
       >
         <head>
-          {isEnglish && <script dangerouslySetInnerHTML={{ __html: savedLocaleScript(translated) }} />}
+          {isEnglish && <script dangerouslySetInnerHTML={{ __html: savedLocaleScript(translated, served) }} />}
         </head>
         <body className="min-h-screen bg-background text-foreground antialiased">
-          <Providers urlLocale={isEnglish ? undefined : locale} translations={translated}>
+          <Providers urlLocale={isEnglish ? undefined : locale} translations={translated} servedLocales={served}>
             <LocalizedDocsLayout tree={docsTree(locale)} homeUrl={source.getPage([], locale) ? localePath("/", locale) : "/"}>
               {children}
             </LocalizedDocsLayout>

@@ -8,11 +8,9 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import { CATALOGS } from "@/i18n/catalogs";
 import {
   DEFAULT_LOCALE,
-  isSupportedLocale,
-  LOCALE_COOKIE,
   LOCALE_LABELS,
+  localeCookieWrites,
   readLocaleCookie,
-  SUPPORTED_LOCALES,
   type SupportedLocale,
 } from "@/i18n/locales";
 import { localePath, splitLocalePath, type Translations, withTrailingSlash } from "@/i18n/paths";
@@ -28,9 +26,6 @@ function withLocationSuffix(path: string): string {
   return `${path}${window.location.search}${window.location.hash}`;
 }
 
-const LOCALE_ITEMS = SUPPORTED_LOCALES.map((locale) => ({ locale, name: LOCALE_LABELS[locale] }));
-const ONE_YEAR = 60 * 60 * 24 * 365;
-
 /**
  * A translated article has its own URL, and `urlLocale` is its language. The
  * interface follows the URL there, whatever language is saved.
@@ -39,14 +34,20 @@ const ONE_YEAR = 60 * 60 * 24 * 365;
  * language is applied after hydration, and the switcher changes it in place.
  * When the saved language has a translation of the page, the reader is sent
  * to it.
+ *
+ * `servedLocales` is English plus every language with translated articles.
+ * The switcher offers only those, and a saved language outside them, such
+ * as one picked on the landing site, shows the page in English.
  */
 export function Providers({
   urlLocale,
   translations = {},
+  servedLocales,
   children,
 }: {
   urlLocale?: SupportedLocale;
   translations?: Translations;
+  servedLocales: readonly SupportedLocale[];
   children: ReactNode;
 }) {
   const pathname = usePathname();
@@ -56,8 +57,8 @@ export function Providers({
   const locale = urlLocale ?? saved ?? DEFAULT_LOCALE;
 
   useEffect(() => {
-    if (!urlLocale) setSaved(readLocaleCookie(document.cookie));
-  }, [urlLocale]);
+    if (!urlLocale) setSaved(readLocaleCookie(document.cookie, servedLocales));
+  }, [urlLocale, servedLocales]);
 
   // The inline head script already set <html lang> from the cookie, so
   // only write it once the cookie has been read.
@@ -78,22 +79,27 @@ export function Providers({
     [locale],
   );
   const frameworkStrings = useMemo(() => frameworkTranslations(i18n), [i18n]);
+  const localeItems = useMemo(
+    () => servedLocales.map((served) => ({ locale: served, name: LOCALE_LABELS[served] })),
+    [servedLocales],
+  );
 
   const changeLocale = useCallback(
     (next: string) => {
-      if (!isSupportedLocale(next)) return;
-      document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; samesite=lax`;
+      const chosen = servedLocales.find((served) => served === next);
+      if (!chosen) return;
+      for (const write of localeCookieWrites(chosen, window.location)) document.cookie = write;
       const { path } = splitLocalePath(pathname);
-      if (next !== DEFAULT_LOCALE && translations[path]?.includes(next)) {
-        window.location.assign(withLocationSuffix(localePath(path, next)));
+      if (chosen !== DEFAULT_LOCALE && translations[path]?.includes(chosen)) {
+        window.location.assign(withLocationSuffix(localePath(path, chosen)));
       } else if (urlLocale) {
         // No translation in that language, so go to the English article.
         window.location.assign(withLocationSuffix(path));
       } else {
-        setSaved(next);
+        setSaved(chosen);
       }
     },
-    [pathname, translations, urlLocale],
+    [pathname, translations, urlLocale, servedLocales],
   );
 
   return (
@@ -103,7 +109,7 @@ export function Providers({
         search={{ SearchDialog: DocsSearchDialog }}
         i18n={{
           locale,
-          locales: LOCALE_ITEMS,
+          locales: localeItems,
           translations: frameworkStrings,
           onLocaleChange: changeLocale,
         }}

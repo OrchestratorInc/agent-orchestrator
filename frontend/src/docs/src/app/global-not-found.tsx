@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { NotFound } from "@/components/not-found";
 import { Providers } from "@/components/providers";
 import { siteMetadata } from "@/components/site-root";
+import { DEFAULT_LOCALE } from "@/i18n/locales";
+import { translatedLocales } from "@/lib/translations";
 import "./global.css";
 
 export const metadata: Metadata = {
@@ -16,7 +18,7 @@ export default function NotFoundPage() {
   return (
     <html lang="en" className={`dark overscroll-none ${GeistSans.variable}`} suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
-        <Providers>
+        <Providers servedLocales={[DEFAULT_LOCALE, ...translatedLocales()]}>
           <NotFound />
         </Providers>
       </body>
