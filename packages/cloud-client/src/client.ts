@@ -34,10 +34,10 @@ import type {
   Cue,
   CueDefinitionInput,
   InvokeCueResult,
-  OrgDataRetention,
-  OrgDataRetentionChange,
+  DataRetention,
+  DataRetentionChange,
   PutAgentProviderConnectionInput,
-  PutOrgDataRetentionInput,
+  PutDataRetentionInput,
   RedactedProviderConnection,
   RequestOptions,
   Session,
@@ -148,6 +148,21 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  /** How long the signed-in user's Cloud sessions and their conversation content are kept. */
+  getDataRetention(options: RequestOptions = {}): Promise<DataRetention> {
+    return this.request("/api/cloud/v1/me/data-retention", options);
+  }
+
+  /**
+   * Choose how long the signed-in user's Cloud sessions are kept. With
+   * `dryRun` nothing changes; both modes count the sessions the period deletes.
+   */
+  putDataRetention(input: PutDataRetentionInput, options: RequestOptions = {}): Promise<DataRetentionChange> {
+    return this.request("/api/cloud/v1/me/data-retention", {
+      method: "PUT", body: input, signal: options.signal,
+    });
   }
 
   async listAgents(
@@ -1102,21 +1117,6 @@ export class CloudClient {
       },
     );
     await this.throwIfError(response);
-  }
-
-  /** How long the organization keeps its Cloud sessions and their conversation content (any member). */
-  getOrgDataRetention(orgId: string, options: RequestOptions = {}): Promise<OrgDataRetention> {
-    return this.request(this.orgPath(orgId, "/data-retention"), options);
-  }
-
-  /**
-   * Choose the organization's retention period (owners and admins). With
-   * `dryRun` nothing changes; both modes count the sessions the period deletes.
-   */
-  putOrgDataRetention(orgId: string, input: PutOrgDataRetentionInput, options: RequestOptions = {}): Promise<OrgDataRetentionChange> {
-    return this.request(this.orgPath(orgId, "/data-retention"), {
-      method: "PUT", body: input, signal: options.signal,
-    });
   }
 
   private orgPath(orgId: string, path: string): string {
