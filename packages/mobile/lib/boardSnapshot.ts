@@ -101,10 +101,19 @@ export function parseBoard(raw: string | null, machine: string, now = Date.now()
 	}
 }
 
-/** Forgets a machine's saved board (the machine was forgotten). */
+/**
+ * Forgets a machine's saved board (the machine was forgotten). A save still
+ * waiting for it, or queued behind another, is dropped first, and one already
+ * writing finishes before the board is deleted: none can put it back after.
+ */
 export async function forgetBoard(machine: string): Promise<void> {
+	await Promise.all([...boardSavers].map((saver) => saver.forget(machine)));
 	await AsyncStorage.removeItem(boardKey(machine));
 }
+
+type BoardSaver = { forget(machine: string): Promise<void> };
+/** Every saver made, so forgetting a machine reaches the saves they hold. */
+const boardSavers = new Set<BoardSaver>();
 
 export async function loadBoard(machine: string): Promise<SavedBoard | null> {
 	try {
@@ -120,6 +129,8 @@ export function createBoardSaver(write: (key: string, text: string) => Promise<v
 	let lastWrite = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let chain = Promise.resolve();
+	// Bumped when a machine is forgotten: a write queued before then is skipped.
+	const forgotten = new Map<string, number>();
 	const flush = () => {
 		clearTimeout(timer);
 		timer = undefined;
@@ -128,15 +139,28 @@ export function createBoardSaver(write: (key: string, text: string) => Promise<v
 		pending = null;
 		lastWrite = Date.now();
 		const text = serializeBoard(board);
-		if (text) chain = chain.then(() => write(boardKey(board.machine), text)).catch(() => {});
+		const epoch = forgotten.get(board.machine) ?? 0;
+		if (text) chain = chain.then(() => (forgotten.get(board.machine) ?? 0) === epoch ? write(boardKey(board.machine), text) : undefined).catch(() => {});
 		return chain;
 	};
-	return {
+	const saver = {
 		schedule(board: Omit<SavedBoard, "v">) {
 			pending = board;
 			if (timer) return;
 			timer = setTimeout(() => void flush(), Math.max(0, lastWrite + everyMs - Date.now()));
 		},
 		flush,
+		/** Drops what is waiting to be saved for `machine`; resolves once a write already running is done. */
+		forget(machine: string) {
+			forgotten.set(machine, (forgotten.get(machine) ?? 0) + 1);
+			if (pending?.machine === machine) {
+				pending = null;
+				clearTimeout(timer);
+				timer = undefined;
+			}
+			return chain;
+		},
 	};
+	boardSavers.add(saver);
+	return saver;
 }

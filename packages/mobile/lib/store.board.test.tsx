@@ -58,8 +58,8 @@ function saveBoard(machine: string, answer: SessionsResponse) {
 	})!);
 }
 async function mount() { await act(async () => { renderer = create(<AppProvider><Harness /></AppProvider>); }); }
-// B is paired but never answers.
-const configFor = (id: string) => id === "b" ? null : { hostId: id, host: `${id}.test`, httpPort: "3011", muxPort: "3011", password: "secret" };
+// B is paired but never answers. C answers on a connection that names no machine.
+const configFor = (id: string) => id === "b" ? null : { ...(id === "c" ? {} : { hostId: id }), host: `${id}.test`, httpPort: "3011", muxPort: "3011", password: "secret" };
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -101,4 +101,28 @@ it("shows another machine's saved projects rather than keeping the last machine'
 	await act(async () => { await current.switchHost("b"); });
 	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 	expect(current.projects.map((project) => project.id)).toEqual(["b-app"]);
+});
+
+// A poll whose /projects failed keeps the list it had on screen; the board
+// saved for the next launch must keep it too, not null over it.
+it("saves the projects it kept when a poll could not load them", async () => {
+	await mount();
+	expect(current.projects.map((project) => project.id)).toEqual(["a-app"]);
+	state.sessions.mockResolvedValue({ ...board("Live A"), projects: null });
+	await act(async () => { await current.refresh(); });
+	expect(current.projects.map((project) => project.id)).toEqual(["a-app"]);
+	await act(async () => { state.onState!("background"); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect(JSON.parse(state.items.get(boardKey("host.a")) ?? "null")?.projects).toEqual([{ id: "a-app", name: "a-app" }]);
+});
+
+// Shown and forgotten by the paired machine's id: one saved under its address
+// instead would never be shown, nor deleted when the machine is forgotten.
+it("keeps no board for a connection that names no machine", async () => {
+	state.selected = "c";
+	await mount();
+	expect(current.sessions[0]?.displayName).toBe("Live A");
+	await act(async () => { state.onState!("background"); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect([...state.items.keys()].filter((key) => key.startsWith("ao.board."))).toEqual([]);
 });

@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn() } }));
+const items = vi.hoisted(() => new Map<string, string>());
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
+	getItem: async (key: string) => items.get(key) ?? null,
+	setItem: async (key: string, value: string) => { items.set(key, value); },
+	removeItem: async (key: string) => { items.delete(key); },
+} }));
 
-import { BOARD_KEEP_MS, BOARD_MAX_BYTES, boardKey, createBoardSaver, parseBoard, serializeBoard, utf8ByteLength, type SavedBoard } from "./boardSnapshot";
+import { BOARD_KEEP_MS, BOARD_MAX_BYTES, boardKey, createBoardSaver, forgetBoard, parseBoard, serializeBoard, utf8ByteLength, type SavedBoard } from "./boardSnapshot";
 
 const board = (overrides: Partial<SavedBoard> = {}): Omit<SavedBoard, "v"> => ({
 	machine: "host.a",
@@ -81,5 +86,38 @@ describe("the saved board", () => {
 		await saver.flush();
 		expect(writes).toEqual([[boardKey("host.a"), 1], [boardKey("host.a"), 3]]);
 	});
-});
 
+	// A poll inside the throttle window leaves a save waiting: forgetting the
+	// machine must not see it write the board back afterwards.
+	it("never writes a forgotten machine's board back", async () => {
+		vi.useFakeTimers();
+		items.clear();
+		const saver = createBoardSaver(undefined, 15_000);
+		saver.schedule(board());
+		await vi.advanceTimersByTimeAsync(0);
+		expect(items.has(boardKey("host.a"))).toBe(true);
+		saver.schedule(board({ notificationsUnread: 5 }));
+		await forgetBoard("host.a");
+		await vi.advanceTimersByTimeAsync(30_000);
+		await saver.flush();
+		expect(items.has(boardKey("host.a"))).toBe(false);
+		// Another machine's save still goes.
+		saver.schedule(board({ machine: "host.b" }));
+		await saver.flush();
+		expect(items.has(boardKey("host.b"))).toBe(true);
+	});
+
+	it("waits for a write already running before deleting the board", async () => {
+		items.clear();
+		let finish = () => {};
+		const saver = createBoardSaver(async (key, text) => { await new Promise<void>((resolve) => { finish = resolve; }); items.set(key, text); }, 0);
+		saver.schedule(board());
+		const writing = saver.flush();
+		await Promise.resolve();
+		const forgetting = forgetBoard("host.a");
+		finish();
+		await writing;
+		await forgetting;
+		expect(items.has(boardKey("host.a"))).toBe(false);
+	});
+});

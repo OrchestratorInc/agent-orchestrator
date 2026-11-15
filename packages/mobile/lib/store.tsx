@@ -383,6 +383,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [selectedHostName, setSelectedHostName] = useState<string | null>(null);
 	const [activeEndpoints, setActiveEndpoints] = useState<Endpoint[]>([]);
 	const [knownProjects, setKnownProjects] = useState<KnownProjects>(NO_PROJECTS_KNOWN);
+	// Read by a poll to save the projects it kept when /projects did not answer.
+	const knownProjectsRef = useRef(knownProjects);
+	knownProjectsRef.current = knownProjects;
 	const [sessions, setSessions] = useState<DashboardSession[]>([]);
 	const [archive, setArchive] = useState<ArchiveSummary | null>(null);
 	const [orchestrators, setOrchestrators] = useState<OrchestratorLink[]>([]);
@@ -887,6 +890,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				{ machine: machineIdentity(c), projects: sess.projects },
 				machineIdentity(c),
 			));
+			// What the board shows: a list /projects failed to send this time is
+			// the one this machine sent before, so that one is what gets saved.
+			const shownProjects = retainProjects(knownProjectsRef.current, { machine: machineIdentity(c), projects: sess.projects }, machineIdentity(c));
 			setSessions((previous) => reconcileRows(previous, sess.sessions));
 			setArchive((previous) => (sameArchiveSummary(previous, sess.archive) ? previous : sess.archive ?? null));
 			setOrchestrators((previous) => reconcileRows(previous, sess.orchestrators));
@@ -915,18 +921,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			publishedFor.current = machineIdentity(c);
 			// Saved now, not after the unread count: the app can go to the
 			// background while that request runs, and its flush must find this
-			// board. The count updates it once it answers.
-			const saved = {
-				machine: machineIdentity(c),
+			// board. The count updates it once it answers. Saved under the paired
+			// machine's id, the key it is shown and forgotten by: a connection
+			// that names no machine has no board kept, rather than one that
+			// would never be shown or deleted.
+			const saved = c.hostId ? {
+				machine: hostMachineIdentity(c.hostId),
 				savedAt: Date.now(),
 				sessions: sess.sessions,
 				orchestrators: sess.orchestrators,
-				projects: sess.projects,
+				projects: shownProjects.known ? shownProjects.projects : null,
 				archive: sess.archive ?? null,
 				stats: sess.stats,
 				notificationsUnread: unreadRef.current,
-			};
-			boardSaver.schedule(saved);
+			} : null;
+			if (saved) boardSaver.schedule(saved);
 			try {
 				const page = await getNotifications(c, { status: "unread", limit: 1 }, { signal: controller.signal });
 				if (!isCurrent()) return false;
@@ -937,7 +946,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				unreadRef.current = 0;
 				setNotificationsUnread(0);
 			}
-			if (saved.notificationsUnread !== unreadRef.current) boardSaver.schedule({ ...saved, notificationsUnread: unreadRef.current });
+			if (saved && saved.notificationsUnread !== unreadRef.current) boardSaver.schedule({ ...saved, notificationsUnread: unreadRef.current });
 			return true;
 		} catch (e) {
 			if (!isCurrent()) return false;
