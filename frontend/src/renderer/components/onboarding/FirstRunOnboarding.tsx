@@ -769,9 +769,9 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 
 /** Why an account is worth it: what only an account unlocks. */
 const SIGN_IN_PERKS: Array<{ icon: AppIcon; title: MessageKey; detail: MessageKey }> = [
+	{ icon: Smartphone, title: "firstRun.signInPerkMobile", detail: "firstRun.signInPerkMobileDetail" },
 	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail" },
 	{ icon: Server, title: "firstRun.signInPerkRemote", detail: "firstRun.signInPerkRemoteDetail" },
-	{ icon: Smartphone, title: "firstRun.signInPerkMobile", detail: "firstRun.signInPerkMobileDetail" },
 ];
 
 function SignInStep({ onNext }: { onNext: () => void }) {
