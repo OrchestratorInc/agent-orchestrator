@@ -406,7 +406,6 @@
 	"firstRun.toolsTitle": "Suas ferramentas",
 	"firstRun.toolsChecking": "Verificando suas ferramentas…",
 	"firstRun.githubTitle": "GitHub CLI",
-	"firstRun.ghSignInHint": "Não conectado.",
 	"firstRun.install": "Instalar",
 	"firstRun.agentsBodyNone": "Instale e entre em pelo menos um harness para continuar.",
 	"firstRun.toolsGithubHeading": "Ferramentas",
