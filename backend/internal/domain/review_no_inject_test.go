@@ -42,7 +42,7 @@ func TestSuppressNoInjectWindowRowsBeforeSubmit(t *testing.T) {
 		{ID: "c3", Author: "you", CreatedAt: start.Add(2 * time.Minute), AutoInjectReview: true},
 		{ID: "c4", Author: "me", CreatedAt: start.Add(-time.Hour), AutoInjectReview: true},
 	}
-	SuppressNoInjectWindowRows(running, "me", reviews, comments)
+	SuppressNoInjectWindowRows(running, "me", time.Time{}, reviews, comments)
 	if reviews[0].AutoInjectReview || !reviews[1].AutoInjectReview || !reviews[2].AutoInjectReview {
 		t.Fatalf("reviews = %+v, want only the AO account's review during the pass suppressed", reviews)
 	}
@@ -62,14 +62,39 @@ func TestSuppressNoInjectWindowRowsReviewerExitedAfterPosting(t *testing.T) {
 		{ID: "skewed", Author: "me", CreatedAt: start.Add(10*time.Minute + 30*time.Second), AutoInjectReview: true},
 		{ID: "later", Author: "me", CreatedAt: start.Add(time.Hour), AutoInjectReview: true},
 	}
-	SuppressNoInjectWindowRows(ended, "me", nil, comments)
+	SuppressNoInjectWindowRows(ended, "me", time.Time{}, nil, comments)
 	if comments[0].AutoInjectReview || comments[1].AutoInjectReview || !comments[2].AutoInjectReview {
 		t.Fatalf("comments = %+v, want the pass's comments suppressed and later ones kept", comments)
 	}
 	// Without the account the rows cannot be attributed, so nothing changes.
 	later := []PullRequestComment{{ID: "posted", Author: "me", CreatedAt: start.Add(5 * time.Minute), AutoInjectReview: true}}
-	SuppressNoInjectWindowRows(ended, "", nil, later)
+	SuppressNoInjectWindowRows(ended, "", time.Time{}, nil, later)
 	if !later[0].AutoInjectReview {
 		t.Fatal("an unknown account suppressed a comment")
+	}
+}
+
+// #6810: a row the provider sent without a time cannot be placed outside a
+// pass, so the posting account's such rows match whenever a pass exists, even
+// once the writer filled in its own observation time for them.
+func TestSuppressNoInjectWindowRowsUnknownTimeMatches(t *testing.T) {
+	start := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	ended := []NoInjectReviewWindow{{Start: start, End: start.Add(5 * time.Minute)}}
+	observed := start.Add(3*time.Hour + 123*time.Nanosecond)
+	reviews := []PullRequestReview{
+		{ID: "PRR_filled", Author: "me", SubmittedAt: observed, AutoInjectReview: true},
+		{ID: "PRR_known", Author: "me", SubmittedAt: start.Add(3 * time.Hour), AutoInjectReview: true},
+	}
+	comments := []PullRequestComment{
+		{ID: "zero", Author: "me", AutoInjectReview: true},
+		{ID: "filled", Author: "me", CreatedAt: observed, AutoInjectReview: true},
+		{ID: "other", Author: "you", CreatedAt: observed, AutoInjectReview: true},
+	}
+	SuppressNoInjectWindowRows(ended, "me", observed, reviews, comments)
+	if reviews[0].AutoInjectReview || !reviews[1].AutoInjectReview {
+		t.Fatalf("reviews = %+v, want only the review without a provider time suppressed", reviews)
+	}
+	if comments[0].AutoInjectReview || comments[1].AutoInjectReview || !comments[2].AutoInjectReview {
+		t.Fatalf("comments = %+v, want the account's comments without a provider time suppressed", comments)
 	}
 }

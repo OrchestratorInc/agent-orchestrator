@@ -92,3 +92,35 @@ func TestClaimPRMidNoInjectPassStoresRowsNonInjecting(t *testing.T) {
 		t.Fatal("stored rows without the posting account")
 	}
 }
+
+// #6810: the claim fills its own time into rows the provider sent without one;
+// that time is not when they were posted, so the posting account's such rows
+// are held back even when the claim comes long after the pass ended.
+func TestClaimPRUnknownPostingTimeStaysNonInjecting(t *testing.T) {
+	start := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, AutoInjectReview: true, Metadata: domain.SessionMetadata{WorkspacePath: "/ws"}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/repo"}
+	url := "https://github.com/acme/repo/pull/7"
+	scm := signedInSCM{
+		fakeSCM: fakeSCM{
+			obs: ports.SCMObservation{Fetched: true, Provider: "github", Host: "github.com", Repo: "acme/repo", PR: ports.SCMPRObservation{URL: url, Number: 7}},
+			review: ports.SCMReviewObservation{
+				Reviews: []ports.SCMReviewSummaryObservation{{ID: "PRR_ao", Author: "alice", State: string(domain.ReviewChangesRequest)}},
+				Threads: []ports.SCMReviewThreadObservation{{ID: "t1", Path: "a.go", Line: 1, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "alice", Body: "fix"}}}},
+			},
+		},
+		signedIn: alice(),
+	}
+	claimer := &noInjectClaimer{windows: []domain.NoInjectReviewWindow{{Start: start, End: start.Add(5 * time.Minute)}}}
+	svc := NewWithDeps(Deps{Store: st, PRClaimer: claimer, SCM: scm})
+	if _, err := svc.ClaimPR(context.Background(), "mer-1", "7", ClaimPROptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(claimer.gotReviews) != 1 || claimer.gotReviews[0].AutoInjectReview {
+		t.Fatalf("reviews = %+v, want the review without a provider time stored non-injecting", claimer.gotReviews)
+	}
+	if len(claimer.gotComments) != 1 || claimer.gotComments[0].AutoInjectReview {
+		t.Fatalf("comments = %+v, want the comment without a provider time stored non-injecting", claimer.gotComments)
+	}
+}

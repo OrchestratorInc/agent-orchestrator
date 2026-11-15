@@ -57,13 +57,22 @@ func (w NoInjectReviewWindow) contains(t time.Time) bool {
 // --no-inject pass was running. It covers the pass before `ao review submit`
 // records its review id, and a reviewer that exited after posting but before
 // submitting. Inline comments of a suppressed review go with it.
-func SuppressNoInjectWindowRows(windows []NoInjectReviewWindow, login string, reviews []PullRequestReview, comments []PullRequestComment) {
+//
+// A row with no provider time cannot be placed outside a pass, so the
+// account's rows without one match whenever a pass exists. Writers fill a
+// missing time with their observation time; unknownAt is that value, and a
+// row carrying it (or a zero time) has no provider time. Provider times are
+// whole seconds and the observation clock is not, so they do not collide.
+func SuppressNoInjectWindowRows(windows []NoInjectReviewWindow, login string, unknownAt time.Time, reviews []PullRequestReview, comments []PullRequestComment) {
 	if len(windows) == 0 || login == "" {
 		return
 	}
 	inWindow := func(author string, at time.Time) bool {
 		if !strings.EqualFold(author, login) {
 			return false
+		}
+		if at.IsZero() || (!unknownAt.IsZero() && at.Equal(unknownAt)) {
+			return true
 		}
 		for _, w := range windows {
 			if w.contains(at) {
@@ -105,7 +114,9 @@ type NoInjectReviewSource interface {
 // exited without submitting. postingLogin is asked only when a pass exists; an
 // error or empty login fails the call so the writer retries rather than store
 // rows that might be delivered. A nil postingLogin matches by id only.
-func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, postingLogin func(context.Context) (string, error), prURL string, reviews []PullRequestReview, comments []PullRequestComment) error {
+// unknownAt is the time the writer filled in for rows the provider sent
+// without one (see SuppressNoInjectWindowRows).
+func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, postingLogin func(context.Context) (string, error), prURL string, unknownAt time.Time, reviews []PullRequestReview, comments []PullRequestComment) error {
 	if src == nil || prURL == "" || (len(reviews) == 0 && len(comments) == 0) {
 		return nil
 	}
@@ -131,6 +142,6 @@ func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, po
 	if login == "" {
 		return fmt.Errorf("resolve the account AO reviews post with: no login")
 	}
-	SuppressNoInjectWindowRows(windows, login, reviews, comments)
+	SuppressNoInjectWindowRows(windows, login, unknownAt, reviews, comments)
 	return nil
 }

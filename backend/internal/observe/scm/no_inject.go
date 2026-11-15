@@ -2,6 +2,7 @@ package scm
 
 import (
 	"context"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -13,8 +14,9 @@ import (
 // domain.SuppressNoInjectAOReviews, which ClaimPR shares, with the account the
 // provider is signed in as, which is the one AO's reviewer posts with. A store
 // that cannot list --no-inject passes keeps the session-wide behavior; without
-// an identity resolver only recorded review ids are matched.
-func suppressNoInjectAOReviews(ctx context.Context, store any, identity ports.ScopedIdentityResolver, repo ports.SCMRepo, prURL string, reviews []domain.PullRequestReview, comments []domain.PullRequestComment) error {
+// an identity resolver only recorded review ids are matched. unknownAt is the
+// observation time the poll filled in for rows without a provider time.
+func suppressNoInjectAOReviews(ctx context.Context, store any, identity ports.ScopedIdentityResolver, repo ports.SCMRepo, prURL string, unknownAt time.Time, reviews []domain.PullRequestReview, comments []domain.PullRequestComment) error {
 	src, ok := store.(domain.NoInjectReviewSource)
 	if !ok {
 		return nil
@@ -26,5 +28,5 @@ func suppressNoInjectAOReviews(ctx context.Context, store any, identity ports.Sc
 			return id.Login, err
 		}
 	}
-	return domain.SuppressNoInjectAOReviews(ctx, src, postingLogin, prURL, reviews, comments)
+	return domain.SuppressNoInjectAOReviews(ctx, src, postingLogin, prURL, unknownAt, reviews, comments)
 }

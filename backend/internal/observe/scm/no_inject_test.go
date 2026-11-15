@@ -44,7 +44,7 @@ func TestSuppressNoInjectAOReviewsPollBeforeSubmit(t *testing.T) {
 	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: "me", Human: true}}
 	reviews, comments := noInjectObservedRows(start.Add(time.Minute))
 	repo := ports.SCMRepo{Provider: "github", Host: "github.com"}
-	if err := suppressNoInjectAOReviews(context.Background(), store, identity, repo, "https://github.com/o/r/pull/1", reviews, comments); err != nil {
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, repo, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err != nil {
 		t.Fatal(err)
 	}
 	if reviews[0].AutoInjectReview || !reviews[1].AutoInjectReview {
@@ -62,7 +62,7 @@ func TestSuppressNoInjectAOReviewsReviewerExitedAfterPosting(t *testing.T) {
 	store := fakeNoInjectStore{windows: []domain.NoInjectReviewWindow{{Start: start, End: start.Add(5 * time.Minute)}}}
 	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: "me", Human: true}}
 	reviews, comments := noInjectObservedRows(start.Add(4 * time.Minute))
-	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", reviews, comments); err != nil {
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err != nil {
 		t.Fatal(err)
 	}
 	if reviews[0].AutoInjectReview || comments[0].AutoInjectReview {
@@ -80,12 +80,12 @@ func TestSuppressNoInjectAOReviewsIdentityErrorRetries(t *testing.T) {
 	store := fakeNoInjectStore{windows: []domain.NoInjectReviewWindow{{Start: start}}}
 	identity := &fakeIdentityResolver{err: errors.New("offline")}
 	reviews, comments := noInjectObservedRows(start)
-	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", reviews, comments); err == nil {
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err == nil {
 		t.Fatal("want an error when the posting account cannot be resolved")
 	}
 	// No open pass: identity is not needed and not asked for.
 	identity = &fakeIdentityResolver{err: errors.New("offline")}
-	if err := suppressNoInjectAOReviews(context.Background(), fakeNoInjectStore{}, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", reviews, comments); err != nil || identity.calls != 0 {
+	if err := suppressNoInjectAOReviews(context.Background(), fakeNoInjectStore{}, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err != nil || identity.calls != 0 {
 		t.Fatalf("err = %v calls = %d, want no identity lookup without an open pass", err, identity.calls)
 	}
 }
@@ -97,7 +97,7 @@ func TestSuppressNoInjectAOReviewsEmptyLoginRetries(t *testing.T) {
 	store := fakeNoInjectStore{windows: []domain.NoInjectReviewWindow{{Start: start}}}
 	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: "  ", Human: true}}
 	reviews, comments := noInjectObservedRows(start)
-	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", reviews, comments); err == nil {
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err == nil {
 		t.Fatal("want an error when the posting account has no login")
 	}
 }
