@@ -19,8 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
@@ -1439,15 +1437,13 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !ok {
 		return false
 	}
-	if len(suffix) >= 36 {
-		if _, err := uuid.Parse(suffix[:36]); err == nil {
-			if len(suffix) == 36 {
-				return true
-			}
-			suffix, ok = strings.CutPrefix(suffix[36:], "-")
-			if !ok {
-				return false
-			}
+	if len(suffix) >= 10 && strings.Trim(suffix[:10], "abcdefghijklmnopqrstuvwxyz234567") == "" {
+		if len(suffix) == 10 {
+			return true
+		}
+		suffix, ok = strings.CutPrefix(suffix[10:], "-")
+		if !ok {
+			return false
 		}
 	}
 	// workspaceProjectBranch appends -2, -3, ... when a ref already exists.

@@ -2,14 +2,13 @@ package sessionmanager
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
-
-	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -211,7 +210,7 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 	if project != nil {
 		info = *project
 	}
-	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug+"-"+uuid.NewString(), "root"))
+	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug+"-"+strings.ToLower(rand.Text()[:10]), "root"))
 	if err == nil && held.Root.Branch != ws.Branch {
 		recordErr := m.recordTaskBranch(ctx, rec.ID, ws.Branch, held)
 		if recordErr == nil {

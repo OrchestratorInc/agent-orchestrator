@@ -11,7 +11,7 @@ import (
 
 func TestPoll_WorkspaceGeneratedBranches(t *testing.T) {
 	for _, origin := range []string{"", "https://github.com/o/r.git"} {
-		for _, branch := range []string{"ao/p-1", "ao/p-1-2", "ao/p-1-7ebc3861-2348-46f8-808d-37e8d0e38ea4", "ao/dev/p-1-7ebc3861-2348-46f8-808d-37e8d0e38ea4-2"} {
+		for _, branch := range []string{"ao/p-1", "ao/p-1-2", "ao/p-1-k7m2q4b6px", "ao/dev/p-1-k7m2q4b6px-2"} {
 			t.Run(origin+"/"+branch, func(t *testing.T) {
 				store := testStoreWithSession()
 				store.sessions[0].Metadata.Branch = branch
@@ -99,12 +99,14 @@ func TestMatchSession_WorkspaceOwnership(t *testing.T) {
 	bare := workspace("p-1", "ao/p-1")
 	collision := workspace("p-1", "ao/p-1-2")
 	next := workspace("p-1-2", "ao/p-1-2")
-	unique := "ao/p-1-7ebc3861-2348-46f8-808d-37e8d0e38ea4"
+	unique := "ao/p-1-k7m2q4b6px"
 	for _, tc := range []struct {
 		name, source string
 		candidates   []sessionRepo
 		want         domain.SessionID
 	}{
+		{"invalid short suffix", "ao/p-1-abcdef234-fix", []sessionRepo{workspace("p-1", "ao/p-1-abcdef234")}, ""},
+		{"invalid suffix character", "ao/p-1-k7m2q4b6p0-fix", []sessionRepo{workspace("p-1", "ao/p-1-k7m2q4b6p0")}, ""},
 		{"unique hyphen branch", unique + "-fix", []sessionRepo{workspace("p-1", unique)}, "p-1"},
 		{"unique collision suffix", unique + "-2-fix", []sessionRepo{workspace("p-1", unique+"-2")}, "p-1"},
 		{"unique padded collision excluded", unique + "-02-fix", []sessionRepo{workspace("p-1", unique+"-02")}, ""},

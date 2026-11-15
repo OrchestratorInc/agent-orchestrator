@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -19,7 +17,7 @@ func isGeneratedBranch(branch, prefix string, root bool) bool {
 		}
 	}
 	suffix, ok := strings.CutPrefix(branch, prefix+"-")
-	return ok && uuid.Validate(suffix) == nil
+	return ok && len(suffix) == 10 && strings.Trim(suffix, "abcdefghijklmnopqrstuvwxyz234567") == ""
 }
 
 func TestGeneratedBranchesDifferAcrossInstallations(t *testing.T) {
