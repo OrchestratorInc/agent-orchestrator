@@ -416,6 +416,55 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.queryByRole("img", { name: "Working" })).not.toBeInTheDocument();
 	});
 
+	// Review on #7176: the group kept from the previous snapshot still read the controller as live.
+	it("settles a settled turn's working child when only the controller changes to stopped", async () => {
+		const childStep = { ...child("p3", 10, "tool-pages", "cd /repo; grep -rn returns src/app"), status: "running" as const };
+		const settled = snapshot("completed", [childStep]);
+		const { rerender } = render(<ChatWorkspace snapshot={settled} />);
+		openTeam();
+		expect(screen.getAllByRole("img", { name: "Working" }).length).toBeGreaterThan(0);
+
+		rerender(<ChatWorkspace snapshot={{ ...settled, controller: { state: "stopped" } }} />);
+		await waitFor(() => expect(screen.queryByRole("img", { name: "Working" })).not.toBeInTheDocument());
+	});
+
+	// Review on #7176: a search match in a child's step opened only the turn's Worked
+	// for, so the row never mounted and the search fell back to the parent's turn.
+	it("opens the owning child inline when search lands on one of its steps", async () => {
+		const settled = snapshot("completed");
+		const { rerender } = render(<ChatWorkspace snapshot={settled} />);
+		rerender(<ChatWorkspace snapshot={settled} annotationNavigationRequest={{ id: "search:child", text: "faq", messageId: "prompt", activitySequence: 9 }} />);
+
+		const log = screen.getByRole("log", { name: "Conversation" });
+		await waitFor(() => expect(log.querySelector('[data-chat-activity-id="p2"]')).toHaveClass("chat-annotation-target"));
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByText("The referenced message could not be brought into view.")).not.toBeInTheDocument();
+	});
+
+	it("opens the owning child in the Subagents panel when search lands on one of its steps", async () => {
+		const tabBody = document.createElement("div");
+		document.body.append(tabBody);
+		const reveal = vi.fn();
+		const panelHost = { container: tabBody, reveal, onAvailableChange: vi.fn() };
+		const settled = snapshot("completed");
+		const { rerender, unmount } = render(<ChatWorkspace snapshot={settled} subagentPanel={panelHost} />);
+		rerender(
+			<ChatWorkspace
+				snapshot={settled}
+				subagentPanel={panelHost}
+				annotationNavigationRequest={{ id: "search:panel", text: "faq", messageId: "prompt", activitySequence: 9 }}
+			/>,
+		);
+
+		await waitFor(() => expect(tabBody.querySelector('[data-chat-activity-id="p2"]')).toHaveClass("chat-annotation-target"));
+		expect(reveal).toHaveBeenCalledTimes(1);
+		expect(within(tabBody).getByRole("heading", { name: "Audit: info pages" })).toBeInTheDocument();
+		expect(screen.queryByText("The referenced message could not be brought into view.")).not.toBeInTheDocument();
+
+		unmount();
+		tabBody.remove();
+	});
+
 	it("does not offer the panel when the chat has no subagents", () => {
 		const onAvailableChange = vi.fn();
 		const items: ConversationItem[] = [text("prompt", 1, "user", "Hi"), text("reply", 2, "assistant", "Hello.")];

@@ -2625,6 +2625,44 @@ type TimelineRun =
 	| { kind: "subagents"; key: string; items: ConversationActivity[] }
 	| { kind: "single"; key: string; items: [ConversationItem] };
 
+/**
+ * The items a turn draws in its own flow. A subagent's steps leave it and hang
+ * under their launch, so the child's commands stop reading as the parent's own,
+ * and a failed turn's provider failure shows once, as its outcome.
+ */
+function turnFlowItems(group: TimelineGroup): ConversationItem[] {
+	const hasTerminalFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error);
+	return group.items.filter((item) => {
+		if (group.subagents?.stepIds.has(item.id)) return false;
+		if (item.id === group.liveProviderFailure?.id) return false;
+		if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
+		return !(
+			hasTerminalFailure &&
+			item.kind === "activity" &&
+			item.detail?.event === "provider.failure" &&
+			item.status === "failed"
+		);
+	});
+}
+
+/**
+ * The subagent whose child took this step, with where its launch is drawn: the
+ * launch's group and the team run holding it. Undefined for the parent's own steps.
+ */
+function owningSubagent(groups: readonly TimelineGroup[], activityId: string): { launchId: string; groupIndex: number; teamKey: string } | undefined {
+	for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+		const group = groups[groupIndex]!;
+		if (!group.subagents) continue;
+		for (const [launchId, steps] of group.subagents.steps) {
+			if (!steps.some((step) => step.id === activityId)) continue;
+			const run = runsOf(turnFlowItems(group)).find((each) => each.kind === "subagents" && each.items.some((item) => item.id === launchId));
+			if (!run) return undefined;
+			return { launchId, groupIndex, teamKey: `${group.key}:${run.key}` };
+		}
+	}
+	return undefined;
+}
+
 function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
@@ -4527,15 +4565,30 @@ export function Timeline({
 			}
 			const activity = groups[index]!.items.find((item) => item.kind === "activity" && item.sequence === activitySequence)!;
 			setRevealedActivity(activity.id);
-			const disclosureKey = `${groups[index]!.key}:worked`;
-			if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
-			const row = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])
+			// A child's step is drawn under its launch, not in its own turn: in the
+			// Subagents panel when the chat has one, else inline under the launch's team.
+			const owner = owningSubagent(groups, activity.id);
+			const inPanel = Boolean(owner && openSubagent);
+			const holder = owner?.groupIndex ?? index;
+			if (owner && inPanel) {
+				if (openSubagentId !== owner.launchId) openSubagent!(owner.launchId);
+			} else {
+				const keys = [`${groups[holder]!.key}:worked`];
+				if (owner) keys.push(owner.teamKey, `${owner.teamKey}:agent:${owner.launchId}`);
+				if (keys.some((key) => !activityDisclosureOverrides[key])) {
+					setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
+				}
+			}
+			// The panel's body exists only while its tab shows, so the row is looked for
+			// again once revealing the tab mounts it.
+			const rowRoot = inPanel ? subagentPanel?.container : scrollContent.current;
+			const row = Array.from(rowRoot?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])
 				.find((element) => element.dataset.chatActivityId === activity.id);
 			const range = row ? annotationReferenceRange(row, annotationTarget) : undefined;
 			// The row mounts once its folds open, and its output a moment later. Output
 			// shows only its tail, so a word earlier in a long log marks the whole row.
 			if (!row || !range) {
-				if (!row && virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+				if (!row && virtualized && !inPanel) virtualizer.scrollToIndex(holder, { align: "center" });
 				if (annotationRetryCount.current++ >= (row ? 5 : 20)) {
 					if (!row) return toTurn();
 				} else {
@@ -4549,7 +4602,10 @@ export function Timeline({
 				annotationHighlightCleanup.current = highlightChatAnnotation(row!, annotationTarget.text);
 				const scrollerNode = scroller.current;
 				const view = scrollerNode?.getBoundingClientRect();
-				if (scrollerNode && view) {
+				if (inPanel) {
+					// The panel scrolls on its own, apart from the timeline.
+					row!.scrollIntoView({ block: "center", behavior: "auto" });
+				} else if (scrollerNode && view) {
 					const delta = activityRevealScrollDelta((range ?? row!).getBoundingClientRect(), view, Boolean(range));
 					if (delta !== 0) scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: "auto" });
 				}
@@ -4664,7 +4720,7 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt, openSubagent, openSubagentId, subagentPanel?.container]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -5356,6 +5412,9 @@ export function Timeline({
 		<ChatOpeningRef.Provider value={chatOpening}>
 		<OpenSubagentContext.Provider value={openSubagent}>
 		{subagentPanel?.container ? createPortal(
+			// A search match in a child's step opens the child here, so its folds read the
+			// revealed row the way the timeline's do.
+			<RevealedChatActivity.Provider value={revealedActivity}>
 			<SubagentPanel
 				subagents={subagents}
 				openId={openSubagentId}
@@ -5365,7 +5424,8 @@ export function Timeline({
 				models={subagentPanel.models}
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
-			/>,
+			/>
+			</RevealedChatActivity.Provider>,
 			subagentPanel.container,
 		) : null}
 		<ChatEntrance.Provider value={entranceGate}>
@@ -5860,27 +5920,11 @@ const TurnGroup = memo(function TurnGroup({
 	const batched = useContext(BatchedReportsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const hasTerminalFailure =
-		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
-		() =>
-			runsOf(
-				group.items.filter((item) => {
-					// A subagent's steps leave the turn's flow and hang under its launch, so
-					// the child's commands stop reading as the parent's own.
-					if (group.subagents?.stepIds.has(item.id)) return false;
-					if (item.id === group.liveProviderFailure?.id) return false;
-					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
-					return !(
-						hasTerminalFailure &&
-						item.kind === "activity" &&
-						item.detail?.event === "provider.failure" &&
-						item.status === "failed"
-					);
-				}),
-			),
-		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
+		() => runsOf(turnFlowItems(group)),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
 	const lastAssistantId = [...group.items]
 		.reverse()
@@ -6564,7 +6608,7 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
  */
 function sameSubagents(a: GroupSubagents | undefined, b: GroupSubagents | undefined): boolean {
 	if (a === b) return true;
-	if (!a || !b || a.live.size !== b.live.size || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
+	if (!a || !b || a.stopped !== b.stopped || a.live.size !== b.live.size || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
 	for (const id of a.live) if (!b.live.has(id)) return false;
 	for (const id of a.stepIds) if (!b.stepIds.has(id)) return false;
 	for (const [launchId, steps] of a.steps) {
