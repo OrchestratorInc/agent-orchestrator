@@ -180,12 +180,12 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 				return 0, false, err
 			}
 		}
-		returning := ""
+		query := fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s`, table, strings.Join(sets, ","), strings.Join(checks, " AND "))
 		if columns[0].table == "sessions" {
 			// RETURNING sees the revision before the AFTER UPDATE trigger runs.
-			returning = ` RETURNING revision`
+			query += ` RETURNING revision`
 		}
-		stmt, err := tx.PrepareContext(ctx, fmt.Sprintf(`UPDATE %s SET %s WHERE rowid=? AND %s%s`, table, strings.Join(sets, ","), strings.Join(checks, " AND "), returning))
+		stmt, err := tx.PrepareContext(ctx, query)
 		if err != nil {
 			return 0, false, err
 		}

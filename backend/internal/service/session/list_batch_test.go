@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	msqlite "modernc.org/sqlite"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -195,18 +197,17 @@ func addListSession(t *testing.T, store *sqlitestore.Store, dataDir string, shap
 type countingConnector struct {
 	dsn        string
 	statements *atomic.Int64
-	base       driver.Driver
 }
 
 func (c countingConnector) Connect(context.Context) (driver.Conn, error) {
-	inner, err := c.base.Open(c.dsn)
+	inner, err := (&msqlite.Driver{}).Open(c.dsn)
 	if err != nil {
 		return nil, err
 	}
 	return &countingConn{Conn: inner, statements: c.statements}, nil
 }
 
-func (c countingConnector) Driver() driver.Driver { return c.base }
+func (c countingConnector) Driver() driver.Driver { return &msqlite.Driver{} }
 
 type countingConn struct {
 	driver.Conn
@@ -256,16 +257,8 @@ func openCountingStore(t *testing.T, statements *atomic.Int64) (store *sqlitesto
 	file := url.URL{Path: filepath.Join(dataDir, "ao.db")}
 	dsn := "file:" + file.EscapedPath() +
 		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)"
-	configured, err := sql.Open("ao-sqlite", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := configured.Driver()
-	if err := configured.Close(); err != nil {
-		t.Fatal(err)
-	}
 	open := func(conns int) *sql.DB {
-		db := sql.OpenDB(countingConnector{dsn: dsn, statements: statements, base: base})
+		db := sql.OpenDB(countingConnector{dsn: dsn, statements: statements})
 		db.SetMaxOpenConns(conns)
 		db.SetMaxIdleConns(conns)
 		return db
