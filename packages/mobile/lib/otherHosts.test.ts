@@ -280,6 +280,49 @@ describe("another paired host's live runner", () => {
 		} finally { runner.stop(); }
 	});
 
+	it("acts on a late credential repair from an upgrade race whose connection a refused poll dropped", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(1_000_000);
+		const { connectToHost } = await import("./connectRuntime");
+		const { findHost } = await import("./hosts");
+		const { ApiError, getSessions, getNotifications } = await import("./api");
+		const tunnel = { kind: "tunnel" as const, host: "host-b.tunnel.test", port: 443, secure: true };
+		const lan = { kind: "lan" as const, host: "host-b.lan.test", port: 3011, secure: false };
+		const paired = { ...host, endpoints: [lan, tunnel] };
+		const tunnelConfig = { ...config, host: tunnel.host, httpPort: "443", secure: true, endpointKind: "tunnel" as const };
+		const repairedConfig = { ...tunnelConfig, password: "kept-password" };
+		const answer = { projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} };
+		let finishRace!: (result: unknown) => void;
+		let repair!: (repaired: boolean) => void;
+		vi.mocked(findHost).mockResolvedValue(paired);
+		vi.mocked(connectToHost)
+			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint: tunnel, config: tunnelConfig })
+			.mockImplementationOnce(() => new Promise((resolve) => { finishRace = resolve as (result: unknown) => void; }))
+			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint: tunnel, config: repairedConfig });
+		vi.mocked(getSessions).mockImplementation(async (c: ServerConfig) => {
+			if (c === tunnelConfig && vi.mocked(connectToHost).mock.calls.length >= 2) throw new ApiError(401, "unauthorized");
+			return answer;
+		});
+		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
+		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
+		let snapshot = emptyHostSnapshot(paired);
+		const runner = startOtherHost(paired, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
+		try {
+			await runner.refresh();
+			await vi.advanceTimersByTimeAsync(60_001);
+			expect(connectToHost).toHaveBeenCalledTimes(2);
+			// The poll during the race is refused and drops the connection.
+			await runner.refresh();
+			expect(runner.config).toBeNull();
+			finishRace({ ok: true, hostId: host.id, endpoint: tunnel, config: { ...tunnelConfig }, credentialRepair: new Promise<boolean>((done) => { repair = done; }) });
+			await vi.advanceTimersByTimeAsync(1);
+			repair(true);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(connectToHost).toHaveBeenCalledTimes(3);
+			expect(runner.config).toBe(repairedConfig);
+		} finally { runner.stop(); }
+	});
+
 	it("adopts a verified open primary without racing its identity again", async () => {
 		const { connectToHost } = await import("./connectRuntime");
 		const { getSessions, getNotifications } = await import("./api");

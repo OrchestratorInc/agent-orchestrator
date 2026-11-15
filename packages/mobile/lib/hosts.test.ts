@@ -187,6 +187,16 @@ describe("host store", () => {
 		expect((await findHost("h_one"))!.endpoints).toEqual([lan("10.0.0.5")]);
 	});
 
+	it("does not let a refresh read before a re-pair save over its endpoints", async () => {
+		const { saveHost, updateHostEndpoints, endpointRevisionOf, findHost } = await mod();
+		const paired = { id: "h_one", name: "a", platform: "darwin" as const, endpoints: [lan("192.168.1.42")], token: "pw", lastConnected: 1 };
+		await saveHost(paired);
+		const before = (await findHost("h_one"))!;
+		await saveHost({ ...paired, endpoints: [lan("10.0.0.5")] });
+		await updateHostEndpoints("h_one", [lan("10.0.0.9")], endpointRevisionOf(before));
+		expect((await findHost("h_one"))!.endpoints).toEqual([lan("10.0.0.5")]);
+	});
+
 	it("keeps every paired host available for explicit removal", async () => {
 		const { saveHost, loadHosts } = await mod();
 		for (let i = 0; i < 15; i++) {

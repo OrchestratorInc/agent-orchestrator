@@ -126,7 +126,11 @@ export async function findHost(id: string): Promise<Host | null> {
  * rather than adding a second entry for it. */
 export async function saveHost(host: Host): Promise<void> {
 	const { token, fallbackToken, ...rest } = host;
-	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id)]);
+	// Its endpoints are replaced too: a refresh that read the list before must not save over them.
+	await mutateStored(
+		(stored) => [rest, ...stored.filter((h) => h.id !== host.id)],
+		() => { endpointRevisions.set(host.id, hostEndpointRevision(host.id) + 1); },
+	);
 	await writeSecret(tokenKey(host.id), token);
 	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
 }

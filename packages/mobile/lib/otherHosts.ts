@@ -174,7 +174,13 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 			})) return;
 			lastRaceAt = Date.now();
 			const result = await connectToHost(host.id);
-			if (stopped || !connected || runner.config !== current || !result.ok || result.hostId !== host.id) return;
+			if (stopped || !result.ok || result.hostId !== host.id) return;
+			if (!connected || runner.config !== current) {
+				// A poll refused the token meanwhile and dropped the connection: a
+				// late repair from this race is what brings it back.
+				if (runner.config === null) reconnectAfterRepair(result, current);
+				return;
+			}
 			if (sameServerConfig(current, result.config)) {
 				// Same connection, same refused token: a late repair still applies to it.
 				reconnectAfterRepair(result, current);
