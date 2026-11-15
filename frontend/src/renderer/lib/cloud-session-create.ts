@@ -1,5 +1,5 @@
 import { CloudCpError } from "./cloud-cp";
-import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, CloudCpMutationOptions, CloudCpSessionResponse } from "./cloud-cp";
+import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpCreateStandaloneAgentRequest, CloudCpInterfaceMode, CloudCpMutationOptions, CloudCpSessionResponse, CloudCpStandaloneAgentResponse } from "./cloud-cp";
 import type { Settings } from "../hooks/useSettings";
 import { reportCloudSessionCreateRequested } from "./cloud-telemetry";
 
@@ -142,6 +142,43 @@ export async function createCloudChatSessionWithFiles(
 	upload: (sessionId: string, file: CloudTaskFile, signal: AbortSignal) => Promise<{ id: string }>,
 	options: { idempotencyKey?: string } = {},
 ): Promise<CloudCpSessionResponse> {
+	return startChatWithFiles(client, orgId, body, files, upload,
+		(start, idempotencyKey) => createCloudSession(client, orgId, start, { idempotencyKey }), options);
+}
+
+/**
+ * Starts a Cloud session of its own (a standalone agent) whose brief carries
+ * files, as createCloudChatSessionWithFiles starts one in a project: created
+ * without a prompt, the files uploaded to it, the brief sent with them. Its
+ * project comes back with it. A start the files or the brief did not reach
+ * deletes the session; its project, its owner's alone, keeps no live session.
+ */
+export async function createCloudChatAgentWithFiles(
+	client: Pick<CloudCpClient, "createStandaloneAgent" | "sendSessionMessage" | "deleteSession">,
+	orgId: string,
+	body: CloudCpCreateStandaloneAgentRequest & { interfaceMode: "chat" },
+	files: readonly CloudTaskFile[],
+	/** Uploads one file to the session; the signal stops it once another file failed. */
+	upload: (sessionId: string, file: CloudTaskFile, signal: AbortSignal) => Promise<{ id: string }>,
+	options: { idempotencyKey?: string } = {},
+): Promise<CloudCpStandaloneAgentResponse> {
+	return startChatWithFiles(client, orgId, body, files, upload,
+		(start, idempotencyKey) => client.createStandaloneAgent(orgId, start, { idempotencyKey }), options);
+}
+
+/** What the brief's first message is sent with. */
+type ChatStartBody = Pick<CloudCpCreateSessionRequest, "prompt" | "model" | "reasoningEffort" | "approvalMode"> & { interfaceMode: "chat" };
+
+async function startChatWithFiles<Body extends ChatStartBody, Created extends CloudCpSessionResponse>(
+	client: Pick<CloudCpClient, "sendSessionMessage" | "deleteSession">,
+	orgId: string,
+	body: Body,
+	files: readonly CloudTaskFile[],
+	upload: (sessionId: string, file: CloudTaskFile, signal: AbortSignal) => Promise<{ id: string }>,
+	/** Creates the session without a prompt, under the attempt's key. */
+	create: (body: Body, idempotencyKey: string) => Promise<Created>,
+	options: { idempotencyKey?: string },
+): Promise<Created> {
 	const requestId = options.idempotencyKey;
 	const attempt = (requestId === undefined ? undefined : unsettledFileStarts.get(requestId))
 		?? { key: `${requestId ?? crypto.randomUUID()}:files:${crypto.randomUUID()}` };
@@ -149,9 +186,9 @@ export async function createCloudChatSessionWithFiles(
 	const settle = () => {
 		if (requestId !== undefined) unsettledFileStarts.delete(requestId);
 	};
-	let created: CloudCpSessionResponse;
+	let created: Created;
 	try {
-		created = await createCloudSession(client, orgId, { ...body, prompt: "" }, { idempotencyKey: attempt.key });
+		created = await create({ ...body, prompt: "" }, attempt.key);
 	} catch (error) {
 		// A refusal made nothing. Without an answer the session may exist, so a
 		// retry replays this create.

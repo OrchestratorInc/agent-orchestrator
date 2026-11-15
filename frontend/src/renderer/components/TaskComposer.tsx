@@ -38,7 +38,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatAgentWithFiles, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
 import { uploadCloudAttachment } from "../lib/cloud-attachments";
 import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
@@ -249,12 +249,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
 				const files = input.attachments ?? [];
-				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
-				// on a control plane that takes them. A standalone agent starts without
-				// them: its own project comes with its session, and a start the files
-				// did not reach would leave that project behind.
+				// Files ride the first message of a Chat session, in a project
+				// (createCloudChatSessionWithFiles) or of its own (createCloudChatAgentWithFiles),
+				// on a control plane that takes them.
 				// Both are final refusals (a code), so the page hands the task back to change.
-				if (files.length > 0 && (isCloudStandalone || cloudOffering.maxAttachmentBytes === undefined)) {
+				if (files.length > 0 && cloudOffering.maxAttachmentBytes === undefined) {
 					throw new TaskCreateError(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }), "CLOUD_ATTACHMENTS_UNSUPPORTED");
 				}
 				if (files.length > 0 && input.mode !== "chat") {
@@ -293,7 +292,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// The agent and its project come back together; its project joins
 					// the list now so the Scratchpad shows the agent at once.
 					reportCloudSessionCreateRequested({ kind: "worker", projectId: "" });
-					const created = await cloudClient.createStandaloneAgent(orgId, body, createOptions);
+					const created = files.length > 0
+						? await createCloudChatAgentWithFiles(cloudClient, orgId, { ...body, interfaceMode: "chat" }, files,
+							(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
+							{ idempotencyKey: input.clientRequestId })
+						: await cloudClient.createStandaloneAgent(orgId, body, createOptions);
 					seedCreatedStandaloneAgent(queryClient, cloudBaseUrl, orgId, created.project);
 					rememberStandaloneAgent(created.session.id, created.project.id);
 					session = created.session;
