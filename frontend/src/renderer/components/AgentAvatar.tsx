@@ -28,6 +28,9 @@ import copilotLightLogo from "../assets/agents/copilot-light.svg";
 import crushLogo from "../assets/agents/crush.svg";
 import cursorDarkLogo from "../assets/agents/cursor-dark.svg";
 import cursorLightLogo from "../assets/agents/cursor-light.svg";
+// docker/docker-agent (Apache-2.0): docs/assets/docker-mark.svg and docker-mark-white.svg.
+import dockerAgentDarkLogo from "../assets/agents/docker-agent-dark.svg";
+import dockerAgentLightLogo from "../assets/agents/docker-agent-light.svg";
 import devinDarkLogo from "../assets/agents/devin-dark.svg";
 import devinLightLogo from "../assets/agents/devin-light.svg";
 import deepseekHarnessDarkLogo from "../assets/agents/deepseek-harness-dark.svg";
@@ -94,6 +97,7 @@ const LOGOS: AgentLogoSources = {
 	goose: { light: gooseLightLogo, dark: gooseDarkLogo },
 	continue: { light: continueLightLogo, dark: continueDarkLogo },
 	devin: { light: devinLightLogo, dark: devinDarkLogo },
+	"docker-agent": { light: dockerAgentLightLogo, dark: dockerAgentDarkLogo },
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
 	memcode: memcodeLogo,
