@@ -1059,14 +1059,19 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 	ms := effectiveMergeStatus(mr)
 	var blockers []string
 	// cleared reports whether this status positively rules conflicts out.
-	// detailed_merge_status is GitLab's single "why this MR cannot merge right
-	// now" enum whose only conflict value is `conflict`: every other computed
-	// status means GitLab ran the merge check and found no conflict. The
-	// not-yet-computed set (checking/preparing/unchecked/approvals_syncing/"")
-	// and any unknown future status are not proof, so they stay false.
-	// need_rebase stays false as a documented boundary: a behind-base head may
-	// still be conflict-free, but the status alone does not prove it.
+	// detailed_merge_status names only the first check that fails, so a
+	// blocker such as draft_status or not_open can be reported while the MR
+	// still conflicts. Only `mergeable` (every check passed) proves it alone;
+	// any other blocker counts only when the legacy merge_status, which is
+	// the merge check itself, confirms a clean merge. The not-yet-computed set
+	// (checking/preparing/unchecked/approvals_syncing/"") and any unknown
+	// future status are not proof, so they stay false. need_rebase stays false
+	// as a documented boundary: a behind-base head may still be conflict-free,
+	// but the status alone does not prove it.
 	cleared := gitlabMergeStatusRulesOutConflicts(ms)
+	if cleared && ms != "mergeable" && ms != "can_be_merged" && mr.MergeStatus != "can_be_merged" {
+		cleared = false
+	}
 
 	switch ms {
 	// Mergeable (current + legacy aliases). GitLab reports these when the
