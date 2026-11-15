@@ -15,7 +15,7 @@ import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, hostEndpointRevision, touchHost, updateHostEndpoints } from "./hosts";
-import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints } from "./race";
+import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints, type RaceOutcome } from "./race";
 
 function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
 	const hostId = typeof body.hostId === "string" ? body.hostId : "";
@@ -217,7 +217,7 @@ export type ConnectOptions = {
  * bounded by SLOW_LINK_PROBE_TIMEOUT_MS. Each answer still goes through the
  * same identity and version checks.
  */
-export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint, now: () => number = Date.now) {
+export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint, now: () => number = Date.now): Promise<RaceOutcome> {
 	const slow = (endpoint: Endpoint, signal: AbortSignal) => probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false });
 	// A machine that last answered only on the slow race goes straight to it:
 	// the quick race would spend PROBE_TIMEOUT_MS failing first on every
@@ -233,7 +233,9 @@ export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], host
 	if (quick.ok || !quick.timedOut?.length) return quick;
 	const outcome = await raceEndpoints(quick.timedOut, hostId, slow);
 	if (outcome.ok && hostId !== "") slowLinkAt.set(hostId, now());
-	return outcome;
+	// Nothing compatible answered even slowly: an incompatible answer from the
+	// first race still explains it better than "unreachable".
+	return !outcome.ok && quick.reason === "incompatible" ? { ok: false, reason: "incompatible" } : outcome;
 }
 
 /** How long a machine that needed the slow race is raced that way first. */
