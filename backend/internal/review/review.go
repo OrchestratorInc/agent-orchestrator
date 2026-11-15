@@ -423,6 +423,11 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 		if err != nil {
 			return TriggerResult{}, err
 		}
+		// Cancel does not wait for this worker's trigger lock. Once it has
+		// cancelled a pass this trigger started, start no further reviewer.
+		if cancelledAnyRun(runs, combined.CreatedRuns) {
+			break
+		}
 		res, err := e.triggerReviewer(ctx, worker, prs, runs, sel.Harness, sel.AgentConfig, opts, noOpenPR, configured)
 		if err != nil {
 			wrapped := fmt.Errorf("reviewer %s: %w", sel.Harness, err)
@@ -446,12 +451,16 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 			combined.Created = true
 			combined.Run = res.Run
 			combined.ReviewerHandleID = res.ReviewerHandleID
+			combined.ReviewerSurface = res.ReviewerSurface
 		}
 		if combined.Run.ID == "" {
 			combined.Run = res.Run
 		}
 		if combined.ReviewerHandleID == "" {
 			combined.ReviewerHandleID = res.ReviewerHandleID
+		}
+		if combined.ReviewerSurface.ReviewID == "" {
+			combined.ReviewerSurface = res.ReviewerSurface
 		}
 	}
 	if !combined.Created && len(skipReasons) == 1 {
@@ -479,6 +488,18 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 	}
 	combined.Reviews = PlanReviewers(prs, runs, harnesses)
 	return combined, nil
+}
+
+// cancelledAnyRun reports whether any of started is now cancelled in runs.
+func cancelledAnyRun(runs, started []domain.ReviewRun) bool {
+	for _, s := range started {
+		for _, run := range runs {
+			if run.ID == s.ID && run.Status == domain.ReviewRunCancelled {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // triggerReviewer runs one reviewer harness over the worker's PRs. configured

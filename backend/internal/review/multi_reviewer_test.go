@@ -602,3 +602,41 @@ func TestTriggerKeepsAnotherConfiguredReviewersIdlePane(t *testing.T) {
 		t.Fatalf("destroy calls = %d, want claude-code's idle pane kept", launcher.destroyCalls)
 	}
 }
+
+func TestTriggerStopsFanOutAfterConcurrentCancel(t *testing.T) {
+	// Cancel does not take the worker lock, so it can land while claude-code
+	// is launching. Once it has cancelled that pass, codex must not start.
+	store := &fakeStore{}
+	launcher := perHarnessLauncher()
+	launcher.onSpawn = func(spec LaunchSpec) {
+		launcher.handle = "review-" + string(spec.Harness)
+		for i := range store.runs {
+			if store.runs[i].Harness == spec.Harness && store.runs[i].Status == domain.ReviewRunRunning {
+				store.runs[i].Status = domain.ReviewRunCancelled
+			}
+		}
+	}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), twoReviewerProject(), launcher)
+
+	if _, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{}); err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	if got := spawnedHarnesses(launcher); len(got) != 1 || got[0] != domain.ReviewerClaudeCode {
+		t.Fatalf("spawned = %v, want only claude-code before the cancel", got)
+	}
+	if runs := runsFor(store.runs, domain.ReviewerCodex, domain.ReviewRunRunning); len(runs) != 0 {
+		t.Fatalf("codex runs = %+v, want none after cancel", runs)
+	}
+}
+
+func TestTriggerReportsReviewerSurfaceForConfiguredReviewers(t *testing.T) {
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), twoReviewerProject(), perHarnessLauncher())
+
+	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	if res.ReviewerSurface.ReviewID == "" || res.ReviewerSurface.Harness != domain.ReviewerClaudeCode {
+		t.Fatalf("surface = %+v, want the first started reviewer's surface", res.ReviewerSurface)
+	}
+}
