@@ -292,6 +292,8 @@ func clearProviderKeys(t *testing.T) {
 	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"} {
 		t.Setenv(key, "")
 	}
+	// Keys saved by `docker-agent setup` are read too; keep the real ones out.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 }
 
 // Without AO_DOCKER_AGENT_CONFIG, AO writes a private default config for the

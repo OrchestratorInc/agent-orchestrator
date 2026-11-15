@@ -4,10 +4,14 @@ package dockeragent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
@@ -53,16 +57,83 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "Docker Agent", Names: []string{"docker-agent"}, WinNames: []string{"docker-agent.exe"}, UnixPaths: []string{"/usr/local/bin/docker-agent", "/opt/homebrew/bin/docker-agent", "/home/linuxbrew/.linuxbrew/bin/docker-agent"}, UnixHomePaths: [][]string{{".local", "bin", "docker-agent"}}})
 }
 
-// AuthStatus reports configuration, not remote authorization: a selected native
-// config, or a provider key AO's default config can use.
+// AuthStatus asks Docker Agent's own credential diagnosis (`doctor --json`),
+// which sees every source Docker Agent reads: the process environment and the
+// env file `docker-agent setup` writes. It reports configuration, not remote
+// authorization; the provider checks the key on a live turn. Releases without
+// `doctor` fall back to AO's own key lookup.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	if _, err := p.ResolveBinary(ctx); err != nil {
+	binary, err := p.ResolveBinary(ctx)
+	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if strings.TrimSpace(os.Getenv(ConfigEnv)) != "" || len(DefaultModels(nil)) > 0 {
+	config := strings.TrimSpace(os.Getenv(ConfigEnv))
+	if status, ok := doctorAuthStatus(ctx, binary, config); ok {
+		if status == ports.AgentAuthStatusConfigured && config == "" {
+			return verifyDefaultProvider(ctx, nil), nil
+		}
+		return status, nil
+	}
+	if config != "" {
 		return ports.AgentAuthStatusConfigured, nil
 	}
+	if len(DefaultModels(nil)) > 0 {
+		return verifyDefaultProvider(ctx, nil), nil
+	}
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+const doctorTimeout = 15 * time.Second
+
+// doctorReport is the subset of `docker-agent doctor --json` AO reads. It
+// never carries secret values.
+type doctorReport struct {
+	Providers []struct {
+		Provider string `json:"provider"`
+		Found    bool   `json:"found"`
+	} `json:"providers"`
+	AutoModel *struct {
+		Usable bool `json:"usable"`
+	} `json:"auto_model"`
+}
+
+// doctorAuthStatus runs Docker Agent's diagnosis. With a selected config it
+// checks that file's requirements (doctor exits non-zero when an issue would
+// stop the agent); otherwise AO's default config needs a provider it can
+// render. ok is false when doctor is unavailable or its output unreadable.
+func doctorAuthStatus(ctx context.Context, binary, config string) (ports.AgentAuthStatus, bool) {
+	ctx, cancel := context.WithTimeout(ctx, doctorTimeout)
+	defer cancel()
+	args := []string{"doctor", "--json"}
+	if config != "" {
+		args = []string{"doctor", config, "--json"}
+	}
+	out, runErr := exec.CommandContext(ctx, binary, args...).Output()
+	var report doctorReport
+	if err := json.Unmarshal(out, &report); err != nil || report.Providers == nil {
+		return ports.AgentAuthStatusUnknown, false
+	}
+	if config != "" {
+		if runErr != nil {
+			return ports.AgentAuthStatusUnauthorized, true
+		}
+		return ports.AgentAuthStatusConfigured, true
+	}
+	for _, provider := range report.Providers {
+		if provider.Found && defaultConfigProvider(provider.Provider) {
+			return ports.AgentAuthStatusConfigured, true
+		}
+	}
+	return ports.AgentAuthStatusUnauthorized, true
+}
+
+func defaultConfigProvider(name string) bool {
+	for _, entry := range providerModels {
+		if entry.provider == name {
+			return true
+		}
+	}
+	return false
 }
 
 // providerModels are the models offered per provider key: Docker Agent's own
@@ -81,13 +152,57 @@ var providerModels = []struct {
 // DefaultModel is one entry of AO's default Docker Agent configuration.
 type DefaultModel struct{ Name, Provider, Model string }
 
-// lookupKey reads key from env, falling back to the process environment.
+// lookupKey reads key from env, falling back to the process environment and
+// then to the env file `docker-agent setup` stores keys in.
 func lookupKey(env map[string]string, key string) string {
 	value, ok := env[key]
 	if !ok {
 		value = os.Getenv(key)
 	}
-	return strings.TrimSpace(value)
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return setupEnvFileValue(key)
+}
+
+// setupEnvFile is where `docker-agent setup` saves provider keys
+// ($XDG_CONFIG_HOME/cagent/.env, default ~/.config/cagent/.env).
+func setupEnvFile() string {
+	base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		base = filepath.Join(home, ".config")
+	}
+	return filepath.Join(base, "cagent", ".env")
+}
+
+// setupEnvFileValue reads one KEY=VALUE entry from the setup env file. A
+// missing or unreadable file contributes nothing.
+func setupEnvFileValue(key string) string {
+	path := setupEnvFile()
+	if path == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "export "))
+		name, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
+		}
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 // ProviderEnv returns launch overlays for keys AO accepts under another name:
@@ -127,7 +242,7 @@ func DefaultModels(env map[string]string) []DefaultModel {
 func DefaultConfig(env map[string]string) ([]byte, error) {
 	models := DefaultModels(env)
 	if len(models) == 0 {
-		return nil, errors.New("docker agent needs a provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY or GEMINI_API_KEY) or " + ConfigEnv)
+		return nil, errors.New("docker agent needs a provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY or GEMINI_API_KEY, in the environment or saved by `docker-agent setup`) or " + ConfigEnv)
 	}
 	var b strings.Builder
 	b.WriteString("# Generated by Agent Orchestrator. Set " + ConfigEnv + " to use your own.\nmodels:\n")

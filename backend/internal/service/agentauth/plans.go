@@ -16,7 +16,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
-	documentationPlan("docker-agent", "Configure Docker Agent", "Docker Agent has no login command: set ANTHROPIC_API_KEY, OPENAI_API_KEY or GOOGLE_API_KEY (GEMINI_API_KEY also works) and Orchestrator generates a default configuration. To use your own YAML, set AO_DOCKER_AGENT_CONFIG to its absolute path. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/getting-started/quickstart/"),
+	plan("docker-agent", ActionSetup, "Set up Docker Agent", []string{"docker-agent", "setup"}, "Native model setup: connect Anthropic, OpenAI or Google and Docker Agent saves the key in its own env file, which Orchestrator's default configuration uses. To use your own YAML, set AO_DOCKER_AGENT_CONFIG to its absolute path. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/getting-started/quickstart/"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),

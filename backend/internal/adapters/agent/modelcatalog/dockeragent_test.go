@@ -49,6 +49,8 @@ func TestDockerAgentDiscoveryFingerprintFollowsKeysAndConfig(t *testing.T) {
 	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", dockeragent.ConfigEnv} {
 		t.Setenv(key, "")
 	}
+	// Keys saved by `docker-agent setup` are read too; keep the real ones out.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	openai := dockerAgentDiscoveryFingerprint(map[string]string{"OPENAI_API_KEY": "secret-openai"})
 	anthropic := dockerAgentDiscoveryFingerprint(map[string]string{"ANTHROPIC_API_KEY": "secret-anthropic"})
 	if openai == anthropic {
