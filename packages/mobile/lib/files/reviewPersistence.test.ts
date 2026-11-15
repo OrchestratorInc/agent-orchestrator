@@ -58,4 +58,41 @@ describe("saving review comments", () => {
 		const saved = JSON.parse(store.items.get(REVIEWS_STORAGE_KEY)!) as { reviews: Array<{ key: string }> };
 		expect(saved.reviews.map((review) => review.key)).toEqual([reviewKey("machine-b", "s1")]);
 	});
+
+	// Forgotten while the launch was still reading the saved reviews: the read
+	// landing must not put that machine's comments back, in memory or on the phone.
+	it("does not bring back a machine forgotten while the saved reviews were being read", async () => {
+		const { REVIEWS_STORAGE_KEY, startReviewPersistence } = await import("./reviewPersistence");
+		const { forgetHostReviews, reviewComments, reviewKey } = await import("./reviewStore");
+		const comment = (id: string) => ({ id, label: "a.ts · Line 1", feedback: id, target, status: "queued" });
+		store.items.set(REVIEWS_STORAGE_KEY, JSON.stringify({ v: 1, reviews: [
+			{ key: reviewKey("machine-a", "s1"), changedAt: Date.now(), comments: [comment("for-a")] },
+			{ key: reviewKey("machine-b", "s1"), changedAt: Date.now(), comments: [comment("for-b")] },
+		] }));
+		const started = startReviewPersistence();
+		forgetHostReviews("machine-a");
+		store.pendingRead!.resolve(null);
+		await started;
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(reviewComments(reviewKey("machine-a", "s1"))).toEqual([]);
+		expect(reviewComments(reviewKey("machine-b", "s1"))).toHaveLength(1);
+		const saved = JSON.parse(store.items.get(REVIEWS_STORAGE_KEY)!) as { reviews: Array<{ key: string }> };
+		expect(saved.reviews.map((review) => review.key)).toEqual([reviewKey("machine-b", "s1")]);
+	});
+
+	// Nothing in memory to forget yet, so no change was told: what was saved
+	// must still be written over once the read lands.
+	it("writes over the saved reviews of a machine forgotten before any were restored", async () => {
+		const { REVIEWS_STORAGE_KEY, startReviewPersistence } = await import("./reviewPersistence");
+		const { forgetHostReviews, reviewKey } = await import("./reviewStore");
+		store.items.set(REVIEWS_STORAGE_KEY, JSON.stringify({ v: 1, reviews: [
+			{ key: reviewKey("machine-a", "s1"), changedAt: Date.now(), comments: [{ id: "c1", label: "x", feedback: "for-a", target, status: "queued" }] },
+		] }));
+		const started = startReviewPersistence();
+		forgetHostReviews("machine-a");
+		store.pendingRead!.resolve(null);
+		await started;
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(false);
+	});
 });

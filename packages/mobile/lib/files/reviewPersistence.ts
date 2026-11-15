@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { AppState } from "react-native";
-import { onReviewsChanged, restoreReviews, storedReviews } from "./reviewStore";
+import { beginRestoringReviews, finishRestoringReviews, onReviewsChanged, restoreReviews, storedReviews } from "./reviewStore";
 
 // Saves review comments to the phone and puts them back on launch, so a review
 // survives the phone closing the app in the background. Kept apart from the
@@ -32,6 +32,7 @@ export async function startReviewPersistence(): Promise<void> {
 		if (loaded) schedule();
 		else changedWhileLoading = true;
 	});
+	beginRestoringReviews();
 	try {
 		const raw = await AsyncStorage.getItem(REVIEWS_STORAGE_KEY);
 		restoring = true;
@@ -39,6 +40,7 @@ export async function startReviewPersistence(): Promise<void> {
 	} catch {
 		// Unreadable storage must not keep the app from reviewing; it is overwritten below.
 	} finally {
+		finishRestoringReviews();
 		restoring = false;
 		loaded = true;
 	}

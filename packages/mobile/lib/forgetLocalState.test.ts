@@ -1,10 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const store = vi.hoisted(() => ({ items: new Map<string, string>() }));
+const store = vi.hoisted(() => ({ items: new Map<string, string>(), failRemove: new Map<string, number>() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => store.items.get(key) ?? null,
 	setItem: async (key: string, value: string) => { store.items.set(key, value); },
-	removeItem: async (key: string) => { store.items.delete(key); },
+	removeItem: async (key: string) => {
+		const failures = store.failRemove.get(key) ?? 0;
+		if (failures > 0) {
+			store.failRemove.set(key, failures - 1);
+			throw new Error(`cannot remove ${key}`);
+		}
+		store.items.delete(key);
+	},
 } }));
 vi.mock("expo-file-system", () => {
 	class Directory { exists = false; delete() {} }
@@ -24,7 +31,8 @@ import { SPAWN_DRAFT_KEY } from "./spawnDraft";
 const target = { path: "a.ts", side: "new" as const, line: 1 };
 const draft = (owner: { hostId: string | null; accountId: string | null }) => JSON.stringify({ v: 1, savedAt: Date.now(), prompt: "p", attachments: [], owner });
 
-beforeEach(() => store.items.clear());
+afterEach(() => vi.restoreAllMocks());
+beforeEach(() => { store.items.clear(); store.failRemove.clear(); vi.spyOn(console, "warn").mockImplementation(() => {}); });
 
 describe("forgetting what the app kept across being closed", () => {
 	it("leaves nothing of a forgotten machine's: board, New task draft, review comments, last screen", async () => {
@@ -53,5 +61,30 @@ describe("forgetting what the app kept across being closed", () => {
 		store.items.set(SPAWN_DRAFT_KEY, draft({ hostId: "machine-a", accountId: "user-2" }));
 		await forgetAccountState("user-1");
 		expect(store.items.has(SPAWN_DRAFT_KEY)).toBe(true);
+	});
+
+	// The disconnect flow reports a forget that left something behind; a
+	// cleanup that swallowed the failure let the machine vanish with its state kept.
+	it("fails once every deletion ran, when one still could not be done", async () => {
+		store.items.set(boardKey("host.machine-a"), "{}");
+		store.items.set(SPAWN_DRAFT_KEY, draft({ hostId: "machine-a", accountId: null }));
+		store.items.set(LAST_ROUTE_KEY, "{}");
+		store.failRemove.set(boardKey("host.machine-a"), 2);
+		await expect(forgetMachineState("machine-a")).rejects.toThrow("cannot remove ao.board.v1.host.machine-a");
+		// The others still went.
+		expect([...store.items.keys()]).toEqual([boardKey("host.machine-a")]);
+		expect(console.warn).toHaveBeenCalled();
+
+		store.items.set(SPAWN_DRAFT_KEY, draft({ hostId: null, accountId: "user-1" }));
+		store.failRemove.set(LAST_ROUTE_KEY, 2);
+		await expect(forgetAccountState("user-1")).rejects.toThrow(`cannot remove ${LAST_ROUTE_KEY}`);
+		expect(store.items.has(SPAWN_DRAFT_KEY)).toBe(false);
+	});
+
+	it("tries a failed deletion again before giving up", async () => {
+		store.items.set(boardKey("host.machine-a"), "{}");
+		store.failRemove.set(boardKey("host.machine-a"), 1);
+		await forgetMachineState("machine-a");
+		expect(store.items.size).toBe(0);
 	});
 });

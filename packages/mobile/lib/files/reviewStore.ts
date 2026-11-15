@@ -25,6 +25,12 @@ const comments = new Map<string, readonly ReviewComment[]>();
 const changedAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 let nextId = 0;
+/**
+ * Machines forgotten while the saved reviews are still being read at launch
+ * (null once they are, or before the read starts): what was saved for them is
+ * not put back when the read lands.
+ */
+let forgottenWhileRestoring: Set<string> | null = null;
 
 /** A review untouched for this long is not restored. */
 export const REVIEW_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
@@ -71,6 +77,16 @@ export function storedReviews(now = Date.now()): StoredReviews {
 	return { v: 1, reviews: kept };
 }
 
+/** The saved reviews are being read: machines forgotten until `finishRestoringReviews` stay forgotten. */
+export function beginRestoringReviews(): void {
+	forgottenWhileRestoring = new Set();
+}
+
+/** The saved reviews were read (or could not be). */
+export function finishRestoringReviews(): void {
+	forgottenWhileRestoring = null;
+}
+
 /**
  * Puts saved reviews back after the app restarts. Comments written since
  * launch stay, after the restored ones; anything unreadable is skipped.
@@ -82,6 +98,7 @@ export function restoreReviews(raw: unknown, now = Date.now()): void {
 	for (const review of stored.reviews) {
 		if (!review || typeof review.key !== "string" || typeof review.changedAt !== "number" || !Array.isArray(review.comments)) continue;
 		if (now - review.changedAt >= REVIEW_KEEP_MS) continue;
+		if (forgottenWhileRestoring && [...forgottenWhileRestoring].some((prefix) => review.key.startsWith(prefix))) continue;
 		const saved = review.comments.filter(isComment);
 		if (!saved.length) continue;
 		const current = comments.get(review.key) ?? EMPTY;
@@ -105,7 +122,14 @@ function isComment(value: unknown): value is ReviewComment {
  */
 export function forgetHostReviews(hostId: string): void {
 	const prefix = reviewKey(hostId, "");
+	// Forgotten while the saved reviews are read: theirs are not put back, and
+	// the change is told even with nothing in memory, so what was saved is
+	// written over once the read lands.
 	let forgot = false;
+	if (forgottenWhileRestoring) {
+		forgottenWhileRestoring.add(prefix);
+		forgot = true;
+	}
 	for (const key of [...comments.keys()]) {
 		if (!key.startsWith(prefix)) continue;
 		comments.delete(key);

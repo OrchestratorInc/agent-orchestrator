@@ -12,21 +12,35 @@ import { forgetSpawnDraftFor } from "./spawnDraft";
 // forgetting a machine, or an account signing out or giving way to another,
 // leaves nothing of theirs for whoever uses the phone next.
 
-/** Forgets what was kept for a machine that was forgotten. */
+/**
+ * Runs every deletion, each tried a second time if it fails (storage that
+ * failed once often answers the next time), and only then fails with the
+ * first error left: one that fails never stops the others, and the caller
+ * learns the phone still holds something it was asked to forget.
+ */
+async function forgetAll(what: string, deletions: Array<() => Promise<void>>): Promise<void> {
+	const results = await Promise.allSettled(deletions.map((deletion) => deletion().catch(() => deletion())));
+	const failed = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+	if (!failed.length) return;
+	console.warn(`[forget] ${failed.length} of ${deletions.length} deletions failed for ${what}`, ...failed.map((result) => result.reason));
+	throw failed[0].reason;
+}
+
+/** Forgets what was kept for a machine that was forgotten. Rejects if any of it is still on the phone. */
 export async function forgetMachineState(hostId: string): Promise<void> {
 	forgetHostReviews(hostId);
-	await Promise.allSettled([
-		forgetBoard(hostMachineIdentity(hostId)),
-		forgetSpawnDraftFor({ hostId }),
-		AsyncStorage.removeItem(LAST_ROUTE_KEY),
+	await forgetAll("a forgotten machine", [
+		() => forgetBoard(hostMachineIdentity(hostId)),
+		() => forgetSpawnDraftFor({ hostId }),
+		() => AsyncStorage.removeItem(LAST_ROUTE_KEY),
 	]);
 }
 
-/** Forgets what was kept while an account was signed in, once it signed out or another signed in. */
+/** Forgets what was kept while an account was signed in, once it signed out or another signed in. Rejects if any of it is still on the phone. */
 export async function forgetAccountState(accountId: string): Promise<void> {
 	forgetHostReviews(CLOUD_HOST_ID);
-	await Promise.allSettled([
-		forgetSpawnDraftFor({ accountId }),
-		AsyncStorage.removeItem(LAST_ROUTE_KEY),
+	await forgetAll("a signed-out account", [
+		() => forgetSpawnDraftFor({ accountId }),
+		() => AsyncStorage.removeItem(LAST_ROUTE_KEY),
 	]);
 }
