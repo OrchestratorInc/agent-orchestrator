@@ -52,4 +52,11 @@ describe("prHasReviewActivity", () => {
 		expect(prHasReviewActivity(pr)).toBe(true);
 		expect(prHasReviewActivity(base)).toBe(false);
 	});
+
+	it("leaves out the PR author's own top-level comments", () => {
+		const conversation = [{ id: "1", author: "@Aditi", isBot: false, body: "Pushed a fix." }];
+		const pr = { ...base, author: "aditi", conversation } as unknown as SessionPRSummary;
+		expect(prConversationComments(pr)).toEqual([]);
+		expect(prHasReviewActivity(pr)).toBe(false);
+	});
 });

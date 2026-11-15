@@ -4101,6 +4101,14 @@ describe("SessionInspector summary reviews", () => {
                 url: "https://example.com/pr/3#issuecomment-2",
                 createdAt: "2026-06-15T11:00:00Z",
                 body: "Please also update the docs.",
+              }, {
+                // The worker's own `gh pr comment` note, posted as the PR author.
+                id: "note-2",
+                author: "aditi",
+                isBot: false,
+                url: "https://example.com/pr/3#issuecomment-3",
+                createdAt: "2026-06-15T12:00:00Z",
+                body: "Pushed the schema fix.",
               }],
             })],
           },
@@ -4119,6 +4127,8 @@ describe("SessionInspector summary reviews", () => {
     // Top-level comments sit beside the review.
     expect(screen.getByText("Adds cloud automations.")).toBeInTheDocument();
     expect(screen.getByText("Please also update the docs.")).toBeInTheDocument();
+    // The PR author's own note is not feedback, so it gets no card to send back.
+    expect(screen.queryByText("Pushed the schema fix.")).not.toBeInTheDocument();
 
     // The bot's inline comment is listed under its review, previewed as words.
     await userEvent.click(screen.getByRole("button", { name: /coderabbitai.*Commented/i }));

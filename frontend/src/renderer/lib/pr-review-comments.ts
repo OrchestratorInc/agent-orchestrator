@@ -3,7 +3,7 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 type CommentReviewer = SessionPRSummary["review"]["unresolvedBy"][number];
 
 /** A login as GitHub's two APIs write it: REST adds "[bot]" to an app's login, GraphQL does not. */
-const loginKey = (login: string) => login.trim().replace(/\[bot\]$/i, "").toLowerCase();
+const loginKey = (login: string) => login.trim().replace(/^@+/, "").replace(/\[bot\]$/i, "").toLowerCase();
 
 /**
  * A bot's inline review comments, grouped by bot as the Reviews tab groups a
@@ -46,9 +46,15 @@ export function botThreadReviewers(pr: SessionPRSummary): { unresolved: CommentR
 	return { unresolved: group(false), resolved: group(true) };
 }
 
-/** The PR's top-level comments (a bot's walkthrough, a person's note), oldest first, for the Reviews tab to list beside its reviews. */
+/**
+ * The PR's top-level comments (a bot's walkthrough, a person's note), oldest
+ * first, for the Reviews tab to list beside its reviews. The PR author's own
+ * comments are left out, as their reviews are: a worker's \`gh pr comment\`
+ * notes are not feedback to send back to it.
+ */
 export function prConversationComments(pr: SessionPRSummary): NonNullable<SessionPRSummary["conversation"]> {
-	return (pr.conversation ?? []).filter((comment) => comment.body.trim());
+	const author = pr.author ? loginKey(pr.author) : "";
+	return (pr.conversation ?? []).filter((comment) => comment.body.trim() && !(author && loginKey(comment.author) === author));
 }
 
 /** Whether a PR has anything for the Reviews tab: a review, an inline comment, or a top-level comment. */
