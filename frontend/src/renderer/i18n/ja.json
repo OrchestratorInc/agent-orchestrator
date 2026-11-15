@@ -1056,7 +1056,7 @@
 	"inspector.requestRereviewPR": "PR の再レビューを依頼",
 	"inspector.reviewActions": "レビュー操作",
 	"inspector.reviewedAt": "{{time}}前にレビュー",
-	"inspector.commentedAt": "{{time}}前にコメント",
+	"inspector.commentedAt": "{{time}}にコメント",
 	"inspector.resolvedComments": "解決済みコメント · {{count}}",
 	"inspector.rereviewRequested": "再レビューを依頼済み",
 	"inspector.rereviewRequestFailed": "再レビューを依頼できませんでした",

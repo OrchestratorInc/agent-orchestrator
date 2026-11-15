@@ -1068,7 +1068,7 @@
 	"inspector.requestRereviewPR": "Demander une nouvelle revue du PR",
 	"inspector.reviewActions": "Actions de révision",
 	"inspector.reviewedAt": "Relu il y a {{time}}",
-	"inspector.commentedAt": "Commenté il y a {{time}}",
+	"inspector.commentedAt": "Commenté {{time}}",
 	"inspector.resolvedComments": "Commentaires résolus · {{count}}",
 	"inspector.rereviewRequested": "Nouvelle revue demandée",
 	"inspector.rereviewRequestFailed": "Impossible de demander une nouvelle revue",

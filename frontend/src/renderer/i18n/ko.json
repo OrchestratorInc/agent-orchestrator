@@ -1056,7 +1056,7 @@
 	"inspector.requestRereviewPR": "PR 재리뷰 요청",
 	"inspector.reviewActions": "리뷰 작업",
 	"inspector.reviewedAt": "{{time}} 전에 리뷰됨",
-	"inspector.commentedAt": "{{time}} 전에 댓글 작성",
+	"inspector.commentedAt": "{{time}}에 댓글 작성",
 	"inspector.resolvedComments": "해결된 댓글 · {{count}}",
 	"inspector.rereviewRequested": "재리뷰 요청됨",
 	"inspector.rereviewRequestFailed": "재리뷰를 요청할 수 없습니다",
