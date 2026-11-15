@@ -54,7 +54,7 @@ export function hostUpdateAction(state: HostUpdateState | undefined, localVersio
 	if (state?.updating) return { kind: "updating" };
 	const view = state?.view;
 	if (!view || !localVersion || (compareVersions(view.version, localVersion) ?? 0) >= 0) return null;
-	if (state.error || view.state === "failed") return { kind: "failed", error: state.error ?? view.error };
+	if (state.error !== undefined || view.state === "failed") return { kind: "failed", error: state.error ?? view.error };
 	if (view.state === "updating") return { kind: "updating" };
 	return view.supported ? { kind: "update", version: view.version } : { kind: "manual", version: view.version };
 }
@@ -70,7 +70,7 @@ function settle(url: string, view: HostUpdateView | null, readAt: number) {
 	}
 	if (!view || view.state === "updating") {
 		if (Date.now() - updating.since < UPDATING_LIMIT_MS) return;
-		patch(url, { view, updating: undefined });
+		patch(url, { ...(view ? { view } : {}), updating: undefined, error: "" });
 		requestRemoteHostsRefresh();
 		return;
 	}
@@ -92,7 +92,10 @@ export async function startHostUpdate(url: string): Promise<void> {
 	} catch (cause) {
 		const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);
 		if (view?.state === "updating") patch(url, { view, updating, error: undefined });
-		else patch(url, { updating: undefined, error: cause instanceof Error ? cause.message : String(cause) });
+		else if (view && (view.state === "failed" || view.version !== updating.from)) {
+			patch(url, { updating });
+			settle(url, view, updating.since);
+		} else patch(url, { updating: undefined, error: cause instanceof Error ? cause.message : String(cause) });
 	}
 }
 

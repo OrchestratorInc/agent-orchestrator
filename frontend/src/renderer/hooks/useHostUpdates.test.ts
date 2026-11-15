@@ -62,7 +62,7 @@ describe("host update flow", () => {
 		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(null);
 		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10", "updating"), updating: { from: "0.14.10", since: Date.now() - 11 * 60_000 } });
 		await refreshHostUpdate(URL);
-		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toBeNull();
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", error: "" });
 	});
 
 	it("keeps the host's reason when its update fails", async () => {
@@ -108,6 +108,18 @@ describe("host update flow", () => {
 		answer(view("0.14.10"));
 		await read;
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+	});
+
+	it("adopts a finished update when the start response was lost", async () => {
+		const refreshed = vi.fn();
+		window.addEventListener("ao:remote-hosts-changed", refreshed);
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockRejectedValue(new Error("request timed out"));
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.15.0"));
+		await startHostUpdate(URL);
+		expect(useHostUpdateStore.getState().byUrl[URL]).toMatchObject({ view: { version: "0.15.0" }, updating: undefined, error: undefined });
+		expect(refreshed).toHaveBeenCalledOnce();
+		window.removeEventListener("ao:remote-hosts-changed", refreshed);
 	});
 
 	it("keeps the known version through one failed read", async () => {

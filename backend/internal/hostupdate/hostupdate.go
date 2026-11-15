@@ -22,7 +22,7 @@ const (
 	installerRun = `set -euo pipefail
 installer="$(mktemp)"
 trap 'rm -f -- "$installer"' EXIT
-curl -fsSL --retry 3 "$1" -o "$installer"
+curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 "$1" -o "$installer"
 shift
 bash "$installer" "$@"`
 )

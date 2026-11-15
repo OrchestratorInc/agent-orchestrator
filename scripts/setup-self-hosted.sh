@@ -119,7 +119,7 @@ else
 	metadata="$stage/release.json"
 	release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases/latest'
 	"$nightly" && release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases?per_page=100'
-	curl -fsSL --retry 3 "$release_api" -o "$metadata"
+	curl -fsSL --retry 3 --connect-timeout 20 --speed-limit 1024 --speed-time 60 "$release_api" -o "$metadata"
 	asset_info="$(python3 - "$metadata" "$asset" "$nightly" <<'PY'
 import json, re, sys
 release = json.load(open(sys.argv[1]))
@@ -140,7 +140,7 @@ PY
 	url="${asset_info%%$'\n'*}"
 	digest="${asset_info#*$'\n'}"
 	archive="$stage/$asset"
-	curl -fL --retry 3 "$url" -o "$archive"
+	curl -fL --retry 3 --connect-timeout 20 --speed-limit 1024 --speed-time 60 "$url" -o "$archive"
 	if command -v shasum >/dev/null; then
 		actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
 	else

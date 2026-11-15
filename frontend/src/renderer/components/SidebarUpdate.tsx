@@ -279,7 +279,7 @@ function MachinesPopover({ action, hostActions, onRequestInstall, children }: {
 		for (const entry of startable) void startHostUpdate(entry.host.url);
 		if (localStartable) startLocal(action, onRequestInstall);
 	};
-	const button = (label: string, onClick: () => void) => <Button onClick={onClick} size="sm" type="button" variant="quiet">{label}</Button>;
+	const button = (label: string, onClick: () => void, ariaLabel?: string) => <Button aria-label={ariaLabel} onClick={onClick} size="sm" type="button" variant="quiet">{label}</Button>;
 	const pending = (label: string) => <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{label}</span>;
 	const localControl = action === null ? null
 		: action.kind === "downloading" ? pending(t("shell.updateDownloading"))
@@ -304,8 +304,8 @@ function MachinesPopover({ action, hostActions, onRequestInstall, children }: {
 								{hostAction.kind === "failed" && hostAction.error ? <span className="block truncate text-xs text-error" title={hostAction.error}>{hostAction.error}</span> : null}
 								{hostAction.kind === "manual" ? <span className="block text-xs text-muted-foreground">{t("shell.updateOnThatComputer")}</span> : null}
 							</span>
-							{hostAction.kind === "update" ? button(t("shell.update"), () => void startHostUpdate(host.url))
-								: hostAction.kind === "failed" ? button(t("notify.retry"), () => void startHostUpdate(host.url))
+							{hostAction.kind === "update" ? button(t("shell.update"), () => void startHostUpdate(host.url), t("shell.updateMachine", { name: host.label }))
+								: hostAction.kind === "failed" ? button(t("notify.retry"), () => void startHostUpdate(host.url), t("shell.retryMachineUpdate", { name: host.label }))
 								: hostAction.kind === "updating" ? pending(t("shell.updating"))
 								: <span className="text-xs tabular-nums text-passive">{shortVersion(hostAction.version)}</span>}
 						</li>
