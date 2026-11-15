@@ -20,7 +20,7 @@ vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
 	probeAgentAuth: auth.probe,
 }));
 
-import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, LOGIN_VERIFY_MS, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn } from "./ToolInstalls";
+import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, closeLoginWorkflow, LOGIN_LIFETIME_MS, LOGIN_VERIFY_MS, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn } from "./ToolInstalls";
 
 const plan = (agentId: string, automatic = true) => ({
 	agentId,
@@ -360,5 +360,53 @@ describe("useVerifyWhileSigningIn", () => {
 		expect(verify).toHaveBeenCalledOnce();
 		await act(async () => { finish(); await vi.advanceTimersByTimeAsync(LOGIN_VERIFY_MS); });
 		expect(verify).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("harness login lifetime and cleanup", () => {
+	const login = (handleId: string, startedAt = Date.now()) => ({
+		agentId: "cursor",
+		action: "login",
+		terminal: { handleId, title: "Sign in to Cursor", createdAt: "2026-11-15T00:00:00Z" },
+		guidance: "",
+		phase: "running",
+		startedAt,
+	}) as never;
+	const messages = { timedOut: "Authentication timed out. Retry to continue.", failed: "Authentication failed." };
+
+	beforeEach(() => terminals.close.mockReset().mockResolvedValue(undefined));
+	afterEach(() => vi.useRealTimers());
+
+	it("keeps a login whose terminal won't close, offering Retry, instead of dropping it", async () => {
+		terminals.close.mockRejectedValueOnce(new Error("daemon unavailable"));
+		const setWorkflow = vi.fn();
+		expect(await closeLoginWorkflow(login("term-1"), setWorkflow, messages.failed)).toBe(false);
+		expect(setWorkflow).toHaveBeenCalledWith(expect.objectContaining({ phase: "cleanup_failed", reason: "daemon unavailable" }));
+		// Retry (the panel calls close again) clears it once the terminal closes.
+		setWorkflow.mockClear();
+		expect(await closeLoginWorkflow(login("term-1"), setWorkflow, messages.failed)).toBe(true);
+		expect(setWorkflow).toHaveBeenCalledWith(null);
+	});
+
+	it("ends a login left open for the lifetime, then verifies sign-in once more", async () => {
+		vi.useFakeTimers();
+		const setWorkflow = vi.fn();
+		const onTimedOut = vi.fn();
+		renderHook(() => useLoginLifetime(login("term-2"), setWorkflow, messages, onTimedOut));
+		await act(async () => { await vi.advanceTimersByTimeAsync(LOGIN_LIFETIME_MS - 1_000); });
+		expect(terminals.close).not.toHaveBeenCalled();
+		await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+		expect(terminals.close).toHaveBeenCalledWith("term-2");
+		expect(setWorkflow).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "timed_out", reason: messages.timedOut }));
+		expect(onTimedOut).toHaveBeenCalledWith("cursor");
+	});
+
+	it("offers Retry when the timed-out login's terminal won't close", async () => {
+		vi.useFakeTimers();
+		terminals.close.mockRejectedValueOnce(new Error("still running"));
+		const setWorkflow = vi.fn();
+		renderHook(() => useLoginLifetime(login("term-3", Date.now() - LOGIN_LIFETIME_MS), setWorkflow, messages, vi.fn()));
+		await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+		expect(setWorkflow).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "cleanup_failed", reason: "still running" }));
 	});
 });

@@ -145,6 +145,67 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 	return { plansReady: !plans.isPending, planFor, canInstall, start, view };
 }
 
+/** How long a harness login may stay open, as in Settings > Harness. */
+export const LOGIN_LIFETIME_MS = 15 * 60_000;
+
+/**
+ * Closes a harness login's terminal. When the close fails the workflow is
+ * kept, as Settings > Harness does, marked cleanup_failed so its panel offers
+ * Retry, rather than dropped while the daemon still holds the login (which
+ * would refuse the next Sign in). Returns whether it closed.
+ */
+export async function closeLoginWorkflow(
+	workflow: AuthTerminalWorkflow,
+	setWorkflow: (next: AuthTerminalWorkflow | null) => void,
+	failedReason: string,
+): Promise<boolean> {
+	try {
+		await closeAuthTerminal(workflow.terminal.handleId);
+		setWorkflow(null);
+		return true;
+	} catch (error) {
+		setWorkflow({ ...workflow, phase: "cleanup_failed", reason: error instanceof Error ? error.message : failedReason });
+		return false;
+	}
+}
+
+/**
+ * Ends a harness login left running for LOGIN_LIFETIME_MS, as Settings >
+ * Harness does: its terminal closes and the panel says it timed out (Retry
+ * starts a new login), or, if the close fails, offers Retry for the cleanup.
+ * `onTimedOut` runs after a clean close (to verify sign-in once more).
+ */
+export function useLoginLifetime(
+	workflow: AuthTerminalWorkflow | null,
+	setWorkflow: (next: AuthTerminalWorkflow | null) => void,
+	messages: { timedOut: string; failed: string },
+	onTimedOut: (agentId: string) => void,
+) {
+	const current = useRef(workflow);
+	current.current = workflow;
+	const latest = useRef({ setWorkflow, messages, onTimedOut });
+	latest.current = { setWorkflow, messages, onTimedOut };
+	const running = workflow?.phase === "running" ? workflow : null;
+	useEffect(() => {
+		if (!running) return;
+		const handleId = running.terminal.handleId;
+		const still = () => current.current?.terminal.handleId === handleId;
+		const timer = window.setTimeout(async () => {
+			if (!still()) return;
+			const { setWorkflow: set, messages: text, onTimedOut: timedOut } = latest.current;
+			set({ ...running, phase: "closing", reason: undefined });
+			try {
+				await closeAuthTerminal(handleId);
+				if (still()) set({ ...running, phase: "timed_out", reason: text.timedOut });
+				timedOut(running.agentId);
+			} catch (error) {
+				if (still()) set({ ...running, phase: "cleanup_failed", reason: error instanceof Error ? error.message : text.failed });
+			}
+		}, Math.max(0, LOGIN_LIFETIME_MS - (Date.now() - running.startedAt)));
+		return () => window.clearTimeout(timer);
+	}, [running]);
+}
+
 /** How often an open login re-verifies sign-in (each check waits for the last). */
 export const LOGIN_VERIFY_MS = 5_000;
 
