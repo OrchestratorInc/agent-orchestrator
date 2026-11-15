@@ -122,6 +122,13 @@ func TestReconcileSessionBranchStateCountsAForkPRHeadAsPushed(t *testing.T) {
 	commitFile(t, repo, "c.go")
 	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr-7", Commits: 3, RemoteBranch: "pr-7/fix/x", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 
+	// Another PR replacing this one at the same head renames the pushed point.
+	st.prs["s1"] = []domain.PullRequest{
+		{URL: "https://github.com/o/r/pull/7", Number: 7, SourceBranch: "fix/x", HeadSHA: pushed, Closed: true},
+		{URL: "https://github.com/o/r/pull/8", Number: 8, SourceBranch: "fix/y", HeadSHA: pushed},
+	}
+	reconcile(domain.SessionBranchState{Branch: "ao/s1/pr-7", Commits: 3, RemoteBranch: "pr-8/fix/y", RemoteHead: pushed, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
+
 	// A PR at a commit this branch does not contain is some other branch's PR.
 	runGit(t, repo, "checkout", "-b", "ao/s1/other", "main")
 	commitFile(t, repo, "d.go")

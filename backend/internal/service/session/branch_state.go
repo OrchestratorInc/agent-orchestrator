@@ -162,7 +162,10 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 			prHead = pr
 		}
 	}
-	fingerprint := target.branch + " " + local + " " + remote + " " + base + " " + baseRef + " " + prHead.HeadSHA
+	// The PR's number and source branch name RemoteBranch, so a different PR at
+	// the same head, or a renamed source branch, must also re-read.
+	fingerprint := target.branch + " " + local + " " + remote + " " + base + " " + baseRef + " " +
+		prHead.HeadSHA + " " + strconv.Itoa(prHead.Number) + " " + prHead.SourceBranch
 	if rec.BranchState != nil && s.branchTips[rec.ID] == fingerprint {
 		return nil
 	}
