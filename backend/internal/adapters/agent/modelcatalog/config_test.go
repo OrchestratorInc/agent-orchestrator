@@ -356,4 +356,24 @@ func TestDiscoverStakpakCatalogOffersTheActiveProfileModel(t *testing.T) {
 	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "openai/gpt-5.5" {
 		t.Fatalf("other profile catalog = %+v, %v", catalog.Models, err)
 	}
+
+	// The launch environment decides the profile; the daemon's is the fallback.
+	t.Setenv("STAKPAK_PROFILE", "")
+	catalog, err = discoverConfigCatalog("stakpak", "", map[string]string{"STAKPAK_PROFILE": "other"})
+	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "openai/gpt-5.5" {
+		t.Fatalf("launch environment profile catalog = %+v, %v; want other's openai/gpt-5.5", catalog.Models, err)
+	}
+	t.Setenv("STAKPAK_PROFILE", "other")
+	catalog, err = discoverConfigCatalog("stakpak", "", map[string]string{"STAKPAK_PROFILE": ""})
+	if err != nil || len(catalog.Models) != 1 || catalog.Models[0].ID != "zai/glm-5.1" {
+		t.Fatalf("launch environment without a profile = %+v, %v; want default's zai/glm-5.1", catalog.Models, err)
+	}
+
+	// A cached catalog must not outlive a profile change.
+	ctx := context.Background()
+	unset := discoveryConfigInputs(ctx, "stakpak", "", map[string]string{"STAKPAK_PROFILE": ""})
+	other := discoveryConfigInputs(ctx, "stakpak", "", map[string]string{"STAKPAK_PROFILE": "other"})
+	if unset == other {
+		t.Fatalf("discovery inputs %q did not change with the profile", unset)
+	}
 }

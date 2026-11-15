@@ -37,7 +37,7 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 	if agentID == "hermes" {
 		return discoverHermesCatalog(base, modelConfigPaths(agentID, workingDir, env))
 	}
-	parser := configModelParser(agentID)
+	parser := configModelParser(agentID, env)
 	if parser == nil {
 		return base, fmt.Errorf("%s has no configuration model parser", agentID)
 	}
@@ -71,7 +71,7 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 	return base, nil
 }
 
-func configModelParser(agentID string) configParser {
+func configModelParser(agentID string, env map[string]string) configParser {
 	switch agentID {
 	case "qwen":
 		return parseQwenModels
@@ -88,7 +88,8 @@ func configModelParser(agentID string) configParser {
 	case "hermes":
 		return parseHermesModels
 	case "stakpak":
-		return parseStakpakModels
+		profile := stakpakProfile(env)
+		return func(raw []byte) ([]ports.AgentModelInfo, error) { return parseStakpakModels(raw, profile) }
 	default:
 		return nil
 	}
@@ -512,11 +513,20 @@ func parseGooseModels(raw []byte) ([]ports.AgentModelInfo, error) {
 	return normalize(models), nil
 }
 
-// parseStakpakModels offers the model of Stakpak's active profile
-// (STAKPAK_PROFILE, else "default", over the shared "all" profile). Stakpak
-// lists no other models: custom providers take any name, so the picker keeps
-// free-form entry for the rest.
-func parseStakpakModels(raw []byte) ([]ports.AgentModelInfo, error) {
+// stakpakProfile is the profile Stakpak sessions run with: STAKPAK_PROFILE from
+// the launch environment, else the daemon's, else "default". An empty value in
+// the launch environment means unset there.
+func stakpakProfile(env map[string]string) string {
+	if profile := envValue(env, "STAKPAK_PROFILE"); profile != "" {
+		return profile
+	}
+	return "default"
+}
+
+// parseStakpakModels offers the model of Stakpak's active profile, over the
+// shared "all" profile. Stakpak lists no other models: custom providers take
+// any name, so the picker keeps free-form entry for the rest.
+func parseStakpakModels(raw []byte, profile string) ([]ports.AgentModelInfo, error) {
 	var config struct {
 		Profiles map[string]struct {
 			Model string `toml:"model"`
@@ -524,10 +534,6 @@ func parseStakpakModels(raw []byte) ([]ports.AgentModelInfo, error) {
 	}
 	if err := toml.Unmarshal(raw, &config); err != nil {
 		return nil, err
-	}
-	profile := strings.TrimSpace(os.Getenv("STAKPAK_PROFILE"))
-	if profile == "" {
-		profile = "default"
 	}
 	model := strings.TrimSpace(config.Profiles[profile].Model)
 	if model == "" {

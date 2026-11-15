@@ -928,6 +928,10 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
 	if config := configDiscoveryFingerprint(agentID, workingDir, env); config != "" {
+		if agentID == "stakpak" {
+			// The profile, not only the file, picks the model the catalog offers.
+			config += ";profile=" + stakpakProfile(env)
+		}
 		return "config=" + config
 	}
 	// The listed models come from the binary, but which one is the default comes
