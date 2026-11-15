@@ -758,6 +758,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			}
 			c.mu.Lock()
 			c.messages[id] += delta
+			c.lastMessageID = id
 			c.mu.Unlock()
 			emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turnID, ProviderItemID: id, Delta: delta})
 		}
@@ -792,6 +793,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 		c.mu.Lock()
 		c.tools[tool.id] = tool
+		c.lastMessageID = ""
 		c.mu.Unlock()
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)

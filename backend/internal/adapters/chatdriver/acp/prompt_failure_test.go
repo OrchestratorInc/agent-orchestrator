@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"runtime"
@@ -210,43 +211,61 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 
 // claude-agent-acp reports a successful answer that quotes "Please run /login" as
 // a refused login whose title is that answer's last text block. Only a refusal
-// that does not end an answer the agent streamed is a real one.
+// that does not end the agent's final message is a real one.
 func TestPromptResponseLoginRefusalThatRepeatsTheAnswer(t *testing.T) {
 	const (
 		answer  = "All four `auth_required` turns are false.\n\nEach answer quotes \"Please run /login\"; there were no real logouts."
 		refusal = "Not logged in · Please run /login"
 	)
+	// A streamed item: a message chunk, or a tool call when message is "".
+	type item struct{ message, text string }
+	tool := item{}
 	for _, tc := range []struct {
 		name     string
-		streamed map[string]string
+		streamed []item
 		title    string
 		details  string
 		actions  []any
 		want     domain.TurnState
 		reauth   bool
 	}{
-		{"answer quoting the advice", map[string]string{"msg-1": "Checking the turns.", "msg-2": answer},
+		{"answer quoting the advice", []item{{"msg-1", "Checking the turns."}, tool, {"msg-2", answer}},
 			strings.ReplaceAll(answer, "\n\n", "\n"), "", []any{"login"}, domain.TurnStateCompleted, false},
-		{"last text block of the answer", map[string]string{"msg-1": "Checking the turns.\n\n" + answer},
+		{"last text block of the answer", []item{{"msg-1", "Checking the turns.\n\n"}, {"msg-1", answer}},
 			answer, "", []any{"login"}, domain.TurnStateCompleted, false},
-		{"answer quoting the advice with details", map[string]string{"msg-1": answer},
+		{"answer quoting the advice with details", []item{{"msg-1", answer}},
 			answer, "Run /login in a terminal.", []any{"login"}, domain.TurnStateCompleted, false},
-		{"refusal the answer quoted earlier", map[string]string{"msg-1": "Each failed turn says \"" + refusal + "\". Let me check the next one."},
+		{"refusal the answer quoted earlier", []item{{"msg-1", "Each failed turn says \"" + refusal + "\". Let me check the next one."}},
 			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
-		{"refusal after some answer", map[string]string{"msg-1": "Let me run the tests."},
+		{"refusal after an earlier message ended on it", []item{{"msg-1", "The CLI printed:\n\n" + refusal}, {"msg-2", "Let me check again."}},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal after a tool call that followed the quote", []item{{"msg-1", "The CLI printed:\n\n" + refusal}, tool},
+			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
+		{"refusal after some answer", []item{{"msg-1", "Let me run the tests."}},
 			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
 		{"refusal before any answer", nil,
 			refusal, "", []any{"login"}, domain.TurnStateFailed, true},
-		{"other failure repeating the answer", map[string]string{"msg-1": answer},
+		{"other failure repeating the answer", []item{{"msg-1", answer}},
 			answer, "", nil, domain.TurnStateFailed, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			authRejected := 0
 			conv := &conversation{
-				activeTurn: "turn-1", events: make(chan ports.ChatEvent, 32), log: slog.New(slog.DiscardHandler),
-				messages:              tc.streamed,
+				sessionID: "session-1", activeTurn: "turn-1", events: make(chan ports.ChatEvent, 64), log: slog.New(slog.DiscardHandler),
+				messages: map[string]string{}, thoughts: map[string]string{}, nestedMessages: map[string]nestedMessageState{}, tools: map[string]*toolState{},
 				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
 				onAuthRejected:        func() { authRejected++ },
+			}
+			for i, streamed := range tc.streamed {
+				update := acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{ToolCallId: acpsdk.ToolCallId(fmt.Sprintf("tool-%d", i)), Title: "Read"}}
+				if streamed.message != "" {
+					update = acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+						MessageId: &streamed.message, Content: acpsdk.TextBlock(streamed.text),
+					}}
+				}
+				if err := conv.processUpdate(acpsdk.SessionNotification{SessionId: "session-1", Update: update}); err != nil {
+					t.Fatalf("stream %d: %v", i, err)
+				}
 			}
 			// The adapter's sessionFailureMeta shape: details only when present.
 			failure := map[string]any{

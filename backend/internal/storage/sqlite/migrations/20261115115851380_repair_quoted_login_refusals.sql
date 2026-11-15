@@ -25,17 +25,25 @@ WHERE t.state = 'failed'
       AND substr(rtrim(m.text, ' ' || char(9, 10, 13)), -length(t.error_message)) = t.error_message
   );
 
--- The demand's reason is the error it was recorded from. A later demand, real or
--- not, carries its own reason and stays. The failure evidence is kept, as a
--- recovered login keeps it.
+-- The demand's reason is the error it was recorded from, and every refused turn
+-- records the demand again, so the demand belongs to the conversation's latest
+-- failed turn with that error. Drop it only when that turn is one repaired here:
+-- a later real refusal can repeat the same text and keeps its demand. The
+-- failure evidence is kept, as a recovered login keeps it.
 UPDATE conversations
 SET account_json = json_remove(account_json, '$.authenticationState', '$.reauthRequiredAt', '$.reauthReason')
 WHERE account_json IS NOT NULL
   AND json_valid(account_json)
   AND json_extract(account_json, '$.reauthRequiredAt') IS NOT NULL
-  AND json_extract(account_json, '$.reauthReason') IN (
-    SELECT r.error_message FROM quoted_login_refusals r WHERE r.conversation_id = conversations.id
-  );
+  AND (
+    SELECT t.id
+    FROM conversation_turns t
+    WHERE t.conversation_id = conversations.id
+      AND t.state = 'failed'
+      AND t.error_message = json_extract(conversations.account_json, '$.reauthReason')
+    ORDER BY t.completed_at DESC, t.requested_at DESC, t.rowid DESC
+    LIMIT 1
+  ) IN (SELECT r.id FROM quoted_login_refusals r);
 
 UPDATE conversation_turns
 SET state = 'completed',

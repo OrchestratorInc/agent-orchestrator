@@ -192,6 +192,8 @@ func packagedACPRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("AO_ACP_RUNTIME_DIR", dir)
+	// A developer's own adapter would replace the packaged one this test checks.
+	t.Setenv("AO_CLAUDE_ACP_COMMAND", "")
 	if _, err := resolveRuntime(context.Background()); err != nil {
 		if os.Getenv(requireACPRuntimeEnv) == "1" {
 			t.Fatalf("packaged ACP runtime: %v", err)

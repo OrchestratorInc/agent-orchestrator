@@ -125,6 +125,11 @@ type conversation struct {
 	skills            []ports.ChatSkill
 	skillsKnown       bool
 	closed            bool
+
+	// lastMessageID is the turn's message that streamed text last, "" once a
+	// tool call starts after it: the message an agent's final result comes from.
+	lastMessageID string
+
 	// sessionLost records that the agent stopped holding this conversation's
 	// session and the provider was stopped for it. See providerSessionLost.
 	sessionLost bool
@@ -550,6 +555,7 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 			c.compactionBefore = c.contextTokens
 		}
 		c.messages = make(map[string]string)
+		c.lastMessageID = ""
 		c.steerSegment = 0
 		c.thoughts = make(map[string]string)
 		c.nestedMessages = make(map[string]nestedMessageState)
@@ -852,6 +858,7 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.outstanding = map[int]bool{0: true}
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
+	c.lastMessageID = ""
 	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
@@ -946,10 +953,7 @@ func (c *conversation) finishPrompt(
 	compactionFailure := c.compactionFailure
 	answered := len(c.messages) > 0 || len(c.tools) > 0
 	// Read before settleOpenItems closes the turn's messages.
-	streamed := make([]string, 0, len(c.messages))
-	for _, text := range c.messages {
-		streamed = append(streamed, text)
-	}
+	finalAnswer := c.messages[c.lastMessageID]
 	// "" when the turn started before this controller (a reattached durable
 	// turn): its model is unknown, and the current selection may not be it.
 	turnModel := ""
@@ -998,7 +1002,7 @@ func (c *conversation) finishPrompt(
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
 			if failure := c.promptResponseFailure(resp, turnModel); failure != nil {
-				if loginRefusalRepeatsAnswer(failure, resp.Meta, streamed) {
+				if loginRefusalRepeatsAnswer(failure, resp.Meta, finalAnswer) {
 					c.log.Warn("chat: ignored a refused login whose text is the turn's own answer", "turn", turnID)
 				} else {
 					state = domain.TurnStateFailed
@@ -1162,6 +1166,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	c.messages = make(map[string]string)
+	c.lastMessageID = ""
 	c.steerSegment = 0
 	c.thoughts = make(map[string]string)
 	c.nestedMessages = make(map[string]nestedMessageState)
@@ -1278,12 +1283,14 @@ func turnState(reason acpsdk.StopReason) domain.TurnState {
 // refused login. The runtime AO packages is patched against that
 // (patchClaudeLoginResultError); this check covers an adapter AO does not package
 // (AO_CLAUDE_ACP_COMMAND) and a chat host still running the previous build.
-// The result is the answer's last text block, so it ends the message it came
-// from. A real refusal is never streamed: the adapter withholds the CLI's own
-// login message and sends it only as the failure. Only the title is compared, so
-// details a later adapter adds cannot hide the match, and whitespace is ignored
-// because the result and the streamed chunks may space the text differently.
-func loginRefusalRepeatsAnswer(failure error, meta map[string]any, streamed []string) bool {
+// The result is the last text block of the agent's final message, so only that
+// message is compared: an earlier message, or one a tool call followed, that
+// quotes the advice says nothing about the turn's failure. A real refusal is
+// never streamed: the adapter withholds the CLI's own login message and sends it
+// only as the failure. Only the title is compared, so details a later adapter
+// adds cannot hide the match, and whitespace is ignored because the result and
+// the streamed chunks may space the text differently.
+func loginRefusalRepeatsAnswer(failure error, meta map[string]any, finalAnswer string) bool {
 	if !errors.Is(failure, ports.ErrChatAuthRequired) {
 		return false
 	}
@@ -1292,12 +1299,7 @@ func loginRefusalRepeatsAnswer(failure error, meta map[string]any, streamed []st
 	if title == "" {
 		return false
 	}
-	for _, answer := range streamed {
-		if strings.HasSuffix(withoutSpaces(answer), title) {
-			return true
-		}
-	}
-	return false
+	return strings.HasSuffix(withoutSpaces(finalAnswer), title)
 }
 
 func withoutSpaces(text string) string {

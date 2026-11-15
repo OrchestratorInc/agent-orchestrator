@@ -111,3 +111,66 @@ FROM conversations WHERE id = ?`, conversation).Scan(&demand, &reason, &lastReas
 		}
 	}
 }
+
+// An answer that ended on the CLI's refusal text was repaired, but a later turn
+// in the same chat really was refused with that same text. The demand belongs to
+// the later refusal and stays.
+func TestMigrationKeepsLaterRefusalWithTheSameReason(t *testing.T) {
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261115072651599)
+	first := time.Date(2026, time.November, 14, 17, 28, 56, 0, time.UTC)
+	later := first.Add(time.Hour)
+	const refusal = "Not logged in · Please run /login"
+
+	account, err := json.Marshal(map[string]string{
+		"authenticationState": "required", "reauthRequiredAt": later.Format(time.RFC3339), "reauthReason": refusal,
+		"lastAuthFailureAt": later.Format(time.RFC3339), "lastAuthFailureReason": refusal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `INSERT INTO projects (id, path, display_name, registered_at) VALUES ('p', '/tmp/p', 'P', ?);`, first)
+	mustExec(t, db, `
+INSERT INTO sessions (id, project_id, num, harness, session_mode, activity_last_at, created_at, updated_at)
+VALUES ('s', 'p', 1, 'claude-code', 'chat', ?, ?, ?);`, later, first, later)
+	mustExec(t, db, `
+INSERT INTO conversations (id, scope, project_id, session_id, current_session_id, account_json, created_at, updated_at)
+VALUES ('c', 'session', 'p', 's', 's', ?, ?, ?);`, string(account), first, later)
+	for i, turn := range []struct {
+		id, answer string
+		at         time.Time
+	}{
+		{"quoted", "The CLI printed this:\n\n" + refusal, first},
+		{"refused", "", later},
+	} {
+		mustExec(t, db, `
+INSERT INTO conversation_turns (id, conversation_id, handled_by_session_id, provider_turn_id, state, error_message, failure_code, requested_at, completed_at)
+VALUES (?, 'c', 's', ? || '-provider', 'failed', ?, 'auth_required', ?, ?);`, turn.id, turn.id, refusal, turn.at, turn.at)
+		if turn.answer != "" {
+			mustExec(t, db, `
+INSERT INTO conversation_messages (id, conversation_id, turn_id, sequence, role, origin, text, created_at, updated_at)
+VALUES (? || '-answer', 'c', ?, ?, 'assistant', 'provider', ?, ?, ?);`, turn.id, turn.id, i+1, turn.answer, turn.at, turn.at)
+		}
+	}
+
+	upTo(t, db, 20261115115851380)
+
+	for turn, wantState := range map[string]string{"quoted": "completed", "refused": "failed"} {
+		var state string
+		if err := db.QueryRow(`SELECT state FROM conversation_turns WHERE id = ?`, turn).Scan(&state); err != nil {
+			t.Fatalf("read %s: %v", turn, err)
+		}
+		if state != wantState {
+			t.Errorf("%s state = %q, want %q", turn, state, wantState)
+		}
+	}
+	var demand sql.NullString
+	var reason string
+	if err := db.QueryRow(`
+SELECT json_extract(account_json, '$.reauthRequiredAt'), coalesce(json_extract(account_json, '$.reauthReason'), '')
+FROM conversations WHERE id = 'c'`).Scan(&demand, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if !demand.Valid || reason != refusal {
+		t.Errorf("sign-in demand = (%v, %q), want the later refusal's demand kept", demand.Valid, reason)
+	}
+}
