@@ -25,6 +25,14 @@ const message = (id: string, turnId: string, role: string, text: string, second:
 	({ id, sideId: side.id, turnId, role, text, revision: 1, sequence, streaming: false, createdAt: at(second), updatedAt: at(second) }) as SideSnapshot["messages"][number];
 
 describe("sideConversationSnapshot", () => {
+	it("keeps the opening question in the timeline and later queued questions in the dock", () => {
+		const conversation = sideConversationSnapshot({ side: { ...side, state: "opening", openingTurnId: "first" }, hasMore: false,
+			turns: [turn("first", "queued", 1), turn("next", "queued", 2)],
+			messages: [message("first-user", "first", "user", "opening", 1, 1), message("next-user", "next", "user", "later", 2, 2)], activities: [] });
+		expect(conversation.turns.map(turn => turn.id)).toEqual(["first"]);
+		expect(conversation.items).toMatchObject([{ id: "first-user", clientMessageId: "first" }]);
+		expect(conversation.controller.state).toBe("connecting");
+	});
 	it("leaves queued turns to the queue dock, like the main chat", () => {
 		const conversation = sideConversationSnapshot({
 			side,

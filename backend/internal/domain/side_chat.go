@@ -38,6 +38,8 @@ type SideConversation struct {
 	Generation         string          `json:"-"`
 	Label              string          `json:"label"`
 	State              string          `json:"state"`
+	OpeningTurnID      string          `json:"openingTurnId,omitempty"`
+	OpeningStartedAt   *time.Time      `json:"openingStartedAt,omitempty"`
 	ErrorMessage       string          `json:"errorMessage,omitempty"`
 	RecreateRequired   bool            `json:"recreateRequired,omitempty"`
 	CleanupPending     bool            `json:"cleanupPending,omitempty"`
@@ -57,6 +59,9 @@ type SideTurn struct {
 	SelectionText    string          `json:"selectionText,omitempty"`
 	ReferenceContext string          `json:"referenceContext,omitempty"`
 	DispatchAttempt  int             `json:"-"`
+	Model            string          `json:"-"`
+	Effort           string          `json:"-"`
+	SettingsFrozen   bool            `json:"-"`
 	ProviderTurnID   string          `json:"-"`
 	RetryOfTurnID    string          `json:"retryOfTurnId,omitempty"`
 	State            string          `json:"state"`

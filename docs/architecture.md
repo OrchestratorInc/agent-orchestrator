@@ -435,6 +435,24 @@ When Codex proves fork ancestry, replay omits copied prefixes only if their stab
 item IDs and complete content match retained ancestor rows. Those rows stay in
 their original scope. Unknown ancestry or changed content is retained in full.
 
+Side-chat tabs are launch-scoped drafts until their first accepted Send. Draft
+creation reads conversation metadata only: it does not wake the parent, read its
+full transcript, or create a provider. Separate creation keys never merge unused
+drafts through empty anchors. The daemon serializes each side's submissions and
+atomically accepts the opening turn with its frozen latest completed parent
+context, model, effort, and launch configuration. Later parent work cannot move
+that cutoff. Opening-turn IDs and timestamps travel with the side's recovery
+state; the shared chat timeline shows that opening question and its lattice
+loader while later questions remain in the queue dock.
+
+Unused drafts restore without provider work. A recovered pre-dispatch receipt or
+interrupted startup with unverified ownership requires visible recreation instead
+of silently capturing newer context or submitting again. Safe startup retries
+reuse the accepted turn and frozen configuration. Staged image bytes are loaded
+from daemon-owned attachment files after renderer remounts. Closing an unused
+draft requires no provider shutdown; an accepted startup retains the existing
+closing controller's cancellation, generation fencing, and cleanup ownership.
+
 Current-context side forks fence source dispatch only during copying. The
 start/stop gate is released before provider I/O; Stop cancels the copy and Kill
 can terminate it. A canceled ACP copy terminates its destination host before

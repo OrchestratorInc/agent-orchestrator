@@ -27,6 +27,7 @@ type sideHTTPService struct {
 	calls    int
 	created  chatsvc.SideCreateRequest
 	sent     ports.ChatUserMessage
+	sendErr  error
 	turn     *domain.SideTurn
 	snapshot *domain.SideSnapshot
 	before   time.Time
@@ -45,6 +46,9 @@ func (s *sideHTTPService) CreateIndependentSideChat(_ context.Context, _ domain.
 func (s *sideHTTPService) SendSideQuestion(_ context.Context, _ domain.SessionID, _ string, msg ports.ChatUserMessage) (domain.SideTurn, error) {
 	s.calls++
 	s.sent = msg
+	if s.sendErr != nil {
+		return domain.SideTurn{}, s.sendErr
+	}
 	if s.turn != nil {
 		return *s.turn, nil
 	}
@@ -113,6 +117,15 @@ func TestSideChatHTTPMapsUnavailableOwnershipToConflict(t *testing.T) {
 	sideHTTPRouter(svc).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/session/conversation/side-chats/wrong", nil))
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "CHAT_SIDE_UNAVAILABLE") {
 		t.Fatal(response.Code, response.Body.String())
+	}
+}
+
+func TestSideChatHTTPReportsIncompatibleSettingsWithoutAcceptingTheQuestion(t *testing.T) {
+	svc := &sideHTTPService{Service: chatsvc.New(chatsvc.Options{}), sendErr: fmt.Errorf("%w (codex)", chatsvc.ErrSideSettingsUnavailable)}
+	response := httptest.NewRecorder()
+	sideHTTPRouter(svc).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/session/conversation/side-chats/side/messages", strings.NewReader(`{"text":"Keep this question","clientMessageId":"first"}`)))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "CHAT_SIDE_SETTINGS_UNAVAILABLE") || !strings.Contains(response.Body.String(), "choose a compatible model") || !strings.Contains(response.Body.String(), "requestId") {
+		t.Fatalf("incompatible settings: %d %s", response.Code, response.Body.String())
 	}
 }
 

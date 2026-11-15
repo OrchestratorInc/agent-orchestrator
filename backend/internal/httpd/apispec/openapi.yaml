@@ -24913,6 +24913,13 @@ components:
           type: boolean
         model:
           type: string
+        openingStartedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        openingTurnId:
+          type: string
         recreateRequired:
           type: boolean
         selectedText:
@@ -25125,12 +25132,18 @@ components:
           type: array
         dispatchAttempt:
           type: integer
+        effort:
+          type: string
+        model:
+          type: string
         providerTurnId:
           type: string
         referenceContexts:
           items:
             type: string
           type: array
+        settingsFrozen:
+          type: boolean
         turn:
           $ref: '#/components/schemas/SideTurn'
       required:

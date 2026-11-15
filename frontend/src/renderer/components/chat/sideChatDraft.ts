@@ -3,6 +3,9 @@ import type { ChatDraftAttachment, ChatDraftExcerptReference } from "../../lib/c
 
 export type SideDeliveryReceipt = {
 	clientMessageId: string;
+	createdAt?: string;
+	// A rejected frozen opening can be edited safely in a recreated draft.
+	recreateRequired?: boolean;
 	request: components["schemas"]["SendSideQuestionRequest"];
 	submitted: {
 		text: string;
@@ -18,6 +21,8 @@ export type SideChatDraft = {
 	attachments: ChatDraftAttachment[];
 	references: ChatDraftExcerptReference[];
 	pendingDelivery?: SideDeliveryReceipt;
+	// Keep the accepted opening question available if provider setup needs recreation.
+	openingDelivery?: SideDeliveryReceipt;
 	// A source-side command owns its destination and frozen request across retries.
 	pendingCommand?: {
 		creationKey: string;
