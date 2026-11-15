@@ -285,6 +285,9 @@ type Controller struct {
 	// artifactDir is the session's artifact directory, empty for a review or a
 	// session without one. Set once, before the controller is published.
 	artifactDir string
+	// workDir is the directory the provider was launched in, where a background
+	// command's relative log path starts. Set once, before the controller is published.
+	workDir string
 	// artifactBaseline is the artifact directory as the turn in flight started,
 	// compared when it ends to record which artifacts it created or edited. Nil
 	// when no turn is being watched.

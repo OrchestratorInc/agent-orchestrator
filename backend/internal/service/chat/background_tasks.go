@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -145,13 +146,40 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
 		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
-	reader, ok := controller.conv.(ports.ChatBackgroundTaskOutputReader)
-	if !ok {
-		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	output, err := ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	if reader, ok := controller.conv.(ports.ChatBackgroundTaskOutputReader); ok {
+		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		output, err = reader.BackgroundTaskOutput(readCtx, taskID)
+		cancel()
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	return reader.BackgroundTaskOutput(readCtx, taskID)
+	if output.Text != "" || (err != nil && !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable)) {
+		return output, err
+	}
+	// A command that writes a log file prints nothing of its own: the log is its output.
+	if logged, ok := controller.redirectedBackgroundOutput(taskID); ok {
+		return logged, nil
+	}
+	return output, err
+}
+
+// redirectedBackgroundOutput reads the log file a background task's command
+// sends its output to. The command comes from the controller's latest task
+// reading, so it is known only once the task has been read.
+func (c *Controller) redirectedBackgroundOutput(taskID string) (ports.ChatBackgroundTaskOutput, bool) {
+	c.backgroundMu.Lock()
+	var command string
+	var startedAt *time.Time
+	for _, task := range c.backgroundTasks {
+		if task.ID == taskID {
+			command, startedAt = task.Command, task.StartedAt
+			break
+		}
+	}
+	c.backgroundMu.Unlock()
+	if command == "" {
+		return ports.ChatBackgroundTaskOutput{}, false
+	}
+	return backgroundtasks.RedirectedOutput(command, c.workDir, startedAt)
 }
 
 // ListBackgroundTasks inspects only already attached controllers. Sessions

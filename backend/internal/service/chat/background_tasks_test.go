@@ -3,6 +3,8 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -199,5 +201,46 @@ func TestBackgroundTaskOutputIsUnavailableWithoutAReader(t *testing.T) {
 	h := newHarnessWithConversation(t, &backgroundConversation{fakeConversation: newFakeConversation()})
 	if _, err := h.svc.BackgroundTaskOutput(context.Background(), testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBackgroundTaskOutputShowsTheLogACommandWritesTo(t *testing.T) {
+	ctx := context.Background()
+	logPath := filepath.Join(t.TempDir(), "dev.log")
+	if err := os.WriteFile(logPath, []byte("ready on :3000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Add(-time.Minute)
+	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Command: "npm run dev > '" + logPath + "' 2>&1", StartedAt: &started}
+
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}
+	h := newHarnessWithConversation(t, conv)
+	// Until a reading reports the command, the provider's empty output stands.
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "" {
+		t.Fatalf("before a reading: output=%+v err=%v", got, err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000" {
+		t.Fatalf("log output=%+v err=%v", got, err)
+	}
+	// Output the task printed itself wins over the log.
+	conv.output = ports.ChatBackgroundTaskOutput{Text: "warning: deprecated"}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "warning: deprecated" {
+		t.Fatalf("own output=%+v err=%v", got, err)
+	}
+
+	// A harness that keeps no output still shows the log its command names.
+	plain := &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}
+	h = newHarnessWithConversation(t, plain)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000" {
+		t.Fatalf("no reader: output=%+v err=%v", got, err)
+	}
+	if _, err := h.svc.BackgroundTaskOutput(ctx, testSession, "other"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("unknown task err=%v", err)
 	}
 }
