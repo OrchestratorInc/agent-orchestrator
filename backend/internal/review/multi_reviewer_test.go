@@ -694,3 +694,28 @@ func TestCancelBeforeNextReviewerLaunchStopsThatReviewer(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentRerunReportsFailureWhileOtherReviewerStillRunning(t *testing.T) {
+	// An agent rerun finds claude-code still reviewing (ErrReviewAlreadyRunning
+	// for it) and codex fails to start. A review is in progress, so codex's
+	// failure is reported with the result rather than returned as an error.
+	store := &fakeStore{
+		reviews: map[domain.ReviewerHarness]domain.Review{
+			domain.ReviewerClaudeCode: {ID: "rev-cc", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-claude-code"},
+		},
+		runs: []domain.ReviewRun{{ID: "run-cc", ReviewID: "rev-cc", SessionID: "mer-1", PRURL: multiPRURL, TargetSHA: "sha1",
+			Harness: domain.ReviewerClaudeCode, Status: domain.ReviewRunRunning, Verdict: domain.VerdictNone}},
+	}
+	launcher := perHarnessLauncher()
+	launcher.alive = true
+	failing := &failingHarnessLauncher{fakeLauncher: launcher, fail: domain.ReviewerCodex}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), twoReviewerProject(), failing)
+
+	res, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, Rerun: true})
+	if err != nil {
+		t.Fatalf("rerun err = %v, want codex's failure reported while claude-code runs", err)
+	}
+	if res.Created || len(res.ReviewerFailures) != 1 || res.ReviewerFailures[0].Harness != domain.ReviewerCodex {
+		t.Fatalf("result = %+v, want not created with codex failure reported", res)
+	}
+}

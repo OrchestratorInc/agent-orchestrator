@@ -463,6 +463,11 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 				failures = append(failures, wrapped)
 				combined.ReviewerFailures = append(combined.ReviewerFailures, ReviewerFailure{Harness: sel.Harness, Error: err.Error()})
 			}
+			if errors.Is(err, ErrReviewAlreadyRunning) {
+				// This reviewer's own pass is still running, so a review is in
+				// progress.
+				active = true
+			}
 			continue
 		}
 		if res.Created || reviewRunsContainRunningForHarness(reviewRunsForHarness(res.Runs, sel.Harness), sel.Harness) {
@@ -509,7 +514,9 @@ func (e *Engine) triggerConfiguredReviewers(ctx stdctx.Context, worker domain.Se
 	if !active && len(failures) > 0 && opts.Source != domain.ReviewTriggerAuto {
 		return TriggerResult{}, errors.Join(failures...)
 	}
-	if len(errs) == len(selections) {
+	// Every reviewer erroring is an error, unless one is still running while
+	// another failed to start: that failure is reported with the result.
+	if len(errs) == len(selections) && (len(failures) == 0 || !active) {
 		return TriggerResult{}, errors.Join(errs...)
 	}
 	runs, err := e.store.ListReviewRunsBySession(ctx, worker.ID)
