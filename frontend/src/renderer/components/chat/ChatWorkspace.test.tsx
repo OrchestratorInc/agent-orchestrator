@@ -219,7 +219,7 @@ beforeEach(() => {
 
 describe("ChatWorkspace quota fallback", () => {
 	it("retains quota and reset information without agent switching, including exhaustion", async () => {
-		const snapshot = { ...chatFixtureSettled, rateLimits: { primaryUsedPercent: 80, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
+		const snapshot = { ...chatFixtureSettled, rateLimits: { primaryUsedPercent: 85, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
 		const { container, rerender } = render(<ChatWorkspace snapshot={snapshot} />);
 		expect(container.querySelector("[data-quota-readout]")).toHaveTextContent("Approaching limit");
 		rerender(<ChatWorkspace snapshot={{ ...snapshot, rateLimits: { ...snapshot.rateLimits, primaryUsedPercent: 100 } }} />);

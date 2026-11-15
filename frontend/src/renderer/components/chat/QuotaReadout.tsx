@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/
 import type { ConversationRateLimits } from "../../types/conversation";
 
 /** Where the warning replaces the model name. */
-export const QUOTA_WARN = 75;
+export const QUOTA_WARN = 82;
 /** How long the warning pill holds before the model comes back. */
 export const QUOTA_FLASH_MS = 5_000;
 

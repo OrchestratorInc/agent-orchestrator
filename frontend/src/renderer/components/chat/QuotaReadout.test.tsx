@@ -8,9 +8,9 @@ function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLim
 }
 
 describe("QuotaReadout", () => {
-	it("only takes the picker's place from 75%", () => {
-		expect(nearQuotaWindow(limits({ primaryUsedPercent: 74 }))).toBeUndefined();
-		expect(nearQuotaWindow(limits({ primaryUsedPercent: 75 }))?.kind).toBe("session");
+	it("only takes the picker's place from 82%", () => {
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 81 }))).toBeUndefined();
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 82 }))?.kind).toBe("session");
 		expect(nearQuotaWindow(undefined)).toBeUndefined();
 	});
 
