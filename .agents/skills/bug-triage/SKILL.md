@@ -118,18 +118,25 @@ host, that copy comes from the remote daemon; the local API below describes only
 local host.
 
 On the affected machine, read the same evidence from the daemon. It is a loopback,
-no-auth service; take the port from the affected binary's `status --json`:
+no-auth service; take the port from the affected binary's `status --json`. Use that
+binary rather than whichever `ao` is on PATH, and an environment whose `AO_DATA_DIR` and
+`AO_RUN_FILE` match the affected install; an Orchestrator worker may inherit others.
 
 ```bash
-port=$(ao status --json | jq -r .port)
+ao_bin=/path/to/affected/ao  # the binary identified above
+port=$("$ao_bin" status --json | jq -r '.port // empty')
+[ -n "$port" ] || echo 'daemon not running; record that and skip daemon evidence'
 api="http://127.0.0.1:$port/api/v1/agents"
 h=claude-code  # affected harness id
-curl -fsS "$api/readiness" | jq --arg h "$h" '.agents[] | select(.id == $h)'
+curl -fsS "$api/readiness" | jq --arg h "$h" '.agents[] | select(.id == $h)
+  | del(.authentication.account.email, .authentication.account.name,
+        .authentication.account.organization)'
 curl -fsS "$api/install-jobs" | jq --arg h "$h" '.jobs[] | select(.target == $h)'
 curl -fsS "$api/installers" | jq --arg h "$h" '.agents[] | select(.agentId == $h)'
 curl -fsS "$api/$h/update-advisory"
-curl -fsS "$api/$h/models?catalogOnly=true"
 ```
+
+If the daemon is not running, don't start it to collect this evidence.
 
 - `readiness` returns cached installation and authentication observations without
   running native checks. `authentication.diagnostics[]` lists each auth check's
@@ -142,10 +149,14 @@ curl -fsS "$api/$h/models?catalogOnly=true"
 - `installers` shows the resolved install plan and why a method is unavailable.
 - `update-advisory` reports installed and latest versions, `binaryPath`, and update
   `status`/`reason`. It serves a cached result, but runs a version probe and package
-  lookup when nothing is cached yet; record that when it happens.
-- `models?catalogOnly=true` returns the persisted model catalog, and may start a first
-  discovery when none is cached. See `docs/harnesses/model-catalogs.md` for catalog
-  sources and what **Configured** does and does not prove.
+  lookup when nothing is cached, after an install or update, or when an earlier lookup
+  failed; record that when it happens.
+- `models?catalogOnly=true` returns the persisted model catalog, but any read may start
+  background model discovery or revalidation, even when a catalog is cached, and can
+  replace the catalog the reporter saw. Read it only for model-list symptoms, record the
+  time, and include `refreshState` from the response. See
+  `docs/harnesses/model-catalogs.md` for catalog sources and what **Configured** does
+  and does not prove.
 
 For a launch failure in a known session, add the harness, model, and state fields from
 `session get <id> --json` and the relevant daemon log lines. When the reporter says
@@ -161,10 +172,12 @@ commands; they can refresh tokens or rewrite credential stores. Running `--versi
 the executable reported above is fine when the advisory has no version. If a fresh check
 would help, ask the reporter to press **Check again** on the Health tab, and note when.
 
-`authentication.account` can hold the account email, name, organization, and plan;
-`source` paths and installer output can include usernames and home directories. Keep
-the source kind and path shape (for example `~/.claude/.credentials.json`) and redact
-identity unless the reporter agrees it matters. Never open or attach the credential
+`authentication.account` can hold the account email, name, and organization; the
+readiness filter above drops them so they never enter the evidence, matching the
+Health-tab copy, and keeps `method`, `sourceKind`, and `provider`. `source` paths and
+installer output can include usernames and home directories. Keep the source kind and
+path shape (for example `~/.claude/.credentials.json`) and redact identity unless the
+reporter agrees it matters. Never open or attach the credential
 files, keychain entries, or environment values these diagnostics point to.
 
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
