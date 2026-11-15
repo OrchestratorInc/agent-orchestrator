@@ -400,6 +400,8 @@
 	"firstRun.moreHarnessesList": "Другие агенты",
 	"firstRun.installHowTo": "Как установить",
 	"firstRun.installOtherWays": "Другие способы установки",
+	"firstRun.installShowOutput": "Показать вывод",
+	"firstRun.installHideOutput": "Скрыть вывод",
 	"firstRun.installDidNotFinish": "Установка не завершилась.",
 	"firstRun.ghDocs": "Скачать GitHub CLI",
 	"firstRun.orchPoint1Title": "Опишите результат",

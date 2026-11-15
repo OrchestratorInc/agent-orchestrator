@@ -442,6 +442,8 @@
 	"firstRun.moreHarnessesList": "その他の Harness",
 	"firstRun.installHowTo": "インストール方法",
 	"firstRun.installOtherWays": "ほかのインストール方法",
+	"firstRun.installShowOutput": "出力を表示",
+	"firstRun.installHideOutput": "出力を隠す",
 	"firstRun.installDidNotFinish": "インストールが完了しませんでした。",
 	"firstRun.ghDocs": "GitHub CLI を入手",
 	"firstRun.orchPoint1Title": "ゴールを伝える",

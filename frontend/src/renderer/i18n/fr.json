@@ -444,6 +444,8 @@
 	"firstRun.moreHarnessesList": "Autres harnesses",
 	"firstRun.installHowTo": "Comment l’installer",
 	"firstRun.installOtherWays": "Autres façons d’installer",
+	"firstRun.installShowOutput": "Afficher la sortie",
+	"firstRun.installHideOutput": "Masquer la sortie",
 	"firstRun.installDidNotFinish": "L’installation n’a pas abouti.",
 	"firstRun.ghDocs": "Obtenir la GitHub CLI",
 	"firstRun.orchPoint1Title": "Décrivez le résultat",

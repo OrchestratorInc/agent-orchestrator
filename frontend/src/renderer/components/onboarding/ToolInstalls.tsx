@@ -319,12 +319,26 @@ export function InstallProblem({ view, docsUrl, docsLabel, otherWays }: {
 	otherWays?: () => void;
 }) {
 	const { t } = useTranslation();
+	const [showOutput, setShowOutput] = useState(false);
 	const command = view.job?.status === "unsupported" || view.job?.status === "failed" ? view.job.command : undefined;
+	// The error alone can be just "exit status 1"; the installer's own output
+	// usually says why (and how to recover), so it can be opened here.
+	const output = view.job?.status === "failed" ? view.job.output?.trim() : undefined;
 	return (
 		<div className="flex flex-col gap-1.5">
 			{view.problem ? <p className="text-xs text-destructive" role="alert">{view.problem}</p> : null}
 			{command ? <ManualCommand command={command} t={t} /> : null}
+			{output && showOutput ? (
+				<pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
+					{output}
+				</pre>
+			) : null}
 			<div className="flex flex-wrap gap-1">
+				{output ? (
+					<Button type="button" size="sm" variant="ghost" className="text-muted-foreground" aria-expanded={showOutput} onClick={() => setShowOutput((shown) => !shown)}>
+						{showOutput ? t("firstRun.installHideOutput") : t("firstRun.installShowOutput")}
+					</Button>
+				) : null}
 				{otherWays ? (
 					<Button type="button" size="sm" variant="ghost" className="text-muted-foreground" onClick={otherWays}>
 						{t("firstRun.installOtherWays")}

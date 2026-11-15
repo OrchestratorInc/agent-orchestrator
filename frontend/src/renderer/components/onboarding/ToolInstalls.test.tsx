@@ -216,6 +216,16 @@ describe("useAgentInstalls", () => {
 });
 
 describe("InstallProblem", () => {
+	it("opens the installer's output when the error alone doesn't say why", async () => {
+		const view = { busy: false, ended: true, problem: "exit status 1", job: { target: "gh", status: "failed", error: "exit status 1", output: "Error: Failed to download resource \"gh\"\nTry again with --verbose", command: "brew install gh" } } as never;
+		render(wrap(<InstallProblem view={view} />));
+		expect(screen.queryByText(/Failed to download resource/)).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Show output" }));
+		expect(screen.getByText(/Failed to download resource/)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Hide output" }));
+		expect(screen.queryByText(/Failed to download resource/)).toBeNull();
+	});
+
 	it("offers the harness's other installers in Settings", async () => {
 		const otherWays = vi.fn();
 		render(wrap(<InstallProblem view={{ busy: false, ended: true, problem: "Forbidden" }} otherWays={otherWays} />));
