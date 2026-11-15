@@ -54,7 +54,7 @@ export function hostUpdateAction(state: HostUpdateState | undefined, localVersio
 	if (state?.updating) return { kind: "updating" };
 	const view = state?.view;
 	if (!view || !localVersion || (compareVersions(view.version, localVersion) ?? 0) >= 0) return null;
-	if (state.error !== undefined || view.state === "failed") return { kind: "failed", error: state.error ?? view.error };
+	if (state.error !== undefined || view.state === "failed") return { kind: "failed", error: state.error || view.error };
 	if (view.state === "updating") return { kind: "updating" };
 	return view.supported ? { kind: "update", version: view.version } : { kind: "manual", version: view.version };
 }
@@ -65,7 +65,7 @@ function settle(url: string, view: HostUpdateView | null, readAt: number) {
 	if (updating && readAt < updating.since) return;
 	if (!updating) {
 		if (!view) return;
-		patch(url, { view, ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
+		patch(url, { view, ...(byUrl[url]?.error === "" ? { error: undefined } : {}), ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
 		return;
 	}
 	if (!view || view.state === "updating") {
