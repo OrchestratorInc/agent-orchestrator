@@ -357,6 +357,26 @@ describe("general access", () => {
 		expect(mocks.client.createShareLink.mock.calls[0]?.[2]).not.toHaveProperty("sessionId");
 	});
 
+	it("shares the whole project when the same dialog is next opened without a session, as from an orchestrator", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const dialog = (props: Partial<React.ComponentProps<typeof ShareSessionDialog>>) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ShareSessionDialog open onOpenChange={() => undefined} orgId={ORG} projectId="project" projectName="acme/web" {...props} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		// Shared from a worker, then closed: the header keeps the dialog mounted as the session changes.
+		const view = render(dialog({ sessionId: "s1", sessionName: "Fix flaky auth test" }));
+		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
+		view.rerender(dialog({ open: false, sessionId: "s1", sessionName: "Fix flaky auth test" }));
+		view.rerender(dialog({ open: false }));
+		view.rerender(dialog({}));
+		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Share only this session" })).toBeNull();
+		expect(await sentence()).toBe("Only members of your workspace and people added above can open this project.");
+	});
+
 	it("is General access and Copy link only in a build without Teams", async () => {
 		renderDialog({ people: false });
 		expect(await sentence()).toBe("Only people with access can open this session.");

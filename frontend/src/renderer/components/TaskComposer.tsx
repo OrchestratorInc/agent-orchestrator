@@ -105,6 +105,13 @@ const CHAT_PREFLIGHT_CODES = new Set([
 	"CHAT_AUTH_REQUIRED",
 ]);
 
+// Harnesses without a terminal interface; mirrors the backend's ChatOnly.
+const CHAT_ONLY_AGENTS = new Set(["unreal-agent", "docker-agent"]);
+
+function isChatOnlyAgent(agent: string | null | undefined): boolean {
+	return Boolean(agent && CHAT_ONLY_AGENTS.has(agent));
+}
+
 const READINESS_RECONCILE_CODES = new Set(["AGENT_BINARY_NOT_FOUND", "AGENT_AUTH_REQUIRED", "CHAT_AUTH_REQUIRED"]);
 
 function cancelTaskPreparation(token: string, hostId?: string): void {
@@ -1221,7 +1228,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && interfaceMode !== "tui" &&
+					: !isChatOnlyAgent(selectedAgent) && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -1269,10 +1276,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
-	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const submitMode: TaskLaunchOptions["interfaceMode"] = isChatOnlyAgent(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			? launch(brief, { interfaceMode: isChatOnlyAgent(selectedAgent) ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {

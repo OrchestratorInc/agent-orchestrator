@@ -66,6 +66,8 @@ type Config struct {
 	// RetryStartupExit starts the agent once more if it exits during its first handshake.
 	RetryStartupExit bool
 	Launch           func(context.Context, LaunchConfig) (Launch, error)
+	// ValidateEnvironment checks required native configuration before session allocation.
+	ValidateEnvironment func(context.Context, map[string]string) error
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -269,6 +271,7 @@ type Driver struct {
 }
 
 var _ ports.ChatDriver = (*Driver)(nil)
+var _ ports.ChatEnvironmentValidator = (*Driver)(nil)
 
 // New returns an ACP Chat driver from a provider binding.
 func New(cfg Config, log *slog.Logger) *Driver {
@@ -415,6 +418,18 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, err
 	}
 	return cloneCapabilities(d.cfg.Capabilities), nil
+}
+
+// ValidateEnvironment checks launch overrides without starting a provider or
+// writing its configuration. Bindings without required configuration are a no-op.
+func (d *Driver) ValidateEnvironment(ctx context.Context, env map[string]string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.cfg.ValidateEnvironment != nil {
+		return d.cfg.ValidateEnvironment(ctx, env)
+	}
+	return nil
 }
 
 // CheckChatInstall reports a missing chat adapter; nil without a cheap check.

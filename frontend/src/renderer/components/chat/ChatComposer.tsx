@@ -186,6 +186,12 @@ const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
  * its space above the box is taken at once, so nothing else is laid out again
  * while it slides, and the clip at the box's edge hides it there.
  */
+function isTextEntryFocused(): boolean {
+	const active = document.activeElement;
+	if (!(active instanceof HTMLElement)) return false;
+	return /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) || active.closest('[contenteditable]:not([contenteditable="false"])') !== null;
+}
+
 function ComposerBand({ band }: { band?: ReactNode }) {
 	const reducedMotion = useReducedMotion();
 	return (
@@ -1027,6 +1033,10 @@ export const ChatComposer = memo(function ChatComposer({
 
 		const onWindowFocus = () => {
 			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			// A click that activates the window can land in another field (the Browser
+			// address bar, a terminal) before this fires; taking focus would send the
+			// user's typing into the composer instead.
+			if (isTextEntryFocused()) return;
 			focusEditor();
 		};
 		const onVisibilityChange = () => {
