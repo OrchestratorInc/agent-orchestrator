@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // AsyncStorage and the documents folder, in memory.
-const store = vi.hoisted(() => ({ items: new Map<string, string>(), files: new Map<string, string>(), failWrite: null as string | null, account: null as string | null, hosts: ["machine-a"] }));
+const store = vi.hoisted(() => ({ items: new Map<string, string>(), files: new Map<string, string>(), failWrite: null as string | null, failRemove: false, account: null as string | null, hosts: ["machine-a"] }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => store.items.get(key) ?? null,
 	setItem: async (key: string, value: string) => { store.items.set(key, value); },
-	removeItem: async (key: string) => { store.items.delete(key); },
+	removeItem: async (key: string) => {
+		if (store.failRemove) throw new Error("storage busy");
+		store.items.delete(key);
+	},
 } }));
 vi.mock("expo-file-system", () => {
 	class Directory {
@@ -40,7 +43,7 @@ import { attachmentsKey, clearSpawnDraft, createSpawnDraftSaver, forgetSpawnDraf
 const image = { name: "screen shot.png", mimeType: "image/png", data: "aW1hZ2U=", bytes: 5, previewUri: "file:///cache/picked.png" };
 const log = { name: "build.log", mimeType: "text/plain", data: "bG9n", bytes: 3 };
 
-beforeEach(() => { store.items.clear(); store.files.clear(); store.failWrite = null; store.account = null; store.hosts = ["machine-a"]; });
+beforeEach(() => { store.items.clear(); store.files.clear(); store.failWrite = null; store.failRemove = false; store.account = null; store.hosts = ["machine-a"]; });
 const draftFiles = () => [...store.files.keys()].filter((key) => key.startsWith("/docs/spawn-draft/") && key !== "/docs/spawn-draft/");
 afterEach(() => vi.useRealTimers());
 
@@ -127,6 +130,20 @@ describe("the New task draft", () => {
 		const restored = (await loadSpawnDraft())!;
 		expect(restored.request).toEqual(request);
 		// The restored files are new objects, read back from disk: still the same Start.
+		expect(requestMatches(restored.request, request.payload, restored.attachments)).toBe(true);
+	});
+
+	// Cleared after the daemon took the Start, but the draft could not be
+	// removed: its files stay, so the restored draft is still that Start (same
+	// attachments, same request id) and the daemon answers with the same task.
+	it("keeps the attachment files when removing the draft fails", async () => {
+		const request = { id: "req-1", payload: "{\"prompt\":\"Ship it\"}", attachments: attachmentsKey([log]) };
+		await saveSpawnDraft({ prompt: "Ship it", attachments: [log], request });
+		store.failRemove = true;
+		await expect(clearSpawnDraft()).rejects.toThrow("storage busy");
+		store.failRemove = false;
+		const restored = (await loadSpawnDraft())!;
+		expect(restored.attachments.map((attachment) => attachment.name)).toEqual(["build.log"]);
 		expect(requestMatches(restored.request, request.payload, restored.attachments)).toBe(true);
 	});
 

@@ -208,14 +208,19 @@ export async function saveSpawnDraft(draft: SpawnDraft, now = Date.now()): Promi
 	}
 }
 
+/**
+ * Deletes the draft, then its files: a removal that fails keeps the files the
+ * draft still names, so a restored draft resends the same attachments (and
+ * reuses its request id) rather than coming back without them.
+ */
 export async function clearSpawnDraft(): Promise<void> {
+	await AsyncStorage.removeItem(SPAWN_DRAFT_KEY);
 	try {
 		const dir = folder();
 		if (dir.exists) dir.delete();
 	} catch {
 		// A folder that cannot be removed is overwritten by the next save.
 	}
-	await AsyncStorage.removeItem(SPAWN_DRAFT_KEY);
 }
 
 type ForgetOwner = { hostId?: string; accountId?: string };
