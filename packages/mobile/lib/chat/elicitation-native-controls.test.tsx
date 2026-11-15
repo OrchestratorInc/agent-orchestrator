@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 vi.mock("react-native", () => ({ StyleSheet: { create: <T,>(styles: T) => styles }, View: "View" }));
 vi.mock("@expo/ui/jetpack-compose", () => ({
-	Button: "Button", Checkbox: "Checkbox", Column: "Column", Host: "Host", ListItem: "ListItem", OutlinedTextField: "OutlinedTextField",
+	Button: "Button", Checkbox: "Checkbox", Column: "Column", Host: "Host", ListItem: "ListItem",
+	OutlinedTextField: Object.assign(function OutlinedTextField() { return null; }, { Placeholder: "OutlinedTextField.Placeholder" }),
 	RadioButton: "RadioButton", Text: "Text", TextButton: "TextButton", useNativeState: () => ({ get: () => "", set: vi.fn() }),
 }));
 // Each modifier records its name and arguments, so a test can read what a control was given.
@@ -14,8 +15,9 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => Object.fromEntries([
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({ accent: "#0a84ff", onAccent: "#ffffff" }), useThemeState: () => ({ scheme: "light" }) }));
 
+import { OutlinedTextField } from "@expo/ui/jetpack-compose";
 import { haptics } from "../haptics";
-import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls";
 
 let renderer: ReactTestRenderer | undefined;
 afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; });
@@ -70,4 +72,14 @@ it("taps on press unless the caller buzzes for the outcome", () => {
 	act(() => actionParts().button.props.onClick());
 	expect(haptics.tap).toHaveBeenCalledOnce();
 	expect(onPress).toHaveBeenCalledTimes(2);
+});
+
+// The timeline reveals a request field when it takes focus; losing it asks nothing.
+it("reports a Material text field taking focus", () => {
+	const onFocus = vi.fn();
+	act(() => { renderer = create(<ElicitationTextField value="" label="Title" onChange={vi.fn()} onFocus={onFocus} />); });
+	const field = renderer!.root.findByType(OutlinedTextField);
+	act(() => field.props.onFocusChanged(true));
+	act(() => field.props.onFocusChanged(false));
+	expect(onFocus).toHaveBeenCalledOnce();
 });

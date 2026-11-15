@@ -5,9 +5,12 @@ type ScrollMetrics = Pick<NativeScrollEvent, "contentOffset" | "contentSize" | "
 /** How close to the end, in points, still counts as reading the newest message. */
 export const TAIL_SLOP = 120;
 
-/** Whether the list is scrolled to (or within a thumb's slop of) its newest message. */
-export function atTail({ contentOffset, contentSize, layoutMeasurement }: ScrollMetrics): boolean {
-	return contentSize.height - layoutMeasurement.height - contentOffset.y < TAIL_SLOP;
+/**
+ * Whether the list is scrolled to (or within a thumb's slop of) its newest
+ * message. `inset` is room the list has made below its content (the keyboard's).
+ */
+export function atTail({ contentOffset, contentSize, layoutMeasurement }: ScrollMetrics, inset = 0): boolean {
+	return contentSize.height - layoutMeasurement.height + inset - contentOffset.y < TAIL_SLOP;
 }
 
 /**
