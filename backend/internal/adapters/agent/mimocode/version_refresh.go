@@ -2,6 +2,7 @@ package mimocode
 
 import (
 	"context"
+	"maps"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -18,7 +19,10 @@ func (p *Plugin) NativeConversationExists(ctx context.Context, ref ports.Session
 	if err != nil {
 		return false, err
 	}
-	return agentbase.NativeJSONSessionExists(ctx, binary, []string{"export", nativeID}, ref, nativeID, env)
+	probeEnv := make(map[string]string, len(env)+1)
+	maps.Copy(probeEnv, env)
+	probeEnv[disableClaudeImportEnv] = "1"
+	return agentbase.NativeJSONSessionExists(ctx, binary, []string{"export", nativeID}, ref, nativeID, probeEnv)
 }
 
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
