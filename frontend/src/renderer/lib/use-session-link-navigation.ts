@@ -6,7 +6,7 @@ import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
 import { LOCAL_HOST } from "./hosts";
 import { useNavigateToSession } from "./navigate-to-session";
-import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
+import { describeUnresolvedSessionLink, parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
 
 export type SessionLinkSource = {
 	ready: boolean;
@@ -88,7 +88,7 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 		}
 		const resolved = resolveSessionLink(url, source.workspaces);
 		if (!resolved) {
-			showGlobalToast("That session is missing or is not accessible in this Orchestrator workspace.", undefined, {
+			showGlobalToast(describeUnresolvedSessionLink(target, source.workspaces), undefined, {
 				tone: "error",
 				placement: "top-center",
 				dismissible: true,

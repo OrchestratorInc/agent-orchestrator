@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // These DTOs mirror the daemon's session search API without importing
@@ -34,6 +36,9 @@ type sessionSearchResultDTO struct {
 	SessionMatches int `json:"sessionMatches,omitempty"`
 	// ReviewID is set when the match is in one of the session's reviewer chats.
 	ReviewID string `json:"reviewId,omitempty"`
+	// Link is the session's canonical in-app link. The CLI fills it in from
+	// the IDs; the daemon does not send it.
+	Link string `json:"link,omitempty"`
 }
 
 type sessionSearchHighlightDTO struct {
@@ -184,6 +189,10 @@ func newSearchCommand(ctx *commandContext) *cobra.Command {
 			var response sessionSearchResponseDTO
 			if err := ctx.getJSON(cmd.Context(), "search/sessions?"+params.Encode(), &response); err != nil {
 				return err
+			}
+			for i := range response.Results {
+				result := &response.Results[i]
+				result.Link = domain.SessionLink(domain.ProjectID(result.ProjectID), domain.SessionID(result.SessionID))
 			}
 			if jsonOutput {
 				return writeJSON(cmd.OutOrStdout(), response)

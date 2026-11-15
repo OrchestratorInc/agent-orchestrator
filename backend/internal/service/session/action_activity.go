@@ -343,19 +343,8 @@ func failureOperationID(ctx context.Context, kind string) string {
 	return "failed:" + kind + ":" + requestID
 }
 
-// standaloneSessionProject matches the desktop scratchpad workspace id.
-// ao://sessions/{project}/{session} needs two segments, and a standalone
-// session has no project. The app routes this id to /sessions/{session}.
-const standaloneSessionProject = "__standalone__"
-
 func sessionActionHref(project domain.ProjectID, id domain.SessionID) string {
-	if id == "" {
-		return ""
-	}
-	if project == "" {
-		project = standaloneSessionProject
-	}
-	return "ao://sessions/" + url.PathEscape(string(project)) + "/" + url.PathEscape(string(id))
+	return domain.SessionLink(project, id)
 }
 
 func safeActionHref(raw string) string {

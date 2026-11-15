@@ -107,6 +107,10 @@ func TestSearchJSONIsMachineReadable(t *testing.T) {
 	if response.Results[0].ResumeCommand != "ao session resume-agent proj-1" {
 		t.Fatalf("resume command = %q", response.Results[0].ResumeCommand)
 	}
+	// The CLI adds the in-app link, so a found session can be linked without a second lookup.
+	if response.Results[0].Link != "ao://sessions/proj/proj-1" {
+		t.Fatalf("link = %q", response.Results[0].Link)
+	}
 	if response.Coverage.State != "ready" || response.Sort != "relevance" || response.Group != "session" {
 		t.Fatalf("response = %+v", response)
 	}

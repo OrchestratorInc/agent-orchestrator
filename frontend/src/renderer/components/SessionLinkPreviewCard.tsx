@@ -15,7 +15,7 @@ import { clampPreviewText, parseMarkdownFrontmatter } from "../lib/markdown-fron
 import { IMAGE_CHECKERBOARD, isRasterImagePath, isSvgPath } from "../lib/image-files";
 import { cn } from "../lib/utils";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
-import { parseArtifactLink, parseSessionLink } from "../lib/session-links";
+import { findLinkedSession, parseArtifactLink, parseSessionLink } from "../lib/session-links";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
 import { prCanMerge, prCardPresentation, sessionPRDisplaySummaries, type PRDisplayTone } from "../lib/pr-display";
 import { useSessionLinkSource } from "../lib/use-session-link-navigation";
@@ -206,8 +206,7 @@ export function SessionLinkPreviewCard({
 }) {
 	const target = parseSessionLink(href);
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
-	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
-	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
+	const session = target ? findLinkedSession(target, source.workspaces)?.session : undefined;
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
 	if (session) {
 		const terminated = session.isTerminated === true || session.status === "terminated";

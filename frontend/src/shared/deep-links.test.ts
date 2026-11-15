@@ -42,8 +42,13 @@ describe("isSessionDeepLink", () => {
 	it("rejects links without a target path", () => {
 		expect(isSessionDeepLink("ao-app://sessions")).toBe(false);
 		expect(isSessionDeepLink("ao-app://sessions/")).toBe(false);
-		expect(isSessionDeepLink("ao-app://sessions/proj-1")).toBe(false);
 		expect(isSessionDeepLink("ao-app://sessions//sess-9")).toBe(false);
+		expect(isSessionDeepLink("ao-app://sessions/proj-1//sess-9")).toBe(false);
+	});
+
+	it("accepts a session-only link, resolved in whichever workspace holds the session", () => {
+		expect(isSessionDeepLink("ao-app://sessions/standalone-40")).toBe(true);
+		expect(normalizeSessionDeepLink("ao-app://sessions/standalone-40/")).toBe("ao-app://sessions/standalone-40");
 	});
 
 	it("exposes the dedicated IPC channel", () => {
