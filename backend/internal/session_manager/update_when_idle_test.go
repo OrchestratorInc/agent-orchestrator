@@ -163,9 +163,9 @@ func TestTerminalResumeProbePassesTheSessionEnvironment(t *testing.T) {
 	mgr.runtime = idleWorkloadRuntime{rt}
 	agent := &recordingAgent{}
 	mgr.agents = singleAgent{agent}
-	project := store.projects[chatTestProject]
+	project := store.projects[string(chatTestProject)]
 	project.Config.Env = map[string]string{"STAKPAK_API_KEY": "project-only"}
-	store.projects[chatTestProject] = project
+	store.projects[string(chatTestProject)] = project
 	store.sessions["terminal"] = domain.SessionRecord{ID: "terminal", ProjectID: chatTestProject, Kind: domain.KindWorker,
 		Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,
 		Activity: domain.Activity{State: domain.ActivityIdle},
