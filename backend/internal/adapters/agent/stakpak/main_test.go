@@ -33,6 +33,12 @@ func runFakeStakpak(dir string, args []string) int {
 	if _, err := os.Stat(filepath.Join(dir, "broken")); err == nil {
 		return 1
 	}
+	// The "remote" profile's store is the Stakpak API, which refuses a
+	// caller without STAKPAK_API_KEY.
+	if len(args) > 0 && args[0] == "sessions" && os.Getenv("STAKPAK_PROFILE") == "remote" && os.Getenv("STAKPAK_API_KEY") == "" {
+		_, _ = fmt.Fprintln(os.Stderr, "Error: API error 401 Unauthorized")
+		return 1
+	}
 	switch {
 	case len(args) > 0 && args[0] == "--version":
 		fmt.Println("stakpak 0.3.88")

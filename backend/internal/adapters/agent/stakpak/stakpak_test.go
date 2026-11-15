@@ -597,3 +597,62 @@ func TestRestoreKeepsTheLaunchProfileWhenTheRestoreEnvironmentDropsIt(t *testing
 		t.Fatalf("explicit default profile = %t, %v; want the conversation missing there", exists, err)
 	}
 }
+
+// A remote profile reads sessions from the Stakpak API, and its
+// STAKPAK_API_KEY may be set only in the project environment. Every lookup AO
+// makes without an environment (the activity observer's discovery, the
+// update-when-idle probe) must use the session's own launch environment, held
+// in memory; a restore after a daemon restart uses the restore environment.
+// The key is never written to the launch record.
+func TestProjectOnlyRemoteCredentialsReachEveryLookup(t *testing.T) {
+	const key = "remote-secret-key"
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	t.Setenv("STAKPAK_API_KEY", "")
+	dir := filepath.Dir(bin)
+	data, ws := t.TempDir(), t.TempDir()
+	launchEnv := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": key}
+	p := New()
+	ctx := context.Background()
+	for _, id := range []string{"ao-1", "ao-2"} {
+		if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: id, WorkspacePath: ws, Env: launchEnv}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := json.Marshal(map[string]any{"sessions": []map[string]any{{"id": nativeA, "cwd": ws, "created_at": time.Now().UTC().Add(time.Second)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sessions-remote.json"), list, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "known-session-remote"), []byte(nativeA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The observer's discovery passes no environment.
+	if id, ok, err := p.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1"}); err != nil || !ok || id != nativeA {
+		t.Fatalf("observer discovery = %q, %t, %v; want %s found with the launch credentials", id, ok, err, nativeA)
+	}
+	// So does the update-when-idle probe.
+	probe := ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-1", WorkspacePath: ws, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}}}
+	if _, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || !ok {
+		t.Fatalf("update-when-idle probe = %t, %v; want the conversation found", ok, err)
+	}
+	// After a daemon restart nothing is in memory: a restore that must still
+	// discover its id lists with the restore environment.
+	restarted := New()
+	restore := ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-2", WorkspacePath: ws, Metadata: map[string]string{}}, Env: launchEnv}
+	argv, ok, err := restarted.GetRestoreCommand(ctx, restore)
+	if err != nil || !ok || !slices.Equal(argv, []string{bin, "--session", nativeA}) {
+		t.Fatalf("restore after a restart = %q, %t, %v; want a resume of %s", argv, ok, err, nativeA)
+	}
+	for _, id := range []string{"ao-1", "ao-2"} {
+		raw, err := os.ReadFile(launchRecordPath(data, id)) //nolint:gosec // test path
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), key) || strings.Contains(string(raw), "STAKPAK_API_KEY") {
+			t.Fatalf("launch record %s kept the credential: %s", id, raw)
+		}
+	}
+}

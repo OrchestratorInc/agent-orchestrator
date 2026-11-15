@@ -51,11 +51,14 @@ type Plugin struct {
 	resolvedBinary string
 	// recordMu serializes launch-record writes, so a resolver that read the
 	// session list while a relaunch replaced the record cannot overwrite it.
-	// It also guards dataDir.
+	// It also guards dataDir and launchEnvs.
 	recordMu sync.Mutex
 	// dataDir is the AO data dir from the latest launch or restore, for
 	// callers that ask about a conversation with a SessionRef that has none.
 	dataDir string
+	// launchEnvs holds each session's launch or resume environment, in memory
+	// only (rememberLaunchEnv).
+	launchEnvs map[string]map[string]string
 }
 
 // New returns a ready-to-register Stakpak adapter.
@@ -174,6 +177,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	p.rememberDataDir(cfg.DataDir)
+	p.rememberLaunchEnv(cfg.SessionID, cfg.Env)
 	if err := p.saveLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt), Profile: launchProfile(cfg.Env)}); err != nil {
 		return nil, err
 	}
@@ -192,7 +196,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	nativeID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if nativeID == "" {
-		resolved, ok, err := p.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: cfg.DataDir, SessionID: domainSessionID(cfg.Session.ID)})
+		resolved, ok, err := p.resolveNativeSessionID(ctx, cfg.DataDir, cfg.Session.ID, cfg.Env)
 		if err != nil || !ok {
 			return nil, false, err
 		}
@@ -208,7 +212,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	// Ask in the resumed process's environment: its profile decides which
 	// store, local or the Stakpak API, holds the conversation.
-	env := restoreEnv(cfg.Env, previous)
+	env := p.sessionEnv(cfg.Session.ID, cfg.Env, previous)
 	exists, err := p.NativeConversationExists(ctx, cfg.Session, nativeID, env)
 	if err != nil {
 		return nil, false, err
@@ -246,6 +250,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if recorded == "" && sameConversation {
 		recorded = previous.PromptDigest
 	}
+	// A probe passes no environment and launches nothing; a real restore's
+	// environment is the one the resumed process runs with.
+	p.rememberLaunchEnv(cfg.Session.ID, cfg.Env)
 	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded, Profile: launchProfile(env)}); err != nil {
 		return nil, false, err
 	}

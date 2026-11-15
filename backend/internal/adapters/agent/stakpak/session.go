@@ -62,12 +62,37 @@ func restoreEnv(env map[string]string, previous launchRecord) map[string]string 
 	return out
 }
 
-// listEnv is the environment the launch's session list must run in.
-func (r launchRecord) listEnv() map[string]string {
-	if r.Profile == nil {
-		return nil
+// rememberLaunchEnv keeps, in memory only, the environment a session was
+// launched or resumed with. Never written to disk: it can hold API keys, such
+// as a remote profile's STAKPAK_API_KEY set only in the project environment.
+func (p *Plugin) rememberLaunchEnv(sessionID string, env map[string]string) {
+	if strings.TrimSpace(sessionID) == "" || env == nil {
+		return
 	}
-	return map[string]string{"STAKPAK_PROFILE": *r.Profile}
+	kept := make(map[string]string, len(env))
+	for key, value := range env {
+		kept[key] = value
+	}
+	p.recordMu.Lock()
+	defer p.recordMu.Unlock()
+	if p.launchEnvs == nil {
+		p.launchEnvs = map[string]map[string]string{}
+	}
+	p.launchEnvs[sessionID] = kept
+}
+
+// sessionEnv is the environment every Stakpak command about a session runs
+// in. An environment the caller passes wins. AO's activity observer and its
+// update-when-idle probe pass none, so they get the one the session was
+// launched or resumed with. Either way the launch's recorded profile applies
+// when the environment names none.
+func (p *Plugin) sessionEnv(sessionID string, env map[string]string, record launchRecord) map[string]string {
+	if env == nil {
+		p.recordMu.Lock()
+		env = p.launchEnvs[sessionID]
+		p.recordMu.Unlock()
+	}
+	return restoreEnv(env, record)
 }
 
 // matches reports whether this launch's conversation is nativeID: the one it
@@ -183,10 +208,17 @@ func parseSessionList(out []byte) ([]nativeSession, error) {
 // conversation the user starts with /new inside the TUI is therefore not
 // followed.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
+	return p.resolveNativeSessionID(ctx, cfg.DataDir, string(cfg.SessionID), nil)
+}
+
+// resolveNativeSessionID lists sessions in sessionEnv(env): a restore passes
+// its own environment, which still holds project-only credentials after a
+// daemon restart has emptied the in-memory one.
+func (p *Plugin) resolveNativeSessionID(ctx context.Context, dataDir, sessionID string, env map[string]string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
-	record, ok, err := readLaunchRecord(cfg.DataDir, string(cfg.SessionID))
+	record, ok, err := readLaunchRecord(dataDir, sessionID)
 	if err != nil || !ok {
 		return "", false, err
 	}
@@ -195,7 +227,7 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 			return known, true, nil
 		}
 	}
-	sessions, err := p.listSessions(ctx, record.listEnv())
+	sessions, err := p.listSessions(ctx, p.sessionEnv(sessionID, env, record))
 	if err != nil {
 		return "", false, err
 	}
@@ -203,14 +235,14 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 	if !found {
 		return "", false, nil
 	}
-	stored, err := p.recordResolvedID(cfg.DataDir, string(cfg.SessionID), record, id)
+	stored, err := p.recordResolvedID(dataDir, sessionID, record, id)
 	if err != nil || !stored {
 		return "", false, err
 	}
 	return id, true, nil
 }
 
-// rememberDataDir keeps the AO data dir for withRecordedProfile.
+// rememberDataDir keeps the AO data dir for conversationEnv.
 func (p *Plugin) rememberDataDir(dataDir string) {
 	if strings.TrimSpace(dataDir) == "" {
 		return
@@ -220,12 +252,11 @@ func (p *Plugin) rememberDataDir(dataDir string) {
 	p.recordMu.Unlock()
 }
 
-// withRecordedProfile applies the session's recorded launch profile to env
-// when env names none. AO's restore asks again whether the conversation
-// exists, with a SessionRef that carries no data dir and the restore
-// environment, which may no longer set the launch's profile.
-func (p *Plugin) withRecordedProfile(ref ports.SessionRef, env map[string]string) (map[string]string, error) {
-	if _, set := env["STAKPAK_PROFILE"]; set || strings.TrimSpace(ref.ID) == "" {
+// conversationEnv is sessionEnv for a SessionRef. AO's restore asks again
+// whether the conversation exists with a ref that carries no data dir, so the
+// record is read from the data dir the plugin kept.
+func (p *Plugin) conversationEnv(ref ports.SessionRef, env map[string]string) (map[string]string, error) {
+	if strings.TrimSpace(ref.ID) == "" {
 		return env, nil
 	}
 	dataDir := ref.DataDir
@@ -234,14 +265,15 @@ func (p *Plugin) withRecordedProfile(ref ports.SessionRef, env map[string]string
 		dataDir = p.dataDir
 		p.recordMu.Unlock()
 	}
-	if strings.TrimSpace(dataDir) == "" {
-		return env, nil
+	var record launchRecord
+	if strings.TrimSpace(dataDir) != "" {
+		read, _, err := readLaunchRecord(dataDir, ref.ID)
+		if err != nil {
+			return nil, err
+		}
+		record = read
 	}
-	record, _, err := readLaunchRecord(dataDir, ref.ID)
-	if err != nil {
-		return nil, err
-	}
-	return restoreEnv(env, record), nil
+	return p.sessionEnv(ref.ID, env, record), nil
 }
 
 // saveLaunchRecord writes a launch's record under recordMu.
@@ -308,7 +340,7 @@ func (p *Plugin) NativeConversationExists(ctx context.Context, ref ports.Session
 	if !validSessionID(nativeID) {
 		return false, nil
 	}
-	env, err := p.withRecordedProfile(ref, env)
+	env, err := p.conversationEnv(ref, env)
 	if err != nil {
 		return false, err
 	}
