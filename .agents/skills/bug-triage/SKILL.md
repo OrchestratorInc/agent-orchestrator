@@ -124,7 +124,7 @@ binary rather than whichever `ao` is on PATH, and an environment whose `AO_DATA_
 
 ```bash
 ao_bin=/path/to/affected/ao  # the binary identified above
-port=$("$ao_bin" status --json | jq -r 'select(.state != "stale") | .port // empty')
+port=$("$ao_bin" status --json | jq -r 'select(.state != "stale" and .health != null) | .port // empty')
 h=claude-code  # affected harness id
 if [ -n "$port" ]; then
   api="http://127.0.0.1:$port/api/v1/agents"
@@ -135,12 +135,13 @@ if [ -n "$port" ]; then
   curl -fsS "$api/installers" | jq --arg h "$h" '.agents[] | select(.agentId == $h)'
   curl -fsS "$api/$h/update-advisory"
 else
-  echo 'daemon not running or stale; record that and skip daemon evidence'
+  echo 'daemon not running, stale, or unverified; record that and skip daemon evidence'
 fi
 ```
 
-If the daemon is not running or stale, don't start or restart it to collect this
-evidence.
+A daemon whose `/healthz` owner check did not pass has no `health` field, and its port
+may belong to another process. If the daemon is not running, stale, or unverified,
+don't start or restart it to collect this evidence.
 
 - `readiness` returns cached installation and authentication observations without
   running native checks. `authentication.diagnostics[]` lists each auth check's
