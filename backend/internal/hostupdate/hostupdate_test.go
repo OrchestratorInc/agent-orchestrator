@@ -94,7 +94,7 @@ func TestStart(t *testing.T) {
 	if run[0] != "systemd-run" {
 		t.Fatalf("last call = %v", run)
 	}
-	for _, want := range []string{"--unit=" + updateUnit, "--setenv=PATH=/usr/bin", "--setenv=AO_PORT=3011", installerURL, "--upgrade", "--nightly"} {
+	for _, want := range []string{"--unit=" + updateUnit, "--property=RuntimeMaxSec=30min", "--setenv=PATH=/usr/bin", "--setenv=AO_PORT=3011", installerURL, "--upgrade", "--nightly"} {
 		if !slices.Contains(run, want) {
 			t.Errorf("systemd-run args missing %q: %v", want, run)
 		}

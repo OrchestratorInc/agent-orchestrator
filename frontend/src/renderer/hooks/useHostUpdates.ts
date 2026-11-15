@@ -59,17 +59,18 @@ export function hostUpdateAction(state: HostUpdateState | undefined, localVersio
 	return view.supported ? { kind: "update", version: view.version } : { kind: "manual", version: view.version };
 }
 
-function settle(url: string, view: HostUpdateView | null) {
+function settle(url: string, view: HostUpdateView | null, readAt: number) {
 	const { byUrl, patch } = useHostUpdateStore.getState();
 	const updating = byUrl[url]?.updating;
+	if (updating && readAt < updating.since) return;
 	if (!updating) {
 		if (!view) return;
-		patch(url, { view, error: undefined, ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
+		patch(url, { view, ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
 		return;
 	}
 	if (!view || view.state === "updating") {
 		if (Date.now() - updating.since < UPDATING_LIMIT_MS) return;
-		patch(url, { view: null, updating: undefined });
+		patch(url, { view, updating: undefined });
 		requestRemoteHostsRefresh();
 		return;
 	}
@@ -78,7 +79,8 @@ function settle(url: string, view: HostUpdateView | null) {
 }
 
 export async function refreshHostUpdate(url: string): Promise<void> {
-	settle(url, await aoBridge.remotes.hostUpdate(url).catch(() => null));
+	const readAt = Date.now();
+	settle(url, await aoBridge.remotes.hostUpdate(url).catch(() => null), readAt);
 }
 
 export async function startHostUpdate(url: string): Promise<void> {
@@ -102,7 +104,7 @@ export function useHostUpdatePolling(hosts: RemoteHost[]): void {
 	const localVersion = useAppVersion();
 	useEffect(() => { useHostUpdateStore.setState({ localVersion }); }, [localVersion]);
 	const readable = hosts.filter((host) => host.failureReason !== "unauthorized" && (host.status === "connected" || host.failureReason === "incompatible"));
-	const key = readable.map((host) => `${host.url}\n${host.status}`).join("\0");
+	const key = [...readable.map((host) => `${host.url}\n${host.status}`), ...hosts.map((host) => `${host.hostId}\n${host.url}`)].join("\0");
 	useEffect(() => {
 		const urls = readable.map((host) => host.url);
 		useHostUpdateStore.getState().retain(urls);

@@ -457,8 +457,8 @@ export function SidebarUpdateRail({
 				<Pressable aria-label={label} className={cn(FOOTER_RAIL_BUTTON_CLASS, "text-foreground")} tabIndex={tabIndex} title={label} type="button">
 					<NavRowHighlight />
 					<span className="relative z-[1] grid place-items-center">
-						<ArrowUp aria-hidden="true" />
-						<span aria-hidden="true" className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-logo-accent ring-2 ring-sidebar" />
+						{hostActions.some((entry) => entry.action.kind === "updating") ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <ArrowUp aria-hidden="true" />}
+						{action || hostActions.some((entry) => entry.action.kind === "update" || entry.action.kind === "failed") ? <span aria-hidden="true" className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-logo-accent ring-2 ring-sidebar" /> : null}
 					</span>
 				</Pressable>
 			</MachinesPopover>

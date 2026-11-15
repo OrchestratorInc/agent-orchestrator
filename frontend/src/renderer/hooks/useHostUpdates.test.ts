@@ -88,11 +88,26 @@ describe("host update flow", () => {
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
 	});
 
-	it("drops a stale failure once the host reports idle", async () => {
-		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10"), error: "host is offline" });
+	it("keeps a refused start's reason through later polls", async () => {
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockRejectedValue(new Error("could not start the update: no user bus"));
 		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10"));
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		await startHostUpdate(URL);
 		await refreshHostUpdate(URL);
-		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "update", version: "0.14.10" });
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", error: "could not start the update: no user bus" });
+	});
+
+	it("ignores a read that started before the update", async () => {
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		let answer!: (value: HostUpdateView) => void;
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockReturnValueOnce(new Promise((done) => { answer = done; }));
+		const read = refreshHostUpdate(URL);
+		await new Promise((done) => setTimeout(done, 2));
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		await startHostUpdate(URL);
+		answer(view("0.14.10"));
+		await read;
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
 	});
 
 	it("keeps the known version through one failed read", async () => {

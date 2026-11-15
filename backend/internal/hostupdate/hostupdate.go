@@ -67,7 +67,7 @@ type Updater struct {
 // New returns an updater that supports only a systemd host installed by setup-self-hosted.sh.
 func New(version string) *Updater {
 	u := &Updater{version: version, run: runCommand, getenv: os.Getenv}
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return u
 	}
 	exe, err := os.Executable()
@@ -182,7 +182,7 @@ func (u *Updater) defaultRoot() bool {
 }
 
 func (u *Updater) startArgs() []string {
-	args := []string{"--user", "--unit=" + updateUnit, "--description=Orchestrator self-hosted update"}
+	args := []string{"--user", "--unit=" + updateUnit, "--description=Orchestrator self-hosted update", "--property=RuntimeMaxSec=30min"}
 	for _, name := range []string{"PATH", "AO_DATA_DIR", "AO_RUN_FILE", "AO_PORT"} {
 		if value := u.getenv(name); value != "" {
 			args = append(args, "--setenv="+name+"="+value)
