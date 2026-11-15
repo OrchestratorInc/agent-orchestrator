@@ -880,11 +880,11 @@ func (c *conversation) handleServerRequest(ctx context.Context, req serverReques
 		return approvalReply(decision), nil
 
 	case <-time.After(approvalWait):
-		c.discardPending(requestID)
+		c.expirePendingApproval(requestID, "timeout")
 		return nil, errors.New("approval timed out without a decision")
 
 	case <-ctx.Done():
-		c.discardPending(requestID)
+		c.expirePendingApproval(requestID, "cancelled")
 		return nil, ctx.Err()
 	}
 }
@@ -1007,10 +1007,30 @@ func (c *conversation) ReloadMCPServers(ctx context.Context) (ports.ChatMCPReloa
 	return ports.ChatMCPReloadResult{Servers: servers, Authoritative: true}, nil
 }
 
-func (c *conversation) discardPending(requestID string) {
+func (c *conversation) discardPending(requestID string) bool {
 	c.mu.Lock()
+	_, present := c.pending[requestID]
 	delete(c.pending, requestID)
 	c.mu.Unlock()
+	return present
+}
+
+// An expired provider request is no longer actionable, even if the Chat
+// activity card is still visible. Publish a resolution without inventing an
+// approval decision, so a second attempt cannot hit a stale pending card.
+func (c *conversation) expirePendingApproval(requestID, reason string) {
+	if !c.discardPending(requestID) {
+		return
+	}
+	detail, _ := json.Marshal(map[string]string{
+		"resolvedBy": "orchestrator",
+		"reason":     reason,
+	})
+	c.emit(ports.ChatEvent{
+		Kind:      ports.ChatEventApprovalResolved,
+		RequestID: requestID,
+		Detail:    detail,
+	})
 }
 
 // failPendingApprovals unblocks every parked handler when the controller ends.

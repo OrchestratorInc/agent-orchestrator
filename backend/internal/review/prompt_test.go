@@ -18,7 +18,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		{RunID: "run-2", PRURL: "https://github.com/o/r/pull/2", TargetSHA: "sha2"},
 	}
 
-	prompt, _ := reviewTexts(spec)
+	prompt, _ := reviewTextsForOS(spec, "linux")
 	for _, want := range []string{
 		"AO created 2 review tasks",
 		"Review every queued PR, then submit all results together",
@@ -63,5 +63,26 @@ func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 	}
 	if strings.Contains(prompt, "omit the field for a review with no inline comments") {
 		t.Fatalf("review prompt still makes inline comments optional:\n%s", prompt)
+	}
+}
+
+func TestReviewTextsUsesPowerShellOnWindows(t *testing.T) {
+	spec := LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"}
+	prompt, _ := reviewTextsForOS(spec, "windows")
+	for _, want := range []string{
+		"'{ \"event\": \"COMMENT\"",
+		"' | gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id'",
+		"'{ \"reviews\": [",
+		"| ao review submit --session mer-1 --reviews -",
+		"double any single quotes",
+		"JSON-escape non-ASCII text",
+		"Do not use a heredoc",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("Windows review prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "printf '%s'") {
+		t.Errorf("Windows review prompt must not require Unix printf:\n%s", prompt)
 	}
 }
