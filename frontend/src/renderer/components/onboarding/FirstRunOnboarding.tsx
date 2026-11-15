@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, RefreshCw, Server, Smartphone, type AppIcon } from "@/components/app-icons";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -50,6 +50,7 @@ import { STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
 import { GitHubIcon } from "../GitHubIcon";
+import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
@@ -768,10 +769,11 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 // ── 1. Sign in (optional) ───────────────────────────────────────────────────
 
 /** Why an account is worth it: what only an account unlocks. */
-const SIGN_IN_PERKS: Array<{ icon: AppIcon; title: MessageKey; detail: MessageKey }> = [
+const SIGN_IN_PERKS: Array<{ icon: AppIcon; title: MessageKey; detail: MessageKey; pro?: boolean }> = [
 	{ icon: Smartphone, title: "firstRun.signInPerkMobile", detail: "firstRun.signInPerkMobileDetail" },
-	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail" },
-	{ icon: Server, title: "firstRun.signInPerkRemote", detail: "firstRun.signInPerkRemoteDetail" },
+	// Cloud sandboxes come with a paid plan.
+	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail", pro: true },
+	{ icon: Monitor, title: "firstRun.signInPerkRemote", detail: "firstRun.signInPerkRemoteDetail" },
 ];
 
 function SignInStep({ onNext }: { onNext: () => void }) {
@@ -812,11 +814,16 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 			) : (
 				<>
 				<ul className={OPEN_ROW_LIST}>
-					{SIGN_IN_PERKS.map(({ icon: Icon, title, detail }) => (
+					{SIGN_IN_PERKS.map(({ icon: Icon, title, detail, pro }) => (
 						<CheckRow
 							key={title}
 							icon={<Icon className="size-icon-md text-muted-foreground" />}
-							label={t(title)}
+							label={
+								<span className="inline-flex items-center gap-1.5">
+									{t(title)}
+									{pro ? <Badge variant="outline" className="h-4 px-1.5 text-2xs">{t("firstRun.proBadge")}</Badge> : null}
+								</span>
+							}
 							detail={t(detail)}
 						/>
 					))}
