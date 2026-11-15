@@ -224,8 +224,9 @@ silently search the web and does not allow `file://` or local filesystem paths.
 By default a session's browser uses the user's default browser profile, which
 is persistent: a site the user signed in to once stays signed in for every
 later session, and several sessions can use it at the same time. A session the
-user switched to Temporary (private) starts signed out and its data is cleared
-when the session ends. Profiles stay on this computer and are never copied
+user switched to Temporary (private), or any session in a project whose
+settings say "Always use a temporary browser", starts signed out and its data is
+cleared when the session ends. Profiles stay on this computer and are never copied
 between machines.
 
 ```bash

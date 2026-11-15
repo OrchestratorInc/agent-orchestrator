@@ -267,6 +267,11 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 	return <ProjectToggleRow id="project-workers-request-review" label={t("settings.project.workersRequestReviewToggle")} description={t("settings.project.workersRequestReviewDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
 }
 
+export function ProjectBrowserTemporaryToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+	const { t } = useTranslation();
+	return <ProjectToggleRow id="project-browser-temporary" label={t("settings.project.browserTemporaryToggle")} description={t("settings.project.browserTemporaryDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
+}
+
 export function ProjectCoAuthorCommitsToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	const { t } = useTranslation();
 	return <ProjectToggleRow id="project-co-author-commits" label={t("settings.project.coAuthorCommitsToggle")} description={t("settings.project.coAuthorCommitsDescription")} checked={checked} onCheckedChange={onCheckedChange} />;

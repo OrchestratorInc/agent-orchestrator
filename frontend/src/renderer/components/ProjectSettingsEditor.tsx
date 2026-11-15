@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAutoReviewToggle, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAutoReviewToggle, ProjectBrowserTemporaryToggle, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -32,6 +32,8 @@ export type ProjectSettingsDraft = {
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
+	/** Local-only: sessions open their desktop browser in a temporary profile. */
+	browserTemporary?: boolean;
 	/** Cloud-only: agent commits name the AO GitHub App as a co-author. */
 	coAuthorCommits?: boolean;
 	intakeEnabled: boolean;
@@ -56,6 +58,7 @@ type Capabilities = {
 	reviewer: boolean;
 	requiredAgents: boolean;
 	workersRequestReview?: boolean;
+	browserTemporary?: boolean;
 	coAuthorCommits?: boolean;
 	nameLimit?: number;
 	requiredBranch?: boolean;
@@ -193,6 +196,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						{capabilities.coAuthorCommits && <ProjectCoAuthorCommitsToggle checked={draft.coAuthorCommits ?? true} onCheckedChange={(coAuthorCommits) => patch({ coAuthorCommits })} />}
 					</ProjectSettingsSection>
 				</>}
+				{capabilities.browserTemporary && <ProjectSettingsSection title={t("settings.project.browser")} grouped>
+					<ProjectBrowserTemporaryToggle checked={draft.browserTemporary ?? false} onCheckedChange={(browserTemporary) => patch({ browserTemporary })} />
+				</ProjectSettingsSection>}
 				{generalExtra}
 			</> : <>
 				{visibleRoles.map((role) => {

@@ -89,6 +89,12 @@ type ProjectConfig struct {
 	// the feature but check with the user or orchestrator before using it.
 	// Read at spawn, when the worker prompt is built.
 	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
+
+	// BrowserTemporary opens every session's desktop browser in a Temporary,
+	// signed-out profile that is cleared when the session ends, instead of the
+	// user's persistent default profile. A profile the user picks for one
+	// session still wins. Read by the desktop app when a session's browser opens.
+	BrowserTemporary bool `json:"browserTemporary,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker

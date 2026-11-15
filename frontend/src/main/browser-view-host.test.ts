@@ -1223,7 +1223,7 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
-	overrides?: { entryReadyTimeoutMs?: number },
+	overrides?: { entryReadyTimeoutMs?: number; isProjectBrowserTemporary?: (sessionId: string) => Promise<boolean> },
 	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
@@ -1463,6 +1463,7 @@ function setupTabHost(
 		clearBrowserProfileData,
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
+		isProjectBrowserTemporary: overrides?.isProjectBrowserTemporary,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -2782,6 +2783,35 @@ describe("browser profile partitions and replacement", () => {
 			persistent: false,
 		});
 		expect(constructorOptions).toHaveLength(0);
+	});
+
+	it("opens Temporary for a session whose project is always Temporary, unless the session chose a profile", async () => {
+		const bindings: Record<string, string | null> = { "worker-chose": profile.id };
+		const isProjectBrowserTemporary = vi.fn(async () => true);
+		const { host, invoke, constructorOptions } = setupTabHost(
+			fakeBrowserProfileStore(profile, bindings, profile.id),
+			false, undefined, undefined, undefined,
+			{ isProjectBrowserTemporary },
+		);
+
+		expect(await host.execute("worker-1", "profile")).toEqual({ profileId: null, profileName: "Temporary", persistent: false });
+		const isolated = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(host.getProfileState(isolated.viewId)).toMatchObject({ profileId: null, temporary: true });
+		expect(constructorOptions[0]!.webPreferences.partition).toMatch(/^persist:ao-browser-temporary-/);
+
+		const chose = (await invoke("browser:ensure", "worker-chose")) as BrowserNavState;
+		expect(host.getProfileState(chose.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
+		expect(bindings["worker-1"]).toBeUndefined();
+	});
+
+	it("falls back to the default profile when the project lookup fails", async () => {
+		const { host, invoke } = setupTabHost(
+			fakeBrowserProfileStore(profile, {}, profile.id),
+			false, undefined, undefined, undefined,
+			{ isProjectBrowserTemporary: async () => { throw new Error("daemon down"); } },
+		);
+		const ensured = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		expect(host.getProfileState(ensured.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
 	});
 
 	it("keeps a session explicitly switched to Temporary out of the default profile, even across reconstruction", async () => {
