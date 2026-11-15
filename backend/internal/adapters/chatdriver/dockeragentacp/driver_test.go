@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -63,7 +64,6 @@ func TestProjectCredentialsAdmitDespiteUnauthorizedDaemonStatus(t *testing.T) {
 	}{
 		{name: "project-only key", env: map[string]string{"OPENAI_API_KEY": "project-key"}},
 		{name: "project key overrides rejected global key", globalKey: "revoked-key", env: map[string]string{"OPENAI_API_KEY": "project-key"}},
-		{name: "project config overrides rejected global key", globalKey: "revoked-key", env: map[string]string{dockeragent.ConfigEnv: config}},
 		{name: "no session credentials still refused", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,8 +98,9 @@ func TestContextualConfigValidation(t *testing.T) {
 		daemonConfig string
 		env          map[string]string
 		wantError    bool
+		wantAuth     bool
 	}{
-		{name: "missing config and provider key", wantError: true},
+		{name: "missing config and provider key", wantError: true, wantAuth: true},
 		{name: "provider key uses AO default config", env: map[string]string{"GEMINI_API_KEY": "key"}},
 		{name: "relative", env: map[string]string{dockeragent.ConfigEnv: "native.yaml"}, wantError: true},
 		{name: "nonexistent", env: map[string]string{dockeragent.ConfigEnv: filepath.Join(dir, "missing.yaml")}, wantError: true},
@@ -108,7 +109,7 @@ func TestContextualConfigValidation(t *testing.T) {
 		{name: "trimmed daemon config", daemonConfig: "  " + config + " \n"},
 		{name: "session config", env: map[string]string{dockeragent.ConfigEnv: config}},
 		{name: "session overrides invalid daemon config", daemonConfig: "relative.yaml", env: map[string]string{dockeragent.ConfigEnv: config}},
-		{name: "explicit empty override without key", daemonConfig: config, env: map[string]string{dockeragent.ConfigEnv: ""}, wantError: true},
+		{name: "explicit empty override without key", daemonConfig: config, env: map[string]string{dockeragent.ConfigEnv: ""}, wantError: true, wantAuth: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clearProviderKeys(t)
@@ -117,7 +118,11 @@ func TestContextualConfigValidation(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Fatalf("ValidateEnvironment error=%v, wantError=%v", err, tc.wantError)
 			}
-			if tc.wantError && !errors.Is(err, ports.ErrChatDriverUnavailable) {
+			// No usable key is a setup problem; a bad config leaves the driver unavailable.
+			if tc.wantAuth && !errors.Is(err, ports.ErrChatAuthRequired) {
+				t.Fatalf("missing provider key not reported as auth-required: %v", err)
+			}
+			if tc.wantError && !tc.wantAuth && !errors.Is(err, ports.ErrChatDriverUnavailable) {
 				t.Fatalf("config failure lost typed admission error: %v", err)
 			}
 		})
@@ -416,5 +421,83 @@ func TestDefaultConfigPrefersSessionProviderKey(t *testing.T) {
 				t.Fatalf("launch env overlay = %v, want %v", env, tc.wantEnv)
 			}
 		})
+	}
+}
+
+func TestSplitHookContextReassemblesLongContext(t *testing.T) {
+	const limit = 1024
+	var lines []string
+	for i := 0; i < 200; i++ {
+		lines = append(lines, fmt.Sprintf("line %d: \"quoted\" <tag> ü %s", i, strings.Repeat("x", i%40)))
+	}
+	lines = append(lines, strings.Repeat("ü", 3*limit)) // one line longer than a whole response
+	text := strings.Join(lines, "\n")
+	chunks, err := splitHookContext(text, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("long context produced %d response(s)", len(chunks))
+	}
+	var parts []string
+	for _, chunk := range chunks {
+		if len(chunk) > limit {
+			t.Fatalf("hook response is %d bytes, over %d", len(chunk), limit)
+		}
+		var out struct {
+			HookSpecificOutput struct {
+				AdditionalContext string `json:"additional_context"`
+			} `json:"hook_specific_output"`
+		}
+		if err := json.Unmarshal(chunk, &out); err != nil {
+			t.Fatal(err)
+		}
+		parts = append(parts, out.HookSpecificOutput.AdditionalContext)
+	}
+	// Docker Agent joins hook contexts with newlines; only the over-long
+	// line's own splits add newlines that were not in the text.
+	joined := strings.Join(parts, "\n")
+	if strings.ReplaceAll(joined, "\n", "") != strings.ReplaceAll(text, "\n", "") {
+		t.Fatal("reassembled context lost or reordered text")
+	}
+	if !strings.HasPrefix(joined, strings.Join(lines[:200], "\n")) {
+		t.Fatal("splits on newline boundaries did not reassemble exactly")
+	}
+}
+
+func TestConfigureSplitsLongStandingContextAcrossHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
+	dir := t.TempDir()
+	config := filepath.Join(dir, "native.yaml")
+	if err := os.WriteFile(config, []byte("agents: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{dockeragent.ConfigEnv: config}
+	prompt := strings.Repeat("Standing instruction line.\n", 4000) // about 108 KiB
+	launch := func(prompt string) []string {
+		args, _, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: dir, SessionID: "s", Env: env, SystemPrompt: prompt, WorkspacePath: dir})
+		if err != nil {
+			t.Fatalf("long standing context refused: %v", err)
+		}
+		var hooks []string
+		for i, arg := range args {
+			if arg == "--hook-session-start" {
+				hooks = append(hooks, args[i+1])
+			}
+		}
+		return hooks
+	}
+	if hooks := launch(prompt); len(hooks) < 4 {
+		t.Fatalf("108 KiB context used %d hooks", len(hooks))
+	}
+	// A shorter relaunch leaves no stale responses behind.
+	if hooks := launch("short"); len(hooks) != 1 {
+		t.Fatalf("short context used %d hooks", len(hooks))
+	}
+	stale, _ := filepath.Glob(filepath.Join(dir, "agent-runtime", "docker-agent", "*", "standing-context-*.json"))
+	if len(stale) != 0 {
+		t.Fatalf("stale hook responses kept: %v", stale)
 	}
 }

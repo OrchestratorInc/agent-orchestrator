@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -39,23 +41,15 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 
 // chatProbePlugin keeps the global, cached Chat probe off credentials. The
 // plugin's AuthStatus only sees the daemon's environment, but a session may
-// bring its own provider key or config in the project environment, which
-// ValidateEnvironment checks per task. Settings and readiness keep the real
-// AuthStatus through the unwrapped plugin.
+// bring its own provider key in the project environment (or receive an
+// AO-stored one), which ValidateEnvironment checks per task. Settings and
+// readiness keep the real AuthStatus through the unwrapped plugin.
+// AO_DOCKER_AGENT_CONFIG is daemon-level: project environments cannot set
+// reserved AO_* keys.
 type chatProbePlugin struct{ nativeacp.Plugin }
 
 func (chatProbePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 	return ports.AgentAuthStatusUnknown, nil
-}
-
-// AugmentRuntimeEnv forwards nativeacp's optional launch hook, which the
-// embedded interface would otherwise hide.
-func (p chatProbePlugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
-	if augmenter, ok := p.Plugin.(interface {
-		AugmentRuntimeEnv(map[string]string, string)
-	}); ok {
-		augmenter.AugmentRuntimeEnv(env, dataDir)
-	}
 }
 
 // minimumVersion is the first release qualified with this binding. Newer
@@ -106,10 +100,21 @@ func preflight(ctx context.Context) error {
 
 func validateEnvironment(ctx context.Context, env map[string]string) error {
 	_, _, err := nativeConfig(ctx, env)
-	if err != nil {
+	return configError(err)
+}
+
+// configError classifies a config failure: no usable provider key is a setup
+// problem the user resolves with `docker-agent setup`, so it is reported as
+// auth-required; anything else leaves the driver unavailable.
+func configError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, dockeragent.ErrNoProviderKey):
+		return fmt.Errorf("%w: %w", ports.ErrChatAuthRequired, err)
+	default:
 		return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 	}
-	return nil
 }
 
 // nativeConfig returns the user's selected config, or "" and AO's rendered
@@ -149,7 +154,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	}
 	config, defaultConfig, err := nativeConfig(ctx, cfg.Env)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+		return nil, nil, configError(err)
 	}
 	if !filepath.IsAbs(cfg.DataDir) || cfg.SessionID == "" {
 		return nil, nil, fmt.Errorf("docker agent requires an absolute AO data directory and session ID")
@@ -167,34 +172,15 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 			return nil, nil, err
 		}
 	}
-	contextBytes, err := json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": cfg.SystemPrompt + "\n\nAO session working directory: " + cfg.WorkspacePath + ". Use this directory for workspace tools and task files; do not use the repository source checkout."}})
+	contextText := cfg.SystemPrompt + "\n\nAO session working directory: " + cfg.WorkspacePath + ". Use this directory for workspace tools and task files; do not use the repository source checkout."
+	hooks, err := writeStandingContext(dir, contextText)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Reject overlarge context instead of accepting native bounded-hook truncation.
-	if len(contextBytes) > 32*1024 {
-		return nil, nil, fmt.Errorf("docker agent private context exceeds 32 KiB")
+	args := []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", cfg.WorkspacePath}
+	for _, hook := range hooks {
+		args = append(args, "--hook-session-start", hook)
 	}
-	contextPath := filepath.Join(dir, "standing-context.json")
-	// Atomic replacement lets a reconnect refresh launch context without leaving
-	// a partial hook response. No workspace/config/AGENTS files are modified.
-	temp, err := os.CreateTemp(dir, ".standing-context-*")
-	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = os.Remove(temp.Name()) }()
-	if _, err := temp.Write(contextBytes); err != nil {
-		_ = temp.Close()
-		return nil, nil, err
-	}
-	if err := temp.Close(); err != nil {
-		return nil, nil, err
-	}
-	if err := os.Rename(temp.Name(), contextPath); err != nil {
-		return nil, nil, err
-	}
-	hook := "cat -- " + shellQuote(contextPath)
-	args := []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", cfg.WorkspacePath, "--hook-session-start", hook}
 	env := dockeragent.ProviderEnv(cfg.Env)
 	env["TELEMETRY_ENABLED"] = "false"
 	return args, env, nil
@@ -247,6 +233,132 @@ func DiscoverConfigOptions(ctx context.Context, binary, dataDir string, env map[
 		Args:    []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", dir},
 		Env:     launchEnv,
 	}, dir, log)
+}
+
+// maxHookContextBytes bounds one session-start hook's JSON response. Long
+// context is split across several hooks rather than truncated or refused:
+// Docker Agent joins their additional_context with newlines in argument order,
+// which reassembles the text exactly when each split falls on a newline.
+const maxHookContextBytes = 32 * 1024
+
+// writeStandingContext writes text as one or more session-start hook
+// responses under dir and returns the hook commands that print them, in order.
+// Files are replaced atomically so a reconnect never reads a partial response;
+// responses left from a longer earlier launch are removed.
+func writeStandingContext(dir, text string) ([]string, error) {
+	chunks, err := splitHookContext(text, maxHookContextBytes)
+	if err != nil {
+		return nil, err
+	}
+	hooks := make([]string, 0, len(chunks))
+	keep := make(map[string]bool, len(chunks))
+	for i, chunk := range chunks {
+		name := "standing-context.json"
+		if i > 0 {
+			name = fmt.Sprintf("standing-context-%d.json", i+1)
+		}
+		path := filepath.Join(dir, name)
+		if err := writeFileAtomic(dir, path, chunk); err != nil {
+			return nil, err
+		}
+		keep[path] = true
+		hooks = append(hooks, "cat -- "+shellQuote(path))
+	}
+	stale, _ := filepath.Glob(filepath.Join(dir, "standing-context-*.json"))
+	for _, path := range stale {
+		if !keep[path] {
+			_ = os.Remove(path)
+		}
+	}
+	return hooks, nil
+}
+
+// splitHookContext encodes text as hook responses of at most limit bytes
+// each. It splits on newlines where it can, and inside a line only when that
+// line alone does not fit.
+func splitHookContext(text string, limit int) ([][]byte, error) {
+	encode := func(part string) ([]byte, error) {
+		return json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": part}})
+	}
+	fits := func(part string) (bool, error) {
+		b, err := encode(part)
+		return len(b) <= limit, err
+	}
+	var parts []string
+	current, open := "", false
+	for _, line := range strings.Split(text, "\n") {
+		if open {
+			ok, err := fits(current + "\n" + line)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				current += "\n" + line
+				continue
+			}
+			parts = append(parts, current)
+			open = false
+		}
+		for {
+			ok, err := fits(line)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				current, open = line, true
+				break
+			}
+			// The line alone is too long: emit a prefix that fits, cut on a
+			// rune boundary.
+			cut := len(line) / 2
+			for cut > 0 {
+				for cut > 0 && !utf8.RuneStart(line[cut]) {
+					cut--
+				}
+				ok, err := fits(line[:cut])
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					break
+				}
+				cut = cut * 3 / 4
+			}
+			if cut == 0 {
+				return nil, fmt.Errorf("docker agent standing context cannot be split into %d-byte hook responses", limit)
+			}
+			parts = append(parts, line[:cut])
+			line = line[cut:]
+		}
+	}
+	if open {
+		parts = append(parts, current)
+	}
+	out := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		b, err := encode(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+func writeFileAtomic(dir, path string, data []byte) error {
+	temp, err := os.CreateTemp(dir, ".standing-context-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(temp.Name()) }()
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), path)
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }

@@ -36,7 +36,7 @@ func TestRejectsTerminalEvenWithTaskAndNativeIdentity(t *testing.T) {
 // empty temporary config home, returning that file's path.
 func isolateProviderKeys(t *testing.T) string {
 	t.Helper()
-	for _, key := range []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "GOOGLE_API_KEY", "GEMINI_API_KEY", ConfigEnv} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL", ConfigEnv} {
 		t.Setenv(key, "")
 	}
 	home := t.TempDir()

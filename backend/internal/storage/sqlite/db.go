@@ -2228,6 +2228,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		}
 		needsStakpak = true
 	}
+	if !needsDockerAgent {
+		// Docker Agent must stay last before 'fake' (its migration's Down
+		// anchors on "'docker-agent', 'fake'))"), but the appends below would
+		// land after it. Remove it the same way and append it again last.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''docker-agent'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Docker Agent constraint: %w", err)
+		}
+		needsDockerAgent = true
+	}
 	type replacement struct {
 		old string
 		new string

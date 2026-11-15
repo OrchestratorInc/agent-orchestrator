@@ -99,3 +99,22 @@ func TestDockerAgentRepairsBurnedHistoryBeforeAppending(t *testing.T) {
 		})
 	}
 }
+
+// Repairing another missing harness must keep Docker Agent last before 'fake',
+// where a fresh database has it and where its Down migration anchors.
+func TestDockerAgentStaysLastWhenAnotherHarnessIsRepaired(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 20261115071147951)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''stakpak'', ', '') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	if err := reconcileHarnessConstraint(db); err != nil {
+		t.Fatal(err)
+	}
+	var repaired string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&repaired); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(repaired, "'stakpak', 'docker-agent', 'fake'))") {
+		t.Fatalf("Docker Agent is not last after repair: %s", repaired)
+	}
+}

@@ -1211,7 +1211,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, agentlaunch.MergeEnv(project.Config.Env, nil)); err != nil {
+		} else if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, m.chatPreflightEnv(cfg, project.Config.Env)); err != nil {
 			fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
 				errors.Is(err, ports.ErrChatDriverUnavailable) ||
 				errors.Is(err, ports.ErrChatDriverIncompatible) ||
@@ -6783,6 +6783,16 @@ func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.Proje
 	if err != nil {
 		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
 	}
+	return env
+}
+
+// chatPreflightEnv is the environment a new Chat session will launch with,
+// before it has an ID: the same AO-stored provider keys, withheld keys and
+// account environment as runtimeEnvForHarness, so admission and launch agree
+// on which credentials exist. An unresolved account leaves its keys out, as
+// the launch would.
+func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]string) map[string]string {
+	env, _ := m.runtimeEnvChecked("", cfg.ProjectID, cfg.IssueID, projectEnv, cfg.AgentAccountID, cfg.Harness)
 	return env
 }
 

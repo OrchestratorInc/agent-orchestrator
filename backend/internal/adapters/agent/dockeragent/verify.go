@@ -22,6 +22,15 @@ var providerVerifyURLs = map[string]string{
 	"google":    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
 }
 
+// providerBaseURLs are the base-URL overrides Docker Agent honours, with the
+// model-list path under each. OpenAI's base includes the API version;
+// Anthropic's and Gemini's do not.
+var providerBaseURLs = map[string]struct{ env, path string }{
+	"anthropic": {"ANTHROPIC_BASE_URL", "/v1/models?limit=1"},
+	"openai":    {"OPENAI_BASE_URL", "/models"},
+	"google":    {"GOOGLE_GEMINI_BASE_URL", "/v1beta/models?pageSize=1"},
+}
+
 var verifyClient = &http.Client{Timeout: verifyTimeout}
 
 // verifyDefaultProvider checks the key of the provider AO's default config
@@ -41,10 +50,12 @@ func verifyDefaultProvider(ctx context.Context, env map[string]string) ports.Age
 	if !ok {
 		return ports.AgentAuthStatusConfigured
 	}
-	// Docker Agent sends an OpenAI key to OPENAI_BASE_URL when it is set (an
-	// OpenAI-compatible gateway such as Z.ai), so the key is checked there.
-	if base := lookupKey(env, "OPENAI_BASE_URL"); provider == "openai" && base != "" {
-		endpoint = strings.TrimRight(base, "/") + "/models"
+	// Docker Agent sends a key to its provider's base-URL override when one is
+	// set (a gateway such as Z.ai), so the key is checked there.
+	if gateway, ok := providerBaseURLs[provider]; ok {
+		if base := lookupKey(env, gateway.env); base != "" {
+			endpoint = strings.TrimRight(base, "/") + gateway.path
+		}
 	}
 	key := providerKey(env, provider)
 	if key == "" || !credentialEndpointAllowed(endpoint) {
@@ -75,10 +86,13 @@ func verifyDefaultProvider(ctx context.Context, env map[string]string) ports.Age
 		return ports.AgentAuthStatusConfigured
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return ports.AgentAuthStatusAuthorized
+	// Google answers an invalid API key with 400 API_KEY_INVALID, not 401.
+	case provider == "google" && resp.StatusCode == http.StatusBadRequest && strings.Contains(string(body), "API_KEY_INVALID"):
+		return ports.AgentAuthStatusUnauthorized
 	// Only 401 rejects the key. A 403 can mean the key may chat but not list
 	// models, and unauthorized would block Chat, so it stays unverified.
 	case resp.StatusCode == http.StatusUnauthorized:

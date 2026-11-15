@@ -122,3 +122,53 @@ func TestVerifyDefaultProviderRefusesPlainHTTPGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyDefaultProviderRejectsInvalidGeminiKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want ports.AgentAuthStatus
+	}{
+		{"invalid key", `{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}`, ports.AgentAuthStatusUnauthorized},
+		{"other bad request stays unverified", `{"error":{"code":400,"status":"FAILED_PRECONDITION"}}`, ports.AgentAuthStatusConfigured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateProviderKeys(t)
+			var gotKey string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotKey = r.Header.Get("x-goog-api-key")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			env := map[string]string{"GEMINI_API_KEY": "bad-key", "GOOGLE_GEMINI_BASE_URL": server.URL}
+			if got := verifyDefaultProvider(context.Background(), env); got != tc.want {
+				t.Fatalf("verifyDefaultProvider = %q, want %q", got, tc.want)
+			}
+			if gotKey != "bad-key" {
+				t.Fatalf("x-goog-api-key = %q", gotKey)
+			}
+		})
+	}
+}
+
+func TestVerifyDefaultProviderUsesAnthropicBaseURL(t *testing.T) {
+	isolateProviderKeys(t)
+	var gotPath, gotKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotKey = r.URL.Path, r.Header.Get("x-api-key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	previous := providerVerifyURLs["anthropic"]
+	providerVerifyURLs["anthropic"] = "http://127.0.0.1:1/unused"
+	defer func() { providerVerifyURLs["anthropic"] = previous }()
+
+	env := map[string]string{"ANTHROPIC_API_KEY": "gateway-token", "ANTHROPIC_BASE_URL": server.URL + "/gateway/"}
+	if got := verifyDefaultProvider(context.Background(), env); got != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("verifyDefaultProvider = %q, want authorized", got)
+	}
+	if gotPath != "/gateway/v1/models" || gotKey != "gateway-token" {
+		t.Fatalf("checked %q with key %q, want the gateway's /v1/models", gotPath, gotKey)
+	}
+}
