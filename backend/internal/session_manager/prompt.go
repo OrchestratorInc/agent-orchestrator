@@ -173,7 +173,9 @@ Work only from the user's requests and the files in this Orchestrator-managed wo
 func workerGitIsolationPrompt() string {
 	return `## Worktree Git Isolation
 
-Orchestrator-managed sessions use linked Git worktrees. Linked worktrees share the repository's .git/config and remote definitions with the human checkout. Do not run 'git remote add', 'git remote set-url', 'git remote remove', or write repository config with 'git config --local' (or the default write mode). For session-specific settings, use 'git config --worktree ...'. For a one-off fork push or fetch, use an explicit URL instead of adding a named remote. Existing remotes may be inspected and used read-only.`
+Orchestrator-managed sessions use linked Git worktrees. Linked worktrees share the repository's .git/config and remote definitions with the human checkout. Do not run 'git remote add', 'git remote set-url', 'git remote remove', or write repository config with 'git config --local' (or the default write mode). For session-specific settings, use 'git config --worktree ...'. For a one-off fork push or fetch, use an explicit URL instead of adding a named remote. Existing remotes may be inspected and used read-only.
+
+If a commit is blocked by missing Git author identity, never change global or shared repository config and never invent a name or email. For an explicitly authorized GitHub publication, verify the intended author using the authenticated 'gh api user' account (login and numeric id), ensuring it is the user authorized for the work. Its account-specific noreply address is '<id>+<login>@users.noreply.github.com'. Use the verified login and noreply email ONLY for that one commit, e.g. 'git -c user.name=<login> -c user.email=<noreply> commit ...', with all ordinary permission gates still enforced. If identity is unavailable, ambiguous, or not authorized, stop and request it rather than changing configuration.`
 }
 
 // systemPromptGuard is appended to every agent system prompt. The role,

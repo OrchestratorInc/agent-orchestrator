@@ -29,7 +29,13 @@ func reviewTextsForOS(spec LaunchSpec, goos string) (prompt, systemPrompt string
 	quotingInstructions := "Keep the JSON on one line and shell-escape any single quotes in review text before passing it to printf; do not use a heredoc because reviewer panes run through an interactive PTY."
 	if goos == "windows" {
 		postCommand = `'{ "event": "COMMENT", "body": "<summary>", "comments": [ { "path": "<file>", "line": <n>, "body": "<finding>" } ] }' | gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id'`
-		submitCommand = fmt.Sprintf(`'{ "reviews": [ { "runId": "<run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" } ] }' | ao review submit --session %s --reviews -`, spec.WorkerID)
+		aoCommand := "ao"
+		if spec.AOExecutable != "" {
+			// PowerShell single quotes are escaped by doubling. The executable is
+			// supplied by the trusted launcher, never by a review or repository.
+			aoCommand = "& '" + strings.ReplaceAll(spec.AOExecutable, "'", "''") + "'"
+		}
+		submitCommand = fmt.Sprintf(`'{ "reviews": [ { "runId": "<run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" } ] }' | %s review submit --session %s --reviews -`, aoCommand, spec.WorkerID)
 		quotingInstructions = "For Windows PowerShell: keep the JSON on one line, double any single quotes within the PowerShell single-quoted JSON string, and JSON-escape non-ASCII text (e.g. Unicode escapes) so the native pipeline preserves it. Do not use a heredoc."
 	}
 	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %s.

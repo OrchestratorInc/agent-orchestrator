@@ -1311,3 +1311,24 @@ func TestNotifyReviewerChatCarriesItsBatch(t *testing.T) {
 		t.Fatalf("review notification: %+v", chat)
 	}
 }
+
+func TestLauncherWindowsInvocationPinsExistingAOExecutable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable paths are verified on Windows only")
+	}
+	exe := filepath.Join(t.TempDir(), "ao.exe")
+	launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(),
+		WithExecutable(func() (string, error) { return exe, nil }))
+	inv := launcher.(*agentLauncher).invocation(launchSpec())
+	want := "| & '" + strings.ReplaceAll(exe, "'", "''") + "' review submit"
+	if !strings.Contains(inv.Prompt, want) {
+		t.Fatalf("review task must use the daemon's absolute ao.exe, got:\n%s", inv.Prompt)
+	}
+	foreign := filepath.Join(t.TempDir(), "unrelated.exe")
+	launcher = NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(),
+		WithExecutable(func() (string, error) { return foreign, nil }))
+	inv = launcher.(*agentLauncher).invocation(launchSpec())
+	if strings.Contains(inv.Prompt, foreign) {
+		t.Fatalf("review prompt must not embed a non-AO binary: %s", inv.Prompt)
+	}
+}
