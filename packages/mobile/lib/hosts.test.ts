@@ -159,6 +159,19 @@ describe("host store", () => {
 		expect(got[0].token).toBe("pw");
 	});
 
+	it("skips a refresh that read an older revision than the endpoints now stored", async () => {
+		const { saveHost, updateHostEndpoints, hostEndpointRevision, loadHosts } = await mod();
+		await saveHost({
+			id: "h_one", name: "a", platform: "darwin",
+			endpoints: [lan("192.168.1.42")], token: "pw", lastConnected: 1,
+		});
+		const slowRefreshRead = hostEndpointRevision("h_one");
+		await updateHostEndpoints("h_one", [lan("10.0.0.5")], hostEndpointRevision("h_one"));
+		await updateHostEndpoints("h_one", [lan("10.0.0.9")], slowRefreshRead);
+
+		expect((await loadHosts())[0].endpoints).toEqual([lan("10.0.0.5")]);
+	});
+
 	it("keeps every paired host available for explicit removal", async () => {
 		const { saveHost, loadHosts } = await mod();
 		for (let i = 0; i < 15; i++) {

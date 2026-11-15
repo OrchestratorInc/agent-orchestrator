@@ -564,15 +564,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const hosts = await loadHosts().catch(() => null);
 			if (resolution !== configResolution.current) return null;
 			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
-			let c = await resolveActiveConfig(runtimeResolveDeps(options));
+			let c = await resolveActiveConfig(runtimeResolveDeps(options), () => {
+				// The machine refused the token this config carries and the kept
+				// password now stands in for it; connect again with it, unless a
+				// newer resolution already did.
+				if (mountedRef.current && resolution === configResolution.current) void reloadConfig(options);
+			});
 			if (resolution !== configResolution.current) return null;
 			// A re-check (a network change, the look for a better address) that
 			// found nothing must not cost a connection that still works: the one in
 			// use is asked once more, with the slow-link limit, before it goes.
 			const working = cfgRef.current;
-			if (!(c && isConfigured(c)) && working?.hostId && working.hostId === selected?.id && await endpointStillAnswers(working)) {
+			if (!(c && isConfigured(c)) && working?.hostId && working.hostId === selected?.id) {
+				const stillAnswers = await endpointStillAnswers(working);
+				// Superseded while the probe ran, whatever it found: a newer
+				// resolution (another machine above all) owns the config now.
 				if (resolution !== configResolution.current) return null;
-				c = working;
+				if (stillAnswers) c = working;
 			}
 			// Every endpoint was tried and none answered. The poll stops without a
 			// config, so this race (and the reconnect timer's next ones) is what
