@@ -136,7 +136,13 @@ function readStored(raw: string | null): StoredDraft | null {
  * a machine no longer paired. Rejects when storage could not be read: the
  * draft may still be there, and the page must not save over it as empty.
  */
-export async function loadSpawnDraft(now = Date.now(), context: SpawnDraftContext = currentContext): Promise<SpawnDraft | null> {
+export function loadSpawnDraft(now = Date.now(), context: SpawnDraftContext = currentContext): Promise<SpawnDraft | null> {
+	// In the draft queue: a save from another page cannot commit a new draft
+	// and delete this one's attachment files while they are read.
+	return inDraftQueue(() => readDraft(now, context));
+}
+
+async function readDraft(now: number, context: SpawnDraftContext): Promise<SpawnDraft | null> {
 	const raw = await AsyncStorage.getItem(SPAWN_DRAFT_KEY);
 	let stored: StoredDraft | null;
 	try {
@@ -148,7 +154,8 @@ export async function loadSpawnDraft(now = Date.now(), context: SpawnDraftContex
 	if (!stored) return null;
 	if (now - stored.savedAt >= SPAWN_DRAFT_KEEP_MS) {
 		// Too old to restore; a removal that fails is tried on the next read.
-		await clearSpawnDraft().catch(() => {});
+		// Already in the queue, so removed directly.
+		await removeDraft().catch(() => {});
 		return null;
 	}
 	const owner = stored.owner ?? { hostId: null, accountId: null };
@@ -156,7 +163,7 @@ export async function loadSpawnDraft(now = Date.now(), context: SpawnDraftContex
 	const accountGone = owner.accountId !== null && owner.accountId !== accountId;
 	const machineGone = owner.hostId !== null && !isCloudHost(owner.hostId) && !hostIds.includes(owner.hostId);
 	if (accountGone || machineGone) {
-		await clearSpawnDraft().catch(() => {});
+		await removeDraft().catch(() => {});
 		return null;
 	}
 	const attachments: SpawnAttachment[] = [];
@@ -286,6 +293,8 @@ const draftSavers = new Set<SpawnDraftSaverHandle>();
  */
 export function createSpawnDraftSaver(save: (draft: SpawnDraft) => Promise<void> = saveSpawnDraft, delayMs = 500) {
 	let pending: SpawnDraft | null = null;
+	// Counts drafts scheduled: a failed save is kept only while none came after it.
+	let scheduled = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let chain = Promise.resolve();
 	let last: Promise<boolean> = Promise.resolve(true);
@@ -295,7 +304,7 @@ export function createSpawnDraftSaver(save: (draft: SpawnDraft) => Promise<void>
 		clearTimeout(timer);
 		timer = undefined;
 		if (!pending) return last;
-		const item = { draft: pending, dropped: false };
+		const item = { draft: pending, dropped: false, order: scheduled };
 		pending = null;
 		queued.add(item);
 		const result = inDraftQueue(async () => {
@@ -304,7 +313,7 @@ export function createSpawnDraftSaver(save: (draft: SpawnDraft) => Promise<void>
 			return true;
 		}).catch(() => {
 			// Kept for the next flush, unless a newer draft, a cancel or a forget came since.
-			if (!item.dropped && !pending) pending = item.draft;
+			if (!item.dropped && !pending && item.order === scheduled) pending = item.draft;
 			return false;
 		}).finally(() => { queued.delete(item); });
 		last = result;
@@ -315,6 +324,7 @@ export function createSpawnDraftSaver(save: (draft: SpawnDraft) => Promise<void>
 		schedule(draft: SpawnDraft) {
 			// Registered again if it was let go: whatever it holds, forgetting reaches.
 			draftSavers.add(saver);
+			scheduled += 1;
 			pending = draft;
 			clearTimeout(timer);
 			timer = setTimeout(() => void flush(), delayMs);

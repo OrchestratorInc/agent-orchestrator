@@ -234,6 +234,43 @@ describe("the New task draft", () => {
 		expect(saved).toEqual(["latest edits", "newer"]);
 	});
 
+	it("does not retry an older failed save once a newer one is queued", async () => {
+		const saved: string[] = [];
+		let failOlder!: () => void;
+		const saver = createSpawnDraftSaver(async (draft) => {
+			if (draft.prompt === "older") await new Promise<void>((_done, reject) => { failOlder = () => reject(new Error("disk full")); });
+			saved.push(draft.prompt);
+		});
+		saver.schedule({ prompt: "older", attachments: [] });
+		const older = saver.flush();
+		await vi.waitFor(() => expect(failOlder).toBeDefined());
+		saver.schedule({ prompt: "newer", attachments: [] });
+		const newer = saver.flush();
+		failOlder();
+		expect(await older).toBe(false);
+		expect(await newer).toBe(true);
+		await saver.flush();
+		expect(saved).toEqual(["newer"]);
+	});
+
+	// Read in the same queue as saves: another page's save never deletes the
+	// attachment files of the draft being read.
+	it("reads the draft in the queue saves and removals use", async () => {
+		await saveSpawnDraft({ prompt: "Keep me", attachments: [log] });
+		let release!: () => void;
+		const blocking = createSpawnDraftSaver(async () => { await new Promise<void>((done) => { release = done; }); });
+		blocking.schedule({ prompt: "other", attachments: [] });
+		const saving = blocking.flush();
+		await vi.waitFor(() => expect(release).toBeDefined());
+		let loaded = false;
+		const loading = loadSpawnDraft().then((draft) => { loaded = true; return draft; });
+		await new Promise((done) => setTimeout(done, 0));
+		expect(loaded).toBe(false);
+		release();
+		await saving;
+		expect((await loading)?.attachments).toHaveLength(1);
+	});
+
 	it("does not retry a failed save after a Start cancelled it", async () => {
 		let attempts = 0;
 		let fail!: () => void;
