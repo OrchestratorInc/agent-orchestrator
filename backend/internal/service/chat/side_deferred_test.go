@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +27,89 @@ func sideProviderCount(h *sideWorkflow) int {
 	h.driver.mu.Lock()
 	defer h.driver.mu.Unlock()
 	return len(h.driver.forks)
+}
+
+func TestDeferredSideCreationLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, want string
+		manual, invalid   bool
+	}{
+		{name: "omitted", want: "Side Chat"},
+		{name: "whitespace", input: " \t\n", want: "Side Chat"},
+		{name: "custom", input: "Investigate timeout", want: "Investigate timeout", manual: true},
+		{name: "trimmed", input: "  Investigate timeout \t", want: "Investigate timeout", manual: true},
+		{name: "ASCII boundary", input: strings.Repeat("x", 80), want: strings.Repeat("x", 80), manual: true},
+		{name: "Unicode boundary", input: strings.Repeat("界", 80), want: strings.Repeat("界", 80), manual: true},
+		{name: "emoji boundary", input: strings.Repeat("🙂", 80), want: strings.Repeat("🙂", 80), manual: true},
+		{name: "ASCII too long", input: strings.Repeat("x", 81), invalid: true},
+		{name: "Unicode too long", input: strings.Repeat("界", 81), invalid: true},
+		{name: "padding counts toward API limit", input: " " + strings.Repeat("x", 80), invalid: true},
+		{name: "invalid text", input: string([]byte{0xff}), invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSideWorkflow(t, "")
+			side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "named", Label: tc.input})
+			if tc.invalid {
+				if !errors.Is(err, chatsvc.ErrSideLabelInvalid) {
+					t.Fatalf("invalid label accepted: %+v, %v", side, err)
+				}
+			} else if err != nil || side.Label != tc.want || side.ManualLabel != tc.manual || side.State != "draft" {
+				t.Fatalf("created label: %+v, %v", side, err)
+			}
+			sides, err := h.svc.ListIndependentSideChats(t.Context(), testSession)
+			if err != nil || tc.invalid && len(sides) != 0 || !tc.invalid && len(sides) != 1 {
+				t.Fatalf("created drafts: %+v, %v", sides, err)
+			}
+			if sideProviderCount(h) != 0 {
+				t.Fatal("naming a draft started a provider")
+			}
+		})
+	}
+}
+
+func TestDeferredSideCreationLabelSurvivesFirstSendAndRenamedRetry(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "named", Label: "Investigate timeout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.source(t)
+	if _, err := h.svc.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{ClientMessageID: "question", Text: "Do not replace the chosen name"}); err != nil {
+		t.Fatal(err)
+	}
+	snap := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "ready" })
+	if snap.Side.Label != "Investigate timeout" || !snap.Side.ManualLabel {
+		t.Fatalf("first Send replaced the chosen name: %+v", snap.Side)
+	}
+	if err := h.svc.RenameSideChat(t.Context(), testSession, side.ID, "Renamed investigation"); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "named", Label: "Different retry name"})
+	if err != nil || retried.ID != side.ID || retried.Label != "Renamed investigation" || !retried.ManualLabel || sideProviderCount(h) != 1 {
+		t.Fatalf("creation retry changed identity/name or restarted provider: %+v, %v", retried, err)
+	}
+}
+
+func TestDeferredSideCustomNamesAllowDuplicatesWithoutAllocatingDefaultNumbers(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	last := draftSide(t, h, "last-default")
+	if err := h.svc.RenameSideChat(t.Context(), testSession, last.ID, "Side Chat 99"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "over-limit"}); !errors.Is(err, chatsvc.ErrSideNameLimit) {
+		t.Fatalf("default numbering limit changed: %v", err)
+	}
+	var previousID string
+	for _, key := range []string{"custom-one", "custom-two"} {
+		side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: key, Label: "Investigation"})
+		if err != nil || side.ID == previousID || side.Label != "Investigation" || !side.ManualLabel {
+			t.Fatalf("custom name reserved a number or merged identities: %+v, %v", side, err)
+		}
+		previousID = side.ID
+	}
+	if sideProviderCount(h) != 0 {
+		t.Fatal("custom naming started a provider")
+	}
 }
 
 func TestDeferredSideDraftDoesNotStartProvider(t *testing.T) {
@@ -189,7 +273,10 @@ func TestDeferredSideCloseCancelsStartup(t *testing.T) {
 
 func TestDeferredSideRestoreDraftStaysUnused(t *testing.T) {
 	h := newSideWorkflow(t, "")
-	side := draftSide(t, h, "recover")
+	side, err := h.svc.CreateIndependentSideChat(t.Context(), testSession, chatsvc.SideCreateRequest{IdempotencyKey: "recover", Label: "Recovered investigation"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	records, err := h.svc.ExportSideChatLaunch(t.Context(), "workflow")
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +290,7 @@ func TestDeferredSideRestoreDraftStaysUnused(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap, err := replacement.SideSnapshot(t.Context(), testSession, side.ID, time.Time{}, 50)
-	if err != nil || snap.Side.State != "draft" || sideProviderCount(h) != 0 {
+	if err != nil || snap.Side.State != "draft" || snap.Side.Label != "Recovered investigation" || !snap.Side.ManualLabel || sideProviderCount(h) != 0 {
 		t.Fatalf("restored draft started: %+v %v", snap.Side, err)
 	}
 }

@@ -55,6 +55,8 @@ func writeSideChatError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "CHAT_SIDE_CLOSED", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideIdempotencyConflict):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_IDEMPOTENCY_CONFLICT", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrSideLabelInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_SIDE_LABEL_INVALID", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideCreateKeyRequired), errors.Is(err, chatsvc.ErrSideQuestionInvalid), errors.Is(err, chatsvc.ErrSideDraftTooLarge):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_SIDE_INVALID_REQUEST", err.Error(), nil)
 	default:

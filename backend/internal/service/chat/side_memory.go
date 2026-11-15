@@ -360,19 +360,21 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 			return current, false, nil
 		}
 	}
-	largest, open := 1, false
-	for _, current := range m.sides {
-		if current.SessionID == side.SessionID && current.ClosedAt == nil {
-			open = true
-			largest = max(largest, sideChatNumber(current.Label))
+	if !side.ManualLabel {
+		largest, open := 1, false
+		for _, current := range m.sides {
+			if current.SessionID == side.SessionID && current.ClosedAt == nil {
+				open = true
+				largest = max(largest, sideChatNumber(current.Label))
+			}
 		}
-	}
-	side.Label = "Side Chat"
-	if open {
-		if largest >= 99 {
-			return domain.SideConversation{}, false, ErrSideNameLimit
+		side.Label = "Side Chat"
+		if open {
+			if largest >= 99 {
+				return domain.SideConversation{}, false, ErrSideNameLimit
+			}
+			side.Label = fmt.Sprintf("Side Chat %d", largest+1)
 		}
-		side.Label = fmt.Sprintf("Side Chat %d", largest+1)
 	}
 	m.sides[side.ID] = side
 	return side, true, nil

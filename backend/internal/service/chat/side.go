@@ -30,6 +30,8 @@ var (
 	ErrSideCreateKeyRequired = errors.New("side chat idempotency key is required")
 	// ErrSideQuestionInvalid indicates that a question or its client ID is missing.
 	ErrSideQuestionInvalid = errors.New("side question and client message ID are required")
+	// ErrSideLabelInvalid rejects creation names outside the API's text limit.
+	ErrSideLabelInvalid = errors.New("side chat name must contain valid text and be at most 80 characters")
 	// ErrSideDraftTooLarge indicates that a side draft exceeds its size limit.
 	ErrSideDraftTooLarge = errors.New("side draft is too large")
 	// ErrSideNotReady indicates that the side has no usable provider connection.
@@ -402,6 +404,10 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
 		return side, err
 	}
+	if !utf8.ValidString(req.Label) || utf8.RuneCountInString(req.Label) > 80 {
+		return domain.SideConversation{}, ErrSideLabelInvalid
+	}
+	label := strings.TrimSpace(req.Label)
 	main, err := s.store.ConversationForSession(ctx, id)
 	if err != nil {
 		return domain.SideConversation{}, err
@@ -421,6 +427,7 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 		PolicyVersion: sidePolicyVersion, ID: idNew, SessionID: id,
 		MainConversationID: main.ID, AppRunID: s.sides.launchID(),
 		CreateKey: req.IdempotencyKey, ForceNew: req.ForceNew,
+		Label: label, ManualLabel: label != "",
 		ProviderHostID: "btw-" + s.sides.launchID() + "-" + idNew,
 		Harness:        record.Harness, Model: main.Settings.Model, Effort: main.Settings.ReasoningEffort,
 		Generation: s.newID(), State: "draft", CreatedAt: s.now(), UpdatedAt: s.now(),
