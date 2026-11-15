@@ -17,7 +17,7 @@ func TestVerifyDefaultProvider(t *testing.T) {
 	}{
 		{"accepted", http.StatusOK, ports.AgentAuthStatusAuthorized},
 		{"rejected", http.StatusUnauthorized, ports.AgentAuthStatusUnauthorized},
-		{"forbidden", http.StatusForbidden, ports.AgentAuthStatusUnauthorized},
+		{"forbidden to list models stays unverified", http.StatusForbidden, ports.AgentAuthStatusConfigured},
 		{"provider error stays unverified", http.StatusServiceUnavailable, ports.AgentAuthStatusConfigured},
 	}
 	for _, tc := range cases {

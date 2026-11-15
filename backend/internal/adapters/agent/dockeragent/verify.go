@@ -79,7 +79,9 @@ func verifyDefaultProvider(ctx context.Context, env map[string]string) ports.Age
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return ports.AgentAuthStatusAuthorized
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	// Only 401 rejects the key. A 403 can mean the key may chat but not list
+	// models, and unauthorized would block Chat, so it stays unverified.
+	case resp.StatusCode == http.StatusUnauthorized:
 		return ports.AgentAuthStatusUnauthorized
 	default:
 		return ports.AgentAuthStatusConfigured
