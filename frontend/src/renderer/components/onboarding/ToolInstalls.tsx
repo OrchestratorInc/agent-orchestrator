@@ -228,13 +228,18 @@ export function useGhInstall(onInstalled: () => void) {
 /** Under a row while its install runs: a bar that fills to the installer's
  * reported percentage (or sweeps when it states none) and its latest line,
  * else the command it runs. */
-export function InstallProgress({ job, label }: { job?: InstallJob; label: string }) {
+export function InstallProgress({ job, label, compact = false }: {
+	job?: InstallJob;
+	label: string;
+	/** Just a short bar, for a row's trailing spot (no installer output). */
+	compact?: boolean;
+}) {
 	const { t } = useTranslation();
 	const percent = installPercent(job);
 	const line = job?.progress?.detail
 		|| (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"));
 	return (
-		<div className="flex flex-col gap-1.5" role="status">
+		<div className={compact ? "w-24" : "flex flex-col gap-1.5"} role="status">
 			{percent !== undefined ? (
 				<div className="ao-install-progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
 					<div className="ao-install-progress__bar ao-install-progress__bar--determinate" style={{ width: `${percent}%` }} />
@@ -244,7 +249,7 @@ export function InstallProgress({ job, label }: { job?: InstallJob; label: strin
 					<div className="ao-install-progress__bar" />
 				</div>
 			)}
-			<p className="truncate font-mono text-xs text-muted-foreground" title={line}>{line}</p>
+			{compact ? null : <p className="truncate font-mono text-xs text-muted-foreground" title={line}>{line}</p>}
 		</div>
 	);
 }
