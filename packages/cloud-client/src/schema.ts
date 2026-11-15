@@ -1006,7 +1006,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. The session keeps running; delete it once the import succeeds. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. */
+        /** @description Stops the session's agent, then commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. Delete the session once the import succeeds; if the move fails, agent/restart starts its terminal agent again. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. */
         post: operations["exportSessionMove"];
         delete?: never;
         options?: never;
