@@ -62,12 +62,14 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			const prefix = "/proxy-token/api/v1/sessions/";
 			const match = parsed.pathname.startsWith(prefix) ? /^([^/]+)\/preview\/files\/(.+)$/.exec(parsed.pathname.slice(prefix.length)) : null;
 			const artifact = match && parsed.searchParams.get("source") === "artifact" ? hostFiles.get(`${decodeURIComponent(match[1] ?? "")}/${match[2]?.split("/").map(decodeURIComponent).join("/")}`) : undefined;
+			// The real route is GET-only: a HEAD is refused before the file is looked up.
+			if (init.method === "HEAD") return new Response('{"error":"method not allowed"}', { status: 405 });
 			if (!artifact) return new Response("", { status: 404 });
 			const bytes = Buffer.from(artifact.body);
 			const headers = new Headers(artifact.tag === false
 				? { "content-length": String(bytes.length), "last-modified": new Date(Number(artifact.mtimeNs / 1_000_000n)).toUTCString() }
 				: { etag: `"${bytes.length}-${artifact.mtimeNs}"` });
-			return new Response(init.method === "HEAD" ? null : bytes.subarray(0, bytes.length - (artifact.shortBy ?? 0)), { headers });
+			return new Response(bytes.subarray(0, bytes.length - (artifact.shortBy ?? 0)), { headers });
 		}),
 		fetch: vi.fn(async (url: string, init: RequestInit) => {
 			const { pathname } = new URL(url);
@@ -537,7 +539,7 @@ describe("cloudShare IPC for a remote host's file", () => {
 		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toEqual({
 			name: "deck.html", size: 20, unsupported: false, fingerprint: `20:${MTIME_NS / 1_000_000n}`,
 		});
-		expect(hostRequests).toEqual(["HEAD /proxy-token/api/v1/sessions/sess-1/preview/files/docs/deck.html?source=artifact&raw=true"]);
+		expect(hostRequests).toEqual(["GET /proxy-token/api/v1/sessions/sess-1/preview/files/docs/deck.html?source=artifact&raw=true"]);
 		expect(requests).toEqual([]);
 	});
 
@@ -551,7 +553,9 @@ describe("cloudShare IPC for a remote host's file", () => {
 	it("publishes it by downloading it through the host's proxy, and keeps its record apart from this computer's sessions", async () => {
 		const { publish, invoke, hostFile, hostRequests, requests, records, sent } = setup({ hostFiles: deck() });
 		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
-		expect(hostRequests.filter((request) => request.startsWith("GET "))).toHaveLength(1);
+		// The panel's inspect and publish's own version check each read only a GET's headers; the third GET is the download. The route refuses HEAD.
+		expect(hostRequests.filter((request) => request.startsWith("GET "))).toHaveLength(3);
+		expect(hostRequests.some((request) => request.startsWith("HEAD "))).toBe(false);
 		expect(requests).toContain("POST /api/cloud/v1/me/artifact-shares/finalize");
 		expect(sent.at(-1)).toEqual({ sessionId: "sess-1", path: "docs/deck.html", sentBytes: 40, totalBytes: 40 });
 		expect(await snapshots()).toEqual([]);

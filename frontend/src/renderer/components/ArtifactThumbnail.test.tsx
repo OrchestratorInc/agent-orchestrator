@@ -340,7 +340,8 @@ describe("remote host artifact thumbnails", () => {
 	beforeEach(() => {
 		mocks.access.mockReset();
 		mocks.fetch.mockReset();
-		hostFetch.mockReset().mockImplementation(async () => new Response(null, { status: 200 }));
+		// The host's file route is GET-only, as on a real host: a HEAD is refused.
+		hostFetch.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => new Response(null, { status: init?.method === "HEAD" ? 405 : 200 }));
 		vi.stubGlobal("fetch", hostFetch);
 		vi.stubGlobal("IntersectionObserver", class {
 			constructor(private callback: (entries: { isIntersecting: boolean }[]) => void) {}
@@ -355,13 +356,14 @@ describe("remote host artifact thumbnails", () => {
 	});
 	afterEach(() => vi.unstubAllGlobals());
 
-	it("frames another host's page from its proxy URL in an opaque sandbox, checked with a plain HEAD", async () => {
+	it("frames another host's page from its proxy URL in an opaque sandbox, checked with a plain GET", async () => {
 		const { container } = renderThumbnails([remote()]);
 
 		const frame = await screen.findByTitle("report.html");
 		expect(frame).toHaveAttribute("src", PROXY);
 		expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-forms");
-		expect(hostFetch).toHaveBeenCalledWith(PROXY, expect.objectContaining({ method: "HEAD" }));
+		expect(hostFetch).toHaveBeenCalledWith(PROXY, expect.objectContaining({ cache: "no-store" }));
+		expect(hostFetch.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "HEAD")).toBe(false);
 		expect(mocks.fetch).not.toHaveBeenCalled();
 		expect(mocks.access).not.toHaveBeenCalled();
 		fireEvent.load(frame);

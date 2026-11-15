@@ -28,9 +28,10 @@ describe("CloudArtifactFrame", () => {
 		);
 	}
 
-	it("frames a remote host's page after a plain HEAD to its proxy, and shows a refusal as an error, not a link to renew", async () => {
+	it("frames a remote host's page after a plain GET to its proxy, and shows a refusal as an error, not a link to renew", async () => {
 		const proxied = "http://ao-preview-abc123.localhost:4100/page.html?raw=true";
-		const head = vi.fn(async () => new Response(null, { status: 200 }));
+		// The host's file route is GET-only, as on a real host: a HEAD is refused.
+		const head = vi.fn(async (_url: string, init?: RequestInit) => new Response(null, { status: init?.method === "HEAD" ? 405 : 200 }));
 		vi.stubGlobal("fetch", head);
 		try {
 			const onAccessRefused = vi.fn();
@@ -42,7 +43,8 @@ describe("CloudArtifactFrame", () => {
 			const frame = await screen.findByTitle("page.html");
 			expect(frame).toHaveAttribute("src", proxied);
 			expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-forms");
-			expect(head).toHaveBeenCalledWith(proxied, expect.objectContaining({ method: "HEAD" }));
+			expect(head).toHaveBeenCalledWith(proxied, expect.objectContaining({ cache: "no-store" }));
+			expect(head.mock.calls.some(([, init]) => init?.method === "HEAD")).toBe(false);
 			ok.unmount();
 			head.mockImplementation(async () => new Response(null, { status: 403 }));
 			render(

@@ -256,7 +256,10 @@ export type HostFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 /** A remote host's file's name, size and fingerprint, read from its headers alone. */
 export async function inspectHostShareFile(fetchHost: HostFetch, file: { url: string; relativePath: string; name: string }, signal?: AbortSignal): Promise<HostShareFileInfo> {
-	const response = await fetchHostWithin(fetchHost, file.url, { method: "HEAD" }, HOST_SHARE_TIMEOUTS.inspect, signal);
+	// A GET whose body is dropped once the headers are in: the host's file route
+	// answers GET only, and a HEAD there is refused with 405.
+	const response = await fetchHostWithin(fetchHost, file.url, { method: "GET" }, HOST_SHARE_TIMEOUTS.inspect, signal);
+	await response.body?.cancel().catch(() => undefined);
 	if (!response.ok) throw hostFileError(response);
 	const version = hostShareFingerprint(response.headers);
 	if (!version) throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");

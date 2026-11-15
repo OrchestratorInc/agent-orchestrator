@@ -19,7 +19,7 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * reflows and pans with its own scrolling.
  *
  * With source "host" it frames a remote host's page instead, from that host's
- * loopback proxy artifact origin. The proxy drops the host's own sandbox
+ * loopback proxy artifact origin, checked with a GET whose body is dropped. The proxy drops the host's own sandbox
  * policy for its preview origins, so this frame's sandbox is what keeps the
  * page in an opaque origin, as for a Cloud page.
  */
@@ -53,9 +53,13 @@ export function CloudArtifactFrame({ title, url, source = "cloud", onAccessRefus
 	}, [url, source, onAccessRefused, onNavigate]);
 	const status = useQuery({
 		queryKey: [source === "host" ? "host-artifact-status" : "cloud-artifact-status", url],
-		queryFn: async ({ signal }) => source === "host"
-			? (await fetch(url, { method: "HEAD", cache: "no-store", signal })).status
-			: (await cloudCpFetch(url, { method: "HEAD" })).status,
+		queryFn: async ({ signal }) => {
+			if (source === "cloud") return (await cloudCpFetch(url, { method: "HEAD" })).status;
+			// A host's file route answers GET only (a HEAD gets 405): the body is dropped once the status is in.
+			const response = await fetch(url, { cache: "no-store", signal });
+			await response.body?.cancel().catch(() => undefined);
+			return response.status;
+		},
 		retry: false,
 	});
 	// Only a Cloud link expires and is renewed; a host that refuses is an error.
