@@ -11,9 +11,9 @@ import { getConversationPage, sendConversationMessage, streamGlobalConversationE
 import type { ServerConfig } from "../config";
 import { UnreachableError } from "../connectionError";
 import { probeIdentity } from "../connectRuntime";
-import { addDemoMachine } from "./machine";
+import { addDemoMachine, removeDemoMachine } from "./machine";
 import { DEMO_HOST_ID, DEMO_HOSTNAME, DEMO_PORT, DemoServer } from "./server";
-import { DemoSocket, demoEventStream, demoFetch, demoServer, installDemoTransport, isDemoUrl, orderedDelivery, resetDemoServer, setDemoNetwork } from "./transport";
+import { DemoSocket, demoEventStream, demoFetch, demoNetwork, demoServer, installDemoTransport, isDemoUrl, orderedDelivery, resetDemoServer, setDemoNetwork } from "./transport";
 import { demoWorkspace } from "./workspace";
 
 const cfg: ServerConfig = { host: DEMO_HOSTNAME, httpPort: String(DEMO_PORT), muxPort: String(DEMO_PORT), secure: false, password: "demo-token", hostId: DEMO_HOST_ID };
@@ -30,6 +30,22 @@ describe("demo machine", () => {
 		vi.unstubAllGlobals();
 		vi.restoreAllMocks();
 		vi.useRealTimers();
+	});
+
+	it("stops its simulator once removed, and keeps the network chosen", async () => {
+		vi.useFakeTimers();
+		setDemoNetwork("slow");
+		const server = demoServer();
+		const tick = vi.spyOn(server, "tick");
+		vi.advanceTimersByTime(1_000);
+		expect(tick).toHaveBeenCalled();
+		await removeDemoMachine();
+		tick.mockClear();
+		vi.advanceTimersByTime(1_000);
+		expect(tick).not.toHaveBeenCalled();
+		expect(demoNetwork()).toBe("slow");
+		// Added again, it starts afresh.
+		expect(demoServer()).not.toBe(server);
 	});
 
 	it("answers only its own address", () => {

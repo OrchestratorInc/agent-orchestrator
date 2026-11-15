@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { removeHost, saveHost } from "../hosts";
 import { DEMO_HOST_ID, demoEndpoint } from "./server";
-import { isDevBuild, setDemoNetwork, type DemoNetwork } from "./transport";
+import { isDevBuild, setDemoNetwork, stopDemoServer, type DemoNetwork } from "./transport";
 
 // Pairing and settings for the in-app demo machine, without React, so they can
 // be tested on their own. See ./index.ts.
@@ -24,6 +24,7 @@ export async function addDemoMachine(): Promise<void> {
 
 export async function removeDemoMachine(): Promise<void> {
 	await removeHost(DEMO_HOST_ID);
+	stopDemoServer();
 }
 
 export function chooseDemoNetwork(next: DemoNetwork): void {

@@ -55,11 +55,20 @@ export function demoServer(): DemoServer {
 	return server;
 }
 
-/** For tests: forget the machine and its replies. */
-export function resetDemoServer(): void {
+/**
+ * Stops the demo machine: its ticker ends and its chats stop replying, so a
+ * removed demo machine does no work and grows no transcript in the
+ * background. The next request starts a fresh one; the network chosen stays.
+ */
+export function stopDemoServer(): void {
 	if (ticker) clearInterval(ticker);
 	ticker = null;
 	server = null;
+}
+
+/** For tests: forget the machine and its replies. */
+export function resetDemoServer(): void {
+	stopDemoServer();
 	chatPagesInFlight = 0;
 	network = "fast";
 }
